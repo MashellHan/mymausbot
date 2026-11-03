@@ -5,7 +5,7 @@ Upstream: https://github.com/milind-soni/OpenMausBot.
 
 ## Accepted scope
 
-The dedicated Herdr workspace is `MausBot` in local session `default` (`w6`).
+The dedicated Herdr workspace is `MausBot` in local session `default`.
 Its live agents are `mausbot-lead`, `mausbot-design`, `mausbot-front`,
 `mausbot-back`, `mausbot-review`. The actual start argv selected GPT-6-Astra/max
 for lead and reviewer and GPT-6-Sol/xhigh with model_context_window=1000000
@@ -18,11 +18,14 @@ Role files and CONTRIBUTING-FORK.md carry the user's development preferences.
 
 ## 1. Build and open
 
-The source checkout is `/Users/mengxionghan/workspace/OpenMausBot`. Build outputs
+The source checkout is `~/workspace/OpenMausBot`. Build outputs
 are ignored files, not a separate source tree. The already executed script is
 at:
 
-`/Users/mengxionghan/.openmausbot/task-workspaces/0a053f00-e750-4f24-b026-2c3826811429/04c1cba3-f680-4f38-880c-a899afdf892f/mausbot-local-build-20261103/build.sh`
+`~/.openmausbot/task-workspaces/<conversation-id>/<task-id>/mausbot-local-build-20261103/build.sh`
+
+Resolve the private directory through the local handoff record. Do not copy its
+conversation/task identifiers into public docs, PR text or screenshots.
 
 That directory contains build.log, finished, and exit-code. The initial nohup
 attempt never ran; the Python start_new_session launcher did run successfully.
@@ -30,7 +33,7 @@ It installed the frozen pnpm lockfile, passed Electron syntax, built UI/server/
 companion/updater and staged arm64 native resources, and passed the independent
 server smoke check before packaging. The app is:
 
-`/Users/mengxionghan/workspace/OpenMausBot/release/mac-arm64/OpenMausBot.app`
+`~/workspace/OpenMausBot/release/mac-arm64/OpenMausBot.app`
 
 Packaging finished, but the explicit final codesign verification failed:
 `code has no resources but signature indicates they must be present`.
@@ -53,6 +56,8 @@ The requested right panel is the Computer panel, not the bot profile's
 Details/Library/Computer tabs. The existing peer tab registry is
 `src/components/computer-panel-tabs.ts`, and Files is the last registered tab.
 Add Agent Team immediately after Files and Usage immediately after Agent Team.
+Simple mode retains its existing Files tab. Advanced mode adds Files after Data,
+then the same Agent Team and Usage peers, with the existing tab navigation.
 
 Show local Herdr workspaces as teams with counts, collapsed by default.
 Expanded members show name/role, actual model, state and most recent task when
@@ -70,7 +75,7 @@ repos, not only this new fork. Display PRs, commits and tokens in a compact
 period summary followed by trends. Use China time, with exact window semantics
 consistent with Agent Town and transparent partial/stale coverage.
 
-Reference `/Users/mengxionghan/workspace/whatsmyagentdoing/docs/ACTIVITY-MONITOR.md`
+Reference `~/workspace/whatsmyagentdoing/docs/ACTIVITY-MONITOR.md`
 and `scripts/activity-monitor.py`, and existing aggregate
 `~/.local/share/agent-town/activity/latest.json`. Reuse definitions for token
 cache/reasoning accounting, cross-clone commit deduplication and PR identity.
@@ -78,10 +83,11 @@ Read aggregates rather than exposing raw conversation logs or credentials.
 Refresh hourly with single-flight behavior and preserve last good results on
 failure. Reuse an existing schedule or coordinate one owner to avoid duplicate
 collection; the existing standing daily publication remains intact.
-Hourly local refresh is already enabled on 头号狗腿, automation
-`e8e4f244-f5bc-40c6-99aa-acdef15c7b12`, at every hour in China time, first
-2026-11-03 17:00. It calls the existing collector without `--publish`; do not
-add a second hourly collector in the App without consolidating ownership.
+Hourly local refresh already has one external automation owner and runs at
+every hour in China time, first 2026-11-03 17:00. Its identifier stays in the
+local handoff record. It calls the existing collector without `--publish`;
+the App only consumes the aggregate and must not add another collector.
+The 1/7/30-day summaries use completed China calendar days, excluding today.
 
 ## Delivery checks
 

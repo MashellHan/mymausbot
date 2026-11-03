@@ -13,6 +13,8 @@ milind-soni/OpenMausBot; `origin` is MashellHan/openmausbot. Never push to upstr
   broaden only for new risk, failures or required repository checks.
 - PR descriptions lead with the problem and resulting behavior, then validation
   and material limits. Include UI evidence and the exact reviewed commit.
+- Write every PR title, description and comment in English only, with no Chinese
+  text. Code comments must also be in English.
 - Request Reviewer as soon as checks pass; independent next work proceeds in
   parallel. Batch actionable findings; fix once, rerun affected checks and review
   the delta. Avoid serial reviews of unchanged commits or style-only ping-pong.
@@ -22,4 +24,6 @@ milind-soni/OpenMausBot; `origin` is MashellHan/openmausbot. Never push to upstr
 - Merge requires user authorization or an applicable established project policy.
   PR creation and feature-branch pushes were explicitly requested for this work.
 - Keep credentials, raw conversations, machine-private data and build products
-  out of version control. Preserve the user's untracked research files.
+  out of version control. Use placeholders for local conversation/task paths
+  and automation identifiers; keep their actual values in local handoff records.
+  Preserve the user's untracked research files.

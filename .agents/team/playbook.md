@@ -63,6 +63,9 @@ Job files live under the current conversation's `mausbot-local-build-20261103`.
 
 Follow `CONTRIBUTING-FORK.md`. Keep a factual, short project runbook for build
 commands and incident recovery. No secrets in commits, prompts or artifacts.
+All PR titles, descriptions and comments must be entirely in English, with no
+Chinese text. Code comments must also be in English. Keep actual conversation,
+task and automation identifiers in local handoff records, not public documents.
 Respect upstream AGENTS.md, required hooks/checks and verification fixtures.
 Consult the github-accounts skill for identity and repository-specific auth.
 Only push feature branches and PRs to the user's fork; do not push upstream.
