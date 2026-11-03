@@ -62,19 +62,20 @@ function WindowCard({ window }: { window: LocalUsageWindow }) {
 }
 
 function trendValue(day: LocalUsageTrendDay, metric: Metric): number | null {
-  return metric === "prs" ? day.prs ?? day.knownPrs : day[metric];
+  return metric === "prs" ? day.prs ?? (day.knownPrs && day.knownPrs > 0 ? day.knownPrs : null) : day[metric];
 }
 
 function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metric }) {
   const values = days.map((day) => trendValue(day, metric));
   const max = Math.max(1, ...values.filter((value): value is number => value !== null));
   return (
-    <div className="min-w-0 rounded-lg bg-inset p-2.5">
+    <div className="min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric}>
       <h4 className="text-[11px] font-medium text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</h4>
       <div aria-hidden="true" className="mt-2 flex h-14 items-end gap-[2px]">
         {days.map((day, index) => {
           const value = values[index];
-          return <span key={day.day} className="flex h-full min-w-0 flex-1 items-end" title={`${day.day}: ${value === null ? t("computer.usage.unavailable") : number(value)}`}>
+          const label = metric === "prs" ? prText(day.prs, day.knownPrs) : metricText(value);
+          return <span key={day.day} className="flex h-full min-w-0 flex-1 items-end" title={`${day.day}: ${label}`}>
             {value === null ? <span className="h-full w-full bg-warning/15" />
               : <span className={cn("w-full rounded-t-sm", metric === "prs" && day.prs === null ? "bg-accent/40" : "bg-accent/75")}
                 style={{ height: value === 0 ? 0 : `${Math.max(5, value / max * 100)}%` }} />}

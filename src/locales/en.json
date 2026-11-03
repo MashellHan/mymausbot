@@ -5165,7 +5165,7 @@
   "computer.usage.unavailableTokenDays": "Dates without token records: {count}",
   "computer.usage.provenance": "New tokens = noncached input + output. Cache reads are separate; cache writes are in input and reasoning is in output.",
   "computer.usage.trend": "30-day trend",
-  "computer.usage.gapLegend": "Shaded columns mark unavailable data; exact daily values follow.",
+  "computer.usage.gapLegend": "Shaded columns mark pending or unavailable data; pale PR bars are verified lower bounds. Exact daily values follow.",
   "computer.usage.dailyValues": "Daily activity values",
   "computer.usage.day": "Date",
   "computer.usage.coverageHeading": "Source coverage",

@@ -5147,7 +5147,7 @@
   "computer.usage.unavailableTokenDays": "无 Token 记录日期：{count}",
   "computer.usage.provenance": "新增 Token = 非缓存输入 + 输出。缓存读取单列；缓存写入已含在输入中，推理已含在输出中。",
   "computer.usage.trend": "30 天趋势",
-  "computer.usage.gapLegend": "阴影列表示数据不可用；下方列出每日精确数值。",
+  "computer.usage.gapLegend": "阴影列表示待补齐或不可用；浅色 PR 柱表示已核实下界。下方列出每日精确数值。",
   "computer.usage.dailyValues": "每日活动数值",
   "computer.usage.day": "日期",
   "computer.usage.coverageHeading": "来源覆盖",

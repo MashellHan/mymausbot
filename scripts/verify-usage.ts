@@ -20,6 +20,8 @@ function snapshot(scenario: string | null): LocalUsageResponse {
 
   const stale = scenario === "stale";
   const missing = scenario === "missing";
+  const pendingZero = scenario === "pending-zero";
+  const partialPr = missing || pendingZero;
   const midnight = scenario === "midnight";
   const noMetrics = scenario === "no-metrics";
   const zero = scenario === "zero";
@@ -32,9 +34,9 @@ function snapshot(scenario: string | null): LocalUsageResponse {
     if (missing && day === "2026-10-12") return { day, coverage: "unavailable", tokenStatus: "unavailable",
       prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null };
     const tokenGap = missing && day === "2026-10-15";
-    return { day, coverage: missing ? "partial" : "ready", tokenStatus: tokenGap ? "unavailable" : missing ? "partial" : "ready",
-      prs: missing ? null : zero ? 0 : index % 3 === 0 ? 2 : 1,
-      knownPrs: zero ? 0 : index % 3 === 0 ? 2 : 1,
+    return { day, coverage: partialPr ? "partial" : "ready", tokenStatus: tokenGap ? "unavailable" : missing ? "partial" : "ready",
+      prs: partialPr ? null : zero ? 0 : index % 3 === 0 ? 2 : 1,
+      knownPrs: zero || pendingZero && day === "2026-10-12" ? 0 : index % 3 === 0 ? 2 : 1,
       commits: zero ? 0 : 1 + index % 4,
       newTokens: tokenGap ? null : zero ? 0 : 80 + index % 7 * 30,
       cacheRead: tokenGap ? null : zero ? 0 : 20 + index % 3 * 10 };
@@ -44,20 +46,20 @@ function snapshot(scenario: string | null): LocalUsageResponse {
     const sum = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead") => rows.reduce((total, row) => total + (row[field] ?? 0), 0);
     const available = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead") => rows.some((row) => row[field] !== null);
     return { days: count, startDay: rows[0]!.day, endDay: rows.at(-1)!.day, asOf,
-      coverage: noMetrics ? "unavailable" : missing ? "partial" : "ready", tokenCoverage: noMetrics ? "unavailable" : missing ? "partial" : "ready",
+      coverage: noMetrics ? "unavailable" : partialPr ? "partial" : "ready", tokenCoverage: noMetrics ? "unavailable" : missing ? "partial" : "ready",
       missingDays: rows.filter((row) => row.coverage === "unavailable").map((row) => row.day),
       unavailableTokenDays: rows.filter((row) => row.tokenStatus === "unavailable").map((row) => row.day),
-      prs: missing || noMetrics ? null : sum("knownPrs"), knownPrs: available("knownPrs") ? sum("knownPrs") : null,
+      prs: partialPr || noMetrics ? null : sum("knownPrs"), knownPrs: available("knownPrs") ? sum("knownPrs") : null,
       commits: available("commits") ? sum("commits") : null,
       newTokens: available("newTokens") ? sum("newTokens") : null,
       cacheRead: available("cacheRead") ? sum("cacheRead") : null };
   };
-  return { status: stale ? "stale" : missing || noMetrics ? "partial" : "ready", asOf, timeZone: "Asia/Shanghai",
+  return { status: stale ? "stale" : partialPr || noMetrics ? "partial" : "ready", asOf, timeZone: "Asia/Shanghai",
     sourceCoverage: { total: 2, ready: noMetrics ? 0 : missing ? 1 : 2, partial: 0, stale: 0, missing: noMetrics ? 2 : missing ? 1 : 0 },
-    prSourceCoverage: { total: 4, ready: noMetrics ? 0 : missing ? 3 : 4, stale: 0,
-      unavailable: noMetrics ? 4 : missing ? 1 : 0, missing: 0 },
-    prCoverage: { work: missing || noMetrics ? "partial" : "ready", personal: noMetrics ? "partial" : "ready",
-      unclassified: missing || noMetrics ? "partial" : "ready" },
+    prSourceCoverage: { total: 4, ready: noMetrics ? 0 : partialPr ? 3 : 4, stale: 0,
+      unavailable: noMetrics ? 4 : partialPr ? 1 : 0, missing: 0 },
+    prCoverage: { work: partialPr || noMetrics ? "partial" : "ready", personal: noMetrics ? "partial" : "ready",
+      unclassified: partialPr || noMetrics ? "partial" : "ready" },
     windows: { "1": makeWindow(1), "7": makeWindow(7), "30": makeWindow(30) }, trend };
 }
 

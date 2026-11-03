@@ -82,6 +82,23 @@ describe("local Usage panel", () => {
     expect(host.querySelector('time')?.getAttribute("datetime")).toBe("2026-11-03T08:30:00.000Z");
   });
 
+  it("labels partial PR bars as lower bounds and keeps known zero pending", async () => {
+    await render({ ...sample, trend: [
+      { ...trend[0]!, prs: null, knownPrs: 0 },
+      { ...trend[1]!, prs: null, knownPrs: 2 },
+      { ...trend[2]!, prs: 0, knownPrs: 0 },
+      ...trend.slice(3),
+    ] });
+    const bars = [...host.querySelector('[data-usage-trend="prs"] [aria-hidden="true"]')!.children] as HTMLElement[];
+    expect(bars[0]!.title).toBe("2026-10-05: Pending");
+    expect(bars[0]!.firstElementChild?.className).toContain("bg-warning/15");
+    expect(bars[1]!.title).toBe("2026-10-06: ≥2");
+    expect(bars[1]!.firstElementChild?.className).toContain("bg-accent/40");
+    expect(bars[2]!.title).toBe("2026-10-07: 0");
+    expect(bars[2]!.firstElementChild?.className).toContain("bg-accent/75");
+    expect(text()).toContain("pale PR bars are verified lower bounds");
+  });
+
   it("anchors a stale previous-day snapshot to its real capture day, with no current-day claim", async () => {
     const previousAsOf = Date.UTC(2026, 10, 2, 15, 50);
     const windows = {
