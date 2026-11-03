@@ -67,7 +67,7 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="agent-team-panel">
       <header className="mb-4 pt-2">
-        <h2 className="text-[15px] font-semibold text-ink">{t("computer.agentTeam.heading", { count })}</h2>
+        <h2 className="text-[15px] font-semibold text-ink">{snapshot?.teamCount === 1 ? t("computer.agentTeam.headingOne") : t("computer.agentTeam.heading", { count })}</h2>
         <p className="mt-1 text-[11px] text-ink-tertiary">{readAt ? t("computer.agentTeam.readAt", { time: readAt }) : t("computer.agentTeam.neverRead")}</p>
       </header>
       {snapshot === null ? <p role="status" className="text-[12px] text-ink-secondary">{t("computer.agentTeam.loading")}</p> : null}
@@ -85,7 +85,7 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
                   className="flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-3 text-left outline-none hover:bg-raised-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
                   <ChevronRight size={15} className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-90")} aria-hidden="true" />
                   <span dir="auto" className="min-w-0 flex-1 text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{team.name}</span>
-                  <span className="shrink-0 text-[11px] tabular-nums text-ink-secondary">{t("computer.agentTeam.agentCount", { count: team.agentCount })}</span>
+                  <span className="shrink-0 text-[11px] tabular-nums text-ink-secondary">{team.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: team.agentCount })}</span>
                 </button>
               </h3>
               <div id={id} hidden={!open} className="px-3 pb-1">
