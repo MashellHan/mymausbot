@@ -63,18 +63,24 @@ export function ComposerReplyStrip({
   const name = message ? replyAuthor(message, fallbackName) : t("chat.reply.sourceUnavailable");
   const who = message ? t("chat.reply.replyingTo", { name }) : name;
   const excerpt = message ? replySnippet(peerLine(message)?.body ?? message.text ?? "") : null;
+  const guidance = message ? null : t("chat.reply.cancelToSend");
   return (
     <div
       role="group"
-      aria-label={who}
-      title={who}
+      aria-label={guidance ? `${who}. ${guidance}` : who}
+      title={guidance ?? who}
       data-composer-reply=""
       className="mb-1 flex min-w-0 items-center gap-2 rounded-2xl bg-ink/[0.06] py-1.5 ps-3 pe-1.5 text-[13px] leading-5 text-ink-secondary"
     >
       <Reply size={15} strokeWidth={1.5} aria-hidden="true" className="shrink-0 rtl:-scale-x-100" />
       <span className="sr-only">{who}: </span>
-      <span aria-hidden="true" dir="auto" className={cn("font-medium text-ink", message ? "max-w-[35%] shrink-0 truncate" : "min-w-0 flex-1")}>{name}</span>
-      {excerpt && <span dir="auto" className="min-w-0 flex-1 truncate">{excerpt}</span>}
+      {message ? <>
+        <span aria-hidden="true" dir="auto" className="max-w-[35%] shrink-0 truncate font-medium text-ink">{name}</span>
+        <span dir="auto" className="min-w-0 flex-1 truncate">{excerpt}</span>
+      </> : <span className="min-w-0 flex-1">
+        <span aria-hidden="true" className="block font-medium text-ink">{name}</span>
+        <span className="block text-[11px] leading-4">{guidance}</span>
+      </span>}
       {onClear && (
         <button
           type="button"

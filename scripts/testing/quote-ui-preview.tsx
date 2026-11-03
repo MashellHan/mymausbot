@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { ChatView } from "../../src/components/ChatView";
 import { setAnalyticsEnabled } from "../../src/lib/analytics";
-import { rememberReplyDraft } from "../../src/lib/drafts";
+import { rememberReplyDraft, restoreComposerDraft } from "../../src/lib/drafts";
 import { setAdvancedMode } from "../../src/lib/interface-mode";
 import { setLocale } from "../../src/lib/i18n";
 import { applySkin } from "../../src/lib/skins";
@@ -37,6 +37,7 @@ const state = { ...initialState, connected: true, selectedId: bot.id, activeView
 const value = { state, dispatch: () => {}, flushBotPatches: async () => null,
   refreshInstances: async () => {}, refreshModels: async () => {} };
 if (scenario !== "attachments") rememberReplyDraft(bot.threadId, source.id);
+if (scenario === "missing") restoreComposerDraft(`bot:${bot.id}:${bot.threadId}`, { text: "What changed in the revised plan?", attachments: [] });
 
 createRoot(document.getElementById("root")!).render(<BotEditorStore value={value}>
   <div className="h-screen overflow-hidden bg-app text-ink"><ChatView bot={bot} /></div>

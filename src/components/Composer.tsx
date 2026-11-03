@@ -938,7 +938,7 @@ export function Composer({
           // is pending.
           disabled={blocking || locked}
           aria-busy={bot?.awaitingThreadSnapshot || undefined}
-          placeholder={composerPlaceholder({
+          placeholder={unresolvedReply ? t("chat.reply.cancelToSend") : composerPlaceholder({
             simple: !advanced, locked: setupLocked, approval: blocking, attaching: attachmentPending, listening: recording,
             replying: Boolean(replyToId), busy, canSteer: steersNow, queued: pendingCount > 0, busyName, sendLabel, group, members: members ?? [],
             jevOn: jevRoomRoutingOn(state.config), goal: channelMode === "goal", botName: bot?.name ?? "",
@@ -988,9 +988,11 @@ export function Composer({
         {callShown && bot && !group && <CallButton bot={bot} placement="composer" fill={advanced || singleRow ? undefined : slot.fill} ink={slot.ink} inverse={singleRow} />}
         {callShown && group && !advanced && <GroupCallButton group={group} members={members ?? []} placement="composer" fill={slot.fill} ink={slot.ink} />}
         {hasContent && !locked && (
-          <ComposerSendButton compact={simpleDock} waits={busy && !steersNow} label={sendNames.label} title={sendNames.title} look={slot.button}
-            disabled={attachmentPending} onSend={(alternate) => send(followUpFor(alternate))} onChoose={send}
-            menu={followUpFor(false) && { choices: followUpChoices(followUpDefault, canSteer), name: busyName, sendKey: sendLabel, alternateKey: alternateSendLabel(sendKey) }} />
+          <ComposerSendButton compact={simpleDock} waits={busy && !steersNow}
+            label={unresolvedReply ? t("chat.reply.cancelToSend") : sendNames.label}
+            title={unresolvedReply ? t("chat.reply.cancelToSend") : sendNames.title} look={slot.button}
+            disabled={attachmentPending || unresolvedReply} onSend={(alternate) => send(followUpFor(alternate))} onChoose={send}
+            menu={unresolvedReply ? undefined : followUpFor(false) && { choices: followUpChoices(followUpDefault, canSteer), name: busyName, sendKey: sendLabel, alternateKey: alternateSendLabel(sendKey) }} />
           )}
           </div>
         </div>

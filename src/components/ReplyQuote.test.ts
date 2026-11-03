@@ -47,6 +47,7 @@ describe("reply quote in a sent message", () => {
     expect(sent).toContain("Original message unavailable");
     expect(sent).not.toContain("Jump to original message");
     expect(draft).toContain("Original message unavailable");
+    expect(draft).toContain("Cancel this reply to send a new message.");
     expect(draft).toContain('aria-label="Cancel reply"');
   });
 });
