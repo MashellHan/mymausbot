@@ -13,19 +13,21 @@ export function ReplyQuote({
   onClear,
   compact = false,
 }: {
-  message: Message;
+  message: Message | null;
   fallbackName?: string;
   onJump?: () => void;
   onClear?: () => void;
   compact?: boolean;
 }) {
-  const name = replyAuthor(message, fallbackName);
+  const name = message ? replyAuthor(message, fallbackName) : t("chat.reply.sourceUnavailable");
+  const excerpt = message ? replySnippet(peerLine(message)?.body ?? message.text ?? "") : null;
+  const screenReaderLabel = message ? t("chat.reply.replyingTo", { name }) : name;
   const body = (
     <>
       <Reply size={compact ? 14 : 15} strokeWidth={1.5} aria-hidden="true" className="shrink-0 rtl:-scale-x-100" />
-      <span className="sr-only">{t("chat.reply.replyingTo", { name })}: </span>
+      <span className="sr-only">{screenReaderLabel}: </span>
       <span aria-hidden="true" className="shrink-0 font-medium text-ink">{name}</span>
-      <span dir="auto" className="min-w-0 flex-1 truncate">{replySnippet(peerLine(message)?.body ?? message.text ?? "")}</span>
+      {excerpt && <span dir="auto" className="min-w-0 flex-1 truncate">{excerpt}</span>}
     </>
   );
   return (
@@ -33,7 +35,7 @@ export function ReplyQuote({
       "flex min-w-0 items-center gap-2 rounded-2xl bg-ink/[0.06] text-ink-secondary",
       compact ? "py-1 ps-2.5 pe-2 text-[13px] leading-5" : "py-1.5 ps-3 pe-1.5 text-[13px] leading-5",
     )}>
-      {onJump ? (
+      {onJump && message ? (
         <button type="button" onClick={onJump} className="flex min-w-0 flex-1 items-center gap-2 rounded-xl text-start hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus" title={t("chat.reply.jump")}>
           {body}
         </button>
@@ -54,12 +56,13 @@ export function ComposerReplyStrip({
   fallbackName,
   onClear,
 }: {
-  message: Message;
+  message: Message | null;
   fallbackName?: string;
   onClear?: () => void;
 }) {
-  const who = t("chat.reply.replyingTo", { name: replyAuthor(message, fallbackName) });
-  const excerpt = replySnippet(peerLine(message)?.body ?? message.text ?? "");
+  const name = message ? replyAuthor(message, fallbackName) : t("chat.reply.sourceUnavailable");
+  const who = message ? t("chat.reply.replyingTo", { name }) : name;
+  const excerpt = message ? replySnippet(peerLine(message)?.body ?? message.text ?? "") : null;
   return (
     <div
       role="group"
@@ -70,7 +73,8 @@ export function ComposerReplyStrip({
     >
       <Reply size={15} strokeWidth={1.5} aria-hidden="true" className="shrink-0 rtl:-scale-x-100" />
       <span className="sr-only">{who}: </span>
-      <span dir="auto" className="min-w-0 flex-1 truncate">{excerpt}</span>
+      <span aria-hidden="true" dir="auto" className={cn("font-medium text-ink", message ? "max-w-[35%] shrink-0 truncate" : "min-w-0 flex-1")}>{name}</span>
+      {excerpt && <span dir="auto" className="min-w-0 flex-1 truncate">{excerpt}</span>}
       {onClear && (
         <button
           type="button"

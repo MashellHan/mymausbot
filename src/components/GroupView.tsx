@@ -82,7 +82,8 @@ import { useTranscriptViewport } from "@/hooks/use-transcript-viewport";
 import { useUnreadDivider } from "@/hooks/use-unread-divider";
 import { unreadMessageIds } from "@/lib/unread-divider";
 import { NewMessagesDivider } from "./NewMessagesDivider";
-import { appendDraftAttachments, useReplyDraft } from "@/lib/drafts";
+import { appendDraftAttachments, replyDraft, useReplyDraft } from "@/lib/drafts";
+import { canReplyToMessage } from "@/lib/replies";
 import { citationPreviewText, splitTranscriptCitations, type CitationAttachment } from "@/lib/citations";
 import { highlightCitationSource } from "@/lib/citations-dom";
 import { latestFailure, latestReply, type TranscriptSnapshot } from "@/lib/transcript-announcer";
@@ -193,7 +194,7 @@ function RoomTextMessage({
   const tabled = Boolean(blocks?.some((block) => block.kind === "table"));
   const botActions = !user && (
     <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={botMenu}>
-      <ReplyAction onReply={() => onReply(m)} />
+      {canReplyToMessage(m) && <ReplyAction onReply={() => onReply(m)} />}
       {canReact && m.from && <ReactAction threadId={group.threadId} message={m} />}
       {botText && <CopyButton text={botText} className={messageActionClass} />}
       {botText && viewRaw && <RawToggleAction active onToggle={() => setViewRaw(false)} className={messageActionClass} />}
@@ -206,7 +207,7 @@ function RoomTextMessage({
       <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
         {user && (
           <MessageActions side="user" menu={userMessageMenu({ messageId: m.id, pin })}>
-            <ReplyAction onReply={() => onReply(m)} />
+            {canReplyToMessage(m) && <ReplyAction onReply={() => onReply(m)} />}
             {Boolean(display.trim()) && <CopyButton text={display} className={messageActionClass} />}
           </MessageActions>
         )}
@@ -228,18 +229,18 @@ function RoomTextMessage({
         >
           {m.replyToId && (() => {
             const target = transcript.find((candidate) => candidate.id === m.replyToId);
-            return target ? (
+            return (
               <div className="mb-2">
                 <ReplyQuote
-                  message={target}
+                  message={target && canReplyToMessage(target) ? target : null}
                   fallbackName={t("room.fallbackBot")}
                   compact
-                  onJump={() =>
+                  onJump={target ? () =>
                     dispatch({ type: "focusMessage", threadId: group.threadId, messageId: target.id })
-                  }
+                  : undefined}
                 />
               </div>
-            ) : null;
+            );
           })()}
           {user ? (
             <>
@@ -889,11 +890,13 @@ export function GroupView({ group }: { group: Group }) {
   const [folderOpen, setFolderOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
-  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
+  const { selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     group.threadId,
     `group:${group.id}:${group.threadId}`,
     group.messages,
   );
+  const replyId = replyDraft(group.threadId) ?? null;
+  const replyTo = replyId ? group.messages.find((message) => message.id === replyId && canReplyToMessage(message)) ?? null : null;
   const membersTriggerRef = useRef<HTMLButtonElement>(null);
   const closeMembers = useCallback(() => setMembersOpen(false), []);
   useEffect(() => setFindOpen(false), [group.threadId]);
@@ -1209,6 +1212,7 @@ export function GroupView({ group }: { group: Group }) {
         members={members}
         locked={setupPending}
         replyTo={replyTo}
+        replyDraftId={replyId}
         onClearReply={clearReply}
         onConsumeReply={consumeReply}
         onRestoreReply={restoreReply}

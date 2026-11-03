@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Bot, Group } from "@/state/store";
+import type { Bot, Group, Message } from "@/state/store";
 import { restoreComposerDraft } from "@/lib/drafts";
 import { setCallMode } from "@/lib/call-mode";
 import { userBubbleTone } from "@/lib/user-bubble-tone";
@@ -108,6 +108,30 @@ afterEach(() => {
 });
 
 describe("the Simple composer in a bot chat", () => {
+  it("keeps an unresolved quoted source visible and refuses a silent unquoted send", () => {
+    restoreComposerDraft(`bot:${bot.id}:${bot.threadId}`, { text: "Current request", attachments: [] });
+    const onClearReply = vi.fn();
+    render({ bot, replyDraftId: "missing-source", replyTo: null, onClearReply });
+    expect(container.querySelector("[data-composer-reply]")?.textContent).toContain("Original message unavailable");
+    click(sendButton());
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "error", message: "Cancel this reply to send a new message." });
+    expect(fixture.dispatch.mock.calls.some(([action]) => action.type === "send")).toBe(false);
+    click(container.querySelector('button[aria-label="Cancel reply"]'));
+    expect(onClearReply).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])("sends the current request with its resolved quoted source id, busy=%s", (busy) => {
+    restoreComposerDraft(`bot:${bot.id}:${bot.threadId}`, { text: "Current request", attachments: [] });
+    const source = { id: "source", role: "bot", kind: "text", at: 1, text: "Earlier answer" } as Message;
+    const onConsumeReply = vi.fn();
+    render({ bot: { ...bot, busy }, replyDraftId: source.id, replyTo: source, onConsumeReply });
+    click(busy ? container.querySelector('button[aria-label="Sends when Atlas is done"]') : sendButton());
+    expect(fixture.dispatch.mock.calls.find(([action]) => action.type === "send")?.[0]).toMatchObject({
+      text: "Current request", replyToId: "source", threadId: bot.threadId,
+    });
+    expect(onConsumeReply).toHaveBeenCalledOnce();
+  });
+
   it("is one pill: a round + with three rows, the field, and one round button in the bot's tone", () => {
     render({ bot });
     expect(plus()?.getAttribute("aria-label")).toBe("Add");

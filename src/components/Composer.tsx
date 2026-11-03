@@ -109,6 +109,7 @@ export function Composer({
   members,
   onEditLast,
   replyTo,
+  replyDraftId,
   onClearReply,
   onConsumeReply,
   onRestoreReply,
@@ -119,6 +120,7 @@ export function Composer({
   members?: Bot[];
   onEditLast?: () => void;
   replyTo?: Message | null;
+  replyDraftId?: string | null;
   onClearReply?: () => void;
   onConsumeReply?: () => void;
   onRestoreReply?: (message: Message, threadId: string) => void;
@@ -258,7 +260,9 @@ export function Composer({
     });
     return () => cancelAnimationFrame(frame);
   }, []);
-  const replyToId = replyTo?.id ?? null;
+  const replyToId = replyDraftId !== undefined ? replyDraftId : replyTo?.id ?? null;
+  const availableReply = replyTo && replyTo.id === replyToId ? replyTo : null;
+  const unresolvedReply = Boolean(replyToId && !availableReply);
   const focusedReplyRef = useRef(replyToId);
   useEffect(() => {
     const previous = focusedReplyRef.current;
@@ -567,6 +571,10 @@ export function Composer({
   };
   const send = (followUp: FollowUp | undefined = followUpFor(false)) => {
     if (locked || attachmentPending) return;
+    if (unresolvedReply) {
+      dispatch({ type: "error", message: t("chat.reply.cancelToSend") });
+      return;
+    }
     if (
       attachments.some((attachment) => attachment.kind === "image") &&
       !imageTargetsSupport(effectiveText, effectiveChannelMode)
@@ -586,8 +594,8 @@ export function Composer({
       text,
       requestText: body,
       attachments: [...attachments],
-      reply: replyTo ?? null,
-      replyToId: replyTo?.id,
+      reply: availableReply,
+      replyToId: replyToId ?? undefined,
       threadId,
       channelMode: effectiveChannelMode,
     };
@@ -597,7 +605,7 @@ export function Composer({
         groupId: group.id,
         text: body,
         sendId: sentDraft.sendId,
-        replyToId: replyTo?.id,
+        replyToId: replyToId ?? undefined,
         threadId,
         mode: effectiveChannelMode,
         onError: () => restoreDraft(sentDraft),
@@ -606,7 +614,7 @@ export function Composer({
     } else if (bot) {
       const points = effectiveChannelMode === "goal" ? null : takePointedChips(threadId);
       dispatch({
-        type: "send", botId: bot.id, text: body, sendId: sentDraft.sendId, replyToId: replyTo?.id, threadId, dataContext, mode: effectiveChannelMode,
+        type: "send", botId: bot.id, text: body, sendId: sentDraft.sendId, replyToId: replyToId ?? undefined, threadId, dataContext, mode: effectiveChannelMode,
         ...(points ? { pointed: points.pointed } : {}), ...(followUp ? { followUp } : {}),
         onError: () => { points?.restore(); restoreDraft(sentDraft); },
       });
@@ -803,7 +811,7 @@ export function Composer({
           </div>
         )}
         <div className={singleRow ? cn("min-w-0 flex-1 rounded-[26px] px-3 py-1.5", ELEVATED_FLOAT) : "contents"}>
-        {replyTo && <ComposerReplyStrip message={replyTo} fallbackName={bot?.name} onClear={onClearReply} />}
+        {replyToId && <ComposerReplyStrip message={availableReply} fallbackName={bot?.name} onClear={onClearReply} />}
         <div data-composer-row className={cn("flex items-end", simpleDock ? "gap-1.5" : "gap-1", !singleRow && !simpleDock && "@max-[30rem]/composer:flex-wrap", stacked && "flex-wrap")}>
           <input
             ref={fileInput}
@@ -902,7 +910,7 @@ export function Composer({
                 return;
               }
             }
-            if (onClearReply && escapeCancelsReply(e.nativeEvent, { replying: Boolean(replyTo), recording })) {
+            if (onClearReply && escapeCancelsReply(e.nativeEvent, { replying: Boolean(replyToId), recording })) {
               e.preventDefault();
               onClearReply();
               return;
@@ -932,7 +940,7 @@ export function Composer({
           aria-busy={bot?.awaitingThreadSnapshot || undefined}
           placeholder={composerPlaceholder({
             simple: !advanced, locked: setupLocked, approval: blocking, attaching: attachmentPending, listening: recording,
-            replying: Boolean(replyTo), busy, canSteer: steersNow, queued: pendingCount > 0, busyName, sendLabel, group, members: members ?? [],
+            replying: Boolean(replyToId), busy, canSteer: steersNow, queued: pendingCount > 0, busyName, sendLabel, group, members: members ?? [],
             jevOn: jevRoomRoutingOn(state.config), goal: channelMode === "goal", botName: bot?.name ?? "",
             setupHint: group ? null : setupRequestPlaceholder(bot, threadId),
           })}

@@ -20,9 +20,10 @@ describe("composer reply strip", () => {
     expect(html).toContain('aria-label="Cancel reply"');
   });
 
-  it("names who it answers for screen readers, not as a second visible line", () => {
+  it("names who it answers visibly and for screen readers", () => {
     expect(html).toMatch(/role="group" aria-label="Replying to Willow"/);
     expect(html).toContain('<span class="sr-only">Replying to Willow: </span>');
+    expect(html).toMatch(/aria-hidden="true"[^>]*>Willow<\/span>/);
   });
 
   it("mirrors the arrow and keeps the excerpt's own direction in RTL", () => {
@@ -38,5 +39,14 @@ describe("reply quote in a sent message", () => {
     expect(html).toContain("bg-ink/[0.06]");
     expect(html).not.toMatch(/border-s|border-accent/);
     expect(html).toContain(">Willow<");
+  });
+
+  it("shows a missing source instead of silently omitting the quote", () => {
+    const sent = renderToStaticMarkup(createElement(ReplyQuote, { message: null, compact: true }));
+    const draft = renderToStaticMarkup(createElement(ComposerReplyStrip, { message: null, onClear: () => {} }));
+    expect(sent).toContain("Original message unavailable");
+    expect(sent).not.toContain("Jump to original message");
+    expect(draft).toContain("Original message unavailable");
+    expect(draft).toContain('aria-label="Cancel reply"');
   });
 });

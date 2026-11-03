@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { escapeCancelsReply, replyAuthor, replySnippet } from "./replies";
+import { canReplyToMessage, escapeCancelsReply, replyAuthor, replySnippet } from "./replies";
 import { citationAttachment, createCitationTextSelector, serializeCitation } from "./citations";
 import type { Message } from "@/state/store";
 
@@ -51,5 +51,16 @@ describe("replySnippet markup", () => {
   });
   it("leaves a lone asterisk or underscore alone", () => {
     expect(replySnippet("2 * 3 = 6 and snake_case")).toBe("2 * 3 = 6 and snake_case");
+  });
+});
+
+describe("reply source affordance", () => {
+  it("offers Reply only for kinds and text the server accepts", () => {
+    expect(canReplyToMessage({ kind: "text", text: "  a question  " })).toBe(true);
+    expect(canReplyToMessage({ kind: "widget", text: "card body" })).toBe(true);
+    expect(canReplyToMessage({ kind: "app", text: "app body" })).toBe(true);
+    expect(canReplyToMessage({ kind: "text", text: "" })).toBe(false);
+    expect(canReplyToMessage({ kind: "text", text: "   " })).toBe(false);
+    expect(canReplyToMessage({ kind: "activity", text: "tool output" })).toBe(false);
   });
 });

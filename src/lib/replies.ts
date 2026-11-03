@@ -3,6 +3,10 @@ import { t } from "./i18n";
 import { peerLine } from "./peer-message";
 import { citationPreviewText } from "./citations";
 
+export function canReplyToMessage(message: Pick<Message, "kind" | "text">): boolean {
+  return (message.kind === "text" || message.kind === "widget" || message.kind === "app") && Boolean(message.text?.trim());
+}
+
 export function replySnippet(text: string, limit = 160): string {
   const clean = citationPreviewText(text)
     .replace(
