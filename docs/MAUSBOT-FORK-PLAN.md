@@ -18,6 +18,8 @@ Role files and CONTRIBUTING-FORK.md carry the user's development preferences.
 
 ## 1. Build and open
 
+Build recovery and verification details are in [the local runbook](MAUSBOT-LOCAL-RUNBOOK.md).
+
 The source checkout is `~/workspace/OpenMausBot`. Build outputs
 are ignored files, not a separate source tree. The already executed script is
 at:
