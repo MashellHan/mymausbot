@@ -260,6 +260,33 @@ describe("Simple-mode sidebar layout", () => {
     expect(listedBots(render().tree)).toHaveLength(3);
   });
 
+  it("finds visible department members, opens a saved collapsed section only during search", () => {
+    fixture.state = { ...fixture.state,
+      bots: [bot("atlas"), bot("dodo", { section: "Work" }), bot("secret", { section: "Work", hidden: true })],
+      groups: [{ ...room, section: "Work" }],
+    };
+    const saved = JSON.stringify([userSectionId("Work")]);
+    fixture.storage.set(SIDEBAR_COLLAPSED_SECTIONS_KEY, saved);
+    const initial = render().tree;
+    expect(headers(initial).find((header) => header.props.name === "Work")?.props.collapsed).toBe(true);
+    const toggle = () => render().tree.find((node) => node.type === SidebarSearchToggle)!.props as Parameters<typeof SidebarSearchToggle>[0];
+    const pill = () => render().tree.find((node) => node.type === SidebarSearchPill)!.props as Parameters<typeof SidebarSearchPill>[0];
+
+    toggle().onToggle();
+    pill().onQuery("work");
+    const filtered = render().tree;
+    expect(listedBots(filtered)).toEqual(["dodo"]);
+    expect(filtered.some((node) => (node.props.group as Group | undefined)?.id === "room")).toBe(true);
+    expect(headers(filtered).find((header) => header.props.name === "Work")?.props.collapsed).toBe(false);
+    expect(fixture.storage.get(SIDEBAR_COLLAPSED_SECTIONS_KEY)).toBe(saved);
+
+    pill().onClose();
+    const restored = render().tree;
+    expect(headers(restored).find((header) => header.props.name === "Work")?.props.collapsed).toBe(true);
+    expect(listedBots(restored)).toEqual(["atlas"]);
+    expect(fixture.storage.get(SIDEBAR_COLLAPSED_SECTIONS_KEY)).toBe(saved);
+  });
+
   it("opens at 280px in Simple and 320px in Advanced, each remembering its own resized width", () => {
     const width = () => render().root.props.style!["--sidebar-width"];
     expect(width()).toBe("280px");
