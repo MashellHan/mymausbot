@@ -31,6 +31,7 @@ More specific `AGENTS.md` files override this note within their directories.
 Read `.agents/team/playbook.md` and the assigned role in `.agents/team/roles/`.
 The dedicated Herdr team owns this fork. Its lead and reviewer use
 `gpt-6-astra` with `max`; designer, frontend and backend use `gpt-6-sol`
-with `xhigh` and a requested 1,000,000-token context. Never silently substitute
-a model or claim a runtime configuration was verified from a role file alone.
+with `xhigh` and a requested 1,000,000-token context. The upstream integration
+developer uses the same Sol settings. Never silently substitute a model or claim
+a runtime configuration was verified from a role file alone.
 Use small coherent commits and focused PRs as described in `CONTRIBUTING-FORK.md`.

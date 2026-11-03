@@ -12,6 +12,7 @@ The original repository remains the upstream. Preserve its license and notices.
 | mausbot-design | Designer | gpt-6-sol | xhigh | 1,000,000 |
 | mausbot-front | Frontend | gpt-6-sol | xhigh | 1,000,000 |
 | mausbot-back | Backend | gpt-6-sol | xhigh | 1,000,000 |
+| mausbot-upstream | Upstream integration | gpt-6-sol | xhigh | 1,000,000 |
 | mausbot-review | Reviewer | gpt-6-astra | max | provider default |
 
 Launch arguments are in each role file; verify live session settings before
@@ -20,9 +21,9 @@ provider permits that entire context. Surface errors rather than downgrade.
 The Sol launch explicitly uses `service_tier="default"`: the implicit priority
 tier failed with `service_tier is not supported` on this installation, while
 the explicit default tier was verified by real tool-using responses from all
-three Sol members. Keep that local compatibility setting when restarting them.
+four Sol members. Keep that local compatibility setting when restarting them.
 
-Use `/Users/mengxionghan/.agents/skills/herdr/SKILL.md` for Herdr operations,
+Use the Herdr skill for Herdr operations,
 with `--session default` and explicit names/IDs. Work in the MausBot workspace;
 do not modify or close another team's panes. Keep focus unchanged.
 The lead owns scope, task sequencing, integration and acceptance. Specialists
@@ -88,9 +89,27 @@ Lead should dispatch ready changes to reviewer immediately, with exact commit,
 diff scope and validation. Review may run alongside independent next work.
 Use one focused review, one correction batch and delta review of changed hunks
 plus affected contracts. Repeat broad review only for new risk or unresolved
-findings. Merge only with explicit user authorization or an already applicable
-repository policy; creating and pushing reviewable PRs is authorized here.
+findings. The user has authorized reviewed merges into the personal fork. Lead
+decides merge order and merges only after Reviewer has no unresolved
+findings and required checks pass. Creating and pushing reviewable PRs is
+authorized here.
 Never equate a green badge or an idle agent with completed work.
+
+## Upstream integration
+
+The user's assistant owns the existing daily 09:00 Asia/Shanghai schedule;
+do not create another scheduler. The upstream developer works in an isolated
+worktree, checks existing sync branches and PRs, and compares fetched
+`upstream/main` with `origin/main` before integrating. Record exact source SHAs,
+the new upstream range, the integrated commit and tree, resolutions, and checks.
+When there are no new commits or pending integration changes, record the check
+without an empty commit or PR.
+
+Preserve the fork's Agent Team, Usage, sections and quoted reply behavior, user
+data, pairing, and access boundaries. Review both sides of any conflict. Send
+the exact ready commit and validation to Reviewer; Lead makes the merge decision
+under the review rule above. Daily sync does not automatically replace the live
+App.
 
 ## Design and verification
 

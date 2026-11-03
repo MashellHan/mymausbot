@@ -21,8 +21,12 @@ milind-soni/OpenMausBot; `origin` is MashellHan/openmausbot. Never push to upstr
 - Lead resolves routine scope decisions, verifies acceptance and reports PR
   links. A review is complete only with actual findings/approval, not a submitted
   prompt. No skipped checks, invented passes or automatic approval by timeout.
-- Merge requires user authorization or an applicable established project policy.
-  PR creation and feature-branch pushes were explicitly requested for this work.
+- The user has authorized reviewed merges into the personal fork. Lead decides
+  merge order and merges only after Reviewer has no unresolved findings
+  and required checks pass. PR creation and feature-branch pushes are authorized.
+- For upstream sync, record exact source SHAs and any new upstream commit range.
+  If there are no new commits or pending integration changes, record the check
+  without an empty commit or PR. Daily sync does not replace the live App.
 - Keep credentials, raw conversations, machine-private data and build products
   out of version control. Use placeholders for local conversation/task paths
   and automation identifiers; keep their actual values in local handoff records.
