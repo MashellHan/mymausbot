@@ -127,7 +127,8 @@ message access checks and reject invalid or unrelated quote references.
 - Focused PRs include exact commits and real check evidence. The bootstrap PR
   contains only team/profile/workflow docs; user's docs/research stays untracked.
 - Reviewer should review the bootstrap immediately, then each ready slice;
-  independent work can proceed concurrently. Merge is not yet authorized.
+  independent work can proceed concurrently. Lead may merge into the personal
+  fork when Reviewer has no unresolved findings and required checks pass.
 - Completion requires actual artifact/process/UI verification, not only a prompt
   accepted by Herdr or a role declaration. Report remaining limits precisely.
 - Deliver Section and quoting as separate focused English PRs after the two
