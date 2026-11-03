@@ -80,11 +80,11 @@ function rows(raw: unknown, captureDay: string): Map<string, DailyRow> {
     const day = row.day;
     dayNumber(day);
     if (typeof day !== "string" || day < oldest || day > captureDay || daily.has(day)) throw new Error("Invalid activity day range");
-    if (!["ready", "partial", "unavailable"].includes(String(row.tokenStatus))) throw new Error("Invalid token coverage");
+    if (row.tokenStatus !== "ready" && row.tokenStatus !== "partial" && row.tokenStatus !== "unavailable") throw new Error("Invalid token coverage");
     const rawCategories = object(row.categories);
     const categories = {} as Record<LocalUsageCategory, DailyCategory>;
     for (const key of CATEGORIES) categories[key] = category(rawCategories[key]);
-    daily.set(day, { day, tokenStatus: row.tokenStatus as LocalUsageTokenStatus, categories });
+    daily.set(day, { day, tokenStatus: row.tokenStatus, categories });
   }
   return daily;
 }
@@ -175,7 +175,7 @@ function project(raw: unknown, now: number): LocalUsageResponse {
   const snapshot = object(raw);
   const asOf = count(snapshot.updatedAt);
   if (snapshot.version !== 1 || snapshot.timeZone !== "Asia/Shanghai" || !asOf || asOf > now + 5 * 60_000 ||
-      !["ready", "partial"].includes(String(snapshot.status))) throw new Error("Invalid activity snapshot");
+      (snapshot.status !== "ready" && snapshot.status !== "partial")) throw new Error("Invalid activity snapshot");
   const endDay = chinaDay(asOf);
   const daily = rows(snapshot.daily, endDay);
   const sources = sourceCoverage(snapshot.sources);

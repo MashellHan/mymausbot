@@ -103,6 +103,24 @@ describe("local Usage projection", () => {
     expect(response.trend.at(-1)).toMatchObject({ coverage: "unavailable", commits: null, newTokens: null, knownPrs: null });
   });
 
+  it.each(["tokenStatus", "status"])("rejects a non-string %s on first read and preserves the last good result", async (field) => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await fixture(asOf);
+    const invalid = structuredClone(snapshot);
+    if (field === "tokenStatus") (invalid.daily.at(-1)! as { tokenStatus: unknown }).tokenStatus = ["unavailable"];
+    else (invalid as { status: unknown }).status = ["ready"];
+    await writeFile(file, JSON.stringify(invalid));
+    const first = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(first).toMatchObject({ status: "unavailable", asOf: null, windows: null, trend: [] });
+
+    const provider = createLocalUsageProvider({ file, now: () => asOf });
+    await writeFile(file, JSON.stringify(snapshot));
+    const good = await provider.get();
+    expect(good.status).toBe("ready");
+    await writeFile(file, JSON.stringify(invalid));
+    expect(await provider.get()).toEqual({ ...good, status: "stale" });
+  });
+
   it("has no fabricated windows before any valid aggregate", async () => {
     const provider = createLocalUsageProvider({ file: join(tmpdir(), "no-such-usage-aggregate.json") });
     expect(await provider.get()).toEqual({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
