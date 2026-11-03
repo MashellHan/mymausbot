@@ -54,6 +54,23 @@ afterEach(() => {
 });
 
 describe("a cancelled turn in a room", () => {
+  it("offers Reply only for sources the server can quote", () => {
+    const imageOnly = { id: "image-only", role: "bot", kind: "text", at: 1, text: "",
+      from: { botId: "lead", name: "Lead", color: "blue" }, attachments: [{ kind: "image", path: "/fixture/image.png", mime: "image/png" }] } as Message;
+    render([imageOnly]);
+    expect(host.querySelector('button[aria-label="Reply to message"]')).toBeNull();
+
+    const attachedText = { id: "attached-text", role: "user", kind: "text", at: 2,
+      text: '<attached-file path="/fixture/report.txt" name="report.txt" />' } as Message;
+    render([attachedText]);
+    expect(host.querySelector('button[aria-label="Reply to message"]')).not.toBeNull();
+  });
+
+  it("keeps a visible placeholder for a sent reply whose source is missing", () => {
+    render([{ ...ask, replyToId: "missing-source" }]);
+    expect(host.querySelector("[data-reply-quote]")?.textContent).toContain("Original message unavailable");
+  });
+
   it("renders a muted stop and resends the same message on the room's send path", () => {
     render([ask, cancel]);
     expect(host.textContent).toContain("Stopped");

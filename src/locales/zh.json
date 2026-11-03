@@ -2432,6 +2432,8 @@
   "chat.reply.cancel": "取消回复",
   "chat.reply.image": "[图片]",
   "chat.reply.file": "[文件]",
+  "chat.reply.sourceUnavailable": "原消息不可用",
+  "chat.reply.cancelToSend": "取消这条引用后才能发送新消息。",
   "chat.speak.needsKey": "要朗读消息，请在某个智能体的资料中添加 ElevenLabs 密钥",
   "chat.speak.needsSetup": "请先在此智能体的配置中设置语音提供方，才能朗读消息",
   "chat.speak.needsVoice": "要朗读消息，请在这个智能体的资料中选择一个声音",

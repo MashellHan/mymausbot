@@ -56,6 +56,14 @@ afterAll(() => {
 });
 
 describe("a 👍 that answered a bot's question, in the chat", () => {
+  it("offers Reply as the primary Simple action instead of duplicating it in More", async () => {
+    const actions = document.querySelector<HTMLElement>('[data-mid="m2"] [data-testid="message-actions"]')!;
+    expect(actions.querySelector('button[aria-label="Reply to message"]')).not.toBeNull();
+    flushSync(() => actions.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!.click());
+    await settle();
+    expect([...document.querySelectorAll('[role="menuitem"]')].some((item) => item.textContent?.trim() === "Reply")).toBe(false);
+  });
+
   it("shows on the question as the person's reaction, and its own line draws no bubble", () => {
     expect(document.querySelector('[data-mid="m3"]')).toBeNull();
     const chips = document.querySelector('[data-mid="m2"] [role="group"]');

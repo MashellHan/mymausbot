@@ -3,7 +3,7 @@ import { useAdvancedMode } from "@/lib/interface-mode";
 import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
 import { ThreadLinkContext } from "@/components/ThreadLinkMenu";
 import { useShowThreads } from "@/lib/thread-preferences";
-import { AlertTriangle, ChevronLeft, ChevronRight, Copy, Monitor, RefreshCw, Reply, Square, Webhook } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Copy, Monitor, RefreshCw, Square, Webhook } from "lucide-react";
 import { WorkingDots } from "@/components/WorkingIndicator";
 import { ACTION_ICON, ChatBusyContext, CopyButton, MESSAGE_ROW, MessageActions, messageActionClass, ReplyAction, type MessageMenuItem } from "@/components/MessageActions";
 import { copyText } from "@/lib/copy-text";
@@ -121,7 +121,8 @@ import { useTranscriptViewport } from "@/hooks/use-transcript-viewport";
 import { useUnreadDivider } from "@/hooks/use-unread-divider";
 import { NewMessagesDivider } from "./NewMessagesDivider";
 import { unreadMessageIds } from "@/lib/unread-divider";
-import { appendComposerDraft, appendDraftAttachments, useReplyDraft } from "@/lib/drafts";
+import { appendComposerDraft, appendDraftAttachments, replyDraft, useReplyDraft } from "@/lib/drafts";
+import { canReplyToMessage } from "@/lib/replies";
 import { localDay, transcriptLookups, type TranscriptLookups } from "@/lib/transcript-derivations"; import { DaySeparator } from "./DaySeparator";
 import { splitTranscriptCitations, type CitationAttachment } from "@/lib/citations";
 import { EmptyChat } from "./ChatEmptyState";
@@ -301,12 +302,8 @@ export function FailedTurnRow({ tool, engine, onRetry, botId, threadId }: {
 
 export { MessageBoundary };
 
-/** Simple mode keeps a message's Reply and Copy in its "…" menu, beside the one reaction button. */
-function replyAndCopy(onReply: () => void, text: string): MessageMenuItem[] {
-  return [
-    { key: "reply", icon: <Reply {...ACTION_ICON} />, label: t("chat.reply"), onSelect: onReply },
-    ...(text.trim() ? [{ key: "copy", icon: <Copy {...ACTION_ICON} />, label: t("chat.copyMessage"), onSelect: () => { void copyText(text); } }] : []),
-  ];
+function copyMenu(text: string): MessageMenuItem[] {
+  return text.trim() ? [{ key: "copy", icon: <Copy {...ACTION_ICON} />, label: t("chat.copyMessage"), onSelect: () => { void copyText(text); } }] : [];
 }
 
 const Bubble = memo(function Bubble({
@@ -423,8 +420,8 @@ const Bubble = memo(function Bubble({
   const togglePin = () =>
     dispatch({ type: "updateTask", botId, threadId, patch: { pinnedMessageId: pinned ? "" : message.id } });
   const botActions = !user && (
-    <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={simple ? [...replyAndCopy(() => onReply(message), text), ...botMenu] : botMenu}>
-      {!simple && <ReplyAction onReply={() => onReply(message)} />}
+    <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={simple ? [...copyMenu(text), ...botMenu] : botMenu}>
+      {canReplyToMessage(message) && <ReplyAction onReply={() => onReply(message)} />}
       {canReact && !peer && <ReactAction threadId={threadId} message={message} />}
       {!simple && text && <CopyButton text={text} className={messageActionClass} />}
       {text && viewRaw && <RawToggleAction active onToggle={() => setViewRaw(false)} className={messageActionClass} />}
@@ -441,7 +438,7 @@ const Bubble = memo(function Bubble({
           <MessageActions
             side="user"
             menu={[
-              ...(simple ? replyAndCopy(() => onReply(message), visibleText) : []),
+              ...(simple ? copyMenu(visibleText) : []),
               ...userMessageMenu({
                 messageId: message.id,
                 onEdit: !speaker && message.kind === "text" && !webhookView && !hasAttachments && !message.id.startsWith("optimistic-")
@@ -450,7 +447,7 @@ const Bubble = memo(function Bubble({
               }),
             ]}
           >
-            {!simple && <ReplyAction onReply={() => onReply(message)} />}
+            {canReplyToMessage(message) && <ReplyAction onReply={() => onReply(message)} />}
             {!simple && Boolean(visibleText.trim()) && <CopyButton text={visibleText} className={messageActionClass} />}
           </MessageActions>
         )}
@@ -474,15 +471,15 @@ const Bubble = memo(function Bubble({
           style={user && !webhookView && !attachmentsOnly ? ownBubbleStyle : undefined}
           title={workedFor === undefined ? new Date(message.at).toLocaleString() : `${workedLabel(workedFor)} · ${new Date(message.at).toLocaleString()}`}
         >
-          {replyTarget && (
+          {message.replyToId && (
             <div className="mb-2">
               <ReplyQuote
-                message={replyTarget}
+                message={replyTarget && canReplyToMessage(replyTarget) ? replyTarget : null}
                 fallbackName={botName}
                 compact
-                onJump={() =>
+                onJump={replyTarget ? () =>
                   dispatch({ type: "focusMessage", threadId, messageId: replyTarget.id })
-                }
+                : undefined}
               />
             </div>
           )}
@@ -832,7 +829,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   const computerStarting = computerStartLine(state.computerStarts[bot.id], bot.name); useScreensWhile(Boolean(computerStarting));
   const mascotMotion = state.mascotMotion?.botId === bot.id ? state.mascotMotion : null;
   const [findOpen, setFindOpen] = useState(false);
-  const { replyTo, selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
+  const { selectReply, clearReply, consumeReply, restoreReply } = useReplyDraft(
     bot.threadId,
     `bot:${bot.id}:${bot.threadId}`,
     bot.messages,
@@ -851,6 +848,8 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   }, []);
 
   const { messages: allMessages, activeLeafId } = bot;
+  const replyId = replyDraft(bot.threadId) ?? null;
+  const replyTo = replyId ? allMessages.find((message) => message.id === replyId && canReplyToMessage(message)) ?? null : null;
   const messages = useMemo(() => visibleMessages({ messages: allMessages, activeLeafId }), [allMessages, activeLeafId]);
   const lookups = useMemo(() => transcriptLookups(allMessages, messages), [allMessages, messages]);
   const liveTools = useLiveToolIds(messages, bot);
@@ -1282,6 +1281,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
         key={bot.threadId}
         bot={profile}
         replyTo={replyTo}
+        replyDraftId={replyId}
         onClearReply={clearReply}
         onConsumeReply={consumeReply}
         onRestoreReply={restoreReply}

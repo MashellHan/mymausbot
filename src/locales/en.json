@@ -2490,6 +2490,8 @@
   "chat.reply.cancel": "Cancel reply",
   "chat.reply.image": "[image]",
   "chat.reply.file": "[file]",
+  "chat.reply.sourceUnavailable": "Original message unavailable",
+  "chat.reply.cancelToSend": "Cancel this reply to send a new message.",
   "chat.speak.needsKey": "Add an ElevenLabs key in an agent profile to read messages aloud",
   "chat.speak.needsSetup": "Set up a voice provider in this agent's profile to read messages aloud",
   "chat.speak.needsVoice": "Pick a voice in this agent's profile to read messages aloud",
