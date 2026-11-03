@@ -1,5 +1,5 @@
 import { useEffect, type KeyboardEvent, type WheelEvent } from "react";
-import { CalendarClock, Database, FolderOpen, Globe, Monitor, Smartphone, type LucideIcon } from "lucide-react";
+import { CalendarClock, Database, FolderOpen, Globe, Monitor, Smartphone, UsersRound, type LucideIcon } from "lucide-react";
 import { readComputerPanelView, writeComputerPanelView, type ComputerPanelView } from "@/lib/computer-panel-view";
 import type { AndroidUsbDevicesStatus } from "./AndroidDevicePanel";
 import type { LocaleKey } from "@/locales";
@@ -11,6 +11,7 @@ export const PANEL_TABS: Record<ComputerPanelView, { Icon: LucideIcon; label: Lo
   browser: { Icon: Globe, label: "computer.tab.browser", tour: "computer-browser" },
   data: { Icon: Database, label: "computer.tab.data", tour: "computer-data" },
   files: { Icon: FolderOpen, label: "computer.tab.files" },
+  "agent-team": { Icon: UsersRound, label: "computer.tab.agentTeam" },
 };
 
 export const TAB_PANEL_FOCUS = "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60";
@@ -39,6 +40,15 @@ export function scrollTabsWithWheel(event: WheelEvent<HTMLElement>): void {
   const row = event.currentTarget;
   if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || row.scrollWidth <= row.clientWidth) return;
   row.scrollLeft += event.deltaY;
+}
+
+export function revealSelectedTab(row: HTMLElement): void {
+  const selected = row.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (!selected) return;
+  const area = row.getBoundingClientRect();
+  const tab = selected.getBoundingClientRect();
+  if (tab.left < area.left) row.scrollLeft += tab.left - area.left;
+  else if (tab.right > area.right) row.scrollLeft += tab.right - area.right;
 }
 
 export function moveBetweenTabs(
