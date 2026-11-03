@@ -108,6 +108,20 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("No local Herdr teams found");
   });
 
+  it("uses singular copy for one team and one agent in English and Chinese", async () => {
+    const single = { ...ready, teamCount: 1, teams: [{ ...ready.teams[0]!, agentCount: 1, agents: [ready.teams[0]!.agents[0]!] }] };
+    await render("content", single);
+    expect(text()).toContain("Local Herdr · 1 team");
+    expect(text()).toContain("1 agent");
+    expect(text()).not.toContain("1 teams");
+    expect(text()).not.toContain("1 agents");
+
+    setLocale("zh");
+    await render("content", single);
+    expect(text()).toContain("本机 Herdr · 1 个团队");
+    expect(text()).toContain("1 个成员");
+  });
+
   it("reads only the local dashboard route and retains its last snapshot on a transport failure", async () => {
     vi.useFakeTimers();
     calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new Error("offline"));
