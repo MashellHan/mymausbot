@@ -27,6 +27,7 @@ import { BrowserPanel } from "./BrowserPanel";
 import { usePanelPage, type PanelPage } from "@/lib/page-open";
 const DataPanel = lazy(() => import("./data/DataPanel").then((module) => ({ default: module.DataPanel })));
 const AgentTeamPanel = lazy(() => import("./AgentTeamPanel").then((module) => ({ default: module.AgentTeamPanel })));
+const LocalUsagePanel = lazy(() => import("./LocalUsagePanel").then((module) => ({ default: module.LocalUsagePanel })));
 const loadLiveDesktop = () => import("./LiveDesktop").then((module) => ({ default: module.LiveDesktop }));
 const LiveDesktop = lazy(loadLiveDesktop);
 import { browserAvailable, browserUnavailableReason, builtInBrowserEnabled } from "@/lib/feature-flags";
@@ -1307,6 +1308,12 @@ export function ComputerPanel({
         <div {...tabPanelProps("agent-team")} className={cn("flex min-h-0 flex-1 flex-col", TAB_PANEL_FOCUS)}>
           <Suspense fallback={<div className="flex flex-1 items-center justify-center text-[13px] text-ink-secondary" role="status">{t("computer.agentTeam.loading")}</div>}>
             <AgentTeamPanel />
+          </Suspense>
+        </div>
+      ) : panelView === "usage" ? (
+        <div {...tabPanelProps("usage")} className={cn("flex min-h-0 flex-1 flex-col", TAB_PANEL_FOCUS)}>
+          <Suspense fallback={<div className="flex flex-1 items-center justify-center text-[13px] text-ink-secondary" role="status">{t("computer.usage.loading")}</div>}>
+            <LocalUsagePanel />
           </Suspense>
         </div>
       ) : panelView === "android" && androidConnected ? (

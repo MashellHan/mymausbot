@@ -208,18 +208,18 @@ describe("Computer panel tabs", () => {
     }
   });
 
-  it("shows Agent Team after Files in Simple mode", () => {
+  it("shows Agent Team and Usage after Files in Simple mode", () => {
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Browser", "Data", "Files", "Agent Team"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Browser", "Data", "Files", "Agent Team", "Usage"]);
   });
 
-  it("shows Files and Agent Team after the existing Advanced tabs", () => {
+  it("shows Files, Agent Team and Usage after the existing Advanced tabs", () => {
     fixture.advanced = true;
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Agent Team"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Agent Team", "Usage"]);
     fixture.config = {};
     fixture.android = false;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Browser", "Data", "Files", "Agent Team"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Browser", "Data", "Files", "Agent Team", "Usage"]);
   });
 
   it("reads a Routines view stored by Advanced as the Computer tab in Simple", () => {

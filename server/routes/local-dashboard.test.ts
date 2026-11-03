@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import type { LocalAgentTeamsResponse } from "../../shared/local-dashboard.ts";
+import type { LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
 import type { RouteContext } from "./table.ts";
 import { PASS } from "./table.ts";
 import { createLocalDashboardRoutes } from "./local-dashboard.ts";
 
 const snapshot: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1000, teamCount: 0, teams: [] };
+const usageSnapshot: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
+  sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
 
 function route() {
   let reads = 0;
-  const handler = createLocalDashboardRoutes({ get: async () => { reads++; return snapshot; } });
+  const handler = createLocalDashboardRoutes({
+    agents: { get: async () => { reads++; return snapshot; } },
+    usage: { get: async () => { reads++; return usageSnapshot; } },
+  });
   const request = async ({ auth = { kind: "loopback", scopes: ["admin"] }, peer = "127.0.0.1", path = "/api/local-dashboard/agents", method = "GET", search = "" }: {
     auth?: unknown; peer?: string; path?: string; method?: string; search?: string;
   } = {}) => {
@@ -30,7 +35,8 @@ describe("GET /api/local-dashboard/agents", () => {
   it("serves only the local owner and does not accept query parameters", async () => {
     const request = route();
     expect(await request()).toMatchObject({ replies: [{ status: 200, body: snapshot }], reads: 1, headers: { "cache-control": "private, no-store" } });
-    expect(await request({ search: "?path=/private" })).toMatchObject({ replies: [{ status: 400 }], reads: 1 });
+    expect(await request({ path: "/api/local-dashboard/usage" })).toMatchObject({ replies: [{ status: 200, body: usageSnapshot }], reads: 2 });
+    expect(await request({ search: "?path=/private" })).toMatchObject({ replies: [{ status: 400 }], reads: 2 });
     expect((await request({ method: "POST" })).out).toBe(PASS);
   });
 
@@ -41,7 +47,9 @@ describe("GET /api/local-dashboard/agents", () => {
     [{ kind: "loopback", scopes: ["admin"], companionDevice: "phone" }, "127.0.0.1"],
     [{ kind: "loopback", scopes: ["admin"] }, "203.0.113.8"],
   ])("rejects paired, non-owner and remote callers before reading the host", async (auth, peer) => {
-    const result = await route()({ auth, peer });
-    expect(result).toMatchObject({ replies: [{ status: 403, body: { error: "local owner only" } }], reads: 0 });
+    for (const path of ["/api/local-dashboard/agents", "/api/local-dashboard/usage"]) {
+      const result = await route()({ auth, peer, path });
+      expect(result).toMatchObject({ replies: [{ status: 403, body: { error: "local owner only" } }], reads: 0 });
+    }
   });
 });
