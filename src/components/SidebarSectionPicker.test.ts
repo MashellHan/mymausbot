@@ -53,6 +53,7 @@ describe("department picker", () => {
 
     await type("ops 20");
     expect(options().map((button) => button.textContent?.trim())).toEqual(["Ops 20"]);
+    expect(host.querySelector("form button")?.textContent).toBe("Move");
     await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(onAssign).toHaveBeenCalledWith("Ops 20");
     expect(onClose).toHaveBeenCalledOnce();
@@ -63,6 +64,7 @@ describe("department picker", () => {
     await type("North");
     expect(options()).toHaveLength(0);
     expect(host.textContent).toContain("No matching departments");
+    expect(host.querySelector("form button")?.textContent).toBe("Create & move");
     await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(onAssign).toHaveBeenCalledWith("North");
     const remove = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Remove from department")!;

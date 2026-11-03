@@ -89,7 +89,7 @@ export function SectionPicker({
           disabled={!trimmed || trimmed.length > 60}
           className="ui-button ui-button-md shrink-0"
         >
-          {t("sidebar.section.move")}
+          {trimmed && !exactSection ? t("sidebar.section.createAndMove") : t("sidebar.section.move")}
         </button>
       </form>
       {sections.length > 0 && (

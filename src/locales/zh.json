@@ -1954,6 +1954,7 @@
   "sidebar.section.searchOrCreateAria": "搜索或创建部门",
   "sidebar.section.noMatch": "没有匹配的部门",
   "sidebar.section.move": "移动",
+  "sidebar.section.createAndMove": "创建并移动",
   "sidebar.section.newName": "新部门",
   "sidebar.room.renameAria": "重命名 {name}",
   "sidebar.room.saveChatName": "保存对话名称",

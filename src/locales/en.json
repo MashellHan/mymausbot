@@ -1961,6 +1961,7 @@
   "sidebar.section.searchOrCreateAria": "Search or create department",
   "sidebar.section.noMatch": "No matching departments",
   "sidebar.section.move": "Move",
+  "sidebar.section.createAndMove": "Create & move",
   "sidebar.section.newName": "New department",
   "sidebar.room.renameAria": "Rename {name}",
   "sidebar.room.saveChatName": "Save thread name",
