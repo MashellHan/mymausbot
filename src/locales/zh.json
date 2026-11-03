@@ -1953,6 +1953,7 @@
   "sidebar.section.searchOrCreate": "搜索或创建…",
   "sidebar.section.searchOrCreateAria": "搜索或创建部门",
   "sidebar.section.noMatch": "没有匹配的部门",
+  "sidebar.section.ambiguousMatch": "有多个匹配的部门，请在下方选择目标部门。",
   "sidebar.section.move": "移动",
   "sidebar.section.createAndMove": "创建并移动",
   "sidebar.section.newName": "新部门",

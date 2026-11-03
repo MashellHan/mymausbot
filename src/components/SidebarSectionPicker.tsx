@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Check, FolderMinus } from "lucide-react";
 import { useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
@@ -20,6 +20,7 @@ export function SectionPicker({
 }) {
   const { state } = useStore();
   const [name, setName] = useState("");
+  const ambiguousId = useId();
   const motion = useHeldMenuMotion(anchor);
   const shown = motion.value;
   const heldCurrent = useRef(current);
@@ -46,7 +47,10 @@ export function SectionPicker({
 
   const sections = departmentNames(state);
   const filteredSections = sections.filter((section) => section.toLowerCase().includes(trimmed.toLowerCase()));
-  const exactSection = sections.find((section) => section.toLowerCase() === trimmed.toLowerCase());
+  const foldedMatches = sections.filter((section) => section.toLowerCase() === trimmed.toLowerCase());
+  const exactSection = sections.find((section) => section === trimmed);
+  const resolvedSection = exactSection ?? (foldedMatches.length === 1 ? foldedMatches[0] : undefined);
+  const ambiguousSection = !exactSection && foldedMatches.length > 1;
 
   const assign = (section: string) => {
     onAssign(section);
@@ -71,8 +75,8 @@ export function SectionPicker({
         className="flex items-center gap-1.5 p-0.5"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!trimmed || trimmed.length > 60) return;
-          assign(exactSection ?? trimmed);
+          if (!trimmed || trimmed.length > 60 || ambiguousSection) return;
+          assign(resolvedSection ?? trimmed);
         }}
       >
         <input
@@ -82,16 +86,18 @@ export function SectionPicker({
           onChange={(e) => setName(e.target.value)}
           placeholder={t("sidebar.section.searchOrCreate")}
           aria-label={t("sidebar.section.searchOrCreateAria")}
+          aria-describedby={ambiguousSection ? ambiguousId : undefined}
           className="w-full rounded-md bg-ink/[0.05] px-2 py-1.5 text-[13px] text-ink placeholder:text-ink-tertiary focus:outline-none"
         />
         <button
           type="submit"
-          disabled={!trimmed || trimmed.length > 60}
+          disabled={!trimmed || trimmed.length > 60 || ambiguousSection}
           className="ui-button ui-button-md shrink-0"
         >
-          {trimmed && !exactSection ? t("sidebar.section.createAndMove") : t("sidebar.section.move")}
+          {trimmed && foldedMatches.length === 0 ? t("sidebar.section.createAndMove") : t("sidebar.section.move")}
         </button>
       </form>
+      {ambiguousSection && <p id={ambiguousId} role="status" className="px-2 py-2 text-[12px] text-ink-secondary">{t("sidebar.section.ambiguousMatch")}</p>}
       {sections.length > 0 && (
         <div role="group" aria-label={t("sidebar.section.moveToContext")} className="flex max-h-52 flex-col gap-1 overflow-y-auto overscroll-contain">
           {filteredSections.map((section) => (

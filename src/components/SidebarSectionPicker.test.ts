@@ -72,6 +72,32 @@ describe("department picker", () => {
     expect(onAssign).toHaveBeenLastCalledWith("");
   });
 
+  it.each([
+    { sections: ["Work", "work"], target: "work" },
+    { sections: ["work", "Work"], target: "Work" },
+  ])("preserves the exact department $target regardless of stored order", async ({ sections, target }) => {
+    state = { ...state, sections };
+    await mount();
+    await type(target);
+    await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(onAssign).toHaveBeenCalledExactlyOnceWith(target);
+  });
+
+  it("requires an explicit option for an ambiguous folded name", async () => {
+    state = { ...state, sections: ["Work", "work"] };
+    await mount();
+    await type("WORK");
+    expect(host.querySelector<HTMLButtonElement>("form button")!.disabled).toBe(true);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe("More than one department matches. Choose one below.");
+    expect(input().getAttribute("aria-describedby")).toBe(host.querySelector('[role="status"]')!.id);
+    await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(onAssign).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => options().find((button) => button.textContent?.trim() === "work")!.click());
+    expect(onAssign).toHaveBeenCalledExactlyOnceWith("work");
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("stays inside a short viewport with a scrollable menu", async () => {
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 280 });
     await mount({ x: 100, y: 250 });

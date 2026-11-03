@@ -1960,6 +1960,7 @@
   "sidebar.section.searchOrCreate": "Find or create…",
   "sidebar.section.searchOrCreateAria": "Search or create department",
   "sidebar.section.noMatch": "No matching departments",
+  "sidebar.section.ambiguousMatch": "More than one department matches. Choose one below.",
   "sidebar.section.move": "Move",
   "sidebar.section.createAndMove": "Create & move",
   "sidebar.section.newName": "New department",
