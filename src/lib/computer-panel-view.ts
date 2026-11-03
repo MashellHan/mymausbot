@@ -1,11 +1,11 @@
-export type ComputerPanelView = "computer" | "android" | "browser" | "routines" | "files" | "data";
+export type ComputerPanelView = "computer" | "android" | "browser" | "routines" | "files" | "data" | "agent-team";
 
 type PanelTabsContext = { advanced: boolean; androidConnected: boolean };
 
 export function computerPanelTabs({ advanced, androidConnected }: PanelTabsContext): ComputerPanelView[] {
   return advanced
-    ? ["computer", "routines", ...(androidConnected ? (["android"] as const) : []), "browser", "data"]
-    : ["computer", "browser", "data", "files"];
+    ? ["computer", "routines", ...(androidConnected ? (["android"] as const) : []), "browser", "data", "files", "agent-team"]
+    : ["computer", "browser", "data", "files", "agent-team"];
 }
 
 export function resolveComputerPanelView(view: ComputerPanelView, context: PanelTabsContext): ComputerPanelView {
@@ -24,7 +24,7 @@ export function readComputerPanelView(
 ): ComputerPanelView {
   try {
     const value = storage.getItem(storageKey(botId));
-    if (value === "android" || value === "browser" || value === "routines" || value === "files" || value === "data") return value;
+    if (value === "android" || value === "browser" || value === "routines" || value === "files" || value === "data" || value === "agent-team") return value;
   } catch {
   }
   return "computer";

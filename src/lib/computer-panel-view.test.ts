@@ -38,6 +38,13 @@ describe("computer panel view persistence", () => {
     writeComputerPanelView("scout", "data", storage);
     expect(readComputerPanelView("scout", storage)).toBe("data");
   });
+
+  it("round-trips the Agent Team tab", () => {
+    const values = new Map<string, string>();
+    const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+    writeComputerPanelView("scout", "agent-team", storage);
+    expect(readComputerPanelView("scout", storage)).toBe("agent-team");
+  });
 });
 
 describe("computer panel view availability", () => {
@@ -49,14 +56,13 @@ describe("computer panel view availability", () => {
   it("drops the tabs the current mode does not render", () => {
     expect(resolveComputerPanelView("routines", { advanced: false, androidConnected: false })).toBe("computer");
     expect(resolveComputerPanelView("android", { advanced: false, androidConnected: true })).toBe("computer");
-    expect(resolveComputerPanelView("files", { advanced: true, androidConnected: true })).toBe("computer");
+    expect(resolveComputerPanelView("files", { advanced: true, androidConnected: true })).toBe("files");
   });
 
   it("keeps a view whose trigger is on the row", () => {
-    for (const view of ["computer", "browser", "data"] as const) {
+    for (const view of ["computer", "browser", "data", "files", "agent-team"] as const) {
       expect(resolveComputerPanelView(view, { advanced: true, androidConnected: true })).toBe(view);
       expect(resolveComputerPanelView(view, { advanced: false, androidConnected: false })).toBe(view);
     }
-    expect(resolveComputerPanelView("files", { advanced: false, androidConnected: false })).toBe("files");
   });
 });

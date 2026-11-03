@@ -29,6 +29,7 @@ vi.mock("./AndroidDevicePanel", () => ({ AndroidDevicePanel: () => null, useAndr
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: ({ page }: { page?: unknown }) => { fixture.page = page; return null; } }));
 vi.mock("./CloudBackendPicker", () => ({ CloudBackendPicker: () => null }));
 vi.mock("./bot-settings/RoutinesSection", () => ({ RoutinesSection: () => null }));
+vi.mock("./AgentTeamPanel", () => ({ AgentTeamPanel: () => createElement("div", { "data-testid": "agent-team-panel" }) }));
 vi.mock("./data/DataPanel", () => ({ DataPanel: () => createElement("div", { "data-testid": "data-panel" }) }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
@@ -155,11 +156,11 @@ describe("Computer panel tab", () => {
 
   it("marks the selected trigger and only that one", async () => {
     await open(makeBot());
-    expect(tabs().map((candidate) => candidate.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false"]);
+    expect(tabs().map((candidate) => candidate.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false", "false", "false"]);
 
     flushSync(() => tab("Data").click());
     await settle();
-    expect(tabs().map((candidate) => candidate.getAttribute("aria-selected"))).toEqual(["false", "false", "false", "true"]);
+    expect(tabs().map((candidate) => candidate.getAttribute("aria-selected"))).toEqual(["false", "false", "false", "true", "false", "false"]);
   });
 
   it("keeps one Tab stop and moves it with the arrow, Home and End keys", async () => {
@@ -180,16 +181,16 @@ describe("Computer panel tab", () => {
     // Wraps around the row's ends.
     press("Screen", "ArrowLeft");
     await settle();
-    expect(selected()).toBe("Data");
-    press("Data", "ArrowRight");
+    expect(selected()).toBe("Agent Team");
+    press("Agent Team", "ArrowRight");
     await settle();
     expect(selected()).toBe("Screen");
 
     press("Screen", "End");
     await settle();
-    expect(selected()).toBe("Data");
-    expect(document.activeElement).toBe(tab("Data"));
-    press("Data", "Home");
+    expect(selected()).toBe("Agent Team");
+    expect(document.activeElement).toBe(tab("Agent Team"));
+    press("Agent Team", "Home");
     await settle();
     expect(selected()).toBe("Screen");
     expect(document.activeElement).toBe(tab("Screen"));
@@ -208,7 +209,7 @@ describe("Computer panel tab", () => {
   it("moves over an Android tab that appeared", async () => {
     fixture.android = true;
     await open(makeBot());
-    expect(tabLabels()).toEqual(["Screen", "Routines", "Android", "Browser", "Data"]);
+    expect(tabLabels()).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Agent Team"]);
     press("Routines", "ArrowRight");
     await settle();
     expect(selected()).toBe("Android");
@@ -227,19 +228,22 @@ describe("Computer panel tab", () => {
     expect(selected()).toBe("Screen");
   });
 
-  it("stops on the Files tab in Simple mode", async () => {
+  it("reaches Files then Agent Team in Simple mode", async () => {
     fixture.advanced = false;
     await open(makeBot());
-    expect(tabLabels()).toEqual(["Screen", "Browser", "Data", "Files"]);
-    press("Screen", "End");
+    expect(tabLabels()).toEqual(["Screen", "Browser", "Data", "Files", "Agent Team"]);
+    press("Data", "ArrowRight");
     await settle();
     expect(selected()).toBe("Files");
-    expect(document.activeElement).toBe(tab("Files"));
+    press("Screen", "End");
+    await settle();
+    expect(selected()).toBe("Agent Team");
+    expect(document.activeElement).toBe(tab("Agent Team"));
   });
 
   it("points every selected trigger at its panel and the panel back", async () => {
     await open(makeBot());
-    for (const label of ["Screen", "Routines", "Browser", "Data"]) {
+    for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Agent Team"]) {
       flushSync(() => tab(label).click());
       await settle();
       const trigger = tab(label);
@@ -251,7 +255,7 @@ describe("Computer panel tab", () => {
 
   it("puts every selected panel in the tab sequence", async () => {
     await open(makeBot());
-    for (const label of ["Screen", "Routines", "Browser", "Data"]) {
+    for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Agent Team"]) {
       flushSync(() => tab(label).click());
       await settle();
       const panel = document.getElementById(tab(label).getAttribute("aria-controls")!);
