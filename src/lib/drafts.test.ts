@@ -13,6 +13,7 @@ import {
   appendComposerDraft,
   appendDraftAttachments,
   changeDraftAttachmentPending,
+  clearReplyDraft,
   draftRevision,
   failedComposerSends,
   getDraft,
@@ -22,14 +23,18 @@ import {
   markDraftEdited,
   prependComposerDraft,
   recoverFailedComposerSend,
+  rememberReplyDraft,
+  replyDraft,
   replaceDraftAttachment,
   restoredSendId,
   restoredRequestText,
   setDraft,
   setDraftAttachments,
   setDraftChannelMode,
+  selectReplyDraft,
   useComposerChannelMode,
   useDraft,
+  useReplyDraft,
 } from "./drafts";
 import { citationAttachment, createCitationTextSelector } from "./citations";
 import { composeMessage } from "./composer-attachments";
@@ -550,5 +555,72 @@ describe("saving typed drafts", () => {
     leavePage();
     expect(writes).toHaveLength(1);
     expect(JSON.parse(writes[0])).toEqual({ "bot:other-window:thread": "theirs" });
+  });
+});
+
+describe("reply target draft persistence", () => {
+  const key = "omb-draft-reply-ids";
+
+  it("hydrates the reply hook from an ID and keeps a newer selection after a late failure", () => {
+    const store = memoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: store });
+    const threadId = "thread-reply-hook";
+    store.setItem(key, JSON.stringify({ [threadId]: "source-one" }));
+    let restored: string | undefined;
+    let restoreReply: ((message: { id: string }, targetThreadId: string) => void) | undefined;
+    function Reader() {
+      const state = useReplyDraft(threadId, "bot:reply-hook:thread", [{ id: "source-one" }, { id: "source-two" }]);
+      restored = state.replyTo?.id;
+      restoreReply = state.restoreReply;
+      return null;
+    }
+    renderToStaticMarkup(createElement(Reader));
+    expect(restored).toBe("source-one");
+    selectReplyDraft("bot:reply-hook:thread", threadId, "source-two");
+    restoreReply!({ id: "source-one" }, threadId);
+    expect(replyDraft(threadId)).toBe("source-two");
+    expect(JSON.parse(store.getItem(key)!)).toEqual({ [threadId]: "source-two" });
+  });
+
+  it("keeps blocked and quota-rejected storage writes in memory", () => {
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, get: () => { throw new Error("blocked"); } });
+    rememberReplyDraft("thread-blocked-reply", "source-blocked");
+    expect(replyDraft("thread-blocked-reply")).toBe("source-blocked");
+    clearReplyDraft("thread-blocked-reply");
+    expect(replyDraft("thread-blocked-reply")).toBeUndefined();
+
+    const readable = memoryStorage();
+    readable.setItem(key, JSON.stringify({ "thread-quota-reply": "source-old" }));
+    const quota: Storage = { ...readable, setItem: () => { throw new DOMException("quota exceeded", "QuotaExceededError"); } };
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: quota });
+    expect(replyDraft("thread-quota-reply")).toBe("source-old");
+    rememberReplyDraft("thread-quota-reply", "source-new");
+    expect(replyDraft("thread-quota-reply")).toBe("source-new");
+    clearReplyDraft("thread-quota-reply");
+    expect(replyDraft("thread-quota-reply")).toBeUndefined();
+    expect(JSON.parse(readable.getItem(key)!)).toEqual({ "thread-quota-reply": "source-old" });
+  });
+
+  it("stores only per-thread IDs across module reloads and clears sent or cancelled replies", async () => {
+    const store = memoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: store });
+    rememberReplyDraft("thread-reload-a", "source-a");
+    rememberReplyDraft("thread-reload-b", "source-b");
+    expect(JSON.parse(store.getItem(key)!)).toEqual({ "thread-reload-a": "source-a", "thread-reload-b": "source-b" });
+
+    vi.resetModules();
+    const reloaded = await import("./drafts");
+    expect(reloaded.replyDraft("thread-reload-a")).toBe("source-a");
+    expect(reloaded.replyDraft("thread-reload-b")).toBe("source-b");
+    reloaded.clearReplyDraft("thread-reload-a");
+    expect(reloaded.replyDraft("thread-reload-b")).toBe("source-b");
+    expect(JSON.parse(store.getItem(key)!)).toEqual({ "thread-reload-b": "source-b" });
+    reloaded.discardReplyDraft("bot:cancel:thread-reload-b", "thread-reload-b");
+    expect(JSON.parse(store.getItem(key)!)).toEqual({});
+
+    vi.resetModules();
+    const cleared = await import("./drafts");
+    expect(cleared.replyDraft("thread-reload-a")).toBeUndefined();
+    expect(cleared.replyDraft("thread-reload-b")).toBeUndefined();
   });
 });

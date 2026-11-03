@@ -5,9 +5,9 @@ const KEY = "omb-drafts";
 const ATTACHMENTS_KEY = "omb-draft-attachments";
 const SEND_IDS_KEY = "omb-draft-send-ids";
 const CHANNEL_MODES_KEY = "omb-draft-channel-modes";
+const REPLY_IDS_KEY = "omb-draft-reply-ids";
 // Outside React, so a late failure from an unmounted composer cannot overwrite a newer draft.
 const draftRevisions = new Map<string, number>();
-const replyDrafts = new Map<string, string>();
 type ChannelMode = "chat" | "goal";
 type DraftRestore = { text: string; attachments: Attachment[]; channelMode?: ChannelMode };
 type DraftRestoreListener = (draft: DraftRestore) => void;
@@ -46,6 +46,8 @@ const textDraftsByStore = new WeakMap<object, Map<string, string>>();
 const attachmentDraftsByStore = new WeakMap<object, Map<string, Attachment[]>>();
 const fallbackChannelModes = new Map<string, ChannelMode>();
 const channelModesByStore = new WeakMap<object, Map<string, ChannelMode>>();
+const fallbackReplyDrafts = new Map<string, string | undefined>();
+const replyDraftsByStore = new WeakMap<object, Map<string, string | undefined>>();
 
 function memoryFor<T>(
   store: Store,
@@ -170,16 +172,34 @@ export function setDraftAttachments(store: Store, id: string, attachments: Attac
   }
 }
 
+function setReplyDraft(threadId: string, messageId: string | undefined): void {
+  const store = getStore();
+  memoryFor(store, replyDraftsByStore, fallbackReplyDrafts).set(threadId, messageId);
+  const drafts = read(store, REPLY_IDS_KEY);
+  if (messageId === undefined) delete drafts[threadId];
+  else drafts[threadId] = messageId;
+  try {
+    store?.setItem(REPLY_IDS_KEY, JSON.stringify(drafts));
+  } catch {
+  }
+}
+
 export function rememberReplyDraft(threadId: string, messageId: string): void {
-  replyDrafts.set(threadId, messageId);
+  setReplyDraft(threadId, messageId);
 }
 
 export function replyDraft(threadId: string): string | undefined {
-  return replyDrafts.get(threadId);
+  const store = getStore();
+  const memory = memoryFor(store, replyDraftsByStore, fallbackReplyDrafts);
+  if (memory.has(threadId)) return memory.get(threadId);
+  const stored = read(store, REPLY_IDS_KEY)[threadId];
+  const messageId = typeof stored === "string" ? stored : undefined;
+  memory.set(threadId, messageId);
+  return messageId;
 }
 
 export function clearReplyDraft(threadId: string): void {
-  replyDrafts.delete(threadId);
+  setReplyDraft(threadId, undefined);
 }
 
 export function selectReplyDraft(draftId: string, threadId: string, messageId: string): void {
