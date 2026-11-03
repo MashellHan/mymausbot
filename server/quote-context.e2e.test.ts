@@ -61,11 +61,11 @@ it("keeps a quoted source and current request through direct send, queue, retry 
       headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.8" },
       body: JSON.stringify({ threadId: bot.threadId, text: "Denied source", replyToId: source.id }) });
     expect(denied.status).toBe(403);
-    const expired = await fetch(`${url}/api/bots/${bot.id}/messages`, { method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer omb_sess_fixture_expired" },
-      body: JSON.stringify({ threadId: bot.threadId, text: "Expired source", replyToId: source.id }) });
-    expect(expired.status).toBe(401);
-    expect((await messages(bot.threadId)).filter((line) => ["Wrong source", "Missing source", "Denied source", "Expired source"].includes(line.text ?? ""))).toHaveLength(0);
+    const invalidSession = await fetch(`${url}/api/bots/${bot.id}/messages`, { method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer omb_sess_fixture_invalid" },
+      body: JSON.stringify({ threadId: bot.threadId, text: "Invalid-session source", replyToId: source.id }) });
+    expect(invalidSession.status).toBe(401);
+    expect((await messages(bot.threadId)).filter((line) => ["Wrong source", "Missing source", "Denied source", "Invalid-session source"].includes(line.text ?? ""))).toHaveLength(0);
 
     unlinkSync(gate);
     await api("POST", `/api/bots/${bot.id}/messages`, { threadId: bot.threadId, text: "Hold this turn", sendId: "quote-hold-000000001" }, 202);
@@ -84,6 +84,25 @@ it("keeps a quoted source and current request through direct send, queue, retry 
     expect(busyLines).toHaveLength(1);
     expect(busyLines[0]).toMatchObject({ text: busyBody.text, replyToId: source.id });
     expect((await api("POST", `/api/bots/${bot.id}/messages`, busyBody, 202)).message).toMatchObject({ id: busyLines[0]!.id, replyToId: source.id });
+
+    unlinkSync(gate);
+    await api("POST", `/api/bots/${bot.id}/messages`, { threadId: bot.threadId, text: "Hold live turn", sendId: "quote-live-hold-00001" }, 202);
+    await expect.poll(prompt, { timeout: 15_000 }).toContain("Hold live turn");
+    const steerBody = { threadId: bot.threadId, text: "Live choice: keep blue", replyToId: source.id,
+      sendId: "quote-steer-00000001", followUp: "steer" };
+    const live = await api("POST", `/api/bots/${bot.id}/messages`, steerBody, 202);
+    expect(live).toMatchObject({ steered: true, message: { replyToId: source.id, sendId: steerBody.sendId } });
+    const liveMessage = live.message as Line;
+    expect((await api("POST", `/api/bots/${bot.id}/messages`, steerBody, 202)).message).toMatchObject({ id: liveMessage.id, replyToId: source.id });
+    await api("POST", `/api/bots/${bot.id}/messages`, { ...steerBody, replyToId: undefined }, 409);
+    writeFileSync(gate, "release");
+    await settled(bot);
+    const afterSteer = await messages(bot.threadId);
+    expect(afterSteer.filter((line) => line.sendId === steerBody.sendId)).toEqual([
+      expect.objectContaining({ id: liveMessage.id, replyToId: source.id, text: steerBody.text }),
+    ]);
+    const received = afterSteer.filter((line) => line.role === "bot" && line.text?.includes("steered:")).at(-1)?.text?.split("steered:").at(-1) ?? "";
+    expect(received).toMatch(/--- quoted excerpt ---[\s\S]*Source plan: blue door[\s\S]*--- end quoted excerpt ---[\s\S]*Current message:[\s\S]*Live choice: keep blue/);
   } finally {
     await fixture?.close();
     await removeTempDir(control);
