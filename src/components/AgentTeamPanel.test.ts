@@ -119,9 +119,9 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("Local Herdr · 2 teams");
   });
 
-  it("clears old local data when the server denies access", async () => {
+  it.each([401, 403])("clears old local data on HTTP %i", async (status) => {
     vi.useFakeTimers();
-    calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new ApiError("forbidden", 403));
+    calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new ApiError("forbidden", status));
     await render("panel");
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(text()).toContain("Local Herdr · — teams");

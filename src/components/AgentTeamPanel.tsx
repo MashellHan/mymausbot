@@ -114,7 +114,7 @@ export function AgentTeamPanel() {
         const next = await api<LocalAgentTeamsResponse>(ROUTE, { background: true, signal: controller.signal, timeoutMs: 5_000 });
         if (active) setSnapshot((previous) => next.status === "unavailable" && previous?.updatedAt != null ? { ...previous, status: "stale" } : next);
       } catch (error) {
-        if (active) setSnapshot((previous) => error instanceof ApiError && error.status === 403 ? unavailable
+        if (active) setSnapshot((previous) => error instanceof ApiError && (error.status === 401 || error.status === 403) ? unavailable
           : previous?.updatedAt != null ? { ...previous, status: "stale" } : unavailable);
       } finally {
         if (active) timer = setTimeout(refresh, REFRESH_MS);
