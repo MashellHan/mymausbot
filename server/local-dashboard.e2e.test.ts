@@ -11,6 +11,10 @@ describe("local dashboard authorization in an isolated server", () => {
       const owner = await fetch(`${url}/api/local-dashboard/agents`);
       expect(owner.status).toBe(200);
       expect(await owner.json()).toEqual({ status: "unavailable", updatedAt: null, teamCount: null, teams: [] });
+      const ownerUsage = await fetch(`${url}/api/local-dashboard/usage`);
+      expect(ownerUsage.status).toBe(200);
+      expect(await ownerUsage.json()).toEqual({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
+        sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] });
 
       const opened = await fetch(`${url}/api/auth/pairing`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
       const { code } = await opened.json() as { code: string };
@@ -18,7 +22,9 @@ describe("local dashboard authorization in an isolated server", () => {
       const { token } = await paired.json() as { token: string };
       expect(token).toMatch(/^omb_sess_/);
       expect((await fetch(`${url}/api/local-dashboard/agents`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(403);
+      expect((await fetch(`${url}/api/local-dashboard/usage`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(403);
       expect((await fetch(`${url}/api/local-dashboard/agents`, { headers: { "x-forwarded-for": "203.0.113.8" } })).status).toBe(403);
+      expect((await fetch(`${url}/api/local-dashboard/usage`, { headers: { "x-forwarded-for": "203.0.113.8" } })).status).toBe(403);
 
       const browser = await fetch(`${url}/api/local-dashboard/agents`, { headers: {
         origin: url, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty",
