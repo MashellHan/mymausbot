@@ -17,6 +17,10 @@ The original repository remains the upstream. Preserve its license and notices.
 Launch arguments are in each role file; verify live session settings before
 claiming the model is active. A requested context ceiling is not proof the
 provider permits that entire context. Surface errors rather than downgrade.
+The Sol launch explicitly uses `service_tier="default"`: the implicit priority
+tier failed with `service_tier is not supported` on this installation, while
+the explicit default tier was verified by real tool-using responses from all
+three Sol members. Keep that local compatibility setting when restarting them.
 
 Use `/Users/mengxionghan/.agents/skills/herdr/SKILL.md` for Herdr operations,
 with `--session default` and explicit names/IDs. Work in the MausBot workspace;

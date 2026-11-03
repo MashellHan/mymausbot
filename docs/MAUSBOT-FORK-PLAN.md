@@ -11,6 +11,9 @@ Its live agents are `mausbot-lead`, `mausbot-design`, `mausbot-front`,
 for lead and reviewer and GPT-6-Sol/xhigh with model_context_window=1000000
 for the other three. TUI model labels were read for lead and frontend; the
 context value is a launch configuration, not a measured provider limit.
+Sol initially failed on the implicit priority service tier. Restarting those
+three agents with `service_tier="default"` preserved the requested model,
+effort and context settings and produced actual tool-using responses.
 Role files and CONTRIBUTING-FORK.md carry the user's development preferences.
 
 ## 1. Build and open
@@ -75,6 +78,10 @@ Read aggregates rather than exposing raw conversation logs or credentials.
 Refresh hourly with single-flight behavior and preserve last good results on
 failure. Reuse an existing schedule or coordinate one owner to avoid duplicate
 collection; the existing standing daily publication remains intact.
+Hourly local refresh is already enabled on 头号狗腿, automation
+`e8e4f244-f5bc-40c6-99aa-acdef15c7b12`, at every hour in China time, first
+2026-11-03 17:00. It calls the existing collector without `--publish`; do not
+add a second hourly collector in the App without consolidating ownership.
 
 ## Delivery checks
 
