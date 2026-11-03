@@ -53,6 +53,18 @@ for code PRs, rooted beside this project under the user's workspace.
    Missing/offline data is unavailable or stale, never fabricated zero.
    The initial dashboard covers the user's existing activity aggregate sources,
    not only activity inside this newly forked repo. Label the window and coverage.
+   Include the capture day's partial data through the aggregate timestamp plus
+   the preceding 0/6/29 China calendar days. Derive these windows and their
+   matching 30-day trend from daily rows; preserve the collector's own totals.
+4. Improve **Section classification and search** through the existing sidebar
+   sections and picker. Inspect current behavior before adding code. Sections
+   are departments and can affect Chief authority, shared context and computer
+   access; sidebar organization must not silently expand those permissions.
+5. Improve **message quoting and intent** through the existing ReplyAction,
+   composer preview, persisted replyToId and promptWithReply. Make the entry
+   point discoverable and fix demonstrated gaps without a second quote system.
+   Verify direct chat, append while busy, retry and refresh persistence with
+   isolated fixtures, preserving the original access boundaries.
 
 Independent design/data reconnaissance may proceed while task 1 finishes;
 feature integration and acceptance follow the order above. The existing build
@@ -89,3 +101,9 @@ choose sensible detail defaults without another approval round.
 No live data mutation for tests. Use `docs/verification/README.md` fixtures.
 Reviewer checks functional contracts and visual evidence. Report actual checks,
 PR links, artifact paths and remaining limits to the lead and 头号狗腿.
+Keep private handoff receipts in the local build job: `local-app-ready.json`
+for the initial signed App, and `feature-delivery-ready.json` once all five
+outcomes, required checks, independent reviews and the local feature App are
+ready. Include per-outcome status, English PR links, exact commits, real test
+and screenshot paths, the App path and remaining limits. Never mark partial
+work as complete or create another collection/notification automation.

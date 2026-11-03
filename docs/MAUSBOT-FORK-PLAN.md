@@ -87,7 +87,36 @@ Hourly local refresh already has one external automation owner and runs at
 every hour in China time, first 2026-11-03 17:00. Its identifier stays in the
 local handoff record. It calls the existing collector without `--publish`;
 the App only consumes the aggregate and must not add another collector.
-The 1/7/30-day summaries use completed China calendar days, excluding today.
+The 1/7/30-day summaries include the capture day's partial data through
+`updatedAt`, plus the previous 0/6/29 China calendar days. The trend uses the
+same 30 date keys. Derive these windows from daily rows, not the collector's
+complete-day totals or all 31 stored rows. A previous-day snapshot retains its
+actual date window and is stale; missing dates never become invented zeroes.
+
+A privately supplied usage script is a read-only comparison reference, not a
+redistributable source or another collector. Record metric provenance without
+its personal identities or machine conventions. New tokens mean noncached
+input plus output; cache reads are separate, cache writes are included in input
+and reasoning is included in output. Validate provider-specific assumptions
+against version-specific evidence before treating them as established.
+
+## 4. Section classification and search
+
+Reuse `SidebarSections.tsx`, `SidebarSectionPicker.tsx`, `bot-sections.ts` and
+the existing sidebar-section routes. First verify current grouping, collapsing,
+selection and search. Improve demonstrated entry-point or reliability gaps.
+Sections represent departments and can affect Chief authority, shared context
+and computer permissions. A sidebar classification action must not silently
+expand those boundaries or create an unrelated parallel grouping mechanism.
+
+## 5. Message quoting and intent
+
+Reuse ReplyAction, the composer's quote preview, persisted `replyToId` and
+`server/replies.ts`'s `promptWithReply`. Inspect the Simple-mode More menu entry
+and improve discoverability where needed. Keep the referenced source distinct
+from the current request in the bot's input. Verify direct chat, append while
+busy, retry and a refreshed conversation with real isolated fixtures. Preserve
+message access checks and reject invalid or unrelated quote references.
 
 ## Delivery checks
 
@@ -99,3 +128,10 @@ The 1/7/30-day summaries use completed China calendar days, excluding today.
   independent work can proceed concurrently. Merge is not yet authorized.
 - Completion requires actual artifact/process/UI verification, not only a prompt
   accepted by Herdr or a role declaration. Report remaining limits precisely.
+- Deliver Section and quoting as separate focused English PRs after the two
+  dashboard tabs, with coherent commits and delta review of corrections.
+- Record the initial signed App in the local job's `local-app-ready.json`.
+  Record all five outcomes in `feature-delivery-ready.json` only after their
+  code, required checks, Reviewer results and locally runnable feature App are
+  ready. Include exact SHAs, English PR links, real test/screenshot paths and
+  remaining limits. These local receipts must not enter the public repository.
