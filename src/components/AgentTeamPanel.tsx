@@ -26,7 +26,7 @@ const stateDot = {
   unknown: "bg-ink-secondary/30",
 } as const;
 
-function memberRow(member: LocalAgentMember) {
+function memberRow(member: LocalAgentMember, stale: boolean) {
   return (
     <li key={member.id} className="flex min-w-0 gap-2.5 border-t border-hairline/40 py-3 first:border-t-0">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-inset text-ink-secondary" aria-hidden="true"><UserRound size={16} /></span>
@@ -35,9 +35,11 @@ function memberRow(member: LocalAgentMember) {
           <span dir="auto" className="min-w-0 text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{member.name}</span>
           <span className="text-[11px] text-ink-tertiary">{member.role ?? t("computer.agentTeam.roleUnavailable")}</span>
         </div>
-        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-ink-secondary">
-          <span className="inline-flex items-center gap-1.5"><span className={cn("size-1.5 shrink-0 rounded-full", stateDot[member.state])} aria-hidden="true" />{t(stateLabel[member.state])}</span>
-          <span dir="auto" className="min-w-0 [overflow-wrap:anywhere]">{member.model ?? t("computer.agentTeam.modelUnavailable")}</span>
+        <div className="mt-1 text-[11px] text-ink-secondary">
+          <span className="inline-flex items-center gap-1.5"><span className={cn("size-1.5 shrink-0 rounded-full", stale ? "bg-ink-secondary/30" : stateDot[member.state])} aria-hidden="true" />{stale ? t("computer.agentTeam.lastObserved", { state: t(stateLabel[member.state]) }) : t(stateLabel[member.state])}</span>
+        </div>
+        <div dir="auto" className="mt-0.5 min-w-0 text-[11px] text-ink-secondary [overflow-wrap:anywhere]">
+          {member.model ? <>{t("computer.agentTeam.modelLabel")} · {member.model}</> : t("computer.agentTeam.modelUnavailable")}
         </div>
         <p dir="auto" className="mt-1.5 line-clamp-2 text-[12px] leading-4 text-ink-tertiary [overflow-wrap:anywhere]">
           <span className="sr-only">{t("computer.agentTeam.latestTask")}: </span>{member.taskHint ?? t("computer.agentTeam.taskUnavailable")}
@@ -53,6 +55,7 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
   const count = snapshot?.teamCount ?? t("computer.agentTeam.unknownCount");
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
     ? null : new Date(snapshot.updatedAt).toLocaleString();
+  const stale = snapshot?.status === "stale";
 
   const toggle = (id: string) => setExpanded((current) => {
     const next = new Set(current);
@@ -68,9 +71,9 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
         <p className="mt-1 text-[11px] text-ink-tertiary">{readAt ? t("computer.agentTeam.readAt", { time: readAt }) : t("computer.agentTeam.neverRead")}</p>
       </header>
       {snapshot === null ? <p role="status" className="text-[12px] text-ink-secondary">{t("computer.agentTeam.loading")}</p> : null}
-      {snapshot?.status === "stale" ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.agentTeam.stale")}</p> : null}
+      {stale ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.agentTeam.stale")}</p> : null}
       {snapshot?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.unavailable")}</p> : null}
-      {snapshot?.status === "ready" && snapshot.teams.length === 0 ? <p className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.empty")}</p> : null}
+      {snapshot?.teamCount === 0 && snapshot.teams.length === 0 ? <p className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.empty")}</p> : null}
       <div className="space-y-2">
         {snapshot?.teams.map((team) => {
           const open = expanded.has(team.id);
@@ -86,7 +89,7 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
                 </button>
               </h3>
               <div id={id} hidden={!open} className="px-3 pb-1">
-                {team.agents.length ? <ul>{team.agents.map(memberRow)}</ul>
+                {team.agents.length ? <ul>{team.agents.map((member) => memberRow(member, stale))}</ul>
                   : <p className="pb-3 text-[12px] text-ink-tertiary">{t("computer.agentTeam.noAgents")}</p>}
               </div>
             </section>
@@ -109,10 +112,10 @@ export function AgentTeamPanel() {
     const refresh = async () => {
       try {
         const next = await api<LocalAgentTeamsResponse>(ROUTE, { background: true, signal: controller.signal, timeoutMs: 5_000 });
-        if (active) setSnapshot((previous) => next.status === "unavailable" && previous?.teams.length ? { ...previous, status: "stale" } : next);
+        if (active) setSnapshot((previous) => next.status === "unavailable" && previous?.updatedAt != null ? { ...previous, status: "stale" } : next);
       } catch (error) {
         if (active) setSnapshot((previous) => error instanceof ApiError && error.status === 403 ? unavailable
-          : previous?.teams.length ? { ...previous, status: "stale" } : unavailable);
+          : previous?.updatedAt != null ? { ...previous, status: "stale" } : unavailable);
       } finally {
         if (active) timer = setTimeout(refresh, REFRESH_MS);
       }

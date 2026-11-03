@@ -69,6 +69,7 @@ describe("Agent Team panel", () => {
     await act(async () => first.click());
     expect(headers().map((button) => button.getAttribute("aria-expanded"))).toEqual(["true", "false"]);
     expect(text()).toContain("Working");
+    expect(text()).toContain("Model · a-very-long-synthetic-model-identifier");
     expect(text()).toContain("Needs input");
     expect(text()).toContain("Idle");
     expect(text()).toContain("Model unavailable");
@@ -85,6 +86,8 @@ describe("Agent Team panel", () => {
     expect(scroller.scrollTop).toBe(42);
     expect(headers().map((button) => button.getAttribute("aria-expanded"))).toEqual(["true", "false"]);
     expect(text()).toContain("Showing the last known teams");
+    expect(text()).toContain("Last observed · Needs input");
+    expect(host.querySelector<HTMLElement>("section li .bg-ink-secondary\\/30")).not.toBeNull();
     expect(text()).toContain("Local Herdr · 2 teams");
 
     await act(async () => headers()[1]!.click());
@@ -124,5 +127,17 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("Local Herdr · — teams");
     expect(text()).toContain("teams are unavailable");
     expect(text()).not.toContain("Atlas Studio");
+  });
+
+  it("keeps a valid empty snapshot and its zero count when the next read fails", async () => {
+    vi.useFakeTimers();
+    calls.api.mockResolvedValueOnce({ status: "ready", updatedAt: ready.updatedAt, teamCount: 0, teams: [] })
+      .mockRejectedValueOnce(new Error("offline"));
+    await render("panel");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(text()).toContain("Local Herdr · 0 teams");
+    expect(text()).toContain("Showing the last known teams");
+    expect(text()).toContain("No local Herdr teams found");
+    expect(text()).not.toContain("No successful read yet");
   });
 });

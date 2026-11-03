@@ -5155,6 +5155,8 @@
   "computer.agentTeam.noAgents": "No agents in this team.",
   "computer.agentTeam.roleUnavailable": "Role unavailable",
   "computer.agentTeam.modelUnavailable": "Model unavailable",
+  "computer.agentTeam.modelLabel": "Model",
+  "computer.agentTeam.lastObserved": "Last observed · {state}",
   "computer.agentTeam.latestTask": "Latest task",
   "computer.agentTeam.taskUnavailable": "Latest task unavailable",
   "computer.agentTeam.state.working": "Working",

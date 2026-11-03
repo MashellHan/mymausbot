@@ -1,6 +1,8 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { LocalAgentTeamsResponse } from "../shared/local-dashboard.ts";
-import { launchVerificationServer, runControlOmb } from "./control-omb.ts";
-import { fixtureApi, mountPreview, parkUntilSignal, type MountedPreview } from "./testing/preview-fixture.ts";
+import type { Bot } from "../src/state/store.tsx";
+import { mountPreview, parkUntilSignal, type MountedPreview } from "./testing/preview-fixture.ts";
 
 const sample: LocalAgentTeamsResponse = {
   status: "ready", updatedAt: Date.UTC(2026, 10, 3, 8, 30), teamCount: 2,
@@ -17,16 +19,22 @@ const sample: LocalAgentTeamsResponse = {
   ],
 };
 
-const fixture = await launchVerificationServer();
+const bot = {
+  id: "fixture-bot", threadId: "fixture-thread", name: "Sample assistant", title: "", description: "", color: "green",
+  notifications: true, unread: false, busy: false, computer: "off", messages: [],
+  modelSelection: { instanceId: "fixture-engine", model: "fixture-model" },
+  tasks: [{ threadId: "fixture-thread", title: "Sample thread", createdAt: 1, approvalMode: "ask" }],
+} as Bot;
+const server = createServer((req, res) => {
+  res.setHeader("content-type", "application/json");
+  if (req.url?.includes("/computer/control")) res.end(JSON.stringify({ held: false, helpReason: null }));
+  else res.end("{}");
+});
+await new Promise<void>((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
+const address = server.address() as AddressInfo;
 let preview: MountedPreview | undefined;
 try {
-  const control = (args: string[]) => runControlOmb([...args, "--url", fixture.info.url]);
-  await control(["new-bot", "--name", "Sample assistant"]);
-  const { bots } = await fixtureApi(fixture.info.url)("GET", "/api/bots?messages=0");
-  const bot = bots.find((item: { name: string }) => item.name === "Sample assistant");
-  if (!bot) throw new Error("Synthetic bot was not created");
-
-  preview = await mountPreview(fixture, {
+  preview = await mountPreview({ info: { url: `http://127.0.0.1:${address.port}` } }, {
     entry: "/scripts/testing/agent-team-preview.tsx", route: "/__agent-team.html", title: "Isolated Agent Team panel",
     extraRoutes: [
       { path: "/__agent-team-bot", handler: (_req, res) => {
@@ -47,5 +55,5 @@ try {
   await parkUntilSignal();
 } finally {
   await preview?.close();
-  await fixture.close();
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }

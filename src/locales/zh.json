@@ -5137,6 +5137,8 @@
   "computer.agentTeam.noAgents": "此团队暂无成员。",
   "computer.agentTeam.roleUnavailable": "角色不可用",
   "computer.agentTeam.modelUnavailable": "模型不可用",
+  "computer.agentTeam.modelLabel": "模型",
+  "computer.agentTeam.lastObserved": "上次观察 · {state}",
   "computer.agentTeam.latestTask": "最近任务",
   "computer.agentTeam.taskUnavailable": "最近任务不可用",
   "computer.agentTeam.state.working": "工作中",
