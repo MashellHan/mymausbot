@@ -28,7 +28,8 @@ const bots = [bot("fixture-atlas", "Atlas"), bot("fixture-writer", "Writer", "Wo
   bot("fixture-hidden", "Hidden sample", "Work", true), bot("fixture-travel", "Travel", "Home")];
 const room = { id: "fixture-room", threadId: "fixture-room-thread", name: "Launch room", section: "Work", memberIds: ["fixture-writer"],
   messages: [], defaultResponder: { kind: "mentions" }, bulletin: "", unread: false, createdAt: 1 } as Group;
-const sections = picker ? ["Work", "Home", ...Array.from({ length: 36 }, (_, index) => `Department ${String(index + 1).padStart(2, "0")}`)] : ["Work", "Home"];
+const sections = params.get("identity") === "ambiguous" ? ["Work", "work"]
+  : picker ? ["Work", "Home", ...Array.from({ length: 36 }, (_, index) => `Department ${String(index + 1).padStart(2, "0")}`)] : ["Work", "Home"];
 const state = { ...initialState, connected: true, selectedId: "fixture-atlas", activeView: "chat" as const,
   bots, groups: [room], sections };
 const value = { state, dispatch: () => {}, flushBotPatches: async () => null,
