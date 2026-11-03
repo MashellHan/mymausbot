@@ -7,7 +7,6 @@ import { useHeldMenuMotion } from "./MenuMotion";
 import { MENU_HEADING, MENU_ITEM, MENU_ITEM_SEPARATOR, MENU_SHEET } from "./menu-recipe";
 import { departmentNames } from "./bot-sections";
 
-/** "Move to context": the sidebar sections in use, a field for a new one, and "remove from context". */
 export function SectionPicker({
   current,
   anchor,
@@ -27,6 +26,8 @@ export function SectionPicker({
   if (anchor) heldCurrent.current = current;
   const trimmed = name.trim();
 
+  useEffect(() => { if (anchor) setName(""); }, [anchor]);
+
   useEffect(() => {
     if (!anchor) return;
     const onDown = (e: MouseEvent) => {
@@ -44,6 +45,8 @@ export function SectionPicker({
   }, [anchor, onClose]);
 
   const sections = departmentNames(state);
+  const filteredSections = sections.filter((section) => section.toLowerCase().includes(trimmed.toLowerCase()));
+  const exactSection = sections.find((section) => section.toLowerCase() === trimmed.toLowerCase());
 
   const assign = (section: string) => {
     onAssign(section);
@@ -52,23 +55,49 @@ export function SectionPicker({
 
   if (!motion.shown || !shown) return null;
   const sectionCurrent = heldCurrent.current;
-  const top = Math.max(8, Math.min(shown.y, window.innerHeight - 300));
+  const top = Math.max(8, Math.min(shown.y, window.innerHeight - 350));
   const left = Math.min(shown.x, window.innerWidth - 260);
 
   return (
     <div
       data-section-picker
       style={{ top, left }}
-      className={cn("fixed z-40 w-[236px] overflow-hidden", MENU_SHEET, motion.className)} {...motion.exitProps}
+      className={cn("fixed z-40 w-[236px] max-h-[calc(100dvh-16px)] overflow-y-auto", MENU_SHEET, motion.className)} {...motion.exitProps}
     >
       <div className={MENU_HEADING}>
         {t("sidebar.section.moveToContext")}
       </div>
+      <form
+        className="flex items-center gap-1.5 p-0.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!trimmed || trimmed.length > 60) return;
+          assign(exactSection ?? trimmed);
+        }}
+      >
+        <input
+          autoFocus
+          maxLength={60}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={t("sidebar.section.searchOrCreate")}
+          aria-label={t("sidebar.section.searchOrCreateAria")}
+          className="w-full rounded-md bg-ink/[0.05] px-2 py-1.5 text-[13px] text-ink placeholder:text-ink-tertiary focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={!trimmed || trimmed.length > 60}
+          className="ui-button ui-button-md shrink-0"
+        >
+          {t("sidebar.section.move")}
+        </button>
+      </form>
       {sections.length > 0 && (
-        <div className="flex flex-col gap-1">
-          {sections.map((section) => (
+        <div role="group" aria-label={t("sidebar.section.moveToContext")} className="flex max-h-52 flex-col gap-1 overflow-y-auto overscroll-contain">
+          {filteredSections.map((section) => (
             <button
               key={section}
+              type="button"
               onClick={() => assign(section)}
               className={cn(
                 MENU_ITEM, "justify-between",
@@ -79,33 +108,9 @@ export function SectionPicker({
               {section === sectionCurrent && <Check size={14} className="shrink-0 text-accent" />}
             </button>
           ))}
+          {filteredSections.length === 0 && <p className="px-2 py-2 text-[12px] text-ink-secondary">{t("sidebar.section.noMatch")}</p>}
         </div>
       )}
-      <form
-        className="flex items-center gap-1.5 p-0.5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!trimmed || trimmed.length > 60) return;
-          assign(trimmed);
-        }}
-      >
-        <input
-          autoFocus
-          maxLength={60}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t("sidebar.section.newContext")}
-          aria-label={t("sidebar.section.newContextAria")}
-          className="w-full rounded-md bg-ink/[0.05] px-2 py-1.5 text-[13px] text-ink placeholder:text-ink-tertiary focus:outline-none"
-        />
-        <button
-          type="submit"
-          disabled={!trimmed || trimmed.length > 60}
-          className="ui-button ui-button-md ui-button-primary shrink-0"
-        >
-          {t("common.add")}
-        </button>
-      </form>
       {sectionCurrent && (
         <>
           <div role="separator" className={MENU_ITEM_SEPARATOR} />
@@ -114,7 +119,7 @@ export function SectionPicker({
             className={cn(MENU_ITEM, "text-danger hover:bg-menu-hover")}
           >
             <FolderMinus size={16} />
-            {t("sidebar.section.removeFromContext")}
+            {t("sidebar.section.removeFromDepartment")}
           </button>
         </>
       )}
