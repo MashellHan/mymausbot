@@ -20,11 +20,12 @@ export function UsageDailyTable({ days }: { days: LocalUsageTrendDay[] }) {
     </summary>
     <p className="mb-3 text-[13px] leading-5 text-ink-secondary">{t("computer.usage.wowHint")}</p>
     <div className={tableRegion} role="region" aria-label={t("computer.usage.dailyValues")} tabIndex={0}>
-      <table className="w-full min-w-[650px] text-[13px] tabular-nums">
+      <table className="w-full min-w-[650px] table-fixed text-[13px] tabular-nums">
+        <colgroup><col className="w-[104px]" /><col /><col /><col /><col className="w-44" /></colgroup>
         <thead className="bg-inset text-ink-secondary"><tr>
           <th scope="col" className="sticky left-0 z-10 bg-inset px-3 py-2 text-left font-medium">{t("computer.usage.day")}</th>
           {usageMetrics.map((metric) => <th key={metric} scope="col" className="px-3 py-2 text-right font-medium">{t(`computer.usage.metric.${metric}`)}</th>)}
-          <th scope="col" className="min-w-40 px-3 py-2 text-right font-medium">WoW</th>
+          <th scope="col" className="px-3 py-2 text-right font-medium">WoW</th>
         </tr></thead>
         <tbody className="text-ink">
           {days.slice().reverse().map((day) => <tr key={day.day} className="border-t border-hairline/40">

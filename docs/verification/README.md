@@ -111,6 +111,10 @@ built-in browser panel, and updater UI—is still not proven by the harness. Use
 the relevant Electron/package smoke test and state that limitation. Add a map
 entry only after the shared control surface can really drive it.
 
+The [local Usage and Agent Team fixtures](local-dashboard.md) check dashboard
+data, owner access, responsive tables and live session updates using synthetic
+snapshots, without reading or mutating the person's live app data.
+
 The [switchable local environments recipe](local-environments.md) verifies
 creating, switching between and recovering named local environments by hand on
 a packaged desktop install; the control surface cannot drive it, so it is not

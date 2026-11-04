@@ -77,6 +77,8 @@ Use their printed URLs, never a live app URL. Check `width=360`, `400` and `960`
 `skin=midnight` and `atelier`, and `locale=en` and `zh`. Verify three stacked
 trends, initially collapsed daily details, all three WoW values, and keyboard
 navigation of repository period tabs. Check unavailable, stale and zero states.
+In both locales at 360px, expand the daily table and scroll fully right. Each
+WoW metric name and value must remain visible beside the fixed date column.
 
 For Agent Team use `scenario=live`. Open a house, focus the corresponding team
 header and scroll the list. POST to `/__agent-team-update` on that fixture's
