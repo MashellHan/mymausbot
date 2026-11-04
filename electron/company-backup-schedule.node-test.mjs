@@ -16,7 +16,7 @@ const turn = () => new Promise(resolve => setImmediate(resolve));
 function fixture(saved = null) {
   const f = { now: 1_800_000_000_000, scope: { key: "fixture-portal:org:email:device:workspace", generation: 1 },
     saved, calls: [], states: [], writes: [], timers: new Map(), failWrite: false, blockWrite: null,
-    run: async () => {}, read: async () => f.saved };
+    run: async () => {}, read: async () => f.saved, writeThrough: null };
   let nextTimer = 0, tail = Promise.resolve();
   f.scheduler = createCompanyBackupSchedule({
     store: { read: () => f.read(), write: value => {
@@ -24,6 +24,7 @@ function fixture(saved = null) {
       const operation = tail.catch(() => {}).then(async () => {
         if (block) await block.promise;
         if (f.failWrite) throw new Error("fixture secret should never escape");
+        await f.writeThrough?.(copy);
         f.saved = copy; f.writes.push(copy);
       });
       tail = operation; return operation;
@@ -149,18 +150,43 @@ test("locked or malformed storage is fail-closed and secret-free", async () => {
   assert.equal(f.scheduler.state().enabled, false); assert.equal(f.timers.size, 0);
 });
 
-test("a saved schedule this computer can no longer decrypt is removed, and turning backups on again is the one next step", async t => {
+test("a transient decrypt error preserves the saved schedule and never uploads overdue work on recovery", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "omb-schedule-decrypt-retry-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "company-backup-schedule.bin");
+  let first = true;
+  const encryption = { available: async () => true, encrypt: async text => Buffer.from(text).map(byte => byte ^ 0x33),
+    decrypt: async value => {
+      if (first) { first = false; throw new Error("temporarily unavailable"); }
+      return { shouldReEncrypt: false, result: Buffer.from(value).map(byte => byte ^ 0x33).toString() };
+    } };
+  const saved = { version: 2, scope: "fixture-portal:org:email:device:workspace", nextBackupAt: 1_800_000_000_000 - DAY };
+  const real = createManagedDesktopStore({ file, encryption });
+  await real.write(saved);
+  const original = await fs.readFile(file);
+  const f = fixture(saved); f.read = () => real.read(); f.writeThrough = value => real.write(value);
+  assert.deepEqual(await f.scheduler.start(), { enabled: true, status: "paused", message: WAITING });
+  assert.deepEqual(await fs.readFile(file), original);
+  assert.deepEqual(f.writes, []); assert.equal(f.calls.length, 0);
+  assert.equal([...f.timers.values()][0].delay, 15_000);
+  await f.fire(15_000);
+  assert.equal(f.scheduler.state().status, "waiting"); assert.equal(f.scheduler.state().enabled, true);
+  assert.equal(f.calls.length, 0, "an overdue backup never uploads as soon as the record opens");
+  assert.deepEqual(f.writes, []); assert.deepEqual(await fs.readFile(file), original);
+  assert.ok([...f.timers.values()][0].delay >= RESUME_DELAY);
+});
+
+test("malformed decrypted schedule JSON is removed instead of retried", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "omb-schedule-unreadable-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
   const file = path.join(root, "company-backup-schedule.bin");
   const encryption = { available: async () => true, encrypt: async text => Buffer.from(text).map(byte => byte ^ 0x33),
-    decrypt: async () => { throw new Error("Error while decrypting the ciphertext provided to safeStorage.decryptString."); } };
+    decrypt: async () => ({ shouldReEncrypt: false, result: "not json" }) };
   const saved = { version: 2, scope: "fixture-portal:org:email:device:workspace", nextBackupAt: 1_800_000_000_000 + DAY };
-  await createManagedDesktopStore({ file, encryption }).write(saved);
-  const f = fixture(saved); const real = createManagedDesktopStore({ file, encryption }); f.read = () => real.read();
-  await f.scheduler.start();
-  assert.deepEqual(f.scheduler.state(), { enabled: false, status: "off", message: REMOVED });
+  const real = createManagedDesktopStore({ file, encryption });
+  await real.write(saved);
+  const f = fixture(saved); f.read = () => real.read(); f.writeThrough = value => real.write(value);
+  assert.deepEqual(await f.scheduler.start(), { enabled: false, status: "off", message: REMOVED });
   assert.deepEqual(f.writes, [null]); assert.equal(f.timers.size, 0); assert.equal(f.calls.length, 0);
-  await f.scheduler.configure(ENABLE); assert.equal(f.scheduler.state().status, "waiting");
+  await assert.rejects(fs.stat(file), { code: "ENOENT" });
 });
 
 test("a locked keychain never removes the saved schedule: it stays on, is read again sooner then each minute, until it opens", async () => {
