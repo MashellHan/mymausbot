@@ -1,4 +1,6 @@
 import type { LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
+import { createLocalAgentTeamsProvider } from "../local-agent-teams.ts";
+import { createLocalUsageProvider } from "../local-usage.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
 export function createLocalDashboardRoutes(providers: {
@@ -17,3 +19,8 @@ export function createLocalDashboardRoutes(providers: {
     return json(res, 200, await (path === "/api/local-dashboard/agents" ? providers.agents.get() : providers.usage.get()));
   };
 }
+
+export const localDashboardRoutes = createLocalDashboardRoutes({
+  agents: createLocalAgentTeamsProvider(),
+  usage: createLocalUsageProvider(),
+});

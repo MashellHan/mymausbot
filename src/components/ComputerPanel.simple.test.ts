@@ -102,7 +102,6 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 
 const { ComputerPanel } = await import("./ComputerPanel");
-const { ComputerFilesPane } = await import("./ComputerFilesPane");
 const { CloudBackendPicker } = await import("./CloudBackendPicker");
 const { LocalComputerAutoWarning } = await import("./LocalComputerAutoWarning");
 const { KeyRow } = await import("./keys/KeyRow");
@@ -238,7 +237,6 @@ describe("Computer panel tabs", () => {
       digest({ added: ["/Users/me/work/report.md", "/Users/me/work/old.txt"] }),
       digest({ changed: ["/Users/me/work/notes.md"], deleted: ["/Users/me/work/old.txt"] }),
     ] }));
-    expect(rendered.nodes.some((node) => node.type === ComputerFilesPane)).toBe(true);
     expect(rendered.html).toContain("notes.md");
     expect(rendered.html).toContain("report.md");
     expect(rendered.html).not.toContain("old.txt");

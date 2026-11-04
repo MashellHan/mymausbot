@@ -1,4 +1,5 @@
 import { t } from "./i18n";
+import type { Bot, InstanceInfo } from "@/state/store";
 
 export interface FeatureFlagConfig {
   features?: { skillAuthoring?: boolean; skillReview?: boolean; skillReviewSteps?: number; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; claudeUserSkills?: boolean; llmThreadTitles?: boolean; skillsLibrary?: boolean; shareLearnedSkills?: "off" | "ask" | "auto"; roomMemoryCapture?: boolean; savedSteps?: boolean; savedStepsHere?: boolean };
@@ -19,6 +20,9 @@ export function browserUnavailableReason(config: FeatureFlagConfig | null | unde
 export function skillAuthoringEnabled(config: FeatureFlagConfig | null | undefined): boolean {
   return config?.features?.skillAuthoring !== false;
 }
+
+export const supportsAgents = (instances: InstanceInfo[], candidate?: Bot): boolean =>
+  Boolean(candidate && instances.find((instance) => instance.instanceId === candidate.modelSelection.instanceId)?.capabilities?.agentsMcp);
 
 export const DEFAULT_SKILL_REVIEW_STEPS = 10;
 export const MIN_SKILL_REVIEW_STEPS = 3;

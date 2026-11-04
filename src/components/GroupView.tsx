@@ -175,6 +175,7 @@ function RoomTextMessage({
   useEffect(() => { if (focusedSearch && collapsible) setExpanded(true); }, [focusedSearch, collapsible, focus?.nonce]);
   const simple = !useAdvancedMode();
   const speakerBot = members.find((member) => member.id === m.from?.botId);
+  const replyTarget = m.replyToId ? transcript.find((candidate) => candidate.id === m.replyToId) : null;
   const botText = rawText; const teammates = useTeammates(); const peers = useMemo(() => [...members, ...teammates.peers], [members, teammates]);
   const pin = roomPin(group, m, dispatch);
   const botMenu = useBotMessageMenu({
@@ -227,21 +228,16 @@ function RoomTextMessage({
           )}
           title={new Date(m.at).toLocaleString()}
         >
-          {m.replyToId && (() => {
-            const target = transcript.find((candidate) => candidate.id === m.replyToId);
-            return (
-              <div className="mb-2">
-                <ReplyQuote
-                  message={target && canReplyToMessage(target) ? target : null}
-                  fallbackName={t("room.fallbackBot")}
-                  compact
-                  onJump={target ? () =>
-                    dispatch({ type: "focusMessage", threadId: group.threadId, messageId: target.id })
-                  : undefined}
-                />
-              </div>
-            );
-          })()}
+          {m.replyToId && (
+            <div className="mb-2">
+              <ReplyQuote
+                message={replyTarget && canReplyToMessage(replyTarget) ? replyTarget : null}
+                fallbackName={t("room.fallbackBot")}
+                compact
+                onJump={replyTarget ? () => dispatch({ type: "focusMessage", threadId: group.threadId, messageId: replyTarget.id }) : undefined}
+              />
+            </div>
+          )}
           {user ? (
             <>
               {attachments && <AttachmentGallery images={attachments.images} files={attachments.files} message={{ threadId: group.threadId, messageId: m.id }} eager={eager} className={!attachments.display ? "mb-0" : undefined} />}

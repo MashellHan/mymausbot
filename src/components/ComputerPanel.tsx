@@ -8,7 +8,7 @@ import { waitForLocalVmReady } from "@/lib/local-vm-readiness";
 import { CalendarClock, ChevronRight, Columns2, Box, Check, Cloud, Sparkles, Globe, Hand, Loader2, Maximize2, Monitor, Moon, Power, Settings, X } from "lucide-react";
 import { api, ApiError, currentTaskBot, useStore, type Bot, type ConfigStatus } from "@/state/store";
 import { setAdvancedMode, useAdvancedMode } from "@/lib/interface-mode";
-import { ComputerFilesPane } from "./ComputerFilesPane";
+import { ComputerPanelInfoTab } from "./ComputerPanelInfoTab";
 import { effectivePlace, isComputerPlace, placeLabelKey, placeOffered } from "@/lib/place";
 import type { CloudBackend } from "../../shared/wire";
 import { KeyRow } from "./keys/KeyRow"; import { openKeySettings } from "./keys/key-focus";
@@ -26,8 +26,6 @@ import { AndroidDevicePanel, useAndroidUsbDevices } from "./AndroidDevicePanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { usePanelPage, type PanelPage } from "@/lib/page-open";
 const DataPanel = lazy(() => import("./data/DataPanel").then((module) => ({ default: module.DataPanel })));
-const AgentTeamPanel = lazy(() => import("./AgentTeamPanel").then((module) => ({ default: module.AgentTeamPanel })));
-const LocalUsagePanel = lazy(() => import("./LocalUsagePanel").then((module) => ({ default: module.LocalUsagePanel })));
 const loadLiveDesktop = () => import("./LiveDesktop").then((module) => ({ default: module.LiveDesktop }));
 const LiveDesktop = lazy(loadLiveDesktop);
 import { browserAvailable, browserUnavailableReason, builtInBrowserEnabled } from "@/lib/feature-flags";
@@ -1300,22 +1298,8 @@ export function ComputerPanel({
             <DataPanel key={bot.id} bot={bot} requestedCard={dataRequest} />
           </Suspense>
         </div>
-      ) : panelView === "files" ? (
-        <div {...tabPanelProps("files")} className={cn("flex min-h-0 flex-1 flex-col", TAB_PANEL_FOCUS)}>
-          <ComputerFilesPane bot={bot} />
-        </div>
-      ) : panelView === "agent-team" ? (
-        <div {...tabPanelProps("agent-team")} className={cn("flex min-h-0 flex-1 flex-col", TAB_PANEL_FOCUS)}>
-          <Suspense fallback={<div className="flex flex-1 items-center justify-center text-[13px] text-ink-secondary" role="status">{t("computer.agentTeam.loading")}</div>}>
-            <AgentTeamPanel />
-          </Suspense>
-        </div>
-      ) : panelView === "usage" ? (
-        <div {...tabPanelProps("usage")} className={cn("flex min-h-0 flex-1 flex-col", TAB_PANEL_FOCUS)}>
-          <Suspense fallback={<div className="flex flex-1 items-center justify-center text-[13px] text-ink-secondary" role="status">{t("computer.usage.loading")}</div>}>
-            <LocalUsagePanel />
-          </Suspense>
-        </div>
+      ) : panelView === "files" || panelView === "agent-team" || panelView === "usage" ? (
+        <ComputerPanelInfoTab view={panelView} bot={bot} />
       ) : panelView === "android" && androidConnected ? (
         <div {...tabPanelProps("android")} className={cn("flex-1 overflow-y-auto px-4 pt-2", TAB_PANEL_FOCUS)}>
           <AndroidDevicePanel status={androidStatus} />
