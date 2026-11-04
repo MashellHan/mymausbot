@@ -50,7 +50,7 @@ const LINES: Record<string, number> = {
 function sourceFiles(): string[] {
   const out = execFileSync("git", ["ls-files", "server", "shared", "src", "scripts", "evals", "electron", "companion"], { cwd: ROOT, encoding: "utf8" });
   return out.split("\n").filter((file) => /\.(ts|tsx|mjs|cjs)$/.test(file))
-    .filter((file) => !file.includes(".test.") && !file.includes("/testing/") && !file.includes("goldens") && !file.startsWith("electron/vendor/"));
+    .filter((file) => !file.includes(".test.") && !/^electron\/[^/]+\.node-test\.mjs$/.test(file) && !file.includes("/testing/") && !file.includes("goldens") && !file.startsWith("electron/vendor/"));
 }
 
 const count = (file: string) => readFileSync(new URL(file, ROOT), "utf8").split("\n").length - 1;
