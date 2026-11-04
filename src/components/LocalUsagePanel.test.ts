@@ -20,14 +20,16 @@ const { ApiError } = await import("@/state/store");
 const asOf = Date.UTC(2026, 10, 3, 8, 30);
 const window = (days: 1 | 7 | 30, startDay: string, endDay: string, patch: Partial<LocalUsageWindow> = {}): LocalUsageWindow => ({
   days, startDay, endDay, asOf, coverage: "partial", tokenCoverage: "partial", missingDays: [], unavailableTokenDays: [],
-  prs: null, knownPrs: 2, commits: 4, newTokens: 100, cacheRead: 50, ...patch,
+  prs: null, knownPrs: 2, commits: 4, newTokens: 100, cacheRead: 50,
+  categories: { work: { prs: null, knownPrs: 1, commits: 3 }, personal: { prs: 1, knownPrs: 1, commits: 1 }, unclassified: { prs: 0, knownPrs: 0, commits: 0 } },
+  repositories: { sharedCommits: 0, coverage: "partial", rows: [{ id: "repo", name: "sample/team-repo", category: "work", prs: null, knownPrs: days, commits: days * 2 }], unattributedPrs: 0, unattributedCommits: 0 }, ...patch,
 });
 const trend: LocalUsageTrendDay[] = Array.from({ length: 30 }, (_, index) => ({
   day: new Date(Date.UTC(2026, 9, 5 + index)).toISOString().slice(0, 10),
-  coverage: "partial", tokenStatus: "partial", prs: null, knownPrs: 1, commits: 2, newTokens: 100, cacheRead: 10,
+  coverage: "partial", tokenStatus: "partial", prs: null, knownPrs: 1, commits: 2, newTokens: 100, cacheRead: 10, wow: { prs: null, commits: 20, newTokens: "new" },
 }));
-trend[7] = { day: "2026-10-12", coverage: "unavailable", tokenStatus: "unavailable", prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null };
-trend[10] = { ...trend[10]!, tokenStatus: "unavailable", newTokens: null, cacheRead: null };
+trend[7] = { day: "2026-10-12", coverage: "unavailable", tokenStatus: "unavailable", prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, wow: { prs: null, commits: null, newTokens: null } };
+trend[10] = { ...trend[10]!, tokenStatus: "unavailable", newTokens: null, cacheRead: null, wow: { prs: null, commits: null, newTokens: null } };
 
 const sample: LocalUsageResponse = {
   status: "partial", asOf, timeZone: "Asia/Shanghai",
@@ -70,13 +72,15 @@ describe("local Usage panel", () => {
     expect(text()).toContain("2026-11-03 – 2026-11-03");
     expect(text()).toContain("2026-10-28 – 2026-11-03");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
-    expect(text()).toContain("≥9");
+    expect(text()).toContain("9Synced");
+    expect(text()).not.toContain("≥");
+    expect(host.querySelector<HTMLDetailsElement>("[data-usage-daily]")?.open).toBe(false);
     expect(text()).toContain("2,800");
     expect(text()).toContain("Missing dates: 1");
     expect(text()).toContain("Dates without token records: 2");
     expect(text()).toContain("Activity sources: 1/2 ready");
     expect(text()).toContain("PR sources: 3/4 ready");
-    expect(host.querySelectorAll("table tbody tr")).toHaveLength(30);
+    expect(host.querySelectorAll("[data-usage-daily] table tbody tr")).toHaveLength(30);
     expect(text()).not.toContain("2026-10-04");
     expect(host.querySelectorAll('[aria-hidden="true"] .bg-warning\\/15').length).toBeGreaterThan(0);
     expect(host.querySelector('time')?.getAttribute("datetime")).toBe("2026-11-03T08:30:00.000Z");
@@ -90,13 +94,13 @@ describe("local Usage panel", () => {
       ...trend.slice(3),
     ] });
     const bars = [...host.querySelector('[data-usage-trend="prs"] [aria-hidden="true"]')!.children] as HTMLElement[];
-    expect(bars[0]!.title).toBe("2026-10-05: Pending");
-    expect(bars[0]!.firstElementChild?.className).toContain("bg-warning/15");
-    expect(bars[1]!.title).toBe("2026-10-06: ≥2");
+    expect(bars[0]!.title).toBe("2026-10-05: 0 · Synced");
+    expect(bars[0]!.firstElementChild?.className).toContain("bg-accent/40");
+    expect(bars[1]!.title).toBe("2026-10-06: 2 · Synced");
     expect(bars[1]!.firstElementChild?.className).toContain("bg-accent/40");
     expect(bars[2]!.title).toBe("2026-10-07: 0");
     expect(bars[2]!.firstElementChild?.className).toContain("bg-accent/75");
-    expect(text()).toContain("pale PR bars are verified lower bounds");
+    expect(text()).toContain("Pale PR bars: synced counts");
   });
 
   it("anchors a stale previous-day snapshot to its real capture day, with no current-day claim", async () => {
@@ -127,7 +131,7 @@ describe("local Usage panel", () => {
     expect(text()).toContain("2025-12-03 – 2026-01-01");
     expect(text()).toContain("00:05");
     expect(text()).not.toContain("24:05");
-    expect(host.querySelectorAll("table tbody tr")).toHaveLength(30);
+    expect(host.querySelectorAll("[data-usage-daily] table tbody tr")).toHaveLength(30);
   });
 
   it("uses unavailable instead of zero when the aggregate or a whole metric is missing", async () => {
@@ -156,6 +160,26 @@ describe("local Usage panel", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1_000); });
     expect(text()).toContain("Showing the last captured snapshot");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
+  });
+
+  it("keeps daily details collapsed initially and changes repository windows with keyboard tabs", async () => {
+    await render(sample);
+    const daily = host.querySelector<HTMLDetailsElement>("[data-usage-daily]")!;
+    expect(daily.open).toBe(false);
+    daily.open = true;
+    expect(daily.textContent).toContain("+20%");
+    expect(daily.textContent).toContain("New");
+    const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false"]);
+    const values = () => [...host.querySelectorAll("[data-usage-repositories] tbody tr:first-child td")].map((cell) => cell.textContent);
+    expect(values()).toEqual(["Enterprise", "1Synced", "2"]);
+    await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+    expect(document.activeElement).toBe(tabs[2]);
+    expect(values()).toEqual(["Enterprise", "30Synced", "60"]);
+    await render({ ...sample, status: "stale" });
+    expect(daily.open).toBe(true);
+    expect(tabs[2]!.getAttribute("aria-selected")).toBe("true");
+    expect(text()).toContain("Personal");
   });
 
   it.each([401, 403])("clears old activity data on HTTP %i", async (status) => {

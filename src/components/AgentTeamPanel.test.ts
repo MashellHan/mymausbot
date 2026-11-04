@@ -20,14 +20,14 @@ const { ApiError } = await import("@/state/store");
 const ready: LocalAgentTeamsResponse = {
   status: "ready", updatedAt: Date.UTC(2026, 10, 3, 8), teamCount: 2,
   teams: [
-    { id: "w1", name: "Atlas Studio", agentCount: 3, agents: [
-      { id: "p1", name: "A very long synthetic agent name that must wrap inside the panel", kind: "codex", role: "Lead", model: "a-very-long-synthetic-model-identifier-that-must-wrap-in-a-narrow-panel", state: "working", taskHint: "Draft a synthetic release plan with enough detail to occupy more than two lines in a narrow panel without showing any private terminal text." },
-      { id: "p2", name: "Mira", kind: "codex", role: null, model: null, state: "blocked", taskHint: null },
-      { id: "p3", name: "Pine", kind: "codex", role: "Reviewer", model: "model-b", state: "idle", taskHint: "Review sample cards" },
+    { id: "w1", name: "Atlas Studio", agentCount: 3, activeAgentCount: 1, agents: [
+      { id: "p1", name: "A very long synthetic agent name that must wrap inside the panel", kind: "codex", role: "Lead", model: "a-very-long-synthetic-model-identifier-that-must-wrap-in-a-narrow-panel", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft a synthetic release plan with enough detail to occupy more than two lines in a narrow panel without showing any private terminal text." },
+      { id: "p2", name: "Mira", kind: "codex", role: null, model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, state: "blocked", taskHint: null },
+      { id: "p3", name: "Pine", kind: "codex", role: "Reviewer", model: "model-b", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "idle", taskHint: "Review sample cards" },
     ] },
-    { id: "w2", name: "Maple Ops", agentCount: 2, agents: [
-      { id: "p4", name: "Lark", kind: "codex", role: "Developer", model: "model-c", state: "done", taskHint: "Prepare sample data" },
-      { id: "p5", name: "Sage", kind: "codex", role: "Designer", model: "model-d", state: "unknown", taskHint: null },
+    { id: "w2", name: "Maple Ops", agentCount: 2, activeAgentCount: 0, agents: [
+      { id: "p4", name: "Lark", kind: "codex", role: "Developer", model: "model-c", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "done", taskHint: "Prepare sample data" },
+      { id: "p5", name: "Sage", kind: "codex", role: "Designer", model: "model-d", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "unknown", taskHint: null },
     ] },
   ],
 };
@@ -73,7 +73,7 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("Needs input");
     expect(text()).toContain("Idle");
     expect(text()).toContain("Model unavailable");
-    expect(text()).toContain("Latest task unavailable");
+    expect(text()).toContain("No instruction available");
     expect(host.querySelector(".line-clamp-2")).not.toBeNull();
 
     const scroller = host.querySelector<HTMLElement>('[data-testid="agent-team-panel"]')!;
@@ -109,7 +109,7 @@ describe("Agent Team panel", () => {
   });
 
   it("uses singular copy for one team and one agent in English and Chinese", async () => {
-    const single = { ...ready, teamCount: 1, teams: [{ ...ready.teams[0]!, agentCount: 1, agents: [ready.teams[0]!.agents[0]!] }] };
+    const single = { ...ready, teamCount: 1, teams: [{ ...ready.teams[0]!, agentCount: 1, activeAgentCount: 1, agents: [ready.teams[0]!.agents[0]!] }] };
     await render("content", single);
     expect(text()).toContain("Local Herdr · 1 team");
     expect(text()).toContain("1 agent");
@@ -128,16 +128,41 @@ describe("Agent Team panel", () => {
     await render("panel");
     expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/agents", expect.objectContaining({ background: true, signal: expect.any(AbortSignal) }));
     expect(text()).toContain("Local Herdr · 2 teams");
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(text()).toContain("Showing the last known teams");
     expect(text()).toContain("Local Herdr · 2 teams");
+  });
+
+  it("replaces the latest instruction and active count every two seconds without collapsing the list", async () => {
+    vi.useFakeTimers();
+    const updated = { ...ready, teams: ready.teams.map((team) => team.id === "w1" ? { ...team, activeAgentCount: 0,
+      agents: team.agents.map((agent) => agent.id === "p1" ? { ...agent, state: "done" as const, taskHint: "Only the newest instruction", reasoningEffort: "max", contextUsed: 64_000 } : agent) } : team) };
+    calls.api.mockResolvedValueOnce(ready).mockResolvedValueOnce(updated);
+    await render("panel");
+    await act(async () => headers()[0]!.click());
+    const first = headers()[0]!;
+    const scroller = host.querySelector<HTMLElement>('[data-testid="agent-team-panel"]')!;
+    scroller.scrollTop = 90;
+    expect(first.textContent).toContain("1 active");
+    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    expect(calls.api).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(calls.api).toHaveBeenCalledTimes(2);
+    expect(headers()[0]).toBe(first);
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(first.textContent).toContain("0 active");
+    expect(scroller.scrollTop).toBe(90);
+    expect(text()).toContain("Only the newest instruction");
+    expect(text()).toContain("64,000 / 256,000 · 25%");
+    expect(text()).not.toContain("Draft a synthetic release plan");
+    expect(host.querySelector('[data-team-house="w1"]')?.getAttribute("data-activity")).toBe("blocked");
   });
 
   it.each([401, 403])("clears old local data on HTTP %i", async (status) => {
     vi.useFakeTimers();
     calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new ApiError("forbidden", status));
     await render("panel");
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(text()).toContain("Local Herdr · — teams");
     expect(text()).toContain("teams are unavailable");
     expect(text()).not.toContain("Atlas Studio");
@@ -148,7 +173,7 @@ describe("Agent Team panel", () => {
     calls.api.mockResolvedValueOnce({ status: "ready", updatedAt: ready.updatedAt, teamCount: 0, teams: [] })
       .mockRejectedValueOnce(new Error("offline"));
     await render("panel");
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(text()).toContain("Local Herdr · 0 teams");
     expect(text()).toContain("Showing the last known teams");
     expect(text()).toContain("No local Herdr teams found");

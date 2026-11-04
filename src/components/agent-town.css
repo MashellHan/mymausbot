@@ -1,0 +1,24 @@
+.agent-town .house-illustration { display: block; width: 100%; max-height: 160px; }
+.agent-town .town-house { flex: 0 0 min(190px, calc((100% - 12px) / 2)); }
+.agent-town .window-glow, .agent-town .lamp-glass { fill: #c9c4a4; }
+.agent-town .light-highlight { stroke: #f9e3a7; }
+.agent-town .window-light, .agent-town .window-person, .agent-town .smoke { opacity: 0; }
+.agent-town .closed-curtains, .agent-town .sleeping-cat { opacity: 1; }
+.agent-town [data-activity="working"] .closed-curtains,
+.agent-town [data-activity="working"] .sleeping-cat { opacity: 0; }
+.agent-town [data-activity="working"] .window-glow,
+.agent-town [data-activity="working"] .lamp-glass { fill: #f5cb6b; }
+.agent-town [data-activity="working"] .window-light,
+.agent-town [data-activity="working"] .window-person,
+.agent-town [data-activity="working"] .smoke { opacity: 1; }
+.agent-town .puff { fill: #c9c6b8; transform-origin: 210px 30px; animation: agent-town-smoke 4s ease-out infinite; }
+.agent-town .smoke-ridge { fill: none; stroke: #eeece3; stroke-width: 1.5; }
+.agent-town .puff-two { animation-delay: -1.3s; }
+.agent-town .puff-three { animation-delay: -2.6s; }
+.agent-town[data-paused="true"] .puff { animation-play-state: paused; }
+@keyframes agent-town-smoke {
+  0% { opacity: 0; transform: translateY(3px) scale(.5); }
+  20% { opacity: .8; }
+  100% { opacity: 0; transform: translate(10px, -24px) scale(1.05); }
+}
+@media (prefers-reduced-motion: reduce) { .agent-town .puff { animation: none; } }

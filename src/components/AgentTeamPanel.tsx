@@ -1,13 +1,14 @@
 import { ChevronRight, UserRound } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { LocalAgentMember, LocalAgentTeamsResponse } from "../../shared/local-dashboard";
-import { t } from "@/lib/i18n";
+import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
 import { cn } from "@/lib/cn";
+import { AgentTown, teamActivity } from "./AgentTown";
 
 const ROUTE = "/api/local-dashboard/agents";
-const REFRESH_MS = 5_000;
+const REFRESH_MS = 2_000;
 const unavailable: LocalAgentTeamsResponse = { status: "unavailable", updatedAt: null, teamCount: null, teams: [] };
 
 const stateLabel = {
@@ -27,6 +28,9 @@ const stateDot = {
 } as const;
 
 function memberRow(member: LocalAgentMember, stale: boolean) {
+  const number = (value: number | null) => value === null ? "—" : value.toLocaleString(activeLocale());
+  const context = member.contextUsed !== null && member.contextWindow !== null && member.contextWindow > 0
+    ? Math.round(member.contextUsed / member.contextWindow * 100) : null;
   return (
     <li key={member.id} className="flex min-w-0 gap-2.5 border-t border-hairline/40 py-3 first:border-t-0">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-inset text-ink-secondary" aria-hidden="true"><UserRound size={16} /></span>
@@ -41,8 +45,15 @@ function memberRow(member: LocalAgentMember, stale: boolean) {
         <div dir="auto" className="mt-0.5 min-w-0 text-[11px] text-ink-secondary [overflow-wrap:anywhere]">
           {member.model ? <>{t("computer.agentTeam.modelLabel")} · {member.model}</> : t("computer.agentTeam.modelUnavailable")}
         </div>
-        <p dir="auto" className="mt-1.5 line-clamp-2 text-[12px] leading-4 text-ink-tertiary [overflow-wrap:anywhere]">
-          <span className="sr-only">{t("computer.agentTeam.latestTask")}: </span>{member.taskHint ?? t("computer.agentTeam.taskUnavailable")}
+        <dl className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
+          <div className="flex gap-1"><dt>{t("computer.agentTeam.reasoning")}</dt><dd>{member.reasoningEffort ?? "—"}</dd></div>
+          <div className="flex flex-wrap gap-1 tabular-nums"><dt>{t("computer.agentTeam.context")}</dt><dd>{number(member.contextUsed)} / {number(member.contextWindow)}{context !== null ? ` · ${context}%` : ""}</dd></div>
+        </dl>
+        {context !== null && <div role="meter" className="mt-1.5 h-1 overflow-hidden rounded-full bg-inset" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(context, 100)} aria-valuetext={`${context}%`} aria-label={t("computer.agentTeam.context")}>
+          <span className="block h-full rounded-full bg-accent" style={{ width: `${Math.min(context, 100)}%` }} />
+        </div>}
+        <p dir="auto" title={member.taskHint ?? undefined} className="mt-1.5 line-clamp-2 text-[12px] leading-4 text-ink-secondary [overflow-wrap:anywhere]">
+          <span className="font-medium text-ink-secondary">{t("computer.agentTeam.latestInstruction")}: </span>{member.taskHint ?? t("computer.agentTeam.instructionUnavailable")}
         </p>
       </div>
     </li>
@@ -52,9 +63,10 @@ function memberRow(member: LocalAgentMember, stale: boolean) {
 export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse | null }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const baseId = useId();
+  const teamButtons = useRef(new Map<string, HTMLButtonElement>());
   const count = snapshot?.teamCount ?? t("computer.agentTeam.unknownCount");
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
-    ? null : new Date(snapshot.updatedAt).toLocaleString();
+    ? null : new Date(snapshot.updatedAt).toLocaleString(activeLocale());
   const stale = snapshot?.status === "stale";
 
   const toggle = (id: string) => setExpanded((current) => {
@@ -63,17 +75,23 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
     else next.add(id);
     return next;
   });
+  const openTeam = (id: string) => {
+    setExpanded((current) => new Set(current).add(id));
+    requestAnimationFrame(() => { teamButtons.current.get(id)?.focus(); teamButtons.current.get(id)?.scrollIntoView({ block: "nearest" }); });
+  };
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="agent-team-panel">
+    <div className="@container/agents min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="agent-team-panel">
       <header className="mb-4 pt-2">
         <h2 className="text-[15px] font-semibold text-ink">{snapshot?.teamCount === 1 ? t("computer.agentTeam.headingOne") : t("computer.agentTeam.heading", { count })}</h2>
         <p className="mt-1 text-[11px] text-ink-tertiary">{readAt ? t("computer.agentTeam.readAt", { time: readAt }) : t("computer.agentTeam.neverRead")}</p>
+        {snapshot?.status === "ready" && <p className="mt-1 text-[12px] text-ink-secondary">{t("computer.agentTeam.refreshRate")}</p>}
       </header>
       {snapshot === null ? <p role="status" className="text-[12px] text-ink-secondary">{t("computer.agentTeam.loading")}</p> : null}
       {stale ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.agentTeam.stale")}</p> : null}
       {snapshot?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.unavailable")}</p> : null}
       {snapshot?.teamCount === 0 && snapshot.teams.length === 0 ? <p className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.empty")}</p> : null}
+      {!!snapshot?.teams.length && <AgentTown teams={snapshot.teams} stale={stale} onSelect={openTeam} />}
       <div className="space-y-2">
         {snapshot?.teams.map((team) => {
           const open = expanded.has(team.id);
@@ -82,10 +100,17 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
             <section key={team.id} className="min-w-0 rounded-xl border border-hairline/60 bg-card">
               <h3>
                 <button type="button" aria-expanded={open} aria-controls={id} onClick={() => toggle(team.id)}
+                  ref={(element) => { if (element) teamButtons.current.set(team.id, element); else teamButtons.current.delete(team.id); }}
                   className="flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-3 text-left outline-none hover:bg-raised-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
                   <ChevronRight size={15} className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-90")} aria-hidden="true" />
-                  <span dir="auto" className="min-w-0 flex-1 text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{team.name}</span>
-                  <span className="shrink-0 text-[11px] tabular-nums text-ink-secondary">{team.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: team.agentCount })}</span>
+                  <span className="min-w-0 flex-1">
+                    <span dir="auto" className="block text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{team.name}</span>
+                    <span className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-ink-secondary"><span className={cn("size-1.5 rounded-full", stale ? "bg-ink-secondary/30" : stateDot[teamActivity(team)])} aria-hidden="true" />{stale ? t("computer.agentTeam.lastObserved", { state: t(stateLabel[teamActivity(team)]) }) : t(stateLabel[teamActivity(team)])}</span>
+                  </span>
+                  <span className="shrink-0 text-right text-[12px] tabular-nums text-ink-secondary">
+                    <span className="block">{team.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: team.agentCount })}</span>
+                    <span className={cn("mt-0.5 block", !stale && team.activeAgentCount > 0 && "text-success")}>{t(stale ? "computer.agentTeam.lastActive" : "computer.agentTeam.activeCount", { count: team.activeAgentCount })}</span>
+                  </span>
                 </button>
               </h3>
               <div id={id} hidden={!open} className="px-3 pb-1">
@@ -110,6 +135,7 @@ export function AgentTeamPanel() {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
+      const started = Date.now();
       try {
         const next = await api<LocalAgentTeamsResponse>(ROUTE, { background: true, signal: controller.signal, timeoutMs: 5_000 });
         if (active) setSnapshot((previous) => next.status === "unavailable" && previous?.updatedAt != null ? { ...previous, status: "stale" } : next);
@@ -117,7 +143,7 @@ export function AgentTeamPanel() {
         if (active) setSnapshot((previous) => error instanceof ApiError && (error.status === 401 || error.status === 403) ? unavailable
           : previous?.updatedAt != null ? { ...previous, status: "stale" } : unavailable);
       } finally {
-        if (active) timer = setTimeout(refresh, REFRESH_MS);
+        if (active) timer = setTimeout(refresh, Math.max(0, REFRESH_MS - (Date.now() - started)));
       }
     };
     void refresh();

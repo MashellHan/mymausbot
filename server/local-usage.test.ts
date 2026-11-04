@@ -51,7 +51,8 @@ describe("local Usage projection", () => {
     expect(response.windows?.["30"]).toMatchObject({ startDay: "2026-10-05", endDay: "2026-11-03", asOf, knownPrs: 30, commits: 60, newTokens: 420 });
     expect(response.trend).toHaveLength(30);
     expect([response.trend[0]?.day, response.trend.at(-1)?.day]).toEqual(["2026-10-05", "2026-11-03"]);
-    expect(JSON.stringify(response)).not.toMatch(/device|repo|email|session|999/);
+    expect(JSON.stringify(response)).not.toMatch(/device|email|session/);
+    expect(JSON.stringify(response.windows)).not.toContain("999");
   });
 
   it("crosses China midnight and year boundaries without moving a stale capture to today", async () => {
@@ -125,5 +126,65 @@ describe("local Usage projection", () => {
     const provider = createLocalUsageProvider({ file: join(tmpdir(), "no-such-usage-aggregate.json") });
     expect(await provider.get()).toEqual({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
       sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] });
+  });
+
+  it("does not turn a verified PR count into a lower bound for an unused unclassified category", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await fixture(asOf);
+    const input = { ...snapshot, prSources: [{ category: "work", status: "ok" }, { category: "personal", status: "ok" }],
+      prCoverage: { work: "ready", personal: "ready", unclassified: "partial" },
+      daily: snapshot.daily.map((row) => ({ ...row, categories: { ...row.categories, unclassified: { ...row.categories.unclassified, prs: null } } })) };
+    await writeFile(file, JSON.stringify(input));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows?.["30"].prs).toBe(30);
+    expect(response.windows?.["7"].categories).toMatchObject({ work: { prs: 7, commits: 14 }, personal: { prs: 0, commits: 0 } });
+    input.prSources[0]!.status = "unavailable";
+    input.prCoverage.work = "partial";
+    await writeFile(file, JSON.stringify(input));
+    const partial = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(partial.windows?.["1"].prs).toBeNull();
+    expect(partial.windows?.["1"].categories.work.knownPrs).toBeNull();
+    expect(partial.windows?.["1"].categories.personal.prs).toBe(0);
+  });
+
+  it("compares all three metrics with the same date seven days earlier, including zero and missing baselines", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await fixture(asOf);
+    const previous = snapshot.daily.find((row) => row.day === "2026-10-27")!.categories.work;
+    Object.assign(previous, { prs: 0, knownPrs: 0, commits: 4, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, newTokens: 0 });
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.trend.at(-1)?.wow).toEqual({ prs: "new", commits: -50, newTokens: "new" });
+    expect(response.trend[0]?.wow).toEqual({ prs: null, commits: null, newTokens: null });
+    expect(response.trend[10]?.wow).toEqual({ prs: 0, commits: 0, newTokens: 0 });
+    snapshot.sources[0]!.status = "missing";
+    await writeFile(file, JSON.stringify(snapshot));
+    const missing = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(missing.trend.at(-1)?.wow).toEqual({ prs: "new", commits: null, newTokens: null });
+  });
+
+  it("projects local repository counts into matching windows and accounts for unattributed events", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await fixture(asOf);
+    const records = [{ day: "2026-11-03", knownPrs: 1, commits: 2 }, { day: "2026-10-27", knownPrs: 1, commits: 1 }];
+    const input = { ...snapshot, localRepositories: { version: 1, rows: [{ id: "a".repeat(64), name: "github.com/example/sample", category: "work",
+      checkoutPath: "/private/source", daily: structuredClone(records) }], attribution: records } };
+    await writeFile(file, JSON.stringify(input));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows?.["1"].repositories).toMatchObject({ coverage: "ready", unattributedPrs: 0, unattributedCommits: 0,
+      rows: [{ name: "github.com/example/sample", category: "work", prs: 1, knownPrs: 1, commits: 2 }] });
+    expect(response.windows?.["7"].repositories).toMatchObject({ coverage: "partial", unattributedPrs: 6, unattributedCommits: 12 });
+    expect(response.windows?.["30"].repositories.rows[0]).toMatchObject({ prs: 2, commits: 3 });
+    expect(JSON.stringify(response)).not.toMatch(/checkoutPath|private\/source/);
+    input.localRepositories.rows.push({ id: "b".repeat(64), name: "github.com/example/fork", category: "work", checkoutPath: "/private/fork",
+      daily: [{ day: "2026-11-03", knownPrs: 0, commits: 1 }] });
+    await writeFile(file, JSON.stringify(input));
+    const shared = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(shared.windows?.["1"].repositories).toMatchObject({ sharedCommits: 1, unattributedCommits: 0 });
+    expect(shared.windows?.["1"].repositories.rows.map((row) => row.commits)).toEqual([2, 1]);
+    input.localRepositories.rows[0]!.daily[0]!.commits = 3;
+    await writeFile(file, JSON.stringify(input));
+    expect((await createLocalUsageProvider({ file, now: () => asOf }).get()).windows?.["1"]).toMatchObject({ prs: 1,
+      repositories: { coverage: "unavailable", rows: [] } });
   });
 });
