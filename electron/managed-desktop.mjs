@@ -84,7 +84,7 @@ export function decryptedText(decrypted) {
   return typeof decrypted === "string" ? decrypted : decrypted?.result;
 }
 
-/** Never readable: not a small regular file, a key that no longer opens it (Windows reinstall), or not JSON. A locked keychain is never this. */
+/** Only structural defects prove a record unreadable; a decrypt failure may be a temporary keychain error. */
 export const unreadableRecord = error => error?.code === "unreadable_record";
 const unreadable = message => Object.assign(new Error(message), { code: "unreadable_record" });
 export const retryDelay = attempt => [15_000, 30_000, 60_000][Math.min(attempt, 3) - 1];
@@ -105,7 +105,7 @@ export function createManagedDesktopStore({ file, encryption }) {
         await available();
         const encrypted = await handle.readFile();
         let text;
-        try { text = decryptedText(await encryption.decrypt(encrypted)); } catch { throw unreadable("This computer can no longer decrypt the record."); }
+        try { text = decryptedText(await encryption.decrypt(encrypted)); } catch { throw new Error("The credential could not be decrypted right now."); }
         // Not unreadable(): an unknown decrypt shape is this app's mistake, and the record must not be removed.
         if (typeof text !== "string") throw new Error("Unexpected decrypt result.");
         try { return JSON.parse(text); } catch { throw unreadable("The record is not JSON."); }

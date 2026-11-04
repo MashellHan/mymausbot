@@ -314,12 +314,37 @@ function electron43Store(file, lock = { locked: false }, decrypt) {
 // The fixture mocks setTimeout; real file reads finish on their own time.
 const until = async check => { const end = Date.now() + 5000; while (!check()) { if (Date.now() > end) assert.fail("did not happen"); await new Promise(resolve => setImmediate(resolve)); } };
 
-test("a saved company sign-in that can never be read is removed, and signing in again is the one next step", async t => {
+test("a transient decrypt failure preserves the saved company sign-in until retry succeeds", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "omb-managed-decrypt-retry-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "company-connection.bin"), saved = grant();
+  let first = true;
+  const decrypt = async buffer => {
+    if (first) { first = false; throw new Error("temporarily unavailable"); }
+    return { shouldReEncrypt: false, result: Buffer.from(buffer).map(byte => byte ^ 0x5a).toString() };
+  };
+  await electron43Store(file).write(saved);
+  const original = await fs.readFile(file);
+  const store = electron43Store(file, undefined, decrypt);
+  const f = fixture(t, { store, handler: (url, options) => url.endsWith("/api/desktop/session") && options.method !== "DELETE" ? Response.json(session(saved)) : null });
+  const firstState = await f.client.start();
+  assert.equal(firstState.status, "unavailable");
+  assert.equal(store.reads, 1);
+  assert.deepEqual(await fs.readFile(file), original);
+  assert.deepEqual(f.requests, []);
+  assert.deepEqual(f.opened, []);
+  await f.tick(15_000);
+  await until(() => f.client.state().status === "connected");
+  assert.equal(f.client.state().email, saved.email);
+  assert.equal(f.client.state().deviceId, saved.deviceId);
+  assert.equal((await electron43Store(file).read()).token, saved.token);
+  assert.equal(f.requests.some(row => row.url.endsWith("/api/desktop/enrollment") || row.url.endsWith("/api/desktop/enrollment/token")), false);
+  assert.deepEqual(f.opened, []);
+});
+
+test("a malformed saved company sign-in is removed, and signing in again is the one next step", async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "omb-managed-unreadable-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
   const file = path.join(root, "company-connection.bin");
   for (const decrypt of [
-    // This computer's key no longer opens it (Windows after a reinstall onto a new profile).
-    async () => { throw new Error("Error while decrypting the ciphertext provided to safeStorage.decryptString."); },
     async () => ({ shouldReEncrypt: false, result: "not json" }),
     async () => ({ shouldReEncrypt: false, result: JSON.stringify({ token: "not-a-company-token" }) }),
   ]) {
