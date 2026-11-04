@@ -1099,8 +1099,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
       (b) =>
         !q ||
         b.name.toLowerCase().includes(q) ||
-        (b.title ?? "").toLowerCase().includes(q) ||
-        b.section?.toLowerCase().includes(q) ||
+        (b.title ?? "").toLowerCase().includes(q) || b.section?.toLowerCase().includes(q) ||
         botPreview(b, visibleMessages(b), state.instances, advanced).toLowerCase().includes(q) ||
         b.tasks?.some((task) => !task.routineRunId && task.title.toLowerCase().includes(q)) ||
         b.projects?.some((folder) => folder.name.toLowerCase().includes(q)),

@@ -645,13 +645,41 @@ const electron43Store = (file, lock = { locked: false }, decrypt) => createCloud
   decrypt: decrypt ?? (async value => ({ shouldReEncrypt: false, result: Buffer.from(value).map(byte => byte ^ 0x55).toString() })) } });
 const savedSignIn = f => ({ origin: f.origin, token: accessToken, expiresAt: f.now + 86400_000, device: { id: "fixture-device" }, account: { id: "fixture-account", email: "person@example.test" } });
 
-test("a saved Cloud sign-in that can never be read is removed, and signing in again is the one next step", async t => {
+test("a transient decrypt failure preserves the saved Cloud sign-in until retry succeeds", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "omb-cloud-decrypt-retry-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, "cloud-account.bin");
+  let first = true;
+  const decrypt = async value => {
+    if (first) { first = false; throw new Error("temporarily unavailable"); }
+    return { shouldReEncrypt: false, result: Buffer.from(value).map(byte => byte ^ 0x55).toString() };
+  };
+  const f = await fixture(t, { store: electron43Store(file, undefined, decrypt) });
+  const saved = savedSignIn(f);
+  await electron43Store(file).write(saved);
+  const original = await readFile(file);
+  assert.deepEqual(await f.client.start(), { status: "unavailable", message: "restore-failed" });
+  assert.deepEqual(await readFile(file), original);
+  assert.equal(f.delay, 15_000);
+  assert.deepEqual(f.requests, []);
+  assert.deepEqual(f.browsers, []);
+  await assert.rejects(f.client.begin(), /Sign out/);
+  f.tick();
+  await until(() => f.client.state().status === "connected");
+  assert.equal(f.client.state().account.id, saved.account.id);
+  const recovered = await electron43Store(file).read();
+  assert.equal(recovered.account.id, saved.account.id);
+  assert.equal(recovered.device.id, saved.device.id);
+  assert.equal(recovered.token, saved.token);
+  assert.equal(f.requests.some(row => /\/authorize$|\/token$/.test(row.route)), false);
+  assert.deepEqual(f.browsers, []);
+});
+
+test("a malformed saved Cloud sign-in is removed, and signing in again is the one next step", async t => {
   const directory = await mkdtemp(join(tmpdir(), "omb-cloud-unreadable-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = join(directory, "cloud-account.bin");
   for (const decrypt of [
-    // This computer's key no longer opens it (Windows after a reinstall onto a new profile).
-    async () => { throw new Error("Error while decrypting the ciphertext provided to safeStorage.decryptString."); },
     async () => ({ shouldReEncrypt: false, result: "not json" }),
     async () => ({ shouldReEncrypt: false, result: JSON.stringify({ token: "not-a-cloud-token" }) }),
   ]) {
