@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AppState, Bot, InstanceInfo, Message } from "@/state/store";
+import { replyDraft } from "@/lib/drafts";
 
 vi.mock("./ChatMarkdown", async (importOriginal) => ({
   ...await importOriginal<typeof import("./ChatMarkdown")>(),
@@ -102,15 +103,22 @@ describe("conversational replies", () => {
     expect([...document.querySelectorAll("[data-md]")].map((el) => el.textContent)).toContain(reply);
   });
 
-  it("keeps a reply's Reply and Copy in its … menu in Simple mode, beside the reaction button", async () => {
+  it("opens the reply composer from the primary action and keeps Copy in More in Simple mode", async () => {
     await draw(profile({}));
     const row = document.querySelector("[data-mid='m2']")!;
-    expect(row.querySelector('[aria-label="Reply to message"]')).toBeNull();
+    const replyAction = row.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')!;
+    expect(replyAction).not.toBeNull();
     expect(row.querySelector('[aria-label="Copy message"]')).toBeNull();
+    flushSync(() => replyAction.click());
+    await settle();
+    expect(replyDraft("pepper-thread")).toBe("m2");
+    expect(document.querySelector('[data-composer-reply]')?.textContent).toContain("Found it.");
+    flushSync(() => document.querySelector<HTMLButtonElement>('[data-composer-reply] button[aria-label="Cancel reply"]')!.click());
     const more = row.querySelector<HTMLButtonElement>('button[aria-label="Message actions"]')!;
     flushSync(() => more.click());
     const items = [...document.querySelectorAll('[role="menu"][aria-label="Message actions"] [role="menuitem"]')].map((item) => item.textContent);
-    expect(items.slice(0, 2)).toEqual(["Reply", "Copy message"]);
+    expect(items).toContain("Copy message");
+    expect(items).not.toContain("Reply");
   });
 
   it("puts a formatted reply in the bot's bubble in Simple mode, and on the open page in Advanced", async () => {
