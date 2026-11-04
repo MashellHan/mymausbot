@@ -15,8 +15,8 @@ const { sessionCheck, sessionEnded } = await import("@/lib/session-ended");
 
 const ready: LocalAgentTeamsResponse = {
   status: "ready", updatedAt: Date.UTC(2026, 10, 3, 8), teamCount: 1,
-  teams: [{ id: "sample-team", name: "Atlas Studio", agentCount: 1, agents: [
-    { id: "sample-pane", name: "Mira", kind: "codex", role: "Lead", model: "sample-model", state: "working", taskHint: "Draft sample plan" },
+  teams: [{ id: "sample-team", name: "Atlas Studio", agentCount: 1, activeAgentCount: 1, agents: [
+    { id: "sample-pane", name: "Mira", kind: "codex", role: "Lead", model: "sample-model", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft sample plan" },
   ] }],
 };
 
@@ -42,7 +42,7 @@ it("clears the owner snapshot on a real API 401 even when session recheck is unr
     await act(async () => root.render(createElement(AgentTeamPanel)));
     expect(host.textContent).toContain("Atlas Studio");
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); await sessionCheck(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); await sessionCheck(); });
     expect(fetch).toHaveBeenCalledWith("/api/auth/session", expect.objectContaining({ credentials: "same-origin" }));
     expect(sessionEnded()).toBe(false);
     expect(host.textContent).toContain("Local Herdr · — teams");

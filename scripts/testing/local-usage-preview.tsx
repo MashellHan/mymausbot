@@ -4,6 +4,7 @@ import { setAnalyticsEnabled } from "../../src/lib/analytics";
 import { writeComputerPanelView } from "../../src/lib/computer-panel-view";
 import { setAdvancedMode } from "../../src/lib/interface-mode";
 import { setLocale } from "../../src/lib/i18n";
+import { loadLocalePack } from "../../src/locales";
 import { applySkin } from "../../src/lib/skins";
 import { BotEditorStore, initialState, type Bot } from "../../src/state/store";
 import "../../src/styles.css";
@@ -12,7 +13,9 @@ const params = new URLSearchParams(location.search);
 const width = Number(params.get("width"));
 if ([360, 400, 960].includes(width)) localStorage.setItem("omb-computer-panel-width", String(width));
 setAnalyticsEnabled(false);
-setLocale("en");
+const locale = params.get("locale") === "zh" ? "zh" : "en";
+await loadLocalePack(locale);
+setLocale(locale);
 applySkin(params.get("skin") === "atelier" ? "atelier" : "midnight");
 setAdvancedMode(params.get("mode") === "advanced");
 
@@ -41,7 +44,9 @@ createRoot(document.getElementById("root")!).render(
 if (params.has("focus") || params.has("scroll")) {
   const applyFixtureState = () => {
     const scroller = document.querySelector<HTMLElement>('[data-testid="local-usage-panel"]');
-    const table = scroller?.querySelector<HTMLElement>('[aria-label="Daily activity values"]');
+    const details = scroller?.querySelector<HTMLDetailsElement>("[data-usage-daily]");
+    if (details && (params.get("scroll") === "values" || params.get("focus") === "table")) details.open = true;
+    const table = details?.querySelector<HTMLElement>('[role="region"]');
     if ((params.get("scroll") === "values" || params.get("focus") === "table") && !table) return false;
     if (params.get("scroll") === "values") table?.scrollIntoView({ block: "start" });
     if (params.get("hscroll") === "end" && table) table.scrollLeft = table.scrollWidth;

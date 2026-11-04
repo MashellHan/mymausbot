@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,7 +25,9 @@ async function codexLog(id: string, recordedId = id) {
   await writeFile(join(directory, `rollout-2026-11-03-${id}.jsonl`), [
     JSON.stringify({ type: "session_meta", payload: { id: recordedId } }),
     JSON.stringify({ type: "turn_context", payload: { model: "gpt-6-sol", effort: "xhigh" } }),
-    JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "private conversation" } }),
+    JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "latest synthetic instruction" } }),
+    JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "private conversation" } }),
+    JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 120, output_tokens: 30 }, total_token_usage: { input_tokens: 900000 }, model_context_window: 256000 } } }),
   ].join("\n") + "\n");
   return home;
 }
@@ -47,16 +49,60 @@ describe("local Agent Team provider", () => {
     } });
     const snapshot = await provider.get();
     expect(commands.sort()).toEqual(["--session default agent list", "--session default workspace list"]);
-    expect(snapshot).toEqual({ status: "ready", updatedAt: 1000, teamCount: 1, teams: [{ id: "w6", name: "MausBot", agentCount: 1, agents: [{
-      id: "w6:p1", name: "mausbot-front", kind: "codex", role: null, model: "gpt-6-sol", state: "done", taskHint: "Build Agent Team secret",
+    expect(snapshot).toEqual({ status: "ready", updatedAt: 1000, teamCount: 1, teams: [{ id: "w6", name: "MausBot", agentCount: 1, activeAgentCount: 0, agents: [{
+      id: "w6:p1", name: "mausbot-front", kind: "codex", role: null, model: "gpt-6-sol", reasoningEffort: "xhigh", contextUsed: 150, contextWindow: 256000, state: "done", taskHint: "latest synthetic instruction",
     }] }] });
-    expect(JSON.stringify(snapshot)).not.toMatch(/private conversation|private\/workspace|session_meta|effort|terminal_title/);
+    expect(JSON.stringify(snapshot)).not.toMatch(/private conversation|private\/workspace|session_meta|terminal_title|900000/);
   });
 
   it("reports an unknown model when the file's session ID differs", async () => {
     const codexHome = await codexLog(SESSION, OTHER);
     const provider = createLocalAgentTeamsProvider({ codexHome, run: async (args) => args.at(-2) === "workspace" ? workspaces : agents() });
     expect((await provider.get()).teams[0]?.agents[0]?.model).toBeNull();
+    expect((await provider.get()).teams[0]?.agents[0]?.taskHint).toBeNull();
+  });
+
+  it("refreshes the latest instruction and per-turn context without retaining transcript history", async () => {
+    const codexHome = await codexLog(SESSION);
+    const file = join(codexHome, "sessions", "2026", "11", "03", `rollout-2026-11-03-${SESSION}.jsonl`);
+    let time = 1000;
+    const run = vi.fn(async (args: readonly string[]) => args.at(-2) === "workspace" ? workspaces : agents());
+    const provider = createLocalAgentTeamsProvider({ codexHome, now: () => time, run });
+    const [first, concurrent] = await Promise.all([provider.get(), provider.get()]);
+    expect(first).toEqual(concurrent);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(first.teams[0]?.agents[0]).toMatchObject({ contextUsed: 150, reasoningEffort: "xhigh" });
+    const secret = "ghp_" + "a".repeat(36);
+    await appendFile(file, [
+      JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: `Latest request ${secret} ` + "x".repeat(500) } }),
+      JSON.stringify({ type: "turn_context", payload: { model: "new-model", collaboration_mode: { settings: { reasoning_effort: "max" } } } }),
+    ].join("\n") + "\n");
+    time += 2000;
+    const next = await provider.get();
+    const member = next.teams[0]!.agents[0]!;
+    expect(member).toMatchObject({ model: "new-model", reasoningEffort: "max", contextUsed: null, contextWindow: null });
+    expect(member.taskHint).toMatch(/^Latest request/);
+    expect(member.taskHint?.length).toBeLessThanOrEqual(400);
+    expect(JSON.stringify(next)).not.toContain(secret);
+    expect(JSON.stringify(next)).not.toMatch(/latest synthetic instruction|private conversation/);
+    const partial = JSON.stringify({ type: "event_msg", payload: { type: "item_completed", item: { type: "UserMessage", content: [{ text: "Newest item instruction" }] } } });
+    await appendFile(file, partial.slice(0, 30));
+    time += 2000;
+    expect((await provider.get()).teams[0]!.agents[0]!.taskHint).toBe(member.taskHint);
+    await appendFile(file, partial.slice(30) + "\n");
+    time += 2000;
+    expect((await provider.get()).teams[0]!.agents[0]!.taskHint).toBe("Newest item instruction");
+  });
+
+  it("counts only working agents as active and never guesses metadata from role settings", async () => {
+    const provider = createLocalAgentTeamsProvider({ codexHome: "/no-fixture-sessions", run: async (args) => args.at(-2) === "workspace" ? workspaces
+      : JSON.stringify({ result: { agents: ["working", "blocked", "idle", "done", "unknown"].map((state, index) => ({
+        pane_id: `w6:p${index}`, workspace_id: "w6", name: state, agent: "codex", agent_status: state,
+        tokens: { model: "configured-model", reasoning_effort: "max" }, terminal_title_stripped: "Not a user instruction",
+      })) } }) });
+    const team = (await provider.get()).teams[0]!;
+    expect(team).toMatchObject({ agentCount: 5, activeAgentCount: 1 });
+    expect(team.agents.every((agent) => agent.model === null && agent.reasoningEffort === null && agent.taskHint === null)).toBe(true);
   });
 
   it("retains the last good snapshot as stale, and has no invented zero before a good read", async () => {

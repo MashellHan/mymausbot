@@ -30,22 +30,30 @@ function snapshot(scenario: string | null): LocalUsageResponse {
   const days = dates(midnight ? "2025-12-03" : stale ? "2026-10-04" : "2026-10-05");
   const trend: LocalUsageTrendDay[] = days.map((day, index) => {
     if (noMetrics) return { day, coverage: "unavailable", tokenStatus: "unavailable",
-      prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null };
+      prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, wow: { prs: null, commits: null, newTokens: null } };
     if (missing && day === "2026-10-12") return { day, coverage: "unavailable", tokenStatus: "unavailable",
-      prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null };
+      prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, wow: { prs: null, commits: null, newTokens: null } };
     const tokenGap = missing && day === "2026-10-15";
     return { day, coverage: partialPr ? "partial" : "ready", tokenStatus: tokenGap ? "unavailable" : missing ? "partial" : "ready",
       prs: partialPr ? null : zero ? 0 : index % 3 === 0 ? 2 : 1,
       knownPrs: zero || pendingZero && day === "2026-10-12" ? 0 : index % 3 === 0 ? 2 : 1,
       commits: zero ? 0 : 1 + index % 4,
       newTokens: tokenGap ? null : zero ? 0 : 80 + index % 7 * 30,
-      cacheRead: tokenGap ? null : zero ? 0 : 20 + index % 3 * 10 };
+      cacheRead: tokenGap ? null : zero ? 0 : 20 + index % 3 * 10,
+      wow: { prs: null, commits: null, newTokens: null } };
   });
+  const change = (current: number | null, previous: number | null) => current === null || previous === null ? null
+    : previous === 0 ? current === 0 ? 0 : "new" as const : (current - previous) / previous * 100;
+  for (let index = 7; index < trend.length; index++) {
+    const row = trend[index]!, previous = trend[index - 7]!;
+    row.wow = { prs: change(row.prs, previous.prs), commits: missing ? null : change(row.commits, previous.commits),
+      newTokens: missing ? null : change(row.newTokens, previous.newTokens) };
+  }
   const makeWindow = (count: 1 | 7 | 30): LocalUsageWindow => {
     const rows = trend.slice(-count);
     const sum = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead") => rows.reduce((total, row) => total + (row[field] ?? 0), 0);
     const available = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead") => rows.some((row) => row[field] !== null);
-    return { days: count, startDay: rows[0]!.day, endDay: rows.at(-1)!.day, asOf,
+    const result = { days: count, startDay: rows[0]!.day, endDay: rows.at(-1)!.day, asOf,
       coverage: noMetrics ? "unavailable" : partialPr ? "partial" : "ready", tokenCoverage: noMetrics ? "unavailable" : missing ? "partial" : "ready",
       missingDays: rows.filter((row) => row.coverage === "unavailable").map((row) => row.day),
       unavailableTokenDays: rows.filter((row) => row.tokenStatus === "unavailable").map((row) => row.day),
@@ -53,6 +61,16 @@ function snapshot(scenario: string | null): LocalUsageResponse {
       commits: available("commits") ? sum("commits") : null,
       newTokens: available("newTokens") ? sum("newTokens") : null,
       cacheRead: available("cacheRead") ? sum("cacheRead") : null };
+    const work = { prs: result.prs === null ? null : Math.floor(result.prs / 2), knownPrs: result.knownPrs === null ? null : Math.floor(result.knownPrs / 2), commits: result.commits === null ? null : Math.floor(result.commits / 2) };
+    const personal = { prs: result.prs === null ? null : result.prs - (work.prs ?? 0), knownPrs: result.knownPrs === null ? null : result.knownPrs - (work.knownPrs ?? 0), commits: result.commits === null ? null : result.commits - (work.commits ?? 0) };
+    return { ...result, coverage: noMetrics ? "unavailable" : partialPr ? "partial" : "ready", tokenCoverage: noMetrics ? "unavailable" : missing ? "partial" : "ready",
+      categories: { work, personal, unclassified: { prs: noMetrics ? null : 0, knownPrs: noMetrics ? null : 0, commits: noMetrics ? null : 0 } },
+      repositories: { sharedCommits: 0, coverage: noMetrics ? "unavailable" : missing ? "partial" : "ready", unattributedPrs: result.knownPrs === null ? null : 0, unattributedCommits: result.commits === null ? null : 0,
+        rows: noMetrics || zero ? [] : [
+          { id: "sample-work", name: "example/workspace-tools", category: "work", ...work },
+          { id: "sample-personal", name: "example/personal-lab", category: "personal", ...personal },
+        ] } };
+
   };
   return { status: stale ? "stale" : partialPr || noMetrics ? "partial" : "ready", asOf, timeZone: "Asia/Shanghai",
     sourceCoverage: { total: 2, ready: noMetrics ? 0 : missing ? 1 : 2, partial: 0, stale: 0, missing: noMetrics ? 2 : missing ? 1 : 0 },

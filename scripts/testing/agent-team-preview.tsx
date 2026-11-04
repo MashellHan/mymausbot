@@ -4,6 +4,7 @@ import { setAnalyticsEnabled } from "../../src/lib/analytics";
 import { writeComputerPanelView } from "../../src/lib/computer-panel-view";
 import { setAdvancedMode } from "../../src/lib/interface-mode";
 import { setLocale } from "../../src/lib/i18n";
+import { loadLocalePack } from "../../src/locales";
 import { applySkin } from "../../src/lib/skins";
 import { BotEditorStore, initialState, type Bot } from "../../src/state/store";
 import "../../src/styles.css";
@@ -12,7 +13,9 @@ const params = new URLSearchParams(location.search);
 const width = Number(params.get("width"));
 if ([360, 400, 960].includes(width)) localStorage.setItem("omb-computer-panel-width", String(width));
 setAnalyticsEnabled(false);
-setLocale("en");
+const locale = params.get("locale") === "zh" ? "zh" : "en";
+await loadLocalePack(locale);
+setLocale(locale);
 applySkin(params.get("skin") === "atelier" ? "atelier" : "midnight");
 setAdvancedMode(params.get("mode") === "advanced");
 
