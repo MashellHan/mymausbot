@@ -104,21 +104,22 @@ describe("Mini Apps panel", () => {
     expect(stored.get("omb-mini-app:fixture-environment")).toBe("app_a");
   });
 
-  it("keeps the report while the freshness label becomes stale, then returns to Current after recovery", async () => {
+  it("labels the app version separately from report editions while freshness becomes stale and recovers", async () => {
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("7"));
-    expect(freshness()).toBe("Current");
+    expect(freshness()).toBe("Current app version");
+    expect(host.textContent).toContain("App updated");
     fixture.dataRevision = 8;
     await act(async () => { refresh().click(); });
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("8"));
     fixture.failState = true;
     await act(async () => { refresh().click(); });
     await vi.waitFor(() => expect(freshness()).toContain("Showing the last loaded version"));
-    expect(freshness()).not.toContain("Current");
+    expect(freshness()).not.toContain("Current app version");
     expect(frame()?.dataset.dataRevision).toBe("8");
     fixture.failState = false;
     await act(async () => { refresh().click(); });
-    await vi.waitFor(() => expect(freshness()).toBe("Current"));
+    await vi.waitFor(() => expect(freshness()).toBe("Current app version"));
     expect(frame()?.dataset.dataRevision).toBe("8");
   });
 

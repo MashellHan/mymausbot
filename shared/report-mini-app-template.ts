@@ -46,7 +46,7 @@ const HTML = String.raw`<!DOCTYPE html>
     .item .body { margin-top: 7px; max-width: 72ch; }
     .item dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 18px; margin: 11px 0 0; }
     .source { margin-top: 10px; }
-    .source-url { display: block; width: fit-content; max-width: 100%; margin-top: 3px; color: var(--color-text-link, light-dark(#07559b, #9bcfff)); overflow-wrap: anywhere; user-select: text; }
+    .source-url { display: block; width: fit-content; max-width: 100%; margin-top: 3px; color: var(--color-text-primary, light-dark(#1d1d1f, #ececee)); overflow-wrap: anywhere; user-select: text; }
     .empty { margin-top: 12px; border-radius: 8px; padding: 13px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
     @media (max-width: 530px) { main { padding: 14px 14px 24px; } .facts, .item dl { grid-template-columns: minmax(0, 1fr); } .selector { align-items: stretch; } .selector label { width: 100%; } .selector select { width: 100%; } }
   </style>

@@ -51,6 +51,10 @@ it("creates a Node-safe bound template and shows an empty install without a fabr
   expect(app.text()).toContain("No report published yet");
   expect(app.query.mock.calls.map(([id]) => id)).toEqual(["current", "history"]);
   expect(app.view.document.querySelectorAll("a, iframe, form")).toHaveLength(0);
+  const sourceStyle = createReportTemplate("x_ai_digest").match(/\.source-url\s*\{([^}]+)\}/)?.[1];
+  expect(sourceStyle).toContain("--color-text-primary");
+  expect(sourceStyle).toContain("user-select: text");
+  expect(sourceStyle).not.toContain("--color-text-link");
 });
 
 it("keeps an earlier X edition selected across Data refresh and separates all date claims", async () => {
