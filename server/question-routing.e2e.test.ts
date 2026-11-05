@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { launchCloudSendFixture, type CloudSendFixture, type CloudTeamFixture } from "../scripts/testing/cloud-send-fixture.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
+import { parseCompleteJsonLines } from "./testing/complete-json-lines.ts";
 import { hostTimeout } from "./testing/host-timeout.ts";
 
 const MARCO = { email: "marco@acme.test", role: "owner" as const };
@@ -42,7 +43,8 @@ const script = (botId: string, ...entries: unknown[]) => {
 };
 const turns = (botId: string): Array<{ planKey?: string; prompt: unknown }> => {
   const path = file("room-plan.json.evidence.jsonl");
-  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((turn) => turn.botId === botId) : [];
+  return existsSync(path) ? parseCompleteJsonLines<{ botId: string; planKey?: string; prompt: unknown }>(readFileSync(path, "utf8"))
+    .filter((turn) => turn.botId === botId) : [];
 };
 const keys = (botId: string, job: string) => turns(botId).map((turn) => turn.planKey).filter((key) => key?.startsWith(job));
 const told = (botId: string, key: string) => JSON.stringify(turns(botId).find((turn) => turn.planKey === key)?.prompt ?? "");
