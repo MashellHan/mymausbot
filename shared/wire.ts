@@ -32,7 +32,10 @@ import type { WebhookAttempt, WebhookTrigger } from "./webhooks.ts";
 import type { PublishedPageCard } from "./published-page.ts";
 import type { InboxItem, InboxTask } from "./inbox.ts";
 import type { LiveCallRecord, LiveCallState } from "./live-call-wire.ts";
-export type { LiveCallRecord, LiveCallState, LiveCallStatus, LiveClient, LiveEndReason, LiveKeySource, LiveSettings } from "./live-call-wire.ts";
+/** What a team bot's main chat is called, beside each person's own chats. */
+export const SHARED_CHAT_TITLE = "Shared chat";
+
+export type { LiveCallRecord, LiveCallState, LiveCallStatus, LiveClient, LiveEndReason, LiveKeySource, LiveProvider, LiveSettings } from "./live-call-wire.ts";
 
 /** Reasoning-effort levels, ascending: a union of what any engine accepts;
  * each driver declares the subset its CLI will take. */
@@ -139,6 +142,9 @@ export interface WireTask extends InboxTask {
   /** The first message already drove a title attempt for this thread, so a
    * later one does not rename a thread the person may have retitled. */
   titleFromFirstMessage?: true;
+  /** Team Cloud only: this is the bot's main chat, everyone's who sees the bot. Its title is SHARED_CHAT_TITLE on every
+   * person's copy, whatever is stored, and it can't be renamed. */
+  sharedChat?: true;
   /** Organizational grouping only; never a directory or provider context. */
   projectId?: string;
   /** Detached routine execution, reachable through its visible results card. */
@@ -651,6 +657,7 @@ export function nextOpenThread<T extends OpenThreadCandidate>(tasks: readonly T[
 }
 
 export interface OptionCardData extends WaitCardField, ComputerAskField, AccessRequestCardField {
+  /** The harness asks the owner to let this line of theirs use the lent computer (server/host/lending-lifts.ts). */ lendingLift?: { requestMessageId: string; memoryToken?: string; outside?: true; botOpened?: true; allowedAt?: number };
   /** calls: one per outbound call the card covers, in subtitle order. */
   outboundRequest?: { tool: string; app: string | null; calls?: Array<{ app: string | null; label: string }> };
   /** `revision`: the entry as it applied without a person, so Undo can tell it changed since. */
@@ -819,8 +826,8 @@ export interface GroupTask {
   /** This conversation's own turn limit: whole minutes a turn may go without progress. Absent uses
    * the global group turn limit. Direct chats do not use this limit. */
   turnTimeoutMinutes?: number;
-  /** Epoch ms when the person archived this thread; absent while it is in the list. */
-  archivedAt?: number;
+  /** Epoch ms when the person archived this thread; absent while it is in the list. */ archivedAt?: number;
+  /** A card in this thread waits on the person, with no turn running. */ activity?: "waiting-on-you";
   /** Epoch ms of the newest message, or createdAt when the thread has none. */
   updatedAt?: number;
   lastThreadOrderAt?: number;
@@ -925,7 +932,7 @@ export type SteerQueueReason = "capacity" | "group-turn";
 
 /** Pending steer-queue chips, as `queuedSteerSnapshot` emits them and the
  * `bot.queued` frame carries them: threadId → queued items. */
-export type BotQueuedMessages = Record<string, Array<{ queueId: string; text: string; reason?: SteerQueueReason }>>;
+export type BotQueuedMessages = Record<string, Array<{ queueId: string; text: string; reason?: SteerQueueReason; /** The reason in plain words, shown as it is. */ why?: string }>>;
 
 /** Skills library browse surface: one row per library entry, with the bots
  * currently assigned to it. Version is null for locally imported skills. */
