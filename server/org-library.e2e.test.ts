@@ -153,4 +153,3 @@ it("brings an added team to a newer release, keeping what the person changed", a
     await fixture.close();
   }
 }, 120_000);
-

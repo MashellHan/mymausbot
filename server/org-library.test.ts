@@ -1110,4 +1110,3 @@ describe("a newer release of an added team", () => {
     expect(app.readState().installs[installId].release).toBe("1.3.0");
   });
 });
-
