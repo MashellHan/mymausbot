@@ -28,7 +28,7 @@ function stamp(value: number): string {
 }
 
 function changedState(left: MiniAppState | null, right: MiniAppState): boolean {
-  return !left || left.revision !== right.revision || left.templateVersion !== right.templateVersion || left.status !== right.status
+  return !left || left.appId !== right.appId || left.revision !== right.revision || left.templateVersion !== right.templateVersion || left.status !== right.status
     || left.data.length !== right.data.length || right.data.some((entry, index) => entry.datasetId !== left.data[index]?.datasetId || entry.revision !== left.data[index]?.revision);
 }
 
@@ -192,7 +192,7 @@ export function MiniAppsPanel() {
           <p className="shrink-0 tabular-nums">{t("computer.miniApps.published", { time: stamp(selected.updatedAt) })}</p>
         </div>}
       </header>
-      {installing ? <BookkeepingInstall onCancel={() => setInstalling(false)} onInstalled={(id) => { rememberApp(storageKey, id); setInstalling(false); setSelectedId(id); setRefreshKey((current) => current + 1); }} /> : <>
+      {installing ? <BookkeepingInstall onCancel={() => setInstalling(false)} onInstalled={(id) => { choose(id); setInstalling(false); setRefreshKey((current) => current + 1); }} /> : <>
         {stale && <p role="status" className="mx-4 mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.miniApps.stale")}</p>}
         {error && <p role="alert" className="mx-4 mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{error}</p>}
         {loading && apps === null && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>}

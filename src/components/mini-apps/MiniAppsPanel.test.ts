@@ -138,6 +138,21 @@ describe("Mini Apps panel", () => {
     expect(host.querySelector('[data-testid="fixture-install"]')).not.toBeNull();
   });
 
+  it("opens the newly installed document when both apps share the same revisions and Data", async () => {
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+    await act(async () => { button("Install bookkeeping").click(); });
+    fixture.apps.push(app("app_new", "Installed report"));
+    await act(async () => { button("Finish install").click(); });
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_new"));
+    expect(selected()?.dataset.appId).toBe("app_new");
+    const installedFrame = frame();
+    fixture.dataRevision += 1;
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("8"));
+    expect(frame()).toBe(installedFrame);
+  });
+
   it("keeps archived apps out of the active navigation", async () => {
     fixture.apps = [app("app_a", "First report"), { ...app("app_b", "Old report"), status: "archived" }];
     await render();
