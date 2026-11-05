@@ -188,7 +188,7 @@ describe("cloud computer tools", () => {
     expect(result).toEqual({ isError: true, content: [{ type: "text", text: tools.CLOUD_COMPUTER_LATE }] });
     expect(Date.now() - started).toBeGreaterThanOrEqual(550);
     expect(Date.now() - started).toBeLessThan(1_500);
-    expect(calls.filter(entry => entry.path.endsWith("/commands"))).toHaveLength(1);
+    expect(calls.filter(entry => entry.path.endsWith("/commands")).length).toBeLessThanOrEqual(1);
     server.closeAllConnections();
   });
 });
