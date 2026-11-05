@@ -103,4 +103,23 @@ describe("bounded per-agent Codex activity", () => {
     session = SESSION; herdrFailed = true;
     expect(await provider.get(pane)).toMatchObject({ status: "unavailable", events: [] });
   });
+
+  it("revalidates the live session for each concurrent request instead of sharing an older result", async () => {
+    const home = await fixture([row("event_msg", { type: "user_message", message: "old session line" })]);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let reads = 0;
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => {
+      reads++;
+      if (reads === 1) { await held; return listed([agent()]); }
+      return listed([agent(OTHER)]);
+    } });
+    const first = provider.get(pane);
+    const second = provider.get(pane);
+    release();
+    const [older, newer] = await Promise.all([first, second]);
+    expect(reads).toBe(2);
+    expect(older).toMatchObject({ status: "ready", events: [{ text: "old session line" }] });
+    expect(newer).toMatchObject({ status: "unavailable", events: [] });
+  });
 });

@@ -116,7 +116,6 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
 } = {}) {
   const paths = new Map<string, { file: string | null; at: number }>();
   const lastGood = new Map<string, { sessionId: string; file: string; response: LocalAgentActivityResponse }>();
-  const pending = new Map<string, Promise<LocalAgentActivityResponse>>();
 
   async function refresh(agentId: string): Promise<LocalAgentActivityResponse> {
     if (!PANE_ID.test(agentId)) return unavailable(agentId);
@@ -155,11 +154,7 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
 
   return {
     get(agentId: string): Promise<LocalAgentActivityResponse> {
-      const current = pending.get(agentId);
-      if (current) return current;
-      const next = refresh(agentId).finally(() => { pending.delete(agentId); });
-      pending.set(agentId, next);
-      return next;
+      return refresh(agentId);
     },
   };
 }
