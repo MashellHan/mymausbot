@@ -9,11 +9,14 @@ import { fileURLToPath } from "node:url";
 
 /** The vitest job's two steps for one Linux matrix entry, with the step's environment. */
 export function vitestLane(entry, retryLog) {
+  if (!Number.isInteger(entry.shard) || !Number.isInteger(entry.shards) || entry.shard < 1 || entry.shard > entry.shards
+    || entry.shards > 32 || entry.files.split(" ").filter(Boolean).some((file) => !/^[a-zA-Z0-9_][\w./-]*$/.test(file) || file.split("/").includes(".."))) throw new Error("Unsafe Linux test selection");
   return {
     name: `vitest (ubuntu-latest, ${entry.part})`,
-    env: { OMB_VITEST_RETRY_LOG: retryLog, OMB_VITEST_E2E: entry.e2e, OMB_VITEST_SUBSET: entry.files, OMB_VITEST_WORKERS: entry.workers },
+    env: { OMB_VITEST_RETRY_LOG: retryLog, OMB_VITEST_E2E: entry.e2e, OMB_VITEST_SUBSET: entry.files, OMB_VITEST_WORKERS: entry.workers,
+      OMB_DASHBOARD_UI: entry.files.includes("local-dashboard-ui") ? "1" : "0" },
     commands: [
-      `pnpm exec vitest run ${entry.files} --shard=${entry.shard}/${entry.shards} --reporter=default --reporter=github-actions`,
+      `pnpm exec vitest run ${entry.files} --shard=${entry.shard}/${entry.shards} --reporter=default --reporter=github-actions --reporter=json --outputFile.json=qa-results/${entry.shard}/vitest.json`,
       ...(entry.node_tests ? ["pnpm broker:test && pnpm test:electron"] : []),
     ],
   };
@@ -24,7 +27,7 @@ export const EVALS_LANE = {
   env: {},
   commands: [
     "pnpm exec tsc -p evals/tsconfig.json",
-    "pnpm exec vitest run --config evals/vitest.config.ts --reporter=default --reporter=github-actions",
+    "pnpm exec vitest run --config evals/vitest.config.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=qa-results/vitest.json",
     "pnpm eval",
     "pnpm eval --golden",
     `output="$(pnpm eval --live 2>&1)"
@@ -93,7 +96,8 @@ export async function runLanes(lanes, { dir, timeoutMs, heartbeatMs = 60_000, lo
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const plan = JSON.parse(process.env.OMB_CI_LINUX_LANES ?? "");
   const temp = process.env.RUNNER_TEMP ?? "/tmp";
-  const failed = await runLanes(lanesFor(plan, join(temp, "vitest-retries.jsonl")), {
+  mkdirSync("qa-results", { recursive: true });
+  const failed = await runLanes(lanesFor(plan, resolve("qa-results/vitest-retries.jsonl")), {
     dir: join(temp, "linux-lanes"),
     timeoutMs: Number(process.env.OMB_CI_LANE_TIMEOUT_MINUTES ?? 30) * 60_000,
     summary: (markdown) => process.env.GITHUB_STEP_SUMMARY && appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown),
