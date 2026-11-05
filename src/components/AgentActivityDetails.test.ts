@@ -126,6 +126,22 @@ describe("AgentActivityDetails", () => {
     expect(list()?.children.length ?? 0).toBe(status === "stale" ? 4 : 0);
   });
 
+  it("keeps changing as-of times outside the live status region", async () => {
+    calls.api.mockResolvedValueOnce({ ...ready, updatedAt: 1000 }).mockResolvedValueOnce({ ...ready, updatedAt: 3000 });
+    await render();
+    await act(async () => button().click());
+    const status = host.querySelector<HTMLElement>('[role="status"]')!;
+    const asOf = host.querySelector<HTMLElement>('[data-testid="agent-activity-as-of"]')!;
+    const firstTime = asOf.textContent;
+    expect(status.textContent).toBe("Codex session");
+    expect(status.contains(asOf)).toBe(false);
+    expect(asOf.getAttribute("aria-live")).toBe("off");
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(host.querySelector('[role="status"]')).toBe(status);
+    expect(status.textContent).toBe("Codex session");
+    expect(asOf.textContent).not.toBe(firstTime);
+  });
+
   it("preserves reading position away from the bottom while new events arrive", async () => {
     calls.api.mockResolvedValueOnce(ready).mockResolvedValueOnce({ ...ready, events: [...ready.events, { id: "e5", at: null, kind: "assistant", tool: null, text: "More detail" }] });
     await render();

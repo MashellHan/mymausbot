@@ -87,8 +87,8 @@ export function AgentActivityDetails({ agentId, active = true }: { agentId: stri
     : new Date(at).toLocaleTimeString(activeLocale(), { hour: "2-digit", minute: "2-digit" });
   const asOf = snapshot?.updatedAt == null ? null : new Date(snapshot.updatedAt).toLocaleTimeString(activeLocale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const state = snapshot === null ? t("computer.agentTeam.activity.loading")
-    : snapshot.status === "ready" ? t("computer.agentTeam.activity.asOf", { time: asOf ?? "—" })
-      : snapshot.status === "stale" ? t("computer.agentTeam.activity.stale", { time: asOf ?? "—" })
+    : snapshot.status === "ready" ? t("computer.agentTeam.activity.source")
+      : snapshot.status === "stale" ? t("computer.agentTeam.activity.stale")
         : t(snapshot.status === "unsupported" ? "computer.agentTeam.activity.unsupported" : "computer.agentTeam.activity.unavailable");
 
   return (
@@ -100,7 +100,12 @@ export function AgentActivityDetails({ agentId, active = true }: { agentId: stri
       </button>
       <div id={id} hidden={!open} className="mt-1 rounded-lg border border-hairline/60 bg-inset/40 p-2.5">
         {open && <>
-          <p role="status" className={cn("text-[11px]", snapshot?.status === "stale" ? "text-warning" : "text-ink-tertiary")}>{state}</p>
+          <div className="flex flex-wrap items-baseline gap-x-1.5 text-[11px]">
+            <p role="status" className={snapshot?.status === "stale" ? "text-warning" : "text-ink-tertiary"}>{state}</p>
+            {asOf && snapshot?.updatedAt != null && <time aria-live="off" data-testid="agent-activity-as-of" className="text-ink-tertiary" dateTime={new Date(snapshot.updatedAt).toISOString()}>
+              {t(snapshot?.status === "stale" ? "computer.agentTeam.activity.lastObserved" : "computer.agentTeam.activity.asOf", { time: asOf })}
+            </time>}
+          </div>
           {snapshot?.status === "ready" || snapshot?.status === "stale" ? <>
             {snapshot.truncated && <p className="mt-1 text-[11px] text-ink-tertiary">{t("computer.agentTeam.activity.truncated")}</p>}
             {snapshot.events.length ? <ol ref={listRef} role="region" tabIndex={0} aria-label={t("computer.agentTeam.activity.list")}
