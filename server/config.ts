@@ -750,7 +750,7 @@ delete process.env.OMB_SESSION_CONFIG_JSON;
 let sessionConfig: JsonObject | null = null;
 let publishSessionConfig: ((snapshot: JsonObject) => Promise<void> | void) | null = null;
 let sessionConfigConfirmation: Promise<void> | null = null;
-let sessionConfigRevision = 0;
+let sessionConfigPending = false;
 
 function initialSessionConfig(): JsonObject | null {
   if (!SESSION_CREDENTIALS || !sessionConfigSeed) return null;
@@ -963,6 +963,7 @@ export function saveConfig(
   },
   options: { replaceInstances?: boolean } = {},
 ): void {
+  if (SESSION_CREDENTIALS && sessionConfigPending) throw Object.assign(new Error("A session credential save is still being confirmed. Try again."), { status: 409 });
   const p = join(DATA_DIR, "config.json");
   let previousDisk: JsonObject = {};
   let previousBytes: string | null = null;
@@ -1079,18 +1080,18 @@ export function saveConfig(
   writeFileAtomic(p, JSON.stringify(persisted, null, 2), { mode: 0o600 });
   if (SESSION_CREDENTIALS) {
     sessionConfig = disk;
-    const revision = ++sessionConfigRevision;
     if (publishSessionConfig) {
+      sessionConfigPending = true;
       let sent: Promise<void> | void;
       try { sent = publishSessionConfig(structuredClone(disk)); }
       catch (error) { sent = Promise.reject(error); }
-      sessionConfigConfirmation = Promise.resolve(sent).catch((error: unknown) => {
-        if (sessionConfigRevision === revision) {
+      sessionConfigConfirmation = Promise.resolve(sent).then(() => { sessionConfigPending = false; }, (error: unknown) => {
+        try {
           sessionConfig = previousSession;
           if (previousBytes === null) rmSync(p, { force: true });
           else writeFileAtomic(p, previousBytes, { mode: 0o600 });
           storedConfig.forget();
-        }
+        } finally { sessionConfigPending = false; }
         throw error;
       });
       void sessionConfigConfirmation.catch(() => {});

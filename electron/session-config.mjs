@@ -3,16 +3,45 @@ const MAX_BYTES = 128 * 1024;
 /** The current utility server may hand its validated config to the App; the next utility server receives it from memory. */
 export function createSessionConfigMemory() {
   const snapshots = new Map();
+  const pending = new Map();
+  const cancel = (dataDir, requestId) => {
+    const request = pending.get(dataDir);
+    if (!request || request.requestId !== requestId) return false;
+    if (request.committed) {
+      if (request.previous === undefined) snapshots.delete(dataDir);
+      else snapshots.set(dataDir, request.previous);
+    }
+    pending.delete(dataDir);
+    return true;
+  };
   return {
-    receive(dataDir, message) {
+    receive(dataDir, message, owner) {
       if (message?.type !== "openmausbot:session-config") return false;
       if (typeof message.requestId !== "string" || !/^[0-9a-f-]{36}$/i.test(message.requestId)) throw new Error("Invalid session configuration receipt");
+      if (pending.has(dataDir)) throw new Error("A session configuration is already being confirmed");
       const value = message.config;
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid session configuration");
       const json = JSON.stringify(value);
       if (Buffer.byteLength(json) > MAX_BYTES) throw new Error("Session configuration exceeds the desktop handoff limit");
-      snapshots.set(dataDir, JSON.parse(json));
+      pending.set(dataDir, { requestId: message.requestId, owner, snapshot: JSON.parse(json), previous: snapshots.get(dataDir), committed: false });
       return true;
+    },
+    commit(dataDir, requestId, owner) {
+      const request = pending.get(dataDir);
+      if (!request || request.requestId !== requestId || request.owner !== owner || request.committed) return false;
+      snapshots.set(dataDir, request.snapshot);
+      request.committed = true;
+      return true;
+    },
+    finish(dataDir, requestId, owner) {
+      const request = pending.get(dataDir);
+      if (!request || request.requestId !== requestId || request.owner !== owner || !request.committed) return false;
+      pending.delete(dataDir);
+      return true;
+    },
+    cancel,
+    rejectProcess(owner) {
+      for (const [dataDir, request] of pending) if (request.owner === owner) cancel(dataDir, request.requestId);
     },
     childEnvironment(dataDir) {
       const snapshot = snapshots.get(dataDir);

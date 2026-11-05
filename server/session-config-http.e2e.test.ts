@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { launchRestartableServer } from "./testing/restartable-server.ts";
@@ -51,7 +51,7 @@ it("keeps direct and desktop-external provider secrets in this App run through a
   } finally { await fixture.close(); }
 }, 120_000);
 
-it.each(["deny", "drop"])("does not commit a session key when the App parent %s its receipt", async (reply) => {
+it.each(["deny", "drop", "drop-commit"])("does not commit a session key when the App parent %s its receipt", async (reply) => {
   vi.stubEnv("OMB_TEST_DESKTOP_OWNER_TOKEN", OWNER);
   vi.stubEnv("OMB_TEST_SESSION_CREDENTIALS", "1");
   vi.stubEnv("OMB_TEST_SESSION_CONFIG_REPLY", reply);
@@ -65,6 +65,7 @@ it.each(["deny", "drop"])("does not commit a session key when the App parent %s 
     expect(response.status).toBeGreaterThanOrEqual(500);
     expect(readFileSync(file)).toEqual(before);
     expect(readFileSync(file, "utf8")).not.toContain("sk-synthetic-unconfirmed");
+    expect(existsSync(join(fixture.dataDir, "session-config-captured.json"))).toBe(false);
     expect((await (await fetch(fixture.url + "/api/config")).json() as any).openai.configured).toBe(false);
     if (reply === "deny") {
       const mcp = await fetch(fixture.url + "/api/mcp/servers", { method: "POST", headers: {

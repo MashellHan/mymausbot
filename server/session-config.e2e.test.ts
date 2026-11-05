@@ -66,11 +66,13 @@ describe("embedded server session config across App-run restarts", () => {
 
   it("clears a session key in memory without deleting the older persistent copy", () => {
     const { root, old } = fixture();
-    const result = run(root, `import { saveConfig, loadConfig, setSessionConfigPublisher } from ${JSON.stringify(configModule)};
+    const result = run(root, `import { saveConfig, loadConfig, confirmSessionConfig, setSessionConfigPublisher } from ${JSON.stringify(configModule)};
       let snapshot = null;
       setSessionConfigPublisher((value) => { snapshot = value; });
       saveConfig({ openai: { key: "new-session-key" } });
+      await confirmSessionConfig();
       saveConfig({ openai: { key: "" } });
+      await confirmSessionConfig();
       console.log(JSON.stringify({ snapshot, runtime: loadConfig() }));`);
     expect(result.runtime.openai.key).toBe("");
     expect(result.snapshot.openai.key).toBe("");
@@ -91,5 +93,32 @@ describe("embedded server session config across App-run restarts", () => {
     expect(result.failed).toBe(true);
     expect(result.runtime.openai.key).toBe("accepted-session-key");
     expect(JSON.parse(readFileSync(join(root, "config.json"), "utf8")).openai.key).toBe(old.openai.key);
+  });
+
+  it("refuses an overlapping MCP/config save without adopting an unconfirmed key", () => {
+    const { root, old } = fixture();
+    const result = run(root, `import { saveConfig, loadConfig, confirmSessionConfig, setSessionConfigPublisher } from ${JSON.stringify(configModule)};
+      let rejectFirst;
+      const snapshots = [];
+      setSessionConfigPublisher((value) => {
+        snapshots.push(value);
+        return snapshots.length === 1 ? new Promise((_resolve, reject) => { rejectFirst = reject; }) : Promise.resolve();
+      });
+      saveConfig({ openai: { key: "unconfirmed-session-key" } });
+      const first = confirmSessionConfig();
+      let overlappingStatus = null;
+      try { saveConfig({ mcpServers: { notes: { headers: { Authorization: "Bearer other-session-secret" } } } }); }
+      catch (error) { overlappingStatus = error.status; }
+      rejectFirst(new Error("parent refused"));
+      await first.catch(() => {});
+      saveConfig({ mcpServers: { notes: { headers: { Authorization: "Bearer accepted-session-secret" } } } });
+      await confirmSessionConfig();
+      console.log(JSON.stringify({ overlappingStatus, snapshots, runtime: loadConfig() }));`);
+    expect(result.overlappingStatus).toBe(409);
+    expect(result.snapshots).toHaveLength(2);
+    expect(result.snapshots[1].openai.key).toBe(old.openai.key);
+    expect(result.runtime.openai.key).toBe(old.openai.key);
+    expect(result.runtime.mcpServers.notes.headers.Authorization).toBe("Bearer accepted-session-secret");
+    expect(readFileSync(join(root, "config.json"), "utf8")).not.toContain("accepted-session-secret");
   });
 });

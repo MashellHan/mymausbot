@@ -36,6 +36,7 @@ import { createAllWindowsClosedQuit } from "./window-all-closed.mjs";
 import { createStartupScreen } from "./startup-screen.mjs";
 import { createAppBrowserSession } from "./browser-session.mjs";
 import { createSessionConfigMemory } from "./session-config.mjs";
+import { createSessionWorkspaceCredentials } from "./session-workspace-credentials.mjs";
 import { createSystemTray } from "./system-tray.mjs";
 import { createLendingIndicator } from "./lending-indicator.mjs";
 import { createLendingDialogs } from "./lending-dialogs.mjs";
@@ -267,6 +268,8 @@ let serverProc = null;
 let serverReady = !app.isPackaged;
 let secureCredentials = {};
 let secureCredentialState = null;
+const sessionWorkspaceCredentials = createSessionWorkspaceCredentials();
+let sessionCredentialWrites = 0;
 let desktopDataDirLease = null;
 // The folder this process leases; environmentsState.activeId can name a remote server instead.
 let runningDataDir = null;
@@ -1142,7 +1145,8 @@ async function startServerOn(port, dataDir = runningDataDir ?? startupEnvironmen
     resourcesPath: process.resourcesPath,
     userData: app.getPath("userData"),
   });
-  const childEnv = managedComposioChildEnvironment(composioBrokerUrl(), secureCredentials, {
+  const serverCredentials = SESSION_CREDENTIALS ? sessionWorkspaceCredentials.forServer(dataDir, secureCredentials) : secureCredentials;
+  const childEnv = managedComposioChildEnvironment(composioBrokerUrl(), serverCredentials, {
     ...process.env,
     // The parent owns the data-dir lease; a child only validates it, so fallback-port children never replace it.
     ...desktopDataDirLease.utilityServerLeaseEnvironment(),
@@ -1156,12 +1160,12 @@ async function startServerOn(port, dataDir = runningDataDir ?? startupEnvironmen
     OMB_PORT: String(port),
     OMB_APP_VERSION: app.getVersion(),
     OMB_USER_DATA: app.getPath("userData"),
-    ...(secureCredentials.composioApiKey
-      ? { COMPOSIO_API_KEY: secureCredentials.composioApiKey }
+    ...(serverCredentials.composioApiKey
+      ? { COMPOSIO_API_KEY: serverCredentials.composioApiKey }
       : {}),
     OMB_CREDENTIAL_MODE: CREDENTIAL_MODE,
     OMB_CREDENTIAL_STORE: credentialStoreUnavailable || SESSION_CREDENTIALS ? "unavailable" : "ok",
-    ...workspaceCredentialEnv(secureCredentials),
+    ...workspaceCredentialEnv(serverCredentials),
   });
   delete childEnv.OMB_SESSION_CONFIG_JSON;
   if (SESSION_CREDENTIALS) Object.assign(childEnv, sessionConfigMemory.childEnvironment(dataDir));
@@ -1186,10 +1190,15 @@ async function startServerOn(port, dataDir = runningDataDir ?? startupEnvironmen
   proc.on("message", (message) => {
     if (!serverSupervisor.isCurrent(proc)) return;
     try {
-      if (sessionConfigMemory && message?.type === "openmausbot:session-config") {
+      if (sessionConfigMemory && ["openmausbot:session-config", "openmausbot:session-config-commit", "openmausbot:session-config-finish", "openmausbot:session-config-cancel"].includes(message?.type)) {
+        if (message.type === "openmausbot:session-config-finish") { sessionConfigMemory.finish(dataDir, message.requestId, proc); return; }
+        if (message.type === "openmausbot:session-config-cancel") { sessionConfigMemory.cancel(dataDir, message.requestId); return; }
         let ok = true;
-        try { sessionConfigMemory.receive(dataDir, message); } catch { ok = false; }
-        proc.postMessage({ type: "openmausbot:session-config-result", requestId: message.requestId, ok });
+        const phase = message.type === "openmausbot:session-config" ? "prepared" : "committed";
+        try { ok = phase === "prepared" ? sessionConfigMemory.receive(dataDir, message, proc) : sessionConfigMemory.commit(dataDir, message.requestId, proc); }
+        catch { ok = false; }
+        try { proc.postMessage({ type: "openmausbot:session-config-result", requestId: message.requestId, phase, ok }); }
+        catch (error) { sessionConfigMemory.cancel(dataDir, message.requestId); throw error; }
         return;
       }
       if (trustedApprovalMode.receive(proc, message)) return;
@@ -1209,6 +1218,7 @@ async function startServerOn(port, dataDir = runningDataDir ?? startupEnvironmen
   let exited = false;
   proc.once("exit", (code) => {
     exited = true;
+    sessionConfigMemory?.rejectProcess(proc);
     trustedApprovalMode.rejectProcess(proc);
     managedDesktopRelay.rejectProcess(proc);
     resolveServerExit();
@@ -1610,7 +1620,7 @@ function acquireDataDirLeaseFor(dir) {
 async function switchLocalEnvironmentTo(targetDir, targetId, quiet = false) {
   if (!app.isPackaged) return { ok: false, error: "dev" };
   // A second switch would be un-paused by the first's finally mid-handoff.
-  if (localSwitchInFlight) return { ok: false, error: "busy" };
+  if (localSwitchInFlight || sessionCredentialWrites > 0) return { ok: false, error: "busy" };
   const previousDir = runningDataDir ?? startupEnvironmentDir(environmentsState, desktopDataDir());
   let startedProc = null;
   let switchSucceeded = false;
@@ -2835,8 +2845,10 @@ async function saveWorkspaceCredential(name, value) {
     throw new Error("The operating-system credential store is unavailable");
   }
   const secret = value.trim();
+  const targetDataDir = SESSION_CREDENTIALS ? runningDataDir : null;
+  if (SESSION_CREDENTIALS && (!targetDataDir || localSwitchInFlight)) throw new Error("The local environment is changing. Try again when it is ready.");
   const applyToHarness = async () => {
-    if (app.isPackaged && !serverReady) throw new Error("The embedded bot server is unavailable");
+    if (app.isPackaged && (!serverReady || (SESSION_CREDENTIALS && runningDataDir !== targetDataDir))) throw new Error("The embedded bot server is unavailable");
     const secretStorage = app.isPackaged ? "?secretStorage=external" : "";
     const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config${secretStorage}`, {
       method: "PUT",
@@ -2851,6 +2863,20 @@ async function saveWorkspaceCredential(name, value) {
     return body;
   };
   if (!app.isPackaged) return applyToHarness();
+
+  if (SESSION_CREDENTIALS) {
+    sessionCredentialWrites++;
+    try {
+      return await sessionWorkspaceCredentials.state(targetDataDir).update(
+        (credentials) => {
+          if (secret) credentials[name] = secret;
+          else delete credentials[name];
+          return credentials;
+        },
+        applyToHarness,
+      );
+    } finally { sessionCredentialWrites--; }
+  }
 
   // Commit the encrypted value before the server makes it live; a failed reload rolls credentials.bin back.
   return updateSecureCredentialDocument(
