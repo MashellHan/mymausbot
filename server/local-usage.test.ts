@@ -135,10 +135,42 @@ describe("local Usage projection", () => {
     expect(gaps.windows?.["1"].repositories.rows[0]?.comparison).toEqual({ prs: null, commits: 100 });
   });
 
-  it.each(["missing", "partial", "stale"])("keeps observed amounts but suppresses machine-incomplete changes (%s)", async (status) => {
+  it("compares commits within the same successfully collected scope when another machine has no sample", async () => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);
-    snapshot.sources.push({ status });
+    snapshot.sources.push({ status: "missing" });
+    for (const [date, commits] of [["2026-11-03", 64], ["2026-11-02", 24]] as const) {
+      for (const daily of [snapshot.daily, snapshot.localHistory.daily]) {
+        daily.find((row) => row.day === date)!.categories.work.commits = commits;
+      }
+      for (const repositories of [snapshot.localRepositories, snapshot.localHistory.localRepositories]) {
+        repositories.rows[0]!.daily.find((row) => row.day === date)!.commits = commits;
+        repositories.attribution.find((row) => row.day === date)!.commits = commits;
+      }
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const dayChange = (64 - 24) / 24 * 100;
+    expect(response.sourceCoverage).toMatchObject({ ready: 1, missing: 1 });
+    expect(response.windows?.["1"]).toMatchObject({ commits: 64, totalTokens: 256,
+      comparison: { prs: 100, commits: dayChange, totalTokens: null,
+        categories: { work: { prs: 100, commits: dayChange } } },
+      repositories: { rows: [{ commits: 64, comparison: { prs: 100, commits: dayChange } }] } });
+    expect(response.windows?.["7"].comparison).toMatchObject({ commits: (108 - 14) / 14 * 100, totalTokens: null });
+    expect(response.windows?.["30"].comparison).toMatchObject({ commits: (154 - 60) / 60 * 100, totalTokens: null });
+    expect(response.trend.at(-1)).toMatchObject({ commits: 64, wow: { prs: 300, commits: 3100,
+      newTokens: null, totalTokens: null } });
+  });
+
+  it.each([
+    { name: "partial machine", source: { status: "partial" } },
+    { name: "stale machine", source: { status: "stale" } },
+    { name: "missing machine with prior capture", source: { status: "missing", capturedAt: "2026-11-02T00:00:00Z" } },
+    { name: "missing machine with sample metadata", source: { status: "missing", repositoryCount: 0 } },
+  ])("keeps observed amounts but suppresses changes for $name", async ({ source }) => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    snapshot.sources.push(source);
     await writeFile(file, JSON.stringify(snapshot));
     const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
     expect(response.windows?.["1"]).toMatchObject({ prs: 4, commits: 8, newTokens: 56, totalTokens: 256,
@@ -151,7 +183,7 @@ describe("local Usage projection", () => {
       wow: { prs: 300, commits: null, newTokens: null, totalTokens: null } });
   });
 
-  it("keeps PR New from an exact zero while incomplete machines cannot make commit or token New", async () => {
+  it("uses a verified zero within the collected scope for commit New but keeps token changes unavailable", async () => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);
     const yesterday = "2026-11-02";
@@ -164,9 +196,9 @@ describe("local Usage projection", () => {
     await writeFile(file, JSON.stringify(withoutHistory));
     const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
     expect(response.windows?.["1"]).toMatchObject({ commits: 8, totalTokens: 256,
-      comparison: { prs: "new", commits: null, totalTokens: null,
-        categories: { work: { prs: "new", commits: null } } } });
-    expect(response.windows?.["1"].repositories.rows[0]?.comparison).toEqual({ prs: "new", commits: null });
+      comparison: { prs: "new", commits: "new", totalTokens: null,
+        categories: { work: { prs: "new", commits: "new" } } } });
+    expect(response.windows?.["1"].repositories.rows[0]?.comparison).toEqual({ prs: "new", commits: "new" });
   });
 
   it("requires ready token coverage on both dates without suppressing complete PR and commit changes", async () => {
