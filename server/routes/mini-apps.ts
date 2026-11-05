@@ -137,7 +137,7 @@ export function createMiniAppsInternalRoutes(deps: MiniAppRouteDeps) {
     };
     let ownDataset: string | undefined;
     const actor: MiniAppActor = { botId: ctx.botId, writeAllowed: !readOnly, assertActive,
-      canBind: (id) => id === ownDataset || deps.apps.list(actor).some((app) => deps.apps.document(actor, app.id).bindings.some((binding) => binding.datasetId === id)) };
+      canBind: (id) => id === ownDataset };
     try {
       assertActive();
       const raw = await ctx.readBody();
@@ -165,6 +165,10 @@ export function createMiniAppsInternalRoutes(deps: MiniAppRouteDeps) {
       const body = INTERNAL_ID.extend({ requestKey: z.string(), expectedRevision: z.number(), ...(name === "mini_app_rollback" ? { templateVersion: z.number() } : {}) }).safeParse(raw);
       if (!body.success) throw appFailure(400, "Pass app_id, requestKey and expectedRevision, and the templateVersion for rollback.");
       const { app_id: id, ...input } = body.data;
+      if (name === "mini_app_rollback") {
+        ownDataset = (await deps.data.promoteForBot(ctx.botId, MINI_APPS_OWNER)).datasetId;
+        assertActive();
+      }
       return ctx.json(ctx.res, 200, name === "mini_app_rollback" ? await deps.apps.rollback(actor, id, input) : deps.apps.archive(actor, id, input));
     } catch (error) {
       const failure = miniAppError(error);

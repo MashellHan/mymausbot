@@ -816,6 +816,9 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
           if (json !== row.json) update.run(json, record(message) && typeof message.text === "string" ? message.text : null, row.thread_id, row.id);
         }
       }
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mini_apps'").get()) {
+        db.exec("UPDATE mini_apps SET publishers = '[]'");
+      }
       // Import is not a restart: the source may still be running, so never execute a copy of its pending work.
       if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_followups'").get()) {
         const pause = db.prepare("UPDATE chat_followups SET status = 'interrupted', payload = ? WHERE id = ?");

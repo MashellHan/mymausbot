@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, renameSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
@@ -234,5 +234,39 @@ describe("promoted Mini App Data", () => {
     await expect(writer.run("SELECT 1", { connection: "bot" })).rejects.toMatchObject({ error: { code: "engine_unavailable" } });
     await expect(engine.readNamed({ ownerId: "owner", binding: dataBinding, queryId: "rows", parameters: {}, scope: "app-mount", cursor: page.nextCursor })).rejects.toMatchObject({ error: { code: "invalid_input" } });
     expect((await engine.readNamed({ ownerId: "owner", binding: dataBinding, queryId: "quality", parameters: {}, scope: "app-mount" })).rows).toEqual([["6", "4", "5"]]);
+  });
+
+  it("never recreates a missing promoted file through its dataset, bot alias or snapshot", async () => {
+    const { engine, root } = fixture();
+    await (await engine.forBot("writer")).run(firstRows, { connection: "bot", businessMutation: true });
+    const promoted = await engine.promoteForBot("writer", "owner");
+    await engine.closeAll();
+    const folder = join(root, "stores", promoted.storeId);
+    const file = join(folder, "data.duckdb");
+    renameSync(file, join(root, "moved.duckdb"));
+    await expect((await engine.forDataset(promoted.datasetId, "owner")).run("SELECT 1", { connection: "panel" })).rejects.toMatchObject({ error: { code: "engine_unavailable" } });
+    await expect((await engine.forBot("writer")).run("SELECT 1", { connection: "bot" })).rejects.toMatchObject({ error: { code: "engine_unavailable" } });
+    await expect(engine.listDatasets("owner")).rejects.toMatchObject({ error: { code: "engine_unavailable" } });
+    await expect(engine.withSnapshot(join(root, "backup-staging"), async () => true)).rejects.toMatchObject({ error: { code: "engine_unavailable" } });
+    expect(existsSync(file)).toBe(false);
+    rmSync(folder, { recursive: true });
+    await expect((await engine.forDataset(promoted.datasetId, "owner")).run("SELECT 1", { connection: "panel" })).rejects.toMatchObject({ error: { code: "engine_unavailable" } });
+    expect(existsSync(folder)).toBe(false);
+  });
+
+  it("resolves the promoted alias after a queued promotion before bot deletion", async () => {
+    const { engine, root } = fixture();
+    await (await engine.forBot("writer")).run(firstRows, { connection: "bot", businessMutation: true });
+    let promotion!: ReturnType<DataEngine["promoteForBot"]>;
+    let deletion!: Promise<boolean>;
+    await engine.withSnapshot(join(root, "backup-staging"), async () => {
+      promotion = engine.promoteForBot("writer", "owner");
+      await new Promise((resolve) => setImmediate(resolve));
+      deletion = engine.withBotDeletion("writer", () => { rmSync(join(root, "bots", "writer"), { recursive: true, force: true }); return true; });
+    });
+    const dataset = await promotion;
+    expect(await deletion).toBe(true);
+    const retained = await engine.forDataset(dataset.datasetId, "owner");
+    expect((await retained.run("SELECT count(*) FROM synthetic_ledger", { connection: "panel" })).rows).toEqual([["6"]]);
   });
 });

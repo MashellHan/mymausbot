@@ -19,7 +19,7 @@ import { validateDataBindings } from "./named-query.ts";
 import { executeNamedRead, listSourceTables, readNamedPage, verifyBaseTable, type NamedConnection } from "./named-reader.ts";
 import { commitBusinessCreate, ensureRevision, readRevision } from "./revision.ts";
 import { quoteIdentifier } from "./sql-identifiers.ts";
-import { removeSourceStore, storeFolder, DATA_DB_FILE, DATA_TMP_DIR } from "./storage.ts";
+import { removeSourceStore, retainedStoreFile, storeFolder, DATA_DB_FILE, DATA_TMP_DIR } from "./storage.ts";
 import {
   DataFailure,
   type BotDatabase,
@@ -291,16 +291,15 @@ class BotDb implements BotDatabase {
   private statsRevision = 0;
   private readonly storeLane = new DataStoreLane();
   private folderPath: string;
+  private managed: boolean;
   private revoked = false;
   private unsafe = false;
 
   readonly botId: string;
   private readonly engine: Engine;
-  constructor(botId: string, folder: string, engine: Engine) { this.botId = botId; this.folderPath = folder; this.engine = engine; }
+  constructor(botId: string, folder: string, engine: Engine, managed = false) { this.botId = botId; this.folderPath = folder; this.engine = engine; this.managed = managed; }
 
-  get folder(): string { return this.folderPath; }
-
-  relocate(folder: string): void { this.folderPath = folder; }
+  relocate(folder: string): void { this.folderPath = folder; this.managed = true; }
 
   revoke(): void { this.revoked = true; }
 
@@ -323,9 +322,10 @@ class BotDb implements BotDatabase {
   private async openNow(): Promise<Open> {
     const binding = this.engine.binding();
     const folder = this.folderPath;
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    if (!this.managed) mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const file = this.managed ? retainedStoreFile(folder) : join(folder, DATA_DB_FILE);
     const settings = instanceSettings(folder, this.engine.dataDir, binding.version(), this.engine.env);
-    const instance = await binding.DuckDBInstance.create(join(folder, DATA_DB_FILE), settings);
+    const instance = await binding.DuckDBInstance.create(file, settings);
     let bot: DuckDB.DuckDBConnection | undefined;
     let panel: DuckDB.DuckDBConnection | undefined;
     try {
@@ -885,7 +885,7 @@ class Engine implements DataEngine {
     if (!db) {
       const alias = this.catalog?.forBot(botId);
       db = alias
-        ? this.storeDatabases.get(alias.storeId) ?? new BotDb(botId, storeFolder(this.dataDir, alias.storeId), this)
+        ? this.storeDatabases.get(alias.storeId) ?? new BotDb(botId, storeFolder(this.dataDir, alias.storeId), this, true)
         : new BotDb(botId, this.folder(botId), this);
       this.databases.set(botId, db);
       if (alias) { this.storeDatabases.set(alias.storeId, db); this.datasetByDb.set(db, alias.datasetId); }
@@ -900,7 +900,7 @@ class Engine implements DataEngine {
     if (!dataset) throw new DataFailure({ code: "source_not_found", message: "No such Data dataset for this owner." });
     let db = this.storeDatabases.get(dataset.storeId);
     if (!db) {
-      db = new BotDb(`dataset:${datasetId}`, storeFolder(this.dataDir, dataset.storeId), this);
+      db = new BotDb(`dataset:${datasetId}`, storeFolder(this.dataDir, dataset.storeId), this, true);
       this.storeDatabases.set(dataset.storeId, db);
     }
     this.datasetByDb.set(db, datasetId);
@@ -953,9 +953,9 @@ class Engine implements DataEngine {
 
   async withBotDeletion(botId: string, removeBot: () => boolean | Promise<boolean>): Promise<boolean> {
     await this.recover();
-    const alias = this.catalog?.forBot(botId);
-    const db = this.databases.get(botId) ?? (alias ? this.storeDatabases.get(alias.storeId) : undefined);
     return this.admission.barrier(async () => {
+      const alias = this.catalog?.forBot(botId);
+      const db = this.databases.get(botId) ?? (alias ? this.storeDatabases.get(alias.storeId) : undefined);
       await db?.close(true);
       const removed = await removeBot();
       if (!removed) return false;
@@ -972,7 +972,7 @@ class Engine implements DataEngine {
     const catalog = this.requireCatalog();
     return this.admission.barrier(async () => {
       const manifest = await copyDataSnapshots(catalog, this.dataDir, directory, async (dataset) => {
-        const db = this.storeDatabases.get(dataset.storeId) ?? new BotDb(`dataset:${dataset.datasetId}`, storeFolder(this.dataDir, dataset.storeId), this);
+        const db = this.storeDatabases.get(dataset.storeId) ?? new BotDb(`dataset:${dataset.datasetId}`, storeFolder(this.dataDir, dataset.storeId), this, true);
         const revision = await db.revisionForBarrier();
         await db.close(true);
         return revision;

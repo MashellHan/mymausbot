@@ -104,6 +104,17 @@ export class MiniApps {
     if (write && !actor.writeAllowed) throw appFailure(403, "Mini App writes are disabled for this turn.");
   }
 
+  private authorizeTemplate(actor: MiniAppActor, app?: MiniAppSummary, bindings: MiniAppDataBinding[] = []): void {
+    this.authorize(actor, app, true);
+    if (actor.botId && app?.status === "archived") throw appFailure(403, "Only the workspace owner can restore an archived Mini App.");
+    const granted: MiniAppDataBinding[] = app ? JSON.parse(this.version(app.id, app.templateVersion).bindings) : [];
+    for (const binding of bindings) {
+      if (!actor.canBind(binding.datasetId) && !granted.some((candidate) => canonical(candidate) === canonical(binding))) {
+        throw appFailure(403, "This turn can only reuse the target app's current binding or bind its own Data source.");
+      }
+    }
+  }
+
   private require(actor: MiniAppActor, id: string, write = false): MiniAppSummary {
     this.authorize(actor, undefined, write);
     const row = this.row(id);
@@ -161,7 +172,7 @@ export class MiniApps {
       const row = this.db().prepare("SELECT * FROM mini_apps WHERE owner_id = ? AND slug = ?").get(MINI_APPS_OWNER, input.slug) as AppRow | undefined;
       return row && summary(row);
     })();
-    this.authorize(actor, existing, true);
+    this.authorizeTemplate(actor, existing);
     const replay = this.replay(actor, target, "publish", input);
     if (replay) return replay;
     if (!id && existing) throw appFailure(409, "A Mini App already uses this slug. Publish a new version using its app id.");
@@ -170,22 +181,19 @@ export class MiniApps {
     const publishers = [...new Set(input.publisherBotIds ?? existing?.publisherBotIds ?? (actor.botId ? [actor.botId] : []))];
     if (actor.botId && input.publisherBotIds !== undefined) throw appFailure(403, "Only the workspace owner can change publisher grants.");
     if (publishers.some((publisher) => !this.validPublisher(publisher))) throw appFailure(400, "A publisher bot no longer exists.");
-    for (const binding of input.bindings) {
-      if (!actor.canBind(binding.datasetId)) throw appFailure(403, "This turn cannot bind that Data source.");
-      await this.data.validateBinding(MINI_APPS_OWNER, binding);
-    }
-    this.authorize(actor, existing && this.require(actor, existing.id, true), true);
+    this.authorizeTemplate(actor, existing, input.bindings);
+    for (const binding of input.bindings) await this.data.validateBinding(MINI_APPS_OWNER, binding);
+    this.authorizeTemplate(actor, existing && this.require(actor, existing.id, true), input.bindings);
     const stored = this.docs.put({ source: "html", html: input.html });
     if (!stored.ok) throw appFailure(413, "The local app document store is full. The previous version is unchanged.");
     return this.access.write((db) => {
       const current = existing ? this.require(actor, existing.id, true) : undefined;
-      this.authorize(actor, current, true);
+      this.authorizeTemplate(actor, current, input.bindings);
       const retry = this.replay(actor, target, "publish", input);
       if (retry) return retry;
       this.expected(current, input.expectedRevision);
       if (!current && db.prepare("SELECT 1 FROM mini_apps WHERE owner_id = ? AND slug = ?").get(MINI_APPS_OWNER, input.slug)) throw appFailure(409, "A Mini App already uses this slug.");
       if (publishers.some((publisher) => !this.validPublisher(publisher))) throw appFailure(409, "A publisher bot was removed during publication.");
-      if (input.bindings.some((binding) => !actor.canBind(binding.datasetId))) throw appFailure(403, "The Data source grant changed.");
       const now = Date.now();
       const appId = current?.id ?? randomUUID();
       const last = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM mini_app_versions WHERE app_id = ?").get(appId) as { version: number };
@@ -204,16 +212,19 @@ export class MiniApps {
   async rollback(actor: MiniAppActor, id: string, raw: unknown): Promise<MiniAppMutationResult> {
     const input = rollbackSchema.safeParse(raw);
     if (!input.success) throw appFailure(400, "Invalid Mini App rollback.");
-    this.require(actor, id, true);
+    const current = this.require(actor, id, true);
+    this.authorizeTemplate(actor, current);
     const replay = this.replay(actor, id, "rollback", input.data);
     if (replay) return replay;
     const version = this.version(id, input.data.templateVersion);
     if (!this.docs.read(version.doc)) throw appFailure(503, "The requested template is unavailable.");
-    for (const binding of JSON.parse(version.bindings) as MiniAppDataBinding[]) {
-      if (!actor.canBind(binding.datasetId)) throw appFailure(403, "This turn cannot bind that Data source.");
-      await this.data.validateBinding(MINI_APPS_OWNER, binding);
-    }
-    return this.changeHead(actor, id, "rollback", input.data, (app) => ({ ...app, title: version.title, description: version.description, templateVersion: version.version, status: "active" }));
+    const bindings = JSON.parse(version.bindings) as MiniAppDataBinding[];
+    this.authorizeTemplate(actor, current, bindings);
+    for (const binding of bindings) await this.data.validateBinding(MINI_APPS_OWNER, binding);
+    return this.changeHead(actor, id, "rollback", input.data, (app) => {
+      this.authorizeTemplate(actor, app, bindings);
+      return { ...app, title: version.title, description: version.description, templateVersion: version.version, status: "active" };
+    });
   }
 
   archive(actor: MiniAppActor, id: string, raw: unknown): MiniAppMutationResult {

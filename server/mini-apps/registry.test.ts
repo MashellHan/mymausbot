@@ -72,6 +72,54 @@ describe("persistent Mini Apps", () => {
     expect(await apps.query(owner, first.app.id, { expectedRevision: 2, queryId: "stock", parameters: {} })).toMatchObject({ rows: [["Pencil"]] });
   });
 
+  it("keeps archived apps discoverable but lets only the owner reactivate them", async () => {
+    const { apps } = fixture();
+    const { app } = await apps.publish(bot(), publication());
+    const archive = { requestKey: "archive", expectedRevision: 1 };
+    const archived = apps.archive(bot(), app.id, archive);
+    expect(apps.archive(bot(), app.id, archive)).toEqual({ app: archived.app, replayed: true });
+    expect(apps.document(bot(), app.id).app.status).toBe("archived");
+    expect(apps.list(bot())).toHaveLength(1);
+    await expect(apps.publish(bot(), publication({ requestKey: "reactivate", expectedRevision: 2 }), app.id)).rejects.toMatchObject({ status: 403 });
+    await expect(apps.publish(bot(), publication())).rejects.toMatchObject({ status: 403 });
+    await expect(apps.rollback(bot(), app.id, { requestKey: "reactivate", expectedRevision: 2, templateVersion: 1 })).rejects.toMatchObject({ status: 403 });
+    await apps.rollback(owner, app.id, { requestKey: "owner-restore", expectedRevision: 2, templateVersion: 1 });
+    expect((await apps.publish(bot(), publication({ requestKey: "after-restore", expectedRevision: 3 }), app.id)).app.status).toBe("active");
+  });
+
+  it("limits delegated Data to the target app's current canonical binding", async () => {
+    const { apps } = fixture();
+    const delegated: MiniAppActor = { ...bot(), canBind: () => false };
+    const { app } = await apps.publish(owner, publication({ publisherBotIds: ["publisher"] }));
+    const reordered = { ...binding, source: { table: binding.source.table, schema: binding.source.schema } };
+    await apps.publish(delegated, publication({ requestKey: "edit-html", expectedRevision: 1, html: "<p>New layout</p>", bindings: [reordered] }), app.id);
+    for (const expanded of [
+      { ...binding, source: { schema: "main", table: "private_inventory" } },
+      { ...binding, fields: { item: { ...binding.fields.item!, column: "private_item" } } },
+      { ...binding, queries: { stock: { ...binding.queries.stock!, pageSize: 20 } } },
+    ]) {
+      await expect(apps.publish(delegated, publication({ requestKey: "expand", expectedRevision: 2, bindings: [expanded] }), app.id)).rejects.toMatchObject({ status: 403 });
+    }
+    await expect(apps.publish(delegated, publication({ slug: "another-app" }))).rejects.toMatchObject({ status: 403 });
+    await apps.publish(owner, publication({ requestKey: "narrow", expectedRevision: 2, bindings: [{ ...binding, source: { schema: "main", table: "public_inventory" } }] }), app.id);
+    await expect(apps.rollback(delegated, app.id, { requestKey: "old-scope", expectedRevision: 3, templateVersion: 1 })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("rechecks delegated bindings when their validation yields to an owner scope change", async () => {
+    const { apps, data } = fixture();
+    const { app } = await apps.publish(owner, publication({ publisherBotIds: ["publisher"] }));
+    const delegated: MiniAppActor = { ...bot(), canBind: () => false };
+    let finish!: () => void;
+    const validation = new Promise<undefined>((resolve) => { finish = () => resolve(undefined); });
+    data.validateBinding.mockImplementationOnce(() => validation);
+    const pending = apps.publish(delegated, publication({ requestKey: "waiting", expectedRevision: 1 }), app.id);
+    const refused = expect(pending).rejects.toMatchObject({ status: 403 });
+    await apps.publish(owner, publication({ requestKey: "revoke-binding", expectedRevision: 1, bindings: [] }), app.id);
+    finish();
+    await refused;
+    expect(apps.document(owner, app.id).bindings).toEqual([]);
+  });
+
   it("does not publish after its turn stops during asynchronous validation", async () => {
     const { apps, data } = fixture();
     let active = true;

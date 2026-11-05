@@ -4,7 +4,7 @@ import { copyFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { validDataId } from "./catalog.ts";
-import type { DataSnapshotManifest } from "./types.ts";
+import { DataFailure, type DataSnapshotManifest } from "./types.ts";
 
 export const DATA_DB_FILE = "data.duckdb";
 export const DATA_TMP_DIR = "data-tmp";
@@ -16,6 +16,12 @@ export function storeFolder(dataDir: string, storeId: string): string {
 
 export function storeFile(dataDir: string, storeId: string): string {
   return join(storeFolder(dataDir, storeId), DATA_DB_FILE);
+}
+
+export function retainedStoreFile(folder: string): string {
+  const file = join(folder, DATA_DB_FILE);
+  try { const stat = lstatSync(file); if (stat.isFile() && stat.size > 0) return file; } catch {}
+  throw new DataFailure({ code: "engine_unavailable", message: "Retained Data store is missing or is not a regular file." });
 }
 
 export async function fileHash(file: string): Promise<string> {
