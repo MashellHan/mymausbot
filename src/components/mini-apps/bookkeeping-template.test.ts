@@ -54,7 +54,7 @@ function fixture(options: { paginateCategories?: boolean; paginateCategoryOption
       { currency: "USD", category: "Travel", amount: "-8.50", count: 1 },
       { currency: null, category: null, amount: "-3.00", count: 1 },
       { currency: "", category: "", amount: "-1.00", count: 1 },
-    ], options.paginateCategories ? "categories-next" : undefined);
+    ].filter((row) => !parameters.category || row.category === parameters.category), options.paginateCategories ? "categories-next" : undefined);
     if (queryId === "category_options" && paging?.cursor === "options-next") return result([{ currency: "CNY", category: "Salary", count: 1 }]);
     if (queryId === "category_options") return result([
       { currency: "CNY", category: "Food", count: 1 },
@@ -126,7 +126,8 @@ describe("portable bookkeeping Mini App", () => {
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.query).toHaveBeenCalledWith("summary", expect.objectContaining({ category: "Food" }), { expectedDataRevision: 7 });
     expect(app.text("summary")).toContain("12.34");
-    expect(app.text("categories")).toContain("0.0% of outflow");
+    expect(app.text("categories")).toContain("100.0% of outflow");
+    expect(app.text("categories")).not.toContain("Other");
 
     (app.view.document.getElementById("month") as unknown as HTMLButtonElement).click();
     await app.view.happyDOM.whenAsyncComplete();
@@ -147,7 +148,7 @@ describe("portable bookkeeping Mini App", () => {
     expect(app.text("categories")).toContain("Late category");
   });
 
-  it("offers an income-only category from all-sign pages and filters its summary, trend and details", async () => {
+  it("offers an income-only category from all-sign pages and filters every report section", async () => {
     const app = fixture({ paginateCategoryOptions: true });
     opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
@@ -156,11 +157,13 @@ describe("portable bookkeeping Mini App", () => {
 
     app.select("category", "Salary");
     await app.view.happyDOM.whenAsyncComplete();
-    for (const queryId of ["summary", "outflow", "inflow", "trend_day", "details"]) {
+    for (const queryId of ["summary", "outflow", "inflow", "categories", "trend_day", "details"]) {
       expect(app.query).toHaveBeenCalledWith(queryId, expect.objectContaining({ category: "Salary" }), { expectedDataRevision: 7 });
     }
     expect(app.text("summary")).toContain("100.00");
     expect(app.text("summary")).toContain("0.00");
+    expect(app.text("categories")).toBe("No spending categories in this period.");
+    expect(app.view.document.querySelector('#category option[value="Food"]')).not.toBeNull();
     expect(app.text("trend")).toContain("No outflow matches these filters.");
     expect(app.text("details")).toContain("Salary");
     expect(app.text("details")).toContain("100.00 CNY");
