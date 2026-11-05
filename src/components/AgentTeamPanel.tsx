@@ -1,4 +1,4 @@
-import { ChevronRight, UserRound } from "lucide-react";
+import { UserRound } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { LocalAgentMember, LocalAgentTeamsResponse } from "../../shared/local-dashboard";
 import { activeLocale, t } from "@/lib/i18n";
@@ -61,66 +61,51 @@ function memberRow(member: LocalAgentMember, stale: boolean) {
 }
 
 export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse | null }) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const baseId = useId();
-  const teamButtons = useRef(new Map<string, HTMLButtonElement>());
+  const selectorRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const selectedTeam = snapshot?.teams.find((team) => team.id === selectedTeamId);
   const count = snapshot?.teamCount ?? t("computer.agentTeam.unknownCount");
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
     ? null : new Date(snapshot.updatedAt).toLocaleString(activeLocale());
   const stale = snapshot?.status === "stale";
 
-  const toggle = (id: string) => setExpanded((current) => {
-    const next = new Set(current);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    return next;
-  });
-  const openTeam = (id: string) => {
-    setExpanded((current) => new Set(current).add(id));
-    requestAnimationFrame(() => { teamButtons.current.get(id)?.focus(); teamButtons.current.get(id)?.scrollIntoView({ block: "nearest" }); });
-  };
+  useEffect(() => {
+    if (selectedTeamId && snapshot && !selectedTeam) {
+      setSelectedTeamId(null);
+      (selectorRef.current ?? panelRef.current)?.focus();
+    }
+  }, [selectedTeamId, selectedTeam, snapshot]);
 
   return (
-    <div className="@container/agents min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="agent-team-panel">
+    <div ref={panelRef} tabIndex={-1} className="@container/agents min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="agent-team-panel">
       <header className="mb-4 pt-2">
         <h2 className="text-[15px] font-semibold text-ink">{snapshot?.teamCount === 1 ? t("computer.agentTeam.headingOne") : t("computer.agentTeam.heading", { count })}</h2>
         <p className="mt-1 text-[11px] text-ink-tertiary">{readAt ? t("computer.agentTeam.readAt", { time: readAt }) : t("computer.agentTeam.neverRead")}</p>
-        {snapshot?.status === "ready" && <p className="mt-1 text-[12px] text-ink-secondary">{t("computer.agentTeam.refreshRate")}</p>}
       </header>
       {snapshot === null ? <p role="status" className="text-[12px] text-ink-secondary">{t("computer.agentTeam.loading")}</p> : null}
       {stale ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.agentTeam.stale")}</p> : null}
       {snapshot?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.unavailable")}</p> : null}
       {snapshot?.teamCount === 0 && snapshot.teams.length === 0 ? <p className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.empty")}</p> : null}
-      {!!snapshot?.teams.length && <AgentTown teams={snapshot.teams} stale={stale} onSelect={openTeam} />}
-      <div className="space-y-2">
-        {snapshot?.teams.map((team) => {
-          const open = expanded.has(team.id);
-          const id = `${baseId}-${encodeURIComponent(team.id)}`;
-          return (
-            <section key={team.id} className="min-w-0 rounded-xl border border-hairline/60 bg-card">
-              <h3>
-                <button type="button" aria-expanded={open} aria-controls={id} onClick={() => toggle(team.id)}
-                  ref={(element) => { if (element) teamButtons.current.set(team.id, element); else teamButtons.current.delete(team.id); }}
-                  className="flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-3 text-left outline-none hover:bg-raised-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
-                  <ChevronRight size={15} className={cn("shrink-0 text-ink-secondary transition-transform", open && "rotate-90")} aria-hidden="true" />
-                  <span className="min-w-0 flex-1">
-                    <span dir="auto" className="block text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{team.name}</span>
-                    <span className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-ink-secondary"><span className={cn("size-1.5 rounded-full", stale ? "bg-ink-secondary/30" : stateDot[teamActivity(team)])} aria-hidden="true" />{stale ? t("computer.agentTeam.lastObserved", { state: t(stateLabel[teamActivity(team)]) }) : t(stateLabel[teamActivity(team)])}</span>
-                  </span>
-                  <span className="shrink-0 text-right text-[12px] tabular-nums text-ink-secondary">
-                    <span className="block">{team.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: team.agentCount })}</span>
-                    <span className={cn("mt-0.5 block", !stale && team.activeAgentCount > 0 && "text-success")}>{t(stale ? "computer.agentTeam.lastActive" : "computer.agentTeam.activeCount", { count: team.activeAgentCount })}</span>
-                  </span>
-                </button>
-              </h3>
-              <div id={id} hidden={!open} className="px-3 pb-1">
-                {team.agents.length ? <ul>{team.agents.map((member) => memberRow(member, stale))}</ul>
-                  : <p className="pb-3 text-[12px] text-ink-tertiary">{t("computer.agentTeam.noAgents")}</p>}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+      {!!snapshot?.teams.length && <AgentTown teams={snapshot.teams} stale={stale} selectedId={selectedTeamId} detailsId={`${baseId}-members`} selectorRef={selectorRef}
+        onSelect={(id) => setSelectedTeamId((current) => current === id ? null : id)} />}
+      {selectedTeam && <section key={selectedTeam.id} id={`${baseId}-members`} aria-labelledby={`${baseId}-team-name`} data-testid="selected-agent-team" className="min-w-0 rounded-xl border border-hairline/60 bg-card">
+        <header className="flex min-w-0 items-start justify-between gap-3 border-b border-hairline/40 px-3 py-3">
+          <div className="min-w-0">
+            <h3 id={`${baseId}-team-name`} dir="auto" className="text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{selectedTeam.name}</h3>
+            <span className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-ink-secondary"><span className={cn("size-1.5 rounded-full", stale ? "bg-ink-secondary/30" : stateDot[teamActivity(selectedTeam)])} aria-hidden="true" />{stale ? t("computer.agentTeam.lastObserved", { state: t(stateLabel[teamActivity(selectedTeam)]) }) : t(stateLabel[teamActivity(selectedTeam)])}</span>
+          </div>
+          <div className="shrink-0 text-right text-[12px] tabular-nums text-ink-secondary">
+            <span className="block">{selectedTeam.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: selectedTeam.agentCount })}</span>
+            <span className={cn("mt-0.5 block", !stale && selectedTeam.activeAgentCount > 0 && "text-success")}>{t(stale ? "computer.agentTeam.lastActive" : "computer.agentTeam.activeCount", { count: selectedTeam.activeAgentCount })}</span>
+          </div>
+        </header>
+        <div className="px-3 pb-1">
+          {selectedTeam.agents.length ? <ul>{selectedTeam.agents.map((member) => memberRow(member, stale))}</ul>
+            : <p className="py-3 text-[12px] text-ink-tertiary">{t("computer.agentTeam.noAgents")}</p>}
+        </div>
+      </section>}
     </div>
   );
 }

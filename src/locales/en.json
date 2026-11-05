@@ -7490,7 +7490,7 @@
   "computer.agentTeam.refreshRate": "Updates every 2 seconds",
   "computer.agentTeam.activeCount": "{count} active",
   "computer.agentTeam.lastActive": "{count} last active",
-  "computer.agentTeam.town": "Agent Town",
+  "computer.agentTeam.town": "Agent Offices",
   "computer.agentTeam.openTeam": "Open {name}",
   "computer.agentTeam.pauseTown": "Pause town animation",
   "computer.agentTeam.playTown": "Play town animation",

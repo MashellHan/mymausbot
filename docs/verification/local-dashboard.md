@@ -55,8 +55,9 @@ Context uses the last request's input plus output tokens, never lifetime token
 totals. A model change clears prior context. Latest instructions replace one
 bounded field. Team active counts include only the live `working` state;
 blocked, idle, unknown and response-ready agents are separate states. Stale
-snapshots label counts as last observed and pause the town's motion. The town
-uses bundled, attributed artwork and the same snapshot as the list.
+snapshots label counts as last observed and pause the office artwork's motion.
+The office selector uses bundled, attributed artwork and the same snapshot as
+the selected member list.
 
 ## Isolated verification
 
@@ -80,12 +81,15 @@ navigation of repository period tabs. Check unavailable, stale and zero states.
 In both locales at 360px, expand the daily table and scroll fully right. Each
 WoW metric name and value must remain visible beside the fixed date column.
 
-For Agent Team use `scenario=live`. Open a house, focus the corresponding team
-header and scroll the list. POST to `/__agent-team-update` on that fixture's
-printed origin. Within the next polling interval, the active count, instruction,
-effort and context change while expansion, focus and scroll remain. Reset the
-synthetic snapshot with `POST /__agent-team-update?reset=1`. Check paused motion,
-reduced motion, unknown metadata and loss of local authorization.
+For Agent Team use `scenario=live`. No members appear until an office is selected.
+Select an office, focus its card and scroll the selector and member list. POST to
+`/__agent-team-update` on that fixture's printed origin. Within the next polling
+interval, the active count, instruction, effort and context change while
+selection, focus and scroll remain. Switch offices to confirm the previous members
+disappear. Use `scenario=many` to check two visible office rows and keyboard access
+to the rest; `scenario=one` checks singular counts. Reset the synthetic snapshot
+with `POST /__agent-team-update?reset=1`. Check paused motion, reduced motion,
+stale counts, unknown metadata and loss of local authorization.
 
 Stop each foreground fixture with Ctrl-C. The separate collector tests use
 temporary files and synthetic API responses, including an assertion that the
