@@ -181,6 +181,19 @@ describe("local Usage panel", () => {
     }
   });
 
+  it("does not reclaim page focus after a chart bar is explicitly blurred", async () => {
+    await render(rolled(1));
+    const chart = () => host.querySelector<HTMLElement>('[data-usage-trend="commits"]')!;
+    const oldest = chart().querySelector<HTMLButtonElement>('[data-usage-day="2026-10-06"]')!;
+    await act(async () => oldest.focus());
+    await act(async () => oldest.blur());
+    expect(document.activeElement).toBe(document.body);
+    await render(rolled(2));
+    expect(document.activeElement).toBe(document.body);
+    expect(chart().querySelector('[role="tooltip"]')).toBeNull();
+    expect(chart().querySelector<HTMLButtonElement>('[data-usage-day="2026-10-07"]')?.tabIndex).toBe(0);
+  });
+
   it("shows total tokens including cache reads in cards, daily values and a focused trend tooltip", async () => {
     await render(sample);
     expect(host.querySelector("section dd > span")?.textContent).toBe("1");

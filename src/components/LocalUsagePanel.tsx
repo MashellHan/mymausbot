@@ -126,7 +126,8 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
             aria-label={t("computer.usage.trendPoint", { day: day.day, metric: t(`computer.usage.metric.${metric}`), value: label })}
             aria-describedby={activeDay === day.day ? tooltipId : undefined}
             onMouseEnter={() => setActiveDay(day.day)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setActiveDay(null); }}
-            onFocus={(event) => { focusedButton.current = event.currentTarget; setFocusDay(day.day); setActiveDay(day.day); }} onBlur={() => setActiveDay(null)} onClick={() => setActiveDay(day.day)}
+            onFocus={(event) => { focusedButton.current = event.currentTarget; setFocusDay(day.day); setActiveDay(day.day); }}
+            onBlur={(event) => { setActiveDay(null); if (event.currentTarget.isConnected) focusedButton.current = null; }} onClick={() => setActiveDay(day.day)}
             onKeyDown={(event) => {
               if (event.key === "Escape") { setActiveDay(null); return; }
               const next = event.key === "ArrowRight" ? (index + 1) % days.length : event.key === "ArrowLeft" ? (index + days.length - 1) % days.length
