@@ -202,11 +202,17 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
   const results = [];
   const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
   const expected = run.event === "push" && plan ? expectedJobs(plan.outputs, plan.outputs.full_required) : expectedJobs();
+  const selectedArtifacts = new Set();
   for (const artifact of artifacts.filter((item) => item.name.startsWith("qa-results-"))) {
     const match = artifact.name.match(/^(qa-results-.+)-attempt-(\d+)$/);
     const contract = match && expected.find((item) => item.artifact === match[1]);
     const job = contract && jobs.find((item) => item.name === contract.name);
     if (!job || job.run_attempt !== Number(match[2])) continue;
+    if (selectedArtifacts.has(artifact.name)) throw new Error(`Ambiguous result artifact: ${artifact.name}`);
+    selectedArtifacts.add(artifact.name);
+    if (artifact.workflow_run && (artifact.workflow_run.id !== run.id || artifact.workflow_run.head_sha !== run.head_sha)) {
+      throw new Error(`Result artifact does not belong to this run: ${artifact.name}`);
+    }
     const files = await readArtifact(artifact, api);
     const platform = artifact.name.includes("windows") ? "win32" : artifact.name.includes("macos") ? "darwin" : "linux";
     const result = testFindings(files, platform);
