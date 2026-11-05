@@ -29,8 +29,13 @@ bounded, redacted latest instruction are available only through those routes.
   once in the summary. Extra appearances are disclosed separately. Events with
   no repository identity retain their counts in an unattributed row.
 
-The provider reads the existing hourly collector's private `latest.json`. Its
-optional `localRepositories` object has `version: 1`, `rows` and `attribution`.
+The provider reads the existing five-minute collector's private `latest.json`.
+The visible Usage panel reads it every five minutes without overlapping requests.
+A snapshot older than fifteen minutes, or from an earlier China-calendar date,
+is stale and retains its actual counts and capture timestamp. Collection reuses
+the existing local routine with cron `*/5 * * * *` in `Asia/Shanghai`; the separate
+daily publication keeps its schedule. No second collection routine is created.
+The aggregate's optional `localRepositories` object has `version: 1`, `rows` and `attribution`.
 Each row contains a SHA-256 identity, a display name, a category and sparse
 `daily` entries with `day`, `knownPrs` and `commits`. `attribution` contains unique
 global events with known repository identity, using the same daily fields.
@@ -55,15 +60,33 @@ Context uses the last request's input plus output tokens, never lifetime token
 totals. A model change clears prior context. Latest instructions replace one
 bounded field. Team active counts include only the live `working` state;
 blocked, idle, unknown and response-ready agents are separate states. Stale
-snapshots label counts as last observed and pause the town's motion. The town
-uses bundled, attributed artwork and the same snapshot as the list.
+snapshots label counts as last observed and pause the office artwork's motion.
+The office selector uses bundled, attributed artwork and the same snapshot as
+the selected member list.
+
+## Per-agent activity
+
+`GET /api/local-dashboard/agents/{paneId}/activity` is a separate local-owner
+route. It accepts a Herdr pane ID such as `w6:p1` and no query parameters. Each
+read rechecks that pane's current Codex session, matches its exact session file
+ID, then returns at most 60 visible user, assistant, tool-call and tool-result
+events from a 512 KiB tail. Each excerpt is limited to 600 characters;
+path-like values and recognized credential shapes are masked. System/developer
+messages and reasoning records are skipped. The two-second team metadata
+response carries no history.
+
+The response names the pane, status, last successful read time, events and a
+`truncated` flag. `unavailable` and `unsupported` have no rows. `stale` retains
+last-good rows only after Herdr still identifies the same Codex session; a
+missing or changed session clears them. The detail disclosure starts closed,
+polls without overlap only while open and visible, and clears on 401/403.
 
 ## Isolated verification
 
 Run the affected contracts and owner-access fixture:
 
 ```sh
-pnpm exec vitest run server/local-agent-teams.test.ts server/local-usage.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts src/components/AgentTeamPanel.test.ts src/components/AgentTeamPanel.auth.test.ts src/components/LocalUsagePanel.test.ts
+pnpm exec vitest run server/local-agent-teams.test.ts server/local-agent-activity.test.ts server/local-usage.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts src/components/AgentTeamPanel.test.ts src/components/AgentTeamPanel.auth.test.ts src/components/AgentActivityDetails.test.ts src/components/LocalUsagePanel.test.ts
 ```
 
 Launch each synthetic renderer fixture directly in a separate terminal:
@@ -80,12 +103,23 @@ navigation of repository period tabs. Check unavailable, stale and zero states.
 In both locales at 360px, expand the daily table and scroll fully right. Each
 WoW metric name and value must remain visible beside the fixed date column.
 
-For Agent Team use `scenario=live`. Open a house, focus the corresponding team
-header and scroll the list. POST to `/__agent-team-update` on that fixture's
-printed origin. Within the next polling interval, the active count, instruction,
-effort and context change while expansion, focus and scroll remain. Reset the
-synthetic snapshot with `POST /__agent-team-update?reset=1`. Check paused motion,
-reduced motion, unknown metadata and loss of local authorization.
+For Agent Team use `scenario=live`. No members appear until an office is selected.
+Select an office, focus its card and scroll the selector and member list. POST to
+`/__agent-team-update` on that fixture's printed origin. Within the next polling
+interval, the active count, instruction, effort and context change while
+selection, focus and scroll remain. Switch offices to confirm the previous members
+disappear. Use `scenario=many` to check two visible office rows and keyboard access
+to the rest; `scenario=one` checks singular counts. Reset the synthetic snapshot
+with `POST /__agent-team-update?reset=1`. Check paused motion, reduced motion,
+stale counts, unknown metadata and loss of local authorization.
+
+For activity, select an office and open one member's Recent activity button.
+Check the bounded independently scrollable list at `width=360` and `400`, both
+skins and both locales. The fixture shows user, assistant, tool call and result
+rows; `activity=unavailable`, `activity=unsupported` and `activity=stale` exercise
+source states. POST to `/__agent-activity-update` and wait for the open detail
+to refresh without moving the reader away from an older row. Closing the
+disclosure, switching offices or hiding the page stops its detail requests.
 
 Stop each foreground fixture with Ctrl-C. The separate collector tests use
 temporary files and synthetic API responses, including an assertion that the

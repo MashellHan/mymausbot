@@ -66,7 +66,7 @@ async function entries(path: string): Promise<Dirent[]> {
   catch { return []; }
 }
 
-async function discover(codexHome: string, ids: Set<string>) {
+export async function discoverCodexSessionFiles(codexHome: string, ids: Set<string>) {
   const found = new Map<string, string | null>();
   let inspected = 0;
   const root = join(codexHome, "sessions");
@@ -127,7 +127,7 @@ export function createLocalAgentSessionReader(codexHome: string, now: () => numb
     const ids = new Set(agents.map(codexSessionId).filter((id): id is string => id !== null).slice(0, 64));
     const key = [...ids].sort().join(",");
     if (key !== requested || now() - discoveredAt >= 10_000) {
-      paths = ids.size ? await discover(codexHome, ids) : new Map();
+      paths = ids.size ? await discoverCodexSessionFiles(codexHome, ids) : new Map();
       discoveredAt = now(); requested = key;
     }
     for (const id of cache.keys()) if (!ids.has(id)) cache.delete(id);

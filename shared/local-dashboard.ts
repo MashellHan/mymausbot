@@ -34,6 +34,29 @@ export interface LocalAgentTeamsResponse {
   teams: LocalAgentTeam[];
 }
 
+export type LocalAgentActivityStatus = "ready" | "stale" | "unavailable" | "unsupported";
+export type LocalAgentActivityKind = "user" | "assistant" | "tool-call" | "tool-result";
+
+/** Redacted, bounded visible Codex events; IDs are local event positions, never session or tool credentials. */
+export interface LocalAgentActivityEvent {
+  id: string;
+  at: number | null;
+  kind: LocalAgentActivityKind;
+  tool: string | null;
+  text: string | null;
+}
+
+/** Details are fetched separately from the team metadata only while a member's disclosure is open. */
+export interface LocalAgentActivityResponse {
+  agentId: string;
+  status: LocalAgentActivityStatus;
+  /** Last successful read of this exact session; null when no matching readable session exists. */
+  updatedAt: number | null;
+  /** Earlier events or long excerpts were omitted by the read/response bounds. */
+  truncated: boolean;
+  events: LocalAgentActivityEvent[];
+}
+
 export type LocalUsageStatus = "ready" | "partial" | "stale" | "unavailable";
 export type LocalUsageCoverage = "ready" | "partial" | "unavailable";
 export type LocalUsageTokenStatus = "ready" | "partial" | "unavailable";

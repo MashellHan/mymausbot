@@ -68,6 +68,20 @@ describe("local Usage projection", () => {
     expect((await createLocalUsageProvider({ file: rollover.file, now: () => january }).get()).windows?.["30"]).toMatchObject({ startDay: "2026-12-03", endDay: "2027-01-01" });
   });
 
+  it("marks a snapshot stale after fifteen minutes and recovers when collection resumes", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await fixture(asOf);
+    let now = asOf + 15 * 60 * 1000;
+    const provider = createLocalUsageProvider({ file, now: () => now });
+    const fresh = await provider.get();
+    expect(fresh.status).toBe("ready");
+    now++;
+    expect(await provider.get()).toEqual({ ...fresh, status: "stale" });
+    snapshot.updatedAt = now;
+    await writeFile(file, JSON.stringify(snapshot));
+    expect(await provider.get()).toMatchObject({ status: "ready", asOf: now, windows: { "1": { prs: 1, commits: 2 } } });
+  });
+
   it("shows missing dates and wholly unavailable token windows without invented zeros", async () => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file } = await fixture(asOf, { missingDay: "2026-10-30", unavailableDay: "2026-11-03" });

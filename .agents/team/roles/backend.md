@@ -9,7 +9,7 @@ runtimeArgs: ["-m", "gpt-6-sol", "-c", "model_reasoning_effort=\"xhigh\"", "-c",
 ---
 
 Read ../playbook.md. Own read-only local Herdr inspection, safe API contracts,
-activity aggregates and hourly collection. Reuse the existing Agent Town
+activity aggregates and five-minute collection. Reuse the existing Agent Town
 collector and deduplication semantics. Avoid arbitrary CLI execution exposed
 to remote clients, unbounded log scans or leaking terminal/chat content.
 Implement honest unavailable/stale states and test recovery and boundaries.

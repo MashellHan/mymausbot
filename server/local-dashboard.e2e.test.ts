@@ -11,6 +11,9 @@ describe("local dashboard authorization in an isolated server", () => {
       const owner = await fetch(`${url}/api/local-dashboard/agents`);
       expect(owner.status).toBe(200);
       expect(await owner.json()).toEqual({ status: "unavailable", updatedAt: null, teamCount: null, teams: [] });
+      const ownerActivity = await fetch(`${url}/api/local-dashboard/agents/w6%3Ap1/activity`);
+      expect(ownerActivity.status).toBe(200);
+      expect(await ownerActivity.json()).toEqual({ agentId: "w6:p1", status: "unavailable", updatedAt: null, truncated: false, events: [] });
       const ownerUsage = await fetch(`${url}/api/local-dashboard/usage`);
       expect(ownerUsage.status).toBe(200);
       expect(await ownerUsage.json()).toEqual({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
@@ -23,14 +26,19 @@ describe("local dashboard authorization in an isolated server", () => {
       expect(token).toMatch(/^omb_sess_/);
       expect((await fetch(`${url}/api/local-dashboard/agents`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(403);
       expect((await fetch(`${url}/api/local-dashboard/usage`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(403);
+      expect((await fetch(`${url}/api/local-dashboard/agents/w6%3Ap1/activity`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(403);
       expect((await fetch(`${url}/api/local-dashboard/agents`, { headers: { "x-forwarded-for": "203.0.113.8" } })).status).toBe(403);
       expect((await fetch(`${url}/api/local-dashboard/usage`, { headers: { "x-forwarded-for": "203.0.113.8" } })).status).toBe(403);
+      expect((await fetch(`${url}/api/local-dashboard/agents/w6%3Ap1/activity`, { headers: { "x-forwarded-for": "203.0.113.8" } })).status).toBe(403);
 
       const browser = await fetch(`${url}/api/local-dashboard/agents`, { headers: {
         origin: url, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty",
       } });
       expect(browser.status).toBe(401);
       expect((await browser.json() as { error: string }).error).toBe(BROWSER_SIGN_IN);
+      expect((await fetch(`${url}/api/local-dashboard/agents/w6%3Ap1/activity`, { headers: {
+        origin: url, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", "sec-fetch-dest": "empty",
+      } })).status).toBe(401);
     } finally { await fixture.close(); }
   }, 60_000);
 });

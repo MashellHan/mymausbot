@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { LocalAgentTeamsResponse } from "../shared/local-dashboard.ts";
+import type { LocalAgentActivityResponse, LocalAgentTeamsResponse } from "../shared/local-dashboard.ts";
 import type { Bot } from "../src/state/store.tsx";
 import { mountPreview, parkUntilSignal, type MountedPreview } from "./testing/preview-fixture.ts";
 
@@ -18,7 +18,29 @@ const sample: LocalAgentTeamsResponse = {
     ] },
   ],
 };
+const many: LocalAgentTeamsResponse = { ...sample, teamCount: 15, teams: [
+  ...sample.teams,
+  ...Array.from({ length: 13 }, (_, index) => ({
+    id: `sample-extra-${index}`, name: `Sample Office ${index + 3}`, agentCount: 0, activeAgentCount: 0, agents: [],
+  })),
+] };
 let liveSample = sample;
+let activityRevision = 0;
+
+function activityFor(agentId: string, scenario: string | null): LocalAgentActivityResponse {
+  const status = scenario === "unavailable" || scenario === "unsupported" || scenario === "stale" ? scenario
+    : agentId === "a2" ? "unavailable" : agentId === "a3" ? "unsupported" : agentId === "b1" ? "stale" : "ready";
+  const events: LocalAgentActivityResponse["events"] = status === "unavailable" || status === "unsupported" ? [] : [
+    { id: "e1", at: Date.UTC(2026, 10, 5, 1, 0), kind: "user", tool: null, text: "Review the synthetic release plan. " + "Long sample content. ".repeat(18) },
+    { id: "e2", at: Date.UTC(2026, 10, 5, 1, 1), kind: "assistant", tool: null, text: "I am checking the sample now." },
+    ...Array.from({ length: 18 }, (_, index) => ({ id: `e${index + 3}`, at: Date.UTC(2026, 10, 5, 1, 2 + index),
+      kind: index % 2 === 0 ? "tool-call" as const : "tool-result" as const, tool: "functions.exec", text: `Synthetic tool step ${index + 1}; [path] hidden.` })),
+    { id: "e21", at: Date.UTC(2026, 10, 5, 1, 22), kind: "assistant", tool: null,
+      text: activityRevision ? "New synthetic assistant update after polling." : "Initial synthetic assistant update." },
+  ];
+  return { agentId, status, updatedAt: status === "unavailable" || status === "unsupported" ? null : sample.updatedAt! + activityRevision * 2000,
+    truncated: events.length > 0, events };
+}
 
 const bot = {
   id: "fixture-bot", threadId: "fixture-thread", name: "Sample assistant", title: "", description: "", color: "green",
@@ -39,10 +61,16 @@ try {
     entry: "/scripts/testing/agent-team-preview.tsx", route: "/__agent-team.html", title: "Isolated Agent Team panel",
     extraRoutes: [
       { path: "/__agent-team-update", method: "POST", handler: (req, res) => {
-        liveSample = req.url?.includes("reset=1") ? sample : { ...sample, updatedAt: sample.updatedAt! + 2000,
+        if (req.url?.includes("reset=1")) liveSample = sample;
+        else if (req.url?.includes("remove=1")) liveSample = { ...sample, updatedAt: sample.updatedAt! + 2000, teamCount: 1, teams: [sample.teams[0]!] };
+        else liveSample = { ...sample, updatedAt: sample.updatedAt! + 2000,
           teams: sample.teams.map((team) => team.id === "sample-a" ? { ...team, activeAgentCount: 0,
             agents: team.agents.map((agent) => agent.id === "a1" ? { ...agent, state: "done", reasoningEffort: "max", contextUsed: 64_000,
               taskHint: "Only the newest synthetic instruction remains visible." } : agent) } : team) };
+        res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ updated: true }));
+      } },
+      { path: "/__agent-activity-update", method: "POST", handler: (_req, res) => {
+        activityRevision++;
         res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ updated: true }));
       } },
       { path: "/__agent-team-bot", handler: (_req, res) => {
@@ -53,9 +81,17 @@ try {
         const scenario = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams.get("scenario");
         const data = scenario === "unavailable" ? { status: "unavailable", updatedAt: null, teamCount: null, teams: [] }
           : scenario === "empty" ? { status: "ready", updatedAt: sample.updatedAt, teamCount: 0, teams: [] }
-          : scenario === "stale" ? { ...sample, status: "stale" } : scenario === "live" ? liveSample : sample;
+          : scenario === "stale" ? { ...sample, status: "stale" } : scenario === "live" ? liveSample
+            : scenario === "one" ? { ...sample, teamCount: 1, teams: [sample.teams[0]!] }
+              : scenario === "many" ? many : sample;
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify(data));
+      } },
+      { path: /^\/api\/local-dashboard\/agents\/([^/]+)\/activity$/, handler: (req, res, match) => {
+        const scenario = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams.get("activity");
+        const id = decodeURIComponent(match![1]!);
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(activityFor(id, scenario)));
       } },
     ],
   });
