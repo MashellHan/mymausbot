@@ -23,6 +23,34 @@ backup admission, revision consistency, schema changes, bounded reads, lossless
 decimal values and scoped cursors. Existing Data engine, tools and route tests
 remain part of acceptance.
 
+## Reports and existing Automations
+
+```sh
+pnpm exec vitest run shared/report-mini-app.test.ts server/mini-apps/report-store.test.ts server/mini-apps/report-e2e.test.ts src/components/mini-apps/report-template.test.ts src/components/mini-apps/ReportInstall.test.ts src/components/mini-apps/MiniAppsPanel.test.ts
+```
+
+The report fixture starts an isolated server with the scripted fake engine and
+creates one synthetic producer with no Data tables. It creates two local
+Automations, prepares their empty retained report source through the owner route,
+and installs the shipped X AI and GitHub templates with the server-resolved
+producer grant. Both apps initially have no edition.
+
+It then starts actual Automation runs through the routine API. Those turns call
+`mini_app_report`, publish to the shared retained dataset and keep their normal
+chat output. A repeated run keeps the original edition receipt and Data revision;
+an explicit conflicting publication fails, and a late older edition adds history
+without replacing Current. The fixture checks independent report queries, tool
+revocation, restart persistence and expiry of the old turn capability. These are
+synthetic runs, not evidence that a person's existing routine has been changed or
+executed.
+
+The store tests cover atomic complete editions, the nominal scheduled China day,
+URL/date validation and empty bootstrap. Template and installer tests cover
+server-resolved producer identity, stable installation, current/history paging,
+coverage labels and refresh handling. The package owner separately verifies all
+three apps and Data refresh in the production renderer against an isolated
+synthetic workspace. Do not substitute component tests for packaged acceptance.
+
 ## Real desktop renderer
 
 ```sh
