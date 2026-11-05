@@ -31,7 +31,8 @@ export async function fileHash(file: string): Promise<string> {
 }
 
 function syncPath(path: string): void {
-  const fd = openSync(path, "r");
+  // Node 24.22.2 on Windows uses FlushFileBuffers for fsync; it requires GENERIC_WRITE.
+  const fd = openSync(path, process.platform === "win32" ? "r+" : "r");
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
