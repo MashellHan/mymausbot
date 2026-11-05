@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The engines' usage limits on screen: the warning with "Move to after reset", the usage bars in the model button with
 // their card, the stopped turn's Continue button, and the calendar's reset marker that a bot or an automation is dropped on.
-import { createElement } from "react";
+import { act, createElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -254,8 +254,15 @@ describe("the chat", () => {
     const tool = failedTurnTool("This Claude account has reached its 5-hour limit, which resets Oct 19, 3:40 PM (UTC).", { limitResetsAt: RESET });
     const container = mount(createElement(FailedTurnRow, { tool, engine: undefined, botId: "scout", threadId: "t-1", onRetry: vi.fn() }));
     expect([...container.querySelectorAll("button")].map((candidate) => candidate.textContent?.trim())).toEqual(["Continue at 3:40 PM when your limit resets"]);
-    flushSync(() => button(container, "Continue at 3:40 PM when your limit resets").click());
-    await settle();
+    const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      await act(async () => {
+        button(container, "Continue at 3:40 PM when your limit resets").click();
+        await settle();
+      });
+    } finally { actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment; }
     expect(fixture.api).toHaveBeenCalledWith("/api/limit-resets/continue", { method: "POST", body: JSON.stringify({ botId: "scout", threadId: "t-1" }) });
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "routinePatched", routine: created });
     // The button goes once React renders the update its answer set, which a busy runner can schedule after any one tick.
