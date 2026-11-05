@@ -197,6 +197,32 @@ describe("Agent Team panel", () => {
     expect(offices()[0]?.getAttribute("aria-pressed")).toBe("false");
   });
 
+  it("keeps focus on an unrelated input when the selected office disappears", async () => {
+    await render("content");
+    await act(async () => offices()[1]!.click());
+    const external = document.createElement("input");
+    document.body.append(external);
+    try {
+      external.focus();
+      await render("content", { ...ready, teamCount: 1, teams: [ready.teams[0]!] });
+      expect(members()).toBeNull();
+      expect(document.activeElement).toBe(external);
+    } finally {
+      external.remove();
+    }
+  });
+
+  it("returns focus from removed member content to the surviving selector", async () => {
+    await render("content");
+    await act(async () => offices()[0]!.click());
+    const selected = members()!;
+    selected.tabIndex = -1;
+    selected.focus();
+    await render("content", { ...ready, teamCount: 1, teams: [ready.teams[1]!] });
+    expect(members()).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector(".agent-town-offices"));
+  });
+
   it.each([401, 403])("clears old local data on HTTP %i", async (status) => {
     vi.useFakeTimers();
     calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new ApiError("forbidden", status));

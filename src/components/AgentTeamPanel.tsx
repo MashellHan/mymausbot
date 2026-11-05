@@ -1,5 +1,5 @@
 import { UserRound } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { LocalAgentMember, LocalAgentTeamsResponse } from "../../shared/local-dashboard";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
@@ -65,6 +65,9 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
   const baseId = useId();
   const selectorRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const membersRef = useRef<HTMLElement>(null);
+  const restoreFocus = useRef(false);
+  const focusedElement = useRef<Element | null>(null);
   const selectedTeam = snapshot?.teams.find((team) => team.id === selectedTeamId);
   const count = snapshot?.teamCount ?? t("computer.agentTeam.unknownCount");
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
@@ -72,10 +75,24 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
   const stale = snapshot?.status === "stale";
 
   useEffect(() => {
+    const rememberFocus = (event: FocusEvent) => { focusedElement.current = event.target as Element; };
+    document.addEventListener("focusin", rememberFocus);
+    return () => document.removeEventListener("focusin", rememberFocus);
+  }, []);
+
+  useLayoutEffect(() => {
+    const shouldRestore = restoreFocus.current;
+    restoreFocus.current = false;
     if (selectedTeamId && snapshot && !selectedTeam) {
       setSelectedTeamId(null);
-      (selectorRef.current ?? panelRef.current)?.focus();
+      if (shouldRestore) (selectorRef.current ?? panelRef.current)?.focus();
     }
+    const selectedOffice = selectorRef.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]');
+    const selectedMembers = membersRef.current;
+    return () => {
+      const focused = focusedElement.current;
+      restoreFocus.current = !!focused && !!selectedTeamId && !!(selectedOffice?.contains(focused) || selectedMembers?.contains(focused));
+    };
   }, [selectedTeamId, selectedTeam, snapshot]);
 
   return (
@@ -90,7 +107,7 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
       {snapshot?.teamCount === 0 && snapshot.teams.length === 0 ? <p className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.empty")}</p> : null}
       {!!snapshot?.teams.length && <AgentTown teams={snapshot.teams} stale={stale} selectedId={selectedTeamId} detailsId={`${baseId}-members`} selectorRef={selectorRef}
         onSelect={(id) => setSelectedTeamId((current) => current === id ? null : id)} />}
-      {selectedTeam && <section key={selectedTeam.id} id={`${baseId}-members`} aria-labelledby={`${baseId}-team-name`} data-testid="selected-agent-team" className="min-w-0 rounded-xl border border-hairline/60 bg-card">
+      {selectedTeam && <section key={selectedTeam.id} ref={membersRef} id={`${baseId}-members`} aria-labelledby={`${baseId}-team-name`} data-testid="selected-agent-team" className="min-w-0 rounded-xl border border-hairline/60 bg-card">
         <header className="flex min-w-0 items-start justify-between gap-3 border-b border-hairline/40 px-3 py-3">
           <div className="min-w-0">
             <h3 id={`${baseId}-team-name`} dir="auto" className="text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{selectedTeam.name}</h3>
