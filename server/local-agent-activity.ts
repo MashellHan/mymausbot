@@ -9,7 +9,6 @@ import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 
 const PANE_ID = /^w\d+:p\d+$/;
-const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/;
 const HEAD_BYTES = 64 * 1024;
 const TAIL_BYTES = 512 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
@@ -31,40 +30,16 @@ function safeText(value: unknown): { text: string | null; clipped: boolean } {
   return { text: chars.length ? chars.slice(0, MAX_TEXT).join("") : null, clipped: chars.length > MAX_TEXT };
 }
 
-function outputText(value: unknown): unknown {
-  if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return null;
-  return value.slice(0, 4).map((part) => record(part).text).filter((text): text is string => typeof text === "string").join(" ");
-}
-
-function visibleEvent(line: string, offset: number, tools: Map<string, string>): { event: LocalAgentActivityEvent | null; clipped: boolean } {
+function visibleEvent(line: string, offset: number): { event: LocalAgentActivityEvent | null; clipped: boolean } {
   let row: Record<string, unknown>;
   try { row = record(JSON.parse(line)); } catch { return { event: null, clipped: true }; }
   const payload = record(row.payload);
-  let kind: LocalAgentActivityEvent["kind"] | null = null;
-  let tool: string | null = null;
-  let rawText: unknown = null;
-  if (row.type === "event_msg" && (payload.type === "user_message" || payload.type === "agent_message")) {
-    kind = payload.type === "user_message" ? "user" : "assistant";
-    rawText = payload.message;
-  } else if (row.type === "response_item" && (payload.type === "function_call" || payload.type === "custom_tool_call")) {
-    kind = "tool-call";
-    tool = typeof payload.name === "string" && TOOL_NAME.test(payload.name) ? payload.name : null;
-    rawText = payload.type === "function_call" ? payload.arguments : payload.input;
-    if (typeof payload.call_id === "string" && payload.call_id.length <= 128 && tool) {
-      tools.set(payload.call_id, tool);
-      if (tools.size > 200) tools.delete(tools.keys().next().value!);
-    }
-  } else if (row.type === "response_item" && (payload.type === "function_call_output" || payload.type === "custom_tool_call_output")) {
-    kind = "tool-result";
-    tool = typeof payload.call_id === "string" ? tools.get(payload.call_id) ?? null : null;
-    rawText = outputText(payload.output);
-  }
-  if (kind === null) return { event: null, clipped: false };
-  const { text, clipped } = safeText(rawText);
-  if (text === null && (kind === "user" || kind === "assistant")) return { event: null, clipped };
+  if (row.type !== "event_msg" || (payload.type !== "user_message" && payload.type !== "agent_message")) return { event: null, clipped: false };
+  const kind = payload.type === "user_message" ? "user" : "assistant";
+  const { text, clipped } = safeText(payload.message);
+  if (text === null) return { event: null, clipped };
   const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
-  return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null, kind, tool, text }, clipped };
+  return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null, kind, tool: null, text }, clipped };
 }
 
 async function readSession(file: string, sessionId: string): Promise<{ events: LocalAgentActivityEvent[]; truncated: boolean } | null> {
@@ -92,13 +67,12 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
     const first = start === 0 ? 0 : bytes.indexOf(10) + 1;
     let truncated = start > 0;
     const events: LocalAgentActivityEvent[] = [];
-    const tools = new Map<string, string>();
     for (let cursor = first; (start === 0 || first > 0) && cursor < bytesRead;) {
       const end = bytes.indexOf(10, cursor);
       if (end < 0) { truncated = true; break; }
       if (end - cursor > MAX_LINE_BYTES) truncated = true;
       else {
-        const found = visibleEvent(bytes.toString("utf8", cursor, end), start + cursor, tools);
+        const found = visibleEvent(bytes.toString("utf8", cursor, end), start + cursor);
         if (found.clipped) truncated = true;
         if (found.event) {
           events.push(found.event);

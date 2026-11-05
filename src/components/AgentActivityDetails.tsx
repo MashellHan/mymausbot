@@ -9,13 +9,6 @@ import { cn } from "@/lib/cn";
 
 const REFRESH_MS = 2_000;
 const unavailable = (agentId: string): LocalAgentActivityResponse => ({ agentId, status: "unavailable", updatedAt: null, truncated: false, events: [] });
-const kindLabel = {
-  user: "computer.agentTeam.activity.user",
-  assistant: "computer.agentTeam.activity.assistant",
-  "tool-call": "computer.agentTeam.activity.toolCall",
-  "tool-result": "computer.agentTeam.activity.toolResult",
-} as const;
-
 type ScrollAnchor = { bottom: true } | { bottom: false; id: string | null; offset: number; top: number };
 
 export function AgentActivityDetails({ agentId, active = true }: { agentId: string; active?: boolean }) {
@@ -32,7 +25,7 @@ export function AgentActivityDetails({ agentId, active = true }: { agentId: stri
 
   const rememberScroll = () => {
     const list = listRef.current;
-    if (!list) return;
+    if (!list) { anchor.current = { bottom: true }; return; }
     if (list.scrollHeight - list.scrollTop - list.clientHeight <= 24) { anchor.current = { bottom: true }; return; }
     const first = [...list.children].find((item) => item.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
     anchor.current = { bottom: false, id: first instanceof HTMLElement ? first.dataset.eventId ?? null : null,
@@ -90,6 +83,7 @@ export function AgentActivityDetails({ agentId, active = true }: { agentId: stri
     : snapshot.status === "ready" ? t("computer.agentTeam.activity.source")
       : snapshot.status === "stale" ? t("computer.agentTeam.activity.stale")
         : t(snapshot.status === "unsupported" ? "computer.agentTeam.activity.unsupported" : "computer.agentTeam.activity.unavailable");
+  const messages = snapshot?.events.filter((event) => event.kind === "user" || event.kind === "assistant") ?? [];
 
   return (
     <div className="mt-2 min-w-0" data-testid={`agent-activity-${agentId}`}>
@@ -108,16 +102,18 @@ export function AgentActivityDetails({ agentId, active = true }: { agentId: stri
           </div>
           {snapshot?.status === "ready" || snapshot?.status === "stale" ? <>
             {snapshot.truncated && <p className="mt-1 text-[11px] text-ink-tertiary">{t("computer.agentTeam.activity.truncated")}</p>}
-            {snapshot.events.length ? <ol ref={listRef} role="region" tabIndex={0} aria-label={t("computer.agentTeam.activity.list")}
+            {messages.length ? <ol ref={listRef} role="region" tabIndex={0} aria-label={t("computer.agentTeam.activity.list")}
               className="mt-2 max-h-56 space-y-2 overflow-y-auto overscroll-contain pr-1 outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
-              {snapshot.events.map((event: LocalAgentActivityEvent) => <li key={event.id} data-event-id={event.id} className="rounded-md bg-card px-2 py-1.5 text-[11px]">
-                <div className="flex flex-wrap items-baseline gap-x-1.5 text-ink-tertiary">
-                  <span className="font-medium text-ink-secondary">{t(kindLabel[event.kind])}</span>
-                  {event.tool && <span dir="auto" className="min-w-0 [overflow-wrap:anywhere]">{event.tool}</span>}
-                  <time className="ml-auto tabular-nums" dateTime={event.at === null ? undefined : new Date(event.at).toISOString()}>{time(event.at)}</time>
+              {messages.map((event: LocalAgentActivityEvent) => <li key={event.id} data-event-id={event.id}
+                className={cn("min-w-0 rounded-md border px-2.5 py-2", event.kind === "user" ? "border-accent/20 bg-accent/5" : "border-hairline/60 bg-card")}>
+                <div className="flex flex-wrap items-baseline gap-x-1.5">
+                  <span className={cn("text-[12px] font-semibold", event.kind === "user" ? "text-accent-text" : "text-ink-secondary")}>
+                    {t(event.kind === "user" ? "computer.agentTeam.activity.user" : "computer.agentTeam.activity.assistant")}
+                  </span>
+                  <time className="ml-auto text-[11px] tabular-nums text-ink-tertiary" dateTime={event.at === null ? undefined : new Date(event.at).toISOString()}>{time(event.at)}</time>
                 </div>
-                {event.text ? <p dir="auto" className="mt-0.5 min-w-0 whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{event.text}</p>
-                  : <p className="mt-0.5 text-ink-tertiary">{t("computer.agentTeam.activity.textUnavailable")}</p>}
+                {event.text ? <p dir="auto" className="mt-1 min-w-0 whitespace-pre-wrap text-[13px] leading-[18px] text-ink [overflow-wrap:anywhere]">{event.text}</p>
+                  : <p className="mt-1 text-[13px] leading-[18px] text-ink-tertiary">{t("computer.agentTeam.activity.textUnavailable")}</p>}
               </li>)}
             </ol> : <p className="mt-2 text-[11px] text-ink-tertiary">{t("computer.agentTeam.activity.empty")}</p>}
           </> : null}
