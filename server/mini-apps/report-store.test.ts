@@ -102,7 +102,8 @@ describe("retained report editions", () => {
     await expect(reports.publish("producer", "x_ai_digest", xEdition("2026-11-04"), Date.parse("2026-11-05T01:00:00Z")))
       .rejects.toMatchObject({ status: 400 });
     const { editionKey: _unused, ...withoutDay } = xEdition();
-    expect((await reports.publish("producer", "x_ai_digest", withoutDay, Date.parse("2026-11-05T01:00:00Z"))).editionKey)
-      .toBe("2026-11-05");
+    const scheduled = await reports.publish("producer", "x_ai_digest", withoutDay, Date.parse("2026-11-05T01:00:00Z"));
+    expect(scheduled.editionKey).toBe("2026-11-05");
+    expect(await reports.publish("producer", "x_ai_digest", xEdition())).toEqual({ ...scheduled, replayed: true });
   });
 });

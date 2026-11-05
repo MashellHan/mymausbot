@@ -76,39 +76,39 @@ const MAUSBOT_ADDS = 0.02;
 const RESEARCH_TOOLS = ["x_search", "research_search", "research_endpoint", "research_call"];
 /** Only on the person's own Cloud: never on the fullest profile, a Team Cloud's. */
 const OWN_CLOUD_TOOLS = ["ask_for_computer"];
-const MINI_APP_TOOLS = ["mini_app_info", "mini_app_connect", "mini_app_publish", "mini_app_rollback", "mini_app_archive"];
+const MINI_APP_TOOLS = ["mini_app_info", "mini_app_connect", "mini_app_publish", "mini_app_rollback", "mini_app_archive", "mini_app_report"];
 /** The fullest profile, checked in whole; every other one is pinned by tool names, bytes and sha256. */
 const FULL = "skills+shared+voice+escalations+x+team";
 
 /** Bytes when the budget was last set; a profile may move at most 2% either way (lower it to lock in a win). */
 const BUDGET_BASELINE: Record<string, number> = {
-  "default": 61529,
-  "voice": 62310,
-  "shared": 63794,
-  "shared+voice": 64575,
-  "skills": 64348,
-  "skills+voice": 65129,
-  "skills+shared": 66613,
-  "skills+shared+voice": 67394,
-  "non-chief": 52313,
-  "voice+non-chief": 53094,
-  "shared+non-chief": 54578,
-  "shared+voice+non-chief": 55359,
-  "skills+non-chief": 55132,
-  "skills+voice+non-chief": 55913,
-  "skills+shared+non-chief": 57397,
-  "skills+shared+voice+non-chief": 58178,
+  "default": 62243,
+  "voice": 63024,
+  "shared": 64508,
+  "shared+voice": 65289,
+  "skills": 65062,
+  "skills+voice": 65843,
+  "skills+shared": 67327,
+  "skills+shared+voice": 68108,
+  "non-chief": 53027,
+  "voice+non-chief": 53808,
+  "shared+non-chief": 55292,
+  "shared+voice+non-chief": 56073,
+  "skills+non-chief": 55846,
+  "skills+voice+non-chief": 56627,
+  "skills+shared+non-chief": 58111,
+  "skills+shared+voice+non-chief": 58892,
   "skills+shared+voice+cloud-home": 64632,
   "skills+shared+voice+non-chief+cloud-home": 55416,
-  "default+legacy-switches": 61529,
-  "default+mausbot": 62180,
-  "skills+shared+voice+mausbot": 68045,
-  "skills+shared+voice+escalations": 68224,
-  "skills+shared+voice+escalations+x": 72063,
-  "skills+shared+voice+escalations+x+team": 72063,
-  "default+no-computer-pick": 60317,
-  "default+room": 53227,
-  "non-chief+room": 44011,
+  "default+legacy-switches": 62243,
+  "default+mausbot": 62894,
+  "skills+shared+voice+mausbot": 68759,
+  "skills+shared+voice+escalations": 68938,
+  "skills+shared+voice+escalations+x": 72777,
+  "skills+shared+voice+escalations+x+team": 72777,
+  "default+no-computer-pick": 61031,
+  "default+room": 53941,
+  "non-chief+room": 44725,
 };
 
 const RPC_PREFIX = '{"jsonrpc":"2.0","id":1,"result":';

@@ -19,8 +19,15 @@ const sqlValue = (value: string | number | null): string => value === null ? "NU
 type Header = { contentHash: string; publishedAt: string; itemCount: number };
 
 export class ReportStore {
-  constructor(private readonly data: DataEngine, private readonly template: (kind: ReportKind) => string,
-    private readonly now: () => number = Date.now) {}
+  private readonly data: DataEngine;
+  private readonly template: (kind: ReportKind) => string;
+  private readonly now: () => number;
+
+  constructor(data: DataEngine, template: (kind: ReportKind) => string, now: () => number = Date.now) {
+    this.data = data;
+    this.template = template;
+    this.now = now;
+  }
 
   private async ensureTable(database: BotDatabase): Promise<void> {
     const table = (await database.listSourceTables()).find((source) => source.schema === "main" && source.name === REPORT_TABLE);
@@ -72,17 +79,20 @@ export class ReportStore {
     return { contentHash: String(row[0]), publishedAt: String(row[1]), itemCount: Number(row[2]) };
   }
 
-  async publish(botId: string, kind: ReportKind, raw: unknown, nominalAt: number | null = null): Promise<ReportEditionReceipt> {
+  async publish(botId: string, kind: ReportKind, raw: unknown, nominalAt: number | null = null,
+    assertActive: () => void = () => {}): Promise<ReportEditionReceipt> {
     if (!Object.hasOwn(REPORT_APPS, kind)) throw appFailure(400, "Unsupported report kind.");
     const edition = parseReportEdition(kind, raw);
     const editionKey = this.editionKey(edition.editionKey, nominalAt);
-    const normalized = { ...edition, editionKey };
+    const { editionKey: _supplied, ...contents } = edition;
+    const normalized = { editionKey, ...contents };
     const contentHash = createHash("sha256").update(JSON.stringify({ kind, edition: normalized })).digest("hex");
     const { database, datasetId } = await this.connect(botId);
     const receipt = (header: Header, replayed: boolean): ReportEditionReceipt => ({ slug: REPORT_APPS[kind].slug,
       datasetId, kind, editionKey, editionDay: editionKey, itemCount: header.itemCount,
       contentHash: header.contentHash, publishedAt: header.publishedAt, replayed });
     const previous = await this.header(database, kind, editionKey);
+    assertActive();
     if (previous) {
       if (previous.contentHash !== contentHash) throw appFailure(409, "This report edition already has different content.");
       return receipt(previous, true);
@@ -103,6 +113,7 @@ export class ReportStore {
       selection_basis: item.selectionBasis }));
     const values = rows.map((row) => `(${COLUMNS.map((column) => sqlValue(row[column] ?? null)).join(", ")})`).join(", ");
     try {
+      assertActive();
       await database.run(`INSERT INTO ${TABLE} (${COLUMNS.join(", ")}) VALUES ${values}`,
         { connection: "bot", businessMutation: true, maxRows: 0 });
     } catch (error) {

@@ -21,8 +21,9 @@ export const SYNTHETIC_LEDGER_SQL = `CREATE TABLE ledger_master AS SELECT * FROM
   ('Unknown', '2026-04-04', '1.005', 'Card', 'Daily', 'CNY', 'Unrepresentable amount')
 ) AS records("分类", "时间", "金额", "账户", "账本", "货币", "备注")`;
 
-export async function launchMiniAppsFixture() {
-  const fixture = await launchVerificationServer();
+export async function launchMiniAppsFixture({ scripted = false }: { scripted?: boolean } = {}) {
+  const fixture = await launchVerificationServer(process.env, undefined, undefined, undefined, undefined,
+    scripted ? { scripted: true } : undefined);
   let server: ChildProcess | undefined;
   const { url, dataDir, logPath } = fixture.info;
   const api = async <T = Record<string, unknown>>(method: string, path: string, body?: unknown, expected = 200, headers: Record<string, string> = {}): Promise<T> => {
@@ -50,7 +51,7 @@ export async function launchMiniAppsFixture() {
     while (Date.now() < deadline) {
       if (server.exitCode !== null) throw new Error(`Mini App fixture exited: ${readFileSync(logPath, "utf8").slice(-5000)}`);
       try {
-        const response = await fetch(url + "/api/health", { signal: AbortSignal.timeout(500) });
+        const response = await fetch(url + "/api/health", { headers: { origin: url }, signal: AbortSignal.timeout(500) });
         const health = await response.json() as { app?: string; pid?: number };
         if (response.ok && health.app === "openmausbot" && health.pid === server.pid) return;
       } catch {}
