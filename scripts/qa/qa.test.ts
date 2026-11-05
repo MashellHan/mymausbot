@@ -179,7 +179,7 @@ describe("complete CI and trusted QA health", () => {
     await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
   });
 
-  it("retries only bounded transient read responses from GitHub", async () => {
+  it("retries only bounded transient reads from GitHub", async () => {
     vi.stubEnv("GITHUB_REPOSITORY", repository);
     vi.stubEnv("GITHUB_API_URL", "https://api.github.test");
     vi.stubEnv("GH_TOKEN", "synthetic-token");
@@ -202,6 +202,55 @@ describe("complete CI and trusted QA health", () => {
       fetcher.mockResolvedValue(new Response(null, { status: 500 }));
       await expect(github("/actions/runs/100/jobs")).rejects.toThrow("GitHub GET /actions/runs/100/jobs: HTTP 500");
       expect(fetcher).toHaveBeenCalledTimes(1);
+
+      const socketError = (message: string) => new TypeError(message, { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) });
+      fetcher.mockReset();
+      fetcher.mockRejectedValueOnce(socketError("fetch failed")).mockResolvedValueOnce(Response.json({ jobs: [] }));
+      await expect(github("/actions/runs/100/jobs")).resolves.toEqual({ jobs: [] });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      fetcher.mockReset();
+      fetcher.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.reject(socketError("terminated")) }).mockResolvedValueOnce(Response.json({ jobs: [] }));
+      await expect(github("/actions/runs/100/jobs")).resolves.toEqual({ jobs: [] });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      fetcher.mockReset();
+      fetcher.mockResolvedValueOnce({ ok: true, status: 200, arrayBuffer: () => Promise.reject(socketError("terminated")) }).mockResolvedValueOnce(new Response("ok"));
+      await expect(github("/actions/artifacts/3/zip", { raw: true })).resolves.toEqual(Buffer.from("ok"));
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      fetcher.mockReset();
+      const exhausted = socketError("terminated");
+      fetcher.mockRejectedValue(exhausted);
+      await expect(github("/actions/runs/100/jobs")).rejects.toBe(exhausted);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+
+      for (const options of [{ method: "POST", body: { title: "Synthetic" } }, { method: "GET", body: { filter: "all" } }]) {
+        fetcher.mockReset();
+        const closed = socketError("fetch failed");
+        fetcher.mockRejectedValue(closed);
+        await expect(github("/issues", options)).rejects.toBe(closed);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+      }
+
+      for (const error of [new SyntaxError("invalid JSON"), new TypeError("fetch failed", { cause: new Error("connection reset") }),
+        socketError("unrelated message"), new DOMException("aborted", "AbortError"), new DOMException("deadline", "TimeoutError")]) {
+        fetcher.mockReset();
+        if (error instanceof SyntaxError) fetcher.mockResolvedValue({ ok: true, status: 200, json: () => Promise.reject(error) });
+        else fetcher.mockRejectedValue(error);
+        await expect(github("/actions/runs/100/jobs")).rejects.toBe(error);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+      }
+
+      fetcher.mockReset();
+      const deadline = socketError("terminated");
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
+      try {
+        fetcher.mockRejectedValue(deadline);
+        await expect(github("/actions/runs/100/jobs")).rejects.toBe(deadline);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(fetcher.mock.calls[0]?.[1].signal.aborted).toBe(true);
+      } finally { timeout.mockRestore(); }
     } finally {
       vi.unstubAllGlobals();
       vi.unstubAllEnvs();

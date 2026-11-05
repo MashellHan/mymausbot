@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const closedSocket = (error) => error instanceof TypeError && ["fetch failed", "terminated"].includes(error.message)
+  && error.cause?.code === "UND_ERR_SOCKET" && error.cause?.message === "other side closed";
+
 export async function github(path, { method = "GET", body, raw = false } = {}) {
   const repository = process.env.GITHUB_REPOSITORY;
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository ?? "") || !path.startsWith("/") || path.startsWith("//")) throw new Error("Invalid GitHub repository/path");
@@ -19,11 +22,19 @@ export async function github(path, { method = "GET", body, raw = false } = {}) {
   if (!process.env.GH_TOKEN) throw new Error("GitHub credentials unavailable");
   const attempts = method === "GET" && body === undefined ? 3 : 1;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const response = await fetch(`${process.env.GITHUB_API_URL || "https://api.github.com"}${endpoint}`, {
-      method, headers: { authorization: `Bearer ${process.env.GH_TOKEN}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", ...(body === undefined ? {} : { "content-type": "application/json" }) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(60_000),
-    });
-    if (response.ok) return raw ? Buffer.from(await response.arrayBuffer()) : response.status === 204 ? null : response.json();
+    const signal = AbortSignal.timeout(60_000);
+    let response;
+    try {
+      response = await fetch(`${process.env.GITHUB_API_URL || "https://api.github.com"}${endpoint}`, {
+        method, headers: { authorization: `Bearer ${process.env.GH_TOKEN}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", ...(body === undefined ? {} : { "content-type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal,
+      });
+      if (response.ok) return raw ? Buffer.from(await response.arrayBuffer()) : response.status === 204 ? null : await response.json();
+    } catch (error) {
+      if (attempt === attempts || signal.aborted || !closedSocket(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+      continue;
+    }
     if (attempt === attempts || ![502, 503, 504].includes(response.status)) throw new Error(`GitHub ${method} ${path.split("?")[0]}: HTTP ${response.status}`);
     await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
   }
