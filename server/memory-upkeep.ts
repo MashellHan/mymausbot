@@ -901,7 +901,7 @@ export function createMemoryUpkeep(deps: UpkeepDeps): MemoryUpkeep {
           log(`memory upkeep: could not queue turns saved at the last shutdown: ${(error as Error).message}`);
         }
       }
-      const started = ++generation;
+      const started = generation;
       const scheduledTick = () => { if (started === generation) void tick(); };
       timer = setInterval(scheduledTick, TIDY_CHECK_MS);
       timer.unref?.();

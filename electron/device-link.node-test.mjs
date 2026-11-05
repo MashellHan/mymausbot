@@ -246,19 +246,29 @@ test("the link signs in like the poll, takes My Cloud's word for this computer's
   const end = await cloudEnd(t);
   const stop = new AbortController();
   let opened = 0;
+  let outcome = null;
   const connects = [];
   const running = runDeviceLink({ url: end.url, headers: { cookie: "omb_session=s", "x-omb-computer-secret": "a".repeat(64) }, signal: stop.signal, onOpen: () => opened++, openMs: 100,
-    egress: { interfaces: () => ({}), resolve: async () => [{ address: SEEN_AS, family: 4 }], connect: (options) => { connects.push(options); return tcpConnect(1, "127.0.0.1"); } } });
-  await until(() => end.sessions.length === 1 && opened === 1, "the link to open");
-  assert.equal(end.sessions[0].headers.cookie, "omb_session=s");
-  assert.equal(end.sessions[0].headers["x-omb-computer-secret"], "a".repeat(64));
-  await delay(250); // past the opening limit: a link that opened is not ended by it
-  assert.deepEqual(await end.sessions[0].mux.open({ host: "home-router.test", port: 443 }), { refused: "home-network" }, "the home's own public address is home");
-  assert.equal(connects.length, 0);
-  stop.abort();
-  assert.deepEqual(await running, { code: 1000, reason: "stopped" });
-  assert.equal(linkUrl("https://omb-u-1.fly.dev", "/api/shared-computers/c/link"), "wss://omb-u-1.fly.dev/api/shared-computers/c/link");
-  assert.equal(linkUrl("http://127.0.0.1:9", "/x"), "ws://127.0.0.1:9/x");
+    egress: { interfaces: () => ({}), resolve: async () => [{ address: SEEN_AS, family: 4 }], connect: (options) => { connects.push(options); return tcpConnect(1, "127.0.0.1"); } } })
+    .then(result => { outcome = result; return result; });
+  try {
+    try { await until(() => end.sessions.length === 1 && opened === 1, "the link to open"); }
+    catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}; onOpen=${opened}; serverConnections=${end.sessions.length}; linkOutcome=${outcome ? JSON.stringify(outcome) : "pending"}`, { cause: error });
+    }
+    assert.equal(end.sessions[0].headers.cookie, "omb_session=s");
+    assert.equal(end.sessions[0].headers["x-omb-computer-secret"], "a".repeat(64));
+    await delay(250); // past the opening limit: a link that opened is not ended by it
+    assert.deepEqual(await end.sessions[0].mux.open({ host: "home-router.test", port: 443 }), { refused: "home-network" }, "the home's own public address is home");
+    assert.equal(connects.length, 0);
+    stop.abort();
+    assert.deepEqual(await running, { code: 1000, reason: "stopped" });
+    assert.equal(linkUrl("https://omb-u-1.fly.dev", "/api/shared-computers/c/link"), "wss://omb-u-1.fly.dev/api/shared-computers/c/link");
+    assert.equal(linkUrl("http://127.0.0.1:9", "/x"), "ws://127.0.0.1:9/x");
+  } finally {
+    stop.abort();
+    await running;
+  }
 });
 
 test("a My Cloud that stops answering ends the link here within the silence limit, so nothing hangs on it", async (t) => {

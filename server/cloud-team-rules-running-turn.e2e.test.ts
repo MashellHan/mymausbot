@@ -15,6 +15,7 @@ import { hostTimeout } from "./testing/host-timeout.ts";
 
 const ENGINE = `process.env.FAKE_CLAUDE_DUMP = process.env.FAKE_CLAUDE_FIXTURE_DIR + "/dump.json";
 process.env.FAKE_CLAUDE_TOOL_CALLS_FILE = process.env.FAKE_CLAUDE_FIXTURE_DIR + "/tool-calls.json";
+process.env.FAKE_CLAUDE_TEXT_DUMP = process.env.FAKE_CLAUDE_FIXTURE_DIR + "/text-dump.json";
 process.env.FAKE_CLAUDE_RELEASE = process.env.FAKE_CLAUDE_FIXTURE_DIR + "/release";
 process.env.FAKE_CLAUDE_REPLY_FILE = process.env.FAKE_CLAUDE_FIXTURE_DIR + "/reply.txt";`;
 const FINISHED = "Finished with what it had.";
@@ -36,10 +37,10 @@ async function rules(limits: Record<string, unknown> | null) {
   await expect.poll(() => reports.at(-1)?.loaded?.fingerprint ?? null, { timeout: 15_000, interval: 50 }).toBe(fingerprint);
 }
 
-type Dump = { pid: number; mcpConfig?: { mcpServers?: Record<string, unknown> } };
+type Dump = { pid: number; prompt?: unknown; mcpConfig?: { mcpServers?: Record<string, unknown> } };
 const dumpPath = () => join(team.home, "dump.json");
 const dump = () => JSON.parse(readFileSync(dumpPath(), "utf8")) as Dump;
-const script = (calls: unknown[]) => writeFileSync(join(team.home, "tool-calls.json"), JSON.stringify(calls));
+const script = (calls: unknown[] | Record<string, unknown[]>) => writeFileSync(join(team.home, "tool-calls.json"), JSON.stringify(calls));
 const orderCalls = () => (gateway.calls as { name?: string }[]).filter((call) => call.name === "lookup_order").length;
 const thread = async (id: string) => JSON.stringify((await team.as(owner, "GET", `/api/threads/${id}/messages?limit=200`)).body);
 
@@ -66,16 +67,22 @@ async function fullTurn(threadId: string, text: string) {
 async function ruleLandsMidTurn(limits: Record<string, unknown>, calls: unknown[], title: string, { ended = FINISHED, ready = () => true }: { ended?: string; ready?: () => boolean } = {}) {
   await rules(null);
   const threadId = await newThread(title);
-  script(calls);
+  script({ [title]: calls });
   const sent = await send(threadId, title);
   expect(sent.status, JSON.stringify(sent.body)).toBe(202);
-  await expect.poll(() => existsSync(dumpPath()), { timeout: 60_000, interval: 50 }).toBe(true);
-  const launched = dump();
+  let launched: Dump | undefined;
+  await expect.poll(() => {
+    if (!existsSync(dumpPath())) return false;
+    const candidate = dump();
+    if (!String(JSON.stringify(candidate.prompt) ?? "").includes(title)) return false;
+    launched = candidate;
+    return true;
+  }, { timeout: 60_000, interval: 50 }).toBe(true);
   await expect.poll(ready, { timeout: 60_000, interval: 50 }).toBe(true);
   await rules(limits);
   writeFileSync(join(team.home, "release"), "");
   await expect.poll(async () => (await thread(threadId)).includes(ended) && await idle(), { timeout: 60_000, interval: 100 }).toBe(true);
-  return { threadId, launched, words: await thread(threadId) };
+  return { threadId, launched: launched!, words: await thread(threadId) };
 }
 
 beforeAll(async () => {
