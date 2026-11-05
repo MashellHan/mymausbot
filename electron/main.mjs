@@ -45,7 +45,7 @@ let desktopTray = null;
 import { collisionFreeDownloadPath, defaultSaveName, openLogsFolder, revealDownloadWhenDone, revealInFolder, withSavableFile } from "./save-file.mjs";
 import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs";
 import { appPermissionHandlers, externalLinkUrl } from "./app-permissions.mjs";
-import { appFrameNavigationAllowed } from "./app-frame-guard.mjs";
+import { appFrameBlinkSettings, appFrameNavigationAllowed } from "./app-frame-guard.mjs";
 import { writeClipboardText } from "./clipboard-write.mjs";
 import {
   ensureManagedComposioCredentials,
@@ -175,6 +175,8 @@ function applyUnreadBadge(win = mainWindow) {
   }
   if (process.platform === "darwin" || process.platform === "linux") app.setBadgeCount(count);
 }
+
+app.commandLine.appendSwitch("blink-settings", appFrameBlinkSettings(app.commandLine.getSwitchValue("blink-settings")));
 
 // GNOME groups the window with its desktop entry only when both identities match; set before ready.
 if (process.platform === "linux") {
@@ -2029,7 +2031,7 @@ function createWindow({ deferNavigation = false } = {}) {
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
       additionalArguments: [...desktopCompanionRendererArguments(rendererOrigin(), desktopRemoteAccess),
-        ...(app.isPackaged && !desktopRemoteAccess ? ["--omb-company-desktop=1"] : []), `--omb-app-version=${app.getVersion()}`],
+        ...(app.isPackaged && !desktopRemoteAccess ? ["--omb-company-desktop=1"] : []), `--omb-app-version=${app.getVersion()}`, "--omb-opaque-frame-navigation=1"],
     },
   });
   mainWindow = win; hiddenStart = false; chromeRail.attach(win);
