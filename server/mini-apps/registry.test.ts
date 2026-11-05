@@ -87,6 +87,23 @@ describe("persistent Mini Apps", () => {
     expect((await apps.publish(bot(), publication({ requestKey: "after-restore", expectedRevision: 3 }), app.id)).app.status).toBe("active");
   });
 
+  it("does not replay a racing rollback receipt after the owner archives the app", async () => {
+    const { apps, data } = fixture();
+    const { app } = await apps.publish(bot(), publication());
+    await apps.publish(bot(), publication({ requestKey: "second", expectedRevision: 1 }), app.id);
+    let finish!: () => void;
+    const validation = new Promise<undefined>((resolve) => { finish = () => resolve(undefined); });
+    data.validateBinding.mockImplementationOnce(() => validation);
+    const rollback = { requestKey: "same-rollback", expectedRevision: 2, templateVersion: 1 };
+    const pending = apps.rollback(bot(), app.id, rollback);
+    const refused = expect(pending).rejects.toMatchObject({ status: 403 });
+    await apps.rollback(bot(), app.id, rollback);
+    apps.archive(owner, app.id, { requestKey: "archive", expectedRevision: 3 });
+    finish();
+    await refused;
+    expect(apps.document(owner, app.id).app).toMatchObject({ revision: 4, status: "archived" });
+  });
+
   it("limits delegated Data to the target app's current canonical binding", async () => {
     const { apps } = fixture();
     const delegated: MiniAppActor = { ...bot(), canBind: () => false };

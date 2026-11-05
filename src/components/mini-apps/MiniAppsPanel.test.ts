@@ -40,6 +40,7 @@ let root: Root;
 let host: HTMLDivElement;
 let stored: Map<string, string>;
 const frame = () => host.querySelector<HTMLElement>('[data-testid="fixture-frame"]');
+const freshness = () => host.querySelector<HTMLElement>('[data-testid="mini-app-freshness"]')?.textContent ?? "";
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label)!;
 const refresh = () => host.querySelector<HTMLButtonElement>('[aria-label="Check for updates"]')!;
 const selected = () => host.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
@@ -102,15 +103,21 @@ describe("Mini Apps panel", () => {
     expect(stored.get("omb-mini-app:fixture-environment")).toBe("app_a");
   });
 
-  it("updates a mounted app's Data revision and retains it through a later offline check", async () => {
+  it("keeps the report while the freshness label becomes stale, then returns to Current after recovery", async () => {
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("7"));
+    expect(freshness()).toBe("Current");
     fixture.dataRevision = 8;
     await act(async () => { refresh().click(); });
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("8"));
     fixture.failState = true;
     await act(async () => { refresh().click(); });
-    await vi.waitFor(() => expect(host.textContent).toContain("Showing the last loaded version"));
+    await vi.waitFor(() => expect(freshness()).toContain("Showing the last loaded version"));
+    expect(freshness()).not.toContain("Current");
+    expect(frame()?.dataset.dataRevision).toBe("8");
+    fixture.failState = false;
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(freshness()).toBe("Current"));
     expect(frame()?.dataset.dataRevision).toBe("8");
   });
 

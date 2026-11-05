@@ -11,7 +11,7 @@ import { createAndroidDeviceController } from "./android-device.mjs";
 import { finishSpeech, speechBusy, startSpeech, stopSpeech } from "./speech.mjs";
 import { installTalk, isTalkPanel } from "./talk-main.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
-import { linuxDisablesGpu } from "./linux-gpu.mjs";
+import { configureLinuxDesktop } from "./linux-gpu.mjs";
 import { pasteMenuItem } from "./paste-menu-item.mjs";
 import { attachUpdaterWindow, startUpdater, registerUpdaterIpc, sendUpdaterState, reopenedOutOfSight, quietSignals } from "./updater.mjs";
 import {
@@ -178,11 +178,7 @@ function applyUnreadBadge(win = mainWindow) {
 
 app.commandLine.appendSwitch("blink-settings", appFrameBlinkSettings(app.commandLine.getSwitchValue("blink-settings")));
 
-// GNOME groups the window with its desktop entry only when both identities match; set before ready.
-if (process.platform === "linux") {
-  if (linuxDisablesGpu()) app.disableHardwareAcceleration();
-  app.setDesktopName("com.openmausbot.app.desktop");
-}
+configureLinuxDesktop(app);
 
 if (!app.requestSingleInstanceLock()) {
   console.log("[desktop] OpenMausBot is already running — focusing that window");

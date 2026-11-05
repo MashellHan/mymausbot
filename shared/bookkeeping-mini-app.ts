@@ -54,6 +54,7 @@ export function createBookkeepingPublish(input: {
       outflow: aggregate(["currency"], { filters: outflows }),
       inflow: aggregate(["currency"], { filters: [...filters, { field: "amount", op: "gt", literal: "0" }] }),
       categories: aggregate(["currency", "category"], { filters: outflows, orderBy: [{ field: "amount", direction: "asc" }] }),
+      category_options: aggregate(["currency", "category"], { measures: [{ name: "count", op: "count" }], orderBy: [{ field: "currency", direction: "asc" }, { field: "category", direction: "asc" }] }),
       trend_day: aggregate(["currency"], { filters: outflows, timeBucket: { field: "date", unit: "day", name: "bucket" }, orderBy: [{ field: "bucket", direction: "asc" }] }),
       trend_month: aggregate(["currency"], { filters: outflows, timeBucket: { field: "date", unit: "month", name: "bucket" }, orderBy: [{ field: "bucket", direction: "asc" }] }),
       details: { ...base, kind: "rows", columns: ["date", "amount", "currency", "category", "account", "book", "note"],

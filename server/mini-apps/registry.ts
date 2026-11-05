@@ -221,6 +221,7 @@ export class MiniApps {
     const bindings = JSON.parse(version.bindings) as MiniAppDataBinding[];
     this.authorizeTemplate(actor, current, bindings);
     for (const binding of bindings) await this.data.validateBinding(MINI_APPS_OWNER, binding);
+    this.authorizeTemplate(actor, this.require(actor, id, true), bindings);
     return this.changeHead(actor, id, "rollback", input.data, (app) => {
       this.authorizeTemplate(actor, app, bindings);
       return { ...app, title: version.title, description: version.description, templateVersion: version.version, status: "active" };

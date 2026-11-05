@@ -23,6 +23,9 @@ it("keeps a reusable local library through Data refresh, publication, restart, b
     const outflow = await query("outflow", filters);
     expect(records(outflow)).toEqual([{ currency: "CNY", count: "3", amount: "-12.54" }]);
     expect(records(await query("summary", filters, 1, outflow.revision))).toEqual([{ currency: "CNY", count: "6", net: "12.46" }]);
+    expect(records(await query("category_options", filters)).some((row) => row.category === "Transfer")).toBe(true);
+    expect(records(await query("summary", { ...filters, category: "Transfer" }))).toEqual([{ currency: "CNY", count: "1", net: "25.00" }]);
+    expect(records(await query("outflow", { ...filters, category: "Transfer" }))).toEqual([]);
     const currencies = records(await query("outflow", { from: filters.from, through: filters.through })).map((row) => row.currency);
     expect(currencies).toEqual(expect.arrayContaining(["CNY", "USD", "", null]));
     await api("POST", `${root}/query`, { queryId: "outflow", parameters: filters, expectedRevision: 1, sql: "SELECT * FROM secret" }, 400);

@@ -12,6 +12,7 @@ const source: RecordRow[] = [
   { category: "Travel", date: "2026-04-02", amount: "-8.50", account: "Sample cash", book: "Sample book", currency: "USD", note: null },
   { category: null, date: "2026-04-02", amount: "-3.00", account: null, book: "Sample book", currency: null, note: null },
   { category: "", date: "2026-04-02", amount: "-1.00", account: null, book: "Sample book", currency: "", note: null },
+  { category: "Salary", date: "2026-04-01", amount: "+100.00", account: "Demo card", book: "Sample book", currency: "CNY", note: "Synthetic inflow" },
   { category: "Food", date: "2026-04", amount: "-2.00", account: null, book: null, currency: "CNY", note: "Partial date" },
   { category: "Food", date: null, amount: "invalid", account: null, book: null, currency: "CNY", note: "Invalid amount" },
 ];
@@ -20,10 +21,10 @@ function result(rows: RecordRow[], nextCursor?: string) {
   return { columns: Object.keys(rows[0] ?? {}).map((name) => ({ name })), rows: rows.map((row) => Object.values(row)), revision: 7, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-function fixture(options: { paginateCategories?: boolean } = {}) {
+function fixture(options: { paginateCategories?: boolean; paginateCategoryOptions?: boolean } = {}) {
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   const coverage = [
-    { currency: "CNY", count: "5", datedCount: "3", amountCount: "4", firstDate: "2026-04-03", lastDate: "2026-04-04" },
+    { currency: "CNY", count: "6", datedCount: "4", amountCount: "5", firstDate: "2026-04-01", lastDate: "2026-04-04" },
     { currency: "USD", count: "1", datedCount: "1", amountCount: "1", firstDate: "2026-04-02", lastDate: "2026-04-02" },
     { currency: null, count: "1", datedCount: "1", amountCount: "1", firstDate: "2026-04-02", lastDate: "2026-04-02" },
     { currency: "", count: "1", datedCount: "1", amountCount: "1", firstDate: "2026-04-02", lastDate: "2026-04-02" },
@@ -35,16 +36,17 @@ function fixture(options: { paginateCategories?: boolean } = {}) {
     if (queryId === "coverage") return result(coverage);
     if (queryId === "summary") return result(parameters.category === "Food"
       ? [{ currency: "CNY", net: "-12.34", count: 1 }]
+      : parameters.category === "Salary" ? [{ currency: "CNY", net: "100.00", count: 1 }]
       : [
-        { currency: "CNY", net: "-9007199254740968.12", count: 3 },
+        { currency: "CNY", net: "-9007199254740868.12", count: 4 },
         { currency: "USD", net: "-8.50", count: 1 },
         { currency: null, net: "-3.00", count: 1 },
         { currency: "", net: "-1.00", count: 1 },
       ]);
-    if (queryId === "outflow") return result(parameters.category === "Food"
+    if (queryId === "outflow") return result(parameters.category === "Salary" ? [] : parameters.category === "Food"
       ? [{ currency: "CNY", amount: "-12.34" }]
       : [{ currency: "CNY", amount: "-9007199254740993.12" }, { currency: "USD", amount: "-8.50" }, { currency: null, amount: "-3.00" }, { currency: "", amount: "-1.00" }]);
-    if (queryId === "inflow") return result(parameters.category === "Food" ? [] : [{ currency: "CNY", amount: "25.00" }]);
+    if (queryId === "inflow") return result(parameters.category === "Food" ? [] : [{ currency: "CNY", amount: parameters.category === "Salary" ? "100.00" : "125.00" }]);
     if (queryId === "categories" && paging?.cursor === "categories-next") return result([{ currency: "CNY", category: "Late category", amount: "-0.01", count: 1 }]);
     if (queryId === "categories") return result([
       { currency: "CNY", category: "Food", amount: "-12.34", count: 1 },
@@ -53,11 +55,21 @@ function fixture(options: { paginateCategories?: boolean } = {}) {
       { currency: null, category: null, amount: "-3.00", count: 1 },
       { currency: "", category: "", amount: "-1.00", count: 1 },
     ], options.paginateCategories ? "categories-next" : undefined);
-    if (queryId === "trend_day" || queryId === "trend_month") return result([
+    if (queryId === "category_options" && paging?.cursor === "options-next") return result([{ currency: "CNY", category: "Salary", count: 1 }]);
+    if (queryId === "category_options") return result([
+      { currency: "CNY", category: "Food", count: 1 },
+      { currency: "CNY", category: "Other", count: 2 },
+      { currency: "USD", category: "Travel", count: 1 },
+      { currency: null, category: null, count: 1 },
+      { currency: "", category: "", count: 1 },
+      ...(options.paginateCategoryOptions ? [] : [{ currency: "CNY", category: "Salary", count: 1 }]),
+    ], options.paginateCategoryOptions ? "options-next" : undefined);
+    if (queryId === "trend_day" || queryId === "trend_month") return result(parameters.category === "Salary" ? [] : [
       { currency: "CNY", bucket: queryId === "trend_month" ? "2026-04" : "2026-04-04", amount: "-9007199254740993.12", count: 3 },
       { currency: "USD", bucket: queryId === "trend_month" ? "2026-04" : "2026-04-02", amount: "-8.50", count: 1 },
     ]);
-    if (queryId === "details") return paging?.cursor === "next" ? result([source[3]!]) : result(Array.from({ length: 30 }, (_, index) => source[index % 6]!), "next");
+    if (queryId === "details") return parameters.category === "Salary" ? result([source[6]!])
+      : paging?.cursor === "next" ? result([source[3]!]) : result(Array.from({ length: 30 }, (_, index) => source[index % 7]!), "next");
     throw new Error(`Unexpected query: ${queryId}`);
   });
   (view as unknown as { mausApp: unknown }).mausApp = { query, onDataChanged: (callback: () => void) => { changed = callback; } };
@@ -86,12 +98,12 @@ describe("portable bookkeeping Mini App", () => {
     opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
 
-    expect(source).toHaveLength(8);
+    expect(source).toHaveLength(9);
     expect(app.text("notice")).toBe("");
     expect(app.text("coverage")).toContain("2 incomplete dates excluded");
     expect(app.text("coverage")).toContain("1 invalid or unrepresentable amount excluded");
     expect(app.text("summary")).toContain("9,007,199,254,740,993.12");
-    expect(app.text("summary")).toContain("−9,007,199,254,740,968.12");
+    expect(app.text("summary")).toContain("−9,007,199,254,740,868.12");
     expect(app.text("summary")).toContain("Currency missing");
     expect(app.text("summary")).toContain("Currency blank");
     expect(app.text("categories")).toContain("Category missing");
@@ -133,6 +145,25 @@ describe("portable bookkeeping Mini App", () => {
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.query).toHaveBeenCalledWith("categories", expect.any(Object), { cursor: "categories-next", expectedDataRevision: 7 });
     expect(app.text("categories")).toContain("Late category");
+  });
+
+  it("offers an income-only category from all-sign pages and filters its summary, trend and details", async () => {
+    const app = fixture({ paginateCategoryOptions: true });
+    opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.query).toHaveBeenCalledWith("category_options", expect.any(Object), { cursor: "options-next", expectedDataRevision: 7 });
+    expect(app.view.document.querySelector('#category option[value="Salary"]')).not.toBeNull();
+
+    app.select("category", "Salary");
+    await app.view.happyDOM.whenAsyncComplete();
+    for (const queryId of ["summary", "outflow", "inflow", "trend_day", "details"]) {
+      expect(app.query).toHaveBeenCalledWith(queryId, expect.objectContaining({ category: "Salary" }), { expectedDataRevision: 7 });
+    }
+    expect(app.text("summary")).toContain("100.00");
+    expect(app.text("summary")).toContain("0.00");
+    expect(app.text("trend")).toContain("No outflow matches these filters.");
+    expect(app.text("details")).toContain("Salary");
+    expect(app.text("details")).toContain("100.00 CNY");
   });
 
   it("uses the host's Chinese locale for controls and report states", async () => {

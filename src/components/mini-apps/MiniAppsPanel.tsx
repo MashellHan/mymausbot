@@ -200,7 +200,7 @@ export function MiniAppsPanel() {
         {selected && <div id="mini-app-content" role="tabpanel" aria-labelledby={`mini-app-tab-${selected.id}`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-accent">
           {document && appState ? <>
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-2 text-[12px] text-ink-secondary">
-              <span className="inline-flex items-center gap-1.5"><Clock3 size={13} aria-hidden="true" />{checking ? t("computer.miniApps.checking") : appState.status === "archived" ? t("computer.miniApps.archived") : t("computer.miniApps.current")}</span>
+              <span data-testid="mini-app-freshness" className="inline-flex items-center gap-1.5"><Clock3 size={13} aria-hidden="true" />{checking ? t("computer.miniApps.checking") : stale ? t("computer.miniApps.stale") : appState.status === "archived" ? t("computer.miniApps.archived") : t("computer.miniApps.current")}</span>
               <div className="flex items-center gap-3">
                 {publisher && <button type="button" onClick={() => openBot(dispatch, publisher, showThreads)} className="text-accent-text underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.openChat")}</button>}
                 {document.versions.length > 1 && <details className="relative"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t("computer.miniApps.history")}</summary>

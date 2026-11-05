@@ -59,6 +59,9 @@ it("keeps retained Data owner-only until an editing assistant is chosen", async 
   expect(publish.publisherBotIds).toEqual(["bot_b"]);
   expect(publish.bindings[0].source).toEqual({ schema: "main", table: "synthetic_retained" });
   expect(publish.bindings[0].fields.amount.column).toBe("amount");
+  expect(publish.bindings[0].queries.category_options.measures).toEqual([{ name: "count", op: "count" }]);
+  expect(publish.bindings[0].queries.category_options.filters).not.toContainEqual({ field: "amount", op: "lt", literal: "0" });
+  expect(publish.bindings[0].queries.categories.filters).toContainEqual({ field: "amount", op: "lt", literal: "0" });
   expect(installed).toHaveBeenCalledWith("app_fixture");
 });
 

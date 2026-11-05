@@ -74,7 +74,6 @@
       .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .filters > .filter:first-child { grid-column: 1 / -1; }
       .totals { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-      .trend-row { grid-template-columns: 63px minmax(0, 1fr) auto; gap: 6px; }
     }
   </style>
 </head>
@@ -171,6 +170,7 @@
         "Category blank": "空白分类",
         "Category {value}": "分类 {value}",
         "No dated entries match these filters.": "这些条件下没有带完整日期的记录。",
+        "No outflow matches these filters.": "这些条件下没有支出。",
         "Outflow": "支出",
         "Inflow": "流入",
         "Net": "净额",
@@ -433,7 +433,7 @@
 
       function renderTrend(rows) {
         const target = $("trend");
-        if (rows.length === 0) return empty(target, word("No dated entries match these filters."));
+        if (rows.length === 0) return empty(target, word("No outflow matches these filters."));
         const sections = [];
         for (const [key, items] of grouped(rows)) {
           const section = element("div", "currency-group");
@@ -547,11 +547,12 @@
           const filtered = { ...base, ...(state.category ? { category: state.category } : {}) };
           const pinned = { expectedDataRevision: state.dataRevision };
           const budget = { remaining: maxAggregatePages };
-          const [summary, outflow, inflow, categories, trend, details] = await Promise.all([
+          const [summary, outflow, inflow, categories, categoryOptions, trend, details] = await Promise.all([
             queryAll("summary", filtered, pinned, budget, run),
             queryAll("outflow", filtered, pinned, budget, run),
             queryAll("inflow", filtered, pinned, budget, run),
             queryAll("categories", base, pinned, budget, run),
+            queryAll("category_options", base, pinned, budget, run),
             queryAll(`trend_${state.bucket}`, filtered, pinned, budget, run),
             query("details", filtered, pinned),
           ]);
@@ -566,7 +567,7 @@
               inflow: inflows.has(key) ? inflows.get(key) : inflow.truncated ? null : zero,
             };
           });
-          const options = [...new Set(categories.rows.filter((row) => row.category !== null && String(row.category).trim() !== "").map((row) => String(row.category)))].sort();
+          const options = [...new Set(categoryOptions.rows.filter((row) => row.category !== null && String(row.category).trim() !== "").map((row) => String(row.category)))].sort();
           if (state.category && !options.includes(state.category)) options.push(state.category);
           state.category = setOptions($("category"), options.map((name) => [name, name]), state.category, word("All categories"));
           $("range-label").textContent = word("{from} to {through}", range);
@@ -577,7 +578,7 @@
           state.nextCursor = details.nextCursor;
           renderDetails();
           state.loaded = true;
-          notice([summary, outflow, inflow, categories, trend].some((answer) => answer.truncated)
+          notice([summary, outflow, inflow, categories, categoryOptions, trend].some((answer) => answer.truncated)
             ? word("This view is incomplete because the source has more groups than can be read at once. Narrow the date range or choose a currency.")
             : "");
         } catch (error) {
