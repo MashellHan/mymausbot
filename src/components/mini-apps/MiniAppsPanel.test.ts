@@ -28,6 +28,7 @@ vi.mock("./MiniAppFrame", () => ({ MiniAppFrame: ({ document, state }: { documen
   return createElement("div", { "data-testid": "fixture-frame", "data-id": document.app.id, "data-data-revision": state.data[0]?.revision });
 } }));
 vi.mock("./BookkeepingInstall", () => ({ BookkeepingInstall: ({ onInstalled }: { onInstalled(id: string): void }) => createElement("button", { onClick: () => onInstalled("app_new"), "data-testid": "fixture-install" }, "Finish install") }));
+vi.mock("./ReportInstall", () => ({ ReportInstall: ({ kind, onCancel }: { kind: string; onCancel(): void }) => createElement("div", { "data-testid": "fixture-report-install", "data-kind": kind }, createElement("button", { onClick: onCancel }, "Cancel")) }));
 
 import { MiniAppsPanel } from "./MiniAppsPanel";
 
@@ -134,14 +135,21 @@ describe("Mini Apps panel", () => {
     fixture.apps = [];
     await render();
     await vi.waitFor(() => expect(host.textContent).toContain("Installed Mini Apps appear here"));
-    await act(async () => { button("Install bookkeeping").click(); });
+    await act(async () => { button("Add Mini App").click(); });
+    expect(host.textContent).toContain("Daily X AI digest");
+    expect(host.textContent).toContain("GitHub activity & discovery");
+    await act(async () => { button("Choose").click(); });
+    expect(host.querySelector('[data-testid="fixture-report-install"]')?.getAttribute("data-kind")).toBe("x_ai_digest");
+    await act(async () => { button("Cancel").click(); });
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.parentElement?.textContent?.includes("Bookkeeping") && item.textContent === "Choose")!.click(); });
     expect(host.querySelector('[data-testid="fixture-install"]')).not.toBeNull();
   });
 
   it("opens the newly installed document when both apps share the same revisions and Data", async () => {
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
-    await act(async () => { button("Install bookkeeping").click(); });
+    await act(async () => { button("Add Mini App").click(); });
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.parentElement?.textContent?.includes("Bookkeeping") && item.textContent === "Choose")!.click(); });
     fixture.apps.push(app("app_new", "Installed report"));
     await act(async () => { button("Finish install").click(); });
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_new"));
@@ -151,6 +159,16 @@ describe("Mini Apps panel", () => {
     await act(async () => { refresh().click(); });
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("8"));
     expect(frame()).toBe(installedFrame);
+  });
+
+  it("opens an installed report slug from the chooser without starting another install", async () => {
+    fixture.apps = [app("app_a", "First report"), { ...app("report_existing", "Daily X AI digest"), slug: "x-ai-digest" }];
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+    await act(async () => { button("Add Mini App").click(); });
+    await act(async () => { button("Open report").click(); });
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("report_existing"));
+    expect(host.querySelector('[data-testid="fixture-report-install"]')).toBeNull();
   });
 
   it("keeps archived apps out of the active navigation", async () => {
@@ -166,7 +184,7 @@ describe("Mini Apps panel", () => {
     await vi.waitFor(() => expect(host.textContent).toContain("First report"));
     expect(host.textContent).toContain("Open the desktop app to view or install Mini Apps.");
     expect(frame()).toBeNull();
-    expect(host.querySelector('[aria-label="Install bookkeeping"]')).toBeNull();
+    expect(host.textContent).not.toContain("Add Mini App");
     expect(fixture.api.mock.calls.some(([path]) => String(path).endsWith("/query"))).toBe(false);
   });
 });
