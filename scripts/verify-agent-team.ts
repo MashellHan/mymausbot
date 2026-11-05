@@ -18,6 +18,12 @@ const sample: LocalAgentTeamsResponse = {
     ] },
   ],
 };
+const many: LocalAgentTeamsResponse = { ...sample, teamCount: 15, teams: [
+  ...sample.teams,
+  ...Array.from({ length: 13 }, (_, index) => ({
+    id: `sample-extra-${index}`, name: `Sample Office ${index + 3}`, agentCount: 0, activeAgentCount: 0, agents: [],
+  })),
+] };
 let liveSample = sample;
 
 const bot = {
@@ -39,7 +45,9 @@ try {
     entry: "/scripts/testing/agent-team-preview.tsx", route: "/__agent-team.html", title: "Isolated Agent Team panel",
     extraRoutes: [
       { path: "/__agent-team-update", method: "POST", handler: (req, res) => {
-        liveSample = req.url?.includes("reset=1") ? sample : { ...sample, updatedAt: sample.updatedAt! + 2000,
+        if (req.url?.includes("reset=1")) liveSample = sample;
+        else if (req.url?.includes("remove=1")) liveSample = { ...sample, updatedAt: sample.updatedAt! + 2000, teamCount: 1, teams: [sample.teams[0]!] };
+        else liveSample = { ...sample, updatedAt: sample.updatedAt! + 2000,
           teams: sample.teams.map((team) => team.id === "sample-a" ? { ...team, activeAgentCount: 0,
             agents: team.agents.map((agent) => agent.id === "a1" ? { ...agent, state: "done", reasoningEffort: "max", contextUsed: 64_000,
               taskHint: "Only the newest synthetic instruction remains visible." } : agent) } : team) };
@@ -53,7 +61,9 @@ try {
         const scenario = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams.get("scenario");
         const data = scenario === "unavailable" ? { status: "unavailable", updatedAt: null, teamCount: null, teams: [] }
           : scenario === "empty" ? { status: "ready", updatedAt: sample.updatedAt, teamCount: 0, teams: [] }
-          : scenario === "stale" ? { ...sample, status: "stale" } : scenario === "live" ? liveSample : sample;
+          : scenario === "stale" ? { ...sample, status: "stale" } : scenario === "live" ? liveSample
+            : scenario === "one" ? { ...sample, teamCount: 1, teams: [sample.teams[0]!] }
+              : scenario === "many" ? many : sample;
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify(data));
       } },
