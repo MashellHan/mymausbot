@@ -122,4 +122,35 @@ describe("bounded per-agent Codex activity", () => {
     expect(older).toMatchObject({ status: "ready", events: [{ text: "old session line" }] });
     expect(newer).toMatchObject({ status: "unavailable", events: [] });
   });
+
+  it.each(["ready", "missing", "error"] as const)("keeps the newer session cache when an older %s read finishes late", async (olderResult) => {
+    const home = await fixture([]);
+    const directory = join(home, "sessions", "2026", "11", "05");
+    await writeFile(join(directory, `rollout-2026-11-05-${OTHER}.jsonl`), JSON.stringify(row("session_meta", { id: OTHER })) + "\n");
+    let releaseOlder!: () => void, olderStarted!: () => void;
+    const held = new Promise<void>((resolve) => { releaseOlder = resolve; });
+    const started = new Promise<void>((resolve) => { olderStarted = resolve; });
+    const oldEvents = [{ id: "old", at: null, kind: "user" as const, tool: null, text: "old session" }];
+    const newEvents = [{ id: "new", at: null, kind: "user" as const, tool: null, text: "new session" }];
+    let herdrReads = 0, newReads = 0;
+    const provider = createLocalAgentActivityProvider({ codexHome: home,
+      run: async () => listed([agent(++herdrReads === 1 ? SESSION : OTHER)]),
+      read: async (_file, id) => {
+        if (id === SESSION) {
+          olderStarted();
+          await held;
+          if (olderResult === "error") throw new Error("old file unreadable");
+          return olderResult === "missing" ? null : { events: oldEvents, truncated: false };
+        }
+        if (++newReads > 1) throw new Error("new file temporarily unreadable");
+        return { events: newEvents, truncated: false };
+      } });
+    const oldRequest = provider.get(pane);
+    await started;
+    expect(await provider.get(pane)).toMatchObject({ status: "ready", events: newEvents });
+    releaseOlder();
+    await oldRequest;
+    expect(await provider.get(pane)).toMatchObject({ status: "stale", events: newEvents });
+    expect(herdrReads).toBe(3);
+  });
 });

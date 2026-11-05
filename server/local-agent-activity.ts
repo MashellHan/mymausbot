@@ -116,45 +116,51 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
 } = {}) {
   const paths = new Map<string, { file: string | null; at: number }>();
   const lastGood = new Map<string, { sessionId: string; file: string; response: LocalAgentActivityResponse }>();
+  const latest = new Map<string, symbol>();
 
-  async function refresh(agentId: string): Promise<LocalAgentActivityResponse> {
+  async function refresh(agentId: string, current: () => boolean): Promise<LocalAgentActivityResponse> {
     if (!PANE_ID.test(agentId)) return unavailable(agentId);
+    const clear = () => { if (current()) lastGood.delete(agentId); };
     let agents: Record<string, unknown>[];
     try { agents = herdrRows(await run(["--session", "default", "agent", "list"]), "agents"); }
-    catch { lastGood.delete(agentId); return unavailable(agentId); }
+    catch { clear(); return unavailable(agentId); }
     const matches = agents.filter((agent) => agent.pane_id === agentId && agent.workspace_id === agentId.split(":")[0]);
-    if (matches.length !== 1) { lastGood.delete(agentId); return unavailable(agentId); }
+    if (matches.length !== 1) { clear(); return unavailable(agentId); }
     const agent = matches[0]!;
     if (agent.agent !== "codex") {
-      lastGood.delete(agentId);
+      clear();
       return { ...unavailable(agentId), status: "unsupported" };
     }
     const sessionId = codexSessionId(agent);
-    if (!sessionId) { lastGood.delete(agentId); return unavailable(agentId); }
+    if (!sessionId) { clear(); return unavailable(agentId); }
     const known = paths.get(sessionId);
+    let file = known?.file;
     if (!known || !known.file || now() - known.at >= DISCOVERY_MS) {
       const found = await discoverCodexSessionFiles(codexHome, new Set([sessionId]));
-      paths.set(sessionId, { file: found.get(sessionId) ?? null, at: now() });
+      file = found.get(sessionId) ?? null;
+      if (current()) paths.set(sessionId, { file, at: now() });
     }
-    const file = paths.get(sessionId)?.file;
-    if (!file) { lastGood.delete(agentId); return unavailable(agentId); }
+    if (!file) { clear(); return unavailable(agentId); }
     try {
       const observed = await read(file, sessionId);
-      if (!observed) { lastGood.delete(agentId); return unavailable(agentId); }
+      if (!observed) { clear(); return unavailable(agentId); }
       const response: LocalAgentActivityResponse = { agentId, status: "ready", updatedAt: now(), ...observed };
-      lastGood.set(agentId, { sessionId, file, response });
+      if (current()) lastGood.set(agentId, { sessionId, file, response });
       return response;
     } catch {
       const previous = lastGood.get(agentId);
       if (previous?.sessionId === sessionId && previous.file === file) return { ...previous.response, status: "stale" };
-      lastGood.delete(agentId);
+      clear();
       return unavailable(agentId);
     }
   }
 
   return {
     get(agentId: string): Promise<LocalAgentActivityResponse> {
-      return refresh(agentId);
+      const request = Symbol();
+      latest.set(agentId, request);
+      const current = () => latest.get(agentId) === request;
+      return refresh(agentId, current).finally(() => { if (current()) latest.delete(agentId); });
     },
   };
 }
