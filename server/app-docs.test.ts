@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, statSync, utimesSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,6 +54,20 @@ describe("AppDocs", () => {
     const docs = new AppDocs(fresh());
     for (const id of ["", "../etc/passwd", "a".repeat(63), "A".repeat(64), `${"a".repeat(64)}/../x`]) expect(docs.read(id), id).toBeNull();
     expect(docs.read("a".repeat(64))).toBeNull();
+  });
+
+  it("repairs a corrupt content blob without counting the replacement twice", () => {
+    const dir = fresh();
+    const docs = new AppDocs(dir);
+    const input = { source: "html" as const, html: "<p>retained template</p>" };
+    const stored = docs.put(input);
+    if (!stored.ok) throw new Error("not stored");
+    const before = docs.usage();
+    writeFileSync(join(dir, "html", files(dir, "html")[0]!), "corrupt");
+    expect(docs.read(stored.doc)).toBeNull();
+    expect(docs.put(input)).toEqual(stored);
+    expect(docs.read(stored.doc)?.html).toBe(input.html);
+    expect(docs.usage()).toBe(before);
   });
 
   it("sweeps what no row names, keeps what one does, and never touches a file younger than the grace", () => {

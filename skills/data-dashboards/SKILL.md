@@ -16,10 +16,14 @@ that with `show_html` and the page's `app_id`; the same card refreshes.
 |---|---|
 | A quick answer or one chart | No page. Use the Data tools (`data_sql`, `data_show`) or a markdown table. |
 | A small summary to look at here | A chat page (`show_html`) with pre-aggregated rows embedded as CSV. |
+| A reusable local report or dashboard in Computer, backed by live Data | A Mini App. Call `mini_app_info` with `guide: true`, connect the bot's Data with `mini_app_connect`, then use `mini_app_publish`. First look for an existing app to update. |
 | To explore bigger data, or a link to share | Query with the Data tools, export the slice with `data_export` (`format: "parquet"`) into a folder beside `index.html`, show the folder in the chat with `show_html` `path`, and `publish_page` it when the person wants a link: the same card gains it. |
-| "Keep it up to date" | The shared page, plus a schedule (`trigger`, `action=create`, `when=schedule`) whose instructions re-run the export, set `CONFIG.updated`, and publish the same folder again. Publishing the same path keeps the same link. |
+| "Keep it up to date" locally | Update the Mini App's bound business tables with Data tools. The page observes the committed Data revision; HTML is republished only when its presentation or query definitions change. Existing authorized automations can update these same tables. |
+| Keep a public link up to date | The shared page, plus an explicitly requested schedule whose instructions re-run the export, set `CONFIG.updated`, and publish the same folder again. Publishing the same path keeps the same link. |
 
 Publish only when the person asks to share. A published page is public: never put secrets, personal details or rows they didn't ask to share in it.
+
+Mini Apps are local and have no network access. Use self-contained HTML and the `window.mausApp` named-query bridge described by `mini_app_info`; the CDN and DuckDB-WASM template below is for chat/public pages. Keep money as decimal strings, currencies separate, and invalid or missing values visible. Do not copy financial rows into HTML, infer missing categories/currencies, or create a schedule unless requested.
 
 ## Start from the template
 
