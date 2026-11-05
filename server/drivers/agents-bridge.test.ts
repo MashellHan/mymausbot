@@ -414,6 +414,14 @@ describe("use_tool", () => {
     expect(bridgeFor().use(hand)).toEqual(hand);
   });
 
+  it("routes the local Mini App publisher through the bridge as a write", () => {
+    const bridge = bridgeFor();
+    const publish = { name: "mini_app_publish", arguments: { publication: { slug: "daily-report" } } };
+    expect(names(bridge.listed)).not.toContain(publish.name);
+    expect(names(bridge.hidden)).toContain(publish.name);
+    expect(bridge.use(publish)).toEqual(publish);
+  });
+
   it("sends an outward action back to its own name instead of running it", () => {
     for (const [options, name, args] of [
       [{}, "post_to_room", { group_id: "room-1", message: "Shipped." }],
