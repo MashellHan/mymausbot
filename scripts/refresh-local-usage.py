@@ -2,6 +2,7 @@
 """Refresh an existing activity collector with Microsoft tokens held in memory."""
 
 import argparse
+import http.client
 import importlib.util
 import json
 import os
@@ -76,8 +77,15 @@ class AzureMemorySession:
             client_capabilities=["CP1"],
             timeout=15,
         )
-        accounts = client.get_accounts(username=username)
-        accounts = [account for account in accounts if account.get("realm") == tenant]
+        # MSAL 1.39.0 projects one tenant record per home account in cache order.
+        accounts = [account for account in client.get_accounts(username=username)
+                    if account.get("home_account_id") and any(
+                        cached.get("username", "").lower() == username.lower()
+                        for cached in cache.search(cache.CredentialType.ACCOUNT, query={
+                            "home_account_id": account["home_account_id"],
+                            "environment": account["environment"], "realm": tenant,
+                        })
+                    )]
         if len(accounts) != 1:
             raise ValueError("The Microsoft account is not present in the existing CLI cache")
         self.client, self.account = client, accounts[0]
@@ -108,8 +116,11 @@ class AzureMemorySession:
             headers={"Authorization": "Bearer " + self.token(), "Accept": "application/json"},
             method="GET",
         )
-        with self.http.open(request, timeout=timeout) as response:
-            return response.read().decode("utf-8")
+        try:
+            with self.http.open(request, timeout=timeout) as response:
+                return response.read().decode("utf-8")
+        except http.client.HTTPException:
+            raise ValueError("The Azure DevOps response could not be read") from None
 
 
 def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False):

@@ -1,4 +1,5 @@
 import importlib.util
+import http.client
 import http.server
 import io
 import json
@@ -14,7 +15,13 @@ SPEC = importlib.util.spec_from_file_location("usage_memory", Path(__file__).wit
 usage = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(usage)
 TENANT = "11111111-2222-3333-4444-555555555555"
+OTHER_TENANT = "66666666-7777-8888-9999-000000000000"
 OWNER = "owner@example.test"
+
+
+def account(tenant=TENANT, owner=OWNER, home="fixture-owner.home-tenant"):
+    return {"username": owner, "realm": tenant, "home_account_id": home,
+            "environment": "login.microsoftonline.com"}
 
 
 def command(url="https://dev.azure.com/example/_apis/connectionData?connectOptions=0"):
@@ -30,28 +37,39 @@ class MemoryAuthTests(unittest.TestCase):
         profile = {"subscriptions": [{"isDefault": True, "environmentName": "AzureCloud",
                    "tenantId": TENANT, "user": {"name": OWNER, "type": "user"}}]}
         (self.root / "azureProfile.json").write_text(json.dumps(profile))
-        (self.root / "msal_token_cache.json").write_text('{"fixture":"existing-cache"}')
+        self.saved_cache = json.dumps({"accounts": [account()]})
+        (self.root / "msal_token_cache.json").write_text(self.saved_cache)
         self.created = []
         self.sessions = []
         created = self.created
         sessions = self.sessions
 
         class Cache:
+            CredentialType = types.SimpleNamespace(ACCOUNT="Account")
+
             def deserialize(self, value):
                 self.value = value
+                self.accounts = json.loads(value)["accounts"]
+
+            def search(self, credential_type, query):
+                if credential_type != "Account":
+                    raise AssertionError("Unexpected credential lookup")
+                return [entry for entry in self.accounts
+                        if all(entry.get(key) == value for key, value in query.items())]
 
         class Client:
             def __init__(self, client_id, **kwargs):
                 created.append({"client_id": client_id, **kwargs})
                 self.cache = kwargs["token_cache"]
-                self.account = {"username": OWNER, "realm": TENANT}
+                self.accounts = list({entry["home_account_id"]: entry
+                                     for entry in self.cache.accounts}.values())
                 sessions.append(self)
 
             def get_accounts(self, username):
-                return [self.account] if username == OWNER else []
+                return [entry for entry in self.accounts if entry["username"].lower() == username.lower()]
 
             def acquire_token_silent(self, scopes, account):
-                if scopes != [usage.ADO_RESOURCE + "/.default"] or account is not self.account:
+                if scopes != [usage.ADO_RESOURCE + "/.default"] or account not in self.accounts:
                     raise AssertionError("Unexpected authentication scope or account")
                 self.cache.value = "new-session-only-refresh-token"
                 return {"access_token": "fixture-access-token"}
@@ -73,7 +91,28 @@ class MemoryAuthTests(unittest.TestCase):
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.root.iterdir()})
         second = usage.AzureMemorySession(self.root, [OWNER])
         second.connect()
-        self.assertEqual(self.created[1]["token_cache"].value, '{"fixture":"existing-cache"}')
+        self.assertEqual(self.created[1]["token_cache"].value, self.saved_cache)
+
+    def test_selected_tenant_works_in_either_account_cache_order(self):
+        for tenants in [(TENANT, OTHER_TENANT), (OTHER_TENANT, TENANT)]:
+            with self.subTest(tenants=tenants):
+                saved = json.dumps({"accounts": [account(tenant) for tenant in tenants]})
+                (self.root / "msal_token_cache.json").write_text(saved)
+                session = usage.AzureMemorySession(self.root, [OWNER])
+                self.assertEqual(session.token(), "fixture-access-token")
+                self.assertEqual(self.created[-1]["authority"], "https://login.microsoftonline.com/" + TENANT)
+                self.assertEqual((self.root / "msal_token_cache.json").read_text(), saved)
+
+    def test_missing_selected_tenant_wrong_owner_and_ambiguous_identity_are_rejected(self):
+        for accounts in [[account(OTHER_TENANT)], [account(owner="other@example.test")],
+                         [account(), account(home="another-owner.home-tenant")],
+                         [account(owner="other@example.test"), account(OTHER_TENANT)]]:
+            with self.subTest(accounts=accounts):
+                (self.root / "msal_token_cache.json").write_text(json.dumps({"accounts": accounts}))
+                session = usage.AzureMemorySession(self.root, [OWNER])
+                with self.assertRaises(ValueError):
+                    session.token()
+                self.assertIsNone(session.client)
 
     def test_identity_mismatch_never_constructs_an_authentication_client(self):
         session = usage.AzureMemorySession(self.root, ["someone-else@example.test"])
@@ -144,6 +183,23 @@ class MemoryAuthTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_http_protocol_failures_are_safe_collector_errors(self):
+        for wire in [b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nprivate-response-fragment",
+                     b"private-invalid-status-line\r\n\r\n"]:
+            class ResponseSocket:
+                def makefile(self, *args, **kwargs):
+                    return io.BytesIO(wire)
+
+            def open_response(request, timeout):
+                response = http.client.HTTPResponse(ResponseSocket())
+                response.begin()
+                return response
+
+            self.session.http = types.SimpleNamespace(open=open_response)
+            with self.subTest(wire=wire), self.assertRaises(ValueError) as error:
+                self.session.run(command(), 7)
+            self.assertEqual(str(error.exception), "The Azure DevOps response could not be read")
 
     def test_refresh_reuses_collector_and_never_executes_its_azure_cli(self):
         collector = self.root / "collector.py"

@@ -49,7 +49,7 @@ No additional scheduler or network collection runs inside OpenMausBot.
 
 ### Microsoft authentication held in memory
 
-For unattended collection without macOS Keychain requests, use
+For unattended Microsoft authentication without macOS Keychain requests, use
 `scripts/refresh-local-usage.py` with the Python interpreter from the existing
 Azure CLI installation. It reuses that installation's MSAL dependency and reads
 its already configured account and token cache. Newly acquired tokens stay in
@@ -76,9 +76,10 @@ already authorized publication task; the normal refresh does not publish.
 `--reuse-sources` and `--skip-api` keep the collector's recovery semantics.
 
 Run `python3 scripts/refresh-local-usage.test.py` for synthetic memory lifetime,
-identity, endpoint/redirect and collector-routing checks. A real identity GET is
-a separate read-only acceptance check; keep its private receipt and never log
-token contents or publish the CLI cache.
+cross-tenant identity, endpoint/redirect, interrupted HTTP response and
+collector-routing checks. A real identity GET is a separate read-only
+acceptance check; keep its private receipt and never log token contents or
+publish the CLI cache.
 
 ## Agent observations
 
