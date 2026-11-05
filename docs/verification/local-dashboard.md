@@ -64,12 +64,29 @@ snapshots label counts as last observed and pause the office artwork's motion.
 The office selector uses bundled, attributed artwork and the same snapshot as
 the selected member list.
 
+## Per-agent activity
+
+`GET /api/local-dashboard/agents/{paneId}/activity` is a separate local-owner
+route. It accepts a Herdr pane ID such as `w6:p1` and no query parameters. Each
+read rechecks that pane's current Codex session, matches its exact session file
+ID, then returns at most 60 visible user, assistant, tool-call and tool-result
+events from a 512 KiB tail. Each excerpt is limited to 600 characters;
+path-like values and recognized credential shapes are masked. System/developer
+messages and reasoning records are skipped. The two-second team metadata
+response carries no history.
+
+The response names the pane, status, last successful read time, events and a
+`truncated` flag. `unavailable` and `unsupported` have no rows. `stale` retains
+last-good rows only after Herdr still identifies the same Codex session; a
+missing or changed session clears them. The detail disclosure starts closed,
+polls without overlap only while open and visible, and clears on 401/403.
+
 ## Isolated verification
 
 Run the affected contracts and owner-access fixture:
 
 ```sh
-pnpm exec vitest run server/local-agent-teams.test.ts server/local-usage.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts src/components/AgentTeamPanel.test.ts src/components/AgentTeamPanel.auth.test.ts src/components/LocalUsagePanel.test.ts
+pnpm exec vitest run server/local-agent-teams.test.ts server/local-agent-activity.test.ts server/local-usage.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts src/components/AgentTeamPanel.test.ts src/components/AgentTeamPanel.auth.test.ts src/components/AgentActivityDetails.test.ts src/components/LocalUsagePanel.test.ts
 ```
 
 Launch each synthetic renderer fixture directly in a separate terminal:
@@ -95,6 +112,14 @@ disappear. Use `scenario=many` to check two visible office rows and keyboard acc
 to the rest; `scenario=one` checks singular counts. Reset the synthetic snapshot
 with `POST /__agent-team-update?reset=1`. Check paused motion, reduced motion,
 stale counts, unknown metadata and loss of local authorization.
+
+For activity, select an office and open one member's Recent activity button.
+Check the bounded independently scrollable list at `width=360` and `400`, both
+skins and both locales. The fixture shows user, assistant, tool call and result
+rows; `activity=unavailable`, `activity=unsupported` and `activity=stale` exercise
+source states. POST to `/__agent-activity-update` and wait for the open detail
+to refresh without moving the reader away from an older row. Closing the
+disclosure, switching offices or hiding the page stops its detail requests.
 
 Stop each foreground fixture with Ctrl-C. The separate collector tests use
 temporary files and synthetic API responses, including an assertion that the

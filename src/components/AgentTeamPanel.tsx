@@ -6,6 +6,7 @@ import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { AgentTown, teamActivity } from "./AgentTown";
+import { AgentActivityDetails } from "./AgentActivityDetails";
 
 const ROUTE = "/api/local-dashboard/agents";
 const REFRESH_MS = 2_000;
@@ -55,6 +56,7 @@ function memberRow(member: LocalAgentMember, stale: boolean) {
         <p dir="auto" title={member.taskHint ?? undefined} className="mt-1.5 line-clamp-2 text-[12px] leading-4 text-ink-secondary [overflow-wrap:anywhere]">
           <span className="font-medium text-ink-secondary">{t("computer.agentTeam.latestInstruction")}: </span>{member.taskHint ?? t("computer.agentTeam.instructionUnavailable")}
         </p>
+        <AgentActivityDetails agentId={member.id} />
       </div>
     </li>
   );
