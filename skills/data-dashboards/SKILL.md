@@ -42,13 +42,12 @@ import requires an explicit date. Identical retries return the original receipt;
 different content under that identity is an error. Do not replace the managed
 report table, change a date to evade a conflict, or regenerate HTML for each issue.
 
-Preserve actual coverage limits, source URLs, attribution and unknown source
-dates. Optional edition summary, significance and verification notes stay absent
-when unrecorded. A report-level as-of marker does not establish per-item observation
-times. GitHub weekly star increase remains weekly, push time is activity rather
-than a release date, and a public-advisories response is not a safety audit. Without
-earlier comparable observations, period trends remain unavailable. Report source
-URLs are selectable text within the guarded local frame.
+Preserve actual coverage limits, source URLs, attribution and unknown source dates. Optional
+edition summary, significance and verification notes stay absent when unrecorded. A report-level
+as-of marker does not establish per-item observation times. GitHub weekly star increase remains
+weekly, push time is activity rather than a release date, and a public-advisories response is
+not a safety audit. Without earlier comparable observations, period trends remain unavailable.
+Report source URLs are selectable text within the guarded local frame.
 
 ## Start from the template
 
