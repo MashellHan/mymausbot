@@ -9,6 +9,7 @@ export interface TeamMoveView {
 export interface TeamMove {
   bot: { id: string; name: string };
   team: { id: string; name: string; origin?: string };
+  source?: { accountId: string; origin: string };
   phase: "copy" | "freeze" | "final" | "check" | "switch" | "done";
   name?: string;
   label?: string;
@@ -45,14 +46,15 @@ export function createTeamMove(deps: {
   journal: { read(): unknown; write(value: unknown): void };
   open(move: TeamMove): TeamMoveIo;
   inTeam(teamId: string): boolean;
+  sourceCurrent?(move: TeamMove): boolean;
   onChange?(view: TeamMoveView | null): void;
   now?(): number;
   timers?: { set(work: () => void, ms: number): unknown; clear(timer: unknown): void };
   log?(line: string): void;
 }): {
   kick(): Promise<void>;
-  view(): TeamMoveView | null;
-  start(input: { bot: { id: string; name: string }; team: { id: string; name: string; origin?: string } }): Promise<void>;
+  view(eligible?: (move: TeamMove) => boolean): TeamMoveView | null;
+  start(input: { bot: { id: string; name: string }; team: { id: string; name: string; origin?: string }; source?: { accountId: string; origin: string } }): Promise<void>;
   retry(): Promise<void>;
   seen(): TeamMoveView | null;
   moving(botId: string): TeamMove | null;

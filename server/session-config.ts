@@ -6,8 +6,8 @@ const SECRET_FIELDS: Record<string, readonly string[]> = {
   openai: ["key"], openrouter: ["key"], openaiCompat: ["key"],
   treg: ["key"], postiz: ["key"], composio: ["apiKey", "userId", "sessionId"],
   box: ["token"], opencodeGo: ["apiKey", "providerKeys"],
-  tts: ["key", "fishKey"], decider: ["key", "openrouterKey", "workersAiToken"],
-  imageGen: ["key", "customApiKey"], live: ["key"],
+  tts: ["key", "fishKey", "geminiKey"], decider: ["key", "openrouterKey", "workersAiToken"],
+  imageGen: ["key", "customApiKey"], live: ["key", "keyFor"],
 };
 const OPAQUE_SECTIONS = ["instances", "mcpServers"] as const;
 const object = (value: unknown): JsonObject | null => value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : null;
