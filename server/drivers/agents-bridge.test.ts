@@ -78,7 +78,6 @@ describe("what a bridged turn is listed", () => {
       "select_computer",
       "attach_file",
       "publish_page",
-      "mini_app_publish",
       "post_to_room",
       "request_credential",
       "request_sign_in",
@@ -99,7 +98,6 @@ describe("what a bridged turn is listed", () => {
       "select_computer",
       "attach_file",
       "publish_page",
-      "mini_app_publish",
       "post_to_room",
       "request_credential",
       "request_sign_in",
@@ -119,7 +117,7 @@ describe("what a bridged turn is listed", () => {
       const tools = availableTools(turn);
       const hot = createToolBridge(tools as BridgeTool[]).listed.length - 2;
       expect(hot, name).toBeGreaterThanOrEqual(12);
-      expect(hot, name).toBeLessThanOrEqual(16);
+      expect(hot, name).toBeLessThanOrEqual(15);
       expect(hot, name).toBeLessThan(tools.length / 2);
     }
   });
@@ -130,10 +128,9 @@ describe("what a bridged turn is listed", () => {
     expect(names(bridgeFor({ botId: WATCHER_OPTIONS_CARD_BOT_ID }).listed)[0]).toBe("create_options_card");
     expect(names(bridgeFor().listed)).not.toContain("create_options_card");
     expect(names(bridgeFor({ memory: false }).listed)).not.toContain("memory_update");
-    for (const options of [{ chief: true }, { skills: true }, { shared: true }]) {
+    for (const options of [{ chief: true }, { skills: true }, { shared: true }, { cloudHome: true }]) {
       expect(names(bridgeFor(options).listed), JSON.stringify(options)).toEqual(names(bridgeFor().listed));
     }
-    expect(names(bridgeFor({ cloudHome: true }).listed)).toEqual(names(bridgeFor().listed).filter((name) => name !== "mini_app_publish"));
   });
 
   it("lists every hot tool exactly as the unbridged turn does, and loses none of the profile", () => {
@@ -165,7 +162,7 @@ describe("what a bridged turn is listed", () => {
         for (const spelling of reportedAs(hidden.name)) expect(isOutboundTool(spelling), `${name}: ${spelling}`).toBe(false);
       }
     }
-    expect(names(availableTools(profile({ ...FULL_CHIEF }))).filter((tool) => reportedAs(tool).some(isOutboundTool))).toEqual(["publish_page", "mini_app_publish", "post_to_room", "send_voice_note"]);
+    expect(names(availableTools(profile({ ...FULL_CHIEF }))).filter((tool) => reportedAs(tool).some(isOutboundTool))).toEqual(["publish_page", "post_to_room", "send_voice_note"]);
     // and the bridge's own two names are not outward either
     for (const spelling of [...reportedAs(USE_TOOL), ...reportedAs(FIND_TOOL)]) expect(isOutboundTool(spelling), spelling).toBe(false);
     // derived, not listed by hand: a future tool named like a send is kept,
@@ -412,6 +409,14 @@ describe("use_tool", () => {
     expect(bridgeFor().use(remember)).toEqual(remember);
     const hand = { name: "coordinate_bots", arguments: { bot_ids: ["bot-helper"], message: "please review the patch" } };
     expect(bridgeFor().use(hand)).toEqual(hand);
+  });
+
+  it("routes the local Mini App publisher through the bridge as a write", () => {
+    const bridge = bridgeFor();
+    const publish = { name: "mini_app_publish", arguments: { publication: { slug: "daily-report" } } };
+    expect(names(bridge.listed)).not.toContain(publish.name);
+    expect(names(bridge.hidden)).toContain(publish.name);
+    expect(bridge.use(publish)).toEqual(publish);
   });
 
   it("sends an outward action back to its own name instead of running it", () => {
