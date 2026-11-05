@@ -64,7 +64,7 @@ legacy/shadow main pushes retain the existing checks.
 
 The required check remains `CI` and is queued when the workflow starts, so a
 fresh full request cannot reuse the previous green check while its jobs wait.
-It reads the selection artifact for that exact run, attempt and revision, then
+It binds the selection artifact to that run, revision and preflight attempt, then
 waits for all required jobs through the Actions API. Missing, skipped,
 cancelled or failed required jobs cannot pass. Full-required runs also require
 every selected platform and specialist job; deployments are excluded. The gate
@@ -72,6 +72,11 @@ rechecks current PR controls, QA holds and reduced-coverage eligibility before
 returning green. If controls or health changed during the run, rerun CI with
 the required broader coverage. Unreadable current PR controls force full
 selection and grant no repair exemption; unreadable gate controls fail closed.
+Failed-jobs reruns reuse successful evidence from the same immutable run and
+revision, while the newest attempt of each job takes precedence. Expired plans
+or changed coverage requirements fail promptly with an actionable rerun request.
+A pass after a failed workflow attempt remains a finding for Lead to classify
+and cannot verify the incident until a later clean execution covers it.
 
 ## Automated QA and Lead rhythm
 

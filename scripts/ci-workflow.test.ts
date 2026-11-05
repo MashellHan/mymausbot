@@ -17,7 +17,7 @@ function gateState(selected: string[]) {
   const required = requiredRuntimeJobs.filter((job) => selected.includes(job));
   return {
     outputs: { expected_jobs: ["static", ...required].map((id) => ({ id, name: id })), required_jobs: required, qa_areas: ["global"], full_required: false, reduced: false },
-    jobs: ["static", ...requiredRuntimeJobs].map((name) => ({ name, status: "completed", conclusion: name === "static" || required.includes(name) ? "success" : "skipped" })),
+    jobs: ["static", ...requiredRuntimeJobs].map((name) => ({ name, run_attempt: 1, status: "completed", conclusion: name === "static" || required.includes(name) ? "success" : "skipped" })),
   };
 }
 

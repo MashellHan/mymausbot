@@ -86,7 +86,9 @@ lane, which only an emergency `ship_without_ci` release skips.
   on every platform.
 
 The single `CI` check starts with the workflow and reads `static`'s selection
-artifact for the same run, attempt and revision. It waits for every selected
+artifact for the same run, revision and producing preflight attempt. Failed-job
+reruns carry unchanged successful evidence, with each job's newest attempt
+taking precedence. It waits for every selected
 required job and rechecks current PR controls and QA holds before passing.
 Missing jobs, failures, cancellations, unexpected skips and missing or malformed
 selection fail the gate. Full-required runs include the platform and specialist

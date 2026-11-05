@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { artifactFiles, github, pages } from "./github.mjs";
+import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 import { holdsFor, inspectJobs } from "./contracts.mjs";
 import { qaHealth } from "./health.mjs";
 
@@ -33,7 +33,7 @@ export async function verifyGate(outputs, { api = github, health = qaHealth, run
   await checkControls();
   const started = Date.now();
   while (true) {
-    const observed = await pages(`/actions/runs/${runId}/attempts/${attempt}/jobs`, "jobs", api);
+    const observed = await runJobs(runId, attempt, api);
     const result = inspectJobs(expected, observed);
     if (result.failed.length) throw new Error(`Required validation failed: ${result.failed.join(", ")}`);
     if (result.passed) { await checkControls(); return; }
@@ -46,16 +46,15 @@ export async function verifyGate(outputs, { api = github, health = qaHealth, run
 export async function gateRun({ api = github, readArtifact = artifactFiles, runId = process.env.GITHUB_RUN_ID, attempt = process.env.GITHUB_RUN_ATTEMPT || 1, sha = process.env.GITHUB_SHA, deadlineMs = 175 * 60_000, wait = pause, ...options } = {}) {
   const started = Date.now();
   while (true) {
-    const jobs = await pages(`/actions/runs/${runId}/attempts/${attempt}/jobs`, "jobs", api);
+    const jobs = await runJobs(runId, attempt, api);
     const preflight = jobs.find((job) => job.name.startsWith("typecheck + lint"));
     if (preflight?.status === "completed" && preflight.conclusion !== "success") throw new Error(`Preflight ${preflight.conclusion}`);
     const artifacts = await pages(`/actions/runs/${runId}/artifacts`, "artifacts", api);
-    for (const artifact of artifacts.filter((item) => item.name === `qa-plan-attempt-${attempt}` && !item.expired)) {
-      const plan = JSON.parse((await readArtifact(artifact, api))["qa-plan.json"]);
-      if (plan.version !== 1 || plan.sha !== sha || plan.runId !== Number(runId) || plan.attempt !== Number(attempt)) continue;
+    const plan = await runPlan({ id: Number(runId), run_attempt: Number(attempt), head_sha: sha }, jobs, artifacts, { api, readArtifact });
+    if (plan) {
       return verifyGate(plan.outputs, { ...options, api, runId, attempt, wait, deadlineMs: Math.max(0, deadlineMs - (Date.now() - started)) });
     }
-    if (preflight?.conclusion === "success" || Date.now() - started >= deadlineMs) throw new Error("Missing current-run validation plan");
+    if (preflight?.conclusion === "success" || Date.now() - started >= deadlineMs) throw new Error("Missing current-run validation plan; rerun all jobs for this revision");
     console.log("Waiting for the current run's validation plan");
     await wait(15_000);
   }

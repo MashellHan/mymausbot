@@ -12,12 +12,18 @@ const now = Date.parse("2026-11-05T05:00:00Z");
 const run = { id: 100, run_attempt: 1, head_sha: "a".repeat(40), path: ".github/workflows/ci.yml", head_branch: "main", head_repository: { full_name: repository }, event: "schedule", status: "completed", created_at: new Date(now - 60_000).toISOString(), updated_at: new Date(now).toISOString(), html_url: "https://github.com/example/mausbot/actions/runs/100" };
 const report = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, finishedAt: run.updated_at, executionComplete: true, deliveryComplete: true };
 const expected = [{ id: "vitest", name: "vitest (ubuntu-latest, shard 1/8)", artifact: "qa-results-vitest-ubuntu-latest-1", nodeTests: false }];
-const job = { ...expected[0], id: 77, status: "completed", conclusion: "failure", steps: [{ name: "Run tests", conclusion: "failure" }], html_url: run.html_url + "/job/77" };
+const job = { ...expected[0], id: 77, run_attempt: 1, status: "completed", conclusion: "failure", steps: [{ name: "Run tests", conclusion: "failure" }], html_url: run.html_url + "/job/77" };
 const testFile = "server/request-auth.test.ts";
 function result(status = "failed") {
   return { "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: status === "failed" ? 1 : 0, numPendingTests: status === "pending" ? 1 : 0,
     testResults: [{ name: `/home/runner/work/mausbot/mausbot/${testFile}`, status,
       assertionResults: [{ ancestorTitles: ["auth"], title: "rejects a foreign owner", status, failureMessages: ["Expected 403, received 200"] }] }] }) };
+}
+
+function passedPreflight(name = "typecheck + lint") {
+  const steps = ["Verify CI selection and documentation references", "Validate locale catalogs", "pnpm lint", "Source guards"];
+  if (name.includes("Boat")) steps.push("Linux tests (vitest shards, behavior evals, packaged server), side by side");
+  return { name, run_attempt: 1, status: "completed", conclusion: "success", steps: steps.map((name) => ({ name, conclusion: "success" })) };
 }
 
 function issueApi() {
@@ -99,7 +105,7 @@ describe("complete CI and trusted QA health", () => {
     const api = async (path: string) => {
       if (path === "/pulls/7") return { head: { sha: "head" }, labels: labels.map((name) => ({ name })), body: "QA-Repair: #1" };
       if (path.startsWith("/issues?")) return completed ? [{ number: 1, labels: ["qa:p0"] }] : [];
-      return { jobs: outputs.expected_jobs.map((item) => ({ ...item, status: completed ? "completed" : "in_progress", conclusion: completed ? "success" : null })) };
+      return { jobs: outputs.expected_jobs.map((item) => ({ ...item, run_attempt: 1, status: completed ? "completed" : "in_progress", conclusion: completed ? "success" : null })) };
     };
     await expect(verifyGate(outputs, { api, wait: async () => { completed = true; } })).rejects.toThrow("QA hold: #1");
     labels = ["qa:repair"];
@@ -113,11 +119,35 @@ describe("complete CI and trusted QA health", () => {
     const api = async (path: string) => {
       if (path.startsWith("/issues?")) return [];
       if (path.includes("/artifacts")) return { artifacts: [{ name: "qa-plan-attempt-1" }] };
-      return { jobs: [{ name: "typecheck + lint", status: "completed", conclusion: "success" }] };
+      return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }] };
     };
     const invoke = (value: object) => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(value) }), runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 });
     await expect(invoke(plan)).resolves.toBeUndefined();
     for (const patch of [{ sha: "old" }, { runId: 99 }, { attempt: 2 }]) await expect(invoke({ ...plan, ...patch })).rejects.toThrow("Missing current-run validation plan");
+  });
+
+  it("carries successful same-run evidence for failed-jobs reruns while enforcing current controls", async () => {
+    const outputs = { full_required: false, expected_jobs: [{ id: "static", name: "typecheck + lint" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false, pr_number: 7, pr_head: run.head_sha };
+    const plan = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs };
+    const jobs = [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, run_attempt: 2, conclusion: "success" }];
+    let labels: string[] = [];
+    let expired = false;
+    const api = async (path: string) => {
+      if (path === "/pulls/7") return { head: { sha: run.head_sha }, labels: labels.map((name) => ({ name })) };
+      if (path.startsWith("/issues?")) return [];
+      if (path.includes("/artifacts")) return { artifacts: [{ name: "qa-plan-attempt-1", expired }] };
+      return { jobs };
+    };
+    const invoke = () => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }), runId: run.id, attempt: 2, sha: run.head_sha, wait: async () => { throw new Error("Unexpected wait for an impossible artifact"); } });
+    await expect(invoke()).resolves.toBeUndefined();
+    jobs[2]!.conclusion = "failure";
+    await expect(invoke()).rejects.toThrow("Required validation failed");
+    jobs[2]!.conclusion = "success";
+    labels = ["ci:full"];
+    await expect(invoke()).rejects.toThrow("fresh full CI");
+    labels = [];
+    expired = true;
+    await expect(invoke()).rejects.toThrow("rerun all jobs for this revision");
   });
 });
 
@@ -139,23 +169,24 @@ describe("QA findings and idempotent delivery", () => {
     expect(makeReport({ run, expected, jobs: [{ ...job, steps: [{ name: "Run tests", conclusion: "skipped" }] }], results }).executionComplete).toBe(false);
   });
 
-  it("never mixes an earlier attempt's artifacts into a later report", async () => {
+  it("carries successful jobs but keeps a pass after a failed workflow attempt visible", async () => {
     const { api: issuesApi, issues } = issueApi();
     const current = { ...run, event: "push", run_attempt: 2 };
     const outputs = { build: false, jobs: ["vitest"], full_required: false, vitest_matrix: { include: [{ os: "ubuntu-latest", part: "shard 1/8", shard: 1 }] } };
-    const plan = { sha: run.head_sha, runId: run.id, attempt: 2, outputs };
+    const plan = { version: 1, sha: run.head_sha, runId: run.id, attempt: 1, outputs };
     const api = async (path: string, options?: object) => {
       if (path === `/actions/runs/${run.id}`) return current;
-      if (path.includes("/jobs")) return { jobs: [{ name: "typecheck + lint", status: "completed", conclusion: "success" }, { ...job, conclusion: "success", steps: [{ name: "Run tests", conclusion: "success" }] }] };
-      if (path.includes("/artifacts")) return { artifacts: [{ name: `${expected[0].artifact}-attempt-1` }, { name: `${expected[0].artifact}-attempt-2` }, { name: "qa-plan-attempt-2" }] };
+      if (path.includes("/jobs")) return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, run_attempt: 2, conclusion: "success", steps: [{ name: "Run tests", conclusion: "success" }] }] };
+      if (path.includes("/artifacts")) return { artifacts: [{ name: `${expected[0].artifact}-attempt-1` }, { name: `${expected[0].artifact}-attempt-2` }, { name: "qa-plan-attempt-1" }] };
       if (path.includes("ci.yml/runs")) return { workflow_runs: [] };
       return issuesApi(path, options);
     };
     const readArtifact = vi.fn(async (artifact: { name: string }) => artifact.name.startsWith("qa-plan") ? { "qa-plan.json": JSON.stringify(plan) } : result(artifact.name.endsWith("-2") ? "passed" : "failed"));
     const actual = await reportRun(run.id, { api, readArtifact, repository });
-    expect(actual.findings).toEqual([]);
+    expect(actual.findings).toEqual([expect.objectContaining({ kind: "unclassified", retries: 1 })]);
     expect(actual.counts.total).toBe(1);
-    expect(issues).toEqual([]);
+    expect(actual.passed).not.toContain(testFindings(result("passed"), "linux").passed[0]);
+    expect(issues).toHaveLength(1);
     expect(readArtifact).toHaveBeenCalledTimes(2);
   });
 
@@ -199,6 +230,41 @@ describe("QA findings and idempotent delivery", () => {
     await deliverReport(makeReport({ run: { ...run, id: 104 }, expected: contracts, jobs: successJobs, results }), { api });
     expect(labels()).toContain("qa:verified");
     expect(issues[0].state).toBe("open");
+  });
+
+  it("does not clear a preflight incident merely because its original step passed", async () => {
+    const { api, issues } = issueApi();
+    const preflight = passedPreflight();
+    const specialist = expectedJobs().find((item) => item.id === "cloudflared-linux-arm64")!;
+    const contracts = [{ id: "static", name: preflight.name, build: false }, specialist];
+    const failed = { ...preflight, conclusion: "failure", steps: preflight.steps.map((step) => ({ ...step, conclusion: step.name === "pnpm lint" ? "failure" : "success" })) };
+    await deliverReport(makeReport({ run, expected: contracts, jobs: [failed, { ...specialist, status: "completed", conclusion: "skipped" }] }), { api });
+    expect(issues).toHaveLength(1);
+    const narrow = makeReport({ run: { ...run, id: 101 }, expected: contracts.slice(0, 1), jobs: [preflight] });
+    expect(narrow.executionComplete).toBe(true);
+    await deliverReport(narrow, { api });
+    expect(issues[0].labels.map((item: any) => item.name)).not.toContain("qa:verified");
+    const complete = makeReport({ run: { ...run, id: 102 }, expected: contracts, jobs: [preflight, { ...specialist, status: "completed", conclusion: "success", steps: [{ name: "Install and reuse the pinned connector", conclusion: "success" }] }] });
+    expect(complete.executionComplete).toBe(true);
+    await deliverReport(complete, { api });
+    expect(issues[0].labels.map((item: any) => item.name)).toContain("qa:verified");
+  });
+
+  it("requires clean relocated Linux evidence before verifying a Boat setup incident", async () => {
+    const { api, issues } = issueApi();
+    const contracts = expectedJobs({ build: false, jobs: [], linux_lanes: { vitest: [{}], evals: false, packaged_server: false } });
+    expect(contracts[0].artifact).toBe("qa-results-boat");
+    const preflight = passedPreflight(contracts[0].name);
+    const failed = { ...preflight, conclusion: "failure", steps: [{ name: "Run pnpm install --frozen-lockfile", conclusion: "failure" }] };
+    await deliverReport(makeReport({ run, expected: contracts, jobs: [failed], infrastructure: [setupIncident(failed, "ERR_PNPM_FETCH_404 GET https://registry.npmjs.org/example/-/example-1.tgz")] }), { api });
+    const retried = { name: "qa-results-boat", ...testFindings({ ...result("passed"), "vitest-retries.jsonl": JSON.stringify({ file: testFile, test: "auth > rejects a foreign owner", retries: 1, state: "pass" }) }, "linux") };
+    const retryReport = makeReport({ run: { ...run, id: 101 }, expected: contracts, jobs: [preflight], results: [retried] });
+    expect(retryReport.executionComplete).toBe(true);
+    await deliverReport(retryReport, { api });
+    expect(issues[0].labels.map((item: any) => item.name)).not.toContain("qa:verified");
+    const clean = { name: "qa-results-boat", ...testFindings(result("passed"), "linux") };
+    await deliverReport(makeReport({ run: { ...run, id: 102 }, expected: contracts, jobs: [preflight], results: [clean] }), { api });
+    expect(issues[0].labels.map((item: any) => item.name)).toContain("qa:verified");
   });
 
   it("creates once, preserves triage, reopens recurrence and marks verified without auto-closing", async () => {

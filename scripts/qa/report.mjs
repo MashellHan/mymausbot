@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
-import { artifactFiles, github, pages } from "./github.mjs";
+import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels } from "./contracts.mjs";
 
 export function sanitize(value) {
@@ -101,7 +101,12 @@ export function makeReport({ run, jobs, results = [], expected = expectedJobs(),
     const contract = `job:${item.name} > ${failedStep}`;
     const key = signature(contract, "job");
     if (job?.conclusion === "success") {
-      const retried = results.some((entry) => entry.name === item.artifact && entry.findings.some((finding) => finding.retries > 0));
+      const retried = job.priorFailures?.length || results.some((entry) => entry.name === item.artifact && entry.findings.some((finding) => finding.retries > 0));
+      if (job.priorFailures?.length) {
+        const contract = `job:${item.name} > workflow retry`;
+        findings.push({ key: signature(contract, "job"), contract, kind: "unclassified", platform: item.name,
+          assertion: `Passed after failed workflow attempts: ${sanitize(job.priorFailures.map((failure) => `${failure.attempt}: ${failure.step} (${failure.conclusion})`).join(", "))}`, jobs: [item.name], retries: job.priorFailures.length });
+      }
       if (!retried) {
         passed.push(signature(`job:${item.name} > execution`, "job"));
         for (const step of job.steps ?? []) if (step.conclusion === "success") passed.push(signature(`job:${item.name} > ${step.name}`, "job"));
@@ -172,8 +177,8 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
   if (report.executionComplete) {
     for (const issue of issues) {
       const state = stateOf(issue);
-      const contractPassed = state && (report.passed.includes(state.key) || state.verificationJobs?.length
-        && state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))));
+      const contractPassed = state && (state.verificationJobs?.length
+        ? state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))) : report.passed.includes(state.key));
       if (!state || !newerThan(report, state) || !contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
       const verified = { ...state, lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
       const alreadyVerified = issueLabels(issue).includes("qa:verified");
@@ -192,20 +197,22 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
   if (!/^\d+$/.test(String(id))) throw new Error("A numeric CI run ID is required");
   const run = await api(`/actions/runs/${id}`);
   if (!eligibleRun(run, repository, false) || run.status !== "completed") throw new Error("Reporter accepts only completed trusted main CI runs");
-  const jobs = await pages(`/actions/runs/${id}/attempts/${run.run_attempt}/jobs`, "jobs", api);
+  const jobs = await runJobs(id, run.run_attempt, api);
   const artifacts = await pages(`/actions/runs/${id}/artifacts`, "artifacts", api);
   const results = [];
-  let plan;
-  const suffix = `-attempt-${run.run_attempt}`;
-  for (const artifact of artifacts.filter((item) => /^(?:qa-results-|qa-plan-)/.test(item.name) && item.name.endsWith(suffix))) {
-    const files = await readArtifact(artifact, api);
-    const name = artifact.name.slice(0, -suffix.length);
-    if (name === "qa-plan") { plan = JSON.parse(files["qa-plan.json"]); continue; }
-    const platform = artifact.name.includes("windows") ? "win32" : artifact.name.includes("macos") ? "darwin" : "linux";
-    results.push({ name, ...testFindings(files, platform) });
-  }
-  if (plan && (plan.sha !== run.head_sha || plan.runId !== run.id || plan.attempt !== run.run_attempt)) throw new Error("Selection plan does not match the tested main run");
+  const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
   const expected = run.event === "push" && plan ? expectedJobs(plan.outputs, plan.outputs.full_required) : expectedJobs();
+  for (const artifact of artifacts.filter((item) => item.name.startsWith("qa-results-"))) {
+    const match = artifact.name.match(/^(qa-results-.+)-attempt-(\d+)$/);
+    const contract = match && expected.find((item) => item.artifact === match[1]);
+    const job = contract && jobs.find((item) => item.name === contract.name);
+    if (!job || job.run_attempt !== Number(match[2])) continue;
+    const files = await readArtifact(artifact, api);
+    const platform = artifact.name.includes("windows") ? "win32" : artifact.name.includes("macos") ? "darwin" : "linux";
+    const result = testFindings(files, platform);
+    if (job.priorFailures.length) result.passed = [];
+    results.push({ name: match[1], ...result });
+  }
   const infrastructure = [];
   for (const job of jobs.filter((item) => item.conclusion === "failure" && expected.some((entry) => entry.name === item.name))) {
     if (!job.steps?.some((step) => step.conclusion === "failure" && /install|setup-node|pnpm\/action-setup/i.test(step.name))) continue;

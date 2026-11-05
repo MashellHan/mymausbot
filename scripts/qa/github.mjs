@@ -37,6 +37,29 @@ export async function pages(path, key, api = github) {
   throw new Error(`Pagination limit reached: ${path}`);
 }
 
+export async function runJobs(id, attempt, api = github) {
+  const jobs = await pages(`/actions/runs/${id}/jobs?filter=all`, "jobs", api);
+  if (jobs.some((job) => !Number.isSafeInteger(job.run_attempt) || job.run_attempt < 1)) throw new Error("Missing workflow attempt identity");
+  const eligible = jobs.filter((job) => job.run_attempt <= Number(attempt));
+  const latest = new Map();
+  for (const job of eligible) latest.set(job.name, Math.max(latest.get(job.name) ?? 0, job.run_attempt));
+  return eligible.filter((job) => job.run_attempt === latest.get(job.name))
+    .map((job) => ({ ...job, priorFailures: eligible.filter((earlier) => earlier.name === job.name && earlier.run_attempt < job.run_attempt
+      && ["failure", "timed_out"].includes(earlier.conclusion)).map((earlier) => ({ attempt: earlier.run_attempt, conclusion: earlier.conclusion, step: earlier.steps?.find((step) => step.conclusion === "failure")?.name ?? "execution" })) }))
+    .sort((a, b) => b.run_attempt - a.run_attempt);
+}
+
+export async function runPlan(run, jobs, artifacts, { api = github, readArtifact = artifactFiles } = {}) {
+  const preflight = jobs.find((job) => job.name.startsWith("typecheck + lint"));
+  const artifact = artifacts.find((item) => item.name === `qa-plan-attempt-${preflight?.run_attempt}` && !item.expired);
+  if (!artifact) return null;
+  const plan = JSON.parse((await readArtifact(artifact, api))["qa-plan.json"]);
+  if (plan.version !== 1 || plan.sha !== run.head_sha || plan.runId !== run.id || plan.attempt !== preflight.run_attempt || plan.attempt > run.run_attempt) {
+    throw new Error("Missing current-run validation plan; rerun all jobs for this revision");
+  }
+  return plan;
+}
+
 export async function artifactFiles(artifact, api = github) {
   if (artifact.expired || artifact.size_in_bytes > 25 * 1024 * 1024) throw new Error("Artifact expired or too large");
   const directory = mkdtempSync(join(tmpdir(), "mausbot-qa-"));
