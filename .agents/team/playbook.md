@@ -48,7 +48,7 @@ for code PRs, rooted beside this project under the user's workspace.
    `public/team-office.css` and `src/herdr.js`. Reuse the idea, not a second app.
 3. Add a peer **Usage** tab: PR, commit and token totals for the latest 1, 7 and
    30 days, then trends. Default to the user's China time. Reuse verified Agent
-   Town collection definitions and local aggregate data, with an hourly refresh.
+   Town collection definitions and local aggregate data, with a five-minute refresh.
    Read `docs/ACTIVITY-MONITOR.md` and `scripts/activity-monitor.py` in that
    project first. Never publish raw conversations, credentials or repo lists.
    Missing/offline data is unavailable or stale, never fabricated zero.
