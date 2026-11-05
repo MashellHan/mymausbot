@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import type { LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
+import { useEffect, useId, useRef, useState } from "react";
+import type { LocalUsageCategory, LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
-import { metricText, prText, PrCount, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
+import { changeText, metricText, periodChangeLabel, prText, PrCount, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable } from "./LocalUsageTables";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
@@ -28,32 +28,37 @@ function coverageText(coverage: LocalUsageWindow["coverage"]) {
 
 function WindowCard({ window }: { window: LocalUsageWindow }) {
   const rows = [
-    ["computer.usage.metric.prs", prText(window.prs, window.knownPrs)],
-    ["computer.usage.metric.commits", metricText(window.commits)],
-    ["computer.usage.metric.newTokens", window.newTokens !== null && window.newTokens >= 1_000_000
-      ? new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(window.newTokens) : metricText(window.newTokens)],
+    ["prs", prText(window.prs, window.knownPrs), window.comparison.prs],
+    ["commits", metricText(window.commits), window.comparison.commits],
+    ["totalTokens", window.totalTokens !== null && window.totalTokens >= 1_000_000
+      ? new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(window.totalTokens) : metricText(window.totalTokens), window.comparison.totalTokens],
   ] as const;
   return (
     <section className="min-w-0 rounded-xl border border-hairline/60 bg-card p-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <h3 className="text-[16px] font-semibold text-ink">{window.days === 1 ? t("computer.usage.windowOne") : t("computer.usage.window", { days: window.days })}</h3>
-        <span className={cn("text-[13px]", window.coverage === "ready" ? "text-ink-secondary" : "text-warning")}>{coverageText(window.coverage)}</span>
+        <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay} – {window.endDay}</span>
+        <span className={cn("ml-auto text-[12px]", window.coverage === "ready" ? "text-ink-secondary" : "text-warning")}>{coverageText(window.coverage)}</span>
       </div>
-      <p className="mt-0.5 text-[13px] tabular-nums text-ink-secondary">{window.startDay} – {window.endDay}</p>
-      <dl className="mt-3 grid grid-cols-3 gap-2">
-        {rows.map(([label, value]) => (
-          <div key={label} className="min-w-0">
-            <dt className="text-[13px] text-ink-secondary">{t(label)}</dt>
-            <dd title={label === "computer.usage.metric.newTokens" ? metricText(window.newTokens) : undefined} className="mt-0.5 text-[18px] font-semibold tabular-nums text-ink [overflow-wrap:anywhere]">{label === "computer.usage.metric.prs" ? <PrCount prs={window.prs} knownPrs={window.knownPrs} /> : value}</dd>
+      <dl className="mt-2 grid grid-cols-3 gap-2">
+        {rows.map(([metric, value, comparison]) => (
+          <div key={metric} className="min-w-0">
+            <dt className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
+            <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
+              <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <PrCount prs={window.prs} knownPrs={window.knownPrs} /> : value}</span>
+              <span className="text-[13px] text-ink-secondary">({changeText(comparison)} {periodChangeLabel(window.days)})</span>
+            </dd>
           </div>
         ))}
       </dl>
-      <div className="mt-3 border-t border-hairline/40 pt-2 text-[13px] tabular-nums">
-        <div className="mb-1 grid grid-cols-[1fr_1fr_1fr] gap-2 text-ink-secondary" aria-hidden="true"><span /><span className="text-right">{t("computer.usage.metric.prs")}</span><span className="text-right">{t("computer.usage.metric.commits")}</span></div>
-        {(["work", "personal", "unclassified"] as const).filter((key) => key !== "unclassified" || (window.categories[key].knownPrs ?? 0) + (window.categories[key].commits ?? 0) > 0).map((key) => <div key={key} className="grid grid-cols-[1fr_1fr_1fr] gap-2 py-0.5">
+      <div className="mt-2 border-t border-hairline/40 pt-2 text-[13px] tabular-nums">
+        <div className="mb-1 grid grid-cols-[1fr_1fr_1fr] gap-2 text-ink-secondary" aria-hidden="true"><span /><span className="text-right">{t("computer.usage.metric.prs")} · {periodChangeLabel(window.days)}</span><span className="text-right">{t("computer.usage.metric.commits")} · {periodChangeLabel(window.days)}</span></div>
+        {(["work", "personal", "unclassified"] as const).filter((key) => key !== "unclassified" || (window.categories[key].knownPrs ?? 0) + (window.categories[key].commits ?? 0) > 0).map((key) => <div key={key} data-usage-category-row={key} className="grid grid-cols-[1fr_1fr_1fr] gap-2 py-0.5">
           <span className="text-ink-secondary">{t(`computer.usage.category.${key}`)}</span>
-          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.prs")}: </span><PrCount prs={window.categories[key].prs} knownPrs={window.categories[key].knownPrs} /></span>
-          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.commits")}: </span>{metricText(window.categories[key].commits)}</span>
+          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.prs")} {periodChangeLabel(window.days)}: </span><PrCount prs={window.categories[key].prs} knownPrs={window.categories[key].knownPrs} />
+            <span className="block text-[13px] text-ink-secondary">{changeText(window.comparison.categories[key].prs)}</span></span>
+          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.commits")} {periodChangeLabel(window.days)}: </span>{metricText(window.categories[key].commits)}
+            <span className="block text-[13px] text-ink-secondary">{changeText(window.comparison.categories[key].commits)}</span></span>
         </div>)}
       </div>
       {window.missingDays.length > 0 && <p className="mt-2 text-[13px] text-warning">{t("computer.usage.missingDays", { count: window.missingDays.length })}</p>}
@@ -66,34 +71,91 @@ function trendValue(day: LocalUsageTrendDay, metric: Metric): number | null {
   return metric === "prs" ? day.prs ?? day.knownPrs : day[metric];
 }
 
+const categoryOrder = ["work", "personal", "unclassified"] as const;
+const categoryTone: Record<LocalUsageCategory, string> = {
+  work: "bg-accent/75", personal: "bg-ink-secondary/70", unclassified: "bg-warning/65",
+};
+const partialCategoryTone: Record<LocalUsageCategory, string> = {
+  work: "bg-accent/35", personal: "bg-ink-secondary/35", unclassified: "bg-warning/30",
+};
+
+function categoryValue(day: LocalUsageTrendDay, metric: "prs" | "commits", category: LocalUsageCategory): number | null {
+  const counts = day.categories[category];
+  return metric === "prs" ? counts.prs ?? counts.knownPrs : counts.commits;
+}
+
 function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metric }) {
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [focusIndex, setFocusIndex] = useState(0);
+  const buttons = useRef<Array<HTMLButtonElement | null>>([]);
+  const tooltipId = useId();
   const values = days.map((day) => trendValue(day, metric));
   const max = Math.max(1, ...values.filter((value): value is number => value !== null));
+  const active = activeIndex === null ? null : days[activeIndex];
+  const showUnclassified = metric !== "totalTokens" && days.some((day) => (categoryValue(day, metric, "unclassified") ?? 0) > 0);
   return (
-    <div className="min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric}>
+    <div className="relative min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric}>
       <h4 className="text-[13px] font-medium text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</h4>
-      <div aria-hidden="true" className="mt-2 flex h-16 items-end gap-[2px]">
+      <div className="mt-2 flex h-16 items-end gap-[2px]">
         {days.map((day, index) => {
           const value = values[index];
           const label = metric === "prs" ? `${prText(day.prs, day.knownPrs)}${day.prs === null && day.knownPrs !== null ? ` · ${t("computer.usage.synced")}` : ""}` : metricText(value);
-          return <span key={day.day} className="flex h-full min-w-0 flex-1 items-end" title={`${day.day}: ${label}`}>
-            {value === null ? <span className="h-full w-full bg-warning/15" />
-              : <span className={cn("w-full rounded-t-sm", metric === "prs" && day.prs === null ? "bg-accent/40" : "bg-accent/75")}
-                style={{ height: value === 0 ? 0 : `${Math.max(5, value / max * 100)}%` }} />}
-          </span>;
+          const segments = metric === "totalTokens" ? [] : categoryOrder.map((category) => ({
+            category, value: categoryValue(day, metric, category) ?? 0,
+            partial: metric === "prs" && day.categories[category].prs === null,
+          })).filter((segment) => segment.value > 0);
+          const segmentTotal = segments.reduce((total, segment) => total + segment.value, 0);
+          return <button key={day.day} type="button" data-usage-day={day.day} ref={(element) => { buttons.current[index] = element; }}
+            tabIndex={index === Math.min(focusIndex, days.length - 1) ? 0 : -1}
+            aria-label={t("computer.usage.trendPoint", { day: day.day, metric: t(`computer.usage.metric.${metric}`), value: label })}
+            aria-describedby={activeIndex === index ? tooltipId : undefined}
+            onMouseEnter={() => setActiveIndex(index)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setActiveIndex(null); }}
+            onFocus={() => { setFocusIndex(index); setActiveIndex(index); }} onBlur={() => setActiveIndex(null)} onClick={() => setActiveIndex(index)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") { setActiveIndex(null); return; }
+              const next = event.key === "ArrowRight" ? (index + 1) % days.length : event.key === "ArrowLeft" ? (index + days.length - 1) % days.length
+                : event.key === "Home" ? 0 : event.key === "End" ? days.length - 1 : null;
+              if (next === null) return;
+              event.preventDefault(); buttons.current[next]?.focus();
+            }}
+            className="flex h-full min-w-0 flex-1 items-end rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
+            {value === null ? <span aria-hidden="true" className="h-full w-full bg-warning/15" />
+              : <span aria-hidden="true" className="flex w-full flex-col-reverse overflow-hidden rounded-t-sm"
+                style={{ height: value === 0 ? 0 : `${Math.max(5, value / max * 100)}%` }}>
+                {metric === "totalTokens" ? <span className="h-full w-full bg-accent/75" />
+                  : segmentTotal ? segments.map(({ category, value: part, partial }) => <span key={category} data-usage-category={category}
+                    className={partial ? partialCategoryTone[category] : categoryTone[category]} style={{ height: `${part / segmentTotal * 100}%` }} />)
+                    : <span className="h-full w-full bg-ink-secondary/30" />}
+              </span>}
+          </button>;
         })}
       </div>
+      {active && <div id={tooltipId} role="tooltip" data-usage-tooltip
+        className="pointer-events-none absolute bottom-2 right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2 py-1.5 text-[12px] text-ink shadow-lg">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
+          <time className="font-medium">{active.day}</time>
+          <span>{t(`computer.usage.metric.${metric}`)}: {metric === "prs" ? <PrCount prs={active.prs} knownPrs={active.knownPrs} /> : metricText(trendValue(active, metric))}</span>
+        </div>
+        {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
+          {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category}>
+            {t(`computer.usage.category.${category}`)}: {metric === "prs"
+              ? <PrCount prs={active.categories[category].prs} knownPrs={active.categories[category].knownPrs} />
+              : metricText(active.categories[category].commits)}
+          </span>)}
+        </div>}
+      </div>}
     </div>
   );
 }
 
 export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | null }) {
   const windows = snapshot?.windows;
+  const showUnclassified = snapshot?.trend.some((day) => (day.categories.unclassified.prs ?? day.categories.unclassified.knownPrs ?? 0) > 0
+    || (day.categories.unclassified.commits ?? 0) > 0) ?? false;
   return (
     <div className="@container/usage min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="local-usage-panel">
-      <header className="mb-4 pt-2">
+      <header className="mb-3 pt-2">
         <h2 className="text-[18px] font-semibold text-ink">{t("computer.usage.heading")}</h2>
-        <p className="mt-1 text-[13px] text-ink-secondary">{t("computer.usage.scope")}</p>
         {snapshot?.asOf != null ? <p className="mt-1 text-[13px] text-ink-secondary"><time dateTime={new Date(snapshot.asOf).toISOString()}>{t("computer.usage.asOf", { time: asOfTime(snapshot.asOf) })}</time></p> : null}
       </header>
       {snapshot === null ? <p role="status" className="text-[14px] text-ink-secondary">{t("computer.usage.loading")}</p> : null}
@@ -104,17 +166,18 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
         <div className="grid grid-cols-1 gap-2 @min-[42rem]/usage:grid-cols-3">
           {(["1", "7", "30"] as const).map((key) => <WindowCard key={key} window={windows[key]} />)}
         </div>
-        <p className="mt-3 text-[13px] leading-5 text-ink-secondary">{t("computer.usage.provenance")}</p>
-        <section className="mt-4 rounded-xl border border-hairline/60 bg-card p-3 text-[13px] leading-5 text-ink-secondary">
-          <h3 className="text-[14px] font-semibold text-ink">{t("computer.usage.coverageHeading")}</h3>
-          {snapshot.sourceCoverage && <p className="mt-1">{t("computer.usage.sources", { ...snapshot.sourceCoverage })}</p>}
-          {snapshot.prSourceCoverage && <p>{t("computer.usage.prSources", { ...snapshot.prSourceCoverage })}</p>}
-        </section>
-        <section className="mt-5">
-          <h3 className="text-[16px] font-semibold text-ink">{t("computer.usage.trend")}</h3>
-          <p className="mt-0.5 text-[13px] tabular-nums text-ink-secondary">{windows["30"].startDay} – {windows["30"].endDay}</p>
+        <section className="mt-4">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <h3 className="text-[16px] font-semibold text-ink">{t("computer.usage.trend")}</h3>
+            <span className="text-[13px] tabular-nums text-ink-secondary">{windows["30"].startDay} – {windows["30"].endDay}</span>
+          </div>
           <p className="mt-1 text-[13px] text-ink-secondary">{t("computer.usage.gapLegend")}</p>
-          <div className="mt-3 grid grid-cols-1 gap-3">
+          <div data-usage-category-legend className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
+            {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category} className="inline-flex items-center gap-1">
+              <span aria-hidden="true" className={cn("size-2 rounded-sm", categoryTone[category])} />{t(`computer.usage.category.${category}`)}
+            </span>)}
+          </div>
+          <div className="mt-2 grid grid-cols-1 gap-3">
             {metrics.map((metric) => <TrendChart key={metric} days={snapshot.trend} metric={metric} />)}
           </div>
           <UsageDailyTable days={snapshot.trend} />
