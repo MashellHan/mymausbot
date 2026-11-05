@@ -16,7 +16,7 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, cl
   const previous = startDay === endDay ? startDay : `${startDay}–${endDay}`;
   const description = `${t("computer.usage.changeDescription", { change: shown, previous })}`
     + `${daily ? ` ${t("computer.usage.dailyComparisonHint")}` : ""}`
-    + `${metric === "commits" ? ` ${t("computer.usage.commitScopeHint")}` : ""}`
+    + `${metric !== "prs" ? ` ${t("computer.usage.activityScopeHint")}` : ""}`
     + `${value === null ? ` ${t("computer.usage.changeUnavailableHint")}` : ""}`;
   return <span data-usage-change className={className} title={description}>
     <span aria-hidden="true">({shown})</span><span className="sr-only">{description}</span>

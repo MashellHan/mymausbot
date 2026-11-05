@@ -5198,7 +5198,7 @@
   "computer.usage.metric.newTokens": "新增 Token",
   "computer.usage.metric.totalTokens": "Token",
   "computer.usage.changeDescription": "对比北京时间 {previous}：{change}。",
-  "computer.usage.commitScopeHint": "基于已同步设备；尚未同步的设备不计入。",
+  "computer.usage.activityScopeHint": "基于已同步设备；尚未同步的设备不计入。",
   "computer.usage.dailyComparisonHint": "对比上周同一自然日。",
   "computer.usage.changeUnavailableHint": "可比数据不足。",
   "computer.usage.changeHeading": "变化",

@@ -135,10 +135,14 @@ describe("local Usage projection", () => {
     expect(gaps.windows?.["1"].repositories.rows[0]?.comparison).toEqual({ prs: null, commits: 100 });
   });
 
-  it("compares commits within the same successfully collected scope when another machine has no sample", async () => {
+  it.each(["ready", "partial"])("compares observed commits and cached-inclusive tokens with %s days and an unsampled machine", async (tokenStatus) => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);
     snapshot.sources.push({ status: "missing" });
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) row.tokenStatus = tokenStatus;
+      Object.assign(rows.at(-1)!.categories.work, { cacheRead: 456, totalTokens: 512 });
+    }
     for (const [date, commits] of [["2026-11-03", 64], ["2026-11-02", 24]] as const) {
       for (const daily of [snapshot.daily, snapshot.localHistory.daily]) {
         daily.find((row) => row.day === date)!.categories.work.commits = commits;
@@ -152,14 +156,20 @@ describe("local Usage projection", () => {
     const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
     const dayChange = (64 - 24) / 24 * 100;
     expect(response.sourceCoverage).toMatchObject({ ready: 1, missing: 1 });
-    expect(response.windows?.["1"]).toMatchObject({ commits: 64, totalTokens: 256,
-      comparison: { prs: 100, commits: dayChange, totalTokens: null,
+    expect(response.windows?.["1"]).toMatchObject({ commits: 64, totalTokens: 512, tokenCoverage: "partial",
+      comparison: { prs: 100, commits: dayChange, totalTokens: 300,
         categories: { work: { prs: 100, commits: dayChange } } },
       repositories: { rows: [{ commits: 64, comparison: { prs: 100, commits: dayChange } }] } });
-    expect(response.windows?.["7"].comparison).toMatchObject({ commits: (108 - 14) / 14 * 100, totalTokens: null });
-    expect(response.windows?.["30"].comparison).toMatchObject({ commits: (154 - 60) / 60 * 100, totalTokens: null });
+    expect(response.windows?.["7"].comparison).toMatchObject({ commits: (108 - 14) / 14 * 100, totalTokens: (1280 - 448) / 448 * 100 });
+    expect(response.windows?.["30"].comparison).toMatchObject({ commits: (154 - 60) / 60 * 100, totalTokens: (2752 - 1920) / 1920 * 100 });
     expect(response.trend.at(-1)).toMatchObject({ commits: 64, wow: { prs: 300, commits: 3100,
-      newTokens: null, totalTokens: null } });
+      newTokens: 300, totalTokens: 700 } });
+
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) rows.at(-8)!.tokenStatus = "unavailable";
+    await writeFile(file, JSON.stringify(snapshot));
+    const gap = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(gap.windows?.["7"].comparison.totalTokens).toBeNull();
+    expect(gap.trend.at(-1)?.wow).toMatchObject({ commits: 3100, newTokens: null, totalTokens: null });
   });
 
   it.each([
@@ -183,7 +193,7 @@ describe("local Usage projection", () => {
       wow: { prs: 300, commits: null, newTokens: null, totalTokens: null } });
   });
 
-  it("uses a verified zero within the collected scope for commit New but keeps token changes unavailable", async () => {
+  it("uses a verified zero within the collected scope for commit and token New", async () => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);
     const yesterday = "2026-11-02";
@@ -196,7 +206,7 @@ describe("local Usage projection", () => {
     await writeFile(file, JSON.stringify(withoutHistory));
     const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
     expect(response.windows?.["1"]).toMatchObject({ commits: 8, totalTokens: 256,
-      comparison: { prs: "new", commits: "new", totalTokens: null,
+      comparison: { prs: "new", commits: "new", totalTokens: "new",
         categories: { work: { prs: "new", commits: "new" } } } });
     expect(response.windows?.["1"].repositories.rows[0]?.comparison).toEqual({ prs: "new", commits: "new" });
   });

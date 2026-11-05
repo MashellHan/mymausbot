@@ -94,7 +94,7 @@ function rows(raw: unknown, captureDay: string, span = 31, historical = false): 
   return daily;
 }
 
-function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; commitScopeReady: boolean } {
+function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; activityScopeReady: boolean } {
   if (!Array.isArray(raw) || raw.length > 100) throw new Error("Invalid activity sources");
   const coverage = { total: raw.length, ready: 0, partial: 0, stale: 0, missing: 0 };
   let missingSourcesUnsampled = true;
@@ -109,7 +109,7 @@ function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; com
     } else if (status === "partial" || status === "stale") coverage[status]++;
     else throw new Error("Invalid activity source status");
   }
-  return { coverage, commitScopeReady: coverage.ready > 0 && coverage.partial === 0 && coverage.stale === 0 && missingSourcesUnsampled };
+  return { coverage, activityScopeReady: coverage.ready > 0 && coverage.partial === 0 && coverage.stale === 0 && missingSourcesUnsampled };
 }
 
 function prSourceCoverage(raw: unknown): LocalUsagePrSourceCoverage {
@@ -190,17 +190,22 @@ function weekChange(current: number | null, previous: number | null): LocalUsage
   return previous === 0 ? current === 0 ? 0 : "new" : (current - previous) / previous * 100;
 }
 
+function tokenComparisonReady(window: LocalUsageWindow, sources: LocalUsageSourceCoverage,
+  activityScopeReady: boolean): boolean {
+  return window.tokenCoverage === "ready" || activityScopeReady && sources.missing > 0 && window.unavailableTokenDays.length === 0;
+}
+
 function trend(window: LocalUsageWindow, daily: Map<string, DailyRow>, sources: LocalUsageSourceCoverage,
-  commitScopeReady: boolean, prs: LocalUsagePrSourceCoverage, prComplete: boolean,
+  activityScopeReady: boolean, prs: LocalUsagePrSourceCoverage, prComplete: boolean,
   prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>): LocalUsageTrendDay[] {
   return Array.from({ length: 30 }, (_, index) => {
     const day = offsetDay(window.startDay, index);
     const current = buildWindow(1, day, window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories);
     const previous = buildWindow(1, offsetDay(day, -7), window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories);
-    const tokenReady = current.tokenCoverage === "ready" && previous.tokenCoverage === "ready";
+    const tokenReady = tokenComparisonReady(current, sources, activityScopeReady) && tokenComparisonReady(previous, sources, activityScopeReady);
     const wow = {
       prs: weekChange(current.prs, previous.prs),
-      commits: commitScopeReady ? weekChange(current.commits, previous.commits) : null,
+      commits: activityScopeReady ? weekChange(current.commits, previous.commits) : null,
       newTokens: tokenReady ? weekChange(current.newTokens, previous.newTokens) : null,
       totalTokens: tokenReady ? weekChange(current.totalTokens, previous.totalTokens) : null,
     };
@@ -342,27 +347,27 @@ function repositoryPrCovered(window: LocalUsageWindow, category: LocalUsageCateg
 }
 
 function repositoryCommitsCovered(window: LocalUsageWindow, repositories: RepositorySnapshot | null,
-  commitScopeReady: boolean): boolean {
-  return commitScopeReady && window.commits !== null &&
+  activityScopeReady: boolean): boolean {
+  return activityScopeReady && window.commits !== null &&
     window.repositories.unattributedCommits === 0 && datesCovered(window, repositories);
 }
 
 function compareWindows(current: LocalUsageWindow, previous: LocalUsageWindow,
   currentRepositories: RepositorySnapshot | null, previousRepositories: RepositorySnapshot | null,
-  commitScopeReady: boolean): void {
+  sources: LocalUsageSourceCoverage, activityScopeReady: boolean): void {
   const complete = current.missingDays.length === 0 && previous.missingDays.length === 0;
-  const tokenReady = current.tokenCoverage === "ready" && previous.tokenCoverage === "ready";
+  const tokenReady = tokenComparisonReady(current, sources, activityScopeReady) && tokenComparisonReady(previous, sources, activityScopeReady);
   const categories = {} as LocalUsageComparison["categories"];
   for (const key of CATEGORIES) {
     categories[key] = {
       prs: complete ? weekChange(current.categories[key].prs, previous.categories[key].prs) : null,
-      commits: complete && commitScopeReady ? weekChange(current.categories[key].commits, previous.categories[key].commits) : null,
+      commits: complete && activityScopeReady ? weekChange(current.categories[key].commits, previous.categories[key].commits) : null,
     };
   }
   current.comparison = { startDay: previous.startDay, endDay: previous.endDay,
     missingDays: previous.missingDays, unavailableTokenDays: previous.unavailableTokenDays,
     prs: complete ? weekChange(current.prs, previous.prs) : null,
-    commits: complete && commitScopeReady ? weekChange(current.commits, previous.commits) : null,
+    commits: complete && activityScopeReady ? weekChange(current.commits, previous.commits) : null,
     totalTokens: complete && tokenReady
       ? weekChange(current.totalTokens, previous.totalTokens) : null, categories };
   const priorRows = new Map(previous.repositories.rows.map((row) => [row.id, row]));
@@ -372,8 +377,8 @@ function compareWindows(current: LocalUsageWindow, previous: LocalUsageWindow,
       prs: repositoryPrCovered(current, row.category, currentRepositories) &&
         repositoryPrCovered(previous, row.category, previousRepositories)
         ? weekChange(row.prs, prior?.prs ?? 0) : null,
-      commits: repositoryCommitsCovered(current, currentRepositories, commitScopeReady) &&
-        repositoryCommitsCovered(previous, previousRepositories, commitScopeReady)
+      commits: repositoryCommitsCovered(current, currentRepositories, activityScopeReady) &&
+        repositoryCommitsCovered(previous, previousRepositories, activityScopeReady)
         ? weekChange(row.commits, prior?.commits ?? 0) : null,
     };
   }
@@ -386,7 +391,7 @@ function project(raw: unknown, now: number): LocalUsageResponse {
       (snapshot.status !== "ready" && snapshot.status !== "partial")) throw new Error("Invalid activity snapshot");
   const endDay = chinaDay(asOf);
   const daily = rows(snapshot.daily, endDay);
-  const { coverage: sources, commitScopeReady } = sourceCoverage(snapshot.sources);
+  const { coverage: sources, activityScopeReady } = sourceCoverage(snapshot.sources);
   const prs = prSourceCoverage(snapshot.prSources);
   const rawPrCoverage = object(snapshot.prCoverage);
   const prCoverage = {} as Record<LocalUsageCategory, "ready" | "partial">;
@@ -416,13 +421,13 @@ function project(raw: unknown, now: number): LocalUsageResponse {
     const previous = buildWindow(days, offsetDay(window.startDay, -1), asOf, comparisonDaily,
       sources, prs, prComplete, prCoverage, observedCategories);
     previous.repositories = repositoryWindow(comparisonRepositories, previous);
-    compareWindows(window, previous, historical?.repositories ?? repositories, comparisonRepositories, commitScopeReady);
+    compareWindows(window, previous, historical?.repositories ?? repositories, comparisonRepositories, sources, activityScopeReady);
     windows[String(days) as "1" | "7" | "30"] = window;
   }
   const stale = chinaDay(now) !== endDay || now - asOf > STALE_AFTER_MS;
   const status = stale ? "stale" : snapshot.status === "ready" && windows["30"].coverage === "ready" ? "ready" : "partial";
   return { status, asOf, timeZone: "Asia/Shanghai", sourceCoverage: sources, prSourceCoverage: prs,
-    prCoverage, windows, trend: trend(windows["30"], daily, sources, commitScopeReady, prs, prComplete, prCoverage, observedCategories) };
+    prCoverage, windows, trend: trend(windows["30"], daily, sources, activityScopeReady, prs, prComplete, prCoverage, observedCategories) };
 }
 
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",

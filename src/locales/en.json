@@ -5282,7 +5282,7 @@
   "computer.usage.metric.newTokens": "New tokens",
   "computer.usage.metric.totalTokens": "Tokens",
   "computer.usage.changeDescription": "Compared with {previous} (China time): {change}.",
-  "computer.usage.commitScopeHint": "Based on synced devices; devices not yet synced are excluded.",
+  "computer.usage.activityScopeHint": "Based on synced devices; devices not yet synced are excluded.",
   "computer.usage.dailyComparisonHint": "Same calendar day last week.",
   "computer.usage.changeUnavailableHint": "Not enough comparable data.",
   "computer.usage.changeHeading": "Change",
