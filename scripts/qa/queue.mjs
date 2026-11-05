@@ -31,12 +31,15 @@ export async function recoverQa(state, { api = github, readArtifact = artifactFi
   const fullRuns = [];
   let latest, pendingPlan = false;
   for (const run of runs) {
-    if (run.status === "completed" && latest) continue;
     const evidence = await fullRunEvidence(run, { api, readArtifact, repository, now });
     if (evidence === "pending") pendingPlan = true;
+    if (run.status === "completed" && evidence === "unknown") break;
     if (evidence !== "full") continue;
     fullRuns.push(run);
-    if (run.status === "completed" && (sinceInstallation(run) || run.event === "push")) latest = run;
+    if (run.status === "completed") {
+      if (sinceInstallation(run) || run.event === "push") latest = run;
+      break;
+    }
   }
   const qa = await health({ api, readArtifact, repository, now });
   const reporterRuns = (await api("/actions/workflows/qa-report.yml/runs?per_page=100")).workflow_runs;

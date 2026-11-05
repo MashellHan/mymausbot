@@ -7,7 +7,10 @@ export async function qaHealth({ api = github, readArtifact = artifactFiles, now
     const runs = await api("/actions/workflows/ci.yml/runs?branch=main&per_page=100");
     let run;
     for (const item of runs.workflow_runs) {
-      if (item.status === "completed" && await fullRunEvidence(item, { api, readArtifact, repository, now }) === "full") {
+      if (item.status !== "completed") continue;
+      const evidence = await fullRunEvidence(item, { api, readArtifact, repository, now });
+      if (evidence === "unknown") throw new Error(`Main CI run ${item.id} has unclassifiable validation evidence`);
+      if (evidence === "full") {
         run = item;
         break;
       }

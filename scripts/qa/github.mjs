@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eligibleRun, fullPushPlan } from "./contracts.mjs";
+import { eligibleRun, fullPushPlan, narrowPushPlan } from "./contracts.mjs";
 
 export async function github(path, { method = "GET", body, raw = false } = {}) {
   const repository = process.env.GITHUB_REPOSITORY;
@@ -66,19 +66,19 @@ export async function fullRunEvidence(run, { api = github, readArtifact = artifa
   if (!eligibleRun(run, repository, false)) return "ineligible";
   if (run.event !== "push") return "full";
   if (!Number.isSafeInteger(run.id) || run.id < 1 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1
-    || !/^[a-f\d]{40}$/i.test(run.head_sha)) return "ineligible";
+    || !/^[a-f\d]{40}$/i.test(run.head_sha)) return "unknown";
   try {
     const jobs = await runJobs(run.id, run.run_attempt, api);
     const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", api);
     const preflight = jobs.find((job) => job.name.startsWith("typecheck + lint"));
-    if (artifacts.some((artifact) => artifact.name === `qa-plan-attempt-${preflight?.run_attempt}` && artifact.expired)) return "ineligible";
+    if (artifacts.some((artifact) => artifact.name === `qa-plan-attempt-${preflight?.run_attempt}` && artifact.expired)) return "unknown";
     const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
-    if (plan) return fullPushPlan(plan) ? "full" : "ineligible";
+    if (plan) return fullPushPlan(plan) ? "full" : narrowPushPlan(plan) ? "ineligible" : "unknown";
     const age = now - Date.parse(run.created_at);
     return ["queued", "in_progress", "waiting", "requested", "pending"].includes(run.status)
       && preflight?.status !== "completed" && Number.isFinite(age) && age >= -60_000 && age < 14 * 60 * 60_000
-      ? "pending" : "ineligible";
-  } catch { return "ineligible"; }
+      ? "pending" : "unknown";
+  } catch { return "unknown"; }
 }
 
 export async function artifactFiles(artifact, api = github) {
