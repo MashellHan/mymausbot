@@ -27,7 +27,7 @@ export function SecretRequestCard({
   const secret = message.secret!;
   const remoteClient = window.ogb?.remoteClient?.active === true;
   const sessionMode = window.ogb?.credentialMode?.() === "session";
-  const sessionOnly = sessionMode && isConfigCredentialTarget(secret.target);
+  const sessionOnly = sessionMode && secret.target !== CUSTOM_SECRET_TARGET && isConfigCredentialTarget(secret.target);
   const sessionUnavailable = sessionMode && (secret.target === "onePasswordToken" ||
     (secret.target === CUSTOM_SECRET_TARGET && secret.delivery === "file"));
   const [value, setValue] = useState("");
