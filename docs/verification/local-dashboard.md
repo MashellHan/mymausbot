@@ -47,6 +47,40 @@ The Agent Town collector and both of its public transports use an independent
 aggregate whitelist. `localRepositories` must never be added to that whitelist.
 No additional scheduler or network collection runs inside OpenMausBot.
 
+### Microsoft authentication held in memory
+
+For unattended Microsoft authentication without macOS Keychain requests, use
+`scripts/refresh-local-usage.py` with the Python interpreter from the existing
+Azure CLI installation. It reuses that installation's MSAL dependency and reads
+its already configured account and token cache. Newly acquired tokens stay in
+memory for the collection process; the existing cache and CLI settings are not
+rewritten. The macOS authentication broker is disabled for this client.
+
+```sh
+"$USAGE_AZURE_PYTHON" scripts/refresh-local-usage.py \
+  --collector "$USAGE_COLLECTOR" --config "$USAGE_CONFIG"
+```
+
+The collector path points to the existing Agent Town `activity-monitor.py`.
+Its source, overlap lock, identity checks, date filters, aggregation and private
+output files retain their existing behavior. Only its Azure CLI REST calls are
+handled by the in-memory client. GitHub collection uses the existing helper.
+The client supports existing AzureCloud user accounts whose identity matches
+the configured author emails. It accepts only HTTPS Azure DevOps identity and
+PR GET endpoints and refuses redirects carrying authentication. An unavailable
+login leaves the corresponding source stale through the collector's normal
+failure handling; it does not open a login prompt or fall back to the CLI.
+
+Use this command in the existing five-minute routine. Add `--publish` only to an
+already authorized publication task; the normal refresh does not publish.
+`--reuse-sources` and `--skip-api` keep the collector's recovery semantics.
+
+Run `python3 scripts/refresh-local-usage.test.py` for synthetic memory lifetime,
+cross-tenant identity, endpoint/redirect, interrupted HTTP response and
+collector-routing checks. A real identity GET is a separate read-only
+acceptance check; keep its private receipt and never log token contents or
+publish the CLI cache.
+
 ## Agent observations
 
 The visible panel polls every two seconds without overlapping requests. The
