@@ -34,6 +34,12 @@ function fixture(source = "src/page.ts") {
   git("config", "user.name", "CI fixture");
   git("config", "user.email", "ci@example.invalid");
   git("config", "commit.gpgsign", "false");
+  mkdirSync(join(directory, "scripts/testing"), { recursive: true });
+  mkdirSync(join(directory, "server"), { recursive: true });
+  writeFileSync(join(directory, "server/core.test.ts"), "");
+  writeFileSync(join(directory, "scripts/guard.test.ts"), "");
+  writeFileSync(join(directory, "scripts/testing/check-policy.json"), JSON.stringify({ version: 1, core: ["server/core.test.ts"], guards: ["scripts/guard.test.ts"], areas: [] }));
+  git("add", "--", "server/core.test.ts", "scripts/guard.test.ts", "scripts/testing/check-policy.json");
   mkdirSync(dirname(join(directory, source)), { recursive: true });
   mkdirSync(join(directory, "docs"), { recursive: true });
   writeFileSync(join(directory, source), "source\n");
@@ -59,10 +65,14 @@ function run(directory: string, event: string, payload: unknown) {
 
 /** The GITHUB_OUTPUT lines ci-scope wrote, each value parsed. */
 function outputs(text: string) {
-  return Object.fromEntries(text.trimEnd().split("\n").map((line) => {
+  const parsed = Object.fromEntries(text.trimEnd().split("\n").map((line) => {
     const at = line.indexOf("=");
     return [line.slice(0, at), JSON.parse(line.slice(at + 1))];
   }));
+  expect(typeof parsed.full_required).toBe("boolean");
+  expect(parsed.expected_jobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: "static" })]));
+  expect(parsed.required_jobs.every((job: string) => parsed.jobs.includes(job))).toBe(true);
+  return Object.fromEntries(Object.entries(parsed).filter(([key]) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes"].includes(key)));
 }
 
 const packaged = (oses: string[]) => oses.filter((os) => os !== "macos-latest");
@@ -527,9 +537,11 @@ describe("CI scope CLI", () => {
     expect(run(directory, event, {}).output).toEqual(everything(ALL));
   });
 
-  it("runs main's checks for a merge group, whatever it changes", () => {
-    const { directory } = fixture("docs/guide.md");
-    expect(run(directory, "merge_group", { merge_group: { head_sha: "f".repeat(40) } }).output).toEqual(mainLane());
+  it("retains main's checks for a readable docs merge group", () => {
+    const { directory, git, base } = fixture("docs/guide.md");
+    writeFileSync(join(directory, "docs/guide.md"), "updated\n");
+    git("commit", "-qam", "docs");
+    expect(run(directory, "merge_group", { merge_group: { base_sha: base, head_sha: git("rev-parse", "HEAD") } }).output).toEqual(mainLane());
   });
 });
 
@@ -699,12 +711,12 @@ describe("CI scope CLI on a push to main", () => {
     ["a code change", code],
     ["a version bump with a dependency", (directory: string) => writeFileSync(join(directory, "package.json"), pkg("0.1.101", { dependencies: { zod: "4" } }))],
     ["a version bump with code", (directory: string) => { bump(directory); code(directory); }],
-  ])("runs main's checks for %s, asking GitHub only about the merge queue", async (_, change) => {
+  ])("selects main or full checks for %s without reading predecessor CI", async (kind, change) => {
     const { directory, before, after } = pushFixture(change);
     const api = await fakeRunsApi({ [before]: green });
     try {
       const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(mainLane());
+      expect(output).toEqual(kind === "a code change" ? mainLane() : everything(ALL));
       expect(stderr).toBe("");
       expect(api.requests).toEqual([runsOf(after)]);
     } finally {
@@ -716,11 +728,11 @@ describe("CI scope CLI on a push to main", () => {
     ["a missing payload", {}],
     ["a new branch", { before: "0".repeat(40), after: "f".repeat(40) }],
     ["an unknown commit", { before: "f".repeat(40), after: "e".repeat(40) }],
-  ])("falls back loudly to main's checks for %s", async (_, payload) => {
+  ])("falls back loudly to full checks for %s", async (_, payload) => {
     const { directory } = fixture();
     const { output, stderr } = await runPush(directory, payload, {});
-    expect(output).toEqual(mainLane());
-    expect(stderr).toContain("using main's checks");
+    expect(output).toEqual(everything(ALL));
+    expect(stderr).toContain("using all checks");
   });
 });
 
@@ -777,9 +789,9 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     expect(stderr).toBe("");
   });
 
-  it("runs the Windows jobs for the desktop app", async () => {
+  it("runs every platform for the sensitive desktop app", async () => {
     const { directory, payload } = serverChange("app\n", "electron/main.mjs");
-    expect((await runPullRequest(directory, payload)).output).toEqual(serverJobs(PR));
+    expect((await runPullRequest(directory, payload)).output).toEqual(everything(ALL));
   });
 
   it("runs the Windows jobs for the label the pull request has now, so a re-run after labelling runs them", async () => {
@@ -808,7 +820,7 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     }
   });
 
-  it("asks GitHub for no labels when the change selects no Windows job", async () => {
+  it("reads force-full labels even when the change selects no Windows job", async () => {
     const { directory, git, base } = fixture("src/App.tsx");
     writeFileSync(join(directory, "src/App.tsx"), "if (navigator.platform === \"win32\") {}\n");
     git("commit", "--quiet", "-am", "renderer");
@@ -817,7 +829,7 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
       const payload = { pull_request: { number: 7, base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } } };
       const { output } = await runPullRequest(directory, payload, api.env);
       expect(output).toEqual(ciOutputs(selectCiScope(["src/App.tsx"]), LINUX));
-      expect(api.requests).toEqual([]);
+      expect(api.requests).toEqual(["GET /repos/o/r/issues/7/labels?per_page=100 Bearer t"]);
     } finally {
       await api.close();
     }

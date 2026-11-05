@@ -13,6 +13,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   # The merge queue runs CI on the PR merged onto the current main BEFORE it
   # lands, so a PR that is green alone but red together with what just
   # merged is stopped in the queue instead of on main (that shape reddened
@@ -23,7 +24,7 @@ on:
   # The full lane every night on main's newest commit: every platform's shards
   # and smokes, which pushes to main and merge groups leave out (docs/ci.md).
   schedule:
-    - cron: "17 21 * * *"
+    - cron: "17 2,14 * * *"
 
 # least privilege: CI only reads the checkout, it never writes back
 permissions:
@@ -69,11 +70,19 @@ jobs:
       actions: read
       # and a pull request's labels as they are when the run starts
       pull-requests: read
+      issues: read
     outputs:
       jobs: ${{ steps.scope.outputs.jobs }}
       vitest_os: ${{ steps.scope.outputs.vitest_os }}
       vitest_matrix: ${{ steps.scope.outputs.vitest_matrix }}
       packaged_server_os: ${{ steps.scope.outputs.packaged_server_os }}
+      full_required: ${{ steps.scope.outputs.full_required }}
+      required_jobs: ${{ steps.scope.outputs.required_jobs }}
+      expected_jobs: ${{ steps.scope.outputs.expected_jobs }}
+      reduced: ${{ steps.scope.outputs.reduced }}
+      qa_areas: ${{ steps.scope.outputs.qa_areas }}
+      repair_ids: ${{ steps.scope.outputs.repair_ids }}
+      shadow: ${{ steps.scope.outputs.shadow }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,11 +102,17 @@ jobs:
         id: scope
         env:
           GH_TOKEN: ${{ github.token }}
+          MAUSBOT_CI_MODE: ${{ vars.MAUSBOT_CI_MODE }}
           OMB_CI_LINUX_IN_STATIC: ${{ runner.environment == 'self-hosted' }}
         run: node scripts/ci-scope.mjs
       - run: pnpm install --frozen-lockfile
       - name: Verify CI selection and documentation references
-        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts
+        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/qa/qa.test.ts
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qa-plan
+          path: qa-plan.json
+          retention-days: 7
       - name: Validate locale catalogs
         run: pnpm i18n:check
       - run: pnpm lint
@@ -140,7 +155,7 @@ jobs:
       - name: Report flaky tests that needed a retry
         if: ${{ !cancelled() && steps.scope.outputs.linux_lanes }}
         env:
-          OMB_VITEST_RETRY_LOG: ${{ runner.temp }}/vitest-retries.jsonl
+          OMB_VITEST_RETRY_LOG: ${{ github.workspace }}/qa-results/vitest-retries.jsonl
         run: node scripts/testing/ci-retry-summary.mjs
       - name: Upload eval run reports on failure
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -148,6 +163,14 @@ jobs:
         with:
           name: behavior-evals-reports-${{ github.sha }}-${{ github.run_attempt }}
           path: evals/reports/runs/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.scope.outputs.linux_lanes
+        with:
+          name: qa-results-boat
+          path: qa-results/
           if-no-files-found: warn
           retention-days: 7
 
@@ -192,6 +215,11 @@ jobs:
         # before Vitest starts so a cold download cannot consume the fixture
         # timeout.
         run: node --input-type=commonjs -e "require('electron')"
+      - run: mkdir -p qa-results
+        shell: bash
+      - name: Allow the dashboard fixture browser sandbox
+        if: runner.os == 'Linux' && contains(matrix.files, 'local-dashboard-ui')
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run tests
         # The github-actions reporter turns each failure into an annotation
         # on the PR, so the failing test and its assertion are readable
@@ -199,18 +227,19 @@ jobs:
         env:
           # scripts/testing/ci-retry-runner.ts records each listed flaky test
           # that needed a retry here (the runner context is step-level only).
-          OMB_VITEST_RETRY_LOG: ${{ runner.temp }}/vitest-retries.jsonl
+          OMB_VITEST_RETRY_LOG: ${{ github.workspace }}/qa-results/vitest-retries.jsonl
           OMB_VITEST_E2E: ${{ matrix.e2e }}
           OMB_VITEST_SUBSET: ${{ matrix.files }}
           OMB_VITEST_WORKERS: ${{ matrix.workers }}
-        run: pnpm exec vitest run ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} --reporter=default --reporter=github-actions
+          OMB_DASHBOARD_UI: ${{ contains(matrix.files, 'local-dashboard-ui') && '1' || '0' }}
+        run: pnpm exec vitest run ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} --reporter=default --reporter=github-actions --reporter=json --outputFile.json=qa-results/${{ matrix.shard }}/vitest.json
       - name: Report flaky tests that needed a retry
         # Known flakes (scripts/testing/ci-retry-list.json) get two retries in
         # CI. A pass after a retry is still listed in the job summary, so the
         # flake stays visible until its entry is fixed and removed.
         if: ${{ !cancelled() }}
         env:
-          OMB_VITEST_RETRY_LOG: ${{ runner.temp }}/vitest-retries.jsonl
+          OMB_VITEST_RETRY_LOG: ${{ github.workspace }}/qa-results/vitest-retries.jsonl
         run: node scripts/testing/ci-retry-summary.mjs
       - name: Broker and Electron unit tests
         if: matrix.node_tests
@@ -218,6 +247,16 @@ jobs:
         # that never exits would otherwise hold the job to its cap.
         timeout-minutes: 5
         run: pnpm broker:test && pnpm test:electron
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: qa-results-vitest-${{ matrix.os }}-${{ matrix.shard }}
+          path: |
+            qa-results/${{ matrix.shard }}/vitest.json
+            qa-results/vitest-retries.jsonl
+          retention-days: 7
+          if-no-files-found: warn
 
   behavior-evals:
     needs: static
@@ -247,7 +286,7 @@ jobs:
       - name: Eval vitest gate (redaction, trace, golden replay)
         # Same reporter pair as the vitest shards, so a failure annotates
         # the PR with the failing test and assertion.
-        run: pnpm exec vitest run --config evals/vitest.config.ts --reporter=default --reporter=github-actions
+        run: pnpm exec vitest run --config evals/vitest.config.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=qa-results/vitest.json
       - name: Tier 1 scenarios (scripted harness, no models)
         run: pnpm eval
       - name: Tier 2 golden replay against committed baselines
@@ -263,6 +302,14 @@ jobs:
         with:
           name: behavior-evals-reports-${{ github.sha }}-${{ github.run_attempt }}
           path: evals/reports/runs/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: qa-results-evals
+          path: qa-results/
           if-no-files-found: warn
           retention-days: 7
 
@@ -349,6 +396,37 @@ jobs:
         # Forks dist-server/index.js, built by the packaged server step.
         run: pnpm exec electron scripts/smoke-login-handoff.cjs
 
+  shadow:
+    name: shadow core + affected
+    needs: static
+    if: needs.static.outputs.shadow != '[]'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Time the proposed core and affected selection
+        env:
+          OMB_DASHBOARD_UI: "1"
+          OMB_VITEST_WORKERS: "4"
+        run: pnpm exec vitest run ${{ join(fromJSON(needs.static.outputs.shadow), ' ') }} --reporter=default --reporter=json --outputFile.json=qa-results/vitest.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: shadow-core-results
+          path: qa-results/
+          if-no-files-found: error
+          retention-days: 7
+
   gate:
     # One aggregation, not three queued runners doing the same check.
     name: CI
@@ -357,7 +435,11 @@ jobs:
     # workflow alive just to schedule its summary jobs.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      issues: read
     steps:
       - name: Every required job passed
         env:
@@ -370,12 +452,26 @@ jobs:
             let selected;
             try { selected = JSON.parse(needs.static.outputs.jobs); } catch { selected = null; }
             if (!Array.isArray(selected) || !selected.every((job) => typeof job === "string")) throw new Error("Missing CI selection");
+            const required = JSON.parse(needs.static.outputs.required_jobs);
+            if (!Array.isArray(required) || required.some((job) => !Object.hasOwn(needs, job))) throw new Error("A selected required job is missing from the gate");
             const bad = Object.entries(needs).filter(([job, { result }]) => {
               const expected = job === "static" || selected.includes(job) ? "success" : "skipped";
               return result !== expected;
             });
             if (bad.length) { console.error(`\n${bad.length} required job(s) did not pass: ${bad.map(([job]) => job).join(", ")}`); process.exit(1); }
           '
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Enforce QA holds and complete full validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCOPE_OUTPUTS: ${{ toJSON(needs.static.outputs) }}
+        run: node scripts/qa/gate.mjs
 
   cloudflared-linux-arm64:
     needs: static
@@ -419,7 +515,7 @@ jobs:
       - name: Delete the enterprise folder
         run: rm -rf enterprise
       - run: pnpm typecheck
-      - run: pnpm exec vitest run server/enterprise.test.ts server/brand.test.ts
+      - run: pnpm exec vitest run server/enterprise.test.ts server/brand.test.ts --reporter=default --reporter=json --outputFile.json=qa-results/vitest.json
       - name: The server boots and reports the open-source edition
         run: |
           mkdir -p /tmp/omb-foss/home
@@ -431,6 +527,14 @@ jobs:
           grep -q '"edition":"oss"' /tmp/omb-foss/edition.json
           grep -q 'no enterprise layer exists' /tmp/omb-foss/edition.json
           kill %1; wait %1 || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: qa-results-foss
+          path: qa-results/
+          if-no-files-found: warn
+          retention-days: 7
 
   control-plane:
     needs: static
@@ -532,8 +636,9 @@ jobs:
       - name: Drive the real renderer through control-omb ui
         env:
           OMB_UI_E2E: "1"
+          OMB_DASHBOARD_UI: "1"
           OMB_UI_EVIDENCE_DIR: .omb-scratch/verify-evidence
-        run: pnpm exec vitest run scripts/testing/control-omb-ui.e2e.test.ts scripts/testing/bot-tools-ui.e2e.test.ts scripts/testing/thinking-timer-ui.e2e.test.ts scripts/testing/team-share-ui.e2e.test.ts scripts/testing/org-library-ui.e2e.test.ts scripts/testing/presets-ui.e2e.test.ts scripts/testing/browser-evidence.e2e.test.ts scripts/testing/browser-fill.e2e.test.ts scripts/testing/rich-table-composer-ui.e2e.test.ts scripts/testing/computer-panel-focus-ui.e2e.test.ts scripts/testing/mobile-code-blocks-ui.e2e.test.ts
+        run: pnpm exec vitest run scripts/testing/local-dashboard-ui.e2e.test.ts scripts/testing/control-omb-ui.e2e.test.ts scripts/testing/bot-tools-ui.e2e.test.ts scripts/testing/thinking-timer-ui.e2e.test.ts scripts/testing/team-share-ui.e2e.test.ts scripts/testing/org-library-ui.e2e.test.ts scripts/testing/presets-ui.e2e.test.ts scripts/testing/browser-evidence.e2e.test.ts scripts/testing/browser-fill.e2e.test.ts scripts/testing/rich-table-composer-ui.e2e.test.ts scripts/testing/computer-panel-focus-ui.e2e.test.ts scripts/testing/mobile-code-blocks-ui.e2e.test.ts --reporter=default --reporter=json --outputFile.json=qa-results/vitest.json
       - name: Upload the renderer screenshot
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -544,6 +649,14 @@ jobs:
             .omb-scratch/verify-evidence/thinking-timer-anchored.png
             .omb-scratch/verify-evidence/share-team-dialog.png
             .omb-scratch/verify-evidence/mobile-code-blocks/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: qa-results-ui
+          path: qa-results/
           if-no-files-found: warn
           retention-days: 7
 
@@ -584,7 +697,15 @@ jobs:
           OMB_UI_E2E: "1"
         # One file at a time: a runner's first Chrome launch is slow (on Windows it waits for a scan of the binary), and two
         # at once ran the identity probe past its 30 s.
-        run: pnpm exec vitest run scripts/testing/browser-identity.e2e.test.ts scripts/testing/browser-passkey.e2e.test.ts --no-file-parallelism
+        run: pnpm exec vitest run scripts/testing/browser-identity.e2e.test.ts scripts/testing/browser-passkey.e2e.test.ts --no-file-parallelism --reporter=default --reporter=json --outputFile.json=qa-results/vitest.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: qa-results-identity-${{ matrix.os }}
+          path: qa-results/
+          if-no-files-found: warn
+          retention-days: 7
 
   package-linux:
     needs: static
@@ -706,7 +827,7 @@ jobs:
           OMB_CDP_E2E: "1"
         shell: bash
         run: |
-          run=(pnpm exec vitest run server/browser/cdp/s4- server/browser/checklist.e2e server/browser/passkey-wall.e2e server/browser/viewers/viewers.e2e server/browser/viewers/stream-v2.e2e --reporter=verbose --silent=false --reporter=github-actions)
+          run=(pnpm exec vitest run server/browser/cdp/s4- server/browser/checklist.e2e server/browser/passkey-wall.e2e server/browser/viewers/viewers.e2e server/browser/viewers/stream-v2.e2e --reporter=verbose --silent=false --reporter=github-actions --reporter=json --outputFile.json=qa-results/vitest.json)
           if [ "$RUNNER_OS" = "Linux" ]; then xvfb-run -a "${run[@]}"; else "${run[@]}"; fi
       - name: The runner's Google Chrome did not change during the run
         if: ${{ !cancelled() && runner.os == 'macOS' }}
@@ -726,3 +847,10 @@ jobs:
             -e OMB_CDP_CHROME=/opt/openmausbot-browser/chrome -e OMB_CDP_HOST=container -e OMB_BROWSER_SANDBOX=0 \
             -v "$PWD:/src" -w /src omb-runtime:s4 \
             node node_modules/vitest/vitest.mjs run server/browser/cdp/s4- server/browser/checklist.e2e server/browser/passkey-wall.e2e server/browser/viewers/viewers.e2e server/browser/viewers/stream-v2.e2e --reporter=verbose --silent=false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: qa-results-driver-${{ matrix.os }}
+          path: qa-results/
+          if-no-files-found: warn
+          retention-days: 7

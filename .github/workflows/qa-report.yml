@@ -1,0 +1,51 @@
+name: QA report
+run-name: QA report ${{ github.event.workflow_run.id || inputs.run_id }}
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Completed main CI run to report without rerunning tests
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: mausbot-qa-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      contains(fromJSON('["schedule", "workflow_dispatch", "push"]'), github.event.workflow_run.event)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Report trusted main results
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QA_RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+        run: node scripts/qa/report.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mausbot-qa-report
+          path: qa-report.json
+          if-no-files-found: error
+          retention-days: 30

@@ -483,3 +483,9 @@ merging** on the same ruleset: a PR merges only after CI passed on it with
 main's newest commit in it. Every merge then makes the other open PRs update
 their branch and run CI again before they can merge, so it trades merge
 throughput for that guarantee.
+
+## MausBot fork validation rhythm
+
+The fork adds shared local planning, shadow admission, twice-daily full QA,
+trusted issue reporting and a Lead queue. See [MausBot validation](MAUSBOT-VALIDATION.md)
+for commands, exact boundaries, holds, recovery and rollout evidence.
