@@ -135,6 +135,59 @@ describe("local Usage projection", () => {
     expect(gaps.windows?.["1"].repositories.rows[0]?.comparison).toEqual({ prs: null, commits: 100 });
   });
 
+  it.each(["missing", "partial", "stale"])("keeps observed amounts but suppresses machine-incomplete changes (%s)", async (status) => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    snapshot.sources.push({ status });
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows?.["1"]).toMatchObject({ prs: 4, commits: 8, newTokens: 56, totalTokens: 256,
+      tokenCoverage: "partial", comparison: { prs: 100, commits: null, totalTokens: null,
+        categories: { work: { prs: 100, commits: null } } },
+      repositories: { rows: [{ prs: 4, commits: 8, comparison: { prs: 100, commits: null } }] } });
+    expect(response.windows?.["7"].comparison).toMatchObject({ prs: (16 - 7) / 7 * 100, commits: null, totalTokens: null });
+    expect(response.windows?.["30"].comparison).toMatchObject({ prs: 30, commits: null, totalTokens: null });
+    expect(response.trend.at(-1)).toMatchObject({ commits: 8, newTokens: 56, totalTokens: 256,
+      wow: { prs: 300, commits: null, newTokens: null, totalTokens: null } });
+  });
+
+  it("keeps PR New from an exact zero while incomplete machines cannot make commit or token New", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    const yesterday = "2026-11-02";
+    Object.assign(snapshot.daily.find((row) => row.day === yesterday)!.categories.work, { prs: 0, knownPrs: 0,
+      commits: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, newTokens: 0, totalTokens: 0 });
+    snapshot.localRepositories.rows[0]!.daily = snapshot.localRepositories.rows[0]!.daily.filter((row) => row.day !== yesterday);
+    snapshot.localRepositories.attribution = snapshot.localRepositories.attribution.filter((row) => row.day !== yesterday);
+    snapshot.sources.push({ status: "missing" });
+    const { localHistory: _unused, ...withoutHistory } = snapshot;
+    await writeFile(file, JSON.stringify(withoutHistory));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows?.["1"]).toMatchObject({ commits: 8, totalTokens: 256,
+      comparison: { prs: "new", commits: null, totalTokens: null,
+        categories: { work: { prs: "new", commits: null } } } });
+    expect(response.windows?.["1"].repositories.rows[0]?.comparison).toEqual({ prs: "new", commits: null });
+  });
+
+  it("requires ready token coverage on both dates without suppressing complete PR and commit changes", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    for (const date of ["2026-11-02", "2026-10-27"]) {
+      snapshot.daily.find((row) => row.day === date)!.tokenStatus = "partial";
+      snapshot.localHistory.daily.find((row) => row.day === date)!.tokenStatus = "partial";
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows?.["1"]).toMatchObject({ commits: 8, totalTokens: 256,
+      comparison: { prs: 100, commits: 100, totalTokens: null,
+        categories: { work: { prs: 100, commits: 100 } } },
+      repositories: { rows: [{ comparison: { prs: 100, commits: 100 } }] } });
+    expect(response.windows?.["7"].comparison).toMatchObject({ prs: (16 - 7) / 7 * 100,
+      commits: (16 - 7) / 7 * 100, totalTokens: null });
+    expect(response.trend.at(-1)).toMatchObject({ commits: 8, totalTokens: 256,
+      wow: { prs: 300, commits: 300, newTokens: null, totalTokens: null } });
+  });
+
   it("falls back to the public 31 dates when private history is invalid or missing", async () => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);
