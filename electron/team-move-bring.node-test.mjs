@@ -21,10 +21,10 @@ const BOTS = [
   { id: "gone-bot-01", name: "Gone", movedTo: { state: "moved", team: { id: "team-acme", name: "Acme" } } },
 ];
 
-function fixture({ agrees = false, home = true, bots = BOTS, accountState = () => state, homeOrigin = () => HOME, pageOrigin = (event) => event.origin ?? null, confirm, fetchResponse, journalWrite } = {}) {
+function fixture({ agrees = false, home = true, bots = BOTS, accountState = () => state, homeOrigin = () => HOME, pageOrigin = (event) => event.origin ?? null, confirm, fetchResponse, journalWrite, initialJournal = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "omb-team-bring-"));
-  const handlers = new Map(), asked = [], pairs = [];
-  const journal = { value: null, read() { return this.value; }, write(next) { this.value = next; journalWrite?.(next); } };
+  const handlers = new Map(), asked = [], pairs = [], teamPairs = [];
+  const journal = { value: structuredClone(initialJournal), read() { return this.value; }, write(next) { this.value = next; journalWrite?.(next); } };
   const move = installTeamMove({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     cloudPage: () => null,
@@ -35,7 +35,7 @@ function fixture({ agrees = false, home = true, bots = BOTS, accountState = () =
       const origin = homeOrigin();
       return { origin, grant: async () => { pairs.push("grant"); return { origin, code: "C" }; } };
     },
-    account: () => ({ state: accountState, pairTeam: async () => { throw new Error("no team pairing in this test"); } }),
+    account: () => ({ state: accountState, pairTeam: async (id) => { teamPairs.push(id); throw new Error("no team pairing in this test"); } }),
     file: () => join(dir, "send.json"), journalFile: () => join(dir, "moves.json"), journal,
     fetch: async (url, init) => {
       if (fetchResponse) return fetchResponse(url, init);
@@ -45,7 +45,7 @@ function fixture({ agrees = false, home = true, bots = BOTS, accountState = () =
       return new Response(JSON.stringify({ url, method: init?.method }), { status: 503 });
     },
   });
-  return { handlers, asked, pairs, journal, move, done: () => { move.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { handlers, asked, pairs, teamPairs, journal, move, done: () => { move.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 const OWN = { origin: TEAM };
 
@@ -53,12 +53,18 @@ const ACCOUNTS = {
   a: { id: "fixture-account-a", origin: "https://home-a.example.test", bot: "Atlas A" },
   b: { id: "fixture-account-b", origin: "https://home-b.example.test", bot: "Atlas B" },
 };
+const pendingAMove = () => ({
+  bot: { id: `atlas-${ACCOUNTS.a.id}`, name: "Atlas A" },
+  team: { id: "team-acme", name: "Acme", origin: TEAM },
+  source: { accountId: ACCOUNTS.a.id, origin: ACCOUNTS.a.origin },
+  phase: "copy", startedAt: 1,
+});
 const accountBots = (owner) => [
   { id: `maus-${owner.id}`, name: "MausBot", defaultBot: {} },
   { id: `atlas-${owner.id}`, name: owner.bot },
 ];
 
-function accountFixture({ confirm, pageOrigin, botsResponse, journalWrite, teams = () => state.teams } = {}) {
+function accountFixture({ confirm, pageOrigin, botsResponse, journalWrite, initialJournal, teams = () => state.teams } = {}) {
   let active = "a";
   let homeOverride = null;
   const requests = [];
@@ -69,6 +75,7 @@ function accountFixture({ confirm, pageOrigin, botsResponse, journalWrite, teams
     ...(confirm ? { confirm } : {}),
     ...(pageOrigin ? { pageOrigin } : {}),
     ...(journalWrite ? { journalWrite } : {}),
+    ...(initialJournal ? { initialJournal } : {}),
     fetchResponse: async (url) => {
       const parsed = new URL(url);
       const owner = Object.values(ACCOUNTS).find((candidate) => candidate.origin === parsed.origin);
@@ -217,6 +224,82 @@ test("a move keeps its original account and Cloud through deferred startup", asy
     await move.kick();
     assert.deepEqual(journal.value.moves[0].source, { accountId: ACCOUNTS.a.id, origin: ACCOUNTS.a.origin });
     assert.equal(requests.some((request) => request.origin === ACCOUNTS.b.origin), false);
+  } finally { done(); }
+});
+
+test("a foreign pending move stays untouched while the current account's move reaches its team", async () => {
+  const old = pendingAMove();
+  const { handlers, journal, requests, teamPairs, setAccount, move, done } = accountFixture({
+    initialJournal: { v: 1, moves: [old] }, confirm: async () => true,
+  });
+  setAccount("b");
+  try {
+    const answer = await handlers.get("cloud-send:team-bring-move")(OWN, `atlas-${ACCOUNTS.b.id}`);
+    await move.kick();
+    assert.equal(answer.started, true);
+    assert.deepEqual(journal.value.moves[0], old);
+    assert.equal(requests.some((request) => request.origin === ACCOUNTS.a.origin), false);
+    assert.deepEqual(teamPairs, ["team-acme"]);
+  } finally { done(); }
+});
+
+test("another account's team list cannot stop a pending move before its owner returns", async () => {
+  const old = pendingAMove();
+  let otherAccount = false;
+  const { journal, teamPairs, setAccount, move, done } = accountFixture({
+    initialJournal: { v: 1, moves: [old] }, teams: () => otherAccount ? [] : state.teams,
+  });
+  try {
+    otherAccount = true;
+    setAccount("b");
+    await move.kick();
+    assert.deepEqual(journal.value.moves[0], old);
+    otherAccount = false;
+    setAccount("a");
+    await move.kick();
+    assert.deepEqual(teamPairs, ["team-acme"]);
+  } finally { done(); }
+});
+
+test("retry, seen and a matching bot ID leave another account's journal record intact", async () => {
+  const old = { ...pendingAMove(), failing: true, stopped: true, retryAt: 123 };
+  const { handlers, journal, teamPairs, setAccount, move, done } = accountFixture({
+    initialJournal: { v: 1, moves: [old] }, confirm: async () => true,
+    botsResponse: async (owner) => new Response(JSON.stringify({ bots: [
+      { id: `maus-${owner.id}`, name: "MausBot", defaultBot: {} },
+      { id: old.bot.id, name: owner.bot },
+    ] }), { status: 200 }),
+  });
+  setAccount("b");
+  try {
+    await move.retry();
+    move.seen();
+    assert.deepEqual(journal.value.moves, [old]);
+    const answer = await handlers.get("cloud-send:team-bring-move")(OWN, old.bot.id);
+    await move.kick();
+    assert.equal(answer.started, true);
+    assert.deepEqual(journal.value.moves[0], old);
+    assert.equal(journal.value.moves[1].source.accountId, ACCOUNTS.b.id);
+    assert.deepEqual(teamPairs, ["team-acme"]);
+  } finally { done(); }
+});
+
+test("bring status and a canceled confirmation project only the current source and team", async () => {
+  const old = pendingAMove();
+  let otherTeam = false;
+  const { handlers, setAccount, move, done } = accountFixture({
+    initialJournal: { v: 1, moves: [old] },
+    teams: () => otherTeam ? [{ id: "team-b", name: "Team B", machine: { origin: OTHER, status: "ready" } }] : state.teams,
+  });
+  try {
+    assert.equal(handlers.get("cloud-send:team-bring-status")(OWN)?.bot.id, old.bot.id);
+    setAccount("b");
+    assert.equal(handlers.get("cloud-send:team-bring-status")(OWN), null);
+    assert.equal(move.view(), null);
+    otherTeam = true;
+    assert.equal(handlers.get("cloud-send:team-bring-status")({ origin: OTHER }), null);
+    const canceled = await handlers.get("cloud-send:team-bring-move")({ origin: OTHER }, `atlas-${ACCOUNTS.b.id}`);
+    assert.deepEqual(canceled, { started: false, move: null });
   } finally { done(); }
 });
 

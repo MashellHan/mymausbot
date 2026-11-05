@@ -49,6 +49,7 @@ export const routinesOn = (held) => (Array.isArray(held) ? held.filter((key) => 
  *     close(): Promise<void>,
  *   },
  *   inTeam(teamId: string): boolean,
+ *   sourceCurrent?(move: any): boolean,
  *   onChange?(view: unknown): void,
  *   now?(): number,
  *   timers?: { set(work: () => void, ms: number): unknown, clear(timer: unknown): void },
@@ -64,8 +65,9 @@ export function createTeamMove(deps) {
   let running = null, again = false, timer = null, closed = false;
 
   const read = () => parseTeamMoves(deps.journal.read());
-  const view = () => {
-    const shown = read().moves.filter((move) => !move.told).at(-1);
+  const currentSource = (move) => deps.sourceCurrent?.(move) !== false;
+  const view = (eligible = () => true) => {
+    const shown = read().moves.filter((move) => !move.told && eligible(move)).at(-1);
     if (!shown) return null;
     const phase = shown.phase === "done" ? "done" : shown.failing ? "failed" : "moving";
     return { bot: { id: shown.bot.id, name: shown.name ?? shown.bot.name }, team: { id: shown.team.id, name: shown.team.name }, phase };
@@ -74,7 +76,7 @@ export function createTeamMove(deps) {
   /** The move of this bot, changed as `change` says; the journal is written before anything acts on it. */
   const update = (botId, change) => {
     const journal = read();
-    const at = journal.moves.findIndex((move) => move.bot.id === botId);
+    const at = journal.moves.findIndex((move) => move.bot.id === botId && currentSource(move));
     if (at < 0) return null;
     const next = change === null ? null : { ...journal.moves[at], ...change };
     if (next) journal.moves[at] = next; else journal.moves.splice(at, 1);
@@ -189,7 +191,7 @@ export function createTeamMove(deps) {
 
   async function run() {
     for (const move of read().moves) {
-      if (closed || move.phase === "done") continue;
+      if (closed || move.phase === "done" || !currentSource(move)) continue;
       // Someone no longer in the team moves nothing into it; a bot held for the move goes on on My Cloud.
       if (move.phase !== "switch" && !deps.inTeam(move.team.id)) {
         if (FROZEN.has(move.phase) || move.thaw) {
@@ -202,7 +204,7 @@ export function createTeamMove(deps) {
       if (move.stopped) continue;
       if (move.retryAt > now()) { later(move.retryAt - now()); continue; }
       await runOne(move);
-      const after = read().moves.find((entry) => entry.bot.id === move.bot.id);
+      const after = read().moves.find((entry) => entry.bot.id === move.bot.id && currentSource(entry));
       if (after?.retryAt > now()) later(after.retryAt - now());
     }
   }
@@ -226,12 +228,13 @@ export function createTeamMove(deps) {
     /** Starts moving a bot into a team; a bot already moving there goes on. */
     start({ bot, team, source }) {
       const journal = read();
-      const held = journal.moves.find((move) => move.bot.id === bot.id);
+      const held = journal.moves.find((move) => move.bot.id === bot.id && currentSource(move));
       if (held && held.phase !== "done" && !held.stopped) {
         if (held.team.id !== team.id) throw new Error(`${held.bot.name} is moving to ${held.team.name}.`);
         return kick();
       }
-      const moves = journal.moves.filter((move) => move.bot.id !== bot.id).map((move) => (move.phase === "done" ? { ...move, told: true } : move));
+      const moves = journal.moves.filter((move) => move.bot.id !== bot.id || !currentSource(move))
+        .map((move) => (move.phase === "done" && currentSource(move) ? { ...move, told: true } : move));
       deps.journal.write({ v: 1, moves: [...moves, { bot, team, ...(source ? { source } : {}), phase: "copy", startedAt: now() }] });
       publish();
       return kick();
@@ -239,7 +242,7 @@ export function createTeamMove(deps) {
     /** Try again: now, not at the next try. */
     retry() {
       const journal = read();
-      for (const move of journal.moves) if (move.phase !== "done" && (move.retryAt || move.stopped)) { delete move.retryAt; delete move.stopped; }
+      for (const move of journal.moves) if (currentSource(move) && move.phase !== "done" && (move.retryAt || move.stopped)) { delete move.retryAt; delete move.stopped; }
       deps.journal.write(journal);
       publish();
       return kick();
@@ -247,13 +250,13 @@ export function createTeamMove(deps) {
     /** The line was closed: a move that failed goes on trying by itself, and says so again once it is done. */
     seen() {
       const journal = read();
-      for (const move of journal.moves) if (move.phase === "done" || move.failing) move.told = true;
+      for (const move of journal.moves) if (currentSource(move) && (move.phase === "done" || move.failing)) move.told = true;
       deps.journal.write(journal);
       publish();
-      return view();
+      return view(currentSource);
     },
     /** The bot this move carries, or null: a moving bot's menu offers no second move. */
-    moving: (botId) => read().moves.find((move) => move.bot.id === botId && move.phase !== "done") ?? null,
+    moving: (botId) => read().moves.find((move) => move.bot.id === botId && move.phase !== "done" && currentSource(move)) ?? null,
     close() { closed = true; if (timer) timers.clear(timer); },
   };
 }

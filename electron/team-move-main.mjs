@@ -227,7 +227,8 @@ export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, c
     };
   }
 
-  const moves = createTeamMove({ journal: journal ?? jsonFile(journalFile), open, inTeam: (id) => Boolean(teamOf(id)), onChange: () => onChange(), log });
+  const sourceCurrent = (move) => !move.source || sameSource(move.source, bringSource());
+  const moves = createTeamMove({ journal: journal ?? jsonFile(journalFile), open, inTeam: (id) => Boolean(teamOf(id)), sourceCurrent, onChange: () => onChange(), log });
 
   const myCloudPage = (channel, handler) => (event, ...args) => {
     if (cloudPage(event) !== "cloud") throw new Error(`${channel} is only available on My Cloud in this app`);
@@ -244,9 +245,9 @@ export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, c
     if (!team) throw new Error("You're not in that team.");
     if (!ID.test(String(botId))) throw new Error("Choose one of your bots to move.");
     void moves.start({ bot: { id: String(botId), name: sentence(name) ?? "This bot" }, team: { id: team.id, name: team.name, origin: team.origin } });
-    return moves.view();
+    return moves.view(sourceCurrent);
   }));
-  ipcMain.handle("cloud-send:team-retry", myCloudPage("cloud-send:team-retry", () => { void moves.retry(); return moves.view(); }));
+  ipcMain.handle("cloud-send:team-retry", myCloudPage("cloud-send:team-retry", () => { void moves.retry(); return moves.view(sourceCurrent); }));
   ipcMain.handle("cloud-send:team-open", myCloudPage("cloud-send:team-open", (teamId) => {
     const team = teamOf(String(teamId));
     if (!team) throw new Error("You're not in that team.");
@@ -263,6 +264,10 @@ export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, c
   const samePageTeam = (event, team) => {
     const current = pageTeam(event);
     return current?.id === team.id && current.origin === team.origin && current.name === team.name && current.ready === team.ready;
+  };
+  const viewForTeamPage = (event) => {
+    const team = pageTeam(event);
+    return team ? moves.view((move) => sourceCurrent(move) && move.team.id === team.id && (!move.team.origin || move.team.origin === team.origin)) : null;
   };
   let bringList = null;
   async function myCloudBots(source) {
@@ -301,19 +306,16 @@ export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, c
     if (!bot || bot.stays) throw new Error("Choose one of your bots to move.");
     const confirmed = await confirmMove(teamMoveConfirmWords({ bot: bot.name, team: team.name }));
     if (!stillCurrent()) throw new Error("Your Cloud account or team page changed. Try again.");
-    if (!confirmed) return { started: false, move: moves.view() };
+    if (!confirmed) return { started: false, move: viewForTeamPage(event) };
     void moves.start({ bot: { id: bot.id, name: bot.name }, team: { id: team.id, name: team.name, origin: team.origin }, source: { accountId: source.accountId, origin: source.origin } });
     bringList = null;
-    return { started: true, move: moves.view() };
+    return { started: true, move: viewForTeamPage(event) };
   });
-  ipcMain.handle("cloud-send:team-bring-status", (event) => {
-    const team = pageTeam(event), move = moves.view();
-    return team && move?.team.id === team.id ? move : null;
-  });
+  ipcMain.handle("cloud-send:team-bring-status", (event) => viewForTeamPage(event));
 
   return {
     kick: () => moves.kick(),
-    view: () => moves.view(),
+    view: () => moves.view(sourceCurrent),
     seen: () => moves.seen(),
     start: (input) => moves.start(input),
     retry: () => moves.retry(),
