@@ -21,13 +21,18 @@ function page(rows: Row[], revision: number) {
 }
 function fixture(kind: ReportKind) {
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
-  const data = { current: null as Row | null, editions: new Map<string, { header: Row; items: Row[] }>(), revision: 3, fail: false };
+  const data = { current: null as Row | null, editions: new Map<string, { header: Row; items: Row[] }>(), revision: 3, fail: false,
+    historyCursor: false, deferredHistory: null as Promise<ReturnType<typeof page>> | null };
   let changed: (() => void) | undefined;
-  const query = vi.fn(async (id: string, parameters: Record<string, string>, options?: { expectedDataRevision?: number }) => {
+  const query = vi.fn(async (id: string, parameters: Record<string, string>, options?: { expectedDataRevision?: number; cursor?: string }) => {
     if (data.fail) throw new Error("Synthetic read failure");
     if (options?.expectedDataRevision !== undefined && options.expectedDataRevision !== data.revision) throw new Error("Data changed while this report was being read.");
     if (id === "current") return page(data.current ? [data.current] : [], data.revision);
-    if (id === "history") return page([...data.editions.values()].map((entry) => entry.header).sort((a, b) => String(b.editionKey).localeCompare(String(a.editionKey))), data.revision);
+    if (id === "history") {
+      if (options?.cursor && data.deferredHistory) return data.deferredHistory;
+      return { ...page([...data.editions.values()].map((entry) => entry.header).sort((a, b) => String(b.editionKey).localeCompare(String(a.editionKey))), data.revision),
+        ...(data.historyCursor ? { nextCursor: "older" } : {}) };
+    }
     if (id === "edition") return page(data.editions.get(parameters.editionKey)?.header ? [data.editions.get(parameters.editionKey)!.header] : [], data.revision);
     if (id === "items") return page(data.editions.get(parameters.editionKey)?.items ?? [], data.revision);
     throw new Error(`Unknown query ${id}`);
@@ -87,6 +92,7 @@ it("labels GitHub signals precisely, hides absent facts and retains a stale edit
   app.changed();
   await app.view.happyDOM.whenAsyncComplete();
   expect(app.text()).toContain("Weekly Trending star increase");
+  expect(app.text()).toContain("sample/tool");
   expect(app.text()).toContain("Last repository activity");
   expect(app.text()).toContain("This is not a safety audit.");
   expect(app.text()).not.toContain("Why it matters");
@@ -95,4 +101,48 @@ it("labels GitHub signals precisely, hides absent facts and retains a stale edit
   await app.view.happyDOM.whenAsyncComplete();
   expect(app.text()).toContain("Showing the last loaded edition");
   expect(app.text()).toContain("Weekly Trending star increase");
+});
+
+it("discards stale history paging and drains a queued edition and Data refresh", async () => {
+  const app = fixture("x_ai_digest"); opened.push(app.view);
+  const latest = header("2026-11-04");
+  const older = header("2026-11-03");
+  app.data.current = latest;
+  app.data.editions.set("2026-11-04", { header: latest, items: [item({ title: "Latest edition" })] });
+  app.data.editions.set("2026-11-03", { header: older, items: [item({ title: "Earlier edition" })] });
+  app.data.historyCursor = true;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  let release!: (value: ReturnType<typeof page>) => void;
+  app.data.deferredHistory = new Promise((resolve) => { release = resolve; });
+  (app.view.document.getElementById("more") as unknown as HTMLButtonElement).click();
+  const select = app.view.document.getElementById("edition") as unknown as HTMLSelectElement;
+  select.value = "2026-11-03";
+  select.dispatchEvent(new app.view.Event("change") as unknown as Event);
+  const newHead = header("2026-11-05");
+  app.data.current = newHead;
+  app.data.editions.set("2026-11-05", { header: newHead, items: [item({ title: "New edition" })] });
+  app.data.revision = 4;
+  app.changed();
+  release(page([header("2026-10-01")], 3));
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(select.value).toBe("2026-11-03");
+  expect(app.text()).toContain("Earlier edition");
+  expect(app.text()).not.toContain("New edition");
+  expect([...select.options].map((option) => option.value)).not.toContain("2026-10-01");
+  expect(app.query).toHaveBeenCalledWith("edition", { editionKey: "2026-11-03" }, { expectedDataRevision: 4 });
+  expect(app.view.document.getElementById("notice")?.hidden).toBe(true);
+});
+
+it("keeps a known coverage bound and does not call an unknown empty edition partial", async () => {
+  const app = fixture("github_activity"); opened.push(app.view);
+  const edition = header("2026-11-04", { windowEndAt: null, coverageStatus: "unknown", coverageNote: "Collection was not verified.", itemCount: 0 });
+  app.data.current = edition;
+  app.data.editions.set("2026-11-04", { header: edition, items: [] });
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.text()).toContain("Nov 4, 2026");
+  expect(app.text()).toContain("Date unavailable");
+  expect(app.text()).toContain("No verified items are available for this edition.");
+  expect(app.text()).not.toContain("this partial edition");
 });
