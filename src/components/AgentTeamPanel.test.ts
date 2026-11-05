@@ -38,7 +38,8 @@ const render = async (view: "content" | "panel", snapshot: LocalAgentTeamsRespon
   await act(async () => root.render(view === "content"
     ? createElement(AgentTeamView, { snapshot }) : createElement(AgentTeamPanel)));
 };
-const headers = () => [...host.querySelectorAll<HTMLButtonElement>("section h3 button")];
+const offices = () => [...host.querySelectorAll<HTMLButtonElement>("[data-team-house]")];
+const members = () => host.querySelector<HTMLElement>('[data-testid="selected-agent-team"]');
 const text = () => host.textContent ?? "";
 
 beforeEach(() => {
@@ -55,19 +56,26 @@ afterEach(async () => {
 });
 
 describe("Agent Team panel", () => {
-  it("keeps independent groups collapsed, then preserves expansion, focus and scroll through a stale update", async () => {
+  it("shows one selected office at a time and preserves selection, focus and scroll through a stale update", async () => {
     await render("content");
     expect(text()).toContain("Local Herdr · 2 teams");
-    expect(headers()).toHaveLength(2);
-    expect(headers().map((button) => button.getAttribute("aria-expanded"))).toEqual(["false", "false"]);
-    expect(headers().map((button) => document.getElementById(button.getAttribute("aria-controls")!)?.hidden)).toEqual([true, true]);
-    expect(text()).toContain("3 agents");
-    expect(text()).toContain("2 agents");
+    expect(text()).toContain("Agent Offices");
+    expect(text()).not.toContain("Updates every 2 seconds");
+    expect(offices()).toHaveLength(2);
+    expect(offices().map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "false"]);
+    expect(offices()[0]!.textContent).toContain("3 agents");
+    expect(offices()[0]!.textContent).toContain("1 active");
+    expect(offices()[1]!.textContent).toContain("2 agents");
+    expect(members()).toBeNull();
+    expect(text()).not.toContain("Mira");
 
-    const first = headers()[0]!;
+    const first = offices()[0]!;
     first.focus();
     await act(async () => first.click());
-    expect(headers().map((button) => button.getAttribute("aria-expanded"))).toEqual(["true", "false"]);
+    expect(offices().map((button) => button.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
+    expect(first.getAttribute("aria-controls")).toBe(members()?.id);
+    expect(members()?.querySelector("h3")?.textContent).toBe("Atlas Studio");
+    expect(members()?.querySelectorAll("li")).toHaveLength(3);
     expect(text()).toContain("Working");
     expect(text()).toContain("Model · a-very-long-synthetic-model-identifier");
     expect(text()).toContain("Needs input");
@@ -77,24 +85,35 @@ describe("Agent Team panel", () => {
     expect(host.querySelector(".line-clamp-2")).not.toBeNull();
 
     const scroller = host.querySelector<HTMLElement>('[data-testid="agent-team-panel"]')!;
+    const selector = host.querySelector<HTMLElement>(".agent-town-offices")!;
     scroller.scrollTop = 42;
+    selector.scrollTop = 25;
     await render("content", { ...ready, status: "stale", teams: ready.teams.map((team) => team.id === "w1"
       ? { ...team, agents: team.agents.map((agent) => agent.id === "p1" ? { ...agent, state: "blocked" } : agent) }
       : team) });
-    expect(headers()[0]).toBe(first);
+    expect(offices()[0]).toBe(first);
     expect(document.activeElement).toBe(first);
     expect(scroller.scrollTop).toBe(42);
-    expect(headers().map((button) => button.getAttribute("aria-expanded"))).toEqual(["true", "false"]);
+    expect(selector.scrollTop).toBe(25);
+    expect(offices().map((button) => button.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
     expect(text()).toContain("Showing the last known teams");
     expect(text()).toContain("Last observed · Needs input");
-    expect(host.querySelector<HTMLElement>("section li .bg-ink-secondary\\/30")).not.toBeNull();
+    expect(offices()[0]!.textContent).toContain("1 last active");
+    expect(members()?.querySelector<HTMLElement>("li .bg-ink-secondary\\/30")).not.toBeNull();
     expect(text()).toContain("Local Herdr · 2 teams");
 
-    await act(async () => headers()[1]!.click());
-    expect(headers().map((button) => button.getAttribute("aria-expanded"))).toEqual(["true", "true"]);
+    await act(async () => offices()[1]!.click());
+    expect(offices().map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
+    expect(members()?.querySelector("h3")?.textContent).toBe("Maple Ops");
+    expect(members()?.querySelectorAll("li")).toHaveLength(2);
+    expect(members()?.textContent).not.toContain("Mira");
+    expect(members()?.textContent).toContain("2 agents");
+    expect(members()?.textContent).toContain("0 last active");
     expect(text()).toContain("Response ready");
     expect(text()).toContain("Unknown");
     expect(text()).not.toContain("Task completed");
+    await act(async () => offices()[1]!.click());
+    expect(members()).toBeNull();
   });
 
   it("distinguishes no snapshot from a real empty team list", async () => {
@@ -102,10 +121,12 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("Local Herdr · — teams");
     expect(text()).toContain("teams are unavailable");
     expect(text()).not.toContain("0 teams");
+    expect(members()).toBeNull();
 
     await render("content", { status: "ready", updatedAt: ready.updatedAt, teamCount: 0, teams: [] });
     expect(text()).toContain("Local Herdr · 0 teams");
     expect(text()).toContain("No local Herdr teams found");
+    expect(members()).toBeNull();
   });
 
   it("uses singular copy for one team and one agent in English and Chinese", async () => {
@@ -115,6 +136,7 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("1 agent");
     expect(text()).not.toContain("1 teams");
     expect(text()).not.toContain("1 agents");
+    expect(members()).toBeNull();
 
     setLocale("zh");
     await render("content", single);
@@ -133,39 +155,62 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("Local Herdr · 2 teams");
   });
 
-  it("replaces the latest instruction and active count every two seconds without collapsing the list", async () => {
+  it("replaces selected office details every two seconds without moving focus or scroll", async () => {
     vi.useFakeTimers();
     const updated = { ...ready, teams: ready.teams.map((team) => team.id === "w1" ? { ...team, activeAgentCount: 0,
       agents: team.agents.map((agent) => agent.id === "p1" ? { ...agent, state: "done" as const, taskHint: "Only the newest instruction", reasoningEffort: "max", contextUsed: 64_000 } : agent) } : team) };
     calls.api.mockResolvedValueOnce(ready).mockResolvedValueOnce(updated);
     await render("panel");
-    await act(async () => headers()[0]!.click());
-    const first = headers()[0]!;
+    const first = offices()[0]!;
+    first.focus();
+    await act(async () => first.click());
     const scroller = host.querySelector<HTMLElement>('[data-testid="agent-team-panel"]')!;
+    const selector = host.querySelector<HTMLElement>(".agent-town-offices")!;
     scroller.scrollTop = 90;
+    selector.scrollTop = 20;
     expect(first.textContent).toContain("1 active");
     await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
     expect(calls.api).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(calls.api).toHaveBeenCalledTimes(2);
-    expect(headers()[0]).toBe(first);
-    expect(first.getAttribute("aria-expanded")).toBe("true");
+    expect(offices()[0]).toBe(first);
+    expect(document.activeElement).toBe(first);
+    expect(first.getAttribute("aria-pressed")).toBe("true");
     expect(first.textContent).toContain("0 active");
     expect(scroller.scrollTop).toBe(90);
-    expect(text()).toContain("Only the newest instruction");
-    expect(text()).toContain("64,000 / 256,000 · 25%");
-    expect(text()).not.toContain("Draft a synthetic release plan");
+    expect(selector.scrollTop).toBe(20);
+    expect(members()?.textContent).toContain("Only the newest instruction");
+    expect(members()?.textContent).toContain("64,000 / 256,000 · 25%");
+    expect(members()?.textContent).not.toContain("Draft a synthetic release plan");
     expect(host.querySelector('[data-team-house="w1"]')?.getAttribute("data-activity")).toBe("blocked");
+  });
+
+  it("clears a departed office and returns focus to the selector", async () => {
+    await render("content");
+    const first = offices()[0]!;
+    first.focus();
+    await act(async () => first.click());
+    expect(members()?.textContent).toContain("Mira");
+    await render("content", { ...ready, teamCount: 1, teams: [ready.teams[1]!] });
+    expect(members()).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector(".agent-town-offices"));
+    expect(offices()[0]?.getAttribute("aria-pressed")).toBe("false");
   });
 
   it.each([401, 403])("clears old local data on HTTP %i", async (status) => {
     vi.useFakeTimers();
     calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new ApiError("forbidden", status));
     await render("panel");
+    const first = offices()[0]!;
+    first.focus();
+    await act(async () => first.click());
+    expect(members()?.textContent).toContain("Mira");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(text()).toContain("Local Herdr · — teams");
     expect(text()).toContain("teams are unavailable");
     expect(text()).not.toContain("Atlas Studio");
+    expect(members()).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('[data-testid="agent-team-panel"]'));
   });
 
   it("keeps a valid empty snapshot and its zero count when the next read fails", async () => {

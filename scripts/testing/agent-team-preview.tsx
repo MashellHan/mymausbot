@@ -41,15 +41,21 @@ createRoot(document.getElementById("root")!).render(
   </BotEditorStore>,
 );
 
-if (params.has("open") || params.has("focus")) {
-  setTimeout(() => {
-    const groups = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="agent-team-panel"] section h3 button')];
-    if (params.get("open") === "first" || params.get("open") === "both") groups[0]?.click();
-    if (params.get("open") === "both") groups[1]?.click();
+if (params.has("select") || params.has("focus")) {
+  const applySelection = () => {
+    const offices = [...document.querySelectorAll<HTMLButtonElement>("[data-team-house]")];
+    if (!offices.length) return;
+    observer.disconnect();
+    const office = params.get("select") === "second" ? offices[1] : offices[0];
+    if (params.has("select")) office?.click();
     const target = params.get("focus") === "tab"
       ? document.querySelector<HTMLElement>('[data-testid="computer-tabs"] [aria-selected="true"]')
-      : params.get("focus") === "team" ? groups[0] : null;
+      : params.get("focus") === "selector" ? document.querySelector<HTMLElement>(".agent-town-offices")
+        : params.get("focus") === "office" ? office : null;
     target?.focus();
     document.documentElement.dataset.fixtureFocusVisible = String(target?.matches(":focus-visible") ?? false);
-  }, 800);
+  };
+  const observer = new MutationObserver(applySelection);
+  observer.observe(document.getElementById("root")!, { childList: true, subtree: true });
+  applySelection();
 }

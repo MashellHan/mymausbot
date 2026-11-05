@@ -1,7 +1,8 @@
 import { Pause, Play } from "lucide-react";
-import { useState } from "react";
+import { useState, type Ref } from "react";
 import type { LocalAgentTeam } from "../../shared/local-dashboard";
 import { t } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import { AgentTownHouse } from "./AgentTownHouse";
 import "./agent-town.css";
 
@@ -10,7 +11,10 @@ export function teamActivity(team: LocalAgentTeam) {
     : team.agents.some((agent) => agent.state === "unknown") ? "unknown" : "idle";
 }
 
-export function AgentTown({ teams, stale, onSelect }: { teams: LocalAgentTeam[]; stale: boolean; onSelect: (id: string) => void }) {
+export function AgentTown({ teams, stale, selectedId, detailsId, selectorRef, onSelect }: {
+  teams: LocalAgentTeam[]; stale: boolean; selectedId: string | null; detailsId: string;
+  selectorRef: Ref<HTMLDivElement>; onSelect: (id: string) => void;
+}) {
   const [paused, setPaused] = useState(false);
   return <section className="agent-town mb-5" data-paused={paused || stale} aria-label={t("computer.agentTeam.town")}>
     <div className="mb-1 flex items-center justify-between gap-2">
@@ -20,13 +24,15 @@ export function AgentTown({ teams, stale, onSelect }: { teams: LocalAgentTeam[];
         {paused ? <Play size={14} /> : <Pause size={14} />}
       </button>
     </div>
-    <div className="flex gap-3 overflow-x-auto rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60" role="region" aria-label={t("computer.agentTeam.town")} tabIndex={0}>
+    <div ref={selectorRef} className="agent-town-offices rounded-lg border border-hairline/60 bg-inset/40 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60" role="region" aria-label={t("computer.agentTeam.town")} tabIndex={0}>
       {teams.map((team, index) => <button key={team.id} type="button" data-team-house={team.id} data-activity={teamActivity(team)}
-        aria-label={t("computer.agentTeam.openTeam", { name: team.name })} onClick={() => onSelect(team.id)}
-        className="town-house min-w-0 rounded-lg pb-2 text-center outline-none hover:bg-raised-hover focus-visible:ring-2 focus-visible:ring-accent/60">
+        aria-pressed={selectedId === team.id} aria-controls={selectedId === team.id ? detailsId : undefined}
+        onClick={() => onSelect(team.id)}
+        className={cn("town-house min-w-0 rounded-lg border border-transparent px-1 pb-1 text-center outline-none hover:bg-raised-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60", selectedId === team.id && "border-accent/60 bg-accent/5")}>
         <AgentTownHouse index={index} />
-        <span dir="auto" className="block px-1 text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{team.name}</span>
-        <span className="mt-0.5 block text-[12px] tabular-nums text-ink-secondary">{stale ? t("computer.agentTeam.lastActive", { count: team.activeAgentCount }) : t("computer.agentTeam.activeCount", { count: team.activeAgentCount })}</span>
+        <span dir="auto" title={team.name} className="line-clamp-2 px-1 text-[12px] font-medium leading-4 text-ink [overflow-wrap:anywhere]">{team.name}</span>
+        <span className="block text-[11px] leading-4 tabular-nums text-ink-secondary">{team.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: team.agentCount })}</span>
+        <span className="block text-[11px] leading-4 tabular-nums text-ink-secondary">{stale ? t("computer.agentTeam.lastActive", { count: team.activeAgentCount }) : t("computer.agentTeam.activeCount", { count: team.activeAgentCount })}</span>
       </button>)}
     </div>
   </section>;

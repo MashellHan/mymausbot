@@ -7371,7 +7371,7 @@
   "computer.agentTeam.refreshRate": "每 2 秒更新",
   "computer.agentTeam.activeCount": "活跃 {count}",
   "computer.agentTeam.lastActive": "上次活跃 {count}",
-  "computer.agentTeam.town": "Agent 小镇",
+  "computer.agentTeam.town": "Agent 办公室",
   "computer.agentTeam.openTeam": "展开 {name}",
   "computer.agentTeam.pauseTown": "暂停小镇动画",
   "computer.agentTeam.playTown": "播放小镇动画",
