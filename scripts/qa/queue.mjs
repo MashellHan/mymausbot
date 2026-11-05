@@ -19,7 +19,7 @@ export function queueItems(issues, prs, now = Date.now()) {
     else if (Date.parse(due) < now) action = `overdue repair owned by ${owner}, due ${due}`;
     if (action) items.push({ key: `issue:${issue.number}:${epoch}:${action}`, text: `${issue.html_url}: ${action}` });
   }
-  for (const pr of prs.filter((item) => !item.draft && item.labels.some((label) => label.name === "handoff:ready"))) {
+  for (const pr of prs.filter((item) => !item.draft && item.body?.match(/^QA-Handoff:\s*([a-f0-9]{40})\s*$/m)?.[1] === item.head.sha)) {
     items.push({ key: `pr:${pr.number}:${pr.head.sha}`, text: `${pr.html_url}: review/CI handoff for ${pr.head.sha}` });
   }
   return items;
@@ -28,12 +28,13 @@ export function queueItems(issues, prs, now = Date.now()) {
 export async function recoverQa(state, { api = github, health = qaHealth, now = Date.now(), repository = process.env.GITHUB_REPOSITORY } = {}) {
   const runs = (await api("/actions/workflows/ci.yml/runs?branch=main&per_page=100")).workflow_runs.filter((run) => eligibleRun(run, repository, false));
   const fullRuns = runs.filter((run) => eligibleRun(run, repository));
-  const latest = fullRuns.find((run) => run.status === "completed");
+  const sinceInstallation = (run) => !state.startedAt || Date.parse(run.created_at) >= Date.parse(state.startedAt);
+  const latest = fullRuns.find((run) => run.status === "completed" && sinceInstallation(run));
   const qa = await health({ api, repository, now });
   const reporterRuns = (await api("/actions/workflows/qa-report.yml/runs?per_page=100")).workflow_runs;
   const reporting = reporterRuns.some((run) => run.status !== "completed");
   const reported = new Set(reporterRuns.filter((run) => run.conclusion === "success").map((run) => Number(run.display_title?.match(/^QA report (\d+)$/)?.[1])));
-  const backlog = runs.filter((run) => run.status === "completed" && Date.parse(run.created_at) >= Date.parse(state.startedAt)
+  const backlog = runs.filter((run) => run.status === "completed" && sinceInstallation(run)
     && !reported.has(run.id)).at(-1);
   const deliver = !qa.report && latest ? latest : backlog;
   if (deliver && !reporting) {
@@ -56,10 +57,15 @@ export async function recoverQa(state, { api = github, health = qaHealth, now = 
 
 export function promptLead(message, { binary = process.env.MAUSBOT_HERDR || "herdr", session = process.env.MAUSBOT_HERDR_SESSION || "default", lead = "mausbot-lead" } = {}) {
   const command = (...args) => execFileSync(binary, ["--session", session, "agent", ...args], { encoding: "utf8", timeout: 45_000, maxBuffer: 128_000 });
-  const agent = JSON.parse(command("get", lead)).result.agent;
-  const screen = command("read", lead, "--source", "visible", "--lines", "20");
-  if (!agent.interactive_ready || !["working", "done", "idle"].includes(agent.agent_status) || /Would you like|Allow this|approval required|Yes, proceed/i.test(screen)) {
-    throw Object.assign(new Error("Lead is not ready for a queue handoff"), { notSubmitted: true });
+  let agent, screen;
+  try {
+    agent = JSON.parse(command("get", lead)).result.agent;
+    screen = command("read", lead, "--source", "visible", "--lines", "20");
+    if (!agent?.interactive_ready || !["working", "done", "idle"].includes(agent.agent_status) || /Would you like|Allow this|approval required|Yes, proceed/i.test(screen)) {
+      throw new Error("Lead is not ready for a queue handoff");
+    }
+  } catch (error) {
+    throw Object.assign(error, { notSubmitted: true });
   }
   const receipt = JSON.parse(command("prompt", lead, message));
   return { submittedAt: new Date().toISOString(), pane: agent.pane_id, receipt };

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { ciOutputs, FULL_SCOPE, readCheckPolicy, selectCheckPlan, selectCiScope } from "./ci-scope.mjs";
 import { localChange } from "./check.mjs";
+import { holdsFor } from "./qa/contracts.mjs";
 
 const policy = JSON.parse(readFileSync("scripts/testing/check-policy.json", "utf8"));
 const admitted = { ...policy, areas: policy.areas.map((area: object) => ({ ...area, admitted: true })) };
@@ -35,11 +36,20 @@ describe("shared local and CI check policy", () => {
   it("combines affected areas but preserves the broader checks for known new files and deletions", () => {
     const both = plan(["src/components/LocalUsagePanel.tsx", "src/components/AgentTown.tsx"]);
     expect(both.fastAreas).toEqual(["usage", "agents"]);
+    expect(both.holdAreas).toEqual(["usage", "agents"]);
     expect(both.core).toContain("src/components/AgentTeamPanel.auth.test.ts");
     for (const files of [["src/new-helper.ts"], ["src/components/LocalUsagePanel.tsx", "src/new-helper.ts"]]) {
       expect(plan(files)).toMatchObject({ full: false, reduced: false, scope: selectCiScope(files) });
     }
     expect(plan(["src/components/LocalUsagePanel.tsx"], { present: (file: string) => file !== "src/components/LocalUsagePanel.tsx" && existsSync(file) }).reduced).toBe(false);
+  });
+
+  it("keeps mixed mapped and unmapped changes subject to every affected hold", () => {
+    const hold = [{ number: 1, labels: ["qa:p1", "qa:scope:agents"] }];
+    const mixed = plan(["src/components/LocalUsagePanel.tsx", "server/local-agent-activity.ts"]);
+    expect(mixed.holdAreas).toEqual(["global"]);
+    expect(holdsFor(hold, mixed.holdAreas)).toHaveLength(1);
+    expect(holdsFor(hold, plan(["src/components/LocalUsagePanel.tsx"]).holdAreas)).toEqual([]);
   });
 
   it("makes unsafe, mixed sensitive, forced-full and policy changes require all platforms", () => {

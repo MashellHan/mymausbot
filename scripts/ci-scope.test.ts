@@ -10,12 +10,14 @@ import { parse } from "yaml";
 import {
   ALL_OS, AREA_CHECKS, ciOutputs, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, moveLinuxIntoStatic, QUEUED_SCOPE, SELECTABLE_JOBS,
   selectCiScope,
-  selectPushScope, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_LABEL, WINDOWS_OS, windowsReason,
+  pullRequestControls, selectPushScope, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_LABEL, WINDOWS_OS, windowsReason,
 } from "./ci-scope.mjs";
 import { HOST_E2E } from "./testing/host-e2e.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const script = fileURLToPath(new URL("./ci-scope.mjs", import.meta.url));
+const scopeWithEventControls = ["--input-type=module", "-e", `import { runCiScope } from ${JSON.stringify(new URL("./ci-scope.mjs", import.meta.url).href)};
+  await runCiScope({ readPullRequest: async (pr) => ({ labels: (pr.labels ?? []).map(label => label.name), repairIds: [] }) });`];
 const ALL = ["macos-latest", "ubuntu-latest", "windows-latest"];
 const PR = ["ubuntu-latest", "windows-latest"];
 const LINUX = ["ubuntu-latest"];
@@ -52,7 +54,7 @@ function run(directory: string, event: string, payload: unknown) {
   const eventPath = join(directory, "event.json");
   const outputPath = join(directory, "output.txt");
   writeFileSync(eventPath, JSON.stringify(payload));
-  const result = spawnSync(process.execPath, [script], {
+  const result = spawnSync(process.execPath, scopeWithEventControls, {
     cwd: directory,
     env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath },
     encoding: "utf8",
@@ -288,7 +290,7 @@ describe("the Linux work in the static job, on a Boat VM", () => {
     const eventPath = join(directory, "event.json");
     const outputPath = join(directory, "output.txt");
     writeFileSync(eventPath, JSON.stringify({ pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } } }));
-    const result = spawnSync(process.execPath, [script], {
+    const result = spawnSync(process.execPath, scopeWithEventControls, {
       cwd: directory, encoding: "utf8", timeout: 5_000,
       env: { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, OMB_CI_LINUX_IN_STATIC: "true" },
     });
@@ -751,7 +753,7 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
       requests.push(`${request.method} ${request.url} ${request.headers.authorization}`);
       response.statusCode = status;
       response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(status === 200 ? labels.map((name) => ({ name })) : { message: "nope" }));
+      response.end(JSON.stringify(status === 200 ? { labels: labels.map((name) => ({ name })), body: "" } : { message: "nope" }));
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -762,13 +764,15 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     const eventPath = join(directory, "event.json");
     const outputPath = join(directory, "output.txt");
     writeFileSync(eventPath, JSON.stringify(payload));
-    const childEnv: NodeJS.ProcessEnv = { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, ...env };
-    if (!env.GH_TOKEN) delete childEnv.GH_TOKEN;
-    const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      execFile(process.execPath, [script], { cwd: directory, env: childEnv, encoding: "utf8", timeout: 10_000 },
-        (error, out, err) => (error ? reject(new Error(`${error.message}\n${err}`)) : resolve({ stdout: out, stderr: err })));
-    });
-    return { output: outputs(readFileSync(outputPath, "utf8")), stdout, stderr };
+    const localApi = env.GH_TOKEN ? null : await fakeLabelsApi([]);
+    try {
+      const childEnv: NodeJS.ProcessEnv = { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, ...env, ...localApi?.env };
+      const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+        execFile(process.execPath, [script], { cwd: directory, env: childEnv, encoding: "utf8", timeout: 10_000 },
+          (error, out, err) => (error ? reject(new Error(`${error.message}\n${err}`)) : resolve({ stdout: out, stderr: err })));
+      });
+      return { output: outputs(readFileSync(outputPath, "utf8")), stdout, stderr };
+    } finally { await localApi?.close(); }
   }
 
   const serverJobs = (oses: string[]) => ({ build: true, jobs: SERVER_JOBS, vitest_os: oses, packaged_server_os: oses, vitest_matrix: vitestMatrix(oses) });
@@ -801,20 +805,20 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
       const { output, stderr } = await runPullRequest(directory, payload, api.env);
       expect(output).toEqual(serverJobs(PR));
       expect(stderr).toBe("");
-      expect(api.requests).toEqual(["GET /repos/o/r/issues/7/labels?per_page=100 Bearer t"]);
+      expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
     } finally {
       await api.close();
     }
   });
 
-  it("falls back to the labels in the event when GitHub cannot answer", async () => {
+  it("requires full validation when GitHub cannot answer current PR controls", async () => {
     const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
     const api = await fakeLabelsApi([], 502);
     try {
       const labelled = { pull_request: { ...payload.pull_request, labels: [{ name: "windows" }] } };
       const { output, stderr } = await runPullRequest(directory, labelled, api.env);
-      expect(output).toEqual(serverJobs(PR));
-      expect(stderr).toContain("reading the pull request's labels from its event (HTTP 502");
+      expect(output).toEqual(everything(ALL));
+      expect(stderr).toContain("requiring full validation because current PR controls are unavailable (HTTP 502");
     } finally {
       await api.close();
     }
@@ -829,9 +833,15 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
       const payload = { pull_request: { number: 7, base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } } };
       const { output } = await runPullRequest(directory, payload, api.env);
       expect(output).toEqual(ciOutputs(selectCiScope(["src/App.tsx"]), LINUX));
-      expect(api.requests).toEqual(["GET /repos/o/r/issues/7/labels?per_page=100 Bearer t"]);
+      expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
     } finally {
       await api.close();
     }
+  });
+
+  it("reads repair exemptions from the current body and grants none on an unavailable snapshot", async () => {
+    const pr = { number: 7, labels: [], body: "QA-Repair: #12" };
+    expect(await pullRequestControls(pr, async () => ({ labels: [{ name: "qa:repair" }], body: "QA-Repair: #34" }))).toEqual({ labels: ["qa:repair"], repairIds: [34] });
+    expect(await pullRequestControls(pr, async () => { throw new Error("offline"); })).toEqual({ labels: ["ci:full"], repairIds: [] });
   });
 });

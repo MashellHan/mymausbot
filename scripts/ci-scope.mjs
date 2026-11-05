@@ -176,6 +176,7 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   if (filesToRun.some((file) => !SAFE_TEST_PATH.test(file) || !present(file))) throw new Error("Unsafe or missing selected test");
   return {
     version: policy.version, mode, files: changed, areas: baseline.areas, fastAreas: areas.map((area) => area.id),
+    holdAreas: candidate ? areas.map((area) => area.id) : ["global"],
     full, candidate, admitted, reduced, reasons,
     scope: full ? FULL_SCOPE : reduced ? { areas: areas.map((area) => area.id), checks: ["build", "core-tests"], files: filesToRun } : baseline,
     edit: docs ? [...VITEST_SUBSETS["docs-tests"].files, ...policy.guards] : affected,
@@ -375,16 +376,18 @@ async function github(path) {
 
 const ciRuns = async (sha) => (await github(`/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=100`)).workflow_runs;
 
-/** A pull request's labels as they are now, so a label added after the push counts when the run is re-run; the
- * event's own list when GitHub cannot be read. */
-async function pullRequestLabels(pr) {
+export async function pullRequestControls(pr, api = github) {
   const fromEvent = (Array.isArray(pr?.labels) ? pr.labels : []).map((label) => label?.name).filter((name) => typeof name === "string");
-  if (!Number.isSafeInteger(pr?.number) || !process.env.GH_TOKEN || !process.env.GITHUB_REPOSITORY) return fromEvent;
   try {
-    return (await github(`/issues/${pr.number}/labels?per_page=100`)).map((label) => label.name);
+    if (!Number.isSafeInteger(pr?.number)) throw new Error("Missing pull request number");
+    const current = await api(`/issues/${pr.number}`);
+    if (!Array.isArray(current.labels)) throw new Error("Missing current pull request labels");
+    const labels = current.labels.map((label) => label.name);
+    const repairIds = labels.includes("qa:repair") ? [...String(current.body ?? "").matchAll(/^QA-Repair:\s*#(\d+)\s*$/gm)].map((hit) => Number(hit[1])) : [];
+    return { labels, repairIds };
   } catch (error) {
-    console.warn(`CI scope: reading the pull request's labels from its event (${error.message})`);
-    return fromEvent;
+    console.warn(`CI scope: requiring full validation because current PR controls are unavailable (${error.message})`);
+    return { labels: [...new Set([...fromEvent, "ci:full"])], repairIds: [] };
   }
 }
 
@@ -407,24 +410,25 @@ async function passedMergeQueue(sha) {
   return false;
 }
 
-export async function runCiScope() {
+export async function runCiScope({ readPullRequest = pullRequestControls } = {}) {
   const lane = laneOf(process.env.GITHUB_EVENT_NAME);
   let scope = lane === "main" ? MAIN_SCOPE : FULL_SCOPE;
   let vitestOs = lane === "main" ? WINDOWS_OS : ALL_OS;
   const mode = ["legacy", "shadow", "tiered"].includes(process.env.MAUSBOT_CI_MODE) ? process.env.MAUSBOT_CI_MODE : "legacy";
-  let plan, labels = [], repairIds = [], base, files, range, onlyVersion = false;
+  let plan, labels = [], repairIds = [], base, files, range, prNumber = null, prHead = null, onlyVersion = false;
   if (lane === "pr") {
     try {
       const { pull_request: pr } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
       base = pr?.base?.sha;
       const head = pr?.head?.sha;
+      prNumber = pr?.number ?? null;
+      prHead = head ?? null;
       if (![base, head].every((sha) => typeof sha === "string" && SHA.test(sha))) {
         throw new Error("Missing or invalid pull request commit SHAs");
       }
       range = `${base}...${head}`;
       files = changedFiles(range);
-      labels = await pullRequestLabels(pr);
-      if (labels.includes("qa:repair")) repairIds = [...String(pr.body ?? "").matchAll(/^QA-Repair:\s*#(\d+)\s*$/gm)].map((hit) => Number(hit[1]));
+      ({ labels, repairIds } = await readPullRequest(pr));
       scope = selectCiScope(files);
       vitestOs = LINUX_OS;
       if (scope.checks.includes("host-tests")) {
@@ -502,10 +506,12 @@ export async function runCiScope() {
   outputs.required_jobs = outputs.jobs.filter((job) => MERGE_JOBS.includes(job));
   outputs.expected_jobs = expectedJobs(outputs, outputs.full_required);
   outputs.reduced = Boolean(plan?.reduced);
-  outputs.qa_areas = plan?.fastAreas.length ? plan.fastAreas : ["global"];
+  outputs.qa_areas = plan?.holdAreas ?? ["global"];
   outputs.repair_ids = repairIds;
+  outputs.pr_number = prNumber;
+  outputs.pr_head = prHead;
   outputs.shadow = mode === "shadow" && plan?.candidate ? plan.core : [];
-  const receipt = { version: 1, sha: process.env.GITHUB_SHA, createdAt: new Date().toISOString(), plan, outputs };
+  const receipt = { version: 1, sha: process.env.GITHUB_SHA, runId: Number(process.env.GITHUB_RUN_ID), attempt: Number(process.env.GITHUB_RUN_ATTEMPT || 1), createdAt: new Date().toISOString(), plan, outputs };
   writeFileSync("qa-plan.json", JSON.stringify(receipt, null, 2) + "\n");
   console.log(`CI scope: ${scope.areas.join(", ")} -> ${outputs.jobs.join(", ") || "static checks only"}`);
   if (linuxInStatic) {

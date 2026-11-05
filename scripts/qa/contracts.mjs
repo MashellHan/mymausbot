@@ -94,6 +94,7 @@ export function triageOf(issue) {
   const complete = labels.includes("qa:triaged") && !labels.includes("qa:untriaged")
     && Boolean(owner && labels.includes(`owner:${owner[2]}`)) && Number.isFinite(Date.parse(due))
     && labels.some((label) => /^qa:kind:(?:product|flake|infrastructure)$/.test(label))
+    && labels.some((label) => /^qa:scope:(?:global|usage|agents)$/.test(label))
     && labels.some((label) => /^qa:p[012]$/.test(label)) && /^QA-Next:\s*\S/m.test(body);
   return { complete, owner: owner?.[1], due };
 }

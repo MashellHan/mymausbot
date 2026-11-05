@@ -13,7 +13,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   # The merge queue runs CI on the PR merged onto the current main BEFORE it
   # lands, so a PR that is green alone but red together with what just
   # merged is stopped in the queue instead of on main (that shape reddened
@@ -110,7 +110,7 @@ jobs:
         run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/qa/qa.test.ts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: qa-plan
+          name: qa-plan-attempt-${{ github.run_attempt }}
           path: qa-plan.json
           retention-days: 7
       - name: Validate locale catalogs
@@ -169,7 +169,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.scope.outputs.linux_lanes
         with:
-          name: qa-results-boat
+          name: qa-results-boat-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7
@@ -251,7 +251,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-vitest-${{ matrix.os }}-${{ matrix.shard }}
+          name: qa-results-vitest-${{ matrix.os }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             qa-results/${{ matrix.shard }}/vitest.json
             qa-results/vitest-retries.jsonl
@@ -308,7 +308,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-evals
+          name: qa-results-evals-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7
@@ -428,49 +428,25 @@ jobs:
           retention-days: 7
 
   gate:
-    # One aggregation, not three queued runners doing the same check.
     name: CI
-    needs: [static, vitest, behavior-evals, packaged-server, windows-cua, electron-smokes]
-    # Still report failed/skipped dependencies, but don't keep a superseded
-    # workflow alive just to schedule its summary jobs.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     permissions:
       contents: read
       actions: read
       issues: read
+      pull-requests: read
     steps:
-      - name: Every required job passed
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: |
-          node --input-type=module -e '
-            const needs = JSON.parse(process.env.NEEDS);
-            const rows = Object.entries(needs).map(([job, { result }]) => `${result.padEnd(9)} ${job}`);
-            console.log(rows.join("\n"));
-            let selected;
-            try { selected = JSON.parse(needs.static.outputs.jobs); } catch { selected = null; }
-            if (!Array.isArray(selected) || !selected.every((job) => typeof job === "string")) throw new Error("Missing CI selection");
-            const required = JSON.parse(needs.static.outputs.required_jobs);
-            if (!Array.isArray(required) || required.some((job) => !Object.hasOwn(needs, job))) throw new Error("A selected required job is missing from the gate");
-            const bad = Object.entries(needs).filter(([job, { result }]) => {
-              const expected = job === "static" || selected.includes(job) ? "success" : "skipped";
-              return result !== expected;
-            });
-            if (bad.length) { console.error(`\n${bad.length} required job(s) did not pass: ${bad.map(([job]) => job).join(", ")}`); process.exit(1); }
-          '
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      - name: Enforce QA holds and complete full validation
+      - name: Enforce current PR controls, QA holds and required validation
         env:
           GH_TOKEN: ${{ github.token }}
-          SCOPE_OUTPUTS: ${{ toJSON(needs.static.outputs) }}
         run: node scripts/qa/gate.mjs
 
   cloudflared-linux-arm64:
@@ -531,7 +507,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-foss
+          name: qa-results-foss-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7
@@ -655,7 +631,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-ui
+          name: qa-results-ui-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7
@@ -702,7 +678,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-identity-${{ matrix.os }}
+          name: qa-results-identity-${{ matrix.os }}-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7
@@ -850,7 +826,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-driver-${{ matrix.os }}
+          name: qa-results-driver-${{ matrix.os }}-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7

@@ -1,5 +1,9 @@
 # CI job selection
 
+The tables below describe the baseline mapping. The fork's
+[validation policy](MAUSBOT-VALIDATION.md) adds conservative full escalation,
+shadow measurement and QA holds. No area initially receives reduced coverage.
+
 Every PR still runs the workflow, its `static` job and the `CI` gate: locale
 validation, lint, the CI-selection tests, the verification-documentation
 checks and the source guards always run. Selection never skips the entire
@@ -55,7 +59,7 @@ sets (`laneOf` in `scripts/ci-scope.mjs`):
 | --- | --- | --- |
 | `pull_request` | its areas | the table above, with Linux shards, and Windows jobs only for a change that can break Windows (Windows below) |
 | `push` to main, `merge_group` | main | static (typecheck, lint, the build), the eight Linux and eight Windows shards with the Electron node tests, the macOS smokes job, behavior evals, the Linux and Windows packaged server smokes, the open-source edition, the control plane, the renderer smoke and Linux and Windows browser identity |
-| `schedule` (nightly, 21:17 UTC), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
+| `schedule` (02:17 and 14:17 UTC), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
 
 The main lane runs Linux, Windows and one macOS job. The macOS shards, the
 Windows CUA smoke and every smoke that needs a second macOS runner wait for
@@ -81,12 +85,13 @@ lane, which only an emergency `ship_without_ci` release skips.
   main lane; a pull request whose diff cannot be read falls back to every job
   on every platform.
 
-The single `CI` gate keeps the existing required dependencies. `static`
-outputs the selected job ids; the gate wants each required job to have passed
-when it was selected and to have been skipped when it was not. Failures,
-cancellations, a missing or malformed selection and unexpected runs or skips
-fail the gate. Advisory jobs remain advisory. A new push to a PR cancels that
-PR's older run (see Main and releases for every other group).
+The single `CI` check starts with the workflow and reads `static`'s selection
+artifact for the same run, attempt and revision. It waits for every selected
+required job and rechecks current PR controls and QA holds before passing.
+Missing jobs, failures, cancellations, unexpected skips and missing or malformed
+selection fail the gate. Full-required runs include the platform and specialist
+jobs that are otherwise advisory. A new push to a PR cancels that PR's older
+run (see Main and releases for every other group).
 
 The separate shared-terminal smoke workflow is manual-only: its tests already
 run in the Windows Vitest/Electron jobs.

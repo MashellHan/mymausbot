@@ -91,15 +91,21 @@ export function makeReport({ run, jobs, results = [], expected = expectedJobs(),
     if (incident) incident.jobs.push(...blocked);
   }
   findings.push(...grouped.values());
+  const unavailable = !staticJob && (preflight || jobs.length === 0) ? expected.filter((item) => !jobs.some((job) => job.name === item.name && !["skipped", "cancelled"].includes(job.conclusion))).map((item) => item.name) : [];
+  if (unavailable.length) findings.push({ key: signature("workflow:execution unavailable", "shared"), contract: "Workflow execution unavailable", kind: "infrastructure", platform: "shared",
+    assertion: "The completed workflow did not execute its required preflight or dependent validation.", jobs: unavailable, retries: 0 });
   for (const item of expected) {
-    if (blocked.includes(item.name)) continue;
+    if (unavailable.includes(item.name) || blocked.includes(item.name)) continue;
     const job = jobs.find((entry) => entry.name === item.name);
     const failedStep = job?.steps?.find((step) => step.conclusion === "failure")?.name ?? "execution";
     const contract = `job:${item.name} > ${failedStep}`;
     const key = signature(contract, "job");
     if (job?.conclusion === "success") {
-      passed.push(signature(`job:${item.name} > execution`, "job"));
-      for (const step of job.steps ?? []) if (step.conclusion === "success") passed.push(signature(`job:${item.name} > ${step.name}`, "job"));
+      const retried = results.some((entry) => entry.name === item.artifact && entry.findings.some((finding) => finding.retries > 0));
+      if (!retried) {
+        passed.push(signature(`job:${item.name} > execution`, "job"));
+        for (const step of job.steps ?? []) if (step.conclusion === "success") passed.push(signature(`job:${item.name} > ${step.name}`, "job"));
+      }
     }
     else if (!infrastructure.some((incident) => incident.jobs.includes(item.name)) && !results.some((entry) => entry.name === item.artifact && entry.findings.length)) {
       findings.push({ key, contract, kind: "unclassified", platform: item.name, assertion: job ? `${job.conclusion ?? job.status}; failed step: ${sanitize(failedStep)}` : "Required job missing", retries: 0,
@@ -123,9 +129,8 @@ const stateOf = (issue) => {
 
 function newerThan(report, state) {
   if (!state) return true;
-  const time = Date.parse(report.finishedAt) - Date.parse(state.lastExecutionAt ?? state.lastSeen);
   const [id, attempt] = String(state.lastExecution ?? state.lastRun).split(":").map(Number);
-  return time > 0 || time === 0 && (report.runId > id || report.runId === id && report.attempt > attempt);
+  return report.runId > id || report.runId === id && report.attempt > attempt;
 }
 
 function findingBody(finding, report, state, previous = "") {
@@ -152,7 +157,8 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     const area = policy.areas.find((entry) => entry.tests.includes(finding.file))?.id ?? "global";
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
       triageEpoch: !issue || issue.state === "closed" ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
-      lastExecution: runKey, lastExecutionAt: report.finishedAt };
+      lastExecution: runKey, lastExecutionAt: report.finishedAt,
+      ...(finding.jobs?.length ? { verificationJobs: [...new Set([...(previous?.verificationJobs ?? []), ...finding.jobs])] } : {}) };
     const body = findingBody(finding, report, state, issue?.body);
     const defaults = ["qa", "qa:untriaged", `qa:kind:${finding.kind}`, `qa:scope:${area}`, "owner:lead"];
     if (issue) {
@@ -164,13 +170,17 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     }
   }
   if (report.executionComplete) {
-    for (const issue of issues.filter((item) => item.state === "open" && !issueLabels(item).includes("qa:verified"))) {
+    for (const issue of issues) {
       const state = stateOf(issue);
-      if (!state || !newerThan(report, state) || !report.passed.includes(state.key) || report.findings.some((finding) => finding.key === state.key)) continue;
+      const contractPassed = state && (report.passed.includes(state.key) || state.verificationJobs?.length
+        && state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))));
+      if (!state || !newerThan(report, state) || !contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
       const verified = { ...state, lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
+      const alreadyVerified = issueLabels(issue).includes("qa:verified");
       await api(`/issues/${issue.number}`, { method: "PATCH", body: {
-        body: `${issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)}\n\nQA verified this contract without retries on \`${report.sha}\`: ${report.url}. Lead: check the integrated fix and Reviewer evidence before closing.`,
-        labels: [...issueLabels(issue), "qa:verified"],
+        body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)
+          + (alreadyVerified ? "" : `\n\nQA verified this contract without retries on \`${report.sha}\`: ${report.url}. Lead: check the integrated fix and Reviewer evidence before closing.`),
+        ...(!alreadyVerified ? { labels: [...issueLabels(issue), "qa:verified"] } : {}),
       } });
     }
   }
@@ -186,13 +196,15 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
   const artifacts = await pages(`/actions/runs/${id}/artifacts`, "artifacts", api);
   const results = [];
   let plan;
-  for (const artifact of artifacts.filter((item) => /^(?:qa-results-|qa-plan$)/.test(item.name))) {
+  const suffix = `-attempt-${run.run_attempt}`;
+  for (const artifact of artifacts.filter((item) => /^(?:qa-results-|qa-plan-)/.test(item.name) && item.name.endsWith(suffix))) {
     const files = await readArtifact(artifact, api);
-    if (artifact.name === "qa-plan") { plan = JSON.parse(files["qa-plan.json"]); continue; }
+    const name = artifact.name.slice(0, -suffix.length);
+    if (name === "qa-plan") { plan = JSON.parse(files["qa-plan.json"]); continue; }
     const platform = artifact.name.includes("windows") ? "win32" : artifact.name.includes("macos") ? "darwin" : "linux";
-    results.push({ name: artifact.name, ...testFindings(files, platform) });
+    results.push({ name, ...testFindings(files, platform) });
   }
-  if (plan && plan.sha !== run.head_sha) throw new Error("Selection plan does not match the tested main revision");
+  if (plan && (plan.sha !== run.head_sha || plan.runId !== run.id || plan.attempt !== run.run_attempt)) throw new Error("Selection plan does not match the tested main run");
   const expected = run.event === "push" && plan ? expectedJobs(plan.outputs, plan.outputs.full_required) : expectedJobs();
   const infrastructure = [];
   for (const job of jobs.filter((item) => item.conclusion === "failure" && expected.some((entry) => entry.name === item.name))) {

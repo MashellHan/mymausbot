@@ -139,7 +139,7 @@ existing coordinated procedure for an actual App switch.
 Follow [the validation mechanism](../../docs/MAUSBOT-VALIDATION.md). Use
 check:plan, check:edit and check:ready for the small local loop; retain normal
 push hooks and avoid repeating identical checks immediately before them.
-Dev leaves a durable exact-head PR handoff with the handoff:ready label.
+Dev leaves a durable PR-body handoff with `QA-Handoff: <current head SHA>`.
 The existing Lead owns review and CI follow-through while local delivery and
 independent development continue.
 

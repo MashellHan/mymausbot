@@ -1,33 +1,23 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { EVALS_LANE, PACKAGED_SERVER_LANE, vitestLane } from "./ci-linux-lanes.mjs";
 import { SELECTABLE_JOBS, vitestMatrix } from "./ci-scope.mjs";
 import { interpolate } from "./testing/github-expression.ts";
+import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
 const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
 
-function runGate(needs: Record<string, unknown>) {
-  // Execute the actual gate, not a duplicate of its success/failure logic.
-  const command = workflow.jobs.gate.steps[0].run as string;
-  const script = command.match(/node --input-type=module -e '([\s\S]+)'/);
-  expect(script).not.toBeNull();
-  const check = spawnSync(process.execPath, ["--input-type=module", "-e", script![1]], {
-    env: { ...process.env, NEEDS: JSON.stringify(needs) },
-    encoding: "utf8",
-    timeout: 5_000,
-  });
-  expect(check.error).toBeUndefined();
-  return check;
+function runGate(state: ReturnType<typeof gateState>) {
+  return verifyGate(state.outputs, { deadlineMs: 0, api: async (path: string) => path.startsWith("/issues?") ? [] : { jobs: state.jobs } });
 }
 
-/** The gate's needs when static selected `selected`: each required job ran exactly when selected. */
-function gateNeeds(selected: string[]) {
+function gateState(selected: string[]) {
+  const required = requiredRuntimeJobs.filter((job) => selected.includes(job));
   return {
-    static: { result: "success", outputs: { jobs: JSON.stringify(selected), required_jobs: JSON.stringify(requiredRuntimeJobs.filter((job) => selected.includes(job))) } },
-    ...Object.fromEntries(requiredRuntimeJobs.map((job) => [job, { result: selected.includes(job) ? "success" : "skipped" }])),
+    outputs: { expected_jobs: ["static", ...required].map((id) => ({ id, name: id })), required_jobs: required, qa_areas: ["global"], full_required: false, reduced: false },
+    jobs: ["static", ...requiredRuntimeJobs].map((name) => ({ name, status: "completed", conclusion: name === "static" || required.includes(name) ? "success" : "skipped" })),
   };
 }
 
@@ -70,9 +60,10 @@ describe("CI concurrency", () => {
     expect(stop.permissions).toEqual({});
   });
 
-  it("allows cancelled summary jobs to stop without skipping failure reporting", () => {
+  it("creates the required check immediately so a new full request replaces old green evidence", () => {
     expect(workflow.jobs.gate.if).toBe("${{ !cancelled() }}");
-    expect(workflow.jobs.gate.needs).toEqual(["static", ...requiredRuntimeJobs]);
+    expect(workflow.jobs.gate.needs).toBeUndefined();
+    expect(workflow.jobs.gate.steps.some((step: { run?: string }) => step.run === "node scripts/qa/gate.mjs")).toBe(true);
   });
 
   it("schedules one read-only final gate over the selected platform matrix", () => {
@@ -177,7 +168,7 @@ describe("CI concurrency", () => {
     const scope = workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope");
     expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}", MAUSBOT_CI_MODE: "${{ vars.MAUSBOT_CI_MODE }}", OMB_CI_LINUX_IN_STATIC: "${{ runner.environment == 'self-hosted' }}" });
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { permissions?: unknown }][]) {
-      if (name === "gate") expect(job.permissions).toEqual({ contents: "read", actions: "read", issues: "read" });
+      if (name === "gate") expect(job.permissions).toEqual({ contents: "read", actions: "read", issues: "read", "pull-requests": "read" });
       else if (name !== "static") expect(job.permissions, name).toBeUndefined();
     }
   });
@@ -196,10 +187,12 @@ describe("CI concurrency", () => {
     expect(readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8")).toContain('runner: "./scripts/testing/ci-retry-runner.ts"');
   });
 
-  it.each(requiredRuntimeJobs)("fails closed for every required %s outcome when selected", (job) => {
+  it.each(requiredRuntimeJobs)("fails closed for every required %s outcome when selected", async (job) => {
     for (const result of ["success", "failure", "cancelled", "skipped"]) {
-      const check = runGate({ ...gateNeeds(SELECTABLE_JOBS), [job]: { result } });
-      expect(check.status, check.stderr).toBe(result === "success" ? 0 : 1);
+      const state = gateState(SELECTABLE_JOBS);
+      state.jobs.find((item) => item.name === job)!.conclusion = result;
+      if (result === "success") await expect(runGate(state)).resolves.toBeUndefined();
+      else await expect(runGate(state)).rejects.toThrow("Required validation failed");
     }
   });
 
@@ -218,41 +211,39 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.vitest.needs).toBe("static");
   });
 
-  it.each(requiredRuntimeJobs)("accepts %s skipped only when static left it out", (job) => {
+  it.each(requiredRuntimeJobs)("allows an unselected %s to be skipped", async (job) => {
     const others = SELECTABLE_JOBS.filter((name) => name !== job);
-    expect(runGate(gateNeeds(others)).status).toBe(0);
-    for (const result of ["success", "failure", "cancelled"]) {
-      expect(runGate({ ...gateNeeds(others), [job]: { result } }).status).toBe(1);
-    }
+    await expect(runGate(gateState(others))).resolves.toBeUndefined();
   });
 
-  it("accepts every required job skipped on a docs-only PR, and nothing else", () => {
-    expect(runGate(gateNeeds([])).status).toBe(0);
-    for (const result of ["success", "failure", "cancelled"]) {
-      expect(runGate({ ...gateNeeds([]), vitest: { result } }).status).toBe(1);
-    }
+  it("accepts successful preflight when the selected plan has no runtime jobs", async () => {
+    await expect(runGate(gateState([]))).resolves.toBeUndefined();
   });
 
-  it("rejects failed preflight and missing or malformed selection", () => {
+  it("rejects failed preflight and missing or malformed selection", async () => {
     for (const result of ["failure", "cancelled", "skipped"]) {
-      expect(runGate({ ...gateNeeds([]), static: { result, outputs: { jobs: "[]" } } }).status).toBe(1);
+      const state = gateState([]);
+      state.jobs[0]!.conclusion = result;
+      await expect(runGate(state)).rejects.toThrow("Required validation failed");
     }
-    for (const jobs of ["", "yes", "true", "{}", "[1]", "null", '"vitest"']) {
-      expect(runGate({ ...gateNeeds([]), static: { result: "success", outputs: { jobs } } }).status, jobs).toBe(1);
+    for (const expected of [undefined, [], "yes", true, {}, [1], null]) {
+      const state = gateState([]);
+      Object.assign(state.outputs, { expected_jobs: expected });
+      await expect(runGate(state)).rejects.toThrow();
     }
-    expect(runGate({ ...gateNeeds([]), static: { result: "success", outputs: {} } }).status).toBe(1);
   });
 
-  it("rejects a selected required job absent from the aggregator", () => {
-    const needs = gateNeeds(["vitest"]);
-    needs.static.outputs.required_jobs = JSON.stringify(["vitest", "new-required-job"]);
-    expect(runGate(needs).status).toBe(1);
-    const { vitest: _removed, ...missing } = gateNeeds(["vitest"]);
-    expect(runGate(missing).status).toBe(1);
+  it("rejects a selected required job absent from the plan or observed execution", async () => {
+    const state = gateState(["vitest"]);
+    state.outputs.required_jobs.push("new-required-job");
+    await expect(runGate(state)).rejects.toThrow("Missing required validation plan");
+    const missing = gateState(["vitest"]);
+    missing.jobs = missing.jobs.filter((item) => item.name !== "vitest");
+    await expect(runGate(missing)).rejects.toThrow("Incomplete required validation");
   });
 
   it("always starts the workflow and validates selection and docs before fanout", () => {
-    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened", "ready_for_review", "labeled", "unlabeled"]);
+    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened", "labeled", "unlabeled"]);
     expect(workflow.jobs.static.if).toBeUndefined();
     expect(workflow.jobs.static.steps[0].with["fetch-depth"]).toBe(0);
     expect(workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope").run).toBe("node scripts/ci-scope.mjs");
@@ -286,7 +277,7 @@ describe("CI concurrency", () => {
       if (name === "deploy-composio-broker") {
         expect(job.needs).toEqual(["control-plane"]);
         expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main'");
-        expect(workflow.jobs.gate.needs).not.toContain(name);
+        expect(workflow.jobs.gate.needs).toBeUndefined();
         // Without the Cloudflare token the deploy is skipped with a warning, not failed:
         // every step after the token check waits on it.
         const [check, ...rest] = job.steps as { id?: string; if?: string; env?: Record<string, string>; run?: string }[];

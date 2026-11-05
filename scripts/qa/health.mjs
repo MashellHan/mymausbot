@@ -13,9 +13,12 @@ export async function qaHealth({ api = github, readArtifact = artifactFiles, now
       if (owner.path !== ".github/workflows/qa-report.yml" || owner.head_branch !== "main" || owner.head_repository?.full_name !== repository
         || !["workflow_run", "workflow_dispatch"].includes(owner.event) || owner.conclusion !== "success") continue;
       const candidate = JSON.parse((await readArtifact(artifact, api))["qa-report.json"]);
-      if (candidate.runId === run.id && candidate.attempt === run.run_attempt) { report = candidate; break; }
+      if (candidate.runId === run.id && candidate.attempt === run.run_attempt && candidate.version === 1
+        && candidate.sha === run.head_sha && candidate.deliveryComplete === true
+        && typeof candidate.executionComplete === "boolean" && Number.isFinite(Date.parse(candidate.finishedAt))
+        && Date.parse(candidate.finishedAt) <= now + 60_000) { report = candidate; break; }
     }
-    if (!report || report.version !== 1 || report.sha !== run.head_sha || !report.deliveryComplete) throw new Error("Latest full run has no trusted delivered report");
+    if (!report) throw new Error("Latest full run has no trusted delivered report");
     const age = now - Date.parse(report.finishedAt);
     if (!Number.isFinite(age) || age < -60_000 || age > 14 * 60 * 60 * 1000) throw new Error("Full QA report is older than fourteen hours or has invalid time");
     const issues = (await pages("/issues?state=open&labels=qa", null, api)).filter((issue) => !issue.pull_request);

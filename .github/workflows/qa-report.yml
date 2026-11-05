@@ -47,5 +47,6 @@ jobs:
         with:
           name: mausbot-qa-report
           path: qa-report.json
+          overwrite: true
           if-no-files-found: error
           retention-days: 30

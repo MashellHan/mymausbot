@@ -30,10 +30,12 @@ Targets are 5–30 seconds for ordinary edit feedback and 1–2 minutes for ordi
 local completion. Record a costly required step rather than dropping it to meet
 the target. A cold browser or dependency setup is part of the measured cost.
 
-Dev records the exact head, local receipt and remaining checks in the PR and
-adds `handoff:ready`. The queue hands that head to MausBot Lead. Lead owns CI,
+Dev records the exact head, local receipt and remaining checks in the PR body,
+including `QA-Handoff: <40-character head SHA>`. The queue hands that head to
+MausBot Lead only while the marker matches the current head. Updating the
+handoff or marking a draft ready does not restart CI. Lead owns CI,
 independent review and merging while Dev can take independent work. New pushes
-produce new handoffs; a chat mention alone is not the handoff record.
+require an updated handoff marker; a chat mention alone is not the handoff record.
 
 ## Coverage boundaries
 
@@ -60,12 +62,16 @@ impact; adding/removing that label starts a new CI run. A label never waives
 coverage. Ordinary tiered main pushes keep core plus packaged-server startup;
 legacy/shadow main pushes retain the existing checks.
 
-The required check remains `CI`. Its direct aggregation rejects missing,
-skipped, cancelled or failed required jobs. Full-required runs additionally
-wait for every selected platform and specialist validation through the Actions
-API. Deployments are excluded. The gate checks QA holds and rechecks eligibility
-before accepting a reduced run. If health changed during the run, rerun CI to
-select the broader checks.
+The required check remains `CI` and is queued when the workflow starts, so a
+fresh full request cannot reuse the previous green check while its jobs wait.
+It reads the selection artifact for that exact run, attempt and revision, then
+waits for all required jobs through the Actions API. Missing, skipped,
+cancelled or failed required jobs cannot pass. Full-required runs also require
+every selected platform and specialist job; deployments are excluded. The gate
+rechecks current PR controls, QA holds and reduced-coverage eligibility before
+returning green. If controls or health changed during the run, rerun CI with
+the required broader coverage. Unreadable current PR controls force full
+selection and grant no repair exemption; unreadable gate controls fail closed.
 
 ## Automated QA and Lead rhythm
 
@@ -81,8 +87,11 @@ retained for 30 days and raw test results for seven days.
 
 Defects are keyed by contract and platform, not commit. The reporter updates
 or reopens an existing issue, preserves triage text, and groups demonstrated
-common dependency setup failures. Failed preflight has one incident listing
-dependent jobs. A pass after the existing two allowed CI retries remains a
+common dependency setup failures. Failed preflight or a workflow with no jobs
+has one incident listing dependent jobs. A later complete run must positively
+verify every affected job before a shared incident can be marked verified.
+Execution order and attempts govern updates; a slow old run cannot overwrite
+newer evidence merely by finishing later. A pass after the existing two allowed CI retries remains a
 flake. No additional full-suite retry budget is added.
 
 The local ten-minute queue uses the existing `mausbot-lead` Herdr agent. It
@@ -90,7 +99,8 @@ submits new QA work, ready PR heads, verification and overdue conditions. Normal
 recurrence updates the issue without another wake-up. A durable submission
 receipt is not an acknowledgement: Lead acknowledges and triages on the issue
 or PR. An ambiguous Herdr submission is retained for inspection, not blindly
-retried. The schedule requires this Mac and Herdr to be available; CI's coverage
+retried. Preflight outages before any prompt attempt retry on the next tick.
+The schedule requires this Mac and Herdr to be available; CI's coverage
 fallback does not depend on them.
 
 Within 30 minutes Lead sets `qa:triaged`, removes `qa:untriaged`, chooses
