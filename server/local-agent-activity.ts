@@ -30,16 +30,31 @@ function safeText(value: unknown): { text: string | null; clipped: boolean } {
   return { text: chars.length ? chars.slice(0, MAX_TEXT).join("") : null, clipped: chars.length > MAX_TEXT };
 }
 
-function visibleEvent(line: string, offset: number): { event: LocalAgentActivityEvent | null; clipped: boolean } {
+function visibleEvent(line: string, offset: number): { event: LocalAgentActivityEvent | null; clipped: boolean; format?: "legacy" | "canonical"; raw?: string } {
   let row: Record<string, unknown>;
   try { row = record(JSON.parse(line)); } catch { return { event: null, clipped: true }; }
   const payload = record(row.payload);
-  if (row.type !== "event_msg" || (payload.type !== "user_message" && payload.type !== "agent_message")) return { event: null, clipped: false };
-  const kind = payload.type === "user_message" ? "user" : "assistant";
-  const { text, clipped } = safeText(payload.message);
+  let kind: "user" | "assistant", raw: string, format: "legacy" | "canonical";
+  if (row.type === "event_msg" && (payload.type === "user_message" || payload.type === "agent_message")) {
+    kind = payload.type === "user_message" ? "user" : "assistant";
+    raw = typeof payload.message === "string" ? payload.message : "";
+    format = "legacy";
+  } else if (row.type === "response_item" && payload.type === "message") {
+    if (payload.channel === "analysis") return { event: null, clipped: false };
+    if (payload.role === "user" && payload.phase !== "analysis") kind = "user";
+    else if (payload.role === "assistant" && (payload.phase === "commentary" || payload.phase === "final_answer" || payload.phase === "final")) kind = "assistant";
+    else return { event: null, clipped: false };
+    const partType = kind === "user" ? "input_text" : "output_text";
+    raw = Array.isArray(payload.content) ? payload.content.flatMap((part) => {
+      const content = record(part);
+      return content.type === partType && typeof content.text === "string" ? [content.text] : [];
+    }).join(" ") : "";
+    format = "canonical";
+  } else return { event: null, clipped: false };
+  const { text, clipped } = safeText(raw);
   if (text === null) return { event: null, clipped };
   const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
-  return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null, kind, tool: null, text }, clipped };
+  return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null, kind, tool: null, text }, clipped, format, raw };
 }
 
 async function readSession(file: string, sessionId: string): Promise<{ events: LocalAgentActivityEvent[]; truncated: boolean } | null> {
@@ -66,7 +81,7 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
     if (bytesRead !== bytes.length) throw new Error("Session changed during read");
     const first = start === 0 ? 0 : bytes.indexOf(10) + 1;
     let truncated = start > 0;
-    const events: LocalAgentActivityEvent[] = [];
+    const events: Array<{ event: LocalAgentActivityEvent; format: "legacy" | "canonical"; raw: string }> = [];
     for (let cursor = first; (start === 0 || first > 0) && cursor < bytesRead;) {
       const end = bytes.indexOf(10, cursor);
       if (end < 0) { truncated = true; break; }
@@ -75,13 +90,20 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
         const found = visibleEvent(bytes.toString("utf8", cursor, end), start + cursor);
         if (found.clipped) truncated = true;
         if (found.event) {
-          events.push(found.event);
-          if (events.length > MAX_EVENTS) { events.shift(); truncated = true; }
+          const event = found.event;
+          const duplicate = events.findIndex((prior) => event.at !== null && prior.format !== found.format && prior.event.kind === event.kind
+            && prior.event.at === event.at && prior.raw === found.raw);
+          if (duplicate >= 0) {
+            if (found.format === "canonical") events[duplicate] = { event, format: found.format, raw: found.raw! };
+          } else {
+            events.push({ event, format: found.format!, raw: found.raw! });
+            if (events.length > MAX_EVENTS) { events.shift(); truncated = true; }
+          }
         }
       }
       cursor = end + 1;
     }
-    return { events, truncated };
+    return { events: events.map(({ event }) => event), truncated };
   } finally { await handle.close(); }
 }
 
