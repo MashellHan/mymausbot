@@ -56,6 +56,30 @@ afterEach(async () => {
 });
 
 describe("Agent Team panel", () => {
+  it("mounts recent activity only for the selected office and clears it on a team switch", async () => {
+    const selected = { ...ready, teams: ready.teams.map((team) => team.id === "w1"
+      ? { ...team, agents: team.agents.map((member, index) => index === 0 ? { ...member, id: "w1:p1" } : member) }
+      : team) };
+    const detail = { agentId: "w1:p1", status: "ready", updatedAt: 1000, truncated: false,
+      events: [{ id: "e1", at: null, kind: "user", tool: null, text: "Synthetic activity line" }] };
+    calls.api.mockImplementation(async (path: string) => path === "/api/local-dashboard/agents" ? selected : detail);
+    await render("panel");
+    expect(text()).not.toContain("Recent activity");
+    await act(async () => offices()[0]!.click());
+    const activity = members()!.querySelector<HTMLButtonElement>('[data-testid="agent-activity-w1:p1"] button')!;
+    expect(activity.getAttribute("aria-expanded")).toBe("false");
+    expect(calls.api).toHaveBeenCalledTimes(1);
+    activity.focus();
+    await act(async () => activity.click());
+    expect(document.activeElement).toBe(activity);
+    expect(members()?.textContent).toContain("Synthetic activity line");
+    const signal = calls.api.mock.calls.at(-1)?.[1]?.signal as AbortSignal;
+    await act(async () => offices()[1]!.click());
+    expect(signal.aborted).toBe(true);
+    expect(members()?.textContent).not.toContain("Synthetic activity line");
+    expect(members()?.querySelector('[data-testid="agent-activity-w1:p1"]')).toBeNull();
+  });
+
   it("shows one selected office at a time and preserves selection, focus and scroll through a stale update", async () => {
     await render("content");
     expect(text()).toContain("Local Herdr · 2 teams");
