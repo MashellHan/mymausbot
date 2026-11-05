@@ -75,20 +75,9 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
   writeFileSync(join(home, "web", "index.html"), "<!doctype html><title>OpenMausBot</title>");
   const port = await freePortBlock([0, 1]);
   base = `http://127.0.0.1:${port}`;
-  const fixturePrelude = `data:text/javascript,${encodeURIComponent(`
-    import fs from "node:fs";
-    import { syncBuiltinESMExports } from "node:module";
-    const statfsSync = fs.statfsSync;
-    fs.statfsSync = (...args) => {
-      const stats = statfsSync(...args);
-      const count = typeof stats.bsize === "bigint" ? BigInt : Number;
-      const freeBlocks = count(9 * 1024 ** 3 / 4096);
-      return Object.assign(stats, { bsize: count(4096), blocks: count(10 * 1024 ** 3 / 4096), bfree: freeBlocks, bavail: freeBlocks });
-    };
-    syncBuiltinESMExports();
-    globalThis.fetch = async () => new Response("offline fixture", { status: 503 });
-  `)}`;
-  child = spawn(process.execPath, ["--import", fixturePrelude, join(SERVER_DIR, "index.ts")], {
+  const offlinePrelude = `data:text/javascript,${encodeURIComponent('globalThis.fetch = async () => new Response("offline fixture", { status: 503 });')}`;
+  const roomyDisk = pathToFileURL(join(SERVER_DIR, "testing", "roomy-disk.mjs")).href;
+  child = spawn(process.execPath, ["--import", roomyDisk, "--import", offlinePrelude, join(SERVER_DIR, "index.ts")], {
     cwd: join(SERVER_DIR, ".."),
     env: {
       PATH: process.env.PATH,
