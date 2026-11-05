@@ -573,6 +573,45 @@ describe("Lead queue and bounded recovery", () => {
     expect(readArtifact.mock.calls.every(([artifact]) => artifact.name === "mausbot-qa-report")).toBe(true);
   });
 
+  it.each([
+    { name: "pre-installation full run without report", event: "schedule", createdOffset: -120_000, incomplete: false, pending: false },
+    { name: "delivered but incomplete full run", event: "schedule", createdOffset: -30_000, incomplete: true, pending: false },
+    { name: "completed push with unknown evidence", event: "push", createdOffset: -120_000, incomplete: false, pending: false },
+    { name: "pre-installation run while the older push plan is pending", event: "schedule", createdOffset: -120_000, incomplete: false, pending: true },
+  ])("keeps an older active push in flight behind a newer $name", async ({ event, createdOffset, incomplete, pending }) => {
+    const newer = { ...run, id: 201, event, head_sha: "c".repeat(40), created_at: new Date(now + createdOffset).toISOString() };
+    const older = { ...pushRun, id: 200, head_sha: "b".repeat(40), created_at: new Date(now - 180_000).toISOString() };
+    const plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), older);
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [newer, older] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: incomplete
+        ? [{ status: "completed", conclusion: "success", display_title: `QA report ${newer.id}` }] : [] };
+      if (path.includes("/jobs?filter=all")) {
+        if (path.includes(`/runs/${newer.id}/`)) throw new Error("newer jobs unavailable");
+        return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "in_progress" }] };
+      }
+      if (path.startsWith("/actions/artifacts?")) return { artifacts: incomplete
+        ? [{ name: "mausbot-qa-report", workflow_run: { id: 300 } }] : [] };
+      if (path.includes("/artifacts?")) return { artifacts: pending ? [] : [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path === "/actions/runs/300") return { path: ".github/workflows/qa-report.yml", head_branch: "main",
+        head_repository: { full_name: repository }, event: "workflow_run", conclusion: "success" };
+      if (path.startsWith("/issues?")) return [];
+      throw new Error(path);
+    };
+    const readArtifact = vi.fn(async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(plan) } : { "qa-report.json": JSON.stringify({ ...report, runId: newer.id,
+        sha: newer.head_sha, executionComplete: false }) });
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    await recoverQa(state, { api, readArtifact, now, repository });
+    await recoverQa(state, { api, readArtifact, now, repository });
+    expect(calls).toEqual([]);
+    expect(state).not.toHaveProperty("recoveryFor");
+    expect(readArtifact.mock.calls.some(([artifact]) => artifact.name === "qa-plan-attempt-1")).toBe(!pending);
+  });
+
   it("does not backfill pre-installation runs that lack structured evidence", async () => {
     const calls: string[] = [];
     const api = async (path: string, options: any = {}) => {

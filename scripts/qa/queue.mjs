@@ -29,17 +29,15 @@ export async function recoverQa(state, { api = github, readArtifact = artifactFi
   const runs = (await api("/actions/workflows/ci.yml/runs?branch=main&per_page=100")).workflow_runs.filter((run) => eligibleRun(run, repository, false));
   const sinceInstallation = (run) => !state.startedAt || Date.parse(run.created_at) >= Date.parse(state.startedAt);
   const fullRuns = [];
-  let latest, pendingPlan = false;
+  let latest, pendingPlan = false, completedSeen = false;
   for (const run of runs) {
+    if (completedSeen && run.status === "completed") continue;
     const evidence = await fullRunEvidence(run, { api, readArtifact, repository, now });
     if (evidence === "pending") pendingPlan = true;
-    if (run.status === "completed" && evidence === "unknown") break;
+    if (run.status === "completed" && (evidence === "full" || evidence === "unknown")) completedSeen = true;
     if (evidence !== "full") continue;
     fullRuns.push(run);
-    if (run.status === "completed") {
-      if (sinceInstallation(run) || run.event === "push") latest = run;
-      break;
-    }
+    if (run.status === "completed" && (sinceInstallation(run) || run.event === "push")) latest = run;
   }
   const qa = await health({ api, readArtifact, repository, now });
   const reporterRuns = (await api("/actions/workflows/qa-report.yml/runs?per_page=100")).workflow_runs;
