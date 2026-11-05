@@ -7,6 +7,7 @@ import type { MiniAppDataset, MiniAppMutationResult, MiniAppSources } from "../.
 import { BOOKKEEPING_FIELDS, createBookkeepingPublish, suggestedBookkeepingColumns, type BookkeepingColumns } from "../../../shared/bookkeeping-mini-app";
 import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?raw";
 import { SourceTablePreview } from "./SourceTablePreview";
+import { Select } from "../Select";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 
 const emptyColumns = Object.fromEntries(BOOKKEEPING_FIELDS.map((field) => [field, ""])) as BookkeepingColumns;
@@ -122,10 +123,10 @@ export function BookkeepingInstall({ onCancel, onInstalled }: { onCancel(): void
       {sources && <div className="mt-5 space-y-4">
         <label className="block text-[12px] font-medium text-ink-secondary">
           {t("computer.miniApps.source.choose")}
-          <select value={selectedSource} disabled={busy} onChange={(event) => changeSource(event.target.value)} className="mt-1 block w-full min-w-0 rounded-lg border border-hairline bg-card px-2.5 py-2 text-[13px] text-ink focus-visible:outline-2 focus-visible:outline-accent">
+          <Select value={selectedSource} disabled={busy} onChange={(event) => changeSource(event.target.value)} className="mt-1 w-full">
             {sources.datasets.map((entry, index) => <option key={entry.datasetId} value={`dataset:${entry.datasetId}`}>{sourceLabel(entry, index)}</option>)}
             {sources.bots.map((bot) => <option key={bot.id} value={`bot:${bot.id}`}>{t("computer.miniApps.source.bot", { name: bot.name })}</option>)}
-          </select>
+          </Select>
         </label>
         {selectedBotId && <div className="rounded-xl bg-inset p-3">
           <p className="text-[13px] text-ink-secondary">{t("computer.miniApps.source.connectDescription")}</p>
@@ -135,21 +136,21 @@ export function BookkeepingInstall({ onCancel, onInstalled }: { onCancel(): void
         {dataset && dataset.tables.length > 0 && <>
           <label className="block text-[12px] font-medium text-ink-secondary">
             {t("computer.miniApps.source.table")}
-            <select value={tableIndex} disabled={busy} onChange={(event) => changeTable(Number(event.target.value))} className="mt-1 block w-full min-w-0 rounded-lg border border-hairline bg-card px-2.5 py-2 text-[13px] text-ink focus-visible:outline-2 focus-visible:outline-accent">
+            <Select value={tableIndex} disabled={busy} onChange={(event) => changeTable(Number(event.target.value))} className="mt-1 w-full">
               {dataset.tables.map((entry, index) => <option key={`${entry.schema}.${entry.name}`} value={index}>{entry.name} · {t("computer.miniApps.source.rows", { count: entry.rowCount.toLocaleString() })}</option>)}
-            </select>
+            </Select>
           </label>
           {table && <SourceTablePreview key={`${dataset.datasetId}:${table.schema}:${table.name}`} datasetId={dataset.datasetId} table={table} />}
           <label className="block text-[12px] font-medium text-ink-secondary">
             {t("computer.miniApps.publisher.label")}
-            <select value={publisherBotId} disabled={busy} onChange={(event) => {
+            <Select value={publisherBotId} disabled={busy} onChange={(event) => {
               setPublisherBotId(event.target.value);
               publisherByDataset.current.set(dataset.datasetId, event.target.value);
               requestKey.current = null;
-            }} className="mt-1 block w-full min-w-0 rounded-lg border border-hairline bg-card px-2.5 py-2 text-[13px] text-ink focus-visible:outline-2 focus-visible:outline-accent">
+            }} className="mt-1 w-full">
               <option value="">{t("computer.miniApps.publisher.ownerOnly")}</option>
               {sources.bots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
-            </select>
+            </Select>
             <span className="mt-1 block text-[12px] font-normal leading-5 text-ink-secondary">{t("computer.miniApps.publisher.help")}</span>
           </label>
           {table && <fieldset className="min-w-0 rounded-xl border border-hairline/60 p-3">
@@ -158,10 +159,10 @@ export function BookkeepingInstall({ onCancel, onInstalled }: { onCancel(): void
             <div className="grid grid-cols-1 gap-3 @min-[29rem]/mini-apps:grid-cols-2">
               {BOOKKEEPING_FIELDS.map((field) => <label key={field} className="min-w-0 text-[12px] font-medium text-ink-secondary">
                 {t(`computer.miniApps.field.${field}`)}
-                <select value={columns[field]} disabled={busy} onChange={(event) => changeColumn(field, event.target.value)} className="mt-1 block w-full min-w-0 rounded-lg border border-hairline bg-card px-2.5 py-2 text-[13px] text-ink focus-visible:outline-2 focus-visible:outline-accent">
+                <Select value={columns[field]} disabled={busy} onChange={(event) => changeColumn(field, event.target.value)} className="mt-1 w-full">
                   <option value="">{t("computer.miniApps.source.chooseColumn")}</option>
                   {table.columns.map((column) => <option key={column.name} value={column.name}>{column.name} · {column.type}</option>)}
-                </select>
+                </Select>
               </label>)}
             </div>
           </fieldset>}
