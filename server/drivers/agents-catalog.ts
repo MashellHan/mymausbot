@@ -3,6 +3,7 @@ import { CREDENTIAL_TARGETS } from "../../shared/credential-request.ts";
 import { OPTIONS_CARD_LIMITS, WATCHER_OPTIONS_CARD_BOT_ID } from "../../shared/options-card.ts";
 import { agentToolAnnotations } from "../agent-tool-policy.ts";
 import { CHAT_CARD_TOOL_DEFINITIONS } from "./agents-chat-card-tools.ts";
+import { MINI_APP_TOOL_NAMES } from "./agents-mini-app-tools.ts";
 import { DEVS_TOOL_DEFINITIONS } from "./agents-devs-tools.ts";
 import { HELPER_TOOL_DEFINITIONS } from "./agents-helper-tools.ts";
 import { USAGE_LIMITS_TOOL_DEFINITION } from "./agents-usage-tool.ts";
@@ -880,7 +881,7 @@ const CHIEF_ONLY_TOOL_NAMES = new Set([
 const CHIEF_TARGET_TOOL_NAMES = new Set(["propose_profile", "propose_model"]);
 const WATCHER_TOOL_NAMES = new Set(["create_options_card"]);
 
-const LOCAL_VM_TOOL_NAMES = new Set(["vm_exec"]);
+const LOCAL_ONLY_TOOL_NAMES = new Set(["vm_exec", ...MINI_APP_TOOL_NAMES]);
 /** Refused in a room's thread (chat-widgets.ts, chat-apps.ts, routes/waits.ts), and list_waits, since a room holds no wait. */
 const ROOM_REFUSED_TOOL_NAMES = new Set(["show_widget", "show_html", ...WAIT_TOOL_NAMES]);
 const CLOUD_HOME_SURFACE = {
@@ -891,7 +892,7 @@ const CLOUD_HOME_SURFACE = {
 export function availableTools(profile: CatalogProfile) {
   const tools = catalogTools(profile);
   const placed = profile.cloudHome
-    ? tools.filter(tool => !LOCAL_VM_TOOL_NAMES.has(tool.name)).map(tool => tool.name === "select_computer"
+    ? tools.filter(tool => !LOCAL_ONLY_TOOL_NAMES.has(tool.name)).map(tool => tool.name === "select_computer"
       ? { ...tool, inputSchema: { ...tool.inputSchema, properties: { surface: CLOUD_HOME_SURFACE } } }
       : tool)
     : tools;

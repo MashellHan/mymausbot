@@ -19,6 +19,7 @@ import { callWaitTool, WAIT_TOOL_NAMES } from "./agents-wait-tools.ts";
 import { callComputerAskTool, COMPUTER_ASK_TOOL_NAMES } from "./agents-computer-ask-tool.ts";
 import { callMausBotTool, MAUSBOT_TOOL_NAMES } from "./agents-mausbot-tools.ts";
 import { callPageTool, PAGE_TOOL_NAMES } from "./agents-pages-tools.ts";
+import { callMiniAppTool, MINI_APP_TOOL_NAMES } from "./agents-mini-app-tools.ts";
 import { callPersonTool, PERSON_TOOL_NAMES } from "./agents-person-tools.ts";
 import { callDevsTool, DEVS_TOOL_NAMES } from "./agents-devs-tools.ts";
 
@@ -218,6 +219,7 @@ export async function callTool(called: string, input: Json, context: ToolCallCon
   if (HELPER_TOOL_NAMES.has(name)) return callHelperTool(name, args, context);
   if (MAUSBOT_TOOL_NAMES.has(name)) return callMausBotTool(name, args, context);
   if (PAGE_TOOL_NAMES.has(name)) return callPageTool(name, args, context);
+  if (MINI_APP_TOOL_NAMES.has(name)) return callMiniAppTool(name, args, context);
   if (PERSON_TOOL_NAMES.has(name)) return callPersonTool(name, args, context);
   if (DEVS_TOOL_NAMES.has(name)) return callDevsTool(name, args, context);
   if (TRIGGER_TOOL_NAMES.has(name)) return callTriggerTool(name, args, context);

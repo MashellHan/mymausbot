@@ -76,38 +76,39 @@ const MAUSBOT_ADDS = 0.02;
 const RESEARCH_TOOLS = ["x_search", "research_search", "research_endpoint", "research_call"];
 /** Only on the person's own Cloud: never on the fullest profile, a Team Cloud's. */
 const OWN_CLOUD_TOOLS = ["ask_for_computer"];
+const MINI_APP_TOOLS = ["mini_app_info", "mini_app_connect", "mini_app_publish", "mini_app_rollback", "mini_app_archive"];
 /** The fullest profile, checked in whole; every other one is pinned by tool names, bytes and sha256. */
 const FULL = "skills+shared+voice+escalations+x+team";
 
 /** Bytes when the budget was last set; a profile may move at most 2% either way (lower it to lock in a win). */
 const BUDGET_BASELINE: Record<string, number> = {
-  "default": 58250,
-  "voice": 59031,
-  "shared": 60515,
-  "shared+voice": 61296,
-  "skills": 61069,
-  "skills+voice": 61850,
-  "skills+shared": 63334,
-  "skills+shared+voice": 64115,
-  "non-chief": 48881,
-  "voice+non-chief": 49662,
-  "shared+non-chief": 51146,
-  "shared+voice+non-chief": 51927,
-  "skills+non-chief": 51700,
-  "skills+voice+non-chief": 52793,
-  "skills+shared+non-chief": 53965,
-  "skills+shared+voice+non-chief": 55058,
-  "skills+shared+voice+cloud-home": 63839,
-  "skills+shared+voice+non-chief+cloud-home": 55860,
-  "default+legacy-switches": 58250,
-  "default+mausbot": 58901,
-  "skills+shared+voice+mausbot": 64766,
-  "skills+shared+voice+escalations": 64945,
-  "skills+shared+voice+escalations+x": 68784,
-  "skills+shared+voice+escalations+x+team": 69416,
-  "default+no-computer-pick": 57038,
-  "default+room": 49808,
-  "non-chief+room": 40751,
+  "default": 61529,
+  "voice": 62310,
+  "shared": 63794,
+  "shared+voice": 64575,
+  "skills": 64348,
+  "skills+voice": 65129,
+  "skills+shared": 66613,
+  "skills+shared+voice": 67394,
+  "non-chief": 52313,
+  "voice+non-chief": 53094,
+  "shared+non-chief": 54578,
+  "shared+voice+non-chief": 55359,
+  "skills+non-chief": 55132,
+  "skills+voice+non-chief": 55913,
+  "skills+shared+non-chief": 57397,
+  "skills+shared+voice+non-chief": 58178,
+  "skills+shared+voice+cloud-home": 64632,
+  "skills+shared+voice+non-chief+cloud-home": 55416,
+  "default+legacy-switches": 61529,
+  "default+mausbot": 62180,
+  "skills+shared+voice+mausbot": 68045,
+  "skills+shared+voice+escalations": 68224,
+  "skills+shared+voice+escalations+x": 72063,
+  "skills+shared+voice+escalations+x+team": 72063,
+  "default+no-computer-pick": 60317,
+  "default+room": 53227,
+  "non-chief+room": 44011,
 };
 
 const RPC_PREFIX = '{"jsonrpc":"2.0","id":1,"result":';
@@ -284,7 +285,9 @@ describe("agents proxy tools/list golden", () => {
       const desktop = wires[name.slice(0, -"+cloud-home".length)]!;
       const names = toolsOf(wires[name]!).map((tool) => tool.name);
       expect(names).toEqual(expect.arrayContaining(OWN_CLOUD_TOOLS));
-      expect(names.filter((tool) => !OWN_CLOUD_TOOLS.includes(tool))).toEqual(toolsOf(desktop).map((tool) => tool.name).filter((tool) => tool !== "vm_exec"));
+      expect(names.filter((tool) => !OWN_CLOUD_TOOLS.includes(tool))).toEqual(toolsOf(desktop).map((tool) => tool.name).filter((tool) => tool !== "vm_exec" && !MINI_APP_TOOLS.includes(tool)));
+      expect(names.some((tool) => MINI_APP_TOOLS.includes(tool))).toBe(false);
+      expect(toolsOf(desktop).map((tool) => tool.name)).toEqual(expect.arrayContaining(MINI_APP_TOOLS));
       expect(select(desktop).inputSchema.properties.surface.enum).toEqual(["auto", "cloud", "vm", "local", "browser"]);
       expect(toolsOf(desktop).map((tool) => tool.name)).toContain("vm_exec");
       const surface = select(wires[name]!).inputSchema.properties.surface;
