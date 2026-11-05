@@ -6733,14 +6733,25 @@ describe("harness HTTP API", () => {
       const firstCard = (await first.json()) as { messageId: string };
 
       // A second connection holds the database write lock, so the fresh card's append fails mid-request.
-      const lockDb = new DatabaseSync(join(home, ".openmausbot", "messages.db"));
-      lockDb.exec("BEGIN IMMEDIATE");
+      const acquisitionTimeoutMs = 2_000;
+      const lockDb = new DatabaseSync(join(home, ".openmausbot", "messages.db"), { timeout: acquisitionTimeoutMs });
+      let lockHeld = false;
+      const acquisitionStartedAt = Date.now();
       try {
+        try {
+          lockDb.exec("BEGIN IMMEDIATE");
+          lockHeld = true;
+        } catch (error) {
+          throw new Error(`Could not acquire the deliberate message write lock after ${Date.now() - acquisitionStartedAt} ms (limit ${acquisitionTimeoutMs} ms): ${String(error)}`, { cause: error });
+        }
         const failed = await request("needed for the second task");
         expect(failed.status).toBeGreaterThanOrEqual(500);
       } finally {
-        lockDb.exec("COMMIT");
-        lockDb.close();
+        try {
+          if (lockHeld) lockDb.exec("COMMIT");
+        } finally {
+          lockDb.close();
+        }
       }
 
       const card = async (id: string) => (await api("GET", "/api/bots?messages=20")).body.bots
