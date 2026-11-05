@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import vm from "node:vm";
 import { readSecureCredentials } from "./secure-credentials.mjs";
-import { CREDENTIAL_PATCH, credentialSaveError } from "./credential-patch.mjs";
+import { createWorkspaceCredentialSaver } from "./workspace-credential-saver.mjs";
 import { createSessionWorkspaceCredentials } from "./session-workspace-credentials.mjs";
 
 const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
@@ -50,33 +50,30 @@ test("desktop credential IPC uses external session config and rolls back a faile
   const root = mkdtempSync(path.join(tmpdir(), "omb-session-ipc-")); t.after(() => rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, "credentials.bin"), old = Buffer.from("old synthetic encrypted credentials");
   writeFileSync(file, old);
-  const begin = main.indexOf("async function saveWorkspaceCredential(name, value)"), finish = main.indexOf('\nipcMain.handle("credential:set"', begin);
-  assert(begin >= 0 && finish > begin);
   const requests = [];
-  let accept = true;
+  let accept = true, dataDir = "environment-a";
   const sessionWorkspaceCredentials = createSessionWorkspaceCredentials();
   const globalIdentity = { phoneSecretPrivateKey: "synthetic-app-identity" };
-  const context = vm.createContext({ SESSION_CREDENTIALS: true, app: { isPackaged: true }, serverReady: true,
-    safeStorage: new Proxy({}, { get: () => { throw new Error("safeStorage was accessed"); } }),
-    CREDENTIAL_PATCH, credentialSaveError, SERVER_PORT: 43210,
-    runningDataDir: "environment-a", localSwitchInFlight: false, sessionCredentialWrites: 0, sessionWorkspaceCredentials,
-    desktopMutationToken: "synthetic", desktopServerHeaders: () => ({ "x-openmausbot-desktop-owner": "synthetic" }),
-    updateSecureCredentialDocument: () => { throw new Error("App-global credential state was accessed"); },
+  const saver = createWorkspaceCredentialSaver({ packaged: () => true, sessionOnly: true,
+    encryptionAvailable: () => { throw new Error("safeStorage was accessed"); },
+    dataDir: () => dataDir, switching: () => false, ready: () => true, port: () => 43210,
+    headers: () => ({ "x-openmausbot-desktop-owner": "synthetic" }),
+    sessionState: (dir) => sessionWorkspaceCredentials.state(dir),
+    secureUpdate: () => { throw new Error("App-global credential state was accessed"); },
     fetch: async (url, options) => {
       requests.push({ url, options });
       return { ok: accept, status: accept ? 200 : 503, json: async () => accept ? { xai: { configured: true } } : { error: "server unavailable" } };
     },
   });
-  vm.runInContext(main.slice(begin, finish) + "\nglobalThis.saveWorkspaceCredential = saveWorkspaceCredential;", context);
-  await context.saveWorkspaceCredential("xaiApiKey", " new-session-key ");
+  await saver.save("xaiApiKey", " new-session-key ");
   assert.equal(sessionWorkspaceCredentials.forServer("environment-a", globalIdentity).xaiApiKey, "new-session-key");
   assert.deepEqual(sessionWorkspaceCredentials.forServer("environment-b", globalIdentity), globalIdentity);
   assert.equal(requests[0].url, "http://127.0.0.1:43210/api/config?secretStorage=external");
   assert.deepEqual(JSON.parse(requests[0].options.body), { xai: { key: "new-session-key" } });
   accept = false;
-  await assert.rejects(context.saveWorkspaceCredential("xaiApiKey", "rejected-session-key"), /server unavailable/);
+  await assert.rejects(saver.save("xaiApiKey", "rejected-session-key"), /server unavailable/);
   assert.equal(sessionWorkspaceCredentials.forServer("environment-a", globalIdentity).xaiApiKey, "new-session-key");
-  context.runningDataDir = "environment-b";
+  dataDir = "environment-b";
   assert.deepEqual(sessionWorkspaceCredentials.forServer("environment-b", globalIdentity), globalIdentity);
   assert.equal(sessionWorkspaceCredentials.forServer("environment-a", globalIdentity).xaiApiKey, "new-session-key", "recovery retains A without seeding B");
   assert.deepEqual(readFileSync(file), old);

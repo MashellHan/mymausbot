@@ -1,3 +1,7 @@
+import { readFileSync, rmSync } from "node:fs";
+import { z } from "zod";
+import { writeFileAtomic } from "./atomic.ts";
+import { parseJson } from "./schema.ts";
 import type { JsonObject } from "./schema.ts";
 
 const SECRET_FIELDS: Record<string, readonly string[]> = {
@@ -53,5 +57,75 @@ export function withSessionSecrets<T extends JsonObject>(config: T, session: Jso
     if (Object.hasOwn(session, section)) result[section] = structuredClone(session[section]!);
   }
   return result as T;
+}
+
+const SESSION_CONFIG_LIMIT = 128 * 1024;
+const SESSION_CREDENTIALS = process.env.OMB_DESKTOP_PARENT === "1" && process.env.OMB_CREDENTIAL_MODE === "session";
+const sessionConfigSeed = process.env.OMB_SESSION_CONFIG_JSON;
+delete process.env.OMB_SESSION_CONFIG_JSON;
+let sessionConfig: JsonObject | null = null;
+let publisher: ((snapshot: JsonObject) => Promise<void> | void) | null = null;
+let confirmation: Promise<void> | null = null;
+let pending = false;
+
+export function sessionCredentialsEnabled(): boolean { return SESSION_CREDENTIALS; }
+export function readSessionConfigDisk(file: string): { previousDisk: JsonObject; previousBytes: string | null } {
+  let previousDisk: JsonObject = {};
+  let previousBytes: string | null = null;
+  try {
+    previousBytes = readFileSync(file, "utf8");
+    const parsed = z.record(z.string(), z.json()).safeParse(parseJson(previousBytes));
+    if (parsed.success) previousDisk = parsed.data;
+  } catch {}
+  return { previousDisk, previousBytes };
+}
+export function activeSessionConfig(): JsonObject | null {
+  if (!SESSION_CREDENTIALS) return null;
+  if (sessionConfig !== null || !sessionConfigSeed) return sessionConfig;
+  if (Buffer.byteLength(sessionConfigSeed) > SESSION_CONFIG_LIMIT) throw new Error("Session configuration exceeds the desktop handoff limit");
+  const parsed = z.record(z.string(), z.json()).safeParse(parseJson(sessionConfigSeed));
+  if (!parsed.success) throw new Error("Invalid desktop session configuration");
+  return sessionConfig = parsed.data;
+}
+export function assertSessionConfigWritable(): void {
+  if (SESSION_CREDENTIALS && pending) throw Object.assign(new Error("A session credential save is still being confirmed. Try again."), { status: 409 });
+}
+export function setSessionConfigPublisher(send: (snapshot: JsonObject) => Promise<void> | void): void { publisher = send; }
+export async function confirmSessionConfig(): Promise<void> { await confirmation; }
+
+export function writeSessionConfig(input: {
+  file: string;
+  effective: JsonObject;
+  previousDisk: JsonObject;
+  previousSession: JsonObject | null;
+  previousBytes: string | null;
+  patch: JsonObject;
+  forget(): void;
+}): JsonObject {
+  const { file, effective, previousDisk, previousSession, previousBytes, patch, forget } = input;
+  const persisted = SESSION_CREDENTIALS ? persistedSessionConfig(effective, previousDisk) : effective;
+  if (SESSION_CREDENTIALS && Buffer.byteLength(JSON.stringify(effective)) > SESSION_CONFIG_LIMIT) throw new Error("Session configuration exceeds the desktop handoff limit");
+  if (SESSION_CREDENTIALS && hasSessionSecretPatch(patch) && !publisher) throw new Error("The desktop session credential owner is unavailable");
+  writeFileAtomic(file, JSON.stringify(persisted, null, 2), { mode: 0o600 });
+  if (SESSION_CREDENTIALS) {
+    sessionConfig = effective;
+    if (publisher) {
+      pending = true;
+      let sent: Promise<void> | void;
+      try { sent = publisher(structuredClone(effective)); }
+      catch (error) { sent = Promise.reject(error); }
+      confirmation = Promise.resolve(sent).then(() => { pending = false; }, (error: unknown) => {
+        try {
+          sessionConfig = previousSession;
+          if (previousBytes === null) rmSync(file, { force: true });
+          else writeFileAtomic(file, previousBytes, { mode: 0o600 });
+          forget();
+        } finally { pending = false; }
+        throw error;
+      });
+      void confirmation.catch(() => {});
+    }
+  }
+  return persisted;
 }
 

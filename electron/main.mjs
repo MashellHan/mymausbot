@@ -269,7 +269,6 @@ let serverReady = !app.isPackaged;
 let secureCredentials = {};
 let secureCredentialState = null;
 const sessionWorkspaceCredentials = createSessionWorkspaceCredentials();
-let sessionCredentialWrites = 0;
 let desktopDataDirLease = null;
 // The folder this process leases; environmentsState.activeId can name a remote server instead.
 let runningDataDir = null;
@@ -489,7 +488,7 @@ import {
 } from "./companion.mjs";
 import { autoStartCompanion } from "./companion-autostart.mjs";
 import { createRoutineWakeHold, rememberRoutineWake, routineWakeSettings } from "./routine-wake.mjs";
-import { CREDENTIAL_PATCH, credentialSaveError } from "./credential-patch.mjs";
+import { createWorkspaceCredentialSaver } from "./workspace-credential-saver.mjs";
 
 /** Second wall after preload's reduced bridge: computer-controlling IPC answers only the local server's UI.
  * Declared before any handler registration (temporal dead zone). */
@@ -1190,17 +1189,7 @@ async function startServerOn(port, dataDir = runningDataDir ?? startupEnvironmen
   proc.on("message", (message) => {
     if (!serverSupervisor.isCurrent(proc)) return;
     try {
-      if (sessionConfigMemory && ["openmausbot:session-config", "openmausbot:session-config-commit", "openmausbot:session-config-finish", "openmausbot:session-config-cancel"].includes(message?.type)) {
-        if (message.type === "openmausbot:session-config-finish") { sessionConfigMemory.finish(dataDir, message.requestId, proc); return; }
-        if (message.type === "openmausbot:session-config-cancel") { sessionConfigMemory.cancel(dataDir, message.requestId); return; }
-        let ok = true;
-        const phase = message.type === "openmausbot:session-config" ? "prepared" : "committed";
-        try { ok = phase === "prepared" ? sessionConfigMemory.receive(dataDir, message, proc) : sessionConfigMemory.commit(dataDir, message.requestId, proc); }
-        catch { ok = false; }
-        try { proc.postMessage({ type: "openmausbot:session-config-result", requestId: message.requestId, phase, ok }); }
-        catch (error) { sessionConfigMemory.cancel(dataDir, message.requestId); throw error; }
-        return;
-      }
+      if (sessionConfigMemory?.handleMessage(dataDir, proc, message)) return;
       if (trustedApprovalMode.receive(proc, message)) return;
       if (managedDesktopRelay.receive(proc, message)) return;
       if (orgLibrary?.receive(message)) return;
@@ -1620,7 +1609,7 @@ function acquireDataDirLeaseFor(dir) {
 async function switchLocalEnvironmentTo(targetDir, targetId, quiet = false) {
   if (!app.isPackaged) return { ok: false, error: "dev" };
   // A second switch would be un-paused by the first's finally mid-handoff.
-  if (localSwitchInFlight || sessionCredentialWrites > 0) return { ok: false, error: "busy" };
+  if (localSwitchInFlight || workspaceCredentialSaver.busy()) return { ok: false, error: "busy" };
   const previousDir = runningDataDir ?? startupEnvironmentDir(environmentsState, desktopDataDir());
   let startedProc = null;
   let switchSucceeded = false;
@@ -2836,61 +2825,17 @@ ipcMain.handle("desktop:capabilities", async (event) =>
   }),
 );
 
-async function saveWorkspaceCredential(name, value) {
-  const patchFor = CREDENTIAL_PATCH[name];
-  if (!patchFor || typeof value !== "string") {
-    throw new Error("Unsupported credential");
-  }
-  if (app.isPackaged && !SESSION_CREDENTIALS && !(await safeStorage.isAsyncEncryptionAvailable())) {
-    throw new Error("The operating-system credential store is unavailable");
-  }
-  const secret = value.trim();
-  const targetDataDir = SESSION_CREDENTIALS ? runningDataDir : null;
-  if (SESSION_CREDENTIALS && (!targetDataDir || localSwitchInFlight)) throw new Error("The local environment is changing. Try again when it is ready.");
-  const applyToHarness = async () => {
-    if (app.isPackaged && (!serverReady || (SESSION_CREDENTIALS && runningDataDir !== targetDataDir))) throw new Error("The embedded bot server is unavailable");
-    const secretStorage = app.isPackaged ? "?secretStorage=external" : "";
-    const response = await fetch(`http://127.0.0.1:${SERVER_PORT}/api/config${secretStorage}`, {
-      method: "PUT",
-      headers: desktopServerHeaders(
-        { "content-type": "application/json" },
-        { packaged: app.isPackaged, token: desktopMutationToken },
-      ),
-      body: JSON.stringify(patchFor(secret)),
-    });
-    const body = await response.json().catch(() => null);
-    if (!response.ok) throw credentialSaveError(response.status, body);
-    return body;
-  };
-  if (!app.isPackaged) return applyToHarness();
-
-  if (SESSION_CREDENTIALS) {
-    sessionCredentialWrites++;
-    try {
-      return await sessionWorkspaceCredentials.state(targetDataDir).update(
-        (credentials) => {
-          if (secret) credentials[name] = secret;
-          else delete credentials[name];
-          return credentials;
-        },
-        applyToHarness,
-      );
-    } finally { sessionCredentialWrites--; }
-  }
-
-  // Commit the encrypted value before the server makes it live; a failed reload rolls credentials.bin back.
-  return updateSecureCredentialDocument(
-    (credentials) => {
-      if (secret) credentials[name] = secret;
-      else delete credentials[name];
-      return credentials;
-    },
-    applyToHarness,
-  );
-}
+const workspaceCredentialSaver = createWorkspaceCredentialSaver({
+  packaged: () => app.isPackaged, sessionOnly: SESSION_CREDENTIALS,
+  encryptionAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
+  dataDir: () => runningDataDir, switching: () => localSwitchInFlight, ready: () => serverReady,
+  port: () => SERVER_PORT,
+  headers: () => desktopServerHeaders({ "content-type": "application/json" }, { packaged: app.isPackaged, token: desktopMutationToken }),
+  fetch, sessionState: (dir) => sessionWorkspaceCredentials.state(dir), secureUpdate: updateSecureCredentialDocument,
+});
 
 ipcMain.handle("credential:set", localOnly("credential:set", (_event, name, value) =>
-  saveWorkspaceCredential(name, value),
+  workspaceCredentialSaver.save(name, value),
 ));
 ipcMain.on("credential-mode:read", localOnlySync("credential-mode:read", (event) => { event.returnValue = CREDENTIAL_MODE; }, null));
 

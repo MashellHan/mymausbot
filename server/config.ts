@@ -1,12 +1,11 @@
 // ~/.openmausbot/config.json, with env vars overriding its credentials.
-import { readFileSync, mkdirSync, existsSync, renameSync, rmSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { normalizeImageGenerationUrl, type ImageGenerationConfig } from "../shared/image-generation.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
-import { writeFileAtomic } from "./atomic.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "./bot-thread-limits.ts";
 import { anthropicKeyEnv } from "./anthropic-key-env.ts";
 import { withoutComputerEngine } from "./computer-engine-removal.ts";
@@ -28,7 +27,8 @@ import { deciderConfigSchema, type DeciderConfig } from "./decider/config.ts";
 import { liveConfigSchema, liveConfigWithEnv, liveSettingEnv, type LiveConfig } from "./live-config.ts";
 import { browserEngineConfigSchema, isValidCdpTarget, type BrowserEngineConfig } from "./browser/config.ts";
 import { roomContextSettings } from "./room-context-settings.ts";
-import { hasSessionSecretPatch, persistedSessionConfig, withSessionSecrets } from "./session-config.ts";
+import { activeSessionConfig, assertSessionConfigWritable, readSessionConfigDisk, sessionCredentialsEnabled, withSessionSecrets, writeSessionConfig } from "./session-config.ts";
+export { confirmSessionConfig, setSessionConfigPublisher, sessionCredentialsEnabled } from "./session-config.ts";
 import { MAX_LOCAL_VM_IDLE_TIMEOUT_MINUTES, MAX_LOCAL_VM_MAX_INSTANCES, MIN_LOCAL_VM_IDLE_TIMEOUT_MINUTES, MIN_LOCAL_VM_MAX_INSTANCES } from "./local-vm-settings.ts";
 export * from "./local-vm-settings.ts";
 
@@ -743,37 +743,6 @@ export function ensureDirs() {
 
 let lastIgnoredConfigWarning = "";
 const storedConfig = settledFileCache(() => join(DATA_DIR, "config.json"), () => parseStoredConfig(parseJson(readFileSync(join(DATA_DIR, "config.json"), "utf8"))));
-const SESSION_CONFIG_LIMIT = 128 * 1024;
-const SESSION_CREDENTIALS = process.env.OMB_DESKTOP_PARENT === "1" && process.env.OMB_CREDENTIAL_MODE === "session";
-const sessionConfigSeed = process.env.OMB_SESSION_CONFIG_JSON;
-delete process.env.OMB_SESSION_CONFIG_JSON;
-let sessionConfig: JsonObject | null = null;
-let publishSessionConfig: ((snapshot: JsonObject) => Promise<void> | void) | null = null;
-let sessionConfigConfirmation: Promise<void> | null = null;
-let sessionConfigPending = false;
-
-function initialSessionConfig(): JsonObject | null {
-  if (!SESSION_CREDENTIALS || !sessionConfigSeed) return null;
-  if (Buffer.byteLength(sessionConfigSeed) > SESSION_CONFIG_LIMIT) throw new Error("Session configuration exceeds the desktop handoff limit");
-  const checked = jsonObjectSchema.safeParse(parseJson(sessionConfigSeed));
-  if (!checked.success) throw new Error("Invalid desktop session configuration");
-  return checked.data;
-}
-
-function activeSessionConfig(): JsonObject | null {
-  if (!SESSION_CREDENTIALS) return null;
-  return sessionConfig ??= initialSessionConfig();
-}
-
-export function sessionCredentialsEnabled(): boolean { return SESSION_CREDENTIALS; }
-
-export function setSessionConfigPublisher(publish: (snapshot: JsonObject) => Promise<void> | void): void {
-  publishSessionConfig = publish;
-}
-
-export async function confirmSessionConfig(): Promise<void> {
-  await sessionConfigConfirmation;
-}
 
 export function loadConfig(): AppConfig {
   const sessionBase = activeSessionConfig();
@@ -963,20 +932,13 @@ export function saveConfig(
   },
   options: { replaceInstances?: boolean } = {},
 ): void {
-  if (SESSION_CREDENTIALS && sessionConfigPending) throw Object.assign(new Error("A session credential save is still being confirmed. Try again."), { status: 409 });
+  assertSessionConfigWritable();
   const p = join(DATA_DIR, "config.json");
-  let previousDisk: JsonObject = {};
-  let previousBytes: string | null = null;
-  try {
-    previousBytes = readFileSync(p, "utf8");
-    const parsed = jsonObjectSchema.safeParse(parseJson(previousBytes));
-    if (parsed.success) previousDisk = parsed.data;
-  } catch {
-  }
+  const { previousDisk, previousBytes } = readSessionConfigDisk(p);
   const previousSession = activeSessionConfig();
   let disk: JsonObject = previousSession ? withSessionSecrets(previousDisk, previousSession) : structuredClone(previousDisk);
   const checkedPatch = appConfigSchema.partial().extend({ threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional() }).parse(patch);
-  const before = configSaveListeners.size ? structuredClone(SESSION_CREDENTIALS ? previousDisk : disk) : disk;
+  const before = configSaveListeners.size ? structuredClone(sessionCredentialsEnabled() ? previousDisk : disk) : disk;
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
   if (storedProfiles.success) disk.browserProfiles = storedProfiles.data;
   for (const key of ["xai", "anthropic", "mistral", "cerebras", "treg", "postiz", "groq", "greenference", "meta", "deepseek", "openai", "openrouter", "openaiCompat", "composio", "box", "opencodeGo", "tts", "decider", "imageGen", "live", "profile", "rooms", "mcp", "threads", "context", "memory", "localVm", "features", "budgets", "billing", "decisions", "loopGuard", "onboarding", "browserEngine", "newBots", "safetyFloor"] as const) {
@@ -1073,30 +1035,9 @@ export function saveConfig(
       (disk.instances as JsonObject).openaiCompat = { ...entry.data, config: nextConfig };
     }
   }
-  const persisted = SESSION_CREDENTIALS ? persistedSessionConfig(disk, previousDisk) : disk;
-  if (SESSION_CREDENTIALS && Buffer.byteLength(JSON.stringify(disk)) > SESSION_CONFIG_LIMIT) throw new Error("Session configuration exceeds the desktop handoff limit");
-  if (SESSION_CREDENTIALS && hasSessionSecretPatch(checkedPatch as JsonObject) && !publishSessionConfig) throw new Error("The desktop session credential owner is unavailable");
   mkdirSync(DATA_DIR, { recursive: true });
-  writeFileAtomic(p, JSON.stringify(persisted, null, 2), { mode: 0o600 });
-  if (SESSION_CREDENTIALS) {
-    sessionConfig = disk;
-    if (publishSessionConfig) {
-      sessionConfigPending = true;
-      let sent: Promise<void> | void;
-      try { sent = publishSessionConfig(structuredClone(disk)); }
-      catch (error) { sent = Promise.reject(error); }
-      sessionConfigConfirmation = Promise.resolve(sent).then(() => { sessionConfigPending = false; }, (error: unknown) => {
-        try {
-          sessionConfig = previousSession;
-          if (previousBytes === null) rmSync(p, { force: true });
-          else writeFileAtomic(p, previousBytes, { mode: 0o600 });
-          storedConfig.forget();
-        } finally { sessionConfigPending = false; }
-        throw error;
-      });
-      void sessionConfigConfirmation.catch(() => {});
-    }
-  }
+  const persisted = writeSessionConfig({ file: p, effective: disk, previousDisk, previousSession, previousBytes,
+    patch: checkedPatch as JsonObject, forget: () => storedConfig.forget() });
   storedConfig.forget();
   for (const listener of configSaveListeners) {
     try {

@@ -43,6 +43,19 @@ export function createSessionConfigMemory() {
     rejectProcess(owner) {
       for (const [dataDir, request] of pending) if (request.owner === owner) cancel(dataDir, request.requestId);
     },
+    handleMessage(dataDir, owner, message) {
+      const type = message?.type;
+      if (!["openmausbot:session-config", "openmausbot:session-config-commit", "openmausbot:session-config-finish", "openmausbot:session-config-cancel"].includes(type)) return false;
+      if (type === "openmausbot:session-config-finish") { this.finish(dataDir, message.requestId, owner); return true; }
+      if (type === "openmausbot:session-config-cancel") { cancel(dataDir, message.requestId); return true; }
+      const phase = type === "openmausbot:session-config" ? "prepared" : "committed";
+      let ok = true;
+      try { ok = phase === "prepared" ? this.receive(dataDir, message, owner) : this.commit(dataDir, message.requestId, owner); }
+      catch { ok = false; }
+      try { owner.postMessage({ type: "openmausbot:session-config-result", requestId: message.requestId, phase, ok }); }
+      catch (error) { cancel(dataDir, message.requestId); throw error; }
+      return true;
+    },
     childEnvironment(dataDir) {
       const snapshot = snapshots.get(dataDir);
       return snapshot === undefined ? {} : { OMB_SESSION_CONFIG_JSON: JSON.stringify(snapshot) };
