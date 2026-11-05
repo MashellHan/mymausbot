@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { claudeUserMcpEnabled, DATA_DIR, type AppConfig } from "../config.ts";
+import { claudeUserMcpEnabled, confirmSessionConfig, DATA_DIR, loadConfig, type AppConfig } from "../config.ts";
 import { lookForGrokBot, removeOldCursorSignIn } from "../grok-local.ts";
 import { applySetupImport, detectSetup, thisMachine, type SetupHost, type SetupMachine } from "../setup-import.ts";
 import type { BusyFlag } from "./config.ts";
@@ -56,6 +56,9 @@ export function createSetupImportRoutes(deps: SetupImportRouteDeps): RouteHandle
     if (!parsed.success || (!parsed.data.skills && !parsed.data.tools)) {
       return json(res, 400, { error: "Choose skills, tools or both." });
     }
-    return json(res, 200, applySetupImport(machine(), host, parsed.data));
+    const result = applySetupImport(machine(), host, parsed.data);
+    try { await confirmSessionConfig(); }
+    catch (error) { deps.cfg.mcpServers = loadConfig().mcpServers; throw error; }
+    return json(res, 200, result);
   };
 }

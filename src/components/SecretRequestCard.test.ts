@@ -74,6 +74,27 @@ describe("SecretRequestCard superseded requests", () => {
 });
 
 describe("SecretRequestCard ask card", () => {
+  it("says a desktop session key is forgotten on quit before and after saving", () => {
+    vi.stubGlobal("window", { ogb: { credentialMode: () => "session" } });
+    const pending = view({});
+    expect(pending).toContain("Use for this run");
+    expect(pending).toContain("Kept in memory by MausBot until you quit");
+    expect(pending).not.toContain("Save securely");
+    const provided = view({ provided: true, resumed: true });
+    expect(provided).toContain("available for this run");
+    expect(provided).not.toContain("saved securely");
+  });
+
+  it("does not offer file-backed secret delivery or 1Password saves in session mode", () => {
+    vi.stubGlobal("window", { ogb: { credentialMode: () => "session" } });
+    for (const secret of [{ target: "onePasswordToken" }, { target: "customSecret", delivery: "file" }]) {
+      const html = view(secret);
+      expect(html).toContain("persistent credential file");
+      expect(html).not.toContain('type="password"');
+      expect(html).not.toContain("Save securely");
+    }
+  });
+
   it("waits as a compact ask card with a masked field", () => {
     const html = view({});
     expect(html).toContain('data-ask-card="pending"');

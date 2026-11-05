@@ -11,7 +11,7 @@ export { isTalkPanel } from "./talk-panel.mjs";
  * is ready. `speech`: speech.mjs's start/stop/finish/busy. `packaged`: asks go to `localRequest`, this computer's own
  * server; in development to `devUrl`, whose Vite /api proxy reaches `pnpm dev:server`.
  */
-export function installTalk({ ipcMain, localOnly, localOrHome, BrowserWindow, appleSpeech, speech, packaged, devUrl, nativeImage, iconPath, openLink, reveal, log, fetch = globalThis.fetch }) {
+export function installTalk({ ipcMain, localOnly, localOrHome, BrowserWindow, browserSession, appleSpeech, speech, packaged, devUrl, nativeImage, iconPath, openLink, reveal, log, fetch = globalThis.fetch }) {
   const callPresence = createCallPresence();
   let shortcut = null, session = null, panel = null, theme = null;
 
@@ -51,7 +51,7 @@ export function installTalk({ ipcMain, localOnly, localOrHome, BrowserWindow, ap
     start({ globalShortcut, screen, prefs, remote, away, starting, localRequest, dataDir }) {
       const request = (route, init) => (packaged ? localRequest(route, init) : fetch(new URL(route, devUrl), init));
       try {
-        panel = createTalkPanel({ BrowserWindow, screen, nativeImage, iconPath, theme, onOpen: logged("open", () => session.open()), onDismiss: logged("dismiss", () => session.dismiss()) });
+        panel = createTalkPanel({ BrowserWindow, browserSession: browserSession?.(), screen, nativeImage, iconPath, theme, onOpen: logged("open", () => session.open()), onDismiss: logged("dismiss", () => session.dismiss()) });
         session = createTalkSession({
           speech,
           server: createTalkServer({ request, prefs, starting, serverKey: () => (packaged ? dataDir() : devUrl) ?? "local" }),

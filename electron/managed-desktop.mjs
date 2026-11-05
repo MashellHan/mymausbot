@@ -89,8 +89,20 @@ export const unreadableRecord = error => error?.code === "unreadable_record";
 const unreadable = message => Object.assign(new Error(message), { code: "unreadable_record" });
 export const retryDelay = attempt => [15_000, 30_000, 60_000][Math.min(attempt, 3) - 1];
 
-/** OS-encrypted; company tokens never go into config.json, backups, renderer storage, environment variables or CLI homes. */
-export function createManagedDesktopStore({ file, encryption }) {
+/** OS-encrypted by default; session-only records live in this App process and never touch the existing encrypted file. */
+export function createManagedDesktopStore({ file, encryption, sessionOnly = false }) {
+  if (sessionOnly) {
+    let document = null;
+    let tail = Promise.resolve();
+    return {
+      async read() { return structuredClone(document); },
+      write(value) {
+        const operation = tail.catch(() => {}).then(() => { document = structuredClone(value); });
+        tail = operation;
+        return operation;
+      },
+    };
+  }
   let tail = Promise.resolve();
   const available = async () => {
     if (!(await encryption.available())) throw new Error("Unlock your system keychain before connecting an organization.");

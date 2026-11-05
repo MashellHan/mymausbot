@@ -1,12 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cancelSurvey, CHECKOUT_SOURCES, checkoutDestination, cloudMenuSublabel, createCloudAccountClient, createCloudAccountStore, cloudOrigin, cloudPlanSnapshot, CLOUD_ORIGIN } from "./cloud-account.mjs";
 
 const accessToken = `omc_${"T".repeat(43)}`;
+
+test("session-only Cloud account grants forget on a new App run without touching old encrypted bytes", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "omb-cloud-session-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, "cloud-account.bin");
+  const oldBytes = Buffer.from("synthetic existing Cloud ciphertext");
+  await writeFile(file, oldBytes);
+  let encryptionCalls = 0;
+  const encryption = { available: async () => { encryptionCalls++; throw new Error("keychain touched"); },
+    encrypt: async () => { encryptionCalls++; throw new Error("keychain touched"); },
+    decrypt: async () => { encryptionCalls++; throw new Error("keychain touched"); } };
+  const store = createCloudAccountStore({ file, encryption, sessionOnly: true });
+  assert.equal(await store.read(), null);
+  await store.write({ token: accessToken });
+  assert.deepEqual(await store.read(), { token: accessToken });
+  await store.write(null);
+  assert.equal(await store.read(), null);
+  assert.deepEqual(await readFile(file), oldBytes);
+  assert.equal(encryptionCalls, 0);
+  assert.equal(await createCloudAccountStore({ file, encryption, sessionOnly: true }).read(), null);
+});
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let i = 0; i < 200; i++) { if (check()) return; await sleep(5); } assert.fail("Fixture did not reach the expected state"); }
 async function fixture(t, options = {}) {

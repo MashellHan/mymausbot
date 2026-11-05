@@ -154,6 +154,8 @@ import {
   threadEventLogMaxBytes,
   threadEventLogRetentionDays,
   saveConfig,
+  confirmSessionConfig,
+  setSessionConfigPublisher,
   showToolCallsEnabled,
   claudeUserMcpEnabled,
   skillAuthoringEnabled,
@@ -173,6 +175,7 @@ import {
   CLAUDE_API_INSTANCE,
   openCodeProviderKeys,
 } from "./config.ts";
+import { createSessionConfigHandoff } from "./session-config-handoff.ts";
 import { serveStatic } from "./static-files.ts";
 import { startUpkeep } from "./host/start-upkeep.ts";
 import { ComputerControl } from "./computer-control.ts";
@@ -1458,6 +1461,11 @@ type UtilityParentPort = {
 };
 // Only Electron's utility process supplies parentPort, private to the desktop main process; plain Node leaves it absent.
 const utilityParentPort = (process as NodeJS.Process & { parentPort?: UtilityParentPort }).parentPort;
+const sessionConfigHandoff = process.env.OMB_CREDENTIAL_MODE === "session" && utilityParentPort
+  ? createSessionConfigHandoff((message) => utilityParentPort.postMessage(message)) : null;
+if (process.env.OMB_CREDENTIAL_MODE === "session" && utilityParentPort) {
+  setSessionConfigPublisher((config) => sessionConfigHandoff!.publish(config));
+}
 type DesktopPrivateMessage = BrowserCleanupWireRequest | import("./login-handoff.ts").LoginHandoffResult | {
   type: "openmausbot:browser-control";
   botId: string;
@@ -1526,6 +1534,7 @@ const phoneSecrets = new PhoneSecretBridge(postDesktopPrivateMessage);
 utilityParentPort?.on("message", (event) => {
   const message = event?.data;
   try {
+    if (sessionConfigHandoff?.receive(message)) return;
     if (applyDesktopMutationTokenMessage(message) || desktopComputer.receive(message)) return;
     if (handleDesktopTrustedApprovalMessage(message)) return;
     if (browserCleanup.receive(message)) return;
@@ -12074,6 +12083,7 @@ async function stopCompanyInstances(ids: string[]) {
 
 async function persistProviderInstance(instanceId: string, instances: NonNullable<AppConfig["instances"]>) {
   saveConfig({ instances }, { replaceInstances: true });
+  await confirmSessionConfig();
   cfg.instances = instances;
   providerAuthSessions.clearInstance(instanceId);
   bus.detach(instanceId);
@@ -12672,6 +12682,7 @@ ROUTES.push(createLiveRoutes({
   saveSettings: async (patch) => {
     if (providerConfigBusy) throw Object.assign(new Error("Settings are already being updated. Try again in a moment."), { status: 409 });
     saveConfig({ live: patch });
+    await confirmSessionConfig();
     Object.assign(cfg, loadConfig());
     broadcast({ kind: "config", ...configStatus() });
     return liveSettingsFor(cfg);

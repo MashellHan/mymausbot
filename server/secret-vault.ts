@@ -9,6 +9,7 @@ import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openS
 import { join } from "node:path";
 
 import { secretForms } from "./login-store.ts";
+import { appSessionCredentials, sessionCredentialRefusal } from "./app-session-credentials.ts";
 import { HELD_SECRET_MASK } from "./redact.ts";
 import { inSecretFolder, SECRET_FOLDER } from "./secret-folder.ts";
 
@@ -100,6 +101,7 @@ export class SecretVault {
   /** Writes the card's value to `<home>/.openmausbot-secrets/<thread>/<card>` (0600, in 0700 folders); returns its path
    * as the bot's commands see it. */
   saveFile(owner: SecretOwner, messageId: string, value: string, home: SecretFileHome): string {
+    if (appSessionCredentials()) throw sessionCredentialRefusal("Secret file delivery");
     if (!ID.test(owner.threadId) || !ID.test(messageId)) throw new Error("invalid conversation or card id");
     privateFolder(home.host, "all");
     const folder = join(home.host, SECRET_FOLDER);

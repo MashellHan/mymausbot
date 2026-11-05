@@ -4,14 +4,18 @@
 // OMB_TEST_DESKTOP_PAGES_ACCESS: the published pages' access the app hands over for a signed-in MausBot account, as JSON.
 // OMB_TEST_DESKTOP_CUA_CONNECTION: a file holding the app's driver record; the app hands it to its own server, and again
 // each time the file changes, as the real app does each time its driver changes.
-import { readFileSync, unwatchFile, watchFile } from "node:fs";
+import { readFileSync, unwatchFile, watchFile, writeFileSync } from "node:fs";
 
 const token = process.env.OMB_TEST_DESKTOP_OWNER_TOKEN;
 const pages = process.env.OMB_TEST_DESKTOP_PAGES_ACCESS;
 const cuaFile = process.env.OMB_TEST_DESKTOP_CUA_CONNECTION;
+const sessionConfigCapture = process.env.OMB_TEST_SESSION_CONFIG_CAPTURE;
+const sessionConfigReply = process.env.OMB_TEST_SESSION_CONFIG_REPLY;
 delete process.env.OMB_TEST_DESKTOP_OWNER_TOKEN;
 delete process.env.OMB_TEST_DESKTOP_PAGES_ACCESS;
 delete process.env.OMB_TEST_DESKTOP_CUA_CONNECTION;
+delete process.env.OMB_TEST_SESSION_CONFIG_CAPTURE;
+delete process.env.OMB_TEST_SESSION_CONFIG_REPLY;
 
 const cuaGrant = () => {
   let connection = null;
@@ -39,7 +43,19 @@ if (token || cuaFile) {
         if (pages) queueMicrotask(() => listener({ data: { type: "openmausbot:included-pages", access: JSON.parse(pages) } }));
         if (cuaFile) queueMicrotask(() => listener({ data: cuaGrant() }));
       },
-      postMessage() {},
+      postMessage(message) {
+        if (sessionConfigCapture && message?.type === "openmausbot:session-config") {
+          if (sessionConfigReply === "drop") return;
+          let ok = sessionConfigReply !== "deny";
+          if (ok) {
+            try { writeFileSync(sessionConfigCapture, JSON.stringify(message.config), { mode: 0o600 }); }
+            catch { ok = false; }
+          }
+          for (const listener of listeners) queueMicrotask(() => listener({ data: {
+            type: "openmausbot:session-config-result", requestId: message.requestId, ok,
+          } }));
+        }
+      },
     },
   });
 }

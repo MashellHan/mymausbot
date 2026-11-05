@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic } from "../atomic.ts";
+import { appSessionCredentials } from "../app-session-credentials.ts";
 import type { AppConfig } from "../config.ts";
 import { customMcpServers } from "../config.ts";
 import type { McpServerSpec, StdioMcpSpec } from "../contracts.ts";
@@ -96,7 +97,7 @@ export function createMcpServersHost(deps: McpServersHostDeps) {
         const bots = deps.bots();
         const claimed = claimBotMcpServers(deps.cfg().mcpServers, deps.dataDir, (botId) => bots.some((bot) => bot.id === botId));
         if (claimed) deps.persist(claimed.next);
-        writeFileAtomic(CLAIMED_FILE(deps.dataDir), JSON.stringify({ claimedAt: Date.now() }), { mode: 0o600 });
+        if (!appSessionCredentials()) writeFileAtomic(CLAIMED_FILE(deps.dataDir), JSON.stringify({ claimedAt: Date.now() }), { mode: 0o600 });
         for (const [botId, names] of Object.entries(claimed?.claimed ?? {})) {
           const bot = bots.find((candidate) => candidate.id === botId);
           if (bot && bots.length > 1) deps.tell(claimedNotice(bot.name, names), bot);
