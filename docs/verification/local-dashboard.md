@@ -29,8 +29,13 @@ bounded, redacted latest instruction are available only through those routes.
   once in the summary. Extra appearances are disclosed separately. Events with
   no repository identity retain their counts in an unattributed row.
 
-The provider reads the existing hourly collector's private `latest.json`. Its
-optional `localRepositories` object has `version: 1`, `rows` and `attribution`.
+The provider reads the existing five-minute collector's private `latest.json`.
+The visible Usage panel reads it every five minutes without overlapping requests.
+A snapshot older than fifteen minutes, or from an earlier China-calendar date,
+is stale and retains its actual counts and capture timestamp. Collection reuses
+the existing local routine with cron `*/5 * * * *` in `Asia/Shanghai`; the separate
+daily publication keeps its schedule. No second collection routine is created.
+The aggregate's optional `localRepositories` object has `version: 1`, `rows` and `attribution`.
 Each row contains a SHA-256 identity, a display name, a category and sparse
 `daily` entries with `day`, `knownPrs` and `commits`. `attribution` contains unique
 global events with known repository identity, using the same daily fields.

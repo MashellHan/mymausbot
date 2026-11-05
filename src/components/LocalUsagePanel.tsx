@@ -8,7 +8,7 @@ import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
 
 const ROUTE = "/api/local-dashboard/usage";
-const REFRESH_MS = 60 * 60 * 1_000;
+const REFRESH_MS = 5 * 60 * 1_000;
 const unavailable: LocalUsageResponse = {
   status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
   prSourceCoverage: null, prCoverage: null, windows: null, trend: [],

@@ -152,12 +152,15 @@ describe("local Usage panel", () => {
     expect([...host.querySelector<HTMLElement>("section")!.querySelectorAll("dd")].map((value) => value.textContent)).toEqual(["0", "0", "0"]);
   });
 
-  it("fetches only the local summary and keeps a last-good response on transport failure", async () => {
+  it("refreshes the local summary every five minutes and keeps the last good response on failure", async () => {
     vi.useFakeTimers();
     calls.api.mockResolvedValueOnce(sample).mockRejectedValueOnce(new Error("offline"));
     await render(null, true);
     expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/usage", expect.objectContaining({ background: true, signal: expect.any(AbortSignal) }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 - 1); });
+    expect(calls.api).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(calls.api).toHaveBeenCalledTimes(2);
     expect(text()).toContain("Showing the last captured snapshot");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
   });
@@ -186,7 +189,7 @@ describe("local Usage panel", () => {
     vi.useFakeTimers();
     calls.api.mockResolvedValueOnce(sample).mockRejectedValueOnce(new ApiError("forbidden", status));
     await render(null, true);
-    await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60 * 1_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
     expect(text()).toContain("Activity summary unavailable");
     expect(text()).not.toContain("2026-10-05 – 2026-11-03");
   });

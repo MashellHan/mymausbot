@@ -82,11 +82,11 @@ and `scripts/activity-monitor.py`, and existing aggregate
 `~/.local/share/agent-town/activity/latest.json`. Reuse definitions for token
 cache/reasoning accounting, cross-clone commit deduplication and PR identity.
 Read aggregates rather than exposing raw conversation logs or credentials.
-Refresh hourly with single-flight behavior and preserve last good results on
+Refresh every five minutes with single-flight behavior and preserve last good results on
 failure. Reuse an existing schedule or coordinate one owner to avoid duplicate
 collection; the existing standing daily publication remains intact.
-Hourly local refresh already has one external automation owner and runs at
-every hour in China time, first 2026-11-03 17:00. Its identifier stays in the
+Local refresh reuses the existing automation with cron `*/5 * * * *` in
+Asia/Shanghai. Its identifier stays in the
 local handoff record. It calls the existing collector without `--publish`;
 the App only consumes the aggregate and must not add another collector.
 The 1/7/30-day summaries include the capture day's partial data through

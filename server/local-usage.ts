@@ -13,7 +13,7 @@ const CATEGORIES: LocalUsageCategory[] = ["work", "personal", "unclassified"];
 const WINDOWS = [1, 7, 30] as const;
 const DAY_MS = 86_400_000;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const STALE_AFTER_MS = 2 * 60 * 60 * 1000;
+const STALE_AFTER_MS = 15 * 60 * 1000;
 const CHINA_DATE = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
 
 interface DailyCategory {
