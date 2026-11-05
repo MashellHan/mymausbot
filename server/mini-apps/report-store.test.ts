@@ -9,6 +9,7 @@ import { REPORT_COLUMNS, REPORT_TABLE, REPORT_ITEM_FIELDS, reportMiniAppBinding 
 import { createDataEngine } from "../data/engine.ts";
 import type { DataEngine } from "../data/types.ts";
 import { MINI_APPS_OWNER } from "./registry.ts";
+import { parseReportEdition } from "./report-schema.ts";
 import { ReportStore } from "./report-store.ts";
 
 const fixtures: Array<{ root: string; db: DatabaseSync; data: DataEngine }> = [];
@@ -105,5 +106,36 @@ describe("retained report editions", () => {
     const scheduled = await reports.publish("producer", "x_ai_digest", withoutDay, Date.parse("2026-11-05T01:00:00Z"));
     expect(scheduled.editionKey).toBe("2026-11-05");
     expect(await reports.publish("producer", "x_ai_digest", xEdition())).toEqual({ ...scheduled, replayed: true });
+  });
+
+  it("retains one known bound for partial or unknown coverage and requires both for complete coverage", async () => {
+    const { data, reports } = fixture();
+    const prepared = await reports.prepare("producer", "x_ai_digest");
+    const start = "2026-11-04T00:00:00Z";
+    const end = "2026-11-05T00:00:00Z";
+    for (const [coverageStatus, editionKey, windowStartAt, windowEndAt] of [
+      ["partial", "2026-11-01", "2026-10-31T00:00:00.000Z", null],
+      ["partial", "2026-11-02", null, "2026-11-02T00:00:00.000Z"],
+      ["unknown", "2026-11-03", "2026-11-02T00:00:00.000Z", null],
+      ["unknown", "2026-11-04", null, "2026-11-04T00:00:00.000Z"],
+    ] as const) {
+      const edition = { ...xEdition(editionKey), coverageStatus, windowStartAt, windowEndAt };
+      expect(parseReportEdition("x_ai_digest", edition)).toMatchObject({ coverageStatus, windowStartAt, windowEndAt });
+      await reports.publish("producer", "x_ai_digest", edition);
+      const page = await data.readNamed({ ownerId: MINI_APPS_OWNER,
+        binding: reportMiniAppBinding(prepared.dataset.datasetId, "x_ai_digest"), queryId: "edition",
+        parameters: { editionKey }, scope: "synthetic-report" });
+      const header = Object.fromEntries(page.columns.map((column, index) => [column.name, page.rows[0]?.[index]]));
+      expect(header).toMatchObject({ coverageStatus, windowStartAt, windowEndAt });
+    }
+    for (const [windowStartAt, windowEndAt] of [[start, null], [null, end]] as const) {
+      const edition = { ...xEdition(), coverageStatus: "complete", windowStartAt, windowEndAt };
+      expect(() => parseReportEdition("x_ai_digest", edition)).toThrow("Report coverage window is incomplete or invalid.");
+      await expect(reports.publish("producer", "x_ai_digest", edition)).rejects.toMatchObject({ status: 400 });
+    }
+    await expect(reports.publish("producer", "x_ai_digest", {
+      ...xEdition(), coverageStatus: "complete", windowStartAt: end, windowEndAt: start,
+    })).rejects.toMatchObject({ status: 400 });
+    expect(parseReportEdition("x_ai_digest", { ...xEdition(), coverageStatus: "complete" }).coverageStatus).toBe("complete");
   });
 });

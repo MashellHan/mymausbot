@@ -68,9 +68,10 @@ export function parseReportEdition(kind: ReportKind, raw: unknown): ParsedReport
   const edition = parsed.data;
   if (Buffer.byteLength(JSON.stringify(edition)) > 64 * 1024) throw appFailure(413, "Report edition exceeds 64 KiB.");
   if (edition.coverageStatus !== "complete" && !edition.coverageNote) throw appFailure(400, "Partial or unknown coverage needs a limitation note.");
-  if (Boolean(edition.windowStartAt) !== Boolean(edition.windowEndAt) ||
-      edition.windowStartAt && edition.windowEndAt && edition.windowStartAt >= edition.windowEndAt ||
-      edition.coverageStatus === "complete" && !edition.windowStartAt) throw appFailure(400, "Report coverage window is incomplete or invalid.");
+  if ((edition.windowStartAt !== null && edition.windowEndAt !== null && edition.windowStartAt >= edition.windowEndAt) ||
+      (edition.coverageStatus === "complete" && (edition.windowStartAt === null || edition.windowEndAt === null))) {
+    throw appFailure(400, "Report coverage window is incomplete or invalid.");
+  }
   const urls = new Set<string>();
   for (const item of edition.items) {
     if (urls.has(item.sourceUrl)) throw appFailure(409, "A report edition repeats a source URL.");
