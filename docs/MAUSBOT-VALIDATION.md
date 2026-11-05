@@ -12,13 +12,17 @@ reduced coverage in `scripts/testing/check-policy.json`.
 | `pnpm check:plan` | Explain the complete merge-base diff, including staged, unstaged, untracked, deleted and renamed paths; execute no checks |
 | `pnpm check:edit` | Changed contract tests and the area's synthetic UI assertions; use `--test path/to/file.test.ts` when no contract is mapped |
 | `pnpm check:ready` | Fixed core, affected contracts and policy/docs guards once for the review handoff |
-| `git push` | Existing lint, typecheck and locale hook; do not immediately repeat the identical manual sequence |
+| `git push` | Existing changed-file lint and applicable locale/source guards; do not immediately repeat them manually |
 | Review correction | Check the corrected contracts and new risks, then use the normal push hook |
 
 All three commands accept `--base <revision>`; the default is `origin/main`.
-Keep the base current. Local receipts live in `.omb-scratch/validation/` and
+Keep the base current. The current push hook leaves the global typecheck and
+suite in CI. Run additional local static checks when the changed contract or
+verification recipe requires them, with one recorded owner for each check.
+Local receipts live in `.omb-scratch/validation/` and
 record the base/head, dirty-source digest, lockfile digest, command, environment,
-start/end, counts and outcome. They are evidence for that input, never a cache
+start/end, counts and outcome. A source change during the command invalidates
+its readiness result. They are evidence for that input, never a cache
 or a replacement for independent CI. Full escalation concerns merge evidence;
 it does not launch a full platform matrix on a developer's laptop.
 
