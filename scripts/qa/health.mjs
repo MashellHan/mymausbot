@@ -1,11 +1,17 @@
-import { artifactFiles, github, pages } from "./github.mjs";
-import { eligibleRun, issueAreas, issueLabels, triageOf } from "./contracts.mjs";
+import { artifactFiles, fullRunEvidence, github, pages } from "./github.mjs";
+import { issueAreas, issueLabels, triageOf } from "./contracts.mjs";
 
 export async function qaHealth({ api = github, readArtifact = artifactFiles, now = Date.now(), repository = process.env.GITHUB_REPOSITORY } = {}) {
   let report;
   try {
     const runs = await api("/actions/workflows/ci.yml/runs?branch=main&per_page=100");
-    const run = runs.workflow_runs.find((item) => eligibleRun(item, repository) && item.status === "completed");
+    let run;
+    for (const item of runs.workflow_runs) {
+      if (item.status === "completed" && await fullRunEvidence(item, { api, readArtifact, repository, now }) === "full") {
+        run = item;
+        break;
+      }
+    }
     if (!run) throw new Error("No completed full main run");
     const { artifacts } = await api("/actions/artifacts?name=mausbot-qa-report&per_page=100");
     for (const artifact of artifacts.filter((item) => !item.expired)) {
