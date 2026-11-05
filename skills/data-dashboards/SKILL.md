@@ -25,6 +25,31 @@ Publish only when the person asks to share. A published page is public: never pu
 
 Mini Apps are local and have no network access. Use self-contained HTML and the `window.mausApp` named-query bridge described by `mini_app_info`; the CDN and DuckDB-WASM template below is for chat/public pages. Keep money as decimal strings, currencies separate, and invalid or missing values visible. Do not copy financial rows into HTML, infer missing categories/currencies, or create a schedule unless requested.
 
+### Daily X AI and GitHub reports
+
+For the two built-in report kinds, `x_ai_digest` and `github_activity`, first
+discover the stable installed app with `mini_app_info`. Call `mini_app_report`
+with `action: "prepare"` and `kind`; it prepares empty retained Data and returns
+the shipped template's complete publication draft. If the app is absent, install
+that draft through `mini_app_publish`, keeping its request key and payload on retry.
+Preparation does not create a first edition or prove that an Automation has run.
+
+Use `mini_app_report` with `action: "publish"`, `kind` and a complete `edition` to
+append business editions atomically. Keep the existing Automation and its other
+outputs. For an Automation turn, the logical China-date edition key comes from
+the actual scheduled run; retain it across retries. An interactive historical
+import requires an explicit date. Identical retries return the original receipt;
+different content under that identity is an error. Do not replace the managed
+report table, change a date to evade a conflict, or regenerate HTML for each issue.
+
+Preserve actual coverage limits, source URLs, attribution and unknown source
+dates. Optional edition summary, significance and verification notes stay absent
+when unrecorded. A report-level as-of marker does not establish per-item observation
+times. GitHub weekly star increase remains weekly, push time is activity rather
+than a release date, and a public-advisories response is not a safety audit. Without
+earlier comparable observations, period trends remain unavailable. Report source
+URLs are selectable text within the guarded local frame.
+
 ## Start from the template
 
 `dashboard.html` sits next to this guide, in the folder named by this skill's `root`. It is tested in the chat
