@@ -66,6 +66,8 @@ export function createTeamMove(deps) {
 
   const read = () => parseTeamMoves(deps.journal.read());
   const currentSource = (move) => deps.sourceCurrent?.(move) !== false;
+  const sameMove = (one, other) => one.bot.id === other.bot.id && one.startedAt === other.startedAt
+    && one.source?.accountId === other.source?.accountId && one.source?.origin === other.source?.origin;
   const view = (eligible = () => true) => {
     const shown = read().moves.filter((move) => !move.told && eligible(move)).at(-1);
     if (!shown) return null;
@@ -74,9 +76,10 @@ export function createTeamMove(deps) {
   };
   const publish = () => { try { deps.onChange?.(view()); } catch {} };
   /** The move of this bot, changed as `change` says; the journal is written before anything acts on it. */
-  const update = (botId, change) => {
+  const update = (move, change) => {
+    if (!move || !currentSource(move)) return null;
     const journal = read();
-    const at = journal.moves.findIndex((move) => move.bot.id === botId && currentSource(move));
+    const at = journal.moves.findIndex((entry) => sameMove(entry, move));
     if (at < 0) return null;
     const next = change === null ? null : { ...journal.moves[at], ...change };
     if (next) journal.moves[at] = next; else journal.moves.splice(at, 1);
@@ -103,26 +106,30 @@ export function createTeamMove(deps) {
     log(`team move: ${move.bot.name} to ${move.team.name}: ${move.phase} failed (${said})`);
     const tries = (move.tries ?? 0) + 1;
     const released = frozen ? await thaw(io, move) : true;
-    return update(move.bot.id, { phase: "copy", passes: 0, tries, error: said, failing: true, retryAt: now() + RETRY_MS[Math.min(tries - 1, RETRY_MS.length - 1)],
+    return update(move, { phase: "copy", passes: 0, tries, error: said, failing: true, retryAt: now() + RETRY_MS[Math.min(tries - 1, RETRY_MS.length - 1)],
       ...(released ? { thaw: undefined } : { thaw: true }) });
   }
 
   async function copy(io, move) {
     let begun;
     try {
-      if (io.prepare) move = update(move.bot.id, await io.prepare());
+      if (io.prepare) {
+        move = update(move, await io.prepare());
+        if (!move) return null;
+      }
       begun = await io.team.begin();
     } catch (error) {
       // The bot is gone from My Cloud, or is one that stays there: the move stops, nothing changed.
-      if (error?.final) return update(move.bot.id, { failing: true, stopped: true, error: sentence(error.message) ?? undefined, retryAt: undefined });
+      if (error?.final) return update(move, { failing: true, stopped: true, error: sentence(error.message) ?? undefined, retryAt: undefined });
       return failed(io, move, error, false);
     }
     // The team took it already: a run cut short after the switch goes on from there.
-    if (begun.done) return update(move.bot.id, { phase: "switch", teamDone: true, name: begun.name ?? move.name });
-    move = update(move.bot.id, { name: begun.name });
+    if (begun.done) return update(move, { phase: "switch", teamDone: true, name: begun.name ?? move.name });
+    move = update(move, { name: begun.name });
+    if (!move) return null;
     try { await io.engine.move(); }
     catch (error) { return failed(io, move, error, false); }
-    return update(move.bot.id, { phase: "freeze" });
+    return update(move, { phase: "freeze" });
   }
 
   async function freeze(io, move) {
@@ -131,13 +138,13 @@ export function createTeamMove(deps) {
     catch (error) { return failed(io, move, error, true); }
     if (answer.status === 409 && typeof answer.body?.busy === "string") { later(BUSY_POLL_MS); return null; }
     if (!answer.ok || !record(answer.body?.movedTo)) return failed(io, move, new Error(sentence(answer.body?.error) ?? "My Cloud could not hold the bot."), true);
-    return update(move.bot.id, { phase: "final", held: Array.isArray(answer.body.movedTo.held) ? answer.body.movedTo.held : [], frozenAt: now() });
+    return update(move, { phase: "final", held: Array.isArray(answer.body.movedTo.held) ? answer.body.movedTo.held : [], frozenAt: now() });
   }
 
   async function final(io, move) {
     try { await io.engine.move({ final: true }); }
     catch (error) { return failed(io, move, error, true); }
-    return update(move.bot.id, { phase: "check", passes: 1 });
+    return update(move, { phase: "check", passes: 1 });
   }
 
   async function check(io, move) {
@@ -147,10 +154,10 @@ export function createTeamMove(deps) {
         if (passes >= CHECK_PASSES) throw new Error(`Some of ${move.bot.name} did not reach ${move.team.name}.`);
         await io.engine.move({ final: true });
         passes += 1;
-        update(move.bot.id, { passes });
+        if (!update(move, { passes })) return null;
       }
     } catch (error) { return failed(io, { ...move, passes }, error, true); }
-    return update(move.bot.id, { phase: "switch", passes, checkedAt: now() });
+    return update(move, { phase: "switch", passes, checkedAt: now() });
   }
 
   /** The point of no return: the team switches on what was on, then My Cloud keeps the bot as its line. */
@@ -158,17 +165,18 @@ export function createTeamMove(deps) {
     try {
       if (!move.teamDone) {
         await io.team.done(routinesOn(move.held));
-        move = update(move.bot.id, { teamDone: true });
+        move = update(move, { teamDone: true });
+        if (!move) return null;
       }
       const kept = await io.myCloud.call("POST", `/api/bot-moves/${move.bot.id}`, { v: 1, state: "moved", team: { id: move.team.id, name: move.team.name } });
       if (!kept.ok) throw Object.assign(new Error(sentence(kept.body?.error) ?? "My Cloud did not keep the bot's line."), { status: kept.status });
     } catch (error) {
       log(`team move: switching ${move.bot.name} over goes on later (${error?.message ?? error})`);
-      update(move.bot.id, { error: sentence(error?.message) ?? undefined, retryAt: now() + SWITCH_RETRY_MS });
+      update(move, { error: sentence(error?.message) ?? undefined, retryAt: now() + SWITCH_RETRY_MS });
       later(SWITCH_RETRY_MS);
       return null;
     }
-    return update(move.bot.id, { phase: "done", doneAt: now(), error: undefined, failing: undefined, retryAt: undefined, tries: undefined, told: undefined });
+    return update(move, { phase: "done", doneAt: now(), error: undefined, failing: undefined, retryAt: undefined, tries: undefined, told: undefined });
   }
 
   async function runOne(move) {
@@ -176,7 +184,8 @@ export function createTeamMove(deps) {
     try {
       if (move.thaw) {
         if (!(await thaw(io, move))) { later(MINUTE); return; }
-        move = update(move.bot.id, { thaw: undefined });
+        move = update(move, { thaw: undefined });
+        if (!move) return;
       }
       for (let step = 0; move && move.phase !== "done" && step < 12 && !closed; step++) {
         if (move.phase === "copy") move = await copy(io, move);
@@ -198,13 +207,13 @@ export function createTeamMove(deps) {
           const io = deps.open(move);
           try { if (!(await thaw(io, move))) { later(MINUTE); continue; } } finally { await io.close().catch(() => {}); }
         }
-        update(move.bot.id, { phase: "copy", failing: true, stopped: true, error: `You're no longer in ${move.team.name}.`, thaw: undefined, retryAt: undefined });
+        update(move, { phase: "copy", failing: true, stopped: true, error: `You're no longer in ${move.team.name}.`, thaw: undefined, retryAt: undefined });
         continue;
       }
       if (move.stopped) continue;
       if (move.retryAt > now()) { later(move.retryAt - now()); continue; }
       await runOne(move);
-      const after = read().moves.find((entry) => entry.bot.id === move.bot.id && currentSource(entry));
+      const after = read().moves.find((entry) => sameMove(entry, move) && currentSource(entry));
       if (after?.retryAt > now()) later(after.retryAt - now());
     }
   }

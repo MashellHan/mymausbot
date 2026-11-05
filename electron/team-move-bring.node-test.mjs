@@ -284,6 +284,41 @@ test("retry, seen and a matching bot ID leave another account's journal record i
   } finally { done(); }
 });
 
+test("a late A copy result cannot rewrite B's independently confirmed move with the same bot ID", { timeout: 10_000 }, async () => {
+  const old = pendingAMove();
+  let releaseA;
+  const delayedA = new Promise((resolve) => { releaseA = resolve; });
+  let sawA;
+  const startedA = new Promise((resolve) => { sawA = resolve; });
+  const { handlers, journal, teamPairs, setAccount, move, done } = accountFixture({
+    initialJournal: { v: 1, moves: [old] }, confirm: async () => true,
+    botsResponse: async (owner) => {
+      if (owner === ACCOUNTS.a) { sawA(); await delayedA; }
+      return new Response(JSON.stringify({ bots: [
+        { id: `maus-${owner.id}`, name: "MausBot", defaultBot: {} },
+        { id: old.bot.id, name: owner.bot, threadId: "fixture-thread" },
+      ] }), { status: 200 });
+    },
+  });
+  let oldRun;
+  try {
+    oldRun = move.kick();
+    await startedA;
+    setAccount("b");
+    const started = await handlers.get("cloud-send:team-bring-move")(OWN, old.bot.id);
+    const beforeB = structuredClone(journal.value.moves.find((entry) => entry.source?.accountId === ACCOUNTS.b.id));
+    releaseA();
+    await oldRun;
+    const afterA = journal.value.moves.find((entry) => entry.source?.accountId === ACCOUNTS.a.id);
+    const afterB = journal.value.moves.find((entry) => entry.source?.accountId === ACCOUNTS.b.id);
+    assert.equal(started.started, true);
+    assert.deepEqual(afterA, old);
+    assert.equal(beforeB.source.accountId, ACCOUNTS.b.id);
+    assert.notEqual(afterB?.error, "My Cloud sign-in changed. Try again.");
+    assert.deepEqual(teamPairs, ["team-acme"]);
+  } finally { releaseA(); if (oldRun) await oldRun; done(); }
+});
+
 test("bring status and a canceled confirmation project only the current source and team", async () => {
   const old = pendingAMove();
   let otherTeam = false;
