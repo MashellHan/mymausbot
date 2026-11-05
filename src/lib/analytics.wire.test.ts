@@ -107,8 +107,9 @@ it("sends events without any stored or current address, polls nothing, and sends
     analytics.track("app_snapshot", { bots: 3 });
     await minutes(11);
 
+    // posthog-js 1.415.6 compresses asynchronously outside the fake timer clock.
+    await expect.poll(() => sent.length).toBeGreaterThan(0);
     const urls = sent.map(({ url }) => new URL(url));
-    expect(urls.length).toBeGreaterThan(0);
     expect(urls.map(({ origin, pathname }) => `${origin}${pathname}`).filter((url) => url !== "https://us.i.posthog.com/i/v0/e/")).toEqual([]);
     const bodies = await Promise.all(sent.map(({ body }) => bodyText(body)));
     expect(bodies.join("\n")).toContain("app_snapshot");

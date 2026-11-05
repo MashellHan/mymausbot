@@ -61,6 +61,24 @@ describe("scheduled memory upkeep", () => {
     expect(memory()).not.toContain("Trip");
   });
 
+  it("keeps a capture begun before startup when the startup timer begins", async () => {
+    let release!: (answer: string) => void;
+    const held = new Promise<string>((resolve) => { release = resolve; });
+    const generateText = vi.fn().mockReturnValueOnce(held).mockResolvedValue('{"moves":[]}');
+    loop = createMemoryUpkeep({
+      bots: () => [BOT], bot: () => BOT, engine: () => ({ generateText }), busy: () => false,
+      addToAboutMe: () => 0, sourceLabel: () => "owner chat", quietMs: () => 60_000, tidyHour: () => 3,
+    });
+    const capture = loop.capture({ botId: BOT.id, threadId: "owner", turns: [{ person: "Please keep answers brief.", bot: "I will." }] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(generateText).toHaveBeenCalledTimes(1);
+    loop.start();
+    release('[{"text":"Use brief answers","kind":"decision"}]');
+    expect(await capture).toMatchObject({ added: 1 });
+    expect(memory()).toContain("Use brief answers");
+    expect(loop.status(BOT.id).lastCapture?.added).toBe(1);
+  });
+
   it.each(["startup", "interval"] as const)("ignores an already queued %s callback from a stopped generation", async (kind) => {
     const timeout = vi.spyOn(globalThis, "setTimeout");
     const interval = vi.spyOn(globalThis, "setInterval");
