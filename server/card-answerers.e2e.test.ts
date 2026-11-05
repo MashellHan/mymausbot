@@ -10,20 +10,20 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { DecisionRow } from "./decision-log.ts";
 import { SessionRegistry } from "./sessions.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
-import { workerPort } from "./testing/worker-port.ts";
+import { freePortBlock } from "./testing/ports.ts";
 
 const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
 const FAKE_CLI = join(SERVER_DIR, "testing", "fake-acp-cli.ts");
-const PORT = workerPort(28800, 10_000);
-const BASE = `http://127.0.0.1:${PORT}`;
+let PORT = 0;
+let BASE = "";
 const posixOnly = describe.skipIf(process.platform === "win32");
 const BOSS = "boss@example.test";
 const ADA = "ada@example.test";
 const BOB = "bob@example.test";
 const CAPABILITY_KEY = "card-answerers-fixture-capability";
 
-let child: ChildProcess;
-let home: string;
+let child: ChildProcess | undefined;
+let home = "";
 let log = "";
 const tokens: Record<string, string> = {};
 const sessionIds: Record<string, string> = {};
@@ -41,7 +41,10 @@ const api = async (method: string, path: string, body?: unknown, as?: string): P
 };
 
 async function start(env: NodeJS.ProcessEnv = {}) {
-  child = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
+  PORT = await freePortBlock([0, 1]);
+  BASE = `http://127.0.0.1:${PORT}`;
+  log = "";
+  const proc = spawn(process.execPath, [join(SERVER_DIR, "index.ts")], {
     cwd: join(SERVER_DIR, ".."),
     env: {
       ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
@@ -51,12 +54,16 @@ async function start(env: NodeJS.ProcessEnv = {}) {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout!.on("data", (c) => (log += c));
-  child.stderr!.on("data", (c) => (log += c));
+  child = proc;
+  proc.stdout!.on("data", (c) => (log += c));
+  proc.stderr!.on("data", (c) => (log += c));
   const deadline = Date.now() + 20_000;
+  const webhookLine = `openmausbot webhook receiver on http://127.0.0.1:${PORT + 1}`;
+  const readyLine = `openmausbot server on ${BASE}`;
   for (;;) {
+    if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`server never came up:\n${log}`);
     try {
-      if ((await fetch(`${BASE}/api/health`)).ok) return;
+      if (log.includes(webhookLine) && log.includes(readyLine) && (await fetch(`${BASE}/api/health`)).ok && proc.exitCode === null && proc.signalCode === null) return;
     } catch {
     }
     if (Date.now() > deadline) throw new Error(`server never came up:\n${log}`);
@@ -124,12 +131,18 @@ posixOnly("who may answer a card on a shared workspace", () => {
       sessionIds[email] = issued.session.id;
     }
     registry.close(); // a clean close keeps account sessions across the server's boot
-    await start();
+    try { await start(); } catch (error) {
+      await waitForExit(child, { signal: "SIGTERM" });
+      if (home) await removeTempDir(home);
+      child = undefined;
+      home = "";
+      throw error;
+    }
   }, 40_000);
 
   afterAll(async () => {
     await waitForExit(child, { signal: "SIGTERM" });
-    await removeTempDir(home);
+    if (home) await removeTempDir(home);
   });
 
   it("lets the member who sent the request answer it, and no other member", async () => {

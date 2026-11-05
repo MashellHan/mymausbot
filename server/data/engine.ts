@@ -354,11 +354,11 @@ class BotDb implements BotDatabase {
     this.idleTimer.unref();
   }
 
-  private async statement<T>(connection: DataConnection, sql: string, options: { timeoutMs?: number; signal?: AbortSignal; readOnly?: boolean }, work: (open: Open, conn: DuckDB.DuckDBConnection) => Promise<T>): Promise<T> {
+  private async statement<T>(connection: DataConnection, sql: string, options: { timeoutMs?: number; signal?: AbortSignal; readOnly?: boolean; resultCleanup?: true }, work: (open: Open, conn: DuckDB.DuckDBConnection) => Promise<T>): Promise<T> {
     this.inFlight++;
     try {
-      const readOnly = options.readOnly ?? /^(?:SELECT|SHOW|DESCRIBE)\b/i.test(sql.trim());
-      return await this.engine.admission.enter(() => this.storeLane.run(readOnly, async () => {
+      const shared = options.resultCleanup === true || (options.readOnly ?? /^(?:SELECT|SHOW|DESCRIBE)\b/i.test(sql.trim()));
+      return await this.engine.admission.enter(() => this.storeLane.run(shared, async () => {
         const open = await this.open();
         return open.lanes[connection].run(sql, options, (conn) => work(open, conn));
       }));
@@ -484,7 +484,7 @@ class BotDb implements BotDatabase {
   async dropResult(name: string, connection: DataConnection = "bot"): Promise<void> {
     if (!RESULT_NAME.test(name)) throw new DataFailure({ code: "invalid_input", message: `Result name "${name}" must be a plain identifier (letters, digits, underscore).` });
     const sql = `DROP TABLE IF EXISTS ${DATA_RESULTS_SCHEMA}.${name}`;
-    await this.statement(connection, sql, {}, (open, conn) => this.read(open, conn, sql));
+    await this.statement(connection, sql, { resultCleanup: true }, (open, conn) => this.read(open, conn, sql));
   }
 
   private async catalog(connection: DataConnection = "panel"): Promise<CatalogEntry[]> {
