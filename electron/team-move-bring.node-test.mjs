@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { bringableBots, installTeamMove, teamMoveConfirmWords } from "./team-move-main.mjs";
 
 const HOME = "https://home.example.test", TEAM = "https://acme.example.test", OTHER = "https://other.example.test";
-const state = { status: "connected", teams: [
+const state = { status: "connected", account: { id: "fixture-account" }, teams: [
   { id: "team-acme", name: "Acme", machine: { origin: TEAM, status: "ready" } },
   { id: "team-waiting", name: "Waiting", machine: { origin: OTHER, status: "provisioning" } },
 ] };
@@ -21,19 +21,24 @@ const BOTS = [
   { id: "gone-bot-01", name: "Gone", movedTo: { state: "moved", team: { id: "team-acme", name: "Acme" } } },
 ];
 
-function fixture({ agrees = false, home = true, bots = BOTS } = {}) {
+function fixture({ agrees = false, home = true, bots = BOTS, accountState = () => state, homeOrigin = () => HOME, pageOrigin = (event) => event.origin ?? null, confirm, fetchResponse, journalWrite } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "omb-team-bring-"));
   const handlers = new Map(), asked = [], pairs = [];
-  const journal = { value: null, read() { return this.value; }, write(next) { this.value = next; } };
+  const journal = { value: null, read() { return this.value; }, write(next) { this.value = next; journalWrite?.(next); } };
   const move = installTeamMove({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     cloudPage: () => null,
-    pageOrigin: (event) => event.origin ?? null,
-    confirmMove: async (words) => { asked.push(words); return agrees; },
-    home: () => (home ? { origin: HOME, grant: async () => { pairs.push("grant"); return { origin: HOME, code: "C" }; } } : null),
-    account: () => ({ state: () => state, pairTeam: async () => { throw new Error("no team pairing in this test"); } }),
+    pageOrigin,
+    confirmMove: async (words) => { asked.push(words); return confirm ? confirm(words) : agrees; },
+    home: () => {
+      if (!home) return null;
+      const origin = homeOrigin();
+      return { origin, grant: async () => { pairs.push("grant"); return { origin, code: "C" }; } };
+    },
+    account: () => ({ state: accountState, pairTeam: async () => { throw new Error("no team pairing in this test"); } }),
     file: () => join(dir, "send.json"), journalFile: () => join(dir, "moves.json"), journal,
     fetch: async (url, init) => {
+      if (fetchResponse) return fetchResponse(url, init);
       if (String(url).endsWith("/api/auth/pair")) return new Response(JSON.stringify({ token: "omb_sess_fixture" }), { status: 200 });
       if (String(url).endsWith("/api/bots?messages=0")) return new Response(JSON.stringify({ bots }), { status: 200 });
       if (String(url).endsWith("/api/auth/logout")) return new Response("{}", { status: 200 });
@@ -43,6 +48,40 @@ function fixture({ agrees = false, home = true, bots = BOTS } = {}) {
   return { handlers, asked, pairs, journal, move, done: () => { move.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 const OWN = { origin: TEAM };
+
+const ACCOUNTS = {
+  a: { id: "fixture-account-a", origin: "https://home-a.example.test", bot: "Atlas A" },
+  b: { id: "fixture-account-b", origin: "https://home-b.example.test", bot: "Atlas B" },
+};
+const accountBots = (owner) => [
+  { id: `maus-${owner.id}`, name: "MausBot", defaultBot: {} },
+  { id: `atlas-${owner.id}`, name: owner.bot },
+];
+
+function accountFixture({ confirm, pageOrigin, botsResponse, journalWrite, teams = () => state.teams } = {}) {
+  let active = "a";
+  let homeOverride = null;
+  const requests = [];
+  const current = () => ACCOUNTS[active];
+  const setup = fixture({
+    accountState: () => ({ status: "connected", account: { id: current().id }, teams: teams() }),
+    homeOrigin: () => homeOverride ?? current().origin,
+    ...(confirm ? { confirm } : {}),
+    ...(pageOrigin ? { pageOrigin } : {}),
+    ...(journalWrite ? { journalWrite } : {}),
+    fetchResponse: async (url) => {
+      const parsed = new URL(url);
+      const owner = Object.values(ACCOUNTS).find((candidate) => candidate.origin === parsed.origin);
+      assert.ok(owner, "only synthetic Cloud origins are requested");
+      requests.push({ origin: parsed.origin, path: parsed.pathname });
+      if (parsed.pathname === "/api/auth/pair") return new Response(JSON.stringify({ token: "omb_sess_fixture" }), { status: 200 });
+      if (parsed.pathname === "/api/bots") return botsResponse ? botsResponse(owner) : new Response(JSON.stringify({ bots: accountBots(owner) }), { status: 200 });
+      if (parsed.pathname === "/api/auth/logout") return new Response("{}", { status: 200 });
+      throw new Error(`unexpected synthetic route ${parsed.pathname}`);
+    },
+  });
+  return { ...setup, requests, setAccount: (id) => { active = id; }, setHomeOrigin: (origin) => { homeOverride = origin; } };
+}
 
 test("lists My Cloud's bots to that team's own page, each with why it can't go, and to nobody else", async () => {
   const { handlers, done } = fixture();
@@ -72,6 +111,136 @@ test("reads My Cloud once while the list is fresh: every read is one of the Admi
   } finally { done(); }
 });
 
+test("a fresh list never gives another signed-in account the previous account's bots", async () => {
+  const { handlers, requests, setAccount, done } = accountFixture();
+  try {
+    const list = handlers.get("cloud-send:team-bring");
+    assert.equal((await list(OWN)).bots[1].name, "Atlas A");
+    setAccount("b");
+    assert.equal((await list(OWN)).bots[1].name, "Atlas B");
+    assert.equal((await list(OWN)).bots[1].name, "Atlas B");
+    assert.deepEqual(requests.filter((request) => request.path === "/api/bots").map((request) => request.origin), [ACCOUNTS.a.origin, ACCOUNTS.b.origin]);
+  } finally { done(); }
+});
+
+test("the same account does not reuse a list after My Cloud changes", async () => {
+  const { handlers, requests, setHomeOrigin, done } = accountFixture();
+  try {
+    const list = handlers.get("cloud-send:team-bring");
+    assert.equal((await list(OWN)).bots[1].name, "Atlas A");
+    setHomeOrigin(ACCOUNTS.b.origin);
+    assert.equal((await list(OWN)).bots[1].name, "Atlas B");
+    assert.deepEqual(requests.filter((request) => request.path === "/api/bots").map((request) => request.origin), [ACCOUNTS.a.origin, ACCOUNTS.b.origin]);
+  } finally { done(); }
+});
+
+test("a late answer from the previous account cannot refill the cache or reach the new account's page", { timeout: 10_000 }, async () => {
+  let releaseA;
+  const delayedA = new Promise((resolve) => { releaseA = resolve; });
+  let sawA;
+  const startedA = new Promise((resolve) => { sawA = resolve; });
+  const { handlers, requests, setAccount, done } = accountFixture({
+    botsResponse: async (owner) => {
+      if (owner === ACCOUNTS.a) { sawA(); await delayedA; }
+      return new Response(JSON.stringify({ bots: accountBots(owner) }), { status: 200 });
+    },
+  });
+  try {
+    const list = handlers.get("cloud-send:team-bring");
+    const old = list(OWN);
+    await startedA;
+    setAccount("b");
+    assert.equal((await list(OWN)).bots[1].name, "Atlas B");
+    releaseA();
+    assert.deepEqual(await old, { bots: [] });
+    assert.equal((await list(OWN)).bots[1].name, "Atlas B");
+    assert.deepEqual(requests.filter((request) => request.path === "/api/bots").map((request) => request.origin), [ACCOUNTS.a.origin, ACCOUNTS.b.origin]);
+  } finally { releaseA(); done(); }
+});
+
+test("a list waiting on My Cloud answers nothing after its page changes", { timeout: 10_000 }, async () => {
+  let activePage = TEAM, release;
+  const delayed = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const { handlers, done } = accountFixture({
+    pageOrigin: () => activePage,
+    botsResponse: async (owner) => {
+      entered();
+      await delayed;
+      return new Response(JSON.stringify({ bots: accountBots(owner) }), { status: 200 });
+    },
+  });
+  try {
+    const pending = handlers.get("cloud-send:team-bring")(OWN);
+    await started;
+    activePage = OTHER;
+    release();
+    assert.deepEqual(await pending, { bots: [] });
+  } finally { release(); done(); }
+});
+
+for (const changed of ["account", "page"]) {
+  test(`a confirmed bring does not start after its ${changed} changes`, { timeout: 10_000 }, async () => {
+    let activePage = TEAM, answer;
+    const confirmation = new Promise((resolve) => { answer = resolve; });
+    let asked;
+    const asking = new Promise((resolve) => { asked = resolve; });
+    const { handlers, journal, setAccount, done } = accountFixture({
+      pageOrigin: () => activePage,
+      confirm: async () => { asked(); return confirmation; },
+    });
+    try {
+      const pending = handlers.get("cloud-send:team-bring-move")(OWN, `atlas-${ACCOUNTS.a.id}`);
+      await asking;
+      if (changed === "account") setAccount("b");
+      else activePage = OTHER;
+      answer(true);
+      await assert.rejects(pending, /account or team page changed/);
+      assert.equal(journal.value, null);
+    } finally { answer(false); done(); }
+  });
+}
+
+test("a move keeps its original account and Cloud through deferred startup", async () => {
+  let switchAccount, switched = false;
+  const { handlers, journal, requests, setAccount, move, done } = accountFixture({
+    confirm: async () => true,
+    journalWrite: (value) => {
+      if (!switched && value?.moves?.[0]?.phase === "copy") { switched = true; switchAccount(); }
+    },
+  });
+  switchAccount = () => setAccount("b");
+  try {
+    const answer = await handlers.get("cloud-send:team-bring-move")(OWN, `atlas-${ACCOUNTS.a.id}`);
+    assert.equal(answer.started, true);
+    await move.kick();
+    assert.deepEqual(journal.value.moves[0].source, { accountId: ACCOUNTS.a.id, origin: ACCOUNTS.a.origin });
+    assert.equal(requests.some((request) => request.origin === ACCOUNTS.b.origin), false);
+  } finally { done(); }
+});
+
+test("losing team membership during confirmation still blocks another Cloud", { timeout: 10_000 }, async () => {
+  let member = true, answer;
+  const confirmation = new Promise((resolve) => { answer = resolve; });
+  let asked;
+  const asking = new Promise((resolve) => { asked = resolve; });
+  const { handlers, requests, journal, setAccount, done } = accountFixture({
+    teams: () => member ? state.teams : [],
+    confirm: async () => { asked(); return confirmation; },
+  });
+  try {
+    const pending = handlers.get("cloud-send:team-bring-move")(OWN, `atlas-${ACCOUNTS.a.id}`);
+    await asking;
+    member = false;
+    setAccount("b");
+    answer(true);
+    await assert.rejects(pending, /account or team page changed/);
+    assert.equal(requests.some((request) => request.origin === ACCOUNTS.b.origin), false);
+    assert.equal(journal.value, null);
+  } finally { answer(false); done(); }
+});
+
 test("moves nothing until the person agrees in main's own confirm, which says there's no way back and what stays", async () => {
   const { handlers, asked, journal, done } = fixture({ agrees: false });
   try {
@@ -91,6 +260,7 @@ test("moves the bot once they agree, into the page's own team, under the name My
     const answer = await handlers.get("cloud-send:team-bring-move")(OWN, "atlas-bot-1", "a name from the page");
     assert.equal(answer.started, true);
     assert.deepEqual(journal.value.moves.map((move) => [move.bot.id, move.bot.name, move.team.id]), [["atlas-bot-1", "Atlas", "team-acme"]]);
+    assert.deepEqual(journal.value.moves[0].source, { accountId: "fixture-account", origin: HOME });
     assert.deepEqual(await handlers.get("cloud-send:team-bring-status")(OWN), { bot: { id: "atlas-bot-1", name: "Atlas" }, team: { id: "team-acme", name: "Acme" }, phase: "moving" });
     assert.equal(await handlers.get("cloud-send:team-bring-status")({ origin: OTHER }), null, "another team's page reads nothing of it");
   } finally { done(); }

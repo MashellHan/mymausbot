@@ -23,7 +23,7 @@ export function installTeamMove(deps: {
   kick(): Promise<void>;
   view(): TeamMoveView | null;
   seen(): TeamMoveView | null;
-  start(input: { bot: { id: string; name: string }; team: { id: string; name: string; origin?: string } }): Promise<void>;
+  start(input: { bot: { id: string; name: string }; team: { id: string; name: string; origin?: string }; source?: { accountId: string; origin: string } }): Promise<void>;
   retry(): Promise<void>;
   close(): void;
   journal(): unknown;

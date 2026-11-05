@@ -224,7 +224,7 @@ export function createTeamMove(deps) {
     kick,
     view,
     /** Starts moving a bot into a team; a bot already moving there goes on. */
-    start({ bot, team }) {
+    start({ bot, team, source }) {
       const journal = read();
       const held = journal.moves.find((move) => move.bot.id === bot.id);
       if (held && held.phase !== "done" && !held.stopped) {
@@ -232,7 +232,7 @@ export function createTeamMove(deps) {
         return kick();
       }
       const moves = journal.moves.filter((move) => move.bot.id !== bot.id).map((move) => (move.phase === "done" ? { ...move, told: true } : move));
-      deps.journal.write({ v: 1, moves: [...moves, { bot, team, phase: "copy", startedAt: now() }] });
+      deps.journal.write({ v: 1, moves: [...moves, { bot, team, ...(source ? { source } : {}), phase: "copy", startedAt: now() }] });
       publish();
       return kick();
     },

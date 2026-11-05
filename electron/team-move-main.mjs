@@ -115,24 +115,37 @@ function bearerSession(origin, token, fetchImpl) {
 export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, confirmMove = async () => false, home, account, file, journalFile, openTeam, onChange = () => {}, fetch: fetchImpl = globalThis.fetch, journal, log = () => {} }) {
   const teams = () => moveTeams(account()?.state());
   const teamOf = (id) => teams().find((team) => team.id === id) ?? null;
+  const bringSource = () => {
+    const current = account()?.state(), target = home();
+    return current?.status === "connected" && typeof current.account?.id === "string" && target?.origin
+      ? { accountId: current.account.id, origin: target.origin, target } : null;
+  };
+  const sameSource = (one, other) => Boolean(one && other && one.accountId === other.accountId && one.origin === other.origin);
   const sendStore = jsonFile(file);
 
   function open(move) {
+    const assertSource = () => {
+      if (move.source && !sameSource(move.source, bringSource())) throw new Error("My Cloud sign-in changed. Try again.");
+    };
+    assertSource();
     const label = `Move to ${move.team.name}`;
+    const ownerTarget = home();
     const source = lazy(() => {
-      const target = home();
-      if (!target) return Promise.reject(new Error("This app has no My Cloud to move from."));
-      return openOwnerSession(target, fetchImpl, { label, background: false });
+      assertSource();
+      if (!ownerTarget) return Promise.reject(new Error("This app has no My Cloud to move from."));
+      return openOwnerSession(ownerTarget, fetchImpl, { label, background: false });
     });
     let begun = null;
     const facts = { threadId: null, label: null };
     const target = lazy(async () => {
+      assertSource();
       const team = teamOf(move.team.id);
       if (!team) throw new Error(`You're no longer in ${move.team.name}.`);
       const client = account();
       if (!client) throw new Error("Sign in to MausBot Cloud first.");
       const member = await openOwnerSession({ origin: team.origin, grant: () => client.pairTeam(team.id) }, fetchImpl, { label, background: false });
       try {
+        assertSource();
         const asked = await member.call("POST", "/api/team-move-in", { v: 1, bot: { id: move.bot.id, name: move.bot.name, ...(facts.threadId ? { threadId: facts.threadId } : {}) },
           ...(facts.label ? { label: facts.label } : {}) });
         if (!asked.ok) throw Object.assign(new Error(sentence(asked.body?.error) ?? `${team.name} did not take ${move.bot.name}.`), { status: asked.status });
@@ -142,13 +155,22 @@ export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, c
     });
     const scope = { bot: move.bot.id, label: move.label ?? "you", name: move.name ?? move.bot.name };
     const engine = createCloudSend({
-      local: async (route, init) => (await source.get()).fetch(route, { method: init?.method ?? "GET" }),
+      local: async (route, init) => {
+        assertSource();
+        const owner = await source.get();
+        assertSource();
+        const response = await owner.fetch(route, { method: init?.method ?? "GET" });
+        assertSource();
+        return response;
+      },
       cloud: {
-        origin: () => teamOf(move.team.id)?.origin ?? move.team.origin ?? null,
+        origin: () => { assertSource(); return teamOf(move.team.id)?.origin ?? move.team.origin ?? null; },
         asleep: () => false,
         read: () => Promise.reject(new Error("A move reads the team only over its own sign-in.")),
         open: async () => {
+          assertSource();
           const session = await target.get();
+          assertSource();
           if (!session) throw new Error(`${move.bot.name} is in ${move.team.name} already.`);
           return { ...session, close: async () => {} };
         },
@@ -158,7 +180,14 @@ export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, c
       team: scope,
       onChange: () => onChange(),
     });
-    const myCloud = { call: async (method, route, body) => (await source.get()).call(method, route, body) };
+    const myCloud = { call: async (method, route, body) => {
+      assertSource();
+      const owner = await source.get();
+      assertSource();
+      const answer = await owner.call(method, route, body);
+      assertSource();
+      return answer;
+    } };
     return {
       engine: { move: (options) => engine.send({ reason: "move", final: options?.final === true }), check: () => engine.check() },
       myCloud,
@@ -178,14 +207,19 @@ export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, c
       },
       team: {
         async begin() {
+          assertSource();
           await target.get();
+          assertSource();
           if (begun?.name) scope.name = begun.name;
           return begun;
         },
         async done(on) {
+          assertSource();
           const session = await target.get();
+          assertSource();
           if (!session) return;
           const switched = await session.call("POST", `/api/team-move-in/${move.bot.id}/done`, { v: 1, on });
+          assertSource();
           if (!switched.ok) throw Object.assign(new Error(sentence(switched.body?.error) ?? `${move.team.name} did not switch ${move.bot.name}'s routines on.`), { status: switched.status });
         },
       },
@@ -226,31 +260,49 @@ export function installTeamMove({ ipcMain, cloudPage, pageOrigin = () => null, c
     const origin = pageOrigin(event);
     return origin ? teams().find((team) => team.origin === origin) ?? null : null;
   };
+  const samePageTeam = (event, team) => {
+    const current = pageTeam(event);
+    return current?.id === team.id && current.origin === team.origin && current.name === team.name && current.ready === team.ready;
+  };
   let bringList = null;
-  async function myCloudBots() {
+  async function myCloudBots(source) {
+    if (!source) { bringList = null; return []; }
+    if (!sameSource(source, bringSource())) throw new Error("My Cloud sign-in changed. Try again.");
+    if (bringList && !sameSource(bringList, source)) bringList = null;
     if (bringList && Date.now() - bringList.at < BRING_LIST_MS) return bringList.bots;
-    const target = home();
-    if (!target) return [];
-    const session = await openOwnerSession(target, fetchImpl, { label: "Move to a team", background: false });
+    const session = await openOwnerSession(source.target, fetchImpl, { label: "Move to a team", background: false });
+    let bots;
     try {
+      if (!sameSource(source, bringSource())) throw new Error("My Cloud sign-in changed. Try again.");
       const listed = await session.call("GET", "/api/bots?messages=0");
       if (!listed.ok) throw new Error("My Cloud did not answer.");
-      bringList = { at: Date.now(), bots: bringableBots(listed.body?.bots) };
-      return bringList.bots;
+      bots = bringableBots(listed.body?.bots);
     } finally { await session.close().catch(() => {}); }
+    if (!sameSource(source, bringSource())) throw new Error("My Cloud sign-in changed. Try again.");
+    bringList = { accountId: source.accountId, origin: source.origin, at: Date.now(), bots };
+    return bots;
   }
   ipcMain.handle("cloud-send:team-bring", async (event) => {
     const team = pageTeam(event);
     if (!team) return { bots: [] };
-    return { team: { id: team.id, name: team.name, ready: team.ready }, bots: await myCloudBots().catch(() => []) };
+    const source = bringSource();
+    const bots = await myCloudBots(source).catch(() => []);
+    if (!samePageTeam(event, team) || (source && !sameSource(source, bringSource()))) return { bots: [] };
+    return { team: { id: team.id, name: team.name, ready: team.ready }, bots };
   });
   ipcMain.handle("cloud-send:team-bring-move", async (event, botId) => {
     const team = pageTeam(event);
     if (!team?.ready) throw new Error("Open the team you're moving a bot into.");
-    const bot = (await myCloudBots()).find((entry) => entry.id === String(botId));
+    const source = bringSource();
+    if (!source) throw new Error("Sign in to MausBot Cloud first.");
+    const stillCurrent = () => sameSource(source, bringSource()) && samePageTeam(event, team);
+    const bot = (await myCloudBots(source)).find((entry) => entry.id === String(botId));
+    if (!stillCurrent()) throw new Error("Your Cloud account or team page changed. Try again.");
     if (!bot || bot.stays) throw new Error("Choose one of your bots to move.");
-    if (!(await confirmMove(teamMoveConfirmWords({ bot: bot.name, team: team.name })))) return { started: false, move: moves.view() };
-    void moves.start({ bot: { id: bot.id, name: bot.name }, team: { id: team.id, name: team.name, origin: team.origin } });
+    const confirmed = await confirmMove(teamMoveConfirmWords({ bot: bot.name, team: team.name }));
+    if (!stillCurrent()) throw new Error("Your Cloud account or team page changed. Try again.");
+    if (!confirmed) return { started: false, move: moves.view() };
+    void moves.start({ bot: { id: bot.id, name: bot.name }, team: { id: team.id, name: team.name, origin: team.origin }, source: { accountId: source.accountId, origin: source.origin } });
     bringList = null;
     return { started: true, move: moves.view() };
   });
