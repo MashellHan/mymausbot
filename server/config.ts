@@ -747,7 +747,7 @@ export function ensureDirs() {
 
 let lastIgnoredConfigWarning = "";
 const storedConfig = settledFileCache(() => join(DATA_DIR, "config.json"), () => parseStoredConfig(parseJson(readFileSync(join(DATA_DIR, "config.json"), "utf8"))));
-const SESSION_CONFIG_LIMIT = 1024 * 1024;
+const SESSION_CONFIG_LIMIT = 128 * 1024;
 const SESSION_CREDENTIALS = process.env.OMB_DESKTOP_PARENT === "1" && process.env.OMB_CREDENTIAL_MODE === "session";
 const sessionConfigSeed = process.env.OMB_SESSION_CONFIG_JSON;
 delete process.env.OMB_SESSION_CONFIG_JSON;

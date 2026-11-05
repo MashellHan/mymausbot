@@ -1,4 +1,4 @@
-const MAX_BYTES = 1024 * 1024;
+const MAX_BYTES = 128 * 1024;
 
 /** The current utility server may hand its validated config to the App; the next utility server receives it from memory. */
 export function createSessionConfigMemory() {

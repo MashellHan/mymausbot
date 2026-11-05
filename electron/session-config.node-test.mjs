@@ -22,7 +22,7 @@ test("the App holds current config only in memory across utility-server restarts
 test("the App rejects malformed or oversized private snapshots", () => {
   const state = createSessionConfigMemory();
   assert.equal(state.receive({ type: "unrelated", config: {} }), false);
-  for (const config of [null, [], "secret", { huge: "x".repeat(1024 * 1024) }]) {
+  for (const config of [null, [], "secret", { huge: "x".repeat(128 * 1024) }]) {
     assert.throws(() => state.receive("workspace-a", { type: "openmausbot:session-config", requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", config }));
   }
   assert.deepEqual(state.childEnvironment("workspace-a"), {});
