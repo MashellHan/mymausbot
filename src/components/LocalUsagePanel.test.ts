@@ -58,6 +58,14 @@ const sample: LocalUsageResponse = {
   },
   trend,
 };
+const rolledWindow = (current: LocalUsageWindow, offset: number): LocalUsageWindow => ({
+  ...current, startDay: shiftDay(current.startDay, offset), endDay: shiftDay(current.endDay, offset),
+  comparison: { ...current.comparison, startDay: shiftDay(current.comparison.startDay, offset), endDay: shiftDay(current.comparison.endDay, offset) },
+});
+const rolled = (offset: number): LocalUsageResponse => ({ ...sample, asOf: asOf + offset * 86_400_000,
+  windows: { "1": rolledWindow(sample.windows!["1"], offset), "7": rolledWindow(sample.windows!["7"], offset), "30": rolledWindow(sample.windows!["30"], offset) },
+  trend: trend.map((day) => ({ ...day, day: shiftDay(day.day, offset) })),
+});
 
 let host: HTMLDivElement;
 let root: Root;
@@ -133,6 +141,44 @@ describe("local Usage panel", () => {
     await act(async () => bars[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')).toBeNull();
     expect(text()).toContain("Pale PR segments: synced counts");
+  });
+
+  it("keeps the focused date and tooltip aligned as the trend window rolls", async () => {
+    await render(sample);
+    const chart = () => host.querySelector<HTMLElement>('[data-usage-trend="commits"]')!;
+    const nov2 = chart().querySelector<HTMLButtonElement>('[data-usage-day="2026-11-02"]')!;
+    await act(async () => nov2.focus());
+    expect(chart().querySelector('[role="tooltip"]')?.textContent).toContain("2026-11-02");
+    await render(rolled(1));
+    expect(chart().querySelector('[data-usage-day="2026-11-02"]')).toBe(nov2);
+    expect(document.activeElement).toBe(nov2);
+    expect(nov2.tabIndex).toBe(0);
+    expect(nov2.getAttribute("aria-describedby")).toBe(chart().querySelector('[role="tooltip"]')?.id);
+    expect(chart().querySelector('[role="tooltip"]')?.textContent).toContain("2026-11-02");
+
+    const oldest = chart().querySelector<HTMLButtonElement>('[data-usage-day="2026-10-06"]')!;
+    await act(async () => oldest.focus());
+    await render(rolled(2));
+    expect(chart().querySelector('[data-usage-day="2026-10-06"]')).toBeNull();
+    const fallback = chart().querySelector<HTMLButtonElement>('[data-usage-day="2026-10-07"]')!;
+    expect(fallback.tabIndex).toBe(0);
+    expect(document.activeElement).toBe(fallback);
+    expect(fallback.getAttribute("aria-describedby")).toBe(chart().querySelector('[role="tooltip"]')?.id);
+    expect(chart().querySelector('[role="tooltip"]')?.textContent).toContain("2026-10-07");
+    await render(rolled(1));
+    expect(chart().querySelector('[role="tooltip"]')?.textContent).toContain("2026-10-07");
+
+    const external = document.createElement("input");
+    document.body.append(external);
+    try {
+      await act(async () => chart().querySelector<HTMLButtonElement>('[data-usage-day="2026-10-06"]')!.focus());
+      external.focus();
+      await render(rolled(2));
+      expect(document.activeElement).toBe(external);
+      expect(chart().querySelector<HTMLButtonElement>('[data-usage-day="2026-10-07"]')?.tabIndex).toBe(0);
+    } finally {
+      external.remove();
+    }
   });
 
   it("shows total tokens including cache reads in cards, daily values and a focused trend tooltip", async () => {

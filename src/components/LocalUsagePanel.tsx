@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { LocalUsageCategory, LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
 import { changeText, metricText, periodChangeLabel, prText, PrCount, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
@@ -85,14 +85,30 @@ function categoryValue(day: LocalUsageTrendDay, metric: "prs" | "commits", categ
 }
 
 function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metric }) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [focusIndex, setFocusIndex] = useState(0);
-  const buttons = useRef<Array<HTMLButtonElement | null>>([]);
+  const [activeDay, setActiveDay] = useState<string | null>(null);
+  const [focusDay, setFocusDay] = useState<string | null>(null);
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const focusedButton = useRef<HTMLButtonElement | null>(null);
+  const lastFocused = useRef<Element | null>(null);
   const tooltipId = useId();
   const values = days.map((day) => trendValue(day, metric));
   const max = Math.max(1, ...values.filter((value): value is number => value !== null));
-  const active = activeIndex === null ? null : days[activeIndex];
+  const active = days.find((day) => day.day === activeDay) ?? null;
+  const rovingDay = days.some((day) => day.day === focusDay) ? focusDay : days[0]?.day;
   const showUnclassified = metric !== "totalTokens" && days.some((day) => (categoryValue(day, metric, "unclassified") ?? 0) > 0);
+  useLayoutEffect(() => {
+    const rememberFocus = (event: FocusEvent) => { lastFocused.current = event.target as Element; };
+    document.addEventListener("focusin", rememberFocus);
+    return () => document.removeEventListener("focusin", rememberFocus);
+  }, []);
+  useLayoutEffect(() => {
+    if (activeDay && !active) setActiveDay(null);
+    if (focusDay && focusDay !== rovingDay) {
+      const restore = focusedButton.current?.dataset.usageDay === focusDay && lastFocused.current === focusedButton.current;
+      setFocusDay(rovingDay ?? null);
+      if (restore && rovingDay) buttons.current.get(rovingDay)?.focus();
+    }
+  }, [activeDay, active, focusDay, rovingDay]);
   return (
     <div className="relative min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric}>
       <h4 className="text-[13px] font-medium text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</h4>
@@ -105,18 +121,18 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
             partial: metric === "prs" && day.categories[category].prs === null,
           })).filter((segment) => segment.value > 0);
           const segmentTotal = segments.reduce((total, segment) => total + segment.value, 0);
-          return <button key={day.day} type="button" data-usage-day={day.day} ref={(element) => { buttons.current[index] = element; }}
-            tabIndex={index === Math.min(focusIndex, days.length - 1) ? 0 : -1}
+          return <button key={day.day} type="button" data-usage-day={day.day} ref={(element) => { if (element) buttons.current.set(day.day, element); else buttons.current.delete(day.day); }}
+            tabIndex={day.day === rovingDay ? 0 : -1}
             aria-label={t("computer.usage.trendPoint", { day: day.day, metric: t(`computer.usage.metric.${metric}`), value: label })}
-            aria-describedby={activeIndex === index ? tooltipId : undefined}
-            onMouseEnter={() => setActiveIndex(index)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setActiveIndex(null); }}
-            onFocus={() => { setFocusIndex(index); setActiveIndex(index); }} onBlur={() => setActiveIndex(null)} onClick={() => setActiveIndex(index)}
+            aria-describedby={activeDay === day.day ? tooltipId : undefined}
+            onMouseEnter={() => setActiveDay(day.day)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setActiveDay(null); }}
+            onFocus={(event) => { focusedButton.current = event.currentTarget; setFocusDay(day.day); setActiveDay(day.day); }} onBlur={() => setActiveDay(null)} onClick={() => setActiveDay(day.day)}
             onKeyDown={(event) => {
-              if (event.key === "Escape") { setActiveIndex(null); return; }
+              if (event.key === "Escape") { setActiveDay(null); return; }
               const next = event.key === "ArrowRight" ? (index + 1) % days.length : event.key === "ArrowLeft" ? (index + days.length - 1) % days.length
                 : event.key === "Home" ? 0 : event.key === "End" ? days.length - 1 : null;
               if (next === null) return;
-              event.preventDefault(); buttons.current[next]?.focus();
+              event.preventDefault(); buttons.current.get(days[next]!.day)?.focus();
             }}
             className="flex h-full min-w-0 flex-1 items-end rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
             {value === null ? <span aria-hidden="true" className="h-full w-full bg-warning/15" />
