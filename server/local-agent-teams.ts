@@ -9,14 +9,14 @@ import { codexSessionId, createLocalAgentSessionReader, dashboardText } from "./
 
 const execute = promisify(execFile);
 const STATES = new Set<LocalAgentState>(["idle", "working", "blocked", "done", "unknown"]);
-type HerdrRunner = (args: readonly string[]) => Promise<string>;
+export type HerdrRunner = (args: readonly string[]) => Promise<string>;
 
-const runHerdr: HerdrRunner = async (args) => (await execute("herdr", [...args], {
+export const runHerdr: HerdrRunner = async (args) => (await execute("herdr", [...args], {
   timeout: 4000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", windowsHide: true,
   env: { ...process.env, PATH: augmentedPath() },
 })).stdout;
 
-function rows(output: string, field: "workspaces" | "agents"): Record<string, unknown>[] {
+export function herdrRows(output: string, field: "workspaces" | "agents"): Record<string, unknown>[] {
   const parsed: unknown = JSON.parse(output);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) throw new Error("Invalid Herdr response");
   const result = parsed.result;
@@ -49,8 +49,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
       ]);
       if (responses.some((response) => response.status === "rejected")) throw new Error("Herdr read failed");
       const [workspaceOutput, agentOutput] = responses.map((response) => (response as PromiseFulfilledResult<string>).value);
-      const workspaces = rows(workspaceOutput, "workspaces");
-      const agents = rows(agentOutput, "agents");
+      const workspaces = herdrRows(workspaceOutput, "workspaces");
+      const agents = herdrRows(agentOutput, "agents");
       const teams = new Map<string, LocalAgentTeam>();
       for (const workspace of workspaces) {
         const id = workspace.workspace_id;
