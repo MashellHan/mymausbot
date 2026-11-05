@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { z } from "zod";
 import { allowsTool } from "../../shared/tool-scope.ts";
+import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
 import type { MiniAppDataset, MiniAppSources } from "../../shared/mini-apps.ts";
 import type { DataEngine } from "../data/types.ts";
 import { DataFailure } from "../data/types.ts";
@@ -32,6 +33,16 @@ interface MiniAppRouteDeps {
   routines(): Pick<RoutineManager, "listRoutines" | "runForThread" | "isActiveThread"> | null;
   localEnabled(): boolean;
   bots(): Array<{ id: string; name: string; toolScope?: unknown }>;
+}
+
+export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" | "reports"> & {
+  docs: MiniApps["docs"];
+  validPublisher(id: string): boolean;
+}) {
+  const { docs, validPublisher, ...shared } = input;
+  const deps = { ...shared, apps: new MiniApps({ docs, data: shared.data, validPublisher }),
+    reports: new ReportStore(shared.data, createReportTemplate) };
+  return { owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps) };
 }
 
 export function miniAppError(error: unknown): { status: number; error: string; code?: string } {
