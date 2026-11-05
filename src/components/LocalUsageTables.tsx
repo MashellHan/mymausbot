@@ -3,15 +3,16 @@ import { useId, useState } from "react";
 import type { LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
-import { changeText, metricText, periodChangeLabel, PrCount, usageMetrics } from "./LocalUsageValues";
+import { metricText, PrCount, UsageChange, usageMetrics } from "./LocalUsageValues";
 
 const tableRegion = "overflow-x-auto rounded-lg border border-hairline/60 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60";
+const previousWeekDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) - 7 * 86_400_000).toISOString().slice(0, 10);
 
 export function UsageDailyTable({ days }: { days: LocalUsageTrendDay[] }) {
   return <details className="group mt-4" data-usage-daily>
     <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg py-2 text-[14px] font-medium text-ink outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
       <ChevronRight size={16} className="shrink-0 transition-transform group-open:rotate-90" aria-hidden="true" />
-      {t("computer.usage.dailyValues")}<span className="ml-auto text-[13px] font-normal text-ink-secondary">WoW</span>
+      {t("computer.usage.dailyValues")}
     </summary>
     <p className="mb-3 text-[13px] leading-5 text-ink-secondary">{t("computer.usage.wowHint")}</p>
     <div className={tableRegion} role="region" aria-label={t("computer.usage.dailyValues")} tabIndex={0}>
@@ -20,7 +21,7 @@ export function UsageDailyTable({ days }: { days: LocalUsageTrendDay[] }) {
         <thead className="bg-inset text-ink-secondary"><tr>
           <th scope="col" className="sticky left-0 z-10 bg-inset px-3 py-2 text-left font-medium">{t("computer.usage.day")}</th>
           {usageMetrics.map((metric) => <th key={metric} scope="col" className="px-3 py-2 text-right font-medium">{t(`computer.usage.metric.${metric}`)}</th>)}
-          <th scope="col" className="px-3 py-2 text-right font-medium">WoW</th>
+          <th scope="col" className="px-3 py-2 text-right font-medium">{t("computer.usage.changeHeading")}</th>
         </tr></thead>
         <tbody className="text-ink">
           {days.slice().reverse().map((day) => <tr key={day.day} className="border-t border-hairline/40">
@@ -29,7 +30,8 @@ export function UsageDailyTable({ days }: { days: LocalUsageTrendDay[] }) {
             <td className="px-3 py-2 text-right align-top">{metricText(day.commits)}</td>
             <td className="px-3 py-2 text-right align-top">{metricText(day.totalTokens)}</td>
             <td className="px-3 py-2 text-right">{usageMetrics.map((metric) => <div key={metric} className="flex justify-between gap-3 leading-5">
-              <span className="text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</span><span>{changeText(day.wow[metric])}</span>
+              <span className="text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</span>
+              <UsageChange value={day.wow[metric]} startDay={previousWeekDay(day.day)} endDay={previousWeekDay(day.day)} metric={metric} daily className="text-[13px] text-ink" />
             </div>)}</td>
           </tr>)}
         </tbody>
@@ -81,9 +83,9 @@ export function UsageRepositoryTable({ windows }: { windows: Record<Period, Loca
                 <th scope="row" dir="auto" className="px-2 py-2 text-left font-medium [overflow-wrap:anywhere]">{row.name}</th>
                 <td className="px-2 py-2 text-ink-secondary [overflow-wrap:anywhere]">{t(`computer.usage.category.${row.category}`)}</td>
                 <td className="px-2 py-2 text-right [overflow-wrap:anywhere]"><PrCount prs={row.prs} knownPrs={row.knownPrs} />
-                  <span className="block text-[13px] text-ink-secondary">{changeText(row.comparison.prs)} {periodChangeLabel(window.days)}</span></td>
+                  <UsageChange value={row.comparison.prs} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="prs" className="block text-[13px] text-ink-secondary" /></td>
                 <td className="px-2 py-2 text-right [overflow-wrap:anywhere]">{metricText(row.commits)}
-                  <span className="block text-[13px] text-ink-secondary">{changeText(row.comparison.commits)} {periodChangeLabel(window.days)}</span></td>
+                  <UsageChange value={row.comparison.commits} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="commits" className="block text-[13px] text-ink-secondary" /></td>
               </tr>)}
               {!!((repositories.unattributedPrs ?? 0) + (repositories.unattributedCommits ?? 0)) && <tr className="border-t border-hairline/40 text-ink-secondary">
                 <th scope="row" colSpan={2} className="px-3 py-2 text-left font-normal">{t("computer.usage.unattributedRepository")}</th>

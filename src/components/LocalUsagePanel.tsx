@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { LocalUsageCategory, LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
-import { changeText, metricText, periodChangeLabel, prText, PrCount, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
+import { metricText, prText, PrCount, UsageChange, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable } from "./LocalUsageTables";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
@@ -46,19 +46,19 @@ function WindowCard({ window }: { window: LocalUsageWindow }) {
             <dt className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
             <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
               <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <PrCount prs={window.prs} knownPrs={window.knownPrs} /> : value}</span>
-              <span className="text-[13px] text-ink-secondary">({changeText(comparison)} {periodChangeLabel(window.days)})</span>
+              <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric} />
             </dd>
           </div>
         ))}
       </dl>
       <div className="mt-2 border-t border-hairline/40 pt-2 text-[13px] tabular-nums">
-        <div className="mb-1 grid grid-cols-[1fr_1fr_1fr] gap-2 text-ink-secondary" aria-hidden="true"><span /><span className="text-right">{t("computer.usage.metric.prs")} · {periodChangeLabel(window.days)}</span><span className="text-right">{t("computer.usage.metric.commits")} · {periodChangeLabel(window.days)}</span></div>
+        <div className="mb-1 grid grid-cols-[1fr_1fr_1fr] gap-2 text-ink-secondary" aria-hidden="true"><span /><span className="text-right">{t("computer.usage.metric.prs")}</span><span className="text-right">{t("computer.usage.metric.commits")}</span></div>
         {(["work", "personal", "unclassified"] as const).filter((key) => key !== "unclassified" || (window.categories[key].knownPrs ?? 0) + (window.categories[key].commits ?? 0) > 0).map((key) => <div key={key} data-usage-category-row={key} className="grid grid-cols-[1fr_1fr_1fr] gap-2 py-0.5">
           <span className="text-ink-secondary">{t(`computer.usage.category.${key}`)}</span>
-          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.prs")} {periodChangeLabel(window.days)}: </span><PrCount prs={window.categories[key].prs} knownPrs={window.categories[key].knownPrs} />
-            <span className="block text-[13px] text-ink-secondary">{changeText(window.comparison.categories[key].prs)}</span></span>
-          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.commits")} {periodChangeLabel(window.days)}: </span>{metricText(window.categories[key].commits)}
-            <span className="block text-[13px] text-ink-secondary">{changeText(window.comparison.categories[key].commits)}</span></span>
+          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.prs")}: </span><PrCount prs={window.categories[key].prs} knownPrs={window.categories[key].knownPrs} />
+            <UsageChange value={window.comparison.categories[key].prs} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="prs" className="block text-[13px] text-ink-secondary" /></span>
+          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.commits")}: </span>{metricText(window.categories[key].commits)}
+            <UsageChange value={window.comparison.categories[key].commits} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="commits" className="block text-[13px] text-ink-secondary" /></span>
         </div>)}
       </div>
       {window.missingDays.length > 0 && <p className="mt-2 text-[13px] text-warning">{t("computer.usage.missingDays", { count: window.missingDays.length })}</p>}
@@ -188,7 +188,6 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
             <h3 className="text-[16px] font-semibold text-ink">{t("computer.usage.trend")}</h3>
             <span className="text-[13px] tabular-nums text-ink-secondary">{windows["30"].startDay} – {windows["30"].endDay}</span>
           </div>
-          <p className="mt-1 text-[13px] text-ink-secondary">{t("computer.usage.gapLegend")}</p>
           <div data-usage-category-legend className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
             {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category} className="inline-flex items-center gap-1">
               <span aria-hidden="true" className={cn("size-2 rounded-sm", categoryTone[category])} />{t(`computer.usage.category.${category}`)}

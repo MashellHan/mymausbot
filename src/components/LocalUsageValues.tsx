@@ -7,8 +7,21 @@ export const metricText = (value: number | null) => value === null ? t("computer
 export const prText = (prs: number | null, knownPrs: number | null) => metricText(prs ?? knownPrs);
 export const changeText = (value: LocalUsageWeekChange) => value === null ? "—" : value === "new" ? t("computer.usage.newActivity")
   : new Intl.NumberFormat(activeLocale(), { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 1 }).format(value / 100);
-export const periodChangeLabel = (days: 1 | 7 | 30) => t(days === 1 ? "computer.usage.change.dod"
-  : days === 7 ? "computer.usage.change.wow" : "computer.usage.change.mom");
+
+export function UsageChange({ value, startDay, endDay, metric, daily = false, className = "text-[13px] text-ink-secondary" }: {
+  value: LocalUsageWeekChange; startDay: string; endDay: string;
+  metric: "prs" | "commits" | "totalTokens"; daily?: boolean; className?: string;
+}) {
+  const shown = changeText(value);
+  const previous = startDay === endDay ? startDay : `${startDay}–${endDay}`;
+  const description = `${t("computer.usage.changeDescription", { change: shown, previous })}`
+    + `${daily ? ` ${t("computer.usage.dailyComparisonHint")}` : ""}`
+    + `${metric === "commits" ? ` ${t("computer.usage.commitScopeHint")}` : ""}`
+    + `${value === null ? ` ${t("computer.usage.changeUnavailableHint")}` : ""}`;
+  return <span data-usage-change className={className} title={description}>
+    <span aria-hidden="true">({shown})</span><span className="sr-only">{description}</span>
+  </span>;
+}
 
 export function PrCount({ prs, knownPrs }: { prs: number | null; knownPrs: number | null }) {
   return <span className="inline-flex flex-wrap items-baseline justify-end gap-x-1.5">
