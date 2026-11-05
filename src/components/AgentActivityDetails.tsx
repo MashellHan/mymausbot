@@ -28,8 +28,6 @@ export function AgentActivityDetails({ agentId, active = true }: { agentId: stri
   const anchor = useRef<ScrollAnchor | null>(null);
 
   useEffect(() => { setOpen(false); setSnapshot(null); setAuthLost(false); }, [agentId]);
-  useEffect(() => { if (!active) { setOpen(false); setSnapshot(null); setAuthLost(false); } }, [active]);
-
   const rememberScroll = () => {
     const list = listRef.current;
     if (!list) return;

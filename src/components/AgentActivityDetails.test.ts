@@ -95,6 +95,27 @@ describe("AgentActivityDetails", () => {
     expect(button().getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("keeps expanded history while inactive without polling and resumes on return", async () => {
+    calls.api.mockResolvedValue(ready);
+    await render();
+    await act(async () => button().click());
+    const history = list();
+    const signal = calls.api.mock.calls[0]?.[1]?.signal as AbortSignal;
+    expect(history?.textContent).toContain("Check the release");
+
+    await render(agentId, false);
+    expect(signal.aborted).toBe(true);
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+    expect(list()).toBe(history);
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(calls.api).toHaveBeenCalledTimes(1);
+
+    await render(agentId, true);
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+    expect(list()?.textContent).toContain("Check the release");
+    expect(calls.api).toHaveBeenCalledTimes(2);
+  });
+
   it("clears rows and stops after authorization loss; hidden details cancel their request", async () => {
     calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new ApiError("unauthorized", 401));
     await render();

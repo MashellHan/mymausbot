@@ -28,7 +28,7 @@ const stateDot = {
   unknown: "bg-ink-secondary/30",
 } as const;
 
-function memberRow(member: LocalAgentMember, stale: boolean) {
+function memberRow(member: LocalAgentMember, stale: boolean, active: boolean) {
   const number = (value: number | null) => value === null ? "—" : value.toLocaleString(activeLocale());
   const context = member.contextUsed !== null && member.contextWindow !== null && member.contextWindow > 0
     ? Math.round(member.contextUsed / member.contextWindow * 100) : null;
@@ -56,13 +56,13 @@ function memberRow(member: LocalAgentMember, stale: boolean) {
         <p dir="auto" title={member.taskHint ?? undefined} className="mt-1.5 line-clamp-2 text-[12px] leading-4 text-ink-secondary [overflow-wrap:anywhere]">
           <span className="font-medium text-ink-secondary">{t("computer.agentTeam.latestInstruction")}: </span>{member.taskHint ?? t("computer.agentTeam.instructionUnavailable")}
         </p>
-        <AgentActivityDetails agentId={member.id} />
+        <AgentActivityDetails agentId={member.id} active={active} />
       </div>
     </li>
   );
 }
 
-export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse | null }) {
+export function AgentTeamView({ snapshot, active = true }: { snapshot: LocalAgentTeamsResponse | null; active?: boolean }) {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const baseId = useId();
   const selectorRef = useRef<HTMLDivElement>(null);
@@ -121,7 +121,7 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
           </div>
         </header>
         <div className="px-3 pb-1">
-          {selectedTeam.agents.length ? <ul>{selectedTeam.agents.map((member) => memberRow(member, stale))}</ul>
+          {selectedTeam.agents.length ? <ul>{selectedTeam.agents.map((member) => memberRow(member, stale, active))}</ul>
             : <p className="py-3 text-[12px] text-ink-tertiary">{t("computer.agentTeam.noAgents")}</p>}
         </div>
       </section>}
@@ -129,30 +129,31 @@ export function AgentTeamView({ snapshot }: { snapshot: LocalAgentTeamsResponse 
   );
 }
 
-export function AgentTeamPanel() {
-  const visible = usePageVisible();
+export function AgentTeamPanel({ active = true }: { active?: boolean }) {
+  const pageVisible = usePageVisible();
+  const visible = active && pageVisible;
   const [snapshot, setSnapshot] = useState<LocalAgentTeamsResponse | null>(null);
 
   useEffect(() => {
     if (!visible) return;
-    let active = true;
+    let mounted = true;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       const started = Date.now();
       try {
         const next = await api<LocalAgentTeamsResponse>(ROUTE, { background: true, signal: controller.signal, timeoutMs: 5_000 });
-        if (active) setSnapshot((previous) => next.status === "unavailable" && previous?.updatedAt != null ? { ...previous, status: "stale" } : next);
+        if (mounted) setSnapshot((previous) => next.status === "unavailable" && previous?.updatedAt != null ? { ...previous, status: "stale" } : next);
       } catch (error) {
-        if (active) setSnapshot((previous) => error instanceof ApiError && (error.status === 401 || error.status === 403) ? unavailable
+        if (mounted) setSnapshot((previous) => error instanceof ApiError && (error.status === 401 || error.status === 403) ? unavailable
           : previous?.updatedAt != null ? { ...previous, status: "stale" } : unavailable);
       } finally {
-        if (active) timer = setTimeout(refresh, Math.max(0, REFRESH_MS - (Date.now() - started)));
+        if (mounted) timer = setTimeout(refresh, Math.max(0, REFRESH_MS - (Date.now() - started)));
       }
     };
     void refresh();
-    return () => { active = false; controller.abort(); clearTimeout(timer); };
+    return () => { mounted = false; controller.abort(); clearTimeout(timer); };
   }, [visible]);
 
-  return <AgentTeamView snapshot={snapshot} />;
+  return <AgentTeamView snapshot={snapshot} active={visible} />;
 }

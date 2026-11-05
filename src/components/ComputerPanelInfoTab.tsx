@@ -9,13 +9,18 @@ const AgentTeamPanel = lazy(() => import("./AgentTeamPanel").then((module) => ({
 const LocalUsagePanel = lazy(() => import("./LocalUsagePanel").then((module) => ({ default: module.LocalUsagePanel })));
 
 export function ComputerPanelInfoTab({ view, bot }: { view: "files" | "agent-team" | "usage"; bot: Bot }) {
+  const teamActive = view === "agent-team";
   return (
     <div {...tabPanelProps(view)} className={cn("flex min-h-0 flex-1 flex-col", TAB_PANEL_FOCUS)}>
-      {view === "files" ? <ComputerFilesPane bot={bot} /> : (
-        <Suspense fallback={<div className="flex flex-1 items-center justify-center text-[13px] text-ink-secondary" role="status">{t(view === "agent-team" ? "computer.agentTeam.loading" : "computer.usage.loading")}</div>}>
-          {view === "agent-team" ? <AgentTeamPanel /> : <LocalUsagePanel />}
+      {view === "files" && <ComputerFilesPane bot={bot} />}
+      <div hidden={!teamActive} className={cn("min-h-0 flex-1 flex-col", teamActive ? "flex" : "hidden")}>
+        <Suspense fallback={<div className="flex flex-1 items-center justify-center text-[13px] text-ink-secondary" role="status">{t("computer.agentTeam.loading")}</div>}>
+          <AgentTeamPanel active={teamActive} />
         </Suspense>
-      )}
+      </div>
+      {view === "usage" && <Suspense fallback={<div className="flex flex-1 items-center justify-center text-[13px] text-ink-secondary" role="status">{t("computer.usage.loading")}</div>}>
+        <LocalUsagePanel />
+      </Suspense>}
     </div>
   );
 }
