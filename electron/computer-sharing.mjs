@@ -196,15 +196,14 @@ const BROWSE_NOTE_MS = 10 * 60_000;
  * carries it (the session cookie). `myCloud()`: the saved server that is the person's own My Cloud, which the move's
  * project folders are lent to. `ownClouds()`: the saved servers that are the verified session's own Clouds, never a
  * Team Cloud: each is lent this computer by itself (automaticGrant) unless lending is paused. `screen()`: computer
- * control's state, whose `lent` says whether apps and screen are lent: computer control
- * works, or only macOS's permissions are missing, which `askForScreen(connection)` asks macOS for when a Cloud's bot
- * first needs them. `cloudPower(origin)`: the Admin's word on another Cloud of the person's own (the Clouds list's
+ * control's state, whose `lent` says whether apps and screen are lent: computer control works, or only macOS's
+ * permissions are missing. `cloudPower(origin)`: the Admin's word on another Cloud of the person's own (the Clouds list's
  * `power`), so a sleeping one is never dialled. While this app is open, paused or not, each of those Clouds hears how
  * this computer is and asks for it when a bot there needs it: `prompt(env, ask, signal)` shows the ask in this app's
  * own prompt, `startScreen()` starts computer control again (its state after), and `confirmTerminal()` turns on
  * running commands once the person confirms it here. */
 export function createComputerSharing({ file, fetch: fetchImpl, environments, cuaConnection, hostControl, screenLocked = () => false, idleSeconds = () => null, protectedPaths = [], enabled = async () => false, home = os.homedir(), activityFile, cloud = () => null, onChange = () => {}, reconnect = null, now = Date.now, power = createCloudPowerGate(),
-  linkHeaders = () => ({}), WebSocket: linkSocket = globalThis.WebSocket, egress = {}, chrome = {}, myCloud = () => null, ownClouds = () => [], screen = () => false, askForScreen = () => {}, cloudPower = () => null,
+  linkHeaders = () => ({}), WebSocket: linkSocket = globalThis.WebSocket, egress = {}, chrome = {}, myCloud = () => null, ownClouds = () => [], screen = () => false, cloudPower = () => null,
   prompt = async () => null, startScreen = async () => null, confirmTerminal = async () => false, log = () => {} }) {
   const protectedRoots = [path.dirname(file), ...protectedPaths.filter(entry => typeof entry === "string" && entry), ...personalSecretPaths(home)];
   const activity = createLendingActivity(activityFile ?? path.join(path.dirname(file), "lending-activity.jsonl"));
@@ -501,7 +500,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
                   const connection = await cuaConnection();
                   jobSignal.throwIfAborted();
                   const mcp = sharedCuaConnection(connection);
-                  if (!mcp) { if (grant.cloud) try { askForScreen(connection); } catch {} throw new Error(cuaUnavailable(connection?.reason)); }
+                  if (!mcp) throw new Error(cuaUnavailable(connection?.reason));
                   live.cua = createSharedCua(mcp);
                 }
                 return live.cua;

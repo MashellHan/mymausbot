@@ -5,8 +5,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fixture = vi.hoisted(() => ({ home: "", script: "", socketReady: false, children: [], calls: [], embeddedDelays: [], hosts: [], handlers: new Map() }));
-vi.mock("electron", () => ({ app: { isPackaged: false, getPath: () => fixture.home }, ipcMain: { handle: (name, handler) => fixture.handlers.set(name, handler) } }));
+const fixture = vi.hoisted(() => ({ home: "", script: "", socketReady: false, children: [], calls: [], embeddedDelays: [], hosts: [], handlers: new Map(), permissionCalls: [], requests: 0 }));
+vi.mock("electron", () => ({ app: { isPackaged: false, getPath: () => fixture.home }, ipcMain: { handle: (name, handler) => fixture.handlers.set(name, handler) },
+  systemPreferences: {
+    isTrustedAccessibilityClient: (prompt) => { fixture.permissionCalls.push(["accessibility", prompt]); return false; },
+    getMediaAccessStatus: (kind) => { fixture.permissionCalls.push(["media", kind]); return "denied"; },
+  } }));
 vi.mock("@trycua/cua-driver/embedded", () => ({
   EmbeddedCuaDriverHost: class {
     constructor() { this.delay = fixture.embeddedDelays.shift(); fixture.hosts.push(this); }
@@ -23,7 +27,7 @@ vi.mock("@trycua/cua-driver/embedded", () => ({
   },
 }));
 vi.mock("@trycua/cua-driver/electron", () => ({
-  requestMacOSPermissions: () => ({ accessibility: false, screenRecording: false }),
+  requestMacOSPermissions: () => { fixture.requests++; return { accessibility: false, screenRecording: false }; },
   hasRequiredMacOSPermissions: () => fixture.embeddedDelays.length > 0,
 }));
 vi.mock("node:fs", async (original) => {
@@ -78,6 +82,8 @@ beforeEach(async () => {
   fixture.calls = [];
   fixture.embeddedDelays = [];
   fixture.hosts = [];
+  fixture.permissionCalls = [];
+  fixture.requests = 0;
   fixture.handlers.clear();
   vi.stubEnv("OPENMAUSBOT_CUA_EMBEDDED", "1");
   vi.stubEnv("CUA_DRIVER_PATH", "/fixture/cua-driver");
@@ -100,11 +106,26 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== "darwin")("async standalone CUA launch (isolated commands)", () => {
+  it("reads App permissions without prompting or opening a standalone App on ordinary startup", async () => {
+    const result = await cua.startCua();
+    expect(result).toMatchObject({ mode: "unavailable", reason: expect.stringContaining("Accessibility and Screen Recording required") });
+    expect(fixture.permissionCalls).toEqual([["accessibility", false], ["media", "screen"]]);
+    expect(fixture.requests).toBe(0);
+    expect(fixture.calls).toHaveLength(0);
+  });
+
+  it("requests permissions only after the person's explicit retry", async () => {
+    fixture.embeddedDelays = [1];
+    await expect(cua.requestComputerUse()).resolves.toMatchObject({ enabled: true, status: "ready" });
+    expect(fixture.requests).toBe(1);
+    expect(fixture.permissionCalls).toHaveLength(0);
+  });
+
   it("keeps the event loop responsive and publishes the existing descriptor shape", async () => {
     let ticks = 0;
     const timer = setInterval(() => ticks++, 10);
     try {
-      await expect(cua.startCua()).resolves.toMatchObject({ mode: "standalone", mcpArgs: ["mcp"] });
+      await expect(cua.startCua({ requestPermissions: true })).resolves.toMatchObject({ mode: "standalone", mcpArgs: ["mcp"] });
       expect(ticks).toBeGreaterThan(2);
       expect(fixture.calls[0]).toMatchObject({ command: "/usr/bin/open", args: ["-a", "CuaDriver"], options: { timeout: 8_000, killSignal: "SIGKILL" } });
     } finally { clearInterval(timer); }
@@ -112,7 +133,7 @@ describe.skipIf(process.platform !== "darwin")("async standalone CUA launch (iso
 
   it("keeps the embedded and fallback launch failures visible", async () => {
     fixture.script = "process.stderr.write('fixture launch failure'); process.exit(4)";
-    const result = await cua.startCua();
+    const result = await cua.startCua({ requestPermissions: true });
     expect(result.mode).toBe("unavailable");
     expect(result.reason).toContain("embedded host failed");
     expect(result.reason).toContain("standalone launch failed");
@@ -121,7 +142,7 @@ describe.skipIf(process.platform !== "darwin")("async standalone CUA launch (iso
 
   it("cancels a pending launch without publishing a stale ready connection", async () => {
     fixture.script = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
-    const started = cua.startCua();
+    const started = cua.startCua({ requestPermissions: true });
     const aborted = expect(started).rejects.toMatchObject({ name: "AbortError" });
     await expect.poll(() => fixture.children.length).toBe(1);
     await cua.stopCua();
@@ -132,7 +153,7 @@ describe.skipIf(process.platform !== "darwin")("async standalone CUA launch (iso
 
   it("bounds a TERM-ignoring launch with forceful timeout", async () => {
     fixture.script = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
-    await expect(cua.startCua()).resolves.toMatchObject({ mode: "unavailable", reason: expect.stringContaining("standalone launch failed") });
+    await expect(cua.startCua({ requestPermissions: true })).resolves.toMatchObject({ mode: "unavailable", reason: expect.stringContaining("standalone launch failed") });
     expect(fixture.children[0].signalCode).toBe("SIGKILL");
   }, 12_000);
 
@@ -228,10 +249,10 @@ describe.skipIf(process.platform !== "darwin")("async standalone CUA launch (iso
     expect(JSON.parse(readFileSync(join(fixture.home, "cua-connection.json"), "utf8")).mode).toBe("unavailable");
   });
 
-  it("reads permission status asynchronously with bounded output", async () => {
-    fixture.script = "setTimeout(() => console.log(JSON.stringify({ accessibility: true })), 120)";
-    await expect(cua.cuaPermissionsStatus()).resolves.toEqual({ available: true, accessibility: true });
-    expect(fixture.calls[0]).toMatchObject({ args: ["permissions", "status", "--json"], options: { timeout: 5_000, maxBuffer: 65_536, killSignal: "SIGKILL" } });
+  it("reads the App's own permission status without a driver subprocess", async () => {
+    await expect(cua.cuaPermissionsStatus()).resolves.toEqual({ available: true, accessibility: false, screenRecording: false });
+    expect(fixture.permissionCalls).toEqual([["accessibility", false], ["media", "screen"]]);
+    expect(fixture.calls).toHaveLength(0);
   });
 });
 
