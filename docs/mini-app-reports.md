@@ -96,9 +96,9 @@ GitHub observations keep their original meaning:
 - Without comparable earlier local observations, a cross-period trend is
   unavailable. No official public Trending API is assumed.
 
-Source URLs are selectable text. **Select URL** selects that text for normal copy;
-it does not open a browser or claim clipboard access. The existing opaque-frame
-network and native navigation guards remain in force.
+Source URLs are selectable text for normal copy. They do not open a browser or
+access the clipboard. The existing opaque-frame network and native navigation
+guards remain in force.
 
 ## Data and rendering contract
 
