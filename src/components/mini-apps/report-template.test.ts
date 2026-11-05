@@ -131,7 +131,7 @@ it("discards stale history paging and drains a queued edition and Data refresh",
   expect(app.text()).not.toContain("New edition");
   expect([...select.options].map((option) => option.value)).not.toContain("2026-10-01");
   expect(app.query).toHaveBeenCalledWith("edition", { editionKey: "2026-11-03" }, { expectedDataRevision: 4 });
-  expect(app.view.document.getElementById("notice")?.hidden).toBe(true);
+  expect(app.view.document.getElementById("notice")?.getAttribute("hidden")).toBe("");
 });
 
 it("keeps a known coverage bound and does not call an unknown empty edition partial", async () => {
