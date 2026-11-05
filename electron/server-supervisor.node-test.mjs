@@ -195,9 +195,9 @@ test("local switching in main rejects dev mode and overlaps, and adopts the roll
   const body = source.slice(start, source.indexOf("\nasync function switchEnvironment", start));
   assert.ok(start > 0 && body.length > 0, "the switch helper exists");
   assert.match(body, /if \(!app\.isPackaged\) return \{ ok: false, error: "dev" \};/);
-  assert.match(body, /if \(localSwitchInFlight\) return \{ ok: false, error: "busy" \};/);
+  assert.match(body, /if \(localSwitchInFlight \|\| workspaceCredentialSaver\.busy\(\)\) return \{ ok: false, error: "busy" \};/);
   assert.match(body, /if \(restored\.proc\) serverSupervisor\.ready\(restored\.proc\);/);
-  const busyCheck = body.indexOf('if (localSwitchInFlight)');
+  const busyCheck = body.indexOf('if (localSwitchInFlight || workspaceCredentialSaver.busy())');
   const flagSet = body.indexOf("localSwitchInFlight = true;");
   const pause = body.indexOf("serverSupervisor.pause();");
   assert.ok(busyCheck < flagSet && flagSet < pause, "a rejected switch must not pause the supervisor");
@@ -232,6 +232,7 @@ function runForget(state) {
   const end = MAIN_SOURCE.indexOf("function showContextMenu(", start);
   assert.ok(start > 0 && end > start, "the forget helper exists");
   const calls = { dialogs: [], shares: [], persisted: [], navigated: [], rm: [] };
+  const sessionCalls = [];
   const rmOptions = [];
   const ctx = {
     environmentsState: state,
@@ -252,11 +253,14 @@ function runForget(state) {
     remoteMicrophoneRefused: new Set(),
     desktopDataDir: () => "/Users/me/.openmausbot",
     slog: () => {},
-    session: { defaultSession: { fetch: async () => ({ ok: true }), clearStorageData: async () => {} } },
+    browserSession: () => ({
+      fetch: async (url, options) => { sessionCalls.push(["fetch", url, options]); return { ok: true }; },
+      clearStorageData: async (options) => { sessionCalls.push(["clear", options]); },
+    }),
   };
   const context = vm.createContext(ctx);
   vm.runInContext(`${MAIN_SOURCE.slice(start, end)}; this.forgetEnvironment = forgetEnvironment;`, context);
-  return { calls, context, rmOptions };
+  return { calls, context, rmOptions, sessionCalls };
 }
 
 test("forgetting the ACTIVE local environment is refused with {error:active} and touches nothing", async () => {
@@ -290,10 +294,13 @@ test("forgetting a local environment with files kept or purged removes it and an
 
 test("forgetting a remote environment keeps its sign-out confirmation and answers {ok:true}", async () => {
   const remote = { id: "r1", kind: "remote", name: "Office", origin: "https://box.example", missing: false };
-  const { calls, context } = runForget({ environments: [remote], activeId: "r1" });
+  const { calls, context, sessionCalls } = runForget({ environments: [remote], activeId: "r1" });
   assert.deepEqual(plain(await context.forgetEnvironment("r1")), { ok: true });
   assert.equal(calls.dialogs.length, 1, "the remote dialog stays");
   assert.match(calls.dialogs[0].detail, /signs out of that server/);
+  assert.deepEqual(sessionCalls.map(([action]) => action), ["fetch", "clear"], "the selected owner session signs out and clears only this origin");
+  assert.equal(sessionCalls[0][1], "https://box.example/api/auth/logout");
+  assert.equal(sessionCalls[1][1].origin, "https://box.example");
   assert.deepEqual(plain(calls.persisted[0].environments), []);
 });
 
@@ -326,9 +333,11 @@ function switchFixture(t, { startResults = [], releaseLeaseThrows = false, stopU
   t.after(() => rmSync(targetDir, { recursive: true, force: true }));
   const forks = [];
   let forkIndex = 0;
+  let credentialBusy = false;
   const context = vm.createContext({
     app: { isPackaged: true },
     localSwitchInFlight: false,
+    workspaceCredentialSaver: { busy: () => credentialBusy },
     runningDataDir: null,
     serverProc: null,
     SERVER_PORT: 8799,
@@ -364,8 +373,16 @@ function switchFixture(t, { startResults = [], releaseLeaseThrows = false, stopU
   const body = MAIN_SOURCE.slice(start, MAIN_SOURCE.indexOf("\nasync function switchEnvironment", start));
   assert.ok(start > 0 && body.length > 0, "the switch helper exists");
   vm.runInContext(`${body}; this.switchLocalEnvironmentTo = switchLocalEnvironmentTo;`, context);
-  return { context, forks, targetDir };
+  return { context, forks, targetDir, setCredentialBusy: (busy) => { credentialBusy = busy; } };
 }
+
+test("a session credential save prevents environment switching before pausing the server", async (t) => {
+  const { context, forks, targetDir, setCredentialBusy } = switchFixture(t);
+  setCredentialBusy(true);
+  assert.deepEqual(plain(await context.switchLocalEnvironmentTo(targetDir, "l1")), { ok: false, error: "busy" });
+  assert.deepEqual(context.serverSupervisor.calls, []);
+  assert.equal(forks.length, 0);
+});
 
 test("a failed switch with no live child reforks the active environment once and adopts it", async (t) => {
   // releaseLease throws, so the orchestrator rejects before any rollback: only the safety net serves this environment again.

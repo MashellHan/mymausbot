@@ -143,9 +143,9 @@ describe("attachment download destination", () => {
     }
   });
 
-  it("is installed on the default session before the primary window is created", () => {
+  it("is installed on the selected owner session before the primary window is created", () => {
     const main = fs.readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-    const handler = main.indexOf('session.defaultSession.on("will-download"');
+    const handler = main.indexOf('browserSession().on("will-download"');
     assert.notEqual(handler, -1);
     assert.match(main.slice(handler), /item\.setSavePath\(collisionFreeDownloadPath\(/);
     assert.match(main.slice(handler), /revealDownloadWhenDone\(item, /);

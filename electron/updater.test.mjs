@@ -33,7 +33,7 @@ function page(origin) {
   return { webContents, event: { sender: webContents, senderFrame: mainFrame } };
 }
 
-function mainRule() {
+function mainRule({ sessionOnly = false } = {}) {
   const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const start = source.indexOf("function myCloud() {"), end = source.indexOf("const savedWorkspace = id =>", start);
   expect(start).toBeGreaterThanOrEqual(0);
@@ -43,7 +43,7 @@ function mainRule() {
   expect(signInStart).toBeGreaterThanOrEqual(0);
   const window = { isDestroyed: () => false, webContents: null };
   const listeners = new Map();
-  const signIn = { options: null, state: { status: "signed-out", message: "restoring" } };
+  const signIn = { options: null, storeOptions: null, state: { status: "signed-out", message: "restoring" } };
   const context = vm.createContext({
     ipcMain: { handle: () => {}, on: (channel, listener) => listeners.set(channel, listener) },
     senderIsLocal: localOriginModule.isLocalSender, workspaceSenderAllowed: environments.workspaceSenderAllowed, cloudPageSenderAllowed, myCloudOrigin, otherOwnClouds,
@@ -54,8 +54,9 @@ function mainRule() {
     rememberedHome: null, savedCloudHomeOrigin, cloudSignInRestored: true,
     // ensureCloudAccount's world: a packaged app, and a sign-in client whose state the test sets.
     app: { isPackaged: true, getPath: () => "/unused", getVersion: () => "1.0.0" }, process: { platform: "darwin", env: {} }, cloudTarget,
+    SESSION_CREDENTIALS: sessionOnly,
     path: { join: (...parts) => parts.join("/") }, os: { hostname: () => "mac" }, shell: {}, safeStorage: {},
-    createCloudAccountStore: () => ({}), cloudEncryption: {}, accounts: { tell: () => {} }, rememberCloudHome: () => {}, rememberedCloudHome, computerSharing: null, updatesConsent: null,
+    createCloudAccountStore: (options) => { signIn.storeOptions = options; return {}; }, cloudEncryption: {}, accounts: { tell: () => {} }, rememberCloudHome: () => {}, rememberedCloudHome, computerSharing: null, updatesConsent: null,
     sendUpdaterState: () => {}, refreshCloudMenus: () => {}, announceCloudReady: () => {}, installCloudPlanIpc: () => {},
     includedX: { onState: async () => {} }, includedPages: { onState: async () => {} }, cloudPower: { changed: () => {}, awaiting: () => false }, cloudLogins: { kick: () => {} },
     createCloudAccountClient: (options) => {
@@ -91,8 +92,17 @@ function mainRule() {
     context.cloudSignInRestored = true;
     signIn.options.onState(state);
   };
-  return { context, window, show, offered, launching, signedIn, pageAllowed: vm.runInContext("updaterPageAllowed", context) };
+  return { context, window, show, offered, launching, signedIn, signIn, pageAllowed: vm.runInContext("updaterPageAllowed", context) };
 }
+
+it("keeps Cloud account store mode tied to the App's selected credential lifetime", () => {
+  const secure = mainRule();
+  secure.launching();
+  expect(secure.signIn.storeOptions.sessionOnly).toBe(false);
+  const ephemeral = mainRule({ sessionOnly: true });
+  ephemeral.launching();
+  expect(ephemeral.signIn.storeOptions.sessionOnly).toBe(true);
+});
 
 async function load(pageAllowed) {
   vi.resetModules();
