@@ -61,7 +61,9 @@ try {
     entry: "/scripts/testing/agent-team-preview.tsx", route: "/__agent-team.html", title: "Isolated Agent Team panel",
     extraRoutes: [
       { path: "/__agent-team-update", method: "POST", handler: (req, res) => {
-        liveSample = req.url?.includes("reset=1") ? sample : { ...sample, updatedAt: sample.updatedAt! + 2000,
+        if (req.url?.includes("reset=1")) liveSample = sample;
+        else if (req.url?.includes("remove=1")) liveSample = { ...sample, updatedAt: sample.updatedAt! + 2000, teamCount: 1, teams: [sample.teams[0]!] };
+        else liveSample = { ...sample, updatedAt: sample.updatedAt! + 2000,
           teams: sample.teams.map((team) => team.id === "sample-a" ? { ...team, activeAgentCount: 0,
             agents: team.agents.map((agent) => agent.id === "a1" ? { ...agent, state: "done", reasoningEffort: "max", contextUsed: 64_000,
               taskHint: "Only the newest synthetic instruction remains visible." } : agent) } : team) };
