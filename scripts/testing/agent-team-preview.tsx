@@ -11,7 +11,11 @@ import "../../src/styles.css";
 
 const params = new URLSearchParams(location.search);
 const width = Number(params.get("width"));
-if ([360, 400, 960].includes(width)) localStorage.setItem("omb-computer-panel-width", String(width));
+if ([360, 400, 960].includes(width)) {
+  const style = document.createElement("style");
+  style.textContent = `[data-computer-panel] { width: ${width}px !important; }`;
+  document.head.append(style);
+}
 setAnalyticsEnabled(false);
 const locale = params.get("locale") === "zh" ? "zh" : "en";
 await loadLocalePack(locale);
