@@ -251,6 +251,46 @@ describe("Computer panel tab", () => {
     expect(document.activeElement).toBe(tab("Usage"));
   });
 
+  it("reveals the selected Mini Apps tab when the actual panel narrows", async () => {
+    const callbacks = new Map<Element, () => void>();
+    const original = globalThis.ResizeObserver;
+    class ObservedResize {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element) { callbacks.set(target, () => this.callback([], this as unknown as ResizeObserver)); }
+      disconnect() { callbacks.clear(); }
+    }
+    globalThis.ResizeObserver = ObservedResize as unknown as typeof ResizeObserver;
+    try {
+      await open(makeBot());
+      const aside = document.querySelector<HTMLElement>("[data-computer-panel]")!;
+      const row = document.querySelector<HTMLElement>('[data-testid="computer-tabs"]')!;
+      const mini = tab("Mini Apps");
+      let panelWidth = 600;
+      let visibleRight = 600;
+      Object.defineProperty(aside, "offsetWidth", { configurable: true, get: () => panelWidth });
+      vi.spyOn(row, "getBoundingClientRect").mockImplementation(() => ({ left: 0, right: visibleRight }) as DOMRect);
+      vi.spyOn(mini, "getBoundingClientRect").mockImplementation(() => ({ left: 300 - row.scrollLeft, right: 410 - row.scrollLeft }) as DOMRect);
+      flushSync(() => callbacks.get(aside)!());
+      flushSync(() => tab("Files").click());
+      press("Files", "ArrowRight");
+      await settle();
+      expect(selected()).toBe("Mini Apps");
+      expect(document.activeElement).toBe(mini);
+      expect(row.scrollLeft).toBe(0);
+
+      panelWidth = 400;
+      visibleRight = 280;
+      flushSync(() => callbacks.get(aside)!());
+      expect(mini.getBoundingClientRect().right).toBeLessThanOrEqual(row.getBoundingClientRect().right);
+      expect(row.scrollLeft).toBe(130);
+      expect(document.activeElement).toBe(mini);
+      press("Mini Apps", "ArrowRight");
+      await settle();
+      expect(selected()).toBe("Agent Team");
+      expect(document.querySelector('[data-testid="agent-team-panel"]')).not.toBeNull();
+    } finally { globalThis.ResizeObserver = original; }
+  });
+
   it("points every selected trigger at its panel and the panel back", async () => {
     await open(makeBot());
     for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]) {

@@ -3,7 +3,7 @@ import type { Json } from "./agents-client.ts";
 
 export const MINI_APP_TOOL_ROUTES: Readonly<Record<string, string>> = {
   mini_app_info: "mini-apps/info", mini_app_connect: "mini-apps/connect", mini_app_publish: "mini-apps/publish",
-  mini_app_rollback: "mini-apps/rollback", mini_app_archive: "mini-apps/archive",
+  mini_app_rollback: "mini-apps/rollback", mini_app_archive: "mini-apps/archive", mini_app_report: "mini-apps/report",
 };
 export const MINI_APP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(MINI_APP_TOOL_ROUTES));
 
@@ -25,4 +25,9 @@ export const MINI_APP_TOOL_DEFINITIONS = [
     inputSchema: { type: "object", additionalProperties: false, required: ["app_id", "requestKey", "expectedRevision", "templateVersion"], properties: { ...mutation, templateVersion: { type: "integer", minimum: 1 } } } },
   { name: "mini_app_archive", description: "Archive a granted local Mini App when requested. Hides it from the active library; keeps its immutable templates and bound Data. Requires the current revision and a new requestKey.",
     inputSchema: { type: "object", additionalProperties: false, required: ["app_id", "requestKey", "expectedRevision"], properties: mutation } },
+  { name: "mini_app_report", description: "Prepare this bot's retained report Data and an install draft, or publish one immutable X AI/GitHub edition. Prepare takes action and kind only. Publish also takes edition with editionKey for interactive/backfill work; an Automation uses its original scheduled China day. Same key and content replay, different content conflicts. Source URLs are recorded data, never fetched by this tool.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["action", "kind"], properties: {
+      action: { type: "string", enum: ["prepare", "publish"] }, kind: { type: "string", enum: ["x_ai_digest", "github_activity"] },
+      edition: { type: "object", additionalProperties: true },
+    } } },
 ];

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DATA_LIMITS, DATA_TOOL_NAMES, type DataColumn } from "../../shared/data-surface.ts";
+import { REPORT_TABLE } from "../../shared/report-mini-app.ts";
 import { FakeDataDatabase } from "../testing/fake-data-database.ts";
 import { DataSheetStore } from "./sheet.ts";
 import {
@@ -292,6 +293,17 @@ describe("data_load", () => {
     const again = await loadData(ctx, { source: join(dir, "Orders 2024.csv"), replace: false });
     expect(again.tables[0]!.name).toBe("orders_2024_2");
     expect(database.calls.at(-2)!.sql).toMatch(/^CREATE TABLE "orders_2024_2"/);
+  });
+
+  it("keeps retained report editions out of ordinary Data replacement tools", async () => {
+    const { ctx, database } = context();
+    const dir = freshDir();
+    const source = join(dir, "synthetic.csv");
+    writeFileSync(source, "title\nOne\n");
+    await expect(loadData(ctx, { source, name: REPORT_TABLE })).rejects.toMatchObject({ error: { code: "write_refused" } });
+    await expect(runSql(ctx, { sql: `CREATE OR REPLACE TABLE main."${REPORT_TABLE}" AS SELECT 1` }))
+      .rejects.toMatchObject({ error: { code: "write_refused" } });
+    expect(database.calls.some((call) => call.method === "run" && call.sql?.startsWith("CREATE"))).toBe(false);
   });
 
   it("shortens a 63-character name to fit the suffix that keeps it unique", async () => {

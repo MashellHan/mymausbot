@@ -6,9 +6,24 @@ template versions. It belongs to the local workspace owner, independently of
 the chat or bot that created it. Opening, filtering and refreshing an app does
 not start an AI turn.
 
-Bookkeeping is the first example. The registry, publication tools, Data bindings
-and frame host are application independent; an inventory fixture exercises the
-same APIs without finance-specific server code.
+Bookkeeping, Daily X AI digest and GitHub activity use the same registry, retained
+Data and frame host. An inventory fixture also exercises these APIs independently
+of the built-in templates. The two report apps keep current and historical
+editions published by an existing bot or Automation.
+
+## Install a report
+
+Open **Computer → Mini Apps → Add Mini App**, choose Daily X AI digest or GitHub
+activity, and select the existing producer Automation. Setup resolves its bot on
+the server, prepares an empty report table in that bot's retained Data, and
+installs the selected template with that producer as editor. The first screen
+says no edition has been published until the producer actually publishes one.
+Bookkeeping remains available in the same chooser.
+
+The Automation's schedule and other outputs stay in place. Add report publication
+to that existing authorized routine through the bot's supported tools. Installation
+does not edit a routine or establish that it has run. See the
+[report contract and authoring flow](mini-app-reports.md).
 
 ## Use the bookkeeping example
 
@@ -46,11 +61,14 @@ The local `agents` tool catalog exposes:
 | `mini_app_publish` | Create an app or publish a new immutable template and binding version. |
 | `mini_app_rollback` | Activate an earlier template while retaining current business data. |
 | `mini_app_archive` | Remove an app from active navigation while keeping its history and Data. |
+| `mini_app_report` | Prepare a built-in report template or atomically publish an edition to the calling bot's retained Data. |
 
-Before creating a recurring report, the bot discovers the existing app. Data-only
-changes use the existing Data tools. Layout, behavior or binding changes publish a
-new template. The complete contract is returned by `mini_app_info`; the built-in
-`data-dashboards` skill follows this path for reusable local reports.
+Before creating a recurring report, the bot discovers the existing app. General
+Data-only changes use the existing Data tools; the two built-in report kinds use
+`mini_app_report` to preserve atomic edition writes and retry receipts. Layout,
+behavior or binding changes publish a new template. The author guide is returned
+by `mini_app_info`; the built-in `data-dashboards` skill follows this path for
+reusable local reports.
 
 Publication uses `requestKey` and `expectedRevision`. A successful retry returns
 the original receipt; reusing the key with different content or publishing over
@@ -166,8 +184,8 @@ library deliberately owns its lifecycle independently of a session or bot.
 These comparisons use public source/documentation, not a logged-in competitor
 runtime qualification.
 
-This release is a live local-data mechanism. AI Digest ingestion, immutable
-historical report snapshots, Cloudflare publication, public hosting, arbitrary
-backend processes and a plugin marketplace are deferred.
+The built-in reports retain their published editions in Data. Source collection
+uses the existing bot and its authorized tools. Cloudflare publication, public
+hosting, arbitrary backend processes and a plugin marketplace remain deferred.
 
 See [isolated verification](verification/mini-apps.md) for executable checks.

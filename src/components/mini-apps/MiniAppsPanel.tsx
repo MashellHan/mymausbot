@@ -7,9 +7,11 @@ import { useShowThreads } from "@/lib/thread-preferences";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { api, ApiError, openBot, useStore } from "@/state/store";
 import type { MiniAppDocument, MiniAppMutationResult, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
+import { REPORT_APPS, type ReportKind } from "../../../shared/report-mini-app";
 import { BookkeepingInstall } from "./BookkeepingInstall";
 import { MiniAppFrame } from "./MiniAppFrame";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
+import { ReportInstall } from "./ReportInstall";
 
 const REFRESH_MS = 15_000;
 type Inventory = { apps: MiniAppSummary[] };
@@ -43,7 +45,7 @@ export function MiniAppsPanel() {
   const [storageKey, setStorageKey] = useState<string | null>(null);
   const [document, setDocument] = useState<MiniAppDocument | null>(null);
   const [appState, setAppState] = useState<MiniAppState | null>(null);
-  const [installing, setInstalling] = useState(false);
+  const [installing, setInstalling] = useState<"choose" | "bookkeeping" | ReportKind | null>(null);
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [stale, setStale] = useState(false);
@@ -147,6 +149,12 @@ export function MiniAppsPanel() {
     setStale(false);
   };
 
+  const installed = (id: string) => {
+    choose(id);
+    setInstalling(null);
+    setRefreshKey((current) => current + 1);
+  };
+
   const onNavKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.altKey || event.ctrlKey || event.metaKey || !apps?.length) return;
     const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
@@ -180,8 +188,8 @@ export function MiniAppsPanel() {
         <div className="flex min-w-0 items-center justify-between gap-2">
           <h2 className="text-[15px] font-semibold text-ink">{t("computer.miniApps.heading")}</h2>
           <div className="flex items-center gap-1.5">
-            {owner === true && nativeGuard && <button type="button" className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" onClick={() => setInstalling(true)}>{t("computer.miniApps.installExample")}</button>}
-            <button type="button" disabled={checking || installing} aria-label={t("computer.miniApps.refresh")} title={t("computer.miniApps.refresh")} onClick={() => setRefreshKey((current) => current + 1)} className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"><RotateCw size={15} aria-hidden="true" /></button>
+            {owner === true && nativeGuard && <button type="button" className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" onClick={() => setInstalling("choose")}>{t("computer.miniApps.add")}</button>}
+            <button type="button" disabled={checking || Boolean(installing)} aria-label={t("computer.miniApps.refresh")} title={t("computer.miniApps.refresh")} onClick={() => setRefreshKey((current) => current + 1)} className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"><RotateCw size={15} aria-hidden="true" /></button>
           </div>
         </div>
         {!installing && !!apps?.length && <div role="tablist" aria-label={t("computer.miniApps.chooseApp")} onKeyDown={onNavKey} className="mt-3 flex min-w-0 gap-1 overflow-x-auto pb-1 [scrollbar-width:thin]">
@@ -192,7 +200,17 @@ export function MiniAppsPanel() {
           <p className="shrink-0 tabular-nums">{t("computer.miniApps.published", { time: stamp(selected.updatedAt) })}</p>
         </div>}
       </header>
-      {installing ? <BookkeepingInstall onCancel={() => setInstalling(false)} onInstalled={(id) => { choose(id); setInstalling(false); setRefreshKey((current) => current + 1); }} /> : <>
+      {installing === "choose" ? <section className="min-h-0 flex-1 overflow-y-auto px-4 pb-6" data-testid="mini-app-chooser" aria-labelledby="mini-app-chooser-title">
+        <header className="flex items-start justify-between gap-3 pt-3"><div><h2 id="mini-app-chooser-title" className="text-[16px] font-semibold text-ink">{t("computer.miniApps.add")}</h2><p className="mt-1 text-[13px] leading-5 text-ink-secondary">{t("computer.miniApps.chooseTemplate")}</p></div><button type="button" onClick={() => setInstalling(null)} className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.cancel")}</button></header>
+        <div className="mt-5 space-y-3">
+          {(["x_ai_digest", "github_activity"] as const).map((kind) => {
+            const existing = apps?.find((entry) => entry.slug === REPORT_APPS[kind].slug);
+            return <div key={kind} className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl bg-inset p-3"><div className="min-w-0"><h3 className="text-[14px] font-medium text-ink">{t(kind === "x_ai_digest" ? "computer.miniApps.report.xTitle" : "computer.miniApps.report.githubTitle")}</h3><p className="mt-1 text-[12px] leading-5 text-ink-secondary">{t(kind === "x_ai_digest" ? "computer.miniApps.report.xDescription" : "computer.miniApps.report.githubDescription")}</p></div><button type="button" onClick={() => existing ? installed(existing.id) : setInstalling(kind)} className="rounded-lg bg-control px-3 py-1.5 text-[13px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t(existing ? "computer.miniApps.report.open" : "computer.miniApps.report.choose")}</button></div>;
+          })}
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl bg-inset p-3"><div className="min-w-0"><h3 className="text-[14px] font-medium text-ink">{t("computer.miniApps.bookkeepingTitle")}</h3><p className="mt-1 text-[12px] leading-5 text-ink-secondary">{t("computer.miniApps.bookkeepingDescription")}</p></div><button type="button" onClick={() => setInstalling("bookkeeping")} className="rounded-lg bg-control px-3 py-1.5 text-[13px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.report.choose")}</button></div>
+        </div>
+      </section> : installing === "bookkeeping" ? <BookkeepingInstall onCancel={() => setInstalling("choose")} onInstalled={installed} />
+        : installing ? <ReportInstall key={installing} kind={installing} onCancel={() => setInstalling("choose")} onInstalled={installed} /> : <>
         {stale && <p role="status" className="mx-4 mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.miniApps.stale")}</p>}
         {error && <p role="alert" className="mx-4 mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{error}</p>}
         {loading && apps === null && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>}

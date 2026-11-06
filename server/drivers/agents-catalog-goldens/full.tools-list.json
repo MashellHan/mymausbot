@@ -636,6 +636,38 @@
       }
     },
     {
+      "name": "mini_app_report",
+      "description": "Prepare this bot's retained report Data and an install draft, or publish one immutable X AI/GitHub edition. Prepare takes action and kind only. Publish also takes edition with editionKey for interactive/backfill work; an Automation uses its original scheduled China day. Same key and content replay, different content conflicts. Source URLs are recorded data, never fetched by this tool.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "kind"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "prepare",
+              "publish"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "x_ai_digest",
+              "github_activity"
+            ]
+          },
+          "edition": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
       "name": "post_to_room",
       "description": "Put one message into a shared room you belong to, for example when the user asks you to tell the team something. Get group_id from list_rooms. This posts and returns: no room member's turn starts, nobody replies, and nothing comes back except confirmation — so never use it to ask a question or hand out work (use coordinate_bots for those). Post once, say it in full, and tell the user what you posted. Set attach_voice_note true to attach this turn's voice note. If a post is refused, do not retry it unless the refusal says how: say what you wanted to post in your reply instead.",
       "inputSchema": {

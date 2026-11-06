@@ -263,7 +263,7 @@ export function ComputerPanel({
   const panelTabs = computerPanelTabs({ advanced, androidConnected });
   const panelView = resolveComputerPanelView(storedPanelView, { advanced, androidConnected });
   const tabListRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => { if (tabListRef.current) revealSelectedTab(tabListRef.current); }, [panelView, advanced, androidConnected]);
+  useLayoutEffect(() => { if (tabListRef.current) revealSelectedTab(tabListRef.current); }, [panelView, advanced, androidConnected, separatorWidth]);
   const panelRef = useComputerPanelEntry(profileBot.id, panelView);
   const browserAvailableHere = browserAvailable(state.config);
   const browserEnabled = builtInBrowserEnabled(state.config) && bot.browser !== false

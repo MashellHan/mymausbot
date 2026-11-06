@@ -17,6 +17,7 @@ import {
   type DataSource,
   type OmbChartSpec,
 } from "../../shared/data-surface.ts";
+import { REPORT_TABLE } from "../../shared/report-mini-app.ts";
 import { compileToolSchema, schemaProblems } from "../mcp-schema-validator.ts";
 import type { DataSheetStore } from "./sheet.ts";
 import { DataFailure, type BotDatabase, type ChartCompiler, type ChartRenderer, type DataConnection, type DataExtension, type RunOptions, type RunResult, type VegaLiteValidator } from "./types.ts";
@@ -321,6 +322,9 @@ export function gateSql(sql: string, options: { allowCreate?: boolean } = {}): E
   if (kind.kind === "create" && kind.target.split(".").slice(0, -1).some((part) => part.replaceAll('"', "").toLowerCase() === "omb_data_internal")) {
     throw fail("write_refused", "The Data metadata schema is protected.", { sql });
   }
+  if (kind.kind === "create" && kind.target.split(".").at(-1)?.replaceAll('"', "").toLowerCase() === REPORT_TABLE) {
+    throw fail("write_refused", "Retained report editions use mini_app_report.", { sql });
+  }
   return kind;
 }
 
@@ -562,6 +566,7 @@ export async function loadData(ctx: DataContext, input: LoadInput): Promise<Load
   const tables: LoadedTable[] = [];
   const warnings: string[] = [];
   const create = async (name: string, relation: string, plan: LoadPlan, options: Record<string, string | number | boolean>) => {
+    if (name.toLowerCase() === REPORT_TABLE) throw fail("write_refused", "Retained report editions use mini_app_report.");
     const sql = `CREATE ${replace ? "OR REPLACE " : ""}TABLE ${quoteIdent(name)} AS SELECT * FROM ${relation}`;
     await ctx.database.run(sql, { ...runOptions(ctx, { extensions: plan.extensions }), businessMutation: true });
     const described = await ctx.database.describe(quoteIdent(name), runOptions(ctx));

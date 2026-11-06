@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { z } from "zod";
 import { allowsTool } from "../../shared/tool-scope.ts";
+import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
 import type { MiniAppDataset, MiniAppSources } from "../../shared/mini-apps.ts";
 import type { DataEngine } from "../data/types.ts";
 import { DataFailure } from "../data/types.ts";
@@ -12,9 +13,13 @@ import { MINI_APP_TOOL_ROUTES } from "../drivers/agents-mini-app-tools.ts";
 import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "../mini-apps/registry.ts";
 import { appFailure } from "../mini-apps/validation.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
+import { ReportStore } from "../mini-apps/report-store.ts";
+import { parseReportTool, reportKindSchema } from "../mini-apps/report-schema.ts";
+import type { RoutineManager } from "../routines.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
 const ROOT = "/api/mini-apps";
+const REPORT_SOURCE = `${ROOT}/report-source`;
 const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|publish|rollback|archive))?$/;
 const SOURCE = z.object({ botId: z.string().regex(/^[\w-]{1,128}$/) }).strict();
 const INTERNAL_ID = z.object({ app_id: z.uuid() }).strict();
@@ -26,19 +31,22 @@ const SOURCE_PAGE_BODY = z.object({ schema: z.string().min(1).max(200), table: z
 interface MiniAppRouteDeps {
   apps: MiniApps;
   data: DataEngine;
+  reports: ReportStore;
+  routines(): Pick<RoutineManager, "listRoutines" | "runForThread" | "isActiveThread"> | null;
   localEnabled(): boolean;
   bots(): Array<{ id: string; name: string; toolScope?: unknown }>;
 }
 
-export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps"> & {
+export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" | "reports"> & {
   store: Parameters<typeof createChatApps>[0]["store"];
   dataDir: string;
   validPublisher(id: string): boolean;
 }) {
-  const chatApps = createChatApps({ store: input.store, dataDir: input.dataDir,
+  const { store, dataDir, validPublisher, ...shared } = input;
+  const chatApps = createChatApps({ store, dataDir,
     references: () => [...appDocRefs(), ...miniAppDocRefs()] });
-  const deps = { apps: new MiniApps({ docs: chatApps.docs, data: input.data, validPublisher: input.validPublisher }),
-    data: input.data, localEnabled: input.localEnabled, bots: input.bots };
+  const deps = { ...shared, apps: new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher }),
+    reports: new ReportStore(shared.data, createReportTemplate) };
   return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps) };
 }
 
@@ -75,6 +83,23 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
     try {
       assertOwner();
       if (url.search) throw appFailure(400, "Query parameters are not supported.");
+      if (path === REPORT_SOURCE && method === "POST") {
+        const parsed = z.object({ kind: reportKindSchema, routineId: z.string().min(1).max(128) }).strict().safeParse(await readBody(req, 4096));
+        if (!parsed.success) throw appFailure(400, "Choose an existing Automation and report kind.");
+        const { kind, routineId } = parsed.data;
+        const selected = () => deps.routines()?.listRoutines().find((routine) => routine.id === routineId);
+        const routine = selected();
+        if (!routine || !routine.enabled || routine.target !== "bot" || routine.runOn !== "maus" ||
+            !deps.bots().some((bot) => bot.id === routine.botId)) throw appFailure(409, "Choose an enabled local Bot Automation.");
+        const prepared = await deps.reports.prepare(routine.botId, kind);
+        assertOwner();
+        const current = selected();
+        if (!current || !current.enabled || current.target !== "bot" || current.runOn !== "maus" ||
+            current.botId !== routine.botId || !deps.bots().some((bot) => bot.id === current.botId)) {
+          throw appFailure(409, "The selected Automation changed while its report source was prepared.");
+        }
+        return json(res, 200, { ...prepared, routineId: current.id, producerBotId: current.botId });
+      }
       const sourcePage = SOURCE_PAGE.exec(path);
       if (sourcePage && method === "POST") {
         const body = SOURCE_PAGE_BODY.safeParse(await readBody(req, 4096));
@@ -133,6 +158,7 @@ export interface MiniAppsInternalContext {
   res: ServerResponse;
   json: typeof sendJson;
   botId: string;
+  threadId: string;
   readBody(): Promise<unknown>;
   requireActive(): void;
   writeAllowed(): boolean;
@@ -167,6 +193,21 @@ export function createMiniAppsInternalRoutes(deps: MiniAppRouteDeps) {
         const dataset = await deps.data.promoteForBot(ctx.botId, MINI_APPS_OWNER);
         assertActive();
         return ctx.json(ctx.res, 200, { dataset: await datasetInfo(deps.data, dataset.datasetId) });
+      }
+      if (name === "mini_app_report") {
+        const input = parseReportTool(raw);
+        const routines = deps.routines();
+        const isRoutine = routines?.isActiveThread(ctx.threadId) ?? false;
+        const activeRoutine = isRoutine ? routines!.runForThread(ctx.threadId) : null;
+        if (isRoutine && (!activeRoutine || activeRoutine.botId !== ctx.botId || activeRoutine.target !== "bot" || activeRoutine.runOn !== "maus")) {
+          throw appFailure(403, "This Automation has no matching producer Bot.");
+        }
+        const nominalAt = activeRoutine?.scheduledFor ?? null;
+        const result = input.action === "prepare"
+          ? await deps.reports.prepare(ctx.botId, input.kind, nominalAt)
+          : await deps.reports.publish(ctx.botId, input.kind, input.edition, nominalAt, assertActive);
+        assertActive();
+        return ctx.json(ctx.res, 200, result);
       }
       if (name === "mini_app_publish") {
         const body = z.object({ app_id: z.uuid().optional(), publication: z.unknown() }).strict().safeParse(raw);

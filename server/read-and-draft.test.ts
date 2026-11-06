@@ -80,7 +80,7 @@ describe("the fence around a read-and-draft run", () => {
     for (const route of [["GET", "/api/internal/session-search"], ["POST", "/api/internal/hook"], ["POST", "/api/internal/connectors/mcp"]]) {
       expect(gate.refusesRoute(bot, "run-thread", route[0]!, route[1]!)).toBe(false);
     }
-    for (const route of [["POST", "/api/internal/coordinate"], ["POST", "/api/internal/memory"], ["POST", "/api/internal/options-card"], ["POST", "/api/internal/trigger-requests"], ["POST", "/api/internal/waits"], ["GET", "/api/internal/waits"], ["POST", "/api/internal/waits/cancel"], ["POST", "/api/internal/mini-apps/publish"]]) {
+    for (const route of [["POST", "/api/internal/coordinate"], ["POST", "/api/internal/memory"], ["POST", "/api/internal/options-card"], ["POST", "/api/internal/trigger-requests"], ["POST", "/api/internal/waits"], ["GET", "/api/internal/waits"], ["POST", "/api/internal/waits/cancel"], ["POST", "/api/internal/mini-apps/publish"], ["POST", "/api/internal/mini-apps/report"]]) {
       expect(gate.refusesRoute(bot, "run-thread", route[0]!, route[1]!)).toBe(true);
     }
     expect(gate.refusesRoute(bot, "main-chat", "POST", "/api/internal/memory")).toBe(false);

@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 
 import { createMiniAppsInternalRoutes } from "./mini-apps.ts";
 
-it("rejects local Mini App publication before reading a write-disallowed turn", async () => {
+it("rejects local Mini App writes before reading a write-disallowed turn", async () => {
   const deps = {
     localEnabled: () => true,
     bots: () => [{ id: "producer", name: "Producer" }],
@@ -15,10 +15,13 @@ it("rejects local Mini App publication before reading a write-disallowed turn", 
   const requireActive = vi.fn();
   const writeAllowed = vi.fn(() => false);
 
-  await route({ method: "POST", path: "/api/internal/mini-apps/publish", res: response, json, botId: "producer",
-    readBody, requireActive, writeAllowed });
-  expect(json).toHaveBeenCalledWith(response, 403, { error: "This turn may only read Mini Apps." });
-  expect(requireActive).toHaveBeenCalledOnce();
-  expect(writeAllowed).toHaveBeenCalledOnce();
+  for (const path of ["/api/internal/mini-apps/publish", "/api/internal/mini-apps/report"]) {
+    json.mockClear();
+    await route({ method: "POST", path, res: response, json, botId: "producer", threadId: "turn",
+      readBody, requireActive, writeAllowed });
+    expect(json).toHaveBeenCalledWith(response, 403, { error: "This turn may only read Mini Apps." });
+  }
+  expect(requireActive).toHaveBeenCalledTimes(2);
+  expect(writeAllowed).toHaveBeenCalledTimes(2);
   expect(readBody).not.toHaveBeenCalled();
 });

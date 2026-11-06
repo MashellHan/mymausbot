@@ -651,6 +651,7 @@ describe("agents-proxy MCP surface", () => {
       "mini_app_publish",
       "mini_app_rollback",
       "mini_app_archive",
+      "mini_app_report",
       "post_to_room",
       "create_bot",
       "list_team_setup",
