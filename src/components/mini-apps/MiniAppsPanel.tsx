@@ -74,6 +74,7 @@ export function MiniAppsPanel() {
     && selected.dashboard?.kind === dashboard.kind && dashboard.renderer === "native" && dashboard.htmlRole === "fallback-only";
   const recoveryKind = currentHead && selected && document && !dashboard && !selected.dashboard && selected.dashboardIdentity
     && document.app.dashboardIdentity === selected.dashboardIdentity ? selected.dashboardIdentity : null;
+  const dashboardInstalled = !!(selected?.dashboardIdentity || document?.app.dashboardIdentity || selected?.dashboard || dashboard);
 
   useLayoutEffect(() => {
     const target = focusAfter.current;
@@ -283,21 +284,19 @@ export function MiniAppsPanel() {
               <span data-testid="mini-app-freshness" className="inline-flex items-center gap-1.5"><Clock3 size={13} aria-hidden="true" />{checking ? t("computer.miniApps.checking") : stale ? t("computer.miniApps.stale") : appState.status === "archived" ? t("computer.miniApps.archived") : t("computer.miniApps.current")}</span>
               <div className="flex items-center gap-3">
                 {publisher && !dashboard && !selected?.dashboard && !selected?.dashboardIdentity && <button type="button" onClick={() => openBot(dispatch, publisher, showThreads)} className="text-accent-text underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.openChat")}</button>}
-                {document.versions.length > 1 && <details className="relative"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t(selected?.dashboardIdentity ? "computer.miniApps.dashboard.fallbackHistory" : "computer.miniApps.history")}</summary>
+                {document.versions.length > 1 && <details className="relative"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t("computer.miniApps.history")}</summary>
                   <div className="absolute right-0 top-full z-20 mt-1 max-h-60 min-w-44 overflow-y-auto rounded-xl border border-hairline bg-menu p-1.5 shadow-xl">
                     {document.versions.map((version) => <button key={version.version} type="button" disabled={rollbackVersion !== null || version.version === document.app.templateVersion} onClick={() => void rollback(version.version)} className="block w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">{t("computer.miniApps.version", { number: version.version })} · {stamp(version.createdAt)}</button>)}
                   </div>
                 </details>}
               </div>
             </div>
-            {appState.status === "active" && nativeGuard && recoveryKind ? owner === true
-              ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="dashboard-recovery">
+            {appState.status === "active" && nativeGuard && dashboardInstalled ? dashboardCurrent
+              ? <MiniAppDashboard key={`${document.app.id}:${document.app.revision}`} document={document} state={appState} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
+              : recoveryKind && owner === true ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="dashboard-recovery">
                 <p>{t("computer.miniApps.dashboard.recovery")}</p>
                 <button type="button" onClick={() => startChoice(recoveryKind)} className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.dashboard.reauthorize")}</button>
               </section>
-              : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === null ? "computer.miniApps.opening" : "computer.miniApps.accessEnded")}</p>
-              : appState.status === "active" && nativeGuard && (dashboard || selected?.dashboard) ? dashboardCurrent
-              ? <MiniAppDashboard key={`${document.app.id}:${document.app.revision}`} document={document} state={appState} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
               : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === null ? "computer.miniApps.opening" : owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
               : appState.status === "active" && nativeGuard ? <MiniAppFrame document={document} state={appState} onRevoked={revoked} />
               : appState.status === "active" ? <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t("computer.miniApps.desktopRequired")}</p>

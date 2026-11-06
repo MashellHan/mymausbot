@@ -11,6 +11,7 @@ const fixture = vi.hoisted(() => ({
   stateRevision: 3,
   dataRevision: 7,
   failState: false,
+  failDocument: false,
   denied: false,
   dispatch: vi.fn(),
   frameMounts: 0,
@@ -92,6 +93,7 @@ beforeEach(() => {
   fixture.stateRevision = 3;
   fixture.dataRevision = 7;
   fixture.failState = false;
+  fixture.failDocument = false;
   fixture.denied = false;
   fixture.frameMounts = 0;
   fixture.dashboardReads = [];
@@ -131,6 +133,7 @@ beforeEach(() => {
       return { app: fixture.apps[0], replayed: false };
     }
     if (path.startsWith("/api/mini-apps/")) {
+      if (fixture.failDocument) throw new Error("Fixture document offline");
       const id = path.split("/")[3]!;
       const summary = fixture.apps.find((entry) => entry.id === id)!;
       return { app: summary, html: "<p>Fixture</p>", bindings: [], versions: [{ version: 1, title: "Older", createdAt: 1_000 }, { version: 2, title: "Current", createdAt: 2_000 }] };
@@ -255,6 +258,37 @@ describe("Mini Apps panel", () => {
     expect(JSON.parse(options.body)).toMatchObject({ expectedRevision: 3, dashboardKind: "agent-team", bindings: [], publisherBotIds: ["editor"], html: "<p>Fixture</p>" });
     expect(selected()?.dataset.appId).toBe("app_team");
     expect(document.activeElement).toBe(selected());
+  });
+
+  it("keeps a revoked built-in out of the HTML frame while a newer state or document fails to load", async () => {
+    const restored = { ...app("app_team", "Agent Team"), slug: "agent-team", dashboardIdentity: "agent-team" as const, dashboard: null };
+    fixture.apps = [restored];
+    await render();
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-recovery"]')).not.toBeNull());
+    expect(fixture.frameMounts).toBe(0);
+
+    fixture.apps = [{ ...restored, revision: 4 }];
+    fixture.stateRevision = 4;
+    fixture.failState = true;
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.textContent).toContain("Fixture offline"));
+    expect(fixture.frameMounts).toBe(0);
+    expect(frame()).toBeNull();
+
+    fixture.failState = false;
+    fixture.failDocument = true;
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.textContent).toContain("Fixture document offline"));
+    expect(fixture.frameMounts).toBe(0);
+    expect(frame()).toBeNull();
+
+    fixture.failDocument = false;
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-recovery"]')).not.toBeNull());
+    expect(fixture.frameMounts).toBe(0);
   });
 
   it("refreshes a same-revision Usage snapshot immediately, cancelling the old read and staying quiet while hidden", async () => {
