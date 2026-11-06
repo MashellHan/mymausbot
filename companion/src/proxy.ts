@@ -286,16 +286,23 @@ function harnessControlCheck(options: ProxyOptions) {
 export function createProxyHandler(options: ProxyOptions) {
   const viewers = new CompanionViewerRelay({ checkControl: harnessControlCheck(options) });
   const capabilityStreams = new Map<string, Set<() => void>>();
-  const hostedSockets = new Map<string, Set<Duplex>>();
+  const hostedSockets = new Map<string, Map<Duplex, number>>();
   const trackHosted = (deviceId: string, socket: Duplex) => {
-    const sockets = hostedSockets.get(deviceId) ?? new Set<Duplex>();
-    if (sockets.has(socket)) return;
-    sockets.add(socket);
+    const sockets = hostedSockets.get(deviceId) ?? new Map<Duplex, number>();
+    sockets.set(socket, (sockets.get(socket) ?? 0) + 1);
     hostedSockets.set(deviceId, sockets);
-    socket.once("close", () => {
-      sockets.delete(socket);
+    let active = true;
+    const release = () => {
+      if (!active) return;
+      active = false;
+      socket.off("close", release);
+      const count = sockets.get(socket) ?? 0;
+      if (count <= 1) sockets.delete(socket);
+      else sockets.set(socket, count - 1);
       if (sockets.size === 0 && hostedSockets.get(deviceId) === sockets) hostedSockets.delete(deviceId);
-    });
+    };
+    socket.once("close", release);
+    return release;
   };
   const handle = function handle(req: IncomingMessage, res: ServerResponse, listener: ProxyListener = "lan"): void {
     const target = requestTarget(req.url);
@@ -313,7 +320,11 @@ export function createProxyHandler(options: ProxyOptions) {
     const device = options.authenticate(token);
     const e2e = e2eContextOf(req.socket);
     if (listener === "origin" && device?.routes === "local") return sendJson(res, 403, { error: "this device is restricted to Wi-Fi and Tailscale" });
-    if (listener === "origin" && device?.id) trackHosted(device.id, req.socket);
+    if (listener === "origin" && device?.id) {
+      const release = trackHosted(device.id, req.socket);
+      res.once("finish", release);
+      res.once("close", release);
+    }
     if (!e2e && listener === "lan" && device?.e2eAt && path !== "/api/health") return sendJson(res, 426, UPDATE_APP);
     const e2eDenial = e2e ? e2eRefusal(e2e, method, path, device?.id) : null;
     if (e2eDenial) return sendJson(res, 401, { error: e2eDenial });
@@ -707,7 +718,7 @@ export function createProxyHandler(options: ProxyOptions) {
     const sockets = hostedSockets.get(deviceId);
     if (!sockets) return;
     hostedSockets.delete(deviceId);
-    for (const socket of sockets) socket.destroy();
+    for (const socket of sockets.keys()) socket.destroy();
   };
   handle.disconnectDevice = (deviceId: string): void => {
     viewers.closeDevice(deviceId);

@@ -285,7 +285,10 @@ export function createControlServer(options: ControlOptions): Server {
       return;
     }
     if (method === "POST" && path === "/pairing/renew") {
-      const window = options.devices.renewPairing();
+      const expectedToken = requestUrl.searchParams.get("expectedToken");
+      if (!expectedToken || !/^omb_pair_[A-Za-z0-9_-]{43}$/.test(expectedToken)) return json(res, 400, { error: "expected pairing token is required" });
+      const window = options.devices.renewPairing(expectedToken);
+      if (!window) return json(res, 409, { error: "pairing window changed" });
       return json(res, 201, { ...companionState(options), code: window.code, token: window.token });
     }
     if (method === "DELETE" && path === "/pairing") {

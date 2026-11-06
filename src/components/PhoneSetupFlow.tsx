@@ -471,11 +471,11 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     const pin = pairingRoutePinRef.current;
     const companion = companionBridge();
     const renew = companion?.renewPairing;
-    if (!pin || !renew || pairingRenewal.current || !mounted.current || setupGeneration.current !== pin.generation) return;
+    if (!pin || !companion || !renew || pairingRenewal.current || !mounted.current || setupGeneration.current !== pin.generation) return;
     const renewal = { generation: pin.generation, token: pin.token };
     pairingRenewal.current = renewal;
     try {
-      const next = await mutateCompanionBridgeState(companionMutationEpoch, () => renew());
+      const next = await mutateCompanionBridgeState(companionMutationEpoch, () => renew(renewal.token));
       if (!mounted.current || setupGeneration.current !== renewal.generation || pairingRoutePinRef.current?.token !== renewal.token) {
         await closePhonePairingIfOwned(next, () => companion.state(),
           () => mutateCompanionBridgeState(companionMutationEpoch, () => companion.pairing(false, next.pairing?.token)),
@@ -483,7 +483,23 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
         return;
       }
       if (!next.pairing || !companionPairingRoutePinAvailable(next, pin)) {
-        setState(next);
+        const returnedToken = next.pairing?.token;
+        const closed = returnedToken
+          ? await mutateCompanionBridgeState(companionMutationEpoch, () => companion.pairing(false, returnedToken)).catch(() => next)
+          : next;
+        if (!mounted.current || setupGeneration.current !== renewal.generation || pairingRoutePinRef.current?.token !== renewal.token) return;
+        setupGeneration.current += 1;
+        invalidatePhonePairingAttempt(pairingAttemptQueue.current, renewal.generation);
+        releasePhonePairingAttempt(pairingUiOwner.current, renewal.generation);
+        setPairingBusy(false);
+        publishPairingRoutePin(null);
+        setState(closed);
+        setProvisioning(false);
+        setSetupTimedOut(false);
+        setError(returnedToken && closed.pairing?.token === returnedToken
+          ? t("phone.error.remoteUpdate")
+          : closed.pairing ? t("phone.error.codeChanged") : protectedPairingUnavailable());
+        dispatchFlow({ type: "reset" });
         return;
       }
       if (next.pairing.token === renewal.token) {
@@ -494,8 +510,16 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
       setState(next);
       setError(null);
     } catch (cause) {
-      if (mounted.current && setupGeneration.current === renewal.generation) {
-        setError(normalizePhoneSetupActionError(cause, t("phone.error.remoteUpdate")));
+      if (mounted.current && setupGeneration.current === renewal.generation && pairingRoutePinRef.current?.token === renewal.token) {
+        const message = normalizePhoneSetupActionError(cause, t("phone.error.remoteUpdate"));
+        try {
+          const current = await companion.state();
+          if (!mounted.current || setupGeneration.current !== renewal.generation || pairingRoutePinRef.current?.token !== renewal.token) return;
+          if (current.pairing?.token !== renewal.token) setState(current);
+          else setError(message);
+        } catch {
+          if (mounted.current && setupGeneration.current === renewal.generation) setError(message);
+        }
       }
     } finally {
       if (pairingRenewal.current === renewal) pairingRenewal.current = null;

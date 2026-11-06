@@ -2456,7 +2456,7 @@ ipcMain.handle("companion:browser-control", localOnly("companion:browser-control
 ipcMain.handle("companion:revoke", localOnly("companion:revoke", (_event, deviceId) =>
   companionRevoke(deviceId).then(() => desktopCompanionState()),
 ));
-ipcMain.handle("companion:pairing-renew", localOnly("companion:pairing-renew", () => companionPairingRenew().then(decorateDesktopCompanionState)));
+ipcMain.handle("companion:pairing-renew", localOnly("companion:pairing-renew", (_event, expectedToken) => companionPairingRenew(expectedToken).then(decorateDesktopCompanionState)));
 ipcMain.handle("companion:routes", localOnly("companion:routes", (_event, deviceId, routes) =>
   companionDeviceRoutes(deviceId, routes === "local" ? "local" : "any").then(() => desktopCompanionState()),
 ));

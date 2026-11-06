@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { createServer, request, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { Agent, createServer, request, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import { expect, it } from "vitest";
 
 import { createProxyHandler } from "../src/proxy.ts";
@@ -28,7 +28,8 @@ it("keeps a legacy phone's direct route while retiring its hosted bearer and str
   const harnessPort = await listen(harness);
   const proxy = createProxyHandler({
     harnessPort,
-    authenticate: (token) => token === "legacy-token" ? { id: "legacy", routes, cloudDesktopAccess: true, browserControlAccess: false } : null,
+    authenticate: (token) => token === "legacy-token" ? { id: "legacy", routes, cloudDesktopAccess: true, browserControlAccess: false }
+      : token === "other-token" ? { id: "other", routes: "any", cloudDesktopAccess: true, browserControlAccess: false } : null,
     redeem: () => ({ error: "not used" }),
     serverName: () => "Fixture",
     endpoints: () => [{ kind: "hosted", priority: 0, url: "https://retained.example.test" }],
@@ -39,6 +40,7 @@ it("keeps a legacy phone's direct route while retiring its hosted bearer and str
   const hostedPort = await listen(hosted);
   const directPort = await listen(direct);
   const headers = { authorization: "Bearer legacy-token" };
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
   const hostedAbort = new AbortController();
   const directAbort = new AbortController();
   try {
@@ -48,6 +50,31 @@ it("keeps a legacy phone's direct route while retiring its hosted bearer and str
     expect(directStream.status).toBe(200);
     const hostedReader = hostedStream.body!.getReader();
     const directReader = directStream.body!.getReader();
+    let firstSocket: Socket | null = null;
+    const firstStatus = await new Promise<number>((resolve, reject) => {
+      const req = request(`http://127.0.0.1:${hostedPort}/api/health`, { agent, headers }, (res) => {
+        res.resume();
+        res.once("end", () => resolve(res.statusCode ?? 0));
+      });
+      req.once("socket", (socket) => { firstSocket = socket; });
+      req.once("error", reject);
+      req.end();
+    });
+    expect(firstStatus).toBe(200);
+    let reused = false;
+    const otherStream = await new Promise<IncomingMessage>((resolve, reject) => {
+      const req = request(`http://127.0.0.1:${hostedPort}/api/events`, { agent, headers: { authorization: "Bearer other-token" } }, resolve);
+      req.once("socket", (socket) => { reused = socket === firstSocket; });
+      req.once("error", reject);
+      req.end();
+    });
+    expect(reused).toBe(true);
+    expect(otherStream.statusCode).toBe(200);
+    const otherData = new Promise<Buffer>((resolve, reject) => {
+      otherStream.once("data", (chunk) => resolve(Buffer.from(chunk)));
+      otherStream.once("error", reject);
+      otherStream.once("close", () => reject(new Error("unrestricted hosted stream was closed")));
+    });
 
     routes = "local";
     proxy.closeHostedDevice("legacy");
@@ -74,11 +101,13 @@ it("keeps a legacy phone's direct route while retiring its hosted bearer and str
 
     for (const stream of streams) stream.write('data: {"ok":true}\n\n');
     expect((await directReader.read()).done).toBe(false);
+    expect((await otherData).toString()).toContain('"ok":true');
     routes = "any";
     expect((await fetch(`http://127.0.0.1:${hostedPort}/api/health`, { headers })).status).toBe(200);
   } finally {
     hostedAbort.abort();
     directAbort.abort();
+    agent.destroy();
     for (const stream of streams) stream.destroy();
     await Promise.all([close(hosted), close(direct), close(harness)]);
   }

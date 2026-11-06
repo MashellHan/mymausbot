@@ -199,8 +199,9 @@ export class DeviceRegistry {
   }
 
   /** A fresh code while the pairing screen stays open; the one before keeps its remaining time. */
-  renewPairing(): PairingWindow {
+  renewPairing(expectedToken: string): PairingWindow | null {
     const current = this.pairing();
+    if (!current || !sameCredential(current.token, expectedToken)) return null;
     const next = this.newWindow();
     this.previousWindow = current;
     this.window = next;

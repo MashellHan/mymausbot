@@ -50,6 +50,6 @@ export type CompanionBridge = {
   browserControl: (deviceId: string, allowed: boolean) => Promise<CompanionState>;
   revoke: (deviceId: string) => Promise<CompanionState>;
   /** Absent on an app build before the encrypted connection. */
-  renewPairing?: () => Promise<CompanionState>;
+  renewPairing?: (expectedToken: string) => Promise<CompanionState>;
   routes?: (deviceId: string, routes: "any" | "local") => Promise<CompanionState>;
 };

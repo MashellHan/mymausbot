@@ -45,12 +45,16 @@ it("renews through one stable controller timer while polling and rejects a forei
     companion: {
       state: vi.fn(async () => state),
       start: vi.fn(async () => state),
-      pairing: vi.fn(async (open: boolean) => {
-        state = { ...state, pairing: open ? { code: "123456", token: token("b"), expiresAt: Date.now() + 120_000 } : null };
-        if (state.pairing) valid.add(state.pairing.token);
+      pairing: vi.fn(async (open: boolean, expectedToken?: string) => {
+        if (open || state.pairing?.token === expectedToken) {
+          state = { ...state, pairing: open ? { code: "123456", token: token("b"), expiresAt: Date.now() + 120_000 } : null };
+          if (state.pairing) valid.add(state.pairing.token);
+          else valid.clear();
+        }
         return state;
       }),
-      renewPairing: vi.fn(async () => {
+      renewPairing: vi.fn(async (expectedToken: string) => {
+        if (state.pairing?.token !== expectedToken) throw new Error("pairing window changed");
         const pairing = { code: "654321", token: token("c"), expiresAt: Date.now() + 120_000 };
         state = { ...state, pairing };
         valid.add(pairing.token);
@@ -75,7 +79,7 @@ it("renews through one stable controller timer while polling and rejects a forei
   }
   expect(bridge.companion.renewPairing).not.toHaveBeenCalled();
   await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-  expect(bridge.companion.renewPairing).toHaveBeenCalledOnce();
+  expect(bridge.companion.renewPairing).toHaveBeenCalledExactlyOnceWith(token("b"));
   expect(bridge.companion.pairing).toHaveBeenCalledTimes(1);
   expect(host.querySelector("[data-pairing-link]")?.textContent).toContain(token("c"));
   expect(host.querySelector('[aria-label="Device pairing QR code"]')).not.toBeNull();
@@ -85,4 +89,97 @@ it("renews through one stable controller timer while polling and rejects a forei
   await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
   expect(host.querySelector('[aria-label="Device pairing QR code"]')).toBeNull();
   expect(host.textContent).toContain("code changed");
+});
+
+async function renewalScenario(hooks: { beforeRenew?: () => void; afterRenew?: () => void; beforeClose?: () => void }) {
+  let state: CompanionState = { enabled: true, keepAwake: false, port: 8810, devices: [], pairing: null,
+    endpoints: [{ kind: "hosted", url: HOSTED, priority: 0 }],
+    e2e: { enabled: true, relay: "connected", node: null, descriptor: { v: 1, k: "a".repeat(87) } } };
+  const account: CompanionAccountState = { available: true, status: "ready", email: "ada@example.com", endpoint: HOSTED };
+  const valid = new Set<string>();
+  const replaceForeign = () => {
+    state = { ...state, pairing: { code: "999999", token: token("d"), expiresAt: Date.now() + 120_000 } };
+    valid.clear();
+    valid.add(token("d"));
+  };
+  const dropHostedRoute = () => { state = { ...state, endpoints: [] }; };
+  const bridge = {
+    companion: {
+      state: vi.fn(async () => state),
+      start: vi.fn(async () => state),
+      pairing: vi.fn(async (open: boolean, expectedToken?: string) => {
+        if (open) {
+          state = { ...state, pairing: { code: "123456", token: token("b"), expiresAt: Date.now() + 120_000 } };
+          valid.add(token("b"));
+        } else {
+          hooks.beforeClose?.();
+          if (state.pairing?.token === expectedToken) {
+            state = { ...state, pairing: null };
+            valid.clear();
+          }
+        }
+        return state;
+      }),
+      renewPairing: vi.fn(async (expectedToken: string) => {
+        hooks.beforeRenew?.();
+        if (state.pairing?.token !== expectedToken) throw new Error("pairing window changed");
+        state = { ...state, pairing: { code: "654321", token: token("c"), expiresAt: Date.now() + 120_000 } };
+        valid.add(token("c"));
+        hooks.afterRenew?.();
+        return state;
+      }),
+    },
+    companionAccount: { state: vi.fn(async () => account), prepare: vi.fn(async () => account) },
+  };
+  (globalThis as { ogb?: unknown }).ogb = bridge;
+  flushSync(() => root.render(createElement(View)));
+  for (let turn = 0; turn < 10; turn += 1) await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  const button = host.querySelector("button[data-phone-pairing-action]") as HTMLButtonElement;
+  expect(button?.disabled).toBe(false);
+  flushSync(() => button.click());
+  for (let turn = 0; turn < 10 && !host.querySelector('[aria-label="Device pairing QR code"]'); turn += 1) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  }
+  expect(host.querySelector("[data-pairing-link]")?.textContent).toContain(token("b"));
+  return { bridge, valid, state: () => state, replaceForeign, dropHostedRoute };
+}
+
+it("does not rotate or adopt a foreign window inserted at the renewal mutation", async () => {
+  const hooks: { beforeRenew?: () => void } = {};
+  const fixture = await renewalScenario(hooks);
+  hooks.beforeRenew = fixture.replaceForeign;
+  await act(async () => { await vi.advanceTimersByTimeAsync(PAIRING_RENEW_MS); });
+  expect(fixture.bridge.companion.renewPairing).toHaveBeenCalledExactlyOnceWith(token("b"));
+  expect(fixture.state().pairing?.token).toBe(token("d"));
+  expect(fixture.valid).toEqual(new Set([token("d")]));
+  expect(fixture.bridge.companion.pairing).toHaveBeenCalledTimes(1);
+  expect(host.querySelector('[aria-label="Device pairing QR code"]')).toBeNull();
+  expect(host.querySelector("[data-pairing-link]")?.textContent).toBe("");
+  expect(host.textContent).toContain("code changed");
+});
+
+it("closes the owned renewed window and its grace window when the pinned route disappears", async () => {
+  const hooks: { afterRenew?: () => void } = {};
+  const fixture = await renewalScenario(hooks);
+  hooks.afterRenew = fixture.dropHostedRoute;
+  await act(async () => { await vi.advanceTimersByTimeAsync(PAIRING_RENEW_MS); });
+  expect(fixture.bridge.companion.renewPairing).toHaveBeenCalledExactlyOnceWith(token("b"));
+  expect(fixture.bridge.companion.pairing).toHaveBeenLastCalledWith(false, token("c"));
+  expect(fixture.state().pairing).toBeNull();
+  expect(fixture.valid).toEqual(new Set());
+  expect(host.querySelector('[aria-label="Device pairing QR code"]')).toBeNull();
+  expect(host.querySelector("[data-pairing-link]")?.textContent).toBe("");
+});
+
+it("preserves a newer foreign window if it replaces the owned renewal before close", async () => {
+  const hooks: { afterRenew?: () => void; beforeClose?: () => void } = {};
+  const fixture = await renewalScenario(hooks);
+  hooks.afterRenew = fixture.dropHostedRoute;
+  hooks.beforeClose = fixture.replaceForeign;
+  await act(async () => { await vi.advanceTimersByTimeAsync(PAIRING_RENEW_MS); });
+  expect(fixture.bridge.companion.pairing).toHaveBeenLastCalledWith(false, token("c"));
+  expect(fixture.state().pairing?.token).toBe(token("d"));
+  expect(fixture.valid).toEqual(new Set([token("d")]));
+  expect(host.querySelector('[aria-label="Device pairing QR code"]')).toBeNull();
+  expect(host.querySelector("[data-pairing-link]")?.textContent).toBe("");
 });

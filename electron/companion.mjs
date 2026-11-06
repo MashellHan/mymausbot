@@ -404,9 +404,10 @@ export async function companionRevoke(deviceId) {
 }
 
 /** A fresh code while the pairing screen stays open; the previous one keeps its last seconds. */
-export async function companionPairingRenew() {
+export async function companionPairingRenew(expectedToken) {
   if (!proc) throw new Error("Phone connection is unavailable");
-  const state = await control("POST", "/pairing/renew");
+  if (!/^omb_pair_[A-Za-z0-9_-]{43}$/.test(String(expectedToken ?? ""))) throw new Error("Invalid pairing token");
+  const state = await control("POST", `/pairing/renew?expectedToken=${encodeURIComponent(expectedToken)}`);
   if (!state.pairing?.token) throw new Error("Phone pairing renewal was not confirmed");
   return { enabled: true, keepAwake: companionKeepAwakeAtRest(), ...state };
 }

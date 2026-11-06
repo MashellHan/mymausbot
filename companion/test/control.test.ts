@@ -221,12 +221,22 @@ describe("origins the control server will change state for", () => {
 
   it("keeps the previous pairing token redeemable after an owned renewal", async () => {
     const first = await ask("POST", "/pairing");
-    const renewed = await ask("POST", "/pairing/renew");
+    const renewed = await ask("POST", `/pairing/renew?expectedToken=${encodeURIComponent(first.body.pairing.token)}`);
     expect(renewed.status).toBe(201);
     expect(renewed.body.pairing.token).not.toBe(first.body.pairing.token);
     const paired = devices.redeem(first.body.pairing.token, "Older QR");
     expect(paired).not.toHaveProperty("error");
     if (!("error" in paired)) devices.revoke(paired.device.id);
+  });
+
+  it("leaves a foreign pairing window unchanged when an older owner tries to renew it", async () => {
+    const owned = await ask("POST", "/pairing");
+    const foreign = await ask("POST", "/pairing");
+    const currentToken = foreign.body.pairing.token;
+    expect((await ask("POST", "/pairing/renew")).status).toBe(400);
+    expect((await ask("POST", `/pairing/renew?expectedToken=${encodeURIComponent(owned.body.pairing.token)}`)).status).toBe(409);
+    expect((await ask("GET", "/state")).body.pairing.token).toBe(currentToken);
+    await ask("DELETE", `/pairing?expectedToken=${encodeURIComponent(currentToken)}`);
   });
 
   it("refuses a foreign origin on a safe method too", async () => {
