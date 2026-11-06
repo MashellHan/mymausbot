@@ -9,6 +9,10 @@ const requireValue = (condition, message) => { if (!condition) throw new Error(m
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const same = (before, after, label) => requireValue(isDeepStrictEqual(before, after), `${label} changed`);
 const read = (file) => JSON.parse(readFileSync(file, "utf8"));
+const without = (record, fields) => Object.fromEntries(Object.entries(record).filter(([key]) => !fields.includes(key)));
+const sameField = (before, after, key, label) => same([Object.hasOwn(before, key), before[key]],
+  [Object.hasOwn(after, key), after[key]], `${label} ${key}`);
+const identifier = (value) => typeof value === "string" && value.length > 0;
 
 export function validateBuildRequest(request) {
   requireValue(object(request), "Build request must be an object");
@@ -47,19 +51,53 @@ export function assertInventorySame(before, after) {
 export function assertRoutinesSame(before, after) {
   requireValue(object(before) && object(after) && Number.isInteger(before.version) && Number.isInteger(after.version),
     "Routine documents need a version");
-  uniqueRecords(before.routines, "Routine definitions");
-  uniqueRecords(after.routines, "Routine definitions");
-  const { runs: beforeRuns, ...beforeDefinitions } = before;
-  const { runs: afterRuns, ...afterDefinitions } = after;
-  same(beforeDefinitions, afterDefinitions, "Routine definitions");
-  const oldRuns = uniqueRecords(beforeRuns, "Routine runs");
-  const newRuns = uniqueRecords(afterRuns, "Routine runs");
+  const oldRoutines = uniqueRecords(before.routines, "Routine definitions");
+  const newRoutines = uniqueRecords(after.routines, "Routine definitions");
+  const oldRuns = uniqueRecords(before.runs, "Routine runs");
+  const newRuns = uniqueRecords(after.runs, "Routine runs");
+  const materializesCheck = (oldRun, newRun, routine) => oldRun.status === "queued"
+    && oldRun.checkKey === undefined && oldRun.threadId === undefined && oldRun.startedAt === undefined
+    && oldRun.triggerSource !== "webhook" && Array.isArray(routine?.checks) && routine.checks.length > 0
+    && typeof newRun.checkKey === "string" && /^[\w-]{1,128}$/.test(newRun.checkKey) && identifier(newRun.prompt);
+  const metadata = ["routines", "runs", "startupLaunchId"];
+  same(without(before, metadata), without(after, metadata), "Routine document metadata");
+  if (!isDeepStrictEqual(before.startupLaunchId, after.startupLaunchId)) {
+    requireValue(identifier(after.startupLaunchId), "Routine startup identity was lost");
+  }
+  same([...oldRoutines.keys()], [...newRoutines.keys()], "Routine definitions");
+  const operational = ["checkedAt", "wakeAt", "checkTrouble", "nextRunAt", "skippedRuns", "lastSkippedAt",
+    "failureStreak", "weekRuns", "warning", "updatedAt"];
+  for (const [id, oldRoutine] of oldRoutines) {
+    const newRoutine = newRoutines.get(id);
+    const allocatesResults = oldRoutine.resultsThreadId === undefined && identifier(newRoutine.resultsThreadId)
+      && oldRoutine.target === "bot" && [...newRuns.values()].some((run) => run.routineId === id
+        && run.botId === oldRoutine.botId && run.target === "bot" && run.resultsThreadId === newRoutine.resultsThreadId
+        && (!oldRuns.has(run.id) || materializesCheck(oldRuns.get(run.id), run, oldRoutine)));
+    const fields = allocatesResults ? [...operational, "resultsThreadId"] : operational;
+    same(without(oldRoutine, fields), without(newRoutine, fields), "Routine configuration");
+    if (oldRoutine.updatedAt !== undefined || newRoutine.updatedAt !== undefined) {
+      requireValue(Number.isFinite(newRoutine.updatedAt) && newRoutine.updatedAt >= (oldRoutine.updatedAt ?? 0),
+        "Routine revision was lost or moved backwards");
+    }
+  }
   const identity = ["id", "routineId", "botId", "createdAt", "scheduledFor", "runOn", "manual", "triggerSource", "target",
-    "groupId", "eventSource", "webhookId", "deliveryId", "access", "deliver", "attachments", "prompt", "durationMinutes", "timeoutMinutes"];
+    "groupId", "eventSource", "webhookId", "deliveryId", "access", "deliver", "attachments", "durationMinutes", "timeoutMinutes",
+    "routineName", "sourceThreadId"];
   for (const [id, oldRun] of oldRuns) {
     requireValue(newRuns.has(id), "Existing Routine run history was lost");
-    for (const key of identity) same([Object.hasOwn(oldRun, key), oldRun[key]],
-      [Object.hasOwn(newRuns.get(id), key), newRuns.get(id)[key]], "Existing Routine run identity");
+    const newRun = newRuns.get(id);
+    for (const key of identity) sameField(oldRun, newRun, key, "Existing Routine run identity");
+    const checked = materializesCheck(oldRun, newRun, oldRoutines.get(oldRun.routineId));
+    if (!checked) for (const key of ["prompt", "checkKey"]) sameField(oldRun, newRun, key, "Existing Routine run check");
+    const destination = newRoutines.get(oldRun.routineId)?.resultsThreadId;
+    const allocatesResults = checked && oldRun.target === "bot" && oldRun.resultsThreadId === undefined
+      && identifier(newRun.resultsThreadId) && (destination === undefined || newRun.resultsThreadId === destination);
+    if (!allocatesResults) sameField(oldRun, newRun, "resultsThreadId", "Existing Routine run routing");
+    if (oldRun.threadId !== undefined || newRun.threadId !== undefined) {
+      const starts = oldRun.status === "queued" && oldRun.threadId === undefined && oldRun.startedAt === undefined
+        && identifier(newRun.threadId) && Number.isFinite(newRun.startedAt);
+      if (!starts) sameField(oldRun, newRun, "threadId", "Existing Routine run execution");
+    }
   }
 }
 

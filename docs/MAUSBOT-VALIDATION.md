@@ -212,8 +212,10 @@ real data; use the existing coordinated switch/recovery procedure.
 Use the [local runbook](MAUSBOT-LOCAL-RUNBOOK.md) for the read-only
 `check:delivery request`, `routines` and `inventory` commands. Request fields and
 source binding are checked before spending time on a package. A routine run's
-normal recovery state is separate from unchanged definitions and preserved run
-identity. Only absent/null `shippedTemplateKind` is normalized in an inventory;
+normal recovery state and initial queued-check assignments are separate from
+unchanged configuration and established run identity, routing and check authority.
+Unrecognized transitions need owner review, not automatic rollback. Only
+absent/null `shippedTemplateKind` is normalized in an inventory;
 grants, IDs, revisions and every other field remain exact. These checks do not
 replace credentials, pairing, signature, package, startup or rollback checks,
 and they do not authorize a live switch.

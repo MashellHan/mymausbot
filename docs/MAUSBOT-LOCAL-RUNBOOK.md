@@ -37,8 +37,16 @@ pnpm check:delivery routines <before-routines.json> <after-routines.json>
 pnpm check:delivery inventory <before-inventory.json> <after-inventory.json>
 ```
 
-Routine definitions stay exact; existing run identities, authority and history
-remain intact while status/output may progress and new runs may appear.
+Routine configuration stays exact; known scheduler/check metadata and the
+startup identity may advance. Existing run identities, authority, source and
+established result/execution routes remain intact while status/output may
+progress and new runs may appear. A queued check with no prior check key or
+execution may acquire its prompt/key and initial result route; a new Routine
+result route requires a matching new run or queued-check allocation. Existing
+keys and routes cannot be replaced or removed. Unknown configuration stays exact.
+Other migrations, route repairs, receipt changes or scheduled definition changes
+need explicit evidence and owner review. A failed comparison holds acceptance;
+it is not by itself a reason to roll back or overwrite newer runtime data.
 Inventory comparison permits only missing/null `shippedTemplateKind`; changed
 IDs, revisions, grants or publishers fail. Use the same comparisons in the
 recovery workflow. Keep configuration, credentials, paired sessions, phone,
