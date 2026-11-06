@@ -24,6 +24,7 @@ describe("report Mini App contract", () => {
   });
 
   it("returns a stable install draft with no owner-only publisher grant or fabricated edition", () => {
+    expect(REPORT_APPS.github_activity).toMatchObject({ slug: "github-activity", title: "Github Rending" });
     for (const kind of Object.keys(REPORT_APPS) as ReportKind[]) {
       const draft = reportPublicationDraft(kind, DATASET, "<main>Fixture report</main>");
       expect(parsePublish(draft)).toEqual(draft);
