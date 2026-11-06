@@ -457,7 +457,7 @@ import { appliesNow, directApply, UNDO_STALE, type DirectApply } from "./direct-
 import { createTeamMemoryRequests } from "./team-memory-requests.ts";
 import { createAgentCard } from "./chat-widgets.ts";
 import { createChatAppRoutes, createChatAppsMcp } from "./routes/chat-apps.ts";
-import { createMiniAppRouteHandlers } from "./routes/mini-apps.ts"; import { routineReportTurnPrompt, type RoutineReportApp } from "./routine-report-publication.ts"; import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts";
+import { createMiniAppRouteHandlers } from "./routes/mini-apps.ts"; import { dispatchRoutineReportTurn, type RoutineReportApp } from "./routine-report-publication.ts"; import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts";
 import { buildBotOverview, type BotOverview, connectedAppsFacts } from "./bot-overview.ts";
 import { ProfileRequestService } from "./profile-requests.ts";
 import { ModelRequestService } from "./model-requests.ts";
@@ -8869,7 +8869,7 @@ routines = new RoutineManager({
     }
   },
   startTurn: async (botId, threadId, prompt, runOn, triggerSource, onDispatchError) => {
-    if (!companyShutdown) await startTurn(botId, await routineReportTurnPrompt(prompt, botId, threadId, { routines, bot: store.bot(botId) ?? null, reportAppsForBot, localEnabled: !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), writeAllowed: triggerSource !== "webhook" }), { threadId, runOn, automationSource: triggerSource, onDispatchError });
+    await dispatchRoutineReportTurn(prompt, botId, threadId, { routines, botForId: (id) => store.bot(id) ?? null, reportAppsForBot, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), writeAllowed: () => triggerSource !== "webhook" && !proactive.fence.confines(threadId) && !botApiThread(threadId) && !coordinator.active().some((node) => node.threadId === threadId && node.mode === "consult"), stopped: () => companyShutdown }, (text) => startTurn(botId, text, { threadId, runOn, automationSource: triggerSource, onDispatchError }));
   },
   startGoal: async (groupId, threadId, prompt, coordinatorBotId, runId, _onDispatchError) => {
     if (!groupId) {
