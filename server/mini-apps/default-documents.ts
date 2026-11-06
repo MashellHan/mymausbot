@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import type { DefaultMiniAppKind } from "../../shared/mini-apps.ts";
 import { REPORT_APPS } from "../../shared/report-mini-app.ts";
+import { GITHUB_PENDING_TEMPLATE_SHA256 } from "./default-template-history.ts";
 
 export const DEFAULT_APPS = {
   bookkeeping: { slug: "bookkeeping", title: "记账管家", description: "Records, calendar, cash flow and trends from your existing ledger." },
@@ -9,6 +11,16 @@ export const DEFAULT_APPS = {
 } as const;
 
 export const NATIVE_DEFAULT_HTML = '<!doctype html><html lang="en"><meta charset="utf-8"><title>Built-in dashboard</title><body>Open this app in the OpenMausBot desktop app.</body></html>';
+
+export function updatedDefaultAppTitle(kind: DefaultMiniAppKind, title: string): string {
+  return kind === "github_activity" && ["GitHub activity", "GitHub activity & discovery"].includes(title)
+    ? DEFAULT_APPS.github_activity.title : title;
+}
+
+export function matchesPendingDefaultHtml(kind: DefaultMiniAppKind, html: string): boolean {
+  return html === pendingDefaultHtml(kind) || kind === "github_activity"
+    && createHash("sha256").update(html).digest("hex") === GITHUB_PENDING_TEMPLATE_SHA256;
+}
 
 export function pendingDefaultHtml(kind: DefaultMiniAppKind): string {
   const ledger = kind === "bookkeeping";

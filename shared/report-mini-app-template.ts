@@ -67,7 +67,7 @@ const HTML = String.raw`<!DOCTYPE html>
       const state = { selected: "current", current: null, edition: null, history: [], items: [], nextCursor: null, revision: null, loaded: false, busy: false, pending: false, run: 0 };
       const labels = {
         en: {
-          xTitle: "Daily X AI digest", xPurpose: "Selected X AI updates with source and coverage notes.", githubTitle: "GitHub activity & discovery", githubPurpose: "Selected open-source projects and observed activity signals.",
+          xTitle: "Daily X AI digest", xPurpose: "Selected X AI updates with source and coverage notes.", githubTitle: "Github Rending", githubPurpose: "Selected open-source projects and observed activity signals.",
           refresh: "Refresh", current: "Current", earlier: "Earlier editions", returnCurrent: "Return to current", more: "More editions", loading: "Loading report…", checking: "Checking for new editions…",
           noEdition: "No report published yet. The first edition will appear after this Automation publishes one.", noItems: "No noteworthy items in this verified edition.", noVerifiedItems: "No verified items in this partial edition.", noVerifiedUnknown: "No verified items are available for this edition.",
           unavailable: "Report unavailable. Try Refresh.", stale: "Showing the last loaded edition. Data could not be refreshed; try Refresh.", changed: "Data changed while this report was being read. Try Refresh.",
@@ -77,7 +77,7 @@ const HTML = String.raw`<!DOCTYPE html>
           repoStars: "Stars", repoForks: "Forks", repoPushed: "Last repository activity", weekly: "Weekly Trending star increase", signal: "Signal source", advisories: "Public advisories returned", advisoryNote: "This is not a safety audit.", advisoryAsOf: "Public advisory check as of"
         },
         zh: {
-          xTitle: "每日 X AI 摘要", xPurpose: "精选 X AI 动态，并标明来源与覆盖限制。", githubTitle: "GitHub 活跃与发现", githubPurpose: "精选开源项目及已记录的活跃信号。",
+          xTitle: "每日 X AI 摘要", xPurpose: "精选 X AI 动态，并标明来源与覆盖限制。", githubTitle: "Github Rending", githubPurpose: "精选开源项目及已记录的活跃信号。",
           refresh: "刷新", current: "当前版本", earlier: "过往版本", returnCurrent: "返回当前版本", more: "更多版本", loading: "正在读取报告…", checking: "正在检查新版本…",
           noEdition: "尚无已发布的报告。该自动化首次发布后，版本才会出现在这里。", noItems: "此已核实版本没有值得报告的条目。", noVerifiedItems: "此部分覆盖版本没有已核实的条目。", noVerifiedUnknown: "此版本暂无可确认的条目。",
           unavailable: "报告暂不可用，请重试刷新。", stale: "正在显示上次读取的版本；数据刷新失败，请重试。", changed: "读取时 Data 已变化，请重试刷新。",

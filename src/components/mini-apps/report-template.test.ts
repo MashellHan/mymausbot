@@ -19,10 +19,14 @@ const item = (extras: Partial<Row> = {}): Row => ({
 function page(rows: Row[], revision: number) {
   return { columns: Object.keys(rows[0] ?? {}).map((name) => ({ name, type: "text" })), rows: rows.map(Object.values), revision };
 }
-function fixture(kind: ReportKind) {
+function fixture(kind: ReportKind, initial?: { current: Row; editions: Array<{ header: Row; items: Row[] }> }) {
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   const data = { current: null as Row | null, editions: new Map<string, { header: Row; items: Row[] }>(), revision: 3, fail: false,
     historyCursor: false, deferredHistory: null as Promise<ReturnType<typeof page>> | null };
+  if (initial) {
+    data.current = initial.current;
+    for (const edition of initial.editions) data.editions.set(String(edition.header.editionKey), edition);
+  }
   let changed: (() => void) | undefined;
   const query = vi.fn(async (id: string, parameters: Record<string, string>, options?: { expectedDataRevision?: number; cursor?: string }) => {
     if (data.fail) throw new Error("Synthetic read failure");
@@ -55,6 +59,27 @@ it("creates a Node-safe bound template and shows an empty install without a fabr
   expect(sourceStyle).toContain("--color-text-primary");
   expect(sourceStyle).toContain("user-select: text");
   expect(sourceStyle).not.toContain("--color-text-link");
+});
+
+it("opens Github Rending at its latest edition with dated history and no producer turn", async () => {
+  const latest = header("2026-11-06");
+  const older = header("2026-11-04");
+  const app = fixture("github_activity", { current: latest, editions: [
+    { header: latest, items: [item({ title: "Latest project" })] },
+    { header: older, items: [item({ title: "Earlier project" })] },
+  ] }); opened.push(app.view);
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.getElementById("title")?.textContent).toBe("Github Rending");
+  expect(app.text()).toContain("Latest project");
+  expect(app.text()).not.toContain("Earlier project");
+  const select = app.view.document.getElementById("edition") as unknown as HTMLSelectElement;
+  expect([...select.options].map((option) => [option.value, option.textContent])).toEqual([["current", "Current"], ["2026-11-04", "2026-11-04"]]);
+  expect(app.query.mock.calls.map(([id]) => id)).toEqual(["current", "history", "items"]);
+  select.value = "2026-11-04";
+  select.dispatchEvent(new app.view.Event("change") as unknown as Event);
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.text()).toContain("Earlier project");
+  expect(app.query.mock.calls.map(([id]) => id)).toEqual(["current", "history", "items", "current", "history", "edition", "items"]);
 });
 
 it("keeps an earlier X edition selected across Data refresh and separates all date claims", async () => {

@@ -5255,7 +5255,7 @@
   "computer.miniApps.dashboard.recovery": "此内置视图需要所有者重新授权才能读取本地数据。",
   "computer.miniApps.report.xTitle": "每日 X AI 摘要",
   "computer.miniApps.report.xDescription": "精选 X AI 动态，并标明来源与覆盖限制。",
-  "computer.miniApps.report.githubTitle": "GitHub 活跃与发现",
+  "computer.miniApps.report.githubTitle": "Github Rending",
   "computer.miniApps.report.githubDescription": "精选开源项目及已记录的活跃信号。",
   "computer.miniApps.report.choose": "选择",
   "computer.miniApps.report.open": "打开报告",

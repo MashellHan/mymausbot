@@ -21,8 +21,9 @@ system. Opening and filtering an installed application does not require an AI tu
 
 Mini Apps appear as a peer in the existing Computer panel, with navigation between
 installed applications. Bots discover and update existing apps across conversations.
-The first example is a bookkeeping portal over previously imported records, with
-category and time filters, summaries, trends and transaction details.
+The first example is a bookkeeping workspace over previously imported records,
+with record, calendar and statistics views, contextual date navigation, period
+comparisons and detail drilldowns.
 
 ## Capabilities and Constraints
 
