@@ -14,7 +14,7 @@ import { MiniAppDashboard } from "./MiniAppDashboard";
 import { MiniAppFrame } from "./MiniAppFrame";
 import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
 import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
-import { miniAppDisplayName } from "./mini-app-display";
+import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-display";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 
 const REFRESH_MS = 15_000;
@@ -345,7 +345,7 @@ export function MiniAppsPanel() {
             onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)} />
         </div>}
         {selected && <div className="mt-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
-          <p className="min-w-0 [overflow-wrap:anywhere]">{selected.description}</p>
+          <p className="min-w-0 [overflow-wrap:anywhere]">{miniAppDisplayDescription(selected)}</p>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <p className="shrink-0 tabular-nums">{t("computer.miniApps.published", { time: stamp(selected.updatedAt) })}</p>
             {document && appState && publisher && !dashboard && !selected.dashboard && !selected.dashboardIdentity
