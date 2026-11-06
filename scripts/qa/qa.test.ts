@@ -313,6 +313,47 @@ describe("complete CI and trusted QA health", () => {
     ]) expect(fullPushPlan(candidate)).toBe(false);
   });
 
+  it("reports a historical scheduled or manual full plan from its own bound 37 jobs", async () => {
+    const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+    const selected = ciOutputs(FULL_SCOPE, ALL_OS);
+    const historical = { ...selected, jobs: selected.jobs.filter((id) => id !== "relay") };
+    const oldJobs = expectedJobs(historical);
+    expect(oldJobs).toHaveLength(37);
+    const outputs = { ...historical, full_required: true, reduced: false, qa_areas: ["global"],
+      required_jobs: historical.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: oldJobs };
+    const observed = oldJobs.map((item, index) => ({ id: index + 1, name: item.name, run_attempt: 1, status: "completed", conclusion: "success",
+      steps: workflow.jobs[item.id].steps.map((step: { name?: string; run?: string }) => ({ name: step.name ?? `Run ${step.run}`, conclusion: "success" })) }));
+    let plan: any = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs };
+    let artifacts = [
+      { name: "qa-plan-attempt-1", workflow_run: { id: run.id, head_sha: run.head_sha } },
+      ...oldJobs.filter((item) => item.artifact).map((item) => ({ name: `${item.artifact}-attempt-1`, workflow_run: { id: run.id, head_sha: run.head_sha } })),
+    ];
+    const { api: issuesApi } = issueApi();
+    let event = "schedule";
+    const api = async (path: string, options?: object) => path === `/actions/runs/${run.id}` ? { ...run, event }
+      : path.includes("/jobs?") ? { jobs: observed }
+        : path.includes("/artifacts?") ? { artifacts }
+          : path.includes("ci.yml/runs") ? { workflow_runs: [] }
+            : issuesApi(path, options);
+    const readArtifact = async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(plan) }
+      : { "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: 0, numPendingTests: 0,
+        testResults: [{ name: testFile, status: "passed", assertionResults: [{ ancestorTitles: ["auth"], title: "saved contract", status: "passed" }] }] }) };
+    for (event of ["schedule", "workflow_dispatch"]) {
+      const report = await reportRun(run.id, { api, readArtifact, repository });
+      expect(report).toMatchObject({ executionComplete: true, testsPassed: true, missing: [], deliveryComplete: true });
+      expect(report.jobs).toHaveLength(37);
+    }
+    plan = { ...plan, outputs: { ...selected, full_required: true, reduced: false, qa_areas: ["global"],
+      required_jobs: selected.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selected) } };
+    const current = await reportRun(run.id, { api, readArtifact, repository });
+    expect(current).toMatchObject({ executionComplete: false, testsPassed: false, missing: ["relay typecheck + tests + fuzz + audit"] });
+    artifacts = artifacts.filter((item) => !item.name.startsWith("qa-plan"));
+    await expect(reportRun(run.id, { api, readArtifact, repository })).rejects.toThrow("Trusted validation plan unavailable");
+    artifacts = [{ name: "qa-plan-attempt-1", workflow_run: { id: 999, head_sha: run.head_sha } }, ...artifacts];
+    await expect(reportRun(run.id, { api, readArtifact, repository })).rejects.toThrow("Missing current-run validation plan");
+  });
+
   it("binds a push plan to its trusted run, SHA and producing attempt without treating absent evidence as full", async () => {
     const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
     let artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }];
