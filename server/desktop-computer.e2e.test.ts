@@ -66,6 +66,15 @@ describe("this computer belongs to the desktop app's own server", () => {
 
   /** `desktop`: launched as the app launches its own server, hearing the driver record over the parent port. */
   async function start(desktop: boolean, env: Record<string, string> = {}) {
+    data = mkdtempSync(join(home, "data-"));
+    stateFile = join(data, "vm.json");
+    dumpFile = join(data, "dump.json");
+    finishFile = join(data, "finish");
+    writeFileSync(join(data, "config.json"), JSON.stringify({ instances: { claude: {
+      driver: "claudeAgent", config: { cli: join(ROOT, "server/testing/fake-claude-cli.ts") },
+      environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_DUMP: dumpFile,
+        FAKE_CLAUDE_TEXT_DUMP: join(data, "text-dump.json"), FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile },
+    } } }));
     const port = await freePortBlock([0, 1]);
     base = `http://127.0.0.1:${port}`;
     output = "";
@@ -103,13 +112,8 @@ describe("this computer belongs to the desktop app's own server", () => {
 
   beforeAll(() => {
     home = mkdtempSync(join(tmpdir(), "omb-desktop-computer-"));
-    data = join(home, "data");
     ui = join(home, "static");
-    stateFile = join(home, "vm.json");
-    dumpFile = join(home, "dump.json");
-    finishFile = join(home, "finish");
     record.socketPath = join(home, "cua.sock");
-    mkdirSync(data);
     mkdirSync(join(ui, "assets"), { recursive: true });
     writeFileSync(join(ui, "index.html"), "<title>Desktop computer</title>");
     writeFileSync(join(ui, "assets", "test.css"), "body{}");
@@ -117,10 +121,6 @@ describe("this computer belongs to the desktop app's own server", () => {
       mkdirSync(folder, { recursive: true, mode: 0o700 });
       writeFileSync(join(folder, "cua-connection.json"), JSON.stringify(record), { mode: 0o600 });
     }
-    writeFileSync(join(data, "config.json"), JSON.stringify({ instances: { claude: {
-      driver: "claudeAgent", config: { cli: join(ROOT, "server/testing/fake-claude-cli.ts") },
-      environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_DUMP: dumpFile, FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile },
-    } } }));
   });
   afterAll(async () => {
     await stop();

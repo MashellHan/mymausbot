@@ -6,9 +6,11 @@ import type { MiniAppDataset, MiniAppSources } from "../../shared/mini-apps.ts";
 import type { DataEngine } from "../data/types.ts";
 import { DataFailure } from "../data/types.ts";
 import { quoteIdentifier } from "../data/sql-identifiers.ts";
+import { createChatApps } from "../chat-apps.ts";
+import { appDocRefs } from "../message-db.ts";
 import type { json as sendJson } from "../harness/http.ts";
 import { MINI_APP_TOOL_ROUTES } from "../drivers/agents-mini-app-tools.ts";
-import { MiniApps, MINI_APPS_OWNER, type MiniAppActor } from "../mini-apps/registry.ts";
+import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "../mini-apps/registry.ts";
 import { appFailure } from "../mini-apps/validation.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
 import { ReportStore } from "../mini-apps/report-store.ts";
@@ -36,13 +38,16 @@ interface MiniAppRouteDeps {
 }
 
 export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" | "reports"> & {
-  docs: MiniApps["docs"];
+  store: Parameters<typeof createChatApps>[0]["store"];
+  dataDir: string;
   validPublisher(id: string): boolean;
 }) {
-  const { docs, validPublisher, ...shared } = input;
-  const deps = { ...shared, apps: new MiniApps({ docs, data: shared.data, validPublisher }),
+  const { store, dataDir, validPublisher, ...shared } = input;
+  const chatApps = createChatApps({ store, dataDir,
+    references: () => [...appDocRefs(), ...miniAppDocRefs()] });
+  const deps = { ...shared, apps: new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher }),
     reports: new ReportStore(shared.data, createReportTemplate) };
-  return { owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps) };
+  return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps) };
 }
 
 export function miniAppError(error: unknown): { status: number; error: string; code?: string } {
