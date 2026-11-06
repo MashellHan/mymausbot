@@ -4,6 +4,7 @@ import http.client
 import http.server
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -338,6 +339,34 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
                 usage._run_worker({"stage": "collect"}, 0.1)
         kill.assert_called_once_with(123, usage.signal.SIGKILL)
         self.assertEqual(worker.calls, 2)
+
+    def test_worker_imports_sibling_module_from_unrelated_cwd_without_pythonpath(self):
+        unrelated = self.root / "unrelated"
+        home = self.root / "home"
+        repository = self.root / "repository"
+        for directory in (unrelated, home, repository):
+            directory.mkdir()
+        collector = self.root / "collector.py"
+        collector.write_text('''import os
+def repositories(config):
+    return [{"path": config["repoRoots"][0], "cwd": os.getcwd(),
+             "home": os.environ["HOME"], "pythonPath": os.environ.get("PYTHONPATH")}]
+''')
+        environment = os.environ.copy()
+        environment.pop("PYTHONPATH", None)
+        environment["HOME"] = str(home)
+        spawn = subprocess.Popen
+
+        def isolated_spawn(command, **kwargs):
+            self.assertTrue(kwargs["start_new_session"])
+            return spawn(command, cwd=unrelated, env=environment, **kwargs)
+
+        request = {"stage": "repositories", "collector": str(collector),
+                   "config": {"repoRoots": [str(repository)]}}
+        with patch.object(usage.subprocess, "Popen", side_effect=isolated_spawn):
+            result = usage._run_worker(request, 5)
+        self.assertEqual(result, [{"path": str(repository), "cwd": str(unrelated.resolve()),
+                                   "home": str(home), "pythonPath": None}])
 
 
 if __name__ == "__main__":

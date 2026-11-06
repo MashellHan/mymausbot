@@ -75,7 +75,9 @@ def _collect_worker():
 
 
 def _run_worker(request, timeout):
-    command = [sys.executable, "-c", "import runpy,sys; runpy.run_path(sys.argv[1])['_collect_worker']()", str(Path(__file__).resolve())]
+    command = [sys.executable, "-c",
+               "import os,runpy,sys; sys.path.insert(0,os.path.dirname(sys.argv[1])); "
+               "runpy.run_path(sys.argv[1])['_collect_worker']()", str(Path(__file__).resolve())]
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                text=True, start_new_session=True)
     try:
