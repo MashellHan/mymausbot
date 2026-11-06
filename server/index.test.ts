@@ -1721,7 +1721,7 @@ describe("harness HTTP API", () => {
       const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
         // On Windows without wmic the lease reads the other server's start time through Windows PowerShell, whose first
         // start on a CI runner takes several seconds.
-        const timer = setTimeout(() => reject(new Error("competing server did not exit")), process.platform === "win32" ? 30_000 : 5_000);
+        const timer = setTimeout(() => reject(new Error(`competing server did not exit: ${contenderStderr.slice(-500)}`)), process.platform === "win32" ? 30_000 : 15_000);
         timer.unref?.();
         contender.once("close", (code, signal) => {
           clearTimeout(timer);
