@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { expectedJobs, inspectJobs, eligibleRun, holdsFor, triageOf } from "./contracts.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, WINDOWS_OS } from "../ci-scope.mjs";
+import { expectedJobs, fullPushPlan, inspectJobs, eligibleRun, holdsFor, MERGE_JOBS, narrowPushPlan, triageOf } from "./contracts.mjs";
+import { fullRunEvidence, github, runJobs } from "./github.mjs";
 import { qaHealth } from "./health.mjs";
-import { github, runJobs } from "./github.mjs";
 import { deliverReport, makeReport, reportRun, sanitize, setupIncident, testFindings } from "./report.mjs";
 import { drainQueue, promptLead, queueItems, recoverQa } from "./queue.mjs";
 import { gateRun, verifyGate } from "./gate.mjs";
@@ -17,6 +18,19 @@ const expected = [{ id: "vitest", name: "vitest (ubuntu-latest, shard 1/8)", art
 const job = { ...expected[0], id: 77, run_attempt: 1, status: "completed", conclusion: "failure", steps: [{ name: "Run tests", conclusion: "failure" }], html_url: run.html_url + "/job/77" };
 const firstExecution = { created_at: "2026-11-05T12:18:00Z", started_at: "2026-11-05T12:18:19Z", completed_at: "2026-11-05T12:22:32Z" };
 const nextExecution = { created_at: "2026-11-05T12:47:31Z", started_at: "2026-11-05T12:47:32Z", completed_at: "2026-11-05T12:47:34Z" };
+const pushRun = { ...run, event: "push", status: "in_progress", created_at: new Date(now - 120_000).toISOString() };
+function pushPlan(selected = ciOutputs(FULL_SCOPE, ALL_OS), source = pushRun) {
+  return { version: 1, runId: source.id, attempt: 1, sha: source.head_sha,
+    plan: { full: true, reduced: false, scope: FULL_SCOPE, candidate: false, admitted: false },
+    outputs: { ...selected, full_required: true, reduced: false, qa_areas: ["global"],
+      required_jobs: selected.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selected) } };
+}
+function narrowPlan(source = pushRun) {
+  const selected = ciOutputs(MAIN_SCOPE, WINDOWS_OS);
+  const plan = pushPlan(selected, source);
+  return { ...plan, plan: { ...plan.plan, full: false, scope: MAIN_SCOPE },
+    outputs: { ...plan.outputs, full_required: false, expected_jobs: expectedJobs(selected, false) } };
+}
 const testFile = "server/request-auth.test.ts";
 function result(status = "failed") {
   return { "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: status === "failed" ? 1 : 0, numPendingTests: status === "pending" ? 1 : 0,
@@ -62,8 +76,73 @@ describe("complete CI and trusted QA health", () => {
     for (const conclusion of ["skipped", "cancelled", "timed_out", "failure"]) expect(inspectJobs(jobs, [{ ...observed[0], conclusion }, ...observed.slice(1)]).passed).toBe(false);
   });
 
+  it("recognizes only a full selected push plan, including the equivalent relocated Linux lane", () => {
+    const plan = pushPlan();
+    const narrow = narrowPlan();
+    expect(plan.outputs.expected_jobs).toHaveLength(37);
+    expect(fullPushPlan(plan)).toBe(true);
+    expect(fullPushPlan(pushPlan(moveLinuxIntoStatic(ciOutputs(FULL_SCOPE, ALL_OS))))).toBe(true);
+    expect(narrowPushPlan(narrow)).toBe(true);
+    expect(narrowPushPlan(plan)).toBe(false);
+    expect(narrowPushPlan({ ...narrow, plan: { ...narrow.plan, scope: FULL_SCOPE } })).toBe(false);
+    for (const candidate of [
+      { ...plan, outputs: { ...plan.outputs, full_required: false } },
+      { ...plan, outputs: { ...plan.outputs, reduced: true } },
+      { ...plan, outputs: { ...plan.outputs, expected_jobs: plan.outputs.expected_jobs.slice(1) } },
+      { ...plan, outputs: { ...plan.outputs, jobs: ["vitest"] } },
+      { ...plan, outputs: { ...plan.outputs, required_jobs: [] } },
+      { ...plan, outputs: { ...plan.outputs, vitest_matrix: { include: plan.outputs.vitest_matrix.include.slice(1) } } },
+      { ...plan, outputs: { ...plan.outputs, qa_areas: ["usage"] } },
+      { ...plan, plan: { ...plan.plan, full: false } },
+      { ...plan, plan: { ...plan.plan, candidate: true } },
+      { ...plan, plan: { ...plan.plan, admitted: true } },
+      { ...plan, plan: { ...plan.plan, scope: { areas: ["main"], checks: [] } } },
+    ]) expect(fullPushPlan(candidate)).toBe(false);
+  });
+
+  it("binds a push plan to its trusted run, SHA and producing attempt without treating absent evidence as full", async () => {
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
+    let artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }];
+    let value = pushPlan();
+    const api = async (path: string) => {
+      if (path.includes("/jobs?filter=all")) return { jobs: [preflight] };
+      if (path.includes("/artifacts?")) return { artifacts };
+      throw new Error(path);
+    };
+    const readArtifact = async () => ({ "qa-plan.json": JSON.stringify(value) });
+    const check = (candidate = pushRun) => fullRunEvidence(candidate, { api, readArtifact, repository, now });
+    expect(await check()).toBe("full");
+    expect(await check({ ...pushRun, run_attempt: 2 })).toBe("full");
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }, { name: "qa-plan-attempt-2", id: 10, expired: true }];
+    expect(await check({ ...pushRun, run_attempt: 2 })).toBe("full");
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }];
+    for (const patch of [{ sha: "b".repeat(40) }, { runId: 99 }, { attempt: 2 }]) {
+      value = { ...pushPlan(), ...patch };
+      expect(await check()).toBe("unknown");
+    }
+    value = pushPlan();
+    expect(await fullRunEvidence(pushRun, { api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(narrowPlan()) }), repository, now })).toBe("ineligible");
+    expect(await check({ ...pushRun, head_branch: "feature" })).toBe("ineligible");
+    expect(await check({ ...pushRun, head_repository: { full_name: "outsider/fork" } })).toBe("ineligible");
+    expect(await check({ ...pushRun, path: ".github/workflows/untrusted.yml" })).toBe("ineligible");
+    expect(await check({ ...pushRun, head_sha: "not-a-sha" })).toBe("unknown");
+    artifacts = [];
+    expect(await check()).toBe("pending");
+    preflight.status = "completed";
+    expect(await check()).toBe("unknown");
+    preflight.status = "in_progress";
+    expect(await check({ ...pushRun, status: "completed" })).toBe("unknown");
+    expect(await check({ ...pushRun, created_at: new Date(now - 15 * 60 * 60_000).toISOString() })).toBe("unknown");
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: true }];
+    expect(await check()).toBe("unknown");
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }];
+    expect(await fullRunEvidence(pushRun, { api, readArtifact: async () => { throw new Error("unreadable"); }, repository, now })).toBe("unknown");
+  });
+
   it("rejects PR execution and non-main manual runs as reporting sources", () => {
     expect(eligibleRun(run, repository)).toBe(true);
+    expect(eligibleRun({ ...run, event: "workflow_dispatch" }, repository)).toBe(true);
+    expect(eligibleRun({ ...run, event: "push" }, repository)).toBe(false);
     for (const patch of [{ event: "pull_request" }, { head_branch: "feature" }, { head_repository: { full_name: "outsider/fork" } }, { path: ".github/workflows/untrusted.yml" }]) {
       expect(eligibleRun({ ...run, ...patch }, repository)).toBe(false);
     }
@@ -99,6 +178,45 @@ describe("complete CI and trusted QA health", () => {
     }
     expect((await qaHealth({ api: async () => { throw new Error("offline"); }, now, repository })).healthy).toBe(false);
     expect((await qaHealth({ api: async (path: string) => path === "/actions/runs/200" ? { ...await api(path), event: "pull_request" } : api(path), readArtifact, now, repository })).healthy).toBe(false);
+  });
+
+  it("fails closed on unreadable newer push evidence while skipping a proven narrow push", async () => {
+    const current = { ...pushRun, id: 101, head_sha: "b".repeat(40), status: "completed", updated_at: new Date(now).toISOString() };
+    let plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), current);
+    let delivered = { ...report, runId: current.id, sha: current.head_sha };
+    let unreadableJobs = false, unreadablePlan = false;
+    const api = async (path: string) => {
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [current, run] };
+      if (path.includes("/jobs?filter=all")) {
+        if (unreadableJobs) throw new Error("jobs unavailable");
+        return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }] };
+      }
+      if (path.startsWith(`/actions/runs/${current.id}/artifacts?`)) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path.startsWith("/actions/artifacts?")) return { artifacts: [{ name: "mausbot-qa-report", workflow_run: { id: 200 } }] };
+      if (path === "/actions/runs/200") return { path: ".github/workflows/qa-report.yml", head_branch: "main", head_repository: { full_name: repository }, event: "workflow_run", conclusion: "success" };
+      if (path.startsWith("/issues?")) return [];
+      throw new Error(path);
+    };
+    const readArtifact = async (artifact: { name: string }) => {
+      if (!artifact.name.startsWith("qa-plan")) return { "qa-report.json": JSON.stringify(delivered) };
+      if (unreadablePlan) throw new Error("plan unavailable");
+      return { "qa-plan.json": JSON.stringify(plan) };
+    };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(true);
+    delivered = { ...delivered, runId: run.id };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    delivered = { ...delivered, runId: current.id, deliveryComplete: false };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    delivered = { ...report };
+    unreadableJobs = true;
+    expect(await qaHealth({ api, readArtifact, now, repository })).toMatchObject({ healthy: false,
+      reason: expect.stringMatching(/unclassifiable validation evidence/) });
+    unreadableJobs = false;
+    unreadablePlan = true;
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    unreadablePlan = false;
+    plan = narrowPlan(current);
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(true);
   });
 
   it("cannot pass a selected missing full job or a newly unavailable reduced-coverage guard", async () => {
@@ -540,6 +658,126 @@ describe("Lead queue and bounded recovery", () => {
     calls.length = 0;
     await recoverQa({}, { api: bootstrapApi, health: async () => ({ healthy: false }), now, repository });
     expect(calls).toEqual([]);
+  });
+
+  it("reuses a bound full push that began before queue installation and requests only its missing report", async () => {
+    const current = { ...pushRun };
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [current] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [preflight] };
+      if (path.includes("/artifacts?")) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
+      throw new Error(path);
+    };
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    const readArtifact = async () => ({ "qa-plan.json": JSON.stringify(pushPlan()) });
+    const health = async () => ({ healthy: false, reason: "report missing" });
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual([]);
+    current.status = "completed";
+    preflight.status = "completed";
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual(["/actions/workflows/qa-report.yml/dispatches"]);
+  });
+
+  it("waits only for an active push's pending plan, then recovers when coverage is absent or narrow", async () => {
+    const current = { ...pushRun };
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
+    const calls: string[] = [];
+    let artifacts: { name: string; id: number }[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [current] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [preflight] };
+      if (path.includes("/artifacts?")) return { artifacts };
+      throw new Error(path);
+    };
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    const health = async () => ({ healthy: false, reason: "report missing" });
+    const narrow = narrowPlan();
+    const readArtifact = async () => ({ "qa-plan.json": JSON.stringify(narrow) });
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual([]);
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9 }];
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+    calls.length = 0;
+    current.status = "completed";
+    artifacts = [];
+    await recoverQa({ startedAt: new Date(now - 60_000).toISOString() }, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+  });
+
+  it("does not report an older full push ahead of a newer pre-installation scheduled run", async () => {
+    const newer = { ...run, id: 201, created_at: new Date(now - 120_000).toISOString() };
+    const older = { ...pushRun, id: 200, head_sha: "b".repeat(40), status: "completed",
+      created_at: new Date(now - 180_000).toISOString() };
+    const plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), older);
+    expect(fullPushPlan(plan)).toBe(true);
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [newer, older] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed" }] };
+      if (path.startsWith("/actions/artifacts?")) return { artifacts: [{ name: "mausbot-qa-report", workflow_run: { id: 300 } }] };
+      if (path.includes("/artifacts?")) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path === "/actions/runs/300") return { path: ".github/workflows/qa-report.yml", head_branch: "main", head_repository: { full_name: repository }, event: "workflow_run", conclusion: "success" };
+      throw new Error(path);
+    };
+    const readArtifact = vi.fn(async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(plan) } : { "qa-report.json": JSON.stringify({ ...report, runId: older.id, sha: older.head_sha }) });
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    await recoverQa(state, { api, readArtifact, now, repository });
+    await recoverQa(state, { api, readArtifact, now, repository });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+    expect(state).toMatchObject({ recoveryFor: newer.id });
+    expect(readArtifact).toHaveBeenCalled();
+    expect(readArtifact.mock.calls.every(([artifact]) => artifact.name === "mausbot-qa-report")).toBe(true);
+  });
+
+  it.each([
+    { name: "pre-installation full run without report", event: "schedule", createdOffset: -120_000, incomplete: false, pending: false },
+    { name: "delivered but incomplete full run", event: "schedule", createdOffset: -30_000, incomplete: true, pending: false },
+    { name: "completed push with unknown evidence", event: "push", createdOffset: -120_000, incomplete: false, pending: false },
+    { name: "pre-installation run while the older push plan is pending", event: "schedule", createdOffset: -120_000, incomplete: false, pending: true },
+  ])("keeps an older active push in flight behind a newer $name", async ({ event, createdOffset, incomplete, pending }) => {
+    const newer = { ...run, id: 201, event, head_sha: "c".repeat(40), created_at: new Date(now + createdOffset).toISOString() };
+    const older = { ...pushRun, id: 200, head_sha: "b".repeat(40), created_at: new Date(now - 180_000).toISOString() };
+    const plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), older);
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [newer, older] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: incomplete
+        ? [{ status: "completed", conclusion: "success", display_title: `QA report ${newer.id}` }] : [] };
+      if (path.includes("/jobs?filter=all")) {
+        if (path.includes(`/runs/${newer.id}/`)) throw new Error("newer jobs unavailable");
+        return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "in_progress" }] };
+      }
+      if (path.startsWith("/actions/artifacts?")) return { artifacts: incomplete
+        ? [{ name: "mausbot-qa-report", workflow_run: { id: 300 } }] : [] };
+      if (path.includes("/artifacts?")) return { artifacts: pending ? [] : [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path === "/actions/runs/300") return { path: ".github/workflows/qa-report.yml", head_branch: "main",
+        head_repository: { full_name: repository }, event: "workflow_run", conclusion: "success" };
+      if (path.startsWith("/issues?")) return [];
+      throw new Error(path);
+    };
+    const readArtifact = vi.fn(async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(plan) } : { "qa-report.json": JSON.stringify({ ...report, runId: newer.id,
+        sha: newer.head_sha, executionComplete: false }) });
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    await recoverQa(state, { api, readArtifact, now, repository });
+    await recoverQa(state, { api, readArtifact, now, repository });
+    expect(calls).toEqual([]);
+    expect(state).not.toHaveProperty("recoveryFor");
+    expect(readArtifact.mock.calls.some(([artifact]) => artifact.name === "qa-plan-attempt-1")).toBe(!pending);
   });
 
   it("does not backfill pre-installation runs that lack structured evidence", async () => {

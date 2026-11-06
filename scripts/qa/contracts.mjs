@@ -1,4 +1,5 @@
-import { ALL_OS, ciOutputs, FULL_SCOPE } from "../ci-scope.mjs";
+import { isDeepStrictEqual } from "node:util";
+import { ALL_OS, ciOutputs, FULL_SCOPE, moveLinuxIntoStatic } from "../ci-scope.mjs";
 
 export const MERGE_JOBS = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
 const NAMES = {
@@ -76,6 +77,40 @@ export function executionComplete(expected, jobs, artifacts) {
 export function eligibleRun(run, repository, fullOnly = true) {
   return run.path === ".github/workflows/ci.yml" && run.head_branch === "main" && run.head_repository?.full_name === repository
     && (fullOnly ? ["schedule", "workflow_dispatch"] : ["schedule", "workflow_dispatch", "push"]).includes(run.event);
+}
+
+const fullSelection = ciOutputs(FULL_SCOPE, ALL_OS);
+const fullSelections = [fullSelection, moveLinuxIntoStatic(fullSelection)];
+const sameSelection = (outputs, selection) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes"]
+  .every((key) => isDeepStrictEqual(outputs[key], selection[key]));
+
+/** A push's selected jobs must prove the same full scope as the nightly run, including relocated Linux lanes. */
+export function fullPushPlan(plan) {
+  const outputs = plan?.outputs;
+  if (plan?.version !== 1 || plan.plan?.full !== true || plan.plan?.candidate !== false
+    || plan.plan?.admitted !== false || plan.plan?.reduced !== false
+    || !isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE) || outputs?.full_required !== true || outputs.reduced !== false
+    || !isDeepStrictEqual(outputs.qa_areas, ["global"])) return false;
+  return fullSelections.some((selection) => sameSelection(outputs, selection)
+    && isDeepStrictEqual(outputs.expected_jobs, expectedJobs(selection))
+    && isDeepStrictEqual(outputs.required_jobs, selection.jobs.filter((id) => MERGE_JOBS.includes(id))));
+}
+
+/** A bound, internally consistent narrow plan can be skipped when finding the latest full execution. */
+export function narrowPushPlan(plan) {
+  const outputs = plan?.outputs;
+  if (plan?.version !== 1 || (plan.plan !== null && (plan.plan?.full !== false
+    || !Array.isArray(plan.plan?.scope?.areas) || !Array.isArray(plan.plan?.scope?.checks)
+    || isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE)))
+    || outputs?.full_required !== false || typeof outputs.build !== "boolean"
+    || typeof outputs.reduced !== "boolean" || outputs.reduced !== Boolean(plan.plan?.reduced)
+    || !Array.isArray(outputs.jobs) || !Array.isArray(outputs.vitest_os) || !Array.isArray(outputs.packaged_server_os)
+    || !Array.isArray(outputs.vitest_matrix?.include) || !Array.isArray(outputs.qa_areas) || !outputs.qa_areas.length) return false;
+  try {
+    return !fullSelections.some((selection) => sameSelection(outputs, selection))
+      && isDeepStrictEqual(outputs.expected_jobs, expectedJobs(outputs, false))
+      && isDeepStrictEqual(outputs.required_jobs, outputs.jobs.filter((id) => MERGE_JOBS.includes(id)));
+  } catch { return false; }
 }
 
 export function issueAreas(issue) {

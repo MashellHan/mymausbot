@@ -1,5 +1,5 @@
-import { artifactFiles, github, pages } from "./github.mjs";
-import { eligibleRun, issueAreas, issueLabels, triageOf } from "./contracts.mjs";
+import { artifactFiles, fullRunEvidence, github, pages } from "./github.mjs";
+import { issueAreas, issueLabels, triageOf } from "./contracts.mjs";
 
 export const FULL_QA_FRESHNESS_MS = 26 * 60 * 60_000;
 
@@ -7,7 +7,16 @@ export async function qaHealth({ api = github, readArtifact = artifactFiles, now
   let report;
   try {
     const runs = await api("/actions/workflows/ci.yml/runs?branch=main&per_page=100");
-    const run = runs.workflow_runs.find((item) => eligibleRun(item, repository) && item.status === "completed");
+    let run;
+    for (const item of runs.workflow_runs) {
+      if (item.status !== "completed") continue;
+      const evidence = await fullRunEvidence(item, { api, readArtifact, repository, now });
+      if (evidence === "unknown") throw new Error(`Main CI run ${item.id} has unclassifiable validation evidence`);
+      if (evidence === "full") {
+        run = item;
+        break;
+      }
+    }
     if (!run) throw new Error("No completed full main run");
     const { artifacts } = await api("/actions/artifacts?name=mausbot-qa-report&per_page=100");
     for (const artifact of artifacts.filter((item) => !item.expired)) {
