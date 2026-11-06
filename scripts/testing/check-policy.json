@@ -34,6 +34,9 @@
     "scripts/ci-workflow.test.ts",
     "scripts/testing/verification-docs.test.ts",
     "scripts/check.test.ts",
+    "scripts/typecheck.test.ts",
+    "scripts/check-electron-entrypoints.test.ts",
+    "scripts/check-local-app.test.ts",
     "scripts/qa/qa.test.ts"
   ],
   "areas": [
