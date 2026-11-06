@@ -26,10 +26,10 @@ rule that guards correctness; fix the code.
 
 More specific `AGENTS.md` files override this note within their directories.
 
-## MausBot fork team
+## MausBot repository team
 
 Read `.agents/team/playbook.md` and the assigned role in `.agents/team/roles/`.
-The dedicated Herdr team owns this fork. Its lead and reviewer use
+The dedicated Herdr team owns this repository. Its lead and reviewer use
 `gpt-6-astra` with `max`; designer, frontend and backend use `gpt-6-sol`
 with `xhigh` and a requested 1,000,000-token context. The upstream integration
 developer uses the same Sol settings. Never silently substitute a model or claim
