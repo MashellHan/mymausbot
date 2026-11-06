@@ -30,7 +30,7 @@ export function SecretRequestCard({
   const sessionMode = window.ogb?.credentialMode?.() === "session";
   const sessionOnly = sessionMode && secret.target !== CUSTOM_SECRET_TARGET && isConfigCredentialTarget(secret.target);
   const sessionUnavailable = sessionMode && (secret.target === "onePasswordToken" ||
-    (secret.target === CUSTOM_SECRET_TARGET && secret.delivery === "file"));
+    (secret.target === CUSTOM_SECRET_TARGET && (secret.delivery === "file" || secret.delivery === "email")));
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedLocally, setSavedLocally] = useState(false);
