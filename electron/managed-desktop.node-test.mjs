@@ -303,6 +303,28 @@ test("secure record is encrypted, atomic, bounded and does not follow a symlink 
   }
 });
 
+test("session-only company records never read, overwrite or delete an old encrypted file", async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "omb-managed-session-")); t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "connection.bin");
+  const oldBytes = Buffer.from("synthetic old encrypted record");
+  await fs.writeFile(file, oldBytes);
+  let encryptionCalls = 0;
+  const encryption = { available: async () => { encryptionCalls++; throw new Error("keychain touched"); },
+    encrypt: async () => { encryptionCalls++; throw new Error("keychain touched"); },
+    decrypt: async () => { encryptionCalls++; throw new Error("keychain touched"); } };
+  const store = createManagedDesktopStore({ file, encryption, sessionOnly: true });
+  assert.equal(await store.read(), null);
+  const entered = grant();
+  await store.write(entered);
+  entered.token = "changed-after-save";
+  assert.equal((await store.read()).token, token);
+  await store.write(null);
+  assert.equal(await store.read(), null);
+  assert.deepEqual(await fs.readFile(file), oldBytes);
+  assert.equal(encryptionCalls, 0);
+  assert.equal(await createManagedDesktopStore({ file, encryption, sessionOnly: true }).read(), null, "a new App run forgets the in-memory grant");
+});
+
 /** Electron 43's safeStorage shape over a one-byte key, counting finished reads. `lock.locked` stands in for a locked keychain. */
 function electron43Store(file, lock = { locked: false }, decrypt) {
   const store = createManagedDesktopStore({ file, encryption: { available: async () => !lock.locked,

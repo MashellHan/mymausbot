@@ -392,6 +392,7 @@ const bridge = {
       ? ipcRenderer.invoke("open-at-login:set", on === true) : Promise.reject(new Error("Turn on the switch to open OpenMausBot at login.")),
   },
   setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
+  credentialMode: () => ipcRenderer.sendSync("credential-mode:read"),
 
   updater: {
     check: () => ipcRenderer.invoke("update:check"),

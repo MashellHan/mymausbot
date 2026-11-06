@@ -156,6 +156,7 @@ import {
   threadEventLogMaxBytes,
   threadEventLogRetentionDays,
   saveConfig,
+  confirmSessionConfig,
   showToolCallsEnabled,
   claudeUserMcpEnabled,
   skillAuthoringEnabled,
@@ -175,6 +176,7 @@ import {
   CLAUDE_API_INSTANCE,
   openCodeProviderKeys,
 } from "./config.ts";
+import { installSessionConfigHandoff, type UtilityParentPort } from "./session-config-handoff.ts";
 import { serveStatic } from "./static-files.ts";
 import { startUpkeep } from "./host/start-upkeep.ts";
 import { ComputerControl } from "./computer-control.ts";
@@ -1414,12 +1416,9 @@ const availableSkills = () => mergeSkills(bundledSkills, loadUserSkills(join(DAT
 const usbPhoneOffered = (instance: { adapter: { capabilities: { phoneMcp?: boolean } } }, skills: readonly BundledSkill[]) => instance.adapter.capabilities.phoneMcp === true &&
   !CLOUD_HOME && !HOSTED_WORKSPACE && skills.some(({ manifest }) => manifest.defaultEnabled && manifest.requiredCapabilities.includes("phoneMcp"));
 
-type UtilityParentPort = {
-  on(event: "message", listener: (event: { data?: object }) => void): void;
-  postMessage(message: object): void;
-};
 // Only Electron's utility process supplies parentPort, private to the desktop main process; plain Node leaves it absent.
 const utilityParentPort = (process as NodeJS.Process & { parentPort?: UtilityParentPort }).parentPort;
+const sessionConfigHandoff = installSessionConfigHandoff(utilityParentPort, process.env.OMB_CREDENTIAL_MODE);
 type DesktopPrivateMessage = BrowserCleanupWireRequest | import("./login-handoff.ts").LoginHandoffResult | {
   type: "openmausbot:browser-control";
   botId: string;
@@ -1488,7 +1487,7 @@ const phoneSecrets = new PhoneSecretBridge(postDesktopPrivateMessage);
 utilityParentPort?.on("message", (event) => {
   const message = event?.data;
   try {
-    if (applyDesktopMutationTokenMessage(message) || desktopComputer.receive(message)) return;
+    if (sessionConfigHandoff?.receive(message) || applyDesktopMutationTokenMessage(message) || desktopComputer.receive(message)) return;
     if (handleDesktopTrustedApprovalMessage(message)) return;
     if (browserCleanup.receive(message)) return;
     if (phoneSecrets.receive(message) || botLogins.receiveHandoff(message, postDesktopPrivateMessage, (what) => cloudConnections.handoff(what))) return;
@@ -11985,6 +11984,7 @@ async function stopCompanyInstances(ids: string[]) {
 
 async function persistProviderInstance(instanceId: string, instances: NonNullable<AppConfig["instances"]>) {
   saveConfig({ instances }, { replaceInstances: true });
+  await confirmSessionConfig();
   cfg.instances = instances;
   providerAuthSessions.clearInstance(instanceId);
   bus.detach(instanceId);
@@ -12582,7 +12582,7 @@ ROUTES.push(createLiveRoutes({
   settings: () => liveSettingsFor(cfg),
   saveSettings: async (patch) => {
     if (providerConfigBusy) throw Object.assign(new Error("Settings are already being updated. Try again in a moment."), { status: 409 });
-    saveLiveSettings(cfg, patch);
+    await saveLiveSettings(cfg, patch);
     Object.assign(cfg, loadConfig());
     broadcast({ kind: "config", ...configStatus() });
     return liveSettingsFor(cfg);

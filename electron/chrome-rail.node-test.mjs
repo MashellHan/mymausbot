@@ -246,7 +246,9 @@ test("main's own wiring: the choice is this desktop's, and the pages hear the ra
   assert.ok(start >= 0 && end > start, "main makes the window's rail");
   const { made, createView } = viewMaker();
   const kept = { hidden: false }, signals = [], handlers = new Map();
+  const ownerSession = { name: "synthetic-selected-owner-session" };
   const context = vm.createContext({ createChromeRail, CHROME_RAIL_PATH, WebContentsView: function WebContentsView(options) { return createView(options); },
+    browserSession: () => ownerSession,
     path: { join: (...parts) => parts.join("/") }, __dirname: "/app", slog: () => {}, desktopCompanionRendererArguments: () => [],
     app: { isPackaged: true, getVersion: () => "0.1.133" }, desktopRemoteAccess: null, rendererOrigin: () => "http://127.0.0.1:8799", serverReady: true,
     railList: () => [{ id: "local" }, { id: "home" }], desktopPrefs: { railHidden: () => kept.hidden, setRailHidden: (hidden) => { kept.hidden = hidden; } },
@@ -255,6 +257,7 @@ test("main's own wiring: the choice is this desktop's, and the pages hear the ra
   const { win, page } = appWindow();
   chromeRail.attach(win);
   assert.deepEqual(made.map((view) => view.webContents.loaded), [["http://127.0.0.1:8799/rail"]]);
+  assert.equal(made[0].options.webPreferences.session, ownerSession, "the rail uses the selected owner session");
   handlers.get("rail:hide")({ sender: page, senderFrame: page.mainFrame }, true);
   assert.deepEqual([kept.hidden, chromeRail.shown(), signals], [true, false, ["changed", "changed"]]);
 });
