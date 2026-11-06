@@ -19,7 +19,6 @@ import {
   loadConfig,
   localVmMode,
   mergeOpenCodeProviderKeys,
-  parseConfigPatch,
   confirmSessionConfig,
   saveConfig,
   sessionCredentialsEnabled,
