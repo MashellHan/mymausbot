@@ -128,7 +128,7 @@ export const SENSITIVE_PATH = /^(?:shared\/|server\/(?:drivers?\/|host\/|routes\
 const SENSITIVE_LINE = /\b(?:auth|authorization|permission|credential|secret|redact|token|password|localStorage|sessionStorage|fetch|WebSocket|postMessage|ipcRenderer|persist|migration|dispatch|cancel|spawn|exec)\b/i;
 export const SAFE_TEST_PATH = /^(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.test\.[cm]?[jt]sx?$/;
 export const FAST_AFFECTED_LIMIT = 4;
-const FAST_EXPENSIVE_TEST = /^(?:scripts\/testing\/.*\.e2e\.test\.ts|server\/browser\/.*\.e2e\.test\.ts|electron\/.*\.electron\.test\.mjs)$/;
+const FAST_EXPENSIVE_TEST = /^(?:scripts\/testing\/.*\.e2e\.test\.ts|server\/browser\/.*\.e2e\.test\.ts|electron\/.*\.electron\.test\.mjs|server\/index\.test\.ts)$/;
 const unique = (values) => [...new Set(values)].sort();
 
 export function readCheckPolicy(text = readFileSync(POLICY_PATH, "utf8"), present = existsSync) {

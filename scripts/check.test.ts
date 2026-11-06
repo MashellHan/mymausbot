@@ -55,6 +55,17 @@ describe("shared local and CI check policy", () => {
     expect(selected.deferred).toEqual(expensive.sort());
   });
 
+  it("keeps a targeted server regression while deferring the whole entrypoint suite", () => {
+    const files = ["docs/verification/tailscale.md", "server/forwarded-json.e2e.test.ts", "server/index.ts"];
+    const present = (file: string) => file === "server/forwarded-json.e2e.test.ts" || existsSync(file);
+    const selected = plan(files, { policy, fastPr: true, present });
+    expect(selected.fastFiles).toEqual([...policy.core, "server/forwarded-json.e2e.test.ts"].sort());
+    expect(selected.deferred).toEqual(["server/index.test.ts"]);
+    expect(selected.core).toContain("server/index.test.ts");
+    expect(selected.ready).toContain("server/index.test.ts");
+    expect(plan(files, { policy, present }).scope).toEqual(selectCiScope(files));
+  });
+
   it("combines affected areas but preserves the broader checks for known new files and deletions", () => {
     const both = plan(["src/components/LocalUsagePanel.tsx", "src/components/AgentTown.tsx"]);
     expect(both.fastAreas).toEqual(["usage", "agents"]);
