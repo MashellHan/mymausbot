@@ -230,7 +230,10 @@ const control = createControlServer({
   liveRoutes: () => e2e.routes(),
   routesChanged: (deviceId, routes) => {
     relay?.refreshAdmission();
-    if (routes === "local") e2e.closeDevice(deviceId, CLOSE.normal, "relay");
+    if (routes === "local") {
+      proxy.closeHostedDevice(deviceId);
+      e2e.closeDevice(deviceId, CLOSE.normal, "relay");
+    }
   },
   setRelay: (body) => {
     const config = parseRelayConfig(body);

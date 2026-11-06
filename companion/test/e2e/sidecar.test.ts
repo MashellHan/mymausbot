@@ -1,7 +1,10 @@
 // The real sidecar process and the real relay process, with a fake harness, driven by the reference phone.
 import { createHash, randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 
+import { CLOSE } from "../../src/e2e/noise.ts";
+import { MAX_PENDING_HANDSHAKES } from "../../src/e2e/registry.ts";
 import { SessionClosed } from "../../src/e2e/session.ts";
 import { attachmentByte } from "./fake-harness.ts";
 import { events, freePort, http, json, pairViaRelay, spawnRelay, startRig, waitFor, type RelayProcess, type Rig } from "./rig.ts";
@@ -69,6 +72,33 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
     expect((await fetch(`http://127.0.0.1:${rig.companionPort}/api/health`, { headers: { authorization: `Bearer ${deviceToken}` } })).status).toBe(200);
     session.shutdown();
   });
+
+  it("refuses a direct upgrade beyond the pending handshake cap without ending an established session", async () => {
+    const paired = await pairViaRelay(rig);
+    paired.session.shutdown();
+    const established = await rig.direct(await state(), paired.token);
+    const pending: WebSocket[] = [];
+    const openPending = async () => {
+      const ws = new WebSocket(`ws://127.0.0.1:${rig.companionPort}/v1/e2e`, "omb-e2e.v1");
+      const closed = new Promise<number>((resolve) => ws.once("close", resolve));
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", resolve);
+        ws.once("error", reject);
+      });
+      return { ws, closed };
+    };
+    try {
+      for (let index = 0; index < MAX_PENDING_HANDSHAKES; index += 1) pending.push((await openPending()).ws);
+      const refused = await openPending();
+      pending.push(refused.ws);
+      expect(await Promise.race([refused.closed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("pending cap did not close")), 5_000))])).toBe(CLOSE.rejected);
+      expect((await rig.control("GET", "/state")).e2e.enabled).toBe(true);
+      expect((await http(established, "GET", "/api/health", { token: paired.token })).status).toBe(200);
+    } finally {
+      for (const ws of pending) ws.terminate();
+      established.shutdown();
+    }
+  }, 20_000);
 
   it("refuses another device's token inside a session", async () => {
     const pairing = await rig.control("POST", "/pairing");

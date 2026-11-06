@@ -1459,7 +1459,7 @@ function sharingController() {
     protectedPaths: [desktopDataDir()],
     fetch: (...args) => browserSession().fetch(...args),
     environments: () => environmentsState.environments,
-    enabled: refreshSharedComputersAllowed, t: nativeT, askForScreen,
+    enabled: refreshSharedComputersAllowed, t: nativeT,
     cloud: lendingTarget.cloud, myCloud: lendingTarget.environment, ownClouds: lendingTarget.places, screen: screenControl.now, power: cloudPower, cloudPower: origin => cloudAccount?.powerOf?.(origin) ?? null, reconnect: reconnectCloud,
     prompt: createAskPrompt({ t: nativeT, dialog, window: () => mainWindow, idleSeconds: () => powerMonitor.getSystemIdleState(1) === "unknown" ? null : powerMonitor.getSystemIdleTime() }), startScreen: screenControl.start, confirmTerminal: () => lendingDialogs.lendTerminal(true, () => sharingController().lendTerminal(true)), log: slog,
     linkHeaders: async env => ({ cookie: (await browserSession().cookies.get({ url: env.origin })).map(cookie => `${cookie.name}=${cookie.value}`).join("; ") }),

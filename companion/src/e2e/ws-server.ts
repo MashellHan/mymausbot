@@ -96,15 +96,21 @@ function serveFrames(socket: Duplex, head: Buffer, maxPayload: number, handlers:
   let closed = false;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
   let reported = false;
+  let events: WsHandlers | null = null;
+  let pendingClose: number | null = null;
+
+  const reportClose = (code: number) => {
+    if (reported) return;
+    reported = true;
+    if (events) events.close(code);
+    else pendingClose = code;
+  };
 
   const finish = (code: number) => {
     if (closeTimer) clearTimeout(closeTimer);
     closed = true;
     socket.destroy();
-    if (!reported) {
-      reported = true;
-      events.close(code);
-    }
+    reportClose(code);
   };
 
   const connection: WsConnection = {
@@ -117,10 +123,7 @@ function serveFrames(socket: Duplex, head: Buffer, maxPayload: number, handlers:
       socket.write(frame(OP.close, closePayload(code, reason)));
       closeTimer = setTimeout(() => finish(code), CLOSE_WAIT_MS);
       closeTimer.unref?.();
-      if (!reported) {
-        reported = true;
-        events.close(code);
-      }
+      reportClose(code);
     },
     get bufferedAmount() {
       return socket.writableLength;
@@ -133,7 +136,8 @@ function serveFrames(socket: Duplex, head: Buffer, maxPayload: number, handlers:
       if (!closing && !closed) socket.write(frame(OP.ping, data));
     },
   };
-  const events = handlers(connection);
+  events = handlers(connection);
+  if (pendingClose !== null) events.close(pendingClose);
 
   const fail = (code: number) => {
     connection.close(code);
