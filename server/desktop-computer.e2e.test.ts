@@ -95,8 +95,8 @@ describe("this computer belongs to the desktop app's own server", () => {
   };
   const taskFailureState = async (trace: CaseTrace) => {
     if (!trace.base || !trace.botId || !trace.threadId) return { read: "not_ready" };
+    const signal = AbortSignal.timeout(750);
     try {
-      const signal = AbortSignal.timeout(750);
       const [botsResponse, messagesResponse] = await Promise.all([
         fetch(`${trace.base}/api/bots?messages=0`, { signal }),
         fetch(`${trace.base}/api/threads/${encodeURIComponent(trace.threadId)}/messages?limit=20`, { signal }),
@@ -115,7 +115,7 @@ describe("this computer belongs to the desktop app's own server", () => {
       return { read: "ok", busy: typeof task?.busy === "boolean" ? task.busy : null,
         terminal: typeof terminal?.turnSucceeded === "boolean" ? terminal.turnSucceeded : null,
         failedActivityCount: failures.length, failureKind };
-    } catch (error) { return { read: "unavailable", reasonCode: errorKind(error) }; }
+    } catch { return { read: "unavailable", reasonCode: signal.aborted ? "timeout" : "read_error" }; }
   };
   const failureState = async (trace: CaseTrace) => {
     const brokerLine = output.slice(-8192).split("\n").find((line) => line.includes("permission broker unavailable on"));
@@ -253,7 +253,7 @@ describe("this computer belongs to the desktop app's own server", () => {
   const itHost = process.platform === "linux" ? it.skip : it;
 
   beforeAll(() => {
-    home = mkdtempSync(join(tmpdir(), "omb-desktop-computer-"));
+    home = mkdtempSync(join(tmpdir(), "omb-d-"));
     ui = join(home, "static");
     record.socketPath = join(home, "cua.sock");
     mkdirSync(join(ui, "assets"), { recursive: true });
