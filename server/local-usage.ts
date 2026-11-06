@@ -8,6 +8,7 @@ import type {
   LocalUsageComparison, LocalUsageCountComparison, LocalUsageCounts, LocalUsageRepositories, LocalUsageWeekChange,
 } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
+import { createLocalUsageMergedReader } from "./local-usage-merged.ts";
 
 const CATEGORIES: LocalUsageCategory[] = ["work", "personal", "unclassified"];
 const WINDOWS = [1, 7, 30] as const;
@@ -433,22 +434,27 @@ function project(raw: unknown, now: number): LocalUsageResponse {
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
   sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
 
-export function createLocalUsageProvider({ file = join(homedir(), ".local", "share", "agent-town", "activity", "latest.json"), now = Date.now }: {
-  file?: string; now?: () => number;
+export function createLocalUsageProvider({ file = join(homedir(), ".local", "share", "agent-town", "activity", "latest.json"),
+  mergedFile = join(homedir(), ".local", "share", "mymausbot", "usage", "merged-v1.json"), now = Date.now }: {
+  file?: string; mergedFile?: string; now?: () => number;
 } = {}) {
   let lastGood: LocalUsageResponse | null = null;
+  const readMerged = createLocalUsageMergedReader(mergedFile, now);
   return {
     async get(): Promise<LocalUsageResponse> {
+      let local: LocalUsageResponse;
       try {
         const info = await stat(file);
         if (!info.isFile() || info.size > MAX_FILE_BYTES) throw new Error("Invalid activity file");
         const data = await readFile(file, "utf8");
         if (Buffer.byteLength(data) > MAX_FILE_BYTES) throw new Error("Invalid activity file");
         lastGood = project(JSON.parse(data), now());
-        return lastGood;
+        local = lastGood;
       } catch {
-        return lastGood ? { ...lastGood, status: "stale" } : unavailable;
+        local = lastGood ? { ...lastGood, status: "stale" } : unavailable;
       }
+      const merged = await readMerged();
+      return merged ? { ...local, merged } : local;
     },
   };
 }
