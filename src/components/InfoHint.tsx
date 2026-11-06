@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CircleAlert, Info } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -18,7 +18,7 @@ export function InfoHint({ label, children, warning = false, className }: {
   const root = useRef({ contains: (target: unknown) => target instanceof Node
     && Boolean(button.current?.contains(target) || content.current?.contains(target)) });
   const show = () => { clearTimeout(timer.current); setOpen(true); };
-  const close = () => { clearTimeout(timer.current); pinned.current = false; setOpen(false); };
+  const close = useCallback(() => { clearTimeout(timer.current); pinned.current = false; setOpen(false); }, []);
   const leave = (target: EventTarget | null) => {
     if (!pinned.current && !root.current.contains(target) && document.activeElement !== button.current) timer.current = setTimeout(close, 120);
   };
@@ -31,10 +31,16 @@ export function InfoHint({ label, children, warning = false, className }: {
         { width: window.innerWidth, height: window.innerHeight }, getComputedStyle(button.current).direction === "rtl", "end"));
     };
     place();
+    window.addEventListener("blur", close);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
-    return () => { clearTimeout(timer.current); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
-  }, [open, children]);
+    return () => {
+      clearTimeout(timer.current);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, children, close]);
   const Icon = warning ? CircleAlert : Info;
   return <>
     <button ref={button} type="button" data-info-hint aria-label={label} aria-expanded={open}

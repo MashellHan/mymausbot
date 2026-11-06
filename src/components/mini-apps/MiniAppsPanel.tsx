@@ -352,7 +352,7 @@ export function MiniAppsPanel() {
             onToggle={() => { setLibraryFocus(null); setLibraryOpen((current) => !current); }} onClose={() => setLibraryOpen(false)}
             onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)} />
         </div>}
-        {selected && <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-secondary [&:not(:empty)]:mt-2">
+        {selected && <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[12px] text-ink-secondary [&:not(:empty)]:mt-2">
             {document && appState && publisher && !dashboard && !selected.dashboard && !selected.dashboardIdentity
               && <button type="button" onClick={() => openBot(dispatch, publisher, showThreads)} className="text-accent-text underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.openChat")}</button>}
             {document && appState && document.versions.length > 1 && <details className="relative"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t("computer.miniApps.history")}</summary>
