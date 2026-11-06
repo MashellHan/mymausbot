@@ -76,9 +76,10 @@ export async function launchMiniAppsFixture({ scripted = false }: { scripted?: b
     await dataCall("data_sql", { sql: SYNTHETIC_LEDGER_SQL });
     const { dataset } = await api<{ dataset: MiniAppDataset }>("POST", "/api/mini-apps/sources", { botId: bot.id });
     const table = dataset.tables.find((candidate) => candidate.name === "ledger_master")!;
-    const publication = createBookkeepingPublish({ dataset, table, columns: suggestedBookkeepingColumns(table),
+    const publication = { ...createBookkeepingPublish({ dataset, table, columns: suggestedBookkeepingColumns(table),
       html: readFileSync(new URL("../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8"),
-      publisherBotId: bot.id, requestKey: "fixture-install", title: "Bookkeeping", slug: "fixture-bookkeeping" });
+      publisherBotId: bot.id, requestKey: "fixture-install", title: "Bookkeeping", slug: "fixture-bookkeeping" }),
+      shippedTemplateKind: "bookkeeping" as const };
     const installed = await api<MiniAppMutationResult>("POST", "/api/mini-apps", publication, 201);
     return { ...fixture.info, pid: server!.pid!, bot, dataset, publication, installed, api, dataCall, mint, close,
       document: () => api<MiniAppDocument>("GET", `/api/mini-apps/${installed.app.id}`),

@@ -207,9 +207,10 @@ describe("persistent Mini Apps", () => {
       const { docs, data } = fixture();
       const apps = new MiniApps({ docs, data, validPublisher: () => true,
         access: { database: () => db, write: (work) => work(db) } });
-      expect(apps.list(owner)).toMatchObject([{ id: "legacy", dashboard: null, dashboardIdentity: null }]);
+      expect(apps.list(owner)).toMatchObject([{ id: "legacy", dashboard: null, dashboardIdentity: null, shippedTemplateKind: null }]);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_kind")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_identity")).toBe(true);
+      expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "shipped_template_kind")).toBe(true);
     } finally { db.close(); }
   });
 
@@ -219,6 +220,32 @@ describe("persistent Mini Apps", () => {
     data.listDatasets.mockRejectedValue(new Error("unrelated store is broken"));
     expect(await apps.state(owner, app.id)).toMatchObject({ appId: app.id, revision: 1, data: [] });
     expect(data.listDatasets).not.toHaveBeenCalled();
+  });
+
+  it("keeps owner-assigned shipped provenance through Bot edits and template lifecycle without granting dashboard access", async () => {
+    const { apps } = fixture();
+    const first = await apps.publish(owner, publication({ shippedTemplateKind: "bookkeeping", publisherBotIds: ["publisher"] }));
+    const id = first.app.id;
+    await expect(apps.dashboardRead(owner, id, { resource: "teams", expectedRevision: 1 }))
+      .rejects.toMatchObject({ status: 403 });
+    const edited = publication({ requestKey: "bot-edit", expectedRevision: 1, title: "Custom ledger", html: "<p>Edited layout</p>",
+      bindings: [{ ...binding, source: { schema: "main", table: "new_ledger" } }] });
+    expect((await apps.publish(bot(), edited, id)).app).toMatchObject({ shippedTemplateKind: "bookkeeping", revision: 2 });
+    expect((await apps.publish(bot(), edited, id)).replayed).toBe(true);
+    await expect(apps.publish(bot(), publication({ requestKey: "bot-label", expectedRevision: 2,
+      shippedTemplateKind: "github_activity" }), id)).rejects.toMatchObject({ status: 403 });
+    await expect(apps.publish(owner, publication({ requestKey: "other-label", expectedRevision: 2,
+      shippedTemplateKind: "x_ai_digest" }), id)).rejects.toMatchObject({ status: 409 });
+    await expect(apps.publish(owner, publication({ requestKey: "native", expectedRevision: 2,
+      bindings: [], dashboardKind: "agent-team" }), id)).rejects.toMatchObject({ status: 400 });
+    expect((await apps.rollback(owner, id, { requestKey: "rollback", expectedRevision: 2, templateVersion: 1 })).app)
+      .toMatchObject({ shippedTemplateKind: "bookkeeping", revision: 3 });
+    expect(apps.archive(owner, id, { requestKey: "archive", expectedRevision: 3 }).app)
+      .toMatchObject({ shippedTemplateKind: "bookkeeping", status: "archived" });
+    closeMessageDb();
+    expect(apps.document(owner, id).app).toMatchObject({ shippedTemplateKind: "bookkeeping", status: "archived" });
+    const unrelated = await apps.publish(owner, publication({ slug: "x-ai-digest", requestKey: "custom-slug" }));
+    expect(unrelated.app.shippedTemplateKind).toBeNull();
   });
 
   it("keeps native dashboards unbound even when an update omits its grant", async () => {

@@ -124,7 +124,8 @@ it("keeps a reusable local library through Data refresh, publication, restart, b
     const staged = await api<{ id: string }>("POST", "/api/workspace-backup/preview", { id: upload.id, password: "synthetic-mini-app-backup-passphrase" });
     await api("POST", "/api/workspace-backup/restore", { id: staged.id, confirmation: "REPLACE" });
     await fixture.restart();
-    expect((await fixture.document()).app).toMatchObject({ revision: 3, templateVersion: 1, publisherBotIds: [] });
+    expect((await fixture.document()).app).toMatchObject({ revision: 3, templateVersion: 1,
+      shippedTemplateKind: "bookkeeping", publisherBotIds: [] });
     const restoredDashboard = await api<{ app: { id: string; dashboard: unknown; publisherBotIds: string[] } }>("GET", `/api/mini-apps/${dashboard.app.id}`);
     expect(restoredDashboard.app).toMatchObject({ id: dashboard.app.id, dashboard: null,
       dashboardIdentity: "usage", publisherBotIds: [] });

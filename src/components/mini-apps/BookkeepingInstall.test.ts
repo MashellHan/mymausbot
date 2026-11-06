@@ -34,6 +34,7 @@ beforeEach(() => {
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/api/mini-apps/sources" && init?.method === "POST") return { dataset: dataset("retained") };
     if (path === "/api/mini-apps/sources") return { bots: [{ id: "bot_a", name: "Assistant A" }, { id: "bot_b", name: "Assistant B" }], datasets: [dataset("retained"), dataset("other")] };
+    if (path === "/api/mini-apps" && init?.method !== "POST") return { apps: [] };
     if (path === "/api/mini-apps" && init?.method === "POST") return { app: { id: "app_fixture" }, replayed: false };
     throw new Error(`Unexpected API path: ${path}`);
   });
@@ -57,6 +58,7 @@ it("keeps retained Data owner-only until an editing assistant is chosen", async 
   expect(call).toBeTruthy();
   const publish = JSON.parse(String(call![1].body));
   expect(publish.publisherBotIds).toEqual(["bot_b"]);
+  expect(publish.shippedTemplateKind).toBe("bookkeeping");
   expect(publish.bindings[0].source).toEqual({ schema: "main", table: "synthetic_retained" });
   expect(publish.bindings[0].fields.amount.column).toBe("amount");
   expect(publish.bindings[0].queries.category_options.measures).toEqual([{ name: "count", op: "count" }]);
@@ -78,4 +80,17 @@ it("preselects a connected source bot and localizes the published app metadata",
   expect(publish.publisherBotIds).toEqual(["bot_a"]);
   expect(publish.title).toBe("记账");
   expect(publish.description).toContain("各货币单独呈现");
+  expect(publish.shippedTemplateKind).toBe("bookkeeping");
+});
+
+it("keeps an unrelated app occupying the bookkeeping slug untouched", async () => {
+  fixture.api.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/api/mini-apps/sources") return { bots: [], datasets: [dataset("retained")] };
+    if (path === "/api/mini-apps" && init?.method !== "POST") return { apps: [{ id: "custom", slug: "bookkeeping", status: "active", shippedTemplateKind: null }] };
+    throw new Error(`Unexpected API path: ${path}`);
+  });
+  await render();
+  await act(async () => { button("Install portal").click(); });
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("Another app uses this name");
+  expect(fixture.api.mock.calls.some(([path, init]) => path === "/api/mini-apps" && init?.method === "POST")).toBe(false);
 });

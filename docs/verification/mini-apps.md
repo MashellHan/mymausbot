@@ -3,6 +3,36 @@
 Use synthetic fixtures only. Do not exercise promotion, publication, backup,
 restoration or deletion against the running personal workspace.
 
+## Library discovery and navigation
+
+Start with an empty isolated registry. The library must show Bookkeeping, Daily X
+AI digest, GitHub activity, Agent Team and Usage without claiming they are
+installed. Opening the library must not publish records, grant access or create
+an Automation. Follow the existing explicit owner installers and check their
+real prerequisites, including unknown unconnected Bot Data and reports with no
+published edition. Keep a custom app with a colliding slug and verify it is not
+overwritten or silently classified as a shipped app.
+
+Check that owner-recorded `shippedTemplateKind` survives a bot's HTML update,
+version changes, archive and restore without granting any new reads. Legacy
+records remain unmarked, and bots cannot assign or change this metadata. Carry
+the existing native identity, grant and revision tests when their code is
+unchanged.
+
+Verify the single row of installed apps, distinct shipped icons, the custom-app
+fallback and the accessible **All apps** surface. Exercise keyboard selection,
+Escape/close and focus return. Measure the actual panel bounds at 960, 400 and
+360 pixels before capturing light/dark and English/Chinese evidence; a query
+parameter or screenshot filename is not width evidence. Drive the existing
+separator or window geometry rather than changing production resize behavior
+for a fixture. Include a realistic complete App window with chat and Computer
+panels together to check overlap in both the row and expanded-library states.
+
+Use the affected contract tests and the existing renderer fixture once on stable
+source. Package acceptance uses an isolated profile and the actual production
+preload. Normal-App delivery checks the installed source and real inventory
+read-only; templates visible in the catalog are not installed-instance evidence.
+
 ## Built-in Agent Team and Usage
 
 Use the existing synthetic dashboard snapshots with an isolated Mini Apps

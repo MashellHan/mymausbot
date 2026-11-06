@@ -18,7 +18,7 @@ app.commandLine.appendSwitch("host-resolver-rules", "MAP *.miniapp-canary.invali
 const netlog = join(profile, "netlog.json");
 const preload = join(profile, "preload.cjs");
 writeFileSync(preload, `require("electron").contextBridge.exposeInMainWorld("ogb", { platform: process.platform, app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true } });`);
-const result = { checks: [], screenshots: [], errors: [] };
+const result = { checks: [], screenshots: [], geometry: [], errors: [] };
 const passed = (label) => { result.checks.push(label); console.log(label); };
 const windows = [];
 const reads = new Map();
@@ -90,6 +90,17 @@ async function noOverflow(window) {
   })`);
   assert(gaps.every((gap) => gap >= 6), "full trend dates must have a visible gap before their bars");
 }
+async function resizePanel(window, width) {
+  const actual = () => evaluate(window, 'document.querySelector("[data-computer-panel]")?.getBoundingClientRect().width');
+  await until(async () => Math.abs((await actual()) - 960) <= 1, "default 960px panel");
+  for (let expected = 920; expected >= width; expected -= 40) {
+    await evaluate(window, `(() => { const separator = document.querySelector('[role="separator"][aria-orientation="vertical"]');
+      separator.focus(); separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); return true; })()`);
+    await until(async () => Math.abs((await actual()) - expected) <= 1, `${expected}px panel after separator key`);
+  }
+  assert(Math.abs((await actual()) - width) <= 1, `Measured panel width must be ${width}px`);
+  return actual();
+}
 const timer = setTimeout(() => { result.errors.push("Mini App UI smoke timed out"); writeFileSync(join(evidence, "mini-apps-result.json"), JSON.stringify(result, null, 2)); app.exit(1); }, 220_000);
 async function run() {
 try {
@@ -104,7 +115,7 @@ try {
   });
 
   const browser = windowFor({ capability: false });
-  await open(browser, "?width=960&locale=en");
+  await open(browser, "?locale=en");
   await until(() => evaluate(browser, 'document.body.innerText.includes("desktop")'), "unsupported host message");
   assert.equal(await evaluate(browser, 'document.querySelectorAll("iframe").length'), 0);
   assert.equal(reads.get(browser.webContents.id) ?? 0, 0);
@@ -150,7 +161,8 @@ try {
     { width: 360, locale: "zh", skin: "midnight", name: "mobile.png" },
     { width: 400, locale: "en", skin: "atelier", name: "narrow-light.png" },
   ]) {
-    await open(window, `?width=${width}&locale=${locale}&skin=${skin}`);
+    await open(window, `?locale=${locale}&skin=${skin}`);
+    result.geometry.push({ name, requested: width, measured: await resizePanel(window, width) });
     await ready(window);
     await select(window, "currency", "known:CNY");
     assert((await content(window)).includes("12.54"));
@@ -164,7 +176,7 @@ try {
     }
   }
   passed("Real panel renders and fits 960, 400 and 360 pixel panels in light/dark and zh/en");
-  await open(window, "?width=960&locale=en&skin=midnight");
+  await open(window, "?locale=en&skin=midnight");
   await ready(window);
   await select(window, "currency", "known:CNY");
   assert(await inFrame(window, 'Array.from(document.querySelector("#category").options).some(option => option.value === "Transfer")'), "inflow-only category is selectable");

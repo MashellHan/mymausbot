@@ -44,6 +44,12 @@ it("publishes a metadata-only app without promoting the bot's Data", async () =>
   expect(json).toHaveBeenCalledWith(response, 200, { app: { id: "installed" }, replayed: false });
   expect(publish).toHaveBeenCalledWith(expect.objectContaining({ botId: "producer" }), publication, undefined);
   expect(promoteForBot).not.toHaveBeenCalled();
+  await route({ method: "POST", path: "/api/internal/mini-apps/publish", res: response, json,
+    botId: "producer", threadId: "turn", readBody: async () => ({ publication: { ...publication,
+      requestKey: "bot-label", shippedTemplateKind: "bookkeeping" } }), requireActive: () => undefined, writeAllowed: () => true });
+  expect(json).toHaveBeenLastCalledWith(response, 403, { error: "Only the workspace owner can identify a shipped template." });
+  expect(publish).toHaveBeenCalledTimes(1);
+  expect(promoteForBot).not.toHaveBeenCalled();
 });
 
 it("keeps app-scoped dashboard reads behind the existing local owner gate", async () => {

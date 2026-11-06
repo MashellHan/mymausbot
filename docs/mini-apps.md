@@ -12,9 +12,31 @@ Data and frame host. An inventory fixture also exercises these APIs independentl
 of the built-in templates. The two report apps keep current and historical
 editions published by an existing bot or Automation.
 
+## Find and open apps
+
+The library shows all five shipped choices before the first installation.
+Available templates and installed apps have separate states: browsing a template
+does not create an app, grant access or start an Automation. Bookkeeping needs an
+existing Data table and column mappings; reports need an existing enabled local
+Bot Automation; Agent Team and Usage request their own explicit owner read grants.
+An empty retained-dataset list does not establish whether a bot has unconnected
+business Data.
+
+Installed apps use one horizontally scrollable row with an icon for every app.
+**All apps** opens the full library, including custom apps and available templates.
+Arrow keys, Home and End move among installed tabs. Unknown custom apps use the
+default app icon.
+
+Explicit owner installation records the report or bookkeeping template's display
+identity as `shippedTemplateKind`. It survives later bot layout edits, version
+changes, archive and workspace restore, but grants no access. Older entries
+without that metadata remain custom or unknown; a matching slug or HTML document
+does not silently assign an identity or replace an existing app. Native dashboard
+identity and current read grants remain separate.
+
 ## Install Agent Team or Usage
 
-Open **Computer → Mini Apps → Add Mini App**, choose Agent Team or Usage, read
+Open **Computer → Mini Apps**, choose Agent Team or Usage from the library, read
 its access disclosure and install. The existing Agent Team and Usage Computer
 tabs remain available. Both surfaces use the same providers and shared views;
 the installed apps do not start a collector, copy snapshots into another store
@@ -53,12 +75,12 @@ replaced or granted access.
 
 ## Install a report
 
-Open **Computer → Mini Apps → Add Mini App**, choose Daily X AI digest or GitHub
+Open **Computer → Mini Apps**, choose Daily X AI digest or GitHub
 activity, and select the existing producer Automation. Setup resolves its bot on
 the server, prepares an empty report table in that bot's retained Data, and
 installs the selected template with that producer as editor. The first screen
 says no edition has been published until the producer actually publishes one.
-Bookkeeping remains available in the same chooser.
+Bookkeeping remains available in the same library.
 
 The Automation's schedule and other outputs stay in place. Add report publication
 to that existing authorized routine through the bot's supported tools. Installation
@@ -67,7 +89,8 @@ does not edit a routine or establish that it has run. See the
 
 ## Use the bookkeeping example
 
-1. In the desktop app, open **Computer → Mini Apps → Install bookkeeping**.
+1. In the desktop app, open **Computer → Mini Apps** and choose Bookkeeping from
+   the library.
 2. Select a bot with imported Data, or an already connected dataset. Connecting
    retains the entire DuckDB store independently of that bot; its normal Data
    tools continue writing to that same store.
