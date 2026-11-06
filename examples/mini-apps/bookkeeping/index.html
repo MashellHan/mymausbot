@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bookkeeping</title>
+  <title>Bookkeeping Manager</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -75,50 +75,131 @@
       .filters > .filter:first-child { grid-column: 1 / -1; }
       .totals { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
     }
+    .portal { max-width: 900px; padding: 20px 22px 32px; }
+    .heading h1 { font-size: 21px; }
+    .eyebrow { color: var(--color-text-secondary, light-dark(#66656c, #aaaab2)); font-size: 12px; }
+    .currency-mark { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; background: var(--color-background-info, light-dark(#e8f3fa, #1d3440)); color: var(--color-text-info, light-dark(#245872, #9bd4ef)); padding: 4px 9px; font-size: 12px; font-weight: 650; }
+    .quality-details { margin-top: 8px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; }
+    .quality-details[hidden] { display: none; }
+    .quality-details summary { width: fit-content; cursor: pointer; }
+    .quality-details summary:focus-visible { outline: 2px solid var(--color-ring-primary, #1084fe); outline-offset: 3px; }
+    .quality-details p { margin-top: 5px; overflow-wrap: anywhere; }
+    .view-tabs { display: flex; gap: 4px; overflow-x: auto; margin-top: 20px; border-bottom: 1px solid var(--color-border-secondary, light-dark(#e4e4e8, #333338)); }
+    .view-tabs button { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 9px 13px; font-size: 13px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    .view-tabs button[aria-selected="true"] { border-bottom-color: var(--color-ring-info, #1084fe); color: var(--color-text-primary, light-dark(#1d1d1f, #ececee)); font-weight: 650; }
+    .view-tabs button:focus-visible { outline-offset: -3px; }
+    .view[hidden] { display: none; }
+    .filters { grid-template-columns: minmax(0, 1.3fr) repeat(2, minmax(0, 1fr)); margin-top: 16px; }
+    .range-note { margin-top: 8px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .notice { margin-top: 12px; }
+    .section { margin-top: 24px; }
+    .section-head { margin-bottom: 9px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .money-card { min-width: 0; border: 1px solid var(--color-border-secondary, light-dark(#e4e4e8, #333338)); border-radius: 13px; background: var(--color-background-secondary, light-dark(#f8f7f5, #26262a)); padding: 12px; }
+    .money-card[data-flow="outflow"] { background: var(--color-background-danger, light-dark(#fff3ef, #342723)); }
+    .money-card[data-flow="inflow"] { background: var(--color-background-success, light-dark(#eef8f3, #213329)); }
+    .money-card dt { color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; }
+    .money-card dd { margin: 4px 0 0; color: var(--color-text-primary, light-dark(#1d1d1f, #ececee)); font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .money-card .compare { margin-top: 7px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; line-height: 1.4; }
+    .overview-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 22px; }
+    .distribution { display: flex; height: 9px; overflow: hidden; border-radius: 999px; background: var(--color-background-tertiary, light-dark(#e9e9ee, #333338)); }
+    .distribution span { height: 100%; }
+    .category-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 9px; }
+    .category-row button { min-width: 0; border: 0; background: transparent; padding: 0; text-align: left; text-decoration: underline; text-decoration-color: var(--color-border-primary, light-dark(#d8d8de, #3a3a40)); text-underline-offset: 3px; }
+    .category-amount { min-width: 0; overflow-wrap: anywhere; text-align: right; }
+    .category-track { height: 5px; }
+    .category-share { grid-column: 1 / -1; }
+    .monthly-row { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--color-border-tertiary, light-dark(#eee, #303035)); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .monthly-bars { display: grid; gap: 3px; }
+    .monthly-bars span { display: block; min-height: 5px; border-radius: 4px; }
+    .monthly-bars .outflow-bar { background: #d9775e; }
+    .monthly-bars .inflow-bar { background: #59a886; }
+    .monthly-values { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+    .monthly-values span { display: block; }
+    .calendar-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .calendar-head button { border-radius: 7px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 6px 10px; }
+    .calendar-legend { display: flex; gap: 14px; margin-top: 9px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 11px; }
+    .legend-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; }
+    .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; margin-top: 12px; }
+    .calendar-unavailable { grid-column: 1 / -1; }
+    .calendar-weekday { padding: 5px 0; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 11px; text-align: center; }
+    .calendar-day { min-width: 0; min-height: 73px; border-radius: 8px; background: var(--color-background-secondary, light-dark(#f8f7f5, #26262a)); padding: 6px; text-align: left; font-variant-numeric: tabular-nums; }
+    .calendar-day[aria-pressed="true"] { outline: 2px solid var(--color-ring-primary, #1084fe); }
+    .calendar-day .day-number { display: block; font-size: 12px; font-weight: 650; }
+    .calendar-day .day-flow { display: block; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .flow-out { color: var(--color-text-danger, light-dark(#b8503b, #eda18d)); }
+    .flow-in { color: var(--color-text-success, light-dark(#267c59, #83cfa8)); }
+    .record-list, .largest-list { list-style: none; margin: 0; padding: 0; }
+    .record-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; padding: 11px 0; border-bottom: 1px solid var(--color-border-tertiary, light-dark(#eee, #303035)); }
+    .record-row strong { min-width: 0; font-size: 13px; font-weight: 620; overflow-wrap: anywhere; }
+    .record-row .amount { min-width: 0; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; text-align: right; }
+    .record-row small { grid-column: 1 / -1; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; overflow-wrap: anywhere; }
+    @media (max-width: 600px) {
+      .portal { padding: 15px 14px 26px; }
+      .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .filters > .filter:first-child { grid-column: 1 / -1; }
+      .overview-columns { grid-template-columns: 1fr; gap: 0; }
+      .summary-grid { grid-template-columns: 1fr; gap: 6px; }
+      .money-card dd { font-size: 19px; }
+      .calendar-day { min-height: 57px; padding: 4px; }
+      .calendar-day .day-flow { display: inline-block; width: 7px; height: 7px; margin: 4px 3px 0 0; border-radius: 50%; background: currentColor; font-size: 0; vertical-align: top; }
+    }
   </style>
 </head>
 <body>
   <main class="portal">
     <header class="heading">
       <div>
-        <h1 data-i18n="Bookkeeping">Bookkeeping</h1>
+        <h1 data-i18n="Bookkeeping Manager">Bookkeeping Manager</h1>
         <p id="coverage" class="coverage muted" data-i18n="Reading record coverage…">Reading record coverage…</p>
       </div>
-      <button id="refresh" class="refresh" type="button" data-i18n="Refresh">Refresh</button>
+      <div><span class="currency-mark">CNY · ¥</span> <button id="refresh" class="refresh" type="button" data-i18n="Refresh">Refresh</button></div>
     </header>
+    <details id="excluded-currencies" class="quality-details" hidden><summary></summary><p></p></details>
     <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+    <nav class="view-tabs" role="tablist" aria-label="Bookkeeping views" data-i18n-aria-label="Bookkeeping views">
+      <button type="button" id="tab-overview" role="tab" aria-selected="true" aria-controls="view-overview" tabindex="0" data-view="overview" data-i18n="Overview">Overview</button>
+      <button type="button" id="tab-calendar" role="tab" aria-selected="false" aria-controls="view-calendar" tabindex="-1" data-view="calendar" data-i18n="Calendar">Calendar</button>
+      <button type="button" id="tab-records" role="tab" aria-selected="false" aria-controls="view-records" tabindex="-1" data-view="records" data-i18n="Records">Records</button>
+    </nav>
     <section class="filters" aria-label="Filters" data-i18n-aria-label="Filters">
       <label class="filter"><span data-i18n="Period">Period</span>
         <select id="period">
-          <option value="latest" data-i18n="Latest recorded month">Latest recorded month</option>
-          <option value="last30" data-i18n="30 days through latest record">30 days through latest record</option>
-          <option value="all" data-i18n="All dated records">All dated records</option>
+          <option value="week" data-i18n="Week">Week</option>
+          <option value="month" selected data-i18n="Month">Month</option>
+          <option value="year" data-i18n="Year">Year</option>
+          <option value="all" data-i18n="All recorded dates">All recorded dates</option>
           <option value="custom" data-i18n="Custom range">Custom range</option>
         </select>
       </label>
-      <label class="filter"><span data-i18n="Currency">Currency</span><select id="currency"><option value="" data-i18n="All currencies">All currencies</option></select></label>
       <label class="filter"><span data-i18n="Category">Category</span><select id="category"><option value="" data-i18n="All categories">All categories</option></select></label>
       <div id="custom-range" class="custom-range" hidden>
         <label class="filter"><span data-i18n="From">From</span><input id="from" type="date"></label>
         <label class="filter"><span data-i18n="Through">Through</span><input id="through" type="date"></label>
       </div>
     </section>
-    <section class="section" aria-labelledby="summary-title">
-      <div class="section-head"><h2 id="summary-title" data-i18n="Cash flow">Cash flow</h2><p id="range-label" class="section-note"></p></div>
-      <div id="summary" aria-live="polite"><p class="empty" data-i18n="Reading totals…">Reading totals…</p></div>
+    <p id="range-label" class="range-note"></p>
+    <section id="view-overview" class="view" role="tabpanel" aria-labelledby="tab-overview">
+      <section class="section" aria-labelledby="summary-title"><div class="section-head"><h2 id="summary-title" data-i18n="Cash flow">Cash flow</h2></div>
+        <div id="summary" aria-live="polite"><p class="empty" data-i18n="Reading totals…">Reading totals…</p></div></section>
+      <div class="overview-columns">
+        <section class="section" aria-labelledby="trend-title"><div class="section-head"><h2 id="trend-title" data-i18n="Monthly trend">Monthly trend</h2><p class="section-note" data-i18n="Recorded inflow and outflow">Recorded inflow and outflow</p></div>
+          <div id="trend"><p class="empty" data-i18n="Reading trend…">Reading trend…</p></div></section>
+        <section class="section" aria-labelledby="categories-title"><div class="section-head"><h2 id="categories-title" data-i18n="Spending by category">Spending by category</h2></div>
+          <div id="categories"><p class="empty" data-i18n="Reading categories…">Reading categories…</p></div></section>
+      </div>
+      <section class="section" aria-labelledby="largest-title"><div class="section-head"><h2 id="largest-title" data-i18n="Largest recorded outflows">Largest recorded outflows</h2></div>
+        <div id="largest"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div></section>
     </section>
-    <section class="section" aria-labelledby="categories-title">
-      <div class="section-head"><h2 id="categories-title" data-i18n="Spending by category">Spending by category</h2><p class="section-note" data-i18n="Share of outflow, within each currency">Share of outflow, within each currency</p></div>
-      <div id="categories"><p class="empty" data-i18n="Reading categories…">Reading categories…</p></div>
+    <section id="view-calendar" class="view" role="tabpanel" aria-labelledby="tab-calendar" hidden>
+      <section class="section" aria-labelledby="calendar-title"><div class="calendar-head"><button id="calendar-previous" type="button" aria-label="Previous month" data-i18n-aria-label="Previous month">‹</button><h2 id="calendar-title"></h2><button id="calendar-next" type="button" aria-label="Next month" data-i18n-aria-label="Next month">›</button></div>
+        <p class="calendar-legend"><span><span class="legend-dot flow-out" aria-hidden="true"></span><span data-i18n="Outflow">Outflow</span></span><span><span class="legend-dot flow-in" aria-hidden="true"></span><span data-i18n="Inflow">Inflow</span></span></p>
+        <div id="calendar" class="calendar-grid"></div></section>
+      <section class="section" aria-labelledby="day-title"><div class="section-head"><h2 id="day-title" data-i18n="Selected day">Selected day</h2></div><div id="day-details" class="empty" data-i18n="Choose a date to see its records.">Choose a date to see its records.</div></section>
     </section>
-    <section class="section" aria-labelledby="trend-title">
-      <div class="section-head"><h2 id="trend-title" data-i18n="Outflow trend">Outflow trend</h2><div class="trend-toggle" role="group" aria-label="Trend interval" data-i18n-aria-label="Trend interval"><button id="day" type="button" aria-pressed="true" data-i18n="Day">Day</button><button id="month" type="button" aria-pressed="false" data-i18n="Month">Month</button></div></div>
-      <div id="trend"><p class="empty" data-i18n="Reading trend…">Reading trend…</p></div>
-    </section>
-    <section class="section" aria-labelledby="details-title">
-      <div class="section-head"><h2 id="details-title" data-i18n="Entries">Entries</h2><p class="section-note" data-i18n="Up to 30 at a time">Up to 30 at a time</p></div>
-      <div id="details"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div>
-      <button id="more" class="more" type="button" data-i18n="Load more entries" hidden>Load more entries</button>
+    <section id="view-records" class="view" role="tabpanel" aria-labelledby="tab-records" hidden>
+      <section class="section" aria-labelledby="details-title"><div class="section-head"><h2 id="details-title" data-i18n="Records">Records</h2><p class="section-note" data-i18n="Up to 30 at a time">Up to 30 at a time</p></div>
+        <div id="details"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div><button id="more" class="more" type="button" data-i18n="Load more entries" hidden>Load more entries</button></section>
     </section>
   </main>
   <script>
@@ -127,13 +208,47 @@
 
       const $ = (id) => document.getElementById(id);
       const sdk = window.mausApp;
-      const state = { coverage: [], coverageLoaded: false, loaded: false, dataRevision: null, currency: "", category: "", period: "latest", bucket: "day", run: 0, details: [], nextCursor: null };
+      const state = { coverage: [], coverageLoaded: false, loaded: false, dataRevision: null, cnyCurrencies: [], category: "", period: "month", view: "overview", calendarMonth: null, selectedDay: null, calendarOut: [], calendarIn: [], run: 0, details: [], nextCursor: null };
       const maxAggregatePages = 48;
       let scheduledRefresh;
       let refreshing = false;
       let pendingRefresh = false;
       let pendingKeepVisible = false;
       const chinese = {
+        "Bookkeeping Manager": "记账管家",
+        "Bookkeeping views": "记账视图",
+        "Overview": "概览",
+        "Calendar": "日历",
+        "Records": "记录",
+        "Week": "周",
+        "Year": "年",
+        "All recorded dates": "全部记录日期",
+        "Monthly trend": "月度趋势",
+        "Recorded inflow and outflow": "已记录的流入与流出",
+        "Largest recorded outflows": "最大流出记录",
+        "Previous month": "上个月",
+        "Next month": "下个月",
+        "Selected day": "选中日期",
+        "Choose a date to see its records.": "选择日期查看记录。",
+        "Daily totals incomplete. Narrow the date range and refresh.": "每日汇总未读全。请缩小日期范围并刷新。",
+        "Showing first 30 records.": "仅显示前 30 条记录。",
+        "Prior corresponding period": "上期同期",
+        "Previous period unavailable": "上期数据不可用",
+        "Prior {from} to {through}": "上期 {from} 至 {through}",
+        "Prior {amount}": "上期 {amount}",
+        "Change {amount}": "变化 {amount}",
+        "Recorded entries: {count}": "记录条数：{count}",
+        "Recorded through {date}": "记录截至 {date}",
+        "No CNY records in this period.": "此时段没有人民币记录。",
+        "Totals incomplete. Narrow the date range.": "汇总未读全，请缩小日期范围。",
+        "No explicit CNY currency found.": "没有识别到明确标记为人民币的记录。",
+        "{count} other or unknown currency records excluded from CNY": "{count} 条其他币种或币种未知的记录未计入人民币",
+        "No recorded entries": "没有已记录条目",
+        "No recorded outflow": "没有已记录流出",
+        "Outflow {amount}": "流出 {amount}",
+        "Inflow {amount}": "流入 {amount}",
+        "Mon": "一", "Tue": "二", "Wed": "三", "Thu": "四", "Fri": "五", "Sat": "六", "Sun": "日",
+        "This view is incomplete because the source has more groups than can be read at once. Narrow the date range.": "分组过多，此视图未读全。请缩小日期范围。",
         "Bookkeeping": "记账",
         "Reading record coverage…": "正在读取记录范围…",
         "Refresh": "刷新",
@@ -157,7 +272,7 @@
         "Outflow trend": "支出趋势",
         "Trend interval": "趋势间隔",
         "Day": "按日",
-        "Month": "按月",
+        "Month": "月",
         "Reading trend…": "正在读取趋势…",
         "Entries": "明细",
         "Up to 30 at a time": "每次最多 30 条",
@@ -315,6 +430,7 @@
       }
 
       function countValue(value) {
+        if (typeof value === "bigint") return value >= 0n ? value : null;
         if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
         return typeof value === "string" && /^\d+$/.test(value) ? BigInt(value) : null;
       }
@@ -342,23 +458,78 @@
         return date.toISOString().slice(0, 10);
       }
 
-      function visibleCoverage() {
-        return state.currency ? state.coverage.filter((row) => currencyKey(row.currency) === state.currency) : state.coverage;
+      function dateAfter(value, days) { return dateBefore(value, -days); }
+      function monthLast(value) { return new Date(Date.UTC(Number(value.slice(0, 4)), Number(value.slice(5, 7)), 0)).toISOString().slice(0, 10); }
+      function cnyRow(row) { return state.cnyCurrencies.includes(row.currency); }
+      function cnyCoverage() { return state.coverage.filter(cnyRow); }
+      function latestCnyDate() { return cnyCoverage().map((row) => row.lastDate).filter(validDate).sort().at(-1) ?? null; }
+      function earliestCnyDate() { return cnyCoverage().map((row) => row.firstDate).filter(validDate).sort()[0] ?? null; }
+
+      function signedCents(value) {
+        const parts = decimalParts(value);
+        if (!parts || parts.fraction.length > 2) return null;
+        const cents = BigInt(parts.digits) * 100n + BigInt((parts.fraction + "00").slice(0, 2));
+        return parts.negative ? -cents : cents;
+      }
+
+      function centsText(value) {
+        if (value === null) return "—";
+        const positive = value < 0n ? -value : value;
+        const digits = (positive / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        return `${value < 0n ? "−" : ""}¥${digits}.${(positive % 100n).toString().padStart(2, "0")}`;
+      }
+
+      function sumCents(values) {
+        return values.reduce((total, value) => {
+          const next = signedCents(value);
+          return total === null || next === null ? null : total + next;
+        }, 0n);
+      }
+
+      function centsDecimal(value) {
+        if (value === null) return null;
+        const positive = value < 0n ? -value : value;
+        return `${value < 0n ? "-" : ""}${positive / 100n}.${(positive % 100n).toString().padStart(2, "0")}`;
+      }
+
+      function bucketCents(rows) {
+        const amounts = new Map();
+        for (const row of rows) {
+          const previous = amounts.get(row.bucket);
+          const next = signedCents(row.amount);
+          amounts.set(row.bucket, previous === undefined ? next : previous === null || next === null ? null : previous + next);
+        }
+        return amounts;
+      }
+
+      function priorRange(range) {
+        if (!range || !["week", "month", "year"].includes(state.period)) return null;
+        const elapsed = Math.round((Date.parse(`${range.through}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) / 86_400_000) + 1;
+        let from;
+        if (state.period === "week") from = dateBefore(range.from, 7);
+        else if (state.period === "month") from = dateBefore(range.from, 1).slice(0, 7) + "-01";
+        else from = `${Number(range.from.slice(0, 4)) - 1}-01-01`;
+        if (state.period === "week") return { from, through: dateAfter(from, elapsed - 1) };
+        const month = state.period === "month" ? from.slice(0, 7) : `${from.slice(0, 4)}-${range.through.slice(5, 7)}`;
+        const through = `${month}-${String(Math.min(Number(range.through.slice(8)), Number(monthLast(`${month}-01`).slice(8)))).padStart(2, "0")}`;
+        return { from, through };
       }
 
       function periodRange() {
-        const coverage = visibleCoverage();
-        const dates = coverage.flatMap((row) => [row.firstDate, row.lastDate]).filter(validDate).sort();
-        if (dates.length === 0) return null;
-        const first = dates[0];
-        const last = dates[dates.length - 1];
+        const first = earliestCnyDate();
+        const last = latestCnyDate();
+        if (!first || !last) return null;
         if (state.period === "custom") {
           const from = $("from").value;
           const through = $("through").value;
           return validDate(from) && validDate(through) && from <= through ? { from, through } : null;
         }
         if (state.period === "all") return { from: first, through: last };
-        if (state.period === "last30") return { from: dateBefore(last, 29), through: last };
+        if (state.period === "week") {
+          const day = new Date(`${last}T00:00:00Z`).getUTCDay();
+          return { from: dateBefore(last, (day + 6) % 7), through: last };
+        }
+        if (state.period === "year") return { from: `${last.slice(0, 4)}-01-01`, through: last };
         return { from: `${last.slice(0, 7)}-01`, through: last };
       }
 
@@ -383,82 +554,157 @@
 
       function groupHeading(key) { return element("h3", "currency-title", currencyName(key)); }
 
-      function renderSummary(rows) {
+      function renderSummary(current, previous) {
         const target = $("summary");
-        if (rows.length === 0) return empty(target, word("No dated entries match these filters."));
-        const sections = [];
-        for (const [key, items] of grouped(rows)) {
-          const row = items[0];
-          const section = element("div", "currency-group");
-          section.append(groupHeading(key));
-          const totals = element("dl", "totals");
-          for (const [label, value] of [[word("Outflow"), decimalText(row.outflow)], [word("Inflow"), decimalText(row.inflow)], [word("Net"), decimalText(row.net)], [word("Entries"), countText(row.count)]]) {
-            const item = element("div");
-            item.append(element("dt", "", label), element("dd", "", value));
-            totals.append(item);
-          }
-          section.append(totals);
-          sections.push(section);
+        if (!current) return empty(target, word("No CNY records in this period."));
+        if (current.incomplete) return empty(target, word("Totals incomplete. Narrow the date range."));
+        const cards = element("dl", "summary-grid");
+        for (const [key, label] of [["outflow", word("Outflow")], ["inflow", word("Inflow")], ["net", word("Net")]]) {
+          const card = element("div", "money-card");
+          card.dataset.flow = key;
+          card.append(element("dt", "", label), element("dd", "", centsText(current[key])));
+          const compare = element("p", "compare", previous && !previous.incomplete && previous[key] !== null && current[key] !== null
+            ? `${word("Prior {amount}", { amount: centsText(previous[key]) })} · ${word("Change {amount}", { amount: centsText(current[key] - previous[key]) })}`
+            : word("Previous period unavailable"));
+          card.append(compare);
+          cards.append(card);
         }
-        target.replaceChildren(...sections);
+        const count = element("p", "range-note", word("Recorded entries: {count}", { count: countText(current.count) }));
+        target.replaceChildren(cards, count);
       }
 
       function renderCategories(rows, truncated) {
         const target = $("categories");
         if (rows.length === 0) return empty(target, word("No spending categories in this period."));
-        const sections = [];
-        for (const [key, items] of grouped(rows)) {
-          const section = element("div", "currency-group");
-          section.append(groupHeading(key));
-          const list = element("ul", "category-list");
-          const total = truncated ? null : sumDecimals(items.map((row) => absoluteDecimal(row.amount)));
-          for (const row of items) {
-            const entry = element("li", "category-row");
-            const outflow = absoluteDecimal(row.amount);
-            const share = decimalPercent(outflow, total);
-            entry.append(element("span", "category-name", categoryText(row.category)), element("span", "category-amount", decimalText(outflow)));
-            const track = element("div", "category-track");
-            track.setAttribute("aria-hidden", "true");
-            const fill = element("span");
-            fill.style.width = barWidth(outflow, total);
-            track.append(fill);
-            entry.append(track, element("span", "category-share", truncated ? word("Share unavailable: categories are incomplete") : word("{share} of outflow", { share })));
-            list.append(entry);
-          }
-          section.append(list);
-          sections.push(section);
+        const colors = ["#d9775e", "#e2a04b", "#5c9fc1", "#71a889", "#9785b0", "#96949b"];
+        const merged = new Map();
+        for (const row of rows) {
+          const key = row.category === null ? "missing" : `value:${row.category}`;
+          const current = merged.get(key);
+          const next = signedCents(row.amount);
+          merged.set(key, { category: row.category,
+            amount: current === undefined ? next : current.amount === null || next === null ? null : current.amount + next });
         }
-        target.replaceChildren(...sections);
+        const magnitude = (row) => row.amount === null ? null : row.amount < 0n ? -row.amount : row.amount;
+        const sorted = [...merged.values()].sort((a, b) => {
+          const left = magnitude(a), right = magnitude(b);
+          return left === null ? 1 : right === null ? -1 : left > right ? -1 : left < right ? 1 : 0;
+        });
+        const total = truncated ? null : sorted.reduce((sum, row) => {
+          const value = magnitude(row);
+          return sum === null || value === null ? null : sum + value;
+        }, 0n);
+        const list = element("ol", "category-list");
+        const distribution = element("div", "distribution");
+        distribution.setAttribute("aria-hidden", "true");
+        for (const [index, row] of sorted.entries()) {
+          const outflow = magnitude(row);
+          const amount = centsDecimal(outflow);
+          const whole = centsDecimal(total);
+          const color = colors[index % colors.length];
+          const entry = element("li", "category-row");
+          const label = `${index + 1}. ${categoryText(row.category)}`;
+          const name = row.category ? element("button", "category-name", label) : element("span", "category-name", label);
+          if (row.category) {
+            name.type = "button";
+            name.addEventListener("click", () => {
+              state.category = String(row.category);
+              $("category").value = state.category;
+              showView("records");
+              scheduleRefresh();
+            });
+          }
+          entry.append(name, element("span", "category-amount", centsText(outflow)));
+          const track = element("div", "category-track");
+          track.setAttribute("aria-hidden", "true");
+          const fill = element("span");
+          fill.style.width = barWidth(amount, whole);
+          fill.style.backgroundColor = color;
+          track.append(fill);
+          entry.append(track, element("span", "category-share", truncated || total === null
+            ? word("Share unavailable: categories are incomplete") : word("{share} of outflow", { share: decimalPercent(amount, whole) })));
+          list.append(entry);
+          if (total !== null) {
+            const segment = element("span");
+            segment.style.width = barWidth(amount, whole);
+            segment.style.backgroundColor = color;
+            distribution.append(segment);
+          }
+        }
+        target.replaceChildren(...(total !== null ? [distribution] : []), list);
       }
 
-      function renderTrend(rows) {
+      function renderTrend(outRows, inRows) {
         const target = $("trend");
-        if (rows.length === 0) return empty(target, word("No outflow matches these filters."));
-        const sections = [];
-        for (const [key, items] of grouped(rows)) {
-          const section = element("div", "currency-group");
-          section.append(groupHeading(key));
-          const max = items.reduce((largest, row) => {
-            const outflow = absoluteDecimal(row.amount);
-            return compareDecimals(outflow, largest) > 0 ? outflow : largest;
-          }, "0");
-          const list = element("ul", "trend-list");
-          for (const row of items) {
-            const entry = element("li", "trend-row");
-            entry.append(element("span", "trend-label", row.bucket));
-            const track = element("span", "trend-track");
-            track.setAttribute("aria-hidden", "true");
-            const fill = element("span");
-            const outflow = absoluteDecimal(row.amount);
-            fill.style.width = barWidth(outflow, max);
-            track.append(fill);
-            entry.append(track, element("span", "trend-amount", decimalText(outflow)));
-            list.append(entry);
+        const last = latestCnyDate();
+        if (!last) return empty(target, word("No recorded entries"));
+        const out = bucketCents(outRows);
+        const inflow = bucketCents(inRows);
+        const observed = [...out.keys(), ...inflow.keys()].filter((month) => /^\d{4}-\d{2}$/.test(month)).sort();
+        if (!observed.length) return empty(target, word("No recorded entries"));
+        const possible = Array.from({ length: 12 }, (_, index) => {
+          const date = new Date(`${last.slice(0, 7)}-01T00:00:00Z`);
+          date.setUTCMonth(date.getUTCMonth() - (11 - index));
+          return date.toISOString().slice(0, 7);
+        });
+        const months = possible.filter((month) => month >= observed[0]);
+        const values = months.flatMap((month) => [out.get(month), inflow.get(month)].filter((value) => value !== undefined && value !== null)
+          .map((value) => value < 0n ? -value : value));
+        const max = values.reduce((greatest, value) => value > greatest ? value : greatest, 0n);
+        const list = element("ol", "trend-list");
+        for (const month of months) {
+          const outValue = out.has(month) ? out.get(month) : null;
+          const inValue = inflow.has(month) ? inflow.get(month) : null;
+          const spent = outValue === null ? null : -outValue;
+          const row = element("li", "monthly-row");
+          row.append(element("span", "", month.slice(5)));
+          if (spent === null && inValue === null) {
+            row.append(element("span", "muted", word("No recorded entries")));
+          } else {
+            const bars = element("span", "monthly-bars");
+            for (const [kind, value] of [["outflow-bar", spent], ["inflow-bar", inValue]]) {
+              const bar = element("span", kind);
+              bar.style.width = value === null || max === 0n ? "0%" : `${Number(value * 100n / max)}%`;
+              bars.append(bar);
+            }
+            row.append(bars);
           }
-          section.append(list);
-          sections.push(section);
+          const amounts = element("span", "monthly-values");
+          if (spent !== null) amounts.append(element("span", "flow-out", centsText(spent)));
+          if (inValue !== null) amounts.append(element("span", "flow-in", centsText(inValue)));
+          row.append(amounts);
+          list.append(row);
         }
-        target.replaceChildren(...sections);
+        target.replaceChildren(list);
+      }
+
+      function recordItem(row, rank = null) {
+        const entry = element("li", "record-row");
+        const value = signedCents(row.amount);
+        entry.append(element("strong", "", `${rank === null ? "" : `${rank}. `}${categoryText(row.category)}`));
+        entry.append(element("span", `amount ${value !== null && value < 0n ? "flow-out" : "flow-in"}`, value !== null && value > 0n ? `+${centsText(value)}` : centsText(value)));
+        const meta = [validDate(row.date) ? row.date : word("Date unavailable"), row.account, row.book, row.note]
+          .filter((item) => item !== null && String(item).trim() !== "").map(String);
+        entry.append(element("small", "", meta.join(" · ")));
+        return entry;
+      }
+
+      function renderLargest(rows) {
+        const target = $("largest");
+        const outflows = rows.filter((row) => (signedCents(row.amount) ?? 0n) < 0n);
+        if (!outflows.length) return empty(target, word("No recorded outflow"));
+        const list = element("ol", "largest-list");
+        for (const [index, row] of outflows.slice(0, 10).entries()) list.append(recordItem(row, index + 1));
+        target.replaceChildren(list);
+      }
+
+      function renderDayDetails(rows, hasMore = false) {
+        const target = $("day-details");
+        if (!rows.length) { target.className = ""; return empty(target, word("No recorded entries")); }
+        target.className = "";
+        const list = element("ol", "record-list");
+        for (const row of rows) list.append(recordItem(row));
+        target.replaceChildren(list, ...(hasMore ? [element("p", "range-note", word("Showing first 30 records."))] : []));
       }
 
       function renderDetails() {
@@ -468,17 +714,64 @@
           $("more").hidden = true;
           return;
         }
-        const list = element("ol", "entry-list");
-        for (const row of state.details) {
-          const entry = element("li", "entry");
-          entry.append(element("span", "entry-main", `${validDate(row.date) ? row.date : word("Date unavailable")} · ${categoryText(row.category)}`));
-          entry.append(element("span", "entry-amount", `${decimalText(row.amount)} ${currencyText(row.currency)}`));
-          const meta = [row.account, row.book, row.note].filter((value) => value !== null && String(value).trim() !== "").map(String);
-          if (meta.length) entry.append(element("span", "entry-meta", meta.join(" · ")));
-          list.append(entry);
-        }
+        const list = element("ol", "record-list");
+        for (const row of state.details) list.append(recordItem(row));
         target.replaceChildren(list);
         $("more").hidden = state.nextCursor === null;
+      }
+
+      function renderCalendar() {
+        const month = state.calendarMonth;
+        if (!month) return;
+        const first = `${month}-01`;
+        const last = monthLast(first);
+        const titleDate = new Date(`${first}T00:00:00Z`);
+        $("calendar-title").textContent = new Intl.DateTimeFormat(locale() === "zh" ? "zh-CN" : "en-US", { year: "numeric", month: "long", timeZone: "UTC" }).format(titleDate);
+        $("calendar-previous").disabled = !!earliestCnyDate() && month <= earliestCnyDate().slice(0, 7);
+        $("calendar-next").disabled = !!latestCnyDate() && month >= latestCnyDate().slice(0, 7);
+        const out = bucketCents(state.calendarOut);
+        const inflow = bucketCents(state.calendarIn);
+        const grid = $("calendar");
+        const focusedDay = document.activeElement?.dataset?.calendarDay;
+        const cells = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => element("span", "calendar-weekday", word(label)));
+        const offset = (new Date(`${first}T00:00:00Z`).getUTCDay() + 6) % 7;
+        for (let index = 0; index < offset; index++) cells.push(element("span"));
+        const days = Number(last.slice(8));
+        for (let day = 1; day <= days; day++) {
+          const date = `${month}-${String(day).padStart(2, "0")}`;
+          const spent = out.has(date) ? out.get(date) : null;
+          const earned = inflow.has(date) ? inflow.get(date) : null;
+          const button = element("button", "calendar-day");
+          button.type = "button";
+          button.dataset.calendarDay = date;
+          button.setAttribute("aria-pressed", String(state.selectedDay === date));
+          button.setAttribute("aria-label", `${date} · ${spent === null ? word("No recorded outflow") : word("Outflow {amount}", { amount: centsText(-spent) })}${earned === null ? "" : ` · ${word("Inflow {amount}", { amount: centsText(earned) })}`}`);
+          button.append(element("span", "day-number", String(day)));
+          if (spent !== null) button.append(element("span", "day-flow flow-out", centsText(-spent)));
+          if (earned !== null) button.append(element("span", "day-flow flow-in", centsText(earned)));
+          button.addEventListener("click", () => {
+            state.selectedDay = date;
+            renderCalendar();
+            grid.querySelector(`[data-calendar-day="${date}"]`)?.focus();
+            void loadDay(date);
+          });
+          cells.push(button);
+        }
+        grid.replaceChildren(...cells);
+        if (focusedDay) grid.querySelector(`[data-calendar-day="${focusedDay}"]`)?.focus();
+      }
+
+      async function loadDay(day) {
+        if (!state.cnyCurrencies.length) return;
+        const run = state.run;
+        try {
+          const result = await query("details", { from: day, through: day, currencies: state.cnyCurrencies,
+            ...(state.category ? { category: state.category } : {}) }, { expectedDataRevision: state.dataRevision });
+          if (run !== state.run || state.selectedDay !== day) return;
+          renderDayDetails(result.rows, result.nextCursor !== null);
+        } catch {
+          if (run === state.run && state.selectedDay === day) empty($("day-details"), word("Records unavailable. Try Refresh."));
+        }
       }
 
       function setOptions(select, values, current, allLabel) {
@@ -492,25 +785,50 @@
 
       function updateCoverage(rows) {
         state.coverage = rows;
-        const first = rows.map((row) => row.firstDate).filter(validDate).sort()[0];
-        const last = rows.map((row) => row.lastDate).filter(validDate).sort().at(-1);
-        const missing = (field) => rows.reduce((total, row) => {
+        const cny = rows.filter((row) => typeof row.currency === "string" && ["CNY", "RMB", "人民币"].includes(row.currency.trim().toUpperCase()));
+        state.cnyCurrencies = [...new Set(cny.map((row) => row.currency))];
+        const accepted = cny;
+        const first = accepted.map((row) => row.firstDate).filter(validDate).sort()[0];
+        const last = accepted.map((row) => row.lastDate).filter(validDate).sort().at(-1);
+        const missing = (field) => accepted.reduce((total, row) => {
           const all = countValue(row.count);
           const known = countValue(row[field]);
           return total !== null && all !== null && known !== null && all >= known ? total + all - known : null;
         }, 0n);
         const incomplete = missing("datedCount");
         const invalid = missing("amountCount");
-        const parts = [first && last ? word("Dated records {first} to {last}", { first, last }) : word("No usable dates in the source")];
+        const parts = [first && last ? word("Dated records {first} to {last}", { first, last })
+          : rows.length ? word("No explicit CNY currency found.") : word("No recorded entries")];
         if (incomplete !== null && incomplete > 0n) parts.push(word(incomplete === 1n ? "{count} incomplete date excluded" : "{count} incomplete dates excluded", { count: countText(incomplete.toString()) }));
         if (invalid !== null && invalid > 0n) parts.push(word(invalid === 1n ? "{count} invalid or unrepresentable amount excluded" : "{count} invalid or unrepresentable amounts excluded", { count: countText(invalid.toString()) }));
-        if (incomplete === null || invalid === null) parts.push(word("Source quality counts unavailable"));
+        if (accepted.length && (incomplete === null || invalid === null)) parts.push(word("Source quality counts unavailable"));
+        const excluded = rows.filter((row) => !cny.includes(row));
+        const omitted = excluded.reduce((total, row) => {
+          const value = countValue(row.count);
+          return total === null || value === null ? null : total + value;
+        }, 0n);
+        const disclosure = $("excluded-currencies");
+        disclosure.hidden = omitted === 0n;
+        disclosure.querySelector("summary").textContent = word("{count} other or unknown currency records excluded from CNY", { count: countText(omitted) });
+        disclosure.querySelector("p").textContent = excluded.map((row) => `${currencyText(row.currency)} · ${countText(row.count)}`).join(" · ");
         $("coverage").removeAttribute("data-i18n");
         $("coverage").textContent = parts.join(" · ");
-        const currencies = [...new Map(rows.filter((row) => row.currency !== null && String(row.currency).trim() !== "").map((row) => [currencyKey(row.currency), currencyText(row.currency)])).entries()];
-        state.currency = setOptions($("currency"), currencies, state.currency, word("All currencies"));
         $("from").value ||= first ?? "";
         $("through").value ||= last ?? "";
+        state.calendarMonth ??= last?.slice(0, 7) ?? null;
+      }
+
+      function moneyMetrics(summary, outflow, inflow) {
+        if (summary.truncated || outflow.truncated || inflow.truncated) return { incomplete: true };
+        if (!summary.rows.length) return null;
+        const net = sumCents(summary.rows.map((row) => row.net));
+        const spent = sumCents(outflow.rows.map((row) => row.amount));
+        const earned = sumCents(inflow.rows.map((row) => row.amount));
+        const count = summary.rows.reduce((total, row) => {
+          const value = countValue(row.count);
+          return total === null || value === null ? null : total + value;
+        }, 0n);
+        return { net, outflow: spent === null ? null : -spent, inflow: earned, count };
       }
 
       async function refresh(keepVisible = false) {
@@ -530,7 +848,7 @@
           if (!state.coverageLoaded || keepVisible) {
             const coverage = await queryAll("coverage", {}, {}, { remaining: maxAggregatePages }, run);
             if (run !== state.run) return;
-            if (coverage.truncated) throw new Error("Coverage has too many currency groups to summarize safely.");
+            if (coverage.truncated) throw new Error("Coverage could not be read completely.");
             updateCoverage(coverage.rows);
             state.dataRevision = coverage.revision;
             state.coverageLoaded = true;
@@ -538,53 +856,88 @@
           const range = periodRange();
           if (!range) {
             $("range-label").textContent = "";
-            for (const id of ["summary", "categories", "trend", "details"]) empty($(id), word("A valid dated range is unavailable."));
+            for (const id of ["summary", "categories", "trend", "largest", "details"]) empty($(id), word("A valid dated range is unavailable."));
+            $("calendar").replaceChildren();
             $("more").hidden = true;
-            notice(word(state.period === "custom" ? "Choose a valid From and Through date." : "The source has no complete dates to summarize."));
+            notice(word(state.period === "custom" ? "Choose a valid From and Through date."
+              : !state.cnyCurrencies.length ? "No explicit CNY currency found." : "The source has no complete dates to summarize."));
+            state.loaded = true;
             return;
           }
-          const base = { from: range.from, through: range.through, ...(state.currency ? { currency: currencyValue(state.currency) } : {}) };
+          const base = { from: range.from, through: range.through, currencies: state.cnyCurrencies };
           const filtered = { ...base, ...(state.category ? { category: state.category } : {}) };
           const pinned = { expectedDataRevision: state.dataRevision };
           const budget = { remaining: maxAggregatePages };
-          const [summary, outflow, inflow, categories, categoryOptions, trend, details] = await Promise.all([
+          const [summary, outflow, inflow, categories, categoryOptions, details] = await Promise.all([
             queryAll("summary", filtered, pinned, budget, run),
             queryAll("outflow", filtered, pinned, budget, run),
             queryAll("inflow", filtered, pinned, budget, run),
             queryAll("categories", filtered, pinned, budget, run),
             queryAll("category_options", base, pinned, budget, run),
-            queryAll(`trend_${state.bucket}`, filtered, pinned, budget, run),
             query("details", filtered, pinned),
           ]);
           if (run !== state.run) return;
-          const outflows = new Map(outflow.rows.map((row) => [currencyKey(row.currency), row.amount]));
-          const inflows = new Map(inflow.rows.map((row) => [currencyKey(row.currency), row.amount]));
-          const combined = summary.rows.map((row) => {
-            const key = currencyKey(row.currency);
-            const zero = zeroLike(row.net);
-            return { ...row,
-              outflow: outflows.has(key) ? absoluteDecimal(outflows.get(key)) : outflow.truncated ? null : zero,
-              inflow: inflows.has(key) ? inflows.get(key) : inflow.truncated ? null : zero,
-            };
-          });
+          const prior = priorRange(range);
+          const [priorSummary, priorOutflow, priorInflow] = prior ? await Promise.all([
+            queryAll("summary", { ...filtered, from: prior.from, through: prior.through }, pinned, budget, run),
+            queryAll("outflow", { ...filtered, from: prior.from, through: prior.through }, pinned, budget, run),
+            queryAll("inflow", { ...filtered, from: prior.from, through: prior.through }, pinned, budget, run),
+          ]) : [null, null, null];
+          if (run !== state.run) return;
+          const latest = latestCnyDate();
+          const monthStart = new Date(`${latest.slice(0, 7)}-01T00:00:00Z`);
+          monthStart.setUTCMonth(monthStart.getUTCMonth() - 11);
+          const trendBase = { ...filtered, from: monthStart.toISOString().slice(0, 10), through: latest };
+          const [trendOut, trendIn, largest] = await Promise.all([
+            queryAll("trend_month", trendBase, pinned, budget, run),
+            queryAll("trend_month_inflow", trendBase, pinned, budget, run),
+            query("largest_expenses", filtered, pinned),
+          ]);
+          if (run !== state.run) return;
+          let dayOut = null, dayIn = null;
+          if (state.view === "calendar" && state.calendarMonth) {
+            const calendarBase = { ...filtered, from: `${state.calendarMonth}-01`, through: monthLast(`${state.calendarMonth}-01`) };
+            [dayOut, dayIn] = await Promise.all([
+              queryAll("trend_day", calendarBase, pinned, budget, run),
+              queryAll("trend_day_inflow", calendarBase, pinned, budget, run),
+            ]);
+            if (run !== state.run) return;
+            if (dayOut.truncated || dayIn.truncated) {
+              state.calendarOut = [];
+              state.calendarIn = [];
+              $("calendar").replaceChildren(element("p", "empty calendar-unavailable", word("Daily totals incomplete. Narrow the date range and refresh.")));
+              empty($("day-details"), word("Daily totals incomplete. Narrow the date range and refresh."));
+            } else {
+              state.calendarOut = dayOut.rows;
+              state.calendarIn = dayIn.rows;
+              renderCalendar();
+            }
+          }
           const options = [...new Set(categoryOptions.rows.filter((row) => row.category !== null && String(row.category).trim() !== "").map((row) => String(row.category)))].sort();
           if (state.category && !options.includes(state.category)) options.push(state.category);
           state.category = setOptions($("category"), options.map((name) => [name, name]), state.category, word("All categories"));
-          $("range-label").textContent = word("{from} to {through}", range);
-          renderSummary(combined);
+          const fullEnd = state.period === "week" ? dateAfter(range.from, 6)
+            : state.period === "month" ? monthLast(range.from)
+              : state.period === "year" ? `${range.from.slice(0, 4)}-12-31` : range.through;
+          $("range-label").textContent = [word("{from} to {through}", range),
+            ...(prior ? [word("Prior {from} to {through}", prior)] : []),
+            ...(range.through < fullEnd ? [word("Recorded through {date}", { date: range.through })] : [])].join(" · ");
+          renderSummary(moneyMetrics(summary, outflow, inflow), prior ? moneyMetrics(priorSummary, priorOutflow, priorInflow) : null);
           renderCategories(categories.rows, categories.truncated);
-          renderTrend(trend.rows);
+          renderTrend(trendOut.rows, trendIn.rows);
+          renderLargest(largest.rows);
           state.details = details.rows;
           state.nextCursor = details.nextCursor;
           renderDetails();
           state.loaded = true;
-          notice([summary, outflow, inflow, categories, categoryOptions, trend].some((answer) => answer.truncated)
-            ? word("This view is incomplete because the source has more groups than can be read at once. Narrow the date range or choose a currency.")
-            : "");
+          notice([summary, outflow, inflow, categories, categoryOptions, priorSummary, priorOutflow, priorInflow, trendOut, trendIn, dayOut, dayIn]
+            .some((answer) => answer?.truncated)
+            ? word("This view is incomplete because the source has more groups than can be read at once. Narrow the date range.") : "");
+          if (state.view === "calendar" && state.selectedDay && !dayOut?.truncated && !dayIn?.truncated) void loadDay(state.selectedDay);
         } catch (error) {
           if (run === state.run) {
-            if (!state.loaded) for (const id of ["summary", "categories", "trend", "details"]) empty($(id), word("Records unavailable. Try Refresh."));
-            notice(`${word("Records could not be refreshed. Try again.")}${locale() === "en" && error instanceof Error ? ` ${error.message}` : ""}`, "error");
+            if (!state.loaded) for (const id of ["summary", "categories", "trend", "largest", "details"]) empty($(id), word("Records unavailable. Try Refresh."));
+            notice(word("Records could not be refreshed. Try again."), "error");
           }
         } finally {
           refreshing = false;
@@ -608,14 +961,14 @@
         $("more").disabled = true;
         try {
           const cursor = state.nextCursor;
-          const parameters = { from: range.from, through: range.through, ...(state.currency ? { currency: currencyValue(state.currency) } : {}), ...(state.category ? { category: state.category } : {}) };
+          const parameters = { from: range.from, through: range.through, currencies: state.cnyCurrencies, ...(state.category ? { category: state.category } : {}) };
           const result = await query("details", parameters, { cursor, expectedDataRevision: state.dataRevision });
           if (run !== state.run) return;
           state.details.push(...result.rows);
           state.nextCursor = result.nextCursor;
           renderDetails();
         } catch (error) {
-          if (run === state.run) notice(`${word("More entries could not be loaded. Try again.")}${locale() === "en" && error instanceof Error ? ` ${error.message}` : ""}`, "error");
+          if (run === state.run) notice(word("More entries could not be loaded. Try again."), "error");
         } finally {
           $("more").disabled = false;
         }
@@ -627,20 +980,45 @@
         scheduledRefresh = setTimeout(() => { void refresh(); }, 150);
       }
 
+      const tabs = [...document.querySelectorAll('.view-tabs [role="tab"]')];
+      function showView(view, focus = false) {
+        state.view = view;
+        for (const tab of tabs) {
+          const selected = tab.dataset.view === view;
+          tab.setAttribute("aria-selected", String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+          $(tab.getAttribute("aria-controls")).hidden = !selected;
+          if (selected && focus) tab.focus();
+        }
+        if (view === "calendar") void refresh();
+      }
+      for (const [index, tab] of tabs.entries()) {
+        tab.addEventListener("click", () => showView(tab.dataset.view));
+        tab.addEventListener("keydown", (event) => {
+          const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+            : event.key === "ArrowRight" ? (index + 1) % tabs.length
+              : event.key === "ArrowLeft" ? (index - 1 + tabs.length) % tabs.length : -1;
+          if (next < 0) return;
+          event.preventDefault();
+          showView(tabs[next].dataset.view, true);
+        });
+      }
+      for (const [id, delta] of [["calendar-previous", -1], ["calendar-next", 1]]) $(id).addEventListener("click", () => {
+        if (!state.calendarMonth) return;
+        const month = new Date(`${state.calendarMonth}-01T00:00:00Z`);
+        month.setUTCMonth(month.getUTCMonth() + delta);
+        state.calendarMonth = month.toISOString().slice(0, 7);
+        state.selectedDay = null;
+        $("day-details").textContent = word("Choose a date to see its records.");
+        scheduleRefresh();
+      });
       $("period").addEventListener("change", (event) => {
         state.period = event.target.value;
         $("custom-range").hidden = state.period !== "custom";
         scheduleRefresh();
       });
-      $("currency").addEventListener("change", (event) => { state.currency = event.target.value; scheduleRefresh(); });
       $("category").addEventListener("change", (event) => { state.category = event.target.value; scheduleRefresh(); });
       for (const id of ["from", "through"]) $(id).addEventListener("change", () => { if (state.period === "custom") scheduleRefresh(); });
-      for (const bucket of ["day", "month"]) $(bucket).addEventListener("click", () => {
-        state.bucket = bucket;
-        $("day").setAttribute("aria-pressed", String(bucket === "day"));
-        $("month").setAttribute("aria-pressed", String(bucket === "month"));
-        scheduleRefresh();
-      });
       $("refresh").addEventListener("click", () => { void refresh(true); });
       $("more").addEventListener("click", () => { void loadMore(); });
       if (sdk && typeof sdk.onDataChanged === "function") sdk.onDataChanged(() => { void refresh(true); });

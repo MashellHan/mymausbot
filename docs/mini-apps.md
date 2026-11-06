@@ -2,7 +2,7 @@
 
 Mini Apps are persistent applications in **Computer → Mini Apps**. An app has a
 stable identity, immutable template versions and explicit read permissions. Most
-apps use editable HTML and declared Data queries; Agent Team and Usage use
+apps use editable HTML and declared Data queries; Agent Team and Work Tracker use
 registered built-in views. Each app belongs to the local workspace owner,
 independently of the chat or bot that created it. Opening, filtering and
 refreshing an app does not start an AI turn.
@@ -14,33 +14,39 @@ editions published by an existing bot or Automation.
 
 ## Find and open apps
 
-The library shows all five shipped choices before the first installation.
-Available templates and installed apps have separate states: browsing a template
-does not create an app, grant access or start an Automation. Bookkeeping needs an
-existing Data table and column mappings; reports need an existing enabled local
-Bot Automation; Agent Team and Usage request their own explicit owner read grants.
-An empty retained-dataset list does not establish whether a bot has unconnected
-business Data.
+Opening the desktop library adds five included apps to the existing registry:
+Bookkeeping, Daily X AI digest, GitHub activity, Agent Team and Work Tracker.
+There is no installation wizard. The local-owner `POST /api/mini-apps/defaults`
+operation receives the bundled bookkeeping HTML, creates missing entries and
+returns the real persisted inventory. It does not create or start an Automation.
 
-Installed apps use one horizontally scrollable row with an icon for every app.
-**All apps** opens the full library, including custom apps and available templates.
-Arrow keys, Home and End move among installed tabs. Unknown custom apps use the
-default app icon.
+Apps appear in one row with a large icon and a small label below it. **All apps**
+opens an icon grid anchored to its button. Remove hides an app while preserving
+its history and Data. Removed apps stay removed across restart and updates;
+**Add** restores the same identity. Unknown custom apps have a default icon.
 
-Explicit owner installation records the report or bookkeeping template's display
-identity as `shippedTemplateKind`. It survives later bot layout edits, version
-changes, archive and workspace restore, but grants no access. Older entries
-without that metadata remain custom or unknown; a matching slug or HTML document
-does not silently assign an identity or replace an existing app. Native dashboard
-identity and current read grants remain separate.
+Bookkeeping automatically finds an existing physical ledger with the seven known
+columns, preferring a unique `main.ledger_master`. It retains the Bot's existing
+DuckDB store and keeps the Bot writing through its alias to that same store.
+Only the source Bot receives a publisher grant. Ambiguous sources are left
+unchanged and reported; unrelated empty Bot databases are not created. Reports
+connect to a uniquely identified existing local producer Automation. If no source
+exists yet, an included app displays a waiting page. Opening the library again
+connects that untouched waiting page when a source becomes available.
 
-## Install Agent Team or Usage
+Bundled display identity is recorded as `shippedTemplateKind`; it grants no reads.
+Default initialization preserves customized or already bound apps. A custom app
+using a bundled slug is kept, and the new included app receives an available
+suffixed slug. Older unmarked records are not silently adopted. Native dashboard
+identity and current read grants remain separate; initialization does not restore
+a revoked grant.
 
-Open **Computer → Mini Apps**, choose Agent Team or Usage from the library, read
-its access disclosure and install. The existing Agent Team and Usage Computer
+## Agent Team and Work Tracker
+
+Open either app directly from **Computer → Mini Apps**. The original Computer
 tabs remain available. Both surfaces use the same providers and shared views;
-the installed apps do not start a collector, copy snapshots into another store
-or change a schedule.
+the included apps do not start a collector, copy snapshots into another store
+or change a schedule. Work Tracker keeps the internal `usage` identity and routes.
 
 Agent Team reads local Herdr member status, models and bounded task hints. An
 expanded activity disclosure reads recent redacted user and assistant messages;
@@ -48,7 +54,7 @@ it starts folded, and no office is selected initially. The app cannot control
 agents. Team observations refresh every two seconds while visible, and activity
 reads stop when the disclosure closes or the app is hidden.
 
-Usage reads the existing five-minute aggregate, including its coverage and
+Work Tracker reads the existing five-minute aggregate, including its coverage and
 capture time. Manual refresh rereads the current provider snapshot immediately
 without changing the automatic cadence or selected office. Its 1/7/30-day windows include the current partial China-calendar
 day. Commit totals use the existing local non-merge, commit-hash deduplication,
@@ -61,11 +67,11 @@ verified zero values retain their separate meanings.
 These two views are built into the host. Their registered metadata identifies
 `renderer: "native"`, `htmlRole: "fallback-only"` and the editable title and
 description fields. Publishing HTML changes only the fallback document, never
-the live panel layout or its observations. The installer does not offer a chat
-editor for these views. Other Mini Apps retain normal editable HTML behavior.
+the live panel layout or its observations. These views do not offer a chat
+editor. Other Mini Apps retain normal editable HTML behavior.
 
-Uninstalling archives the app and clears its dashboard read grant while keeping
-its identity and history. Reinstalling uses that same app ID and requires an
+Removing archives the app and clears its dashboard read grant while keeping
+its identity and history. Adding it again uses that same app ID and requires an
 explicit owner grant at the current revision. Rolling back a template or
 restoring a workspace backup cannot restore a revoked dashboard grant.
 The library offers an explicit access-recovery action for a registered built-in
@@ -73,36 +79,25 @@ app after restore or revocation. Its persistent `dashboardIdentity` identifies
 that entry but grants no reads; a custom app with the same slug is never silently
 replaced or granted access.
 
-## Install a report
+## Reports
 
-Open **Computer → Mini Apps**, choose Daily X AI digest or GitHub
-activity, and select the existing producer Automation. Setup resolves its bot on
-the server, prepares an empty report table in that bot's retained Data, and
-installs the selected template with that producer as editor. The first screen
-says no edition has been published until the producer actually publishes one.
-Bookkeeping remains available in the same library.
+Daily X AI digest and GitHub activity are included automatically. The server
+resolves an eligible existing local producer, prepares its retained report table
+and grants that Bot as editor. An empty table shows that no edition has been
+published; it does not display invented sample content. Existing schedules and
+other outputs remain in place. See the [report publication contract](mini-app-reports.md).
 
-The Automation's schedule and other outputs stay in place. Add report publication
-to that existing authorized routine through the bot's supported tools. Installation
-does not edit a routine or establish that it has run. See the
-[report contract and authoring flow](mini-app-reports.md).
+## Bookkeeping
 
-## Use the bookkeeping example
+Open Bookkeeping to read the existing ledger directly. The portal has overview,
+calendar and record views, week/month/year periods, corresponding elapsed-period
+comparisons, monthly trends, category shares and largest outflows. Filters apply
+to the same recorded dates without shifting them through a browser time zone.
+There is no source picker, column-mapping wizard or currency selector in normal use.
 
-1. In the desktop app, open **Computer → Mini Apps** and choose Bookkeeping from
-   the library.
-2. Select a bot with imported Data, or an already connected dataset. Connecting
-   retains the entire DuckDB store independently of that bot; its normal Data
-   tools continue writing to that same store.
-3. Select the physical ledger table, inspect its preview and confirm the seven
-   column mappings: category, date, amount, account, book, currency and note.
-4. Choose the assistant allowed to edit the app, or keep it owner-only, and install.
-
-The portal offers recorded-month, recorded-30-day, complete dated history and
-custom date ranges; currency and category filters; inflow, outflow and net totals;
-category shares; daily/monthly trends; and paged entries. Dates use the recorded
-calendar values, without shifting them through a browser time zone. Missing dates
-and invalid or unrepresentable amounts are counted in the coverage notice.
+The main view presents explicitly recognized CNY records. Foreign, blank and
+unknown currency values are not relabeled or combined with CNY. Missing dates
+and invalid or unrepresentable amounts remain visible as coverage limitations.
 
 Negative amounts are outflow and positive amounts are inflow. They are not
 automatically classified as expenses, income, refunds or transfers. Currency
@@ -222,7 +217,7 @@ Consult turns cannot mutate apps. A late response is discarded after revocation,
 an app change or a Data revision change.
 
 Built-in dashboard reads are bound to an installed app ID and current revision.
-The fixed Agent Team grant permits only teams and per-pane activity; Usage
+The fixed Agent Team grant permits only teams and per-pane activity; Work Tracker
 permits only the existing aggregate. The server checks owner access, active
 status, revision and resource before and after each provider read. The host
 aborts pending reads on hide/unmount and clears observations on revocation.

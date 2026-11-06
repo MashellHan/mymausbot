@@ -14,7 +14,7 @@ import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
 import { DataAdmission, DataStoreLane } from "./admission.ts";
 import { DataCatalog, type DataCatalogAccess } from "./catalog.ts";
 import { DataCursorCodec } from "./cursor.ts";
-import { closeKnownDatabases, copyDataSnapshots, listOwnerDatasets, promoteDataStore, recoverPromotions } from "./managed-stores.ts";
+import { closeKnownDatabases, copyDataSnapshots, listExistingBotSources, listOwnerDatasets, promoteDataStore, recoverPromotions } from "./managed-stores.ts";
 import { validateDataBindings } from "./named-query.ts";
 import { executeNamedRead, listSourceTables, readNamedPage, verifyBaseTable, type NamedConnection } from "./named-reader.ts";
 import { commitBusinessCreate, ensureRevision, readRevision } from "./revision.ts";
@@ -74,10 +74,6 @@ export function duckdbDirectory(env: NodeJS.ProcessEnv = process.env): string | 
 /** createRequire resolves upwards from the anchor, so one inside <dir>/node_modules finds the staged @duckdb and @resvg first. */
 export function nativeRequire(directory: string | null = duckdbDirectory()): NodeJS.Require {
   return createRequire(directory ? join(directory, "node_modules", "openmausbot-duckdb-anchor.js") : import.meta.url);
-}
-
-function loadBinding(directory: string | null): Binding {
-  return nativeRequire(directory)("@duckdb/node-api") as Binding;
 }
 
 /** DuckDB's defaults assume it owns the machine (80 % of RAM, every core), and a native OOM takes the server down. */
@@ -857,7 +853,7 @@ class Engine implements DataEngine {
     if (this.loaded) return this.loaded;
     const directory = duckdbDirectory(this.env);
     try {
-      this.loaded = { binding: loadBinding(directory) };
+      this.loaded = { binding: nativeRequire(directory)("@duckdb/node-api") as Binding };
     } catch (error) {
       const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0].trim();
       const where = directory ? `from ${directory}` : "from the server's node_modules";
@@ -905,6 +901,11 @@ class Engine implements DataEngine {
     }
     this.datasetByDb.set(db, datasetId);
     return db;
+  }
+
+  async listBotSources(ownerId: string, botIds: string[]): Promise<Array<{ botId: string; datasetId: string | null }>> {
+    await this.recover();
+    return listExistingBotSources(this.requireCatalog(), this.folder, ownerId, botIds);
   }
 
   async validateBinding(ownerId: string, binding: MiniAppDataBinding): Promise<void> {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalAgentTeamsResponse, LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../../shared/local-dashboard";
 import type { MiniAppDashboardDeclaration, MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
 import { setLocale } from "@/lib/i18n";
+import { withMergedUsageFixture } from "../../../scripts/testing/merged-usage-fixture";
 
 const calls = vi.hoisted(() => ({ api: vi.fn(), visible: true }));
 vi.mock("@/state/store", () => ({
@@ -105,8 +106,8 @@ describe("installed native Mini App dashboards", () => {
     expect(JSON.parse(calls.api.mock.calls[1]![1].body)).toEqual({ resource: "activity", expectedRevision: 3, agentId: "w1:p1" });
   });
 
-  it("renders the same Usage values and weekly separators from an app-scoped snapshot", async () => {
-    calls.api.mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot: usage });
+  it("renders the same merged Usage values and weekly separators from an app-scoped snapshot", async () => {
+    calls.api.mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot: withMergedUsageFixture(usage) });
     await render("usage");
     await vi.waitFor(() => expect(host.querySelectorAll("[data-usage-trend]")).toHaveLength(3));
     expect(host.textContent).toContain("1-day window");
@@ -125,7 +126,7 @@ describe("installed native Mini App dashboards", () => {
     calls.visible = false;
     await render("usage");
     expect(firstSignal.aborted).toBe(true);
-    await act(async () => finish({ appId, revision: 3, resource: "usage", snapshot: usage }));
+    await act(async () => finish({ appId, revision: 3, resource: "usage", snapshot: withMergedUsageFixture(usage) }));
     expect(host.querySelector('[data-usage-trend]')).toBeNull();
     calls.visible = true;
     await render("usage", 4);

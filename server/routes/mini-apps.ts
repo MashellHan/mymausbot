@@ -14,6 +14,8 @@ import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "..
 import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
 import { ReportStore } from "../mini-apps/report-store.ts";
+import { DefaultMiniApps } from "../mini-apps/defaults.ts";
+import { reportAppsForBot } from "../mini-apps/report-apps.ts";
 import { parseReportTool, reportKindSchema } from "../mini-apps/report-schema.ts";
 import { localDashboardProviders, type LocalDashboardProviders } from "./local-dashboard.ts";
 import type { RoutineManager } from "../routines.ts";
@@ -50,7 +52,8 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   const deps = { ...shared, apps: new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
     dashboardProviders: dashboardProviders ?? localDashboardProviders }),
     reports: new ReportStore(shared.data, createReportTemplate) };
-  return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps) };
+  return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps),
+    reportAppsForBot: (botId: string) => reportAppsForBot(deps, botId) };
 }
 
 export function miniAppError(error: unknown): { status: number; error: string; code?: string } {
@@ -73,6 +76,7 @@ async function datasetInfo(data: DataEngine, datasetId: string): Promise<MiniApp
 }
 
 export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
+  const defaults = new DefaultMiniApps(deps);
   return async (ctx) => {
     const { req, res, path, method, auth, json, readBody, url } = ctx;
     if (path !== ROOT && !path.startsWith(`${ROOT}/`)) return PASS;
@@ -86,6 +90,9 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
     try {
       assertOwner();
       if (url.search) throw appFailure(400, "Query parameters are not supported.");
+      if (path === `${ROOT}/defaults` && method === "POST") {
+        return json(res, 200, await defaults.ensure(owner, await readBody(req, 900_000)));
+      }
       if (path === REPORT_SOURCE && method === "POST") {
         const parsed = z.object({ kind: reportKindSchema, routineId: z.string().min(1).max(128) }).strict().safeParse(await readBody(req, 4096));
         if (!parsed.success) throw appFailure(400, "Choose an existing Automation and report kind.");

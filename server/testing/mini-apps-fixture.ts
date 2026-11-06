@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { launchVerificationServer, runControlOmb, verificationServerEnvironment } from "../../scripts/control-omb.ts";
 import { createBookkeepingPublish, suggestedBookkeepingColumns } from "../../shared/bookkeeping-mini-app.ts";
-import type { MiniAppDataset, MiniAppDocument, MiniAppMutationResult } from "../../shared/mini-apps.ts";
+import type { MiniAppDataset, MiniAppDefaultsResult, MiniAppDocument, MiniAppMutationResult } from "../../shared/mini-apps.ts";
 import { waitForExit } from "./cleanup.ts";
 
 const CAPABILITY_KEY = "isolated-mini-apps-fixture-capability";
@@ -21,7 +21,7 @@ export const SYNTHETIC_LEDGER_SQL = `CREATE TABLE ledger_master AS SELECT * FROM
   ('Unknown', '2026-04-04', '1.005', 'Card', 'Daily', 'CNY', 'Unrepresentable amount')
 ) AS records("分类", "时间", "金额", "账户", "账本", "货币", "备注")`;
 
-export async function launchMiniAppsFixture({ scripted = false }: { scripted?: boolean } = {}) {
+export async function launchMiniAppsFixture({ scripted = false, defaultApps = false }: { scripted?: boolean; defaultApps?: boolean } = {}) {
   const fixture = await launchVerificationServer(process.env, undefined, undefined, undefined, undefined,
     scripted ? { scripted: true } : undefined);
   let server: ChildProcess | undefined;
@@ -74,14 +74,17 @@ export async function launchMiniAppsFixture({ scripted = false }: { scripted?: b
       return result.structuredContent;
     };
     await dataCall("data_sql", { sql: SYNTHETIC_LEDGER_SQL });
+    const html = readFileSync(new URL("../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8");
+    const defaults = defaultApps ? await api<MiniAppDefaultsResult>("POST", "/api/mini-apps/defaults", { bookkeepingHtml: html }) : null;
     const { dataset } = await api<{ dataset: MiniAppDataset }>("POST", "/api/mini-apps/sources", { botId: bot.id });
     const table = dataset.tables.find((candidate) => candidate.name === "ledger_master")!;
     const publication = { ...createBookkeepingPublish({ dataset, table, columns: suggestedBookkeepingColumns(table),
-      html: readFileSync(new URL("../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8"),
+      html,
       publisherBotId: bot.id, requestKey: "fixture-install", title: "Bookkeeping", slug: "fixture-bookkeeping" }),
       shippedTemplateKind: "bookkeeping" as const };
-    const installed = await api<MiniAppMutationResult>("POST", "/api/mini-apps", publication, 201);
-    return { ...fixture.info, pid: server!.pid!, bot, dataset, publication, installed, api, dataCall, mint, close,
+    const included = defaults?.apps.find((app) => app.shippedTemplateKind === "bookkeeping");
+    const installed = included ? { app: included, replayed: false } : await api<MiniAppMutationResult>("POST", "/api/mini-apps", publication, 201);
+    return { ...fixture.info, pid: server!.pid!, bot, dataset, publication, installed, defaults, api, dataCall, mint, close,
       document: () => api<MiniAppDocument>("GET", `/api/mini-apps/${installed.app.id}`),
       restart,
     };

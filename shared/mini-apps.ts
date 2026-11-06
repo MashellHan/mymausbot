@@ -9,6 +9,19 @@ export const MINI_APP_DASHBOARD_RESOURCES = {
 export type MiniAppDashboardKind = keyof typeof MINI_APP_DASHBOARD_RESOURCES;
 export type MiniAppDashboardResource = "teams" | "activity" | "usage";
 export type MiniAppShippedTemplateKind = "bookkeeping" | "x_ai_digest" | "github_activity";
+export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage"] as const;
+export type DefaultMiniAppKind = typeof DEFAULT_MINI_APP_KINDS[number];
+
+/** The local owner adds bundled apps once; only an explicit restore re-adds a removed app. */
+export interface MiniAppDefaultsInput {
+  bookkeepingHtml: string;
+  restore?: DefaultMiniAppKind;
+}
+
+export interface MiniAppDefaultsResult {
+  apps: MiniAppSummary[];
+  issues: Array<{ kind: DefaultMiniAppKind; error: string }>;
+}
 /** A native dashboard grant belongs to the installed app, independent of its HTML template. */
 export type MiniAppDashboardDeclaration = {
   [K in MiniAppDashboardKind]: { kind: K; renderer: "native"; htmlRole: "fallback-only";

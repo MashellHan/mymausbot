@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { DataCatalog, type DataDataset } from "./catalog.ts";
 import { durableCopy, durablePromote, fileHash, removeSourceStore, storeFile, storeFolder, verifyDataSnapshot, DATA_DB_FILE } from "./storage.ts";
-import type { DataSnapshotManifest } from "./types.ts";
+import { DataFailure, type DataSnapshotManifest } from "./types.ts";
 
 export async function closeKnownDatabases<T extends { close(strict: boolean): Promise<void>; revoke(): void }>(bots: Iterable<T>, stores: Iterable<T>, revoke = false): Promise<void> {
   const databases = new Set([...bots, ...stores]);
@@ -15,6 +15,18 @@ export async function closeKnownDatabases<T extends { close(strict: boolean): Pr
 export function listOwnerDatasets(catalog: DataCatalog, ownerId: string, revisionFor: (dataset: DataDataset) => Promise<number>): Promise<Array<DataDataset & { revision: number }>> {
   return Promise.all(catalog.stores().filter((dataset) => dataset.ownerId === ownerId)
     .map(async (dataset) => ({ ...dataset, revision: await revisionFor(dataset) })));
+}
+
+export function listExistingBotSources(catalog: DataCatalog, botFolder: (id: string) => string, ownerId: string, botIds: string[]): Array<{ botId: string; datasetId: string | null }> {
+  const sources: Array<{ botId: string; datasetId: string | null }> = [];
+  for (const botId of new Set(botIds)) {
+    if (!botId || /[\\/]|^\.\.?$/.test(botId)) throw new DataFailure({ code: "invalid_input", message: "Invalid Data bot id." });
+    const dataset = catalog.forBot(botId);
+    if (dataset ? dataset.ownerId === ownerId : existsSync(join(botFolder(botId), DATA_DB_FILE))) {
+      sources.push({ botId, datasetId: dataset?.datasetId ?? null });
+    }
+  }
+  return sources;
 }
 
 export async function recoverPromotions(catalog: DataCatalog, dataDir: string, botFolder: (botId: string) => string): Promise<void> {

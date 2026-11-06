@@ -9,9 +9,12 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 import urllib.parse
 import urllib.request
+
+import local_usage_merged
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 
@@ -98,7 +101,10 @@ class AzureMemorySession:
             or list(args[6:]) != ["--resource", ADO_RESOURCE, "-o", "json"]
         ):
             raise ValueError("Usage permits only the existing Azure DevOps GET requests")
-        target = urllib.parse.urlsplit(str(args[5]))
+        return self.request(str(args[5]), timeout)[0]
+
+    def request(self, url, timeout):
+        target = urllib.parse.urlsplit(url)
         if (
             target.scheme != "https"
             or target.hostname != "dev.azure.com"
@@ -107,8 +113,9 @@ class AzureMemorySession:
             or target.password is not None
             or target.fragment
             or not re.fullmatch(
-                r"/[^/]+/_apis/connectionData|/[^/]+/[^/]+/_apis/git/repositories/[^/]+/pullrequests",
+                r"/[^/]+/_apis/connectionData|/[^/]+/[^/]+/_apis/git/(?:pullrequests|repositories/[^/]+/(?:pullrequests|pullrequests/\d+/commits|commits/[0-9a-f]{40}(?:[0-9a-f]{24})?))",
                 target.path,
+                re.I,
             )
         ):
             raise ValueError("Usage permits only Azure DevOps identity and PR endpoints")
@@ -119,7 +126,9 @@ class AzureMemorySession:
         )
         try:
             with self.http.open(request, timeout=timeout) as response:
-                return response.read().decode("utf-8")
+                headers = getattr(response, "headers", None)
+                continuation = headers.get("x-ms-continuationtoken") if headers else None
+                return response.read().decode("utf-8"), continuation
         except http.client.HTTPException:
             raise ValueError("The Azure DevOps response could not be read") from None
 
@@ -142,7 +151,14 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
     options = {"upload": publish, "skip_api": skip_api, "reuse_sources": reuse_sources}
     if "history_days" in inspect.signature(collector.refresh).parameters:
         options["history_days"] = 59
-    collector.refresh(config, **options)
+    try:
+        collector.refresh(config, **options)
+    finally:
+        if config.get("githubProfiles") or config.get("mergedAdoProjects") or config.get("adoRemotes"):
+            try:
+                local_usage_merged.refresh(config, collector, collector.run, ado_request=azure.request, skip_api=skip_api)
+            except Exception as error:
+                print("Remote merged Usage unavailable: " + type(error).__name__, file=sys.stderr)
 
 
 def main():
