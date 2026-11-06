@@ -13,6 +13,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => true }));
 vi.mock("./LocalUsagePanel", () => ({ LocalUsagePanel: () => "Usage" }));
+vi.mock("./mini-apps/MiniAppsPanel", () => ({ MiniAppsPanel: () => "Mini Apps" }));
 
 await import("./AgentTeamPanel");
 const { ComputerPanelInfoTab } = await import("./ComputerPanelInfoTab");
@@ -33,7 +34,7 @@ const bot = { id: "scout", threadId: "thread" } as Bot;
 let host: HTMLDivElement;
 let root: Root;
 
-const render = async (view: "agent-team" | "usage") => {
+const render = async (view: "agent-team" | "usage" | "mini-apps") => {
   await act(async () => root.render(createElement(ComputerPanelInfoTab, { view, bot })));
 };
 
@@ -87,6 +88,17 @@ it("keeps the selected office and open history across Usage without hidden reads
   expect(disclosure.getAttribute("aria-expanded")).toBe("true");
   expect(host.textContent).toContain("Synthetic history");
   expect(calls.api.mock.calls.length).toBeGreaterThan(callsBeforeHide);
+
+  const callsBeforeMiniApps = calls.api.mock.calls.length;
+  await render("mini-apps");
+  expect(host.textContent).toContain("Mini Apps");
+  expect(team.parentElement?.hidden).toBe(true);
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  expect(calls.api).toHaveBeenCalledTimes(callsBeforeMiniApps);
+
+  await render("agent-team");
+  expect(host.querySelector('[data-team-house="office"]')).toBe(office);
+  expect(disclosure.getAttribute("aria-expanded")).toBe("true");
 });
 
 it("clears retained office and history when authorization is denied on return", async () => {
