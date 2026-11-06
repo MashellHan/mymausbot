@@ -292,7 +292,7 @@ describe("complete CI and trusted QA health", () => {
     const narrow = narrowPlan();
     expect(plan.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
     expect(narrow.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
-    expect(plan.outputs.expected_jobs).toHaveLength(37);
+    expect(plan.outputs.expected_jobs).toHaveLength(38);
     expect(fullPushPlan(plan)).toBe(true);
     expect(fullPushPlan(pushPlan(moveLinuxIntoStatic(ciOutputs(FULL_SCOPE, ALL_OS))))).toBe(true);
     expect(narrowPushPlan(narrow)).toBe(true);

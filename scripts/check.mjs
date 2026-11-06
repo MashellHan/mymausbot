@@ -42,15 +42,23 @@ function main() {
   const plan = selectCheckPlan({ files: source.files, policy, lines: changedCodeLines(source.base), mode: process.env.MAUSBOT_CI_MODE || "shadow" });
   console.log(JSON.stringify({ ...plan, source }, null, 2));
   if (action === "plan") return;
-  const files = [...new Set([...plan[action], ...extra])].sort();
-  if (!files.length) throw new Error("No mapped contract test: supply --test <file>, then record the mapping for review");
+  const nativeRelay = plan.nativeRelay || extra.some((file) => file.startsWith("relay/test/"));
+  const files = [...new Set([...plan[action], ...extra.filter((file) => !file.startsWith("relay/test/"))])].sort();
+  if (!files.length && !nativeRelay) throw new Error("No mapped contract test: supply --test <file>, then record the mapping for review");
   const startedAt = new Date().toISOString();
   const directory = join(".omb-scratch", "validation", `${startedAt.replace(/[:.]/g, "-")}-${action}`);
   mkdirSync(directory, { recursive: true });
   const resultFile = join(directory, "vitest.json");
   const command = ["node_modules/vitest/vitest.mjs", "run", ...files, "--reporter=default", "--reporter=json", `--outputFile.json=${resultFile}`];
   const env = { OMB_VITEST_WORKERS: "1", OMB_VITEST_E2E: "all", OMB_DASHBOARD_UI: files.includes("scripts/testing/local-dashboard-ui.e2e.test.ts") ? "1" : "0" };
-  const result = spawnSync(process.execPath, command, { stdio: "inherit", env: { ...process.env, ...env } });
+  const result = files.length ? spawnSync(process.execPath, command, { stdio: "inherit", env: { ...process.env, ...env } }) : null;
+  const nativeCommand = nativeRelay ? ["pnpm", "--dir", "relay", "test"] : null;
+  const nativeResult = nativeCommand ? spawnSync(nativeCommand[0], nativeCommand.slice(1), { encoding: "utf8", env: process.env }) : null;
+  const nativeOutput = `${nativeResult?.stdout ?? ""}${nativeResult?.stderr ?? ""}`;
+  if (nativeResult) {
+    process.stdout.write(nativeOutput);
+    writeFileSync(join(directory, "relay.tap"), nativeOutput);
+  }
   const durationMs = Date.now() - Date.parse(startedAt);
   const budgetMs = action === "edit" ? 30_000 : 120_000;
   const endSource = localChange(base);
@@ -60,21 +68,25 @@ function main() {
     const report = JSON.parse(readFileSync(resultFile, "utf8"));
     counts = Object.fromEntries(["numTotalTests", "numPassedTests", "numFailedTests", "numPendingTests"].map((key) => [key, report[key]]));
   }
+  const nativeSummary = [...nativeOutput.matchAll(/^ℹ (tests|pass|fail|cancelled|skipped|todo) (\d+)$/gm)];
+  const nativeCounts = nativeSummary.length ? Object.fromEntries(nativeSummary.map((match) => [match[1], Number(match[2])])) : null;
+  const exitCode = [result, nativeResult].every((item) => !item || item.status === 0) ? 0 : 1;
   const receipt = {
-    version: 1, action, source, endSource, inputsStable, plan, command: [process.execPath, ...command],
+    version: 1, action, source, endSource, inputsStable, plan, command: result ? [process.execPath, ...command] : null,
+    nativeCommand, nativeCounts, nativeResultFile: nativeResult ? join(directory, "relay.tap") : null,
     env: { ...env, CI: process.env.CI ?? "", TZ: Intl.DateTimeFormat().resolvedOptions().timeZone, LANG: process.env.LANG ?? "" },
     node: process.version, platform: process.platform, arch: process.arch,
     startedAt, finishedAt: new Date().toISOString(), durationMs, budgetMs, overBudget: durationMs > budgetMs,
-    exitCode: result.status, signal: result.signal,
-    error: result.error?.message, counts, resultFile,
+    exitCode, signal: result?.signal ?? nativeResult?.signal,
+    error: result?.error?.message ?? nativeResult?.error?.message, counts, resultFile,
   };
   writeFileSync(join(directory, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
   console.log(`Validation receipt: ${directory}/receipt.json`);
   console.log(`Local ${action}: ${(durationMs / 1000).toFixed(1)}s; target ${budgetMs / 1000}s. Global typecheck belongs in CI; pnpm build includes its own typecheck.`);
   if (durationMs > budgetMs) console.error("Local feedback exceeded its target; record and fix the expensive phase instead of repeating unchanged checks.");
-  console.log(`Local validation: ${files.length} selected test files; ordinary PR CI runs the Ubuntu core and bounded affected tests, with full validation after integration and on the daily/release lanes. Normal push hooks and independent review still apply.`);
+  console.log(`Local validation: ${files.length} Vitest files${nativeRelay ? " and the Relay native suite" : ""}; ordinary PR CI runs the Ubuntu core and bounded affected tests, with full validation after integration and on the daily/release lanes. Normal push hooks and independent review still apply.`);
   if (!inputsStable) console.error("Source inputs changed during validation; this receipt cannot mark the current source ready.");
-  process.exitCode = inputsStable ? result.status ?? 1 : 1;
+  process.exitCode = inputsStable ? exitCode : 1;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

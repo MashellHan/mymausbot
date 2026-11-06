@@ -6,7 +6,7 @@ source guards run beside the fixed 26-file security/data/dispatch core and at
 most four portable affected test files. `qa-plan.json` and the log list
 affected files deferred beyond that bound, including E2E tests under
 `scripts/testing/` and `server/browser/` and Electron tests ending in
-`.electron.test.mjs`. The first attempt has five minutes from run creation,
+`.electron.test.mjs` as well as Relay's separate `node:test` files. The first attempt has five minutes from run creation,
 including queue time; a rerun uses its current attempt start and reports the
 original age separately. A real failure takes priority over a budget incident.
 QA holds and independent review still apply.

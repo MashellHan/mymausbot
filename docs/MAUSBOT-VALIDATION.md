@@ -18,6 +18,10 @@ validation rollout; neither is a prerequisite for the ordinary fast PR gate.
 | Review correction | Check the corrected contracts and new risks, then use the normal push hook |
 
 All three commands accept `--base <revision>`; the default is `origin/main`.
+For changes under `relay/`, local edit and ready checks run the Relay package's
+native `pnpm test` in addition to their selected Vitest files. Relay tests are
+listed as deferred by an ordinary PR's fast selector and run in the full
+integration, daily and release lanes.
 Keep the base current. The current push hook leaves the global typecheck and
 suite in CI. Run additional local static checks when the changed contract or
 verification recipe requires them, with one recorded owner for each check.

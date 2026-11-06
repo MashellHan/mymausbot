@@ -231,7 +231,8 @@ export const SENSITIVE_PATH = /^(?:shared\/|server\/(?:drivers?\/|host\/|routes\
 const SENSITIVE_LINE = /\b(?:auth|authorization|permission|credential|secret|redact|token|password|localStorage|sessionStorage|fetch|WebSocket|postMessage|ipcRenderer|persist|migration|dispatch|cancel|spawn|exec)\b/i;
 export const SAFE_TEST_PATH = /^(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.test\.[cm]?[jt]sx?$/;
 export const FAST_AFFECTED_LIMIT = 4;
-const FAST_EXPENSIVE_TEST = /^(?:scripts\/testing\/.*\.e2e\.test\.ts|server\/browser\/.*\.e2e\.test\.ts|electron\/.*\.electron\.test\.mjs|server\/index\.test\.ts)$/;
+const RELAY_NATIVE_TEST = /^relay\/test\/.*\.test\.ts$/;
+const FAST_EXPENSIVE_TEST = /^(?:scripts\/testing\/.*\.e2e\.test\.ts|server\/browser\/.*\.e2e\.test\.ts|electron\/.*\.electron\.test\.mjs|server\/index\.test\.ts|relay\/test\/.*\.test\.ts)$/;
 const unique = (values) => [...new Set(values)].sort();
 
 export function readCheckPolicy(text = readFileSync(POLICY_PATH, "utf8"), present = existsSync) {
@@ -258,6 +259,8 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
     return [`${stem}.test.ts`, `${stem}.test.tsx`, `${stem}.test.mjs`, `${stem}.e2e.test.ts`].filter(present);
   });
   const affected = unique([...areas.flatMap((area) => area.tests), ...direct]);
+  const nativeRelay = changed.some((file) => file.startsWith("relay/"));
+  const vitestAffected = affected.filter((file) => !RELAY_NATIVE_TEST.test(file));
   const reasons = [];
   if (forceFull) reasons.push("full main validation after integration");
   if (labels.includes("ci:full") || labels.includes("qa:repair")) reasons.push("explicit full validation request");
@@ -279,7 +282,7 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   if (candidate && (!qa.healthy || qaBlocked)) reasons.push(qa.reason || "untriaged or held QA findings affect this area");
   if (candidate && mode !== "tiered") reasons.push(`${mode}: retain existing coverage`);
   const docs = changed.length > 0 && changed.every((file) => areaOf(file) === "docs");
-  const filesToRun = unique([...policy.core, ...affected]);
+  const filesToRun = unique([...policy.core, ...vitestAffected]);
   if (filesToRun.some((file) => !SAFE_TEST_PATH.test(file) || !present(file))) throw new Error("Unsafe or missing selected test");
   const additional = affected.filter((file) => !policy.core.includes(file));
   const portable = additional.filter((file) => !FAST_EXPENSIVE_TEST.test(file));
@@ -291,9 +294,9 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
     full, candidate, admitted, reduced, fast: fastPr, reasons,
     scope: fastPr ? { areas: baseline.areas, checks: ["build"], files: fastFiles }
       : full ? FULL_SCOPE : reduced ? { areas: areas.map((area) => area.id), checks: ["build", "core-tests"], files: filesToRun } : baseline,
-    edit: docs ? [...VITEST_SUBSETS["docs-tests"].files, ...policy.guards] : affected,
+    edit: docs ? [...VITEST_SUBSETS["docs-tests"].files, ...policy.guards] : vitestAffected,
     ready: docs ? unique([...VITEST_SUBSETS["docs-tests"].files, ...policy.guards]) : unique([...filesToRun, ...policy.guards]),
-    core: filesToRun, fastFiles, deferred,
+    core: filesToRun, fastFiles, deferred, nativeRelay,
   };
 }
 
