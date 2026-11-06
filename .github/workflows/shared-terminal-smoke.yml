@@ -10,6 +10,7 @@ permissions:
 jobs:
   windows:
     name: Windows shared terminal
+    if: github.ref != 'refs/heads/diagnose/desktop-ownership-macos-20261106'
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -23,3 +24,56 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Shared computer real connector
         run: pnpm exec vitest run server/shared-computers.e2e.test.ts
+
+  macos-desktop-ownership:
+    name: macOS desktop ownership observation
+    if: github.ref == 'refs/heads/diagnose/desktop-ownership-macos-20261106'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 6b0fe53eba976cc07616130771d00b556ab08898
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.22.1
+          cache: pnpm
+      - name: Bind diagnostic source and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_sha=6b0fe53eba976cc07616130771d00b556ab08898
+          expected_tree=13cfa61f55efeaf3598f8b29b9eff547ff48a6af
+          expected_lock=b1d200592b36e631d7633bbecc433d15beed9c931fec54b833131f1f20fd2648
+          test "$(git rev-parse HEAD)" = "$expected_sha"
+          test "$(git rev-parse HEAD^{tree})" = "$expected_tree"
+          test "$(shasum -a 256 pnpm-lock.yaml | awk '{print $1}')" = "$expected_lock"
+          test "$(node --version)" = v24.22.1
+          test "$(pnpm --version)" = 10.33.0
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD HEAD^{tree}
+          node --version
+          pnpm --version
+          shasum -a 256 pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Prepare Electron test runtime
+        run: node --input-type=commonjs -e "require('electron')"
+      - name: Run desktop ownership fixture once
+        env:
+          OMB_VITEST_E2E: host
+          OMB_VITEST_WORKERS: "1"
+          OMB_VITEST_SUBSET: ""
+        run: |
+          mkdir -p qa-results
+          pnpm exec vitest run server/desktop-computer.e2e.test.ts --reporter=default --reporter=github-actions --reporter=json --outputFile.json=qa-results/desktop-ownership.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: desktop-ownership-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          path: qa-results/desktop-ownership.json
+          if-no-files-found: warn
+          retention-days: 7
