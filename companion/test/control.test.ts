@@ -219,6 +219,16 @@ describe("origins the control server will change state for", () => {
     expect((await ask("GET", "/state")).body.pairing).toBeNull();
   });
 
+  it("keeps the previous pairing token redeemable after an owned renewal", async () => {
+    const first = await ask("POST", "/pairing");
+    const renewed = await ask("POST", "/pairing/renew");
+    expect(renewed.status).toBe(201);
+    expect(renewed.body.pairing.token).not.toBe(first.body.pairing.token);
+    const paired = devices.redeem(first.body.pairing.token, "Older QR");
+    expect(paired).not.toHaveProperty("error");
+    if (!("error" in paired)) devices.revoke(paired.device.id);
+  });
+
   it("refuses a foreign origin on a safe method too", async () => {
     const { status, body } = await ask("GET", "/state", { origin: "https://evil.example" });
     expect(status).toBe(403);
