@@ -85,7 +85,7 @@ let host: HTMLDivElement;
 let stored: Map<string, string>;
 const frame = () => host.querySelector<HTMLElement>('[data-testid="fixture-frame"]');
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label)!;
-const refresh = () => host.querySelector<HTMLButtonElement>('[aria-label="Check for updates"]')!;
+const refresh = () => host.querySelector<HTMLButtonElement>('[aria-label="Check for updates"], [aria-label="检查更新"]')!;
 const selected = () => host.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
 const settle = async () => { await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-apps-panel"]')).not.toBeNull()); };
 const render = async () => {
@@ -358,7 +358,8 @@ describe("Mini Apps panel", () => {
   });
 
   it("labels the native Usage Mini App Work Tracker in English and Chinese while keeping its id", async () => {
-    fixture.apps = [{ ...app("usage", "Usage"), slug: "usage", dashboardIdentity: "usage", dashboard: usageDashboard }];
+    fixture.apps = [{ ...app("usage", "Usage"), slug: "usage", description: "Your work, contributions and agent activity.",
+      dashboardIdentity: "usage", dashboard: usageDashboard }];
     await render();
     await vi.waitFor(() => expect(selected()?.dataset.appId).toBe("usage"));
     expect(selected()?.textContent).toBe("Work Tracker");
@@ -367,6 +368,11 @@ describe("Mini Apps panel", () => {
     await act(async () => { root.render(createElement(MiniAppsPanel)); });
     expect(selected()?.textContent).toBe("工作追踪");
     expect(selected()?.dataset.appId).toBe("usage");
+    expect(host.textContent).toContain("查看你的工作、产出和 Agent 活动。");
+    fixture.apps = [{ ...fixture.apps[0]!, description: "Owner-edited description" }];
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(host.textContent).toContain("Owner-edited description"));
   });
 
   it("replaces a same-revision revoked dashboard with explicit same-id repair and no fallback frame", async () => {
