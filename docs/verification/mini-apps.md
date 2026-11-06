@@ -3,6 +3,43 @@
 Use synthetic fixtures only. Do not exercise promotion, publication, backup,
 restoration or deletion against the running personal workspace.
 
+## Built-in Agent Team and Usage
+
+Use the existing synthetic dashboard snapshots with an isolated Mini Apps
+registry. Install both entries through the library, open them and compare their
+values with the old tabs on the same captured data. Keep Bookkeeping and both
+report apps installed to check that their ordinary HTML path still works.
+
+The focused contracts are:
+
+```sh
+pnpm exec vitest run server/mini-apps/registry.test.ts server/routes/mini-apps.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts server/mini-apps/mini-apps.e2e.test.ts src/components/AgentActivityDetails.test.ts src/components/mini-apps/DashboardInstall.test.ts src/components/mini-apps/MiniAppDashboard.test.ts src/components/mini-apps/MiniAppsPanel.test.ts
+```
+
+Exercise owner disclosure and grants, an app reading an ungranted resource,
+paired/service denial, and a pending read during archive, revision change or
+revocation. An old registry without the dashboard column must migrate with no
+grant. Archive and workspace restore clear grants; rollback cannot revive them.
+An explicit owner reinstall retains the archived app's ID and history.
+After restore or explicit revocation, an active built-in entry must offer a
+visible repair action and require an owner regrant before showing live data.
+Verify the same app ID after repair and refusal of an unrelated custom app with
+the same slug. Persistent built-in identity alone must never authorize a read.
+
+In the renderer, check folded activity and an initially unselected office,
+two-second team refresh, five-minute Usage refresh, and cancellation on hide or
+unmount. Offline data must remain unavailable or stale, and authorization loss
+must clear old observations. Check keyboard navigation, light/dark themes and
+English/Chinese at 960, 400 and 360 pixels. Built-in views must require the
+native guard and current installed revision; HTML markers or a matching title
+must never activate this path. Bot discovery may reveal metadata and editing
+limits, never dashboard snapshots or self-grant authority.
+
+Reuse existing evidence for unchanged shared views and provider validation.
+Run the new lifecycle and adapter contracts once on stable combined source;
+composition alone does not require another suite, build or visual pass. These
+fixtures do not establish packaged or live App acceptance.
+
 ## Contracts and lifecycle
 
 ```sh

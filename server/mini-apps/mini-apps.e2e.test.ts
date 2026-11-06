@@ -102,6 +102,10 @@ it("keeps a reusable local library through Data refresh, publication, restart, b
     await api("POST", "/api/internal/mini-apps/info", {}, 401, beforeRestart);
     expect(records(await query("outflow", filters, 3))[0]?.amount).toBe("-13.54");
 
+    const dashboard = await api<MiniAppMutationResult>("POST", "/api/mini-apps", { requestKey: "dashboard-install",
+      expectedRevision: 0, slug: "fixture-dashboard", title: "Synthetic dashboard", description: "", html: "<p>Fallback</p>",
+      bindings: [], dashboardKind: "usage", publisherBotIds: [bot.id] }, 201);
+    expect(dashboard.app.dashboard).toMatchObject({ kind: "usage" });
     const backup = await api<{ id: string; summary: { bytes: number } }>("POST", "/api/workspace-backup/export", { password: "synthetic-mini-app-backup-passphrase" });
     expect(backup.id).toBeTypeOf("string");
     expect(existsSync(join(fixture.dataDir, "mini-app-data.json"))).toBe(false);
@@ -121,9 +125,22 @@ it("keeps a reusable local library through Data refresh, publication, restart, b
     await api("POST", "/api/workspace-backup/restore", { id: staged.id, confirmation: "REPLACE" });
     await fixture.restart();
     expect((await fixture.document()).app).toMatchObject({ revision: 3, templateVersion: 1, publisherBotIds: [] });
+    const restoredDashboard = await api<{ app: { id: string; dashboard: unknown; publisherBotIds: string[] } }>("GET", `/api/mini-apps/${dashboard.app.id}`);
+    expect(restoredDashboard.app).toMatchObject({ id: dashboard.app.id, dashboard: null,
+      dashboardIdentity: "usage", publisherBotIds: [] });
+    await api("POST", `/api/mini-apps/${dashboard.app.id}/dashboard`, { resource: "usage", expectedRevision: 1 }, 403);
+    const restoredAuth = { authorization: `Bearer ${(await fixture.mint("agents")).token}` };
+    const restoredInfo = await api<{ dashboards: Array<{ id: string; dashboardIdentity: string; dashboard: unknown }> }>(
+      "POST", "/api/internal/mini-apps/info", {}, 200, restoredAuth);
+    expect(restoredInfo.dashboards).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: dashboard.app.id, dashboardIdentity: "usage", dashboard: null }),
+    ]));
+    const reauthorized = await api<MiniAppMutationResult>("POST", `/api/mini-apps/${dashboard.app.id}/publish`, {
+      requestKey: "dashboard-reauthorize", expectedRevision: 1, slug: "fixture-dashboard", title: "Synthetic dashboard",
+      description: "", html: "<p>Fallback</p>", bindings: [], dashboardKind: "usage", publisherBotIds: [] });
+    expect(reauthorized.app).toMatchObject({ id: dashboard.app.id, revision: 2, dashboard: { kind: "usage" }, dashboardIdentity: "usage" });
     expect(records(await query("outflow", filters, 3))[0]?.amount).toBe("-13.54");
     expect((await api<MiniAppSources>("GET", "/api/mini-apps/sources")).bots.some((source) => source.id === bot.id)).toBe(true);
-    const restoredAuth = { authorization: `Bearer ${(await fixture.mint("agents")).token}` };
     await api("POST", "/api/internal/mini-apps/info", { app_id: installed.app.id }, 403, restoredAuth);
     await api("POST", "/api/internal/mini-apps/publish", { app_id: installed.app.id, publication: { ...publication, publisherBotIds: undefined, requestKey: "restore-grant", expectedRevision: 3 } }, 403, restoredAuth);
     await api("POST", `${root}/publish`, { ...publication, requestKey: "owner-regrant", expectedRevision: 3, publisherBotIds: [bot.id] });

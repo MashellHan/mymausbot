@@ -817,7 +817,8 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
         }
       }
       if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mini_apps'").get()) {
-        db.exec("UPDATE mini_apps SET publishers = '[]'");
+        const columns = db.prepare("PRAGMA table_info(mini_apps)").all() as Array<{ name: string }>;
+        db.exec(`UPDATE mini_apps SET publishers = '[]'${columns.some(({ name }) => name === "dashboard_kind") ? ", dashboard_kind = NULL" : ""}`);
       }
       // Import is not a restart: the source may still be running, so never execute a copy of its pending work.
       if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_followups'").get()) {

@@ -1,12 +1,15 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MiniAppDataBinding, MiniAppNamedPage } from "../../shared/mini-app-data.ts";
 import type { MiniAppPublish } from "../../shared/mini-apps.ts";
+import type { LocalAgentActivityResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
 import { AppDocs, APP_DOCS_SWEEP_GRACE_MS } from "../app-docs.ts";
 import { DATA_DIR } from "../config.ts";
 import { applicationDatabase, closeMessageDb } from "../message-db.ts";
-import { MiniApps, miniAppDocRefs, type MiniAppActor } from "./registry.ts";
+import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
+import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "./registry.ts";
 
 const DATASET = "7c39027b-cbb0-461a-aec8-0d7b6e553ec6";
 const binding: MiniAppDataBinding = { id: "inventory", datasetId: DATASET, source: { schema: "main", table: "inventory" },
@@ -16,8 +19,17 @@ const owner: MiniAppActor = { writeAllowed: true, assertActive: () => undefined,
 const bot = (botId = "publisher"): MiniAppActor => ({ ...owner, botId });
 const publication = (extra: Partial<MiniAppPublish> = {}): MiniAppPublish => ({ requestKey: "create", expectedRevision: 0,
   slug: "inventory", title: "Inventory", description: "Synthetic stock report", html: "<h1>Inventory</h1>", bindings: [binding], ...extra });
+const teamsSnapshot: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1000, teamCount: 0, teams: [] };
+const activitySnapshot: LocalAgentActivityResponse = { agentId: "w6:p1", status: "ready", updatedAt: 1000, truncated: false, events: [] };
+const usageSnapshot: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
+  sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
+const dashboardProviders = () => ({
+  agents: { get: vi.fn(async () => teamsSnapshot) },
+  activity: { get: vi.fn(async (_agentId: string) => activitySnapshot) },
+  usage: { get: vi.fn(async () => usageSnapshot) },
+});
 
-function fixture(maxBytes?: number) {
+function fixture(maxBytes?: number, readers?: LocalDashboardProviders) {
   const docs = new AppDocs(join(DATA_DIR, "app-docs"), { maxBytes });
   const publishers = new Set(["publisher", "other"]);
   let revision = 1;
@@ -26,7 +38,7 @@ function fixture(maxBytes?: number) {
     readNamed: vi.fn(async (): Promise<MiniAppNamedPage> => ({ columns: [{ name: "item", type: "text" }], rows: [["Pencil"]], revision })),
     listDatasets: vi.fn(async () => [{ datasetId: DATASET, storeId: "store", revision }]),
   };
-  const apps = new MiniApps({ docs, data, validPublisher: (id) => publishers.has(id) });
+  const apps = new MiniApps({ docs, data, validPublisher: (id) => publishers.has(id), dashboardProviders: readers });
   return { apps, docs, data, publishers, update: () => { revision++; } };
 }
 
@@ -180,5 +192,148 @@ describe("persistent Mini Apps", () => {
     writeFileSync(join(DATA_DIR, "app-docs", "doc", `${doc}.json`), "broken");
     expect(() => docs.sweep(miniAppDocRefs(), Date.now() + APP_DOCS_SWEEP_GRACE_MS + 1)).toThrow("references are unreadable");
     if (loose.ok) expect(docs.read(loose.doc)?.html).toContain("unreferenced");
+  });
+
+  it("migrates an installed record without the dashboard column", () => {
+    const db = new DatabaseSync(join(DATA_DIR, "legacy-mini-apps.db"));
+    try {
+      db.exec(`CREATE TABLE mini_apps (
+        id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, slug TEXT NOT NULL, title TEXT NOT NULL,
+        description TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL,
+        template_version INTEGER NOT NULL, publishers TEXT NOT NULL, created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL, UNIQUE(owner_id, slug));`);
+      db.prepare("INSERT INTO mini_apps VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run("legacy", MINI_APPS_OWNER, "legacy", "Legacy app", "", "active", 1, 1, "[]", 1, 1);
+      const { docs, data } = fixture();
+      const apps = new MiniApps({ docs, data, validPublisher: () => true,
+        access: { database: () => db, write: (work) => work(db) } });
+      expect(apps.list(owner)).toMatchObject([{ id: "legacy", dashboard: null, dashboardIdentity: null }]);
+      expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_kind")).toBe(true);
+      expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_identity")).toBe(true);
+    } finally { db.close(); }
+  });
+
+  it("opens a no-Data dashboard when unrelated retained Data is unavailable", async () => {
+    const { apps, data } = fixture();
+    const { app } = await apps.publish(owner, publication({ bindings: [], dashboardKind: "agent-team" }));
+    data.listDatasets.mockRejectedValue(new Error("unrelated store is broken"));
+    expect(await apps.state(owner, app.id)).toMatchObject({ appId: app.id, revision: 1, data: [] });
+    expect(data.listDatasets).not.toHaveBeenCalled();
+  });
+
+  it("keeps native dashboards unbound even when an update omits its grant", async () => {
+    const { apps, data } = fixture();
+    await expect(apps.publish(owner, publication({ dashboardKind: "agent-team" }))).rejects.toMatchObject({ status: 400 });
+    const { app } = await apps.publish(owner, publication({ bindings: [], dashboardKind: "agent-team", publisherBotIds: ["publisher"] }));
+    await expect(apps.publish(bot(), publication({ bindings: [binding], expectedRevision: 1, requestKey: "bot-add-data" }), app.id))
+      .rejects.toMatchObject({ status: 400 });
+    expect(data.validateBinding).not.toHaveBeenCalled();
+    const botEdit = await apps.publish(bot(), publication({ bindings: [], expectedRevision: 1, requestKey: "bot-metadata",
+      title: "Renamed dashboard", html: "<p>New fallback</p>" }), app.id);
+    expect(botEdit.app.dashboard).toMatchObject({ renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"] });
+    expect(apps.document(bot(), app.id).html).toBe("<p>New fallback</p>");
+    expect((await apps.publish(owner, publication({ expectedRevision: 2, requestKey: "remove-grant", bindings: [], dashboardKind: null }), app.id))
+      .app).toMatchObject({ dashboard: null, dashboardIdentity: "agent-team" });
+    await expect(apps.publish(owner, publication({ expectedRevision: 3, requestKey: "data-after-revoke", dashboardKind: null }), app.id))
+      .rejects.toMatchObject({ status: 400 });
+    await expect(apps.publish(owner, publication({ expectedRevision: 3, requestKey: "wrong-kind", bindings: [],
+      dashboardKind: "usage" }), app.id)).rejects.toMatchObject({ status: 409 });
+    expect((await apps.publish(owner, publication({ expectedRevision: 3, requestKey: "owner-regrant", bindings: [],
+      dashboardKind: "agent-team" }), app.id)).app).toMatchObject({ id: app.id, dashboard: { kind: "agent-team" } });
+    await expect(apps.publish(bot(), publication({ expectedRevision: 4, requestKey: "bot-grant", bindings: [],
+      dashboardKind: "agent-team" }), app.id)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("does not rollback a native dashboard to a Data-bound template", async () => {
+    const { apps } = fixture();
+    const { app } = await apps.publish(owner, publication());
+    await apps.publish(owner, publication({ requestKey: "native", expectedRevision: 1, bindings: [], dashboardKind: "usage" }), app.id);
+    await expect(apps.rollback(owner, app.id, { requestKey: "old-data", expectedRevision: 2, templateVersion: 1 }))
+      .rejects.toMatchObject({ status: 400 });
+    expect(apps.document(owner, app.id).app).toMatchObject({ revision: 2, dashboard: { kind: "usage" } });
+    await apps.publish(owner, publication({ requestKey: "revoke", expectedRevision: 2, bindings: [], dashboardKind: null }), app.id);
+    await expect(apps.rollback(owner, app.id, { requestKey: "old-data-after-revoke", expectedRevision: 3, templateVersion: 1 }))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  it("scopes owner snapshots to the installed kind and never gives bots snapshot authority", async () => {
+    const readers = dashboardProviders();
+    const { apps } = fixture(undefined, readers);
+    const team = (await apps.publish(owner, publication({ bindings: [], dashboardKind: "agent-team", publisherBotIds: ["publisher"] }))).app;
+    const usage = (await apps.publish(owner, publication({ requestKey: "usage", slug: "usage", bindings: [], dashboardKind: "usage" }))).app;
+    expect(apps.dashboardCatalog(bot())).toMatchObject([
+      { id: team.id, dashboardIdentity: "agent-team", dashboard: { kind: "agent-team", resources: ["teams", "activity"] } },
+      { id: usage.id, dashboardIdentity: "usage", dashboard: { kind: "usage", resources: ["usage"] } },
+    ]);
+    await expect(apps.dashboardRead(bot(), team.id, { resource: "teams", expectedRevision: 1 })).rejects.toMatchObject({ status: 403 });
+    await expect(apps.dashboardRead(owner, team.id, { resource: "usage", expectedRevision: 1 })).rejects.toMatchObject({ status: 403 });
+    await expect(apps.dashboardRead(owner, usage.id, { resource: "activity", expectedRevision: 1, agentId: "w6:p1" }))
+      .rejects.toMatchObject({ status: 403 });
+    await expect(apps.dashboardRead(owner, team.id, { resource: "activity", expectedRevision: 1, agentId: "bad" }))
+      .rejects.toMatchObject({ status: 400 });
+    expect(await apps.dashboardRead(owner, team.id, { resource: "teams", expectedRevision: 1 }))
+      .toEqual({ appId: team.id, revision: 1, resource: "teams", snapshot: teamsSnapshot });
+    expect(await apps.dashboardRead(owner, team.id, { resource: "activity", expectedRevision: 1, agentId: "w6:p1" }))
+      .toEqual({ appId: team.id, revision: 1, resource: "activity", snapshot: activitySnapshot });
+    expect(await apps.dashboardRead(owner, usage.id, { resource: "usage", expectedRevision: 1 }))
+      .toEqual({ appId: usage.id, revision: 1, resource: "usage", snapshot: usageSnapshot });
+    expect(readers.agents.get).toHaveBeenCalledTimes(1);
+    expect(readers.activity.get).toHaveBeenCalledWith("w6:p1");
+    expect(readers.usage.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a pending snapshot after a revision change, archive or owner revocation", async () => {
+    const readers = dashboardProviders();
+    const { apps } = fixture(undefined, readers);
+    const { app } = await apps.publish(owner, publication({ bindings: [], dashboardKind: "agent-team" }));
+    let finish!: (snapshot: LocalAgentTeamsResponse) => void;
+    readers.agents.get.mockImplementation(() => new Promise<LocalAgentTeamsResponse>((resolve) => { finish = resolve; }));
+    const changed = apps.dashboardRead(owner, app.id, { resource: "teams", expectedRevision: 1 });
+    await apps.publish(owner, publication({ requestKey: "rename", expectedRevision: 1, bindings: [], title: "Changed" }), app.id);
+    finish(teamsSnapshot);
+    await expect(changed).rejects.toMatchObject({ status: 409 });
+
+    const archived = apps.dashboardRead(owner, app.id, { resource: "teams", expectedRevision: 2 });
+    apps.archive(owner, app.id, { requestKey: "archive", expectedRevision: 2 });
+    finish(teamsSnapshot);
+    await expect(archived).rejects.toMatchObject({ status: 409 });
+    expect(apps.dashboardCatalog(owner)).toEqual([]);
+    await apps.rollback(owner, app.id, { requestKey: "restore", expectedRevision: 3, templateVersion: 1 });
+    expect(apps.document(owner, app.id).app).toMatchObject({ id: app.id, revision: 4, dashboard: null, dashboardIdentity: "agent-team" });
+    await expect(apps.dashboardRead(owner, app.id, { resource: "teams", expectedRevision: 4 })).rejects.toMatchObject({ status: 403 });
+    const reinstalled = await apps.publish(owner, publication({ requestKey: "reinstall", expectedRevision: 4,
+      bindings: [], dashboardKind: "agent-team" }), app.id);
+    expect(reinstalled.app).toMatchObject({ id: app.id, revision: 5, dashboard: { kind: "agent-team" } });
+
+    let active = true;
+    const guardedOwner = { ...owner, assertActive: () => { if (!active) throw Object.assign(new Error("owner revoked"), { status: 403 }); } };
+    const revoked = apps.dashboardRead(guardedOwner, app.id, { resource: "teams", expectedRevision: 5 });
+    active = false;
+    finish(teamsSnapshot);
+    await expect(revoked).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("does not return a pending snapshot after its dashboard grant is revoked", async () => {
+    const readers = dashboardProviders();
+    const { apps } = fixture(undefined, readers);
+    const { app } = await apps.publish(owner, publication({ bindings: [], dashboardKind: "usage" }));
+    let finish!: (snapshot: LocalUsageResponse) => void;
+    readers.usage.get.mockImplementation(() => new Promise<LocalUsageResponse>((resolve) => { finish = resolve; }));
+    const pending = apps.dashboardRead(owner, app.id, { resource: "usage", expectedRevision: 1 });
+    const revoked = await apps.publish(owner, publication({ requestKey: "revoke", expectedRevision: 1,
+      bindings: [], dashboardKind: null }), app.id);
+    expect(revoked.app).toMatchObject({ dashboard: null, dashboardIdentity: "usage" });
+    expect(apps.dashboardCatalog(bot())).toMatchObject([{ id: app.id, revision: 2, dashboardIdentity: "usage", dashboard: null }]);
+    finish(usageSnapshot);
+    await expect(pending).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("keeps a custom slug collision distinct from a revocable built-in identity", async () => {
+    const { apps } = fixture();
+    const unrelated = (await apps.publish(owner, publication({ slug: "agent-team" }))).app;
+    expect(unrelated).toMatchObject({ slug: "agent-team", dashboard: null, dashboardIdentity: null });
+    await expect(apps.publish(owner, publication({ slug: "agent-team", bindings: [], dashboardKind: "agent-team", requestKey: "install" })))
+      .rejects.toMatchObject({ status: 409 });
+    expect(apps.document(owner, unrelated.id).app).toMatchObject({ dashboard: null, dashboardIdentity: null });
   });
 });
