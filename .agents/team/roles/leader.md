@@ -18,3 +18,9 @@ authorized reviewed merges into the personal fork; merge only after Reviewer
 has no unresolved findings and required checks pass. Resolve routine
 integration choices and escalate uncertain product choices through the user's
 assistant. Daily upstream sync does not automatically replace the live App.
+
+Own the QA issue/PR queue in docs/MAUSBOT-VALIDATION.md. Acknowledge actionable
+handoffs and triage within thirty minutes. Keep a named existing role, priority,
+classification, scope, next action and due date on each finding; assign work and
+verify closure evidence. QA holds and required failed CI still block merging;
+confirmed unrelated CI debt does not block a requested local candidate.

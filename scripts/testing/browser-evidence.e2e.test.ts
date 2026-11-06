@@ -115,12 +115,12 @@ describe("page health and browser steps on the real engine", () => {
 
   afterAll(async () => {
     if (!enabled) return;
-    await closeBrowserSession(spec.command, browserRuntimeEnv({ ...spec.env, AGENT_BROWSER_SESSION: session })).catch(() => false);
+    if (spec) await closeBrowserSession(spec.command, browserRuntimeEnv({ ...spec.env, AGENT_BROWSER_SESSION: session })).catch(() => false);
     await runtime?.closeAll();
-    await new Promise((resolve) => server?.close(resolve));
+    if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
     await gate?.close();
-    await removeTempDir(home);
-    await removeTempDir(sockets);
+    if (home) await removeTempDir(home);
+    if (sockets) await removeTempDir(sockets);
   }, 60_000);
 
   const ctx = (record: boolean): StepContext => ({ botId: "bot-e2e", botName: "Ava", threadId: "thread-e2e", generation: "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b", turnId: () => null, record });
@@ -255,7 +255,7 @@ describe("recorded browser steps through the real server", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   }, 600_000);
-  afterAll(async () => { if (enabled) await new Promise((resolve) => server.close(resolve)); });
+  afterAll(async () => { if (server?.listening) await new Promise<void>((resolve) => server.close(() => resolve())); });
 
   run("records a recording bot's steps, serves them, and deletes them with the conversation", async () => {
     const fixture = await launchVerificationServer({}, undefined, undefined, { binaryPath: browser.binary, executablePath: browser.chrome ?? "" }, undefined, { scripted: true });

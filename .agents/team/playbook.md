@@ -95,6 +95,63 @@ findings and required checks pass. Creating and pushing reviewable PRs is
 authorized here.
 Never equate a green badge or an idle agent with completed work.
 
+## Local candidate delivery
+
+When the requested outcome is a runnable local App, build and validate that
+candidate independently of PR merging. Combine the needed pinned commits in an
+isolated integration worktree, record the base and resulting source revision,
+and test the combined source. Individual PR test results do not prove their
+integration. Completion of every PR's remote CI and merge is not a prerequisite
+for producing the local candidate.
+
+Run the affected functional/integration checks and applicable static checks,
+then one package build and isolated startup acceptance for that source. Include
+the package/resource checks needed by the changed behavior. Demonstrate the
+requested user action in an isolated fixture; startup alone is not feature
+acceptance. Reuse identical
+evidence and checks already performed by the build; do not remove required
+build checks or bypass push hooks. Changed source may require a new artifact.
+
+Run inexpensive lint and repository guards before handing off for review or
+starting a package build, so file-size and declaration failures do not arrive
+after acceptance. Assign each check one owner and reuse its result for unchanged
+inputs. For a local arm64 build, reuse verified dependency/resource caches and
+unchanged build outputs; rebuild only the outputs whose inputs changed. Record
+stage durations in the existing build log instead of adding a separate audit.
+
+Classify a remote CI failure by its effect on the candidate. A confirmed
+unrelated failure can be tracked separately with its run link, evidence and
+follow-up owner; repairing it is not a local-build dependency. Age alone does
+not establish irrelevance. Failures affecting startup, authorization, data
+safety or the requested behavior block candidate acceptance even if preexisting.
+Investigate uncertain relevance with a focused check before declaring it unrelated.
+
+Use the existing private build/handoff records to report candidate readiness,
+included revisions, local evidence and pending/failed remote checks separately.
+Candidate readiness does not establish merge or release readiness, or completion
+of all outcomes in feature-delivery-ready.json. Lead follows the PRs through
+their required CI and independent review while local delivery proceeds. Verify
+with isolated fixtures; preserve the official App and real data, and follow the
+existing coordinated procedure for an actual App switch.
+
+## Testing and QA rhythm
+
+Follow [the validation mechanism](../../docs/MAUSBOT-VALIDATION.md). Use
+check:plan, check:edit and check:ready for the small local loop; retain normal
+push hooks and avoid repeating identical checks immediately before them.
+Dev leaves a durable PR-body handoff with `QA-Handoff: <current head SHA>`.
+The existing Lead owns review and CI follow-through while local delivery and
+independent development continue.
+
+The automated QA runner is the existing CI full lane, twice daily. It does not
+need another persistent model. Its trusted reporter files deduplicated issues;
+the ten-minute queue hands actionable work to mausbot-lead. Lead acknowledges,
+triages within thirty minutes, assigns an existing developer/maintainer and sets
+priority, scope, classification, next action and due date. Reviewer reviews fixes;
+QA verifies after integration; Lead closes with evidence. Read the mechanism
+for hold/repair boundaries and rollback. Shadow mode preserves existing checks;
+admission requires the documented pilot evidence.
+
 ## Upstream integration
 
 The user's assistant owns the existing daily 09:00 Asia/Shanghai schedule;

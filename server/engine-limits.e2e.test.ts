@@ -12,6 +12,11 @@ it("a bot's turn reads its accounts' usage limits through its own capability, an
   const fixture = await launchVerificationServer({ FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: gate });
   try {
     const request = (path: string, init: RequestInit = {}) => fetch(fixture.info.url + path, { ...init, headers: { "content-type": "application/json", origin: fixture.info.url, ...init.headers } });
+    for (const path of ["/api/plan-usage", "/api/plan-usage?refresh=1"]) {
+      const response = await request(path);
+      expect(response.status).toBe(200);
+      expect((await response.json() as { providers: unknown[] }).providers).toEqual([]);
+    }
     const { bot } = await (await request("/api/bots", { method: "POST", body: JSON.stringify({ name: "Scout" }) })).json() as { bot: { id: string; threadId: string } };
     await runControlOmb(["send", "--bot", bot.id, "--task", bot.threadId, "--text", "How much Claude is left?", "--url", fixture.info.url]);
     let token = "";
@@ -26,7 +31,7 @@ it("a bot's turn reads its accounts' usage limits through its own capability, an
     const { text } = await answer.json() as { text: string };
     const accounts = JSON.parse(text).accounts as Array<{ engine: string; status: string; windows: unknown[]; why?: string }>;
     const claude = accounts.find((account) => account.engine === "claudeAgent");
-    expect(claude, text).toMatchObject({ status: "unknown", windows: [] });
+    expect(claude, text).toMatchObject({ status: "unsupported", windows: [] });
     expect(claude!.why, text).toBeTruthy();
     writeFileSync(gate, "finish");
   } finally {

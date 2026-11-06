@@ -23,6 +23,8 @@ export interface FailedComposerSend {
   replyToId?: string;
   threadId: string;
   channelMode?: "chat" | "goal";
+  /** Bot ids picked from the @ list. */
+  mentions?: string[];
 }
 type FailedComposerSendInput = Omit<FailedComposerSend, "id">;
 export interface ComposerSendSnapshot extends FailedComposerSendInput {
@@ -445,6 +447,7 @@ export function recoverFailedComposerSend(sent: ComposerSendSnapshot): "restored
       replyToId: sent.replyToId,
       threadId: sent.threadId,
       channelMode: sent.channelMode,
+      mentions: sent.mentions,
     });
     return "outbox";
   }

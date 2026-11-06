@@ -119,7 +119,12 @@ const __APP_VERSION__: string;
       platform: NodeJS.Platform;
       /** This app's own version, and whether this page is this app's own: false on a server added in the Server menu,
        * whose page carries that server's version. Absent in desktop builds before it. */
-      app?: { version: string; ownPage: boolean };
+      app?: {
+        version: string;
+        ownPage: boolean;
+        /** The native window blocks opaque subframes from navigating to external documents. */
+        blocksOpaqueFrameNavigation?: boolean;
+      };
       organization?: import("../../electron/managed-desktop.mjs").ManagedDesktopBridge;
       cloudAccount?: import("../../electron/cloud-account.mjs").CloudAccountBridge;
       accounts?: import("../../electron/cloud-account.mjs").AccountsBridge;
@@ -172,7 +177,8 @@ const __APP_VERSION__: string;
          * places). Absent on an older app. */
         places?: () => Promise<import("../../electron/cloud-rail.mjs").RailState>;
         /** Opens a circle main listed, by its id, through main's own switch: only from the person's click. */
-        open?: (id: string) => Promise<unknown>;
+        /** Nothing for a place of the account in use; for another account's, how its switch went. */
+        open?: (id: string) => Promise<import("../../electron/cloud-account.mjs").RailOpenResult | undefined>;
         /** ＋'s fixed choices: buy a Cloud (this computer's own sheet), a server's pairing link (`link`: the one pasted on the
          * sheet; without it, the clipboard's), or type its address. Resolves false when the person cancels Connect. */
         add?: (choice: "cloud" | "link" | "address", link?: string) => Promise<unknown>;
