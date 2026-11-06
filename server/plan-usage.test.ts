@@ -452,10 +452,12 @@ describe("plan usage fetcher", () => {
 
   it("caches a report for 45 seconds unless refresh is set", async () => {
     const fetchImpl = vi.fn<PlanFetch>(async () => jsonResponse({
-      five_hour: { utilization: 25, resets_at: "2026-09-26T12:00:00.000Z" },
-      seven_day: { utilization: 40, resets_at: "2026-10-03T00:00:00.000Z" },
+      rate_limit: {
+        primary_window: { used_percent: 25, limit_window_seconds: 18000, reset_at: 1_800_000_000 },
+        secondary_window: { used_percent: 40, limit_window_seconds: 604800, reset_at: 1_800_000_000 },
+      },
     }));
-    const accounts = [account("claude")];
+    const accounts = [account("codex")];
     const credentials = { read: () => ({ token: SECRET, accountId: null, expired: false }) };
     await loadPlanUsage({ accounts, now: NOW, fetch: fetchImpl, credentials });
     await loadPlanUsage({ accounts, now: NOW + 10_000, fetch: fetchImpl, credentials });
@@ -468,23 +470,47 @@ describe("plan usage fetcher", () => {
 
   it("does not share the cache when GROK_HOME changes", async () => {
     const fetchImpl = vi.fn<PlanFetch>(async () => jsonResponse({
-      five_hour: { utilization: 25, resets_at: "2026-09-26T12:00:00.000Z" },
-      seven_day: { utilization: 40, resets_at: "2026-10-03T00:00:00.000Z" },
+      config: { creditUsagePercent: 25, currentPeriod: { type: "WEEK", end: "2026-10-03T00:00:00.000Z" } },
     }));
     const credentials = { read: () => ({ token: SECRET, accountId: null, expired: false }) };
     await loadPlanUsage({
-      accounts: [account("claude", { id: "same", environment: { GROK_HOME: "/tmp/one" } })],
+      accounts: [account("grok", { id: "same", environment: { GROK_HOME: "/tmp/one" } })],
       now: NOW,
       fetch: fetchImpl,
       credentials,
     });
     await loadPlanUsage({
-      accounts: [account("claude", { id: "same", environment: { GROK_HOME: "/tmp/two" } })],
+      accounts: [account("grok", { id: "same", environment: { GROK_HOME: "/tmp/two" } })],
       now: NOW + 1_000,
       fetch: fetchImpl,
       credentials,
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls.filter(([url]) => url.includes("format=credits"))).toHaveLength(2);
+  });
+
+  it("loads no Claude credentials or usage on initial, cached or forced reads", async () => {
+    const read = vi.fn(() => { throw new Error("Credential access is forbidden"); });
+    const fetchImpl = vi.fn<PlanFetch>(async () => { throw new Error("Network access is forbidden"); });
+    const accounts = [account("claude"), account("claude", { id: "work", configDir: "/fixture/work" })];
+    for (const [offset, refresh] of [[0, false], [1_000, false], [2_000, true], [60_000, false]] as const) {
+      const report = await loadPlanUsage({ accounts, now: NOW + offset, refresh, credentials: { read }, fetch: fetchImpl });
+      expect(report.providers).toEqual([]);
+    }
+    expect(read).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("keeps other providers live when Claude is configured beside them", async () => {
+    const read = vi.fn((entry: PlanAccount) => {
+      if (entry.driver === "claude") throw new Error("Claude credential access is forbidden");
+      return { token: SECRET, accountId: null, expired: false };
+    });
+    const fetchImpl = vi.fn<PlanFetch>(async () => jsonResponse({ rate_limit: { primary_window: { used_percent: 25, limit_window_seconds: 18000 } } }));
+    const report = await loadPlanUsage({ accounts: [account("claude"), account("codex")], now: NOW, credentials: { read }, fetch: fetchImpl });
+    expect(read.mock.calls.map(([entry]) => entry.driver)).toEqual(["codex"]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(report.providers).toHaveLength(1);
+    expect(report.providers[0]).toMatchObject({ driver: "codex", ok: true, fiveHour: { usedPercent: 25 } });
   });
 
   it("lists configured Claude, Codex, and Grok accounts and skips other engines", () => {

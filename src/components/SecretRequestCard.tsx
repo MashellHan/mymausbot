@@ -38,6 +38,10 @@ export function SecretRequestCard({
   const suppliedDescription = localize && parts
     ? [t(parts.baseCode), parts.reason, t("server.connect.secretNeverRead", { bot: parts.bot })].filter(Boolean).join(" ")
     : secret.description;
+  const sessionMode = window.ogb?.credentialMode?.() === "session";
+  const sessionOnly = sessionMode && secret.target !== CUSTOM_SECRET_TARGET && isConfigCredentialTarget(secret.target);
+  const sessionUnavailable = sessionMode && (secret.target === "onePasswordToken" ||
+    (secret.target === CUSTOM_SECRET_TARGET && (secret.delivery === "file" || secret.delivery === "email")));
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedLocally, setSavedLocally] = useState(false);
@@ -64,10 +68,10 @@ export function SecretRequestCard({
     ? t("chat.secret.superseded")
     : provided
     ? stopped
-      ? t("chat.secret.saved")
+      ? sessionOnly ? t("secretCard.sessionSaved") : t("chat.secret.saved")
       : secret.resumed
-      ? t("chat.secret.savedContinuing")
-      : t("chat.secret.savedWaiting")
+      ? sessionOnly ? t("secretCard.sessionContinuing") : t("chat.secret.savedContinuing")
+      : sessionOnly ? t("secretCard.sessionWaiting") : t("chat.secret.savedWaiting")
     : declined
       ? t("chat.secret.declined", { app: productName() })
       : custom && secret.reason ? secret.reason : customDescription;
@@ -205,7 +209,7 @@ export function SecretRequestCard({
         action={retry}
         detail={error && <p role="alert" className="ms-[19px] mt-1 text-[12px] text-danger">{error}</p>}
       >
-        <span className="text-ink-secondary" title={description}>{provided ? t("chat.secret.labelSaved", { label }) : label}</span>
+        <span className="text-ink-secondary" title={description}>{provided ? sessionOnly ? `${label} ${t("secretCard.sessionShort")}` : t("chat.secret.labelSaved", { label }) : label}</span>
         <span className={declined ? "text-danger" : undefined}> · {footerLabel}</span>
       </AskSettledLine>
     );
@@ -225,6 +229,8 @@ export function SecretRequestCard({
         <div className="text-[13px] leading-relaxed text-ink-secondary">
           {t("chat.secret.remoteClient")}
         </div>
+      ) : sessionUnavailable ? (
+        <p role="status" className="text-[13px] leading-relaxed text-ink-secondary">{t("secretCard.sessionUnavailable")}</p>
       ) : (
         <form onSubmit={(event) => void save(event)}>
           {email && (
@@ -248,13 +254,13 @@ export function SecretRequestCard({
             />
             <button type="submit" disabled={saving || (!value.trim() && !savedLocally) || (email && !address.trim())} {...askPrimary(color)}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : <LockKeyhole size={14} />}
-              {t(savedLocally ? "chat.secret.continue" : "chat.secret.save")}
+              {savedLocally ? t("chat.secret.continue") : sessionOnly ? t("secretCard.sessionUse") : t("chat.secret.save")}
             </button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-tertiary">
             <span className="flex items-center gap-1">
               <LockKeyhole size={11} />{" "}
-              {!custom ? t("chat.secret.storedHint", { app: productName() }) : email ? t("secretCard.email") : secret.delivery === "file" ? t("secretCard.file") : t("secretCard.ref")}
+              {!custom ? sessionOnly ? t("secretCard.sessionStorage") : t("chat.secret.storedHint", { app: productName() }) : email ? t("secretCard.email") : secret.delivery === "file" ? t("secretCard.file") : t("secretCard.ref")}
             </span>
             {secret.helpUrl && (
               <a

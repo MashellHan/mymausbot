@@ -57,7 +57,8 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
           const row = region.querySelector('tbody tr');
           return { overflow: panel.scrollWidth - panel.clientWidth, width: panel.getBoundingClientRect().width, cells: row.querySelectorAll('td').length,
             dateRight: row.querySelector('th').getBoundingClientRect().right, regionRight: region.getBoundingClientRect().right,
-            wow: Array.from(row.querySelectorAll('td:last-child span')).map(span => ({ left: span.getBoundingClientRect().left, right: span.getBoundingClientRect().right, text: span.textContent })) };
+            wow: Array.from(row.querySelectorAll('td:last-child > div > span:first-child, td:last-child > div > [data-usage-change] > span[aria-hidden="true"]'))
+              .map(span => ({ left: span.getBoundingClientRect().left, right: span.getBoundingClientRect().right, text: span.textContent })) };
         })()`);
         expect(geometry.overflow).toBeLessThanOrEqual(1);
         expect(Math.abs(geometry.width - width)).toBeLessThanOrEqual(1);
@@ -73,6 +74,7 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
         expect(await read<number>("document.querySelectorAll('[data-testid=selected-agent-team]').length")).toBe(0);
         await read("document.querySelector('[data-team-house]').click()");
         await expect.poll(() => read<number>("document.querySelectorAll('[data-testid=selected-agent-team]').length")).toBe(1);
+        expect(Math.abs(await read<number>("document.querySelector('[data-testid=agent-team-panel]').getBoundingClientRect().width") - width)).toBeLessThanOrEqual(1);
         expect(await read<number>("(() => { const p = document.querySelector('[data-testid=agent-team-panel]'); return p.scrollWidth - p.clientWidth; })()")).toBeLessThanOrEqual(1);
       }
     }

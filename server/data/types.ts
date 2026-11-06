@@ -8,6 +8,7 @@ import type {
   DataSource,
   OmbChartSpec,
 } from "../../shared/data-surface.ts";
+import type { MiniAppDataBinding, MiniAppNamedPage, MiniAppNamedRead, MiniAppSourceTable } from "../../shared/mini-app-data.ts";
 
 export type { DataColumn, DataColumnStats, DataError, DataHistogram, DataPage, DataReduction, DataSource, OmbChartSpec };
 
@@ -29,6 +30,7 @@ export interface RunOptions {
   signal?: AbortSignal;
   maxRows?: number;
   extensions?: DataExtension[];
+  businessMutation?: boolean;
 }
 
 export interface RunResult {
@@ -64,6 +66,7 @@ export interface BotDatabase {
   stats(table: string, options?: { signal?: AbortSignal }): Promise<DataColumnStats>;
   histogram(table: string, column: string, options?: { bins?: number; signal?: AbortSignal }): Promise<DataHistogram>;
   listTables(): Promise<Array<{ name: string; sqlName?: string; rowCount: number; columns: DataColumn[] }>>;
+  listSourceTables(): Promise<MiniAppSourceTable[]>;
   interrupt(connection: DataConnection): void;
   /** Resolves a bare or qualified identifier; `table_not_found` with candidates otherwise. */
   resolveTable(name: string): Promise<string>;
@@ -73,8 +76,24 @@ export interface BotDatabase {
 export interface DataEngine {
   unavailable(): string | null;
   forBot(botId: string): Promise<BotDatabase>;
+  forDataset(datasetId: string, ownerId: string): Promise<BotDatabase>;
+  listBotSources(ownerId: string, botIds: string[]): Promise<Array<{ botId: string; datasetId: string | null }>>;
+  listDatasets(ownerId: string): Promise<Array<{ datasetId: string; storeId: string; revision: number }>>;
+  promoteForBot(botId: string, ownerId: string): Promise<{ datasetId: string; storeId: string; revision: number }>;
+  validateBinding(ownerId: string, binding: MiniAppDataBinding): Promise<void>;
+  readNamed(input: MiniAppNamedRead): Promise<MiniAppNamedPage>;
+  withSnapshot<T>(directory: string, capture: (manifest: DataSnapshotManifest) => Promise<T>): Promise<T>;
+  withBotDeletion(botId: string, removeBot: () => boolean | Promise<boolean>): Promise<boolean>;
+  onChanged(listener: (event: DataChanged) => void): () => void;
   deleteBot(botId: string): Promise<void>;
   closeAll(): Promise<void>;
+}
+
+export interface DataChanged { datasetId: string; revision: number }
+
+export interface DataSnapshotManifest {
+  version: 1;
+  stores: Array<{ datasetId: string; storeId: string; revision: number; sha256: string; path: string }>;
 }
 
 /** Compiling throws DataFailure(spec_invalid) for a spec that names missing columns or mixes incompatible encodings. */

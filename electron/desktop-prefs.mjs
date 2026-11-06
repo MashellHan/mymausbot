@@ -49,6 +49,7 @@ function parse(raw) {
     ? Object.fromEntries(Object.entries(record.quickAsks).flatMap(([server, chat]) => { const parsed = parseChat(chat); return parsed ? [[server, parsed]] : []; }))
     : {};
   return { seen, ...(typeof record.analytics === "boolean" ? { analytics: record.analytics } : {}),
+    ...(record.credentialMode === "session" ? { credentialMode: "session" } : {}),
     ...(isLanguage(record.language) ? { language: record.language } : {}),
     ...(typeof record.installId === "string" && INSTALL_ID.test(record.installId) ? { installId: record.installId } : {}),
     ...(updatesConsent ? { updatesConsent } : {}),
@@ -91,6 +92,7 @@ export function createDesktopPrefs({ read, write }) {
     /** null until a choice is saved. */
     analytics: () => current().analytics ?? null,
     setAnalytics(enabled) { save({ ...current(), analytics: enabled === true }); },
+    credentialMode: () => current().credentialMode === "session" ? "session" : "system",
     /** null until a language is picked; "" is a pick too: follow the system. */
     language: () => current().language ?? null,
     setLanguage(language) {

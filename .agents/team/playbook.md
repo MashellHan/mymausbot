@@ -1,8 +1,11 @@
 # MausBot development team
 
-The user is 大雄 (menha). This dedicated Herdr team develops the personal
-MashellHan/openmausbot fork in `/Users/mengxionghan/workspace/OpenMausBot`.
-The original repository remains the upstream. Preserve its license and notices.
+The user is 大雄 (menha). This dedicated Herdr team develops the standalone
+personal repository `MashellHan/mymausbot` (`fork=false`) in
+`/Users/mengxionghan/workspace/OpenMausBot`. `origin` targets this repository;
+`upstream` remains the read-only `milind-soni/OpenMausBot` repository.
+`legacy-fork` names the old `MashellHan/openmausbot` repository and its historical
+PR, issue, review and CI records. Preserve upstream license and notices.
 
 ## Roles
 
@@ -29,6 +32,14 @@ do not modify or close another team's panes. Keep focus unchanged.
 The lead owns scope, task sequencing, integration and acceptance. Specialists
 report to the lead; no parallel edits to the same file. Use isolated worktrees
 for code PRs, rooted beside this project under the user's workspace.
+
+Read the validation policy and role from that task checkout. An older dirty
+coordination root may lack new commands or policy files; read the fetched
+`origin/main` versions instead of reverting to historical instructions.
+Root routes nonblocking feedback through Lead. Lead batches actionable changes
+for the owning developer at a safe source boundary; do not repeat the same
+instruction from multiple coordinators. Interrupt only for a concrete blocker
+or data/security risk. Cleanup and unrelated QA retain separate owners.
 
 ## Authorized work, in order
 
@@ -81,36 +92,64 @@ Chinese text. Code comments must also be in English. Keep actual conversation,
 task and automation identifiers in local handoff records, not public documents.
 Respect upstream AGENTS.md, required hooks/checks and verification fixtures.
 Consult the github-accounts skill for identity and repository-specific auth.
-Only push feature branches and PRs to the user's fork; do not push upstream.
+Verify `origin` points to `MashellHan/mymausbot`; push feature branches and PRs
+only there. Never push to read-only `upstream` or historical `legacy-fork`. Map
+old PR and issue numbers through the authoritative migration mapping before
+citing their new counterparts.
 The user requested commit/PR history. Preserve intermediate meaningful commits;
 do not manufacture commit counts, force-push others' work or bypass checks.
 
-Lead should dispatch ready changes to reviewer immediately, with exact commit,
-diff scope and validation. Review may run alongside independent next work.
-Use one focused review, one correction batch and delta review of changed hunks
-plus affected contracts. Repeat broad review only for new risk or unresolved
-findings. The user has authorized reviewed merges into the personal fork. Lead
-decides merge order and merges only after Reviewer has no unresolved
+Lead sends compatible ready changes for one focused independent review of the
+final integrated diff against current main, with exact head, scope and
+validation. Review may run alongside independent next work. Carry accepted
+unchanged hunks and checks on stable inputs. A composition commit alone does
+not trigger another review, test or build cycle; recheck only actual conflicts,
+new risks or findings with focused deltas. Required current-head CI and source
+acceptance still gate merging. The user has authorized reviewed merges into the
+personal repository.
+Lead decides merge order and merges only after Reviewer has no unresolved
 findings and required checks pass. Creating and pushing reviewable PRs is
 authorized here.
 Never equate a green badge or an idle agent with completed work.
 
+Freeze a coherent candidate after focused contract checks. Send its immutable
+commit, available evidence and explicitly pending UI/package checks immediately;
+source review and CI can start while those checks finish. Do not wait for all
+screenshots or a package to begin source review. Pending acceptance still blocks
+the corresponding delivery. Batch corrections and review only their delta.
+
 ## Local candidate delivery
 
-When the requested outcome is a runnable local App, build and validate that
-candidate independently of PR merging. Combine the needed pinned commits in an
-isolated integration worktree, record the base and resulting source revision,
-and test the combined source. Individual PR test results do not prove their
-integration. Completion of every PR's remote CI and merge is not a prerequisite
-for producing the local candidate.
+Every App shown to the user for preview, use or acceptance testing defaults to
+a clean checkout of the active personal repository's latest fetched `origin/main`.
+Fetch before packaging and record the exact main commit and source tree. Recheck
+main before handoff; if it advanced, refresh and validate the candidate instead
+of presenting an old package as the latest main. A local branch named `main`
+does not establish this provenance. Do not silently include unmerged PRs,
+cherry-picks, dirty source patches or packages built from another branch.
 
-Run the affected functional/integration checks and applicable static checks,
-then one package build and isolated startup acceptance for that source. Include
-the package/resource checks needed by the changed behavior. Demonstrate the
-requested user action in an isolated fixture; startup alone is not feature
-acceptance. Reuse identical
-evidence and checks already performed by the build; do not remove required
-build checks or bypass push hooks. Changed source may require a new artifact.
+An exception requires the user's explicit selection of that branch or PR, or
+Lead's documented strong, concrete necessity. The exception source must also
+be a clean, exact checkout. Before showing the App, disclose the reason, exact
+source and main SHAs, every included unmerged PR or commit, validation results
+and the condition for returning to main. Slow CI or delivery convenience alone
+is insufficient. Lead and Reviewer verify this boundary; an exception does not
+waive applicable tests or review. Requested features still
+confined to unmerged PRs remain pending in the default main-based delivery.
+
+Developer branch tests and isolated internal diagnostic builds may combine
+pinned commits in a separate worktree. They do not automatically qualify as an
+App to show the user. Test the combined source: individual PR tests do not prove
+its integration. Incomplete PR CI or merges may coexist with internal diagnostics,
+not with an undisclosed user-facing candidate.
+
+For a user-facing App, run affected functional/integration checks and applicable
+static checks on the exact source, then one package build and isolated startup
+acceptance. Include package/resource checks needed by the changed behavior.
+Demonstrate the requested user action in an isolated fixture; startup alone is
+not feature acceptance. Reuse identical evidence and checks already performed
+by the build; do not remove required build checks or bypass push hooks. Changed
+source may require a new artifact.
 
 Run inexpensive lint and repository guards before handing off for review or
 starting a package build, so file-size and declaration failures do not arrive
@@ -119,19 +158,30 @@ inputs. For a local arm64 build, reuse verified dependency/resource caches and
 unchanged build outputs; rebuild only the outputs whose inputs changed. Record
 stage durations in the existing build log instead of adding a separate audit.
 
-Classify a remote CI failure by its effect on the candidate. A confirmed
-unrelated failure can be tracked separately with its run link, evidence and
-follow-up owner; repairing it is not a local-build dependency. Age alone does
-not establish irrelevance. Failures affecting startup, authorization, data
-safety or the requested behavior block candidate acceptance even if preexisting.
+Use the shared `check:delivery` preflight and preservation commands in the local
+runbook. Do not recreate the routine-state and Mini App inventory comparators
+inside each private job. Validate the build request before starting compilation.
+Use `pnpm typecheck` when a local static check is required; the compiler maintains
+separate UI/server incremental state within this worktree. `pnpm build` includes
+that check, so do not add another prerequisite invocation. CI starts it fresh.
+Reuse existing Electron fixture launchers and run `pnpm check:fixtures` before
+executing changes to them; a launcher failure calls for one bounded correction,
+not an unchanged retry or a larger global timeout.
+
+Classify remote CI failures with a run link, evidence and follow-up owner.
+Unrelated CI debt does not change the required source for user preview. Age
+alone does not establish irrelevance. Failures affecting startup, authorization,
+data safety or the requested behavior block candidate acceptance even if preexisting.
 Investigate uncertain relevance with a focused check before declaring it unrelated.
 
-Use the existing private build/handoff records to report candidate readiness,
-included revisions, local evidence and pending/failed remote checks separately.
-Candidate readiness does not establish merge or release readiness, or completion
-of all outcomes in feature-delivery-ready.json. Lead follows the PRs through
-their required CI and independent review while local delivery proceeds. Verify
-with isolated fixtures; preserve the official App and real data, and follow the
+Use the existing private build/handoff records to report the repository, exact
+source SHA/tree, fetched main SHA, App artifact, validation and any disclosed
+exception alongside pending/failed remote checks.
+Internal candidate readiness or a disclosed exception does not establish merge
+or release readiness, or completion of all outcomes in
+feature-delivery-ready.json. Lead follows PRs through required CI and independent
+review while internal diagnostics or a disclosed exception proceed. Verify with
+isolated fixtures; preserve the official App and real data, and follow the
 existing coordinated procedure for an actual App switch.
 
 ## Testing and QA rhythm
@@ -139,12 +189,24 @@ existing coordinated procedure for an actual App switch.
 Follow [the validation mechanism](../../docs/MAUSBOT-VALIDATION.md). Use
 check:plan, check:edit and check:ready for the small local loop; retain normal
 push hooks and avoid repeating identical checks immediately before them.
+An ordinary PR's first required-gate attempt has five minutes from run creation,
+including queue time; a rerun uses its current attempt start, with the original
+age kept as diagnostic. One cached Ubuntu static/setup path retains typecheck,
+lint and source guards, then runs the 26-file security/data/dispatch core and
+at most four portable affected files. Record deferred affected files, including
+expensive browser and Electron tests. The `ci:full`, `qa:repair` and `windows`
+labels request explicit wider checks.
+Long platform, Electron, browser, full E2E and packaging checks belong to the
+applicable post-integration, daily 05:00 and release lanes. A failed or
+over-budget gate is a CI incident, not a waived check; current-head review
+and QA holds still control merging.
 Dev leaves a durable PR-body handoff with `QA-Handoff: <current head SHA>`.
 The existing Lead owns review and CI follow-through while local delivery and
 independent development continue.
 
-The automated QA runner is the existing CI full lane, twice daily. It does not
-need another persistent model. Its trusted reporter files deduplicated issues;
+The automated QA runner is the existing CI full lane, once daily at 05:00
+Asia/Shanghai. It does not need another persistent model. Its trusted reporter
+files deduplicated issues;
 the ten-minute queue hands actionable work to mausbot-lead. Lead acknowledges,
 triages within thirty minutes, assigns an existing developer/maintainer and sets
 priority, scope, classification, next action and due date. Reviewer reviews fixes;
@@ -154,7 +216,7 @@ admission requires the documented pilot evidence.
 
 ## Upstream integration
 
-The user's assistant owns the existing daily 09:00 Asia/Shanghai schedule;
+The user's assistant owns the existing daily 00:00 Asia/Shanghai schedule;
 do not create another scheduler. The upstream developer works in an isolated
 worktree, checks existing sync branches and PRs, and compares fetched
 `upstream/main` with `origin/main` before integrating. Record exact source SHAs,

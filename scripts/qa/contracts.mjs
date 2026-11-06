@@ -1,9 +1,10 @@
-import { ALL_OS, ciOutputs, FULL_SCOPE } from "../ci-scope.mjs";
+import { isDeepStrictEqual } from "node:util";
+import { ALL_OS, ciOutputs, FULL_SCOPE, moveLinuxIntoStatic } from "../ci-scope.mjs";
 
 export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
 const PREFLIGHT_NAMES = {
-  hosted: ["preflight", "typecheck + lint"],
-  boat: ["preflight + Linux tests (Boat)", "typecheck + lint + Linux tests (Boat)"],
+  hosted: ["typecheck + lint", "preflight"],
+  boat: ["typecheck + lint + Linux tests (Boat)", "preflight + Linux tests (Boat)"],
 };
 
 export function preflightJob(jobs) {
@@ -27,7 +28,8 @@ const NAMES = {
 export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true, preflightName) {
   const names = outputs.linux_lanes ? PREFLIGHT_NAMES.boat : PREFLIGHT_NAMES.hosted;
   if (preflightName !== undefined && !names.includes(preflightName)) throw new Error("Invalid workflow preflight");
-  const jobs = [{ id: "static", name: preflightName ?? names[0], linux: Boolean(outputs.linux_lanes),
+  const jobs = [{ id: "static", name: preflightName ?? names[0], build: outputs.build,
+    ...(outputs.fast_pr ? { fast: true } : {}), linux: Boolean(outputs.linux_lanes),
     ...(outputs.linux_lanes?.vitest.length || outputs.linux_lanes?.evals ? { artifact: "qa-results-boat" } : {}) }];
   for (const id of outputs.jobs) {
     if (!full && !MERGE_JOBS.includes(id)) continue;
@@ -58,7 +60,7 @@ export function inspectJobs(expected, observed) {
 }
 
 const VALIDATION_STEPS = {
-  static: ["Verify CI selection and documentation references", "Validate locale catalogs", "pnpm lint", "Source guards"],
+  static: ["Verify CI selection and documentation references", "Validate locale catalogs", "pnpm lint", "Source guards", "Security, data and dispatch core with bounded affected tests", "pnpm typecheck", "pnpm check:electron", "production UI build"],
   build: ["pnpm typecheck", "pnpm check:electron", "production UI build"],
   vitest: ["Run tests"],
   "behavior-evals": ["Eval suite typecheck", "Eval vitest gate", "Tier 1 scenarios", "Tier 2 golden replay", "Tier 3 stays offline"],
@@ -79,7 +81,13 @@ export function executionComplete(expected, jobs, artifacts) {
     const job = jobs.find((entry) => entry.name === item.name);
     if (!job || job.status !== "completed" || !["success", "failure"].includes(job.conclusion)) return false;
     if (item.artifact && !artifacts.has(item.artifact)) return false;
-    const steps = [...VALIDATION_STEPS[item.id]];
+    const steps = VALIDATION_STEPS[item.id].filter((step) => {
+      if (item.id !== "static") return true;
+      if (step === "Security, data and dispatch core with bounded affected tests") return item.fast;
+      if (step === "pnpm typecheck") return item.build;
+      if (["pnpm check:electron", "production UI build"].includes(step)) return item.build && !item.fast;
+      return true;
+    });
     if (item.linux) steps.push("Linux tests (vitest shards, behavior evals, packaged server), side by side");
     if (item.nodeTests) steps.push("Broker and Electron unit tests");
     if (item.id === "browser-driver" && item.name.includes("ubuntu")) steps.push("S4 inside the server image's runtime");
@@ -91,6 +99,40 @@ export function executionComplete(expected, jobs, artifacts) {
 export function eligibleRun(run, repository, fullOnly = true) {
   return run.path === ".github/workflows/ci.yml" && run.head_branch === "main" && run.head_repository?.full_name === repository
     && (fullOnly ? ["schedule", "workflow_dispatch"] : ["schedule", "workflow_dispatch", "push"]).includes(run.event);
+}
+
+const fullSelection = ciOutputs(FULL_SCOPE, ALL_OS);
+const fullSelections = [fullSelection, moveLinuxIntoStatic(fullSelection)];
+const sameSelection = (outputs, selection) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes"]
+  .every((key) => isDeepStrictEqual(outputs[key], selection[key]));
+
+/** A push's selected jobs must prove the same full scope as the nightly run, including relocated Linux lanes. */
+export function fullPushPlan(plan) {
+  const outputs = plan?.outputs;
+  if (plan?.version !== 1 || plan.plan?.full !== true || plan.plan?.candidate !== false
+    || plan.plan?.admitted !== false || plan.plan?.reduced !== false
+    || !isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE) || outputs?.full_required !== true || outputs.reduced !== false
+    || !isDeepStrictEqual(outputs.qa_areas, ["global"])) return false;
+  return fullSelections.some((selection) => sameSelection(outputs, selection)
+    && isDeepStrictEqual(outputs.expected_jobs, expectedJobs(selection))
+    && isDeepStrictEqual(outputs.required_jobs, selection.jobs.filter((id) => MERGE_JOBS.includes(id))));
+}
+
+/** A bound, internally consistent narrow plan can be skipped when finding the latest full execution. */
+export function narrowPushPlan(plan) {
+  const outputs = plan?.outputs;
+  if (plan?.version !== 1 || (plan.plan !== null && (plan.plan?.full !== false
+    || !Array.isArray(plan.plan?.scope?.areas) || !Array.isArray(plan.plan?.scope?.checks)
+    || isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE)))
+    || outputs?.full_required !== false || typeof outputs.build !== "boolean"
+    || typeof outputs.reduced !== "boolean" || outputs.reduced !== Boolean(plan.plan?.reduced)
+    || !Array.isArray(outputs.jobs) || !Array.isArray(outputs.vitest_os) || !Array.isArray(outputs.packaged_server_os)
+    || !Array.isArray(outputs.vitest_matrix?.include) || !Array.isArray(outputs.qa_areas) || !outputs.qa_areas.length) return false;
+  try {
+    return !fullSelections.some((selection) => sameSelection(outputs, selection))
+      && isDeepStrictEqual(outputs.expected_jobs, expectedJobs(outputs, false))
+      && isDeepStrictEqual(outputs.required_jobs, outputs.jobs.filter((id) => MERGE_JOBS.includes(id)));
+  } catch { return false; }
 }
 
 export function issueAreas(issue) {

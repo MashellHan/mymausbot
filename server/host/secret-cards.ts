@@ -221,6 +221,7 @@ export function createSecretCards(deps: SecretCardsDeps) {
       storeCustomSecret(message, botId, threadId, value);
     } catch (error) {
       console.warn(`secret card: could not keep a secret: ${error instanceof Error ? error.message : String(error)}`);
+      if ((error as { status?: unknown }).status === 409) return { status: 409, body: { error: (error as Error).message } };
       return { status: 500, body: { ...userError("serverError.secret.notKeptSafely") } };
     }
     if (!resumeSecretCard(botId, threadId, message.id, "provided")) return { status: 409, body: { ...userError("serverError.secret.unavailableLower") } };

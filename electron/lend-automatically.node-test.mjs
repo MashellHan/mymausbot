@@ -433,17 +433,17 @@ test("through the home folder, keys, passwords, sign-ins and git secrets stay pr
   assert.deepEqual(await readdir(path.join(home, "Library")), ["Application Support"]);
 });
 
-test("a Cloud's bot needing apps and screen on a Mac that lacks only macOS's permissions asks macOS for them, and says how to allow them", async t => {
+test("a Cloud's bot needing apps and screen reports missing permissions without asking macOS", async t => {
   const homes = { [HOME]: cloudHome() };
   const asked = [];
   const missing = { mode: "unavailable", reason: "Error: Accessibility and Screen Recording required; grant access in System Settings and restart OpenMausBot" };
   const mac = await computer(t, { homes, places: [myCloud], screen: () => true, cuaConnection: async () => missing, askForScreen: connection => asked.push(connection) });
   mac.sharing.start();
   await until(() => homes[HOME].connects.length === 1, "lending to start");
-  assert.equal(homes[HOME].connects[0].computer, true, "lent, so the first bot to need it can have macOS ask");
+  assert.equal(homes[HOME].connects[0].computer, true, "the Cloud still receives this computer's availability");
   homes[HOME].push({ action: "computer_tools" });
   await until(() => homes[HOME].results.length === 1, "the answer");
-  assert.deepEqual(asked, [missing]);
+  assert.deepEqual(asked, [], "a bot request cannot start the permission prompt");
   assert.match(homes[HOME].results[0].content[0].text, /allow Accessibility and Screen Recording for OpenMausBot in System Settings/);
 });
 

@@ -263,6 +263,7 @@ export interface CloudAccountStore {
 }
 export declare function createCloudAccountStore(options: {
   file: string;
+  sessionOnly?: boolean;
   encryption: {
     available(): boolean | Promise<boolean>;
     encrypt(value: string): Buffer | Promise<Buffer>;

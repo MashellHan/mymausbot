@@ -18,6 +18,10 @@ export const LICENSE_EXPIRED_CODE = "admin_license_expired";
 const safeText = (value, max) => typeof value === "string" && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
 const licenseExpired = error => error?.status === 503 && error?.apiCode === LICENSE_EXPIRED_CODE;
 
+export function managedRemoteAccessRefusal(policy) {
+  return policy?.remoteAccess === false ? `${policy.organizationName} does not allow remote access to this computer.` : null;
+}
+
 /** Unknown fields are ignored so a newer Admin stays compatible; a malformed known field rejects the whole object. */
 export function parseDesktopPolicy(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -107,8 +111,20 @@ export const MANAGED_TEXT = Object.freeze({
 });
 const said = (...codes) => ({ message: codes.map(code => MANAGED_TEXT[code]).join(" "), messageCodes: codes });
 
-/** OS-encrypted; company tokens never go into config.json, backups, renderer storage, environment variables or CLI homes. */
-export function createManagedDesktopStore({ file, encryption }) {
+/** OS-encrypted by default; session-only records stay in this App process. Company tokens never enter config, backups, renderer storage, environment variables or CLI homes. */
+export function createManagedDesktopStore({ file, encryption, sessionOnly = false }) {
+  if (sessionOnly) {
+    let document = null;
+    let tail = Promise.resolve();
+    return {
+      async read() { return structuredClone(document); },
+      write(value) {
+        const operation = tail.catch(() => {}).then(() => { document = structuredClone(value); });
+        tail = operation;
+        return operation;
+      },
+    };
+  }
   let tail = Promise.resolve();
   const available = async () => {
     if (!(await encryption.available())) throw new Error("Unlock your system keychain before connecting an organization.");

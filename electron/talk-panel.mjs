@@ -95,7 +95,7 @@ function mascotPng(nativeImage, iconPath) {
   return icon.resize({ width: 2 * MASCOT_PX, height: 2 * MASCOT_PX, quality: "best" }).toPNG().toString("base64");
 }
 
-export function createTalkPanel({ BrowserWindow, screen, nativeImage, iconPath, onOpen, onDismiss, theme: initialTheme = null, t = nativeText.englishText.t }) {
+export function createTalkPanel({ BrowserWindow, browserSession, screen, nativeImage, iconPath, onOpen, onDismiss, theme: initialTheme = null, t = nativeText.englishText.t }) {
   let win = null;
   let loaded = false;
   let shown = false;
@@ -133,6 +133,7 @@ export function createTalkPanel({ BrowserWindow, screen, nativeImage, iconPath, 
         contextIsolation: true,
         sandbox: true,
         nodeIntegration: false,
+        ...(browserSession ? { session: browserSession } : {}),
         spellcheck: false,
         preload: fileURLToPath(new URL("./talk-panel-preload.cjs", import.meta.url)),
       },

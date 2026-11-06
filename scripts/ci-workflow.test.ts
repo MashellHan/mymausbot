@@ -7,7 +7,7 @@ import { interpolate } from "./testing/github-expression.ts";
 import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-const requiredRuntimeJobs = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
+const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
 
 function runGate(state: ReturnType<typeof gateState>) {
   return verifyGate(state.outputs, { deadlineMs: 0, api: async (path: string) => path.startsWith("/issues?") ? [] : { jobs: state.jobs } });
@@ -39,8 +39,8 @@ describe("CI concurrency", () => {
     );
   });
 
-  it("runs the full lane in both China daytime and evening slots", () => {
-    expect(workflow.on.schedule).toEqual([{ cron: "17 2,14 * * *" }]);
+  it("runs the full lane once daily at 05:00 China time", () => {
+    expect(workflow.on.schedule).toEqual([{ cron: "0 21 * * *" }]);
   });
 
   it("stops a closed PR's run by joining ci.yml's PR group", () => {
@@ -71,6 +71,7 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.gate.strategy).toBeUndefined();
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.vitest.strategy.matrix).toBe("${{ fromJSON(needs.static.outputs.vitest_matrix) }}");
+    expect(workflow.jobs.vitest.strategy["max-parallel"]).toBe(4);
     expect(workflow.jobs.vitest["timeout-minutes"]).toBe("${{ matrix.os == 'ubuntu-latest' && 25 || 30 }}");
   });
 
@@ -205,9 +206,7 @@ describe("CI concurrency", () => {
     for (const path of named) expect(existsSync(new URL(`../${path}`, import.meta.url)), path).toBe(true);
     expect(named).toContain("src/locales/");
     expect(named).toContain("scripts/testing/file-size-ratchet.test.ts");
-    // Before the slow checks, so a failed guard reports within a minute: typecheck and the build wait for static.
-    expect(steps.some((step) => step.run === "pnpm typecheck")).toBe(false);
-    expect(workflow.jobs.build.needs).toBe("static");
+    expect(steps.some((step) => step.run === "pnpm typecheck")).toBe(true);
     // Every test the guards run stays in the suite: vitest's include has them, so the shards still deal them out.
     expect(workflow.jobs.vitest.needs).toBe("static");
   });
@@ -256,21 +255,29 @@ describe("CI concurrency", () => {
       qa_areas: "${{ steps.scope.outputs.qa_areas }}",
       repair_ids: "${{ steps.scope.outputs.repair_ids }}",
       shadow: "${{ steps.scope.outputs.shadow }}",
+      fast_pr: "${{ steps.scope.outputs.fast_pr }}",
+      fast_files: "${{ steps.scope.outputs.fast_files }}",
+      deferred_files: "${{ steps.scope.outputs.deferred_files }}",
       jobs: "${{ steps.scope.outputs.jobs }}",
       vitest_os: "${{ steps.scope.outputs.vitest_os }}",
       vitest_matrix: "${{ steps.scope.outputs.vitest_matrix }}",
       packaged_server_os: "${{ steps.scope.outputs.packaged_server_os }}",
     });
-    // The build job runs where the scope selects it, and static holds only what is quick and always runs.
-    expect(workflow.jobs.build.if).toBe(`contains(needs.static.outputs.jobs, '"build"')`);
-    expect((workflow.jobs.build.steps as { run?: string }[]).map((step) => step.run).filter(Boolean))
-      .toEqual(["pnpm install --frozen-lockfile", "pnpm typecheck", "pnpm check:electron", "pnpm exec vite build"]);
-    for (const run of ["pnpm typecheck", "pnpm check:electron", "pnpm exec vite build"]) {
-      expect((workflow.jobs.static.steps as { run?: string }[]).some((step) => step.run === run), run).toBe(false);
-    }
-    expect((workflow.jobs.static.steps as { if?: string }[]).some((step) => step.if?.includes("outputs.build"))).toBe(false);
+    const steps = workflow.jobs.static.steps as Step[];
+    const planUpload = steps.findIndex((step) => step.with?.name?.startsWith("qa-plan-attempt-"));
+    expect(planUpload).toBeGreaterThan(steps.findIndex((step) => step.id === "scope"));
+    expect(planUpload).toBeLessThan(steps.findIndex((step) => step.run === "pnpm install --frozen-lockfile"));
+    const fast = steps.find((step) => step.name === "Security, data and dispatch core with bounded affected tests")!;
+    expect(fast.if).toBe("steps.scope.outputs.fast_pr == 'true'");
+    expect(fast.run).toContain("vitest run ${{ steps.scope.outputs.fast_files }}");
+    const built = (workflow.jobs.static.steps as { if?: string; run?: string }[]).filter((step) => step.if?.includes("outputs.build"));
+    expect(built.map((step) => [step.if, step.run])).toEqual([
+      ["steps.scope.outputs.build == 'true'", "pnpm typecheck"],
+      ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm check:electron"],
+      ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm exec vite build"],
+    ]);
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
-      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/qa/qa.test.ts",
+      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/qa.test.ts",
     )).toBe(true);
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string }][]) {
       if (["static", "gate", "shadow"].includes(name)) continue;
@@ -320,7 +327,7 @@ describe("CI concurrency", () => {
   });
 });
 
-type Step = { id?: string; name?: string; if?: string; run?: string; uses?: string; shell?: string; env?: Record<string, string> };
+type Step = { id?: string; name?: string; if?: string; run?: string; uses?: string; shell?: string; env?: Record<string, string>; with?: Record<string, string> };
 
 /** The contexts a run's static job is routed by: a pull request from `author`, a push, a merge group or a scheduled run. */
 function runContext({ boat = "on", event = "pull_request", actor = "milind-soni", triggering = actor, author = actor, head = "milind-soni/OpenMausBot" }: {
@@ -341,11 +348,10 @@ describe("CI on Boat", () => {
     name: interpolate(workflow.jobs.static.name, context),
     timeout: interpolate(String(workflow.jobs.static["timeout-minutes"]), context),
   });
-  const boat = { runsOn: "boat-xlarge", name: "preflight + Linux tests (Boat)", timeout: 45 };
-  const github = (timeout: number) => ({ runsOn: "ubuntu-latest", name: "preflight", timeout });
+  const boat = { runsOn: "boat-xlarge", name: "typecheck + lint + Linux tests (Boat)", timeout: 45 };
+  const github = (timeout: number) => ({ runsOn: "ubuntu-latest", name: "typecheck + lint", timeout });
 
   it.each([
-    ["the owner's pull request", {}],
     ["the owner's push to main", { event: "push" }],
     ["a merge group the owner queued", { event: "merge_group" }],
   ])("runs the static job, with the Linux work, on one Boat VM for %s", (_, run) => {
@@ -353,14 +359,15 @@ describe("CI on Boat", () => {
   });
 
   it.each([
+    ["for the owner's pull request", {}, 15],
     ["while BOAT_CI is not set", { boat: null }, 15],
     ["while BOAT_CI is off", { boat: "off" }, 15],
-    ["for a fork's pull request", { head: "someone/OpenMausBot", author: "someone", actor: "someone" }, 45],
-    ["for a fork's pull request the owner started", { head: "someone/OpenMausBot", author: "someone" }, 45],
-    ["for a deleted fork's pull request", { head: null }, 45],
-    ["for a teammate's pull request on this repository", { author: "teammate", actor: "teammate" }, 45],
-    ["for the owner's pull request that a teammate pushed to", { actor: "teammate" }, 45],
-    ["for the owner's pull request that a teammate re-ran", { triggering: "teammate" }, 45],
+    ["for a fork's pull request", { head: "someone/OpenMausBot", author: "someone", actor: "someone" }, 15],
+    ["for a fork's pull request the owner started", { head: "someone/OpenMausBot", author: "someone" }, 15],
+    ["for a deleted fork's pull request", { head: null }, 15],
+    ["for a teammate's pull request on this repository", { author: "teammate", actor: "teammate" }, 15],
+    ["for the owner's pull request that a teammate pushed to", { actor: "teammate" }, 15],
+    ["for the owner's pull request that a teammate re-ran", { triggering: "teammate" }, 15],
     ["for a push a bot made", { event: "push", actor: "github-actions[bot]" }, 45],
     ["for the nightly run", { event: "schedule" }, 45],
     ["for a manual run, the release lane among them", { event: "workflow_dispatch" }, 45],

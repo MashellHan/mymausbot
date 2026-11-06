@@ -12,12 +12,13 @@ const nul = (value) => value ? value.replace(/\0$/, "").split("\0") : [];
 export function localChange(base = "origin/main", cwd = process.cwd()) {
   if (!base || base.startsWith("-")) throw new Error("Invalid base revision");
   const head = git(["rev-parse", "HEAD"], cwd).trim();
+  const behindBase = Number(git(["rev-list", "--count", `${head}..${base}`, "--"], cwd).trim());
   const mergeBase = git(["merge-base", base, head], cwd).trim();
   const diff = git(["diff", "--binary", "--no-ext-diff", "--no-renames", mergeBase, "--"], cwd);
   const untracked = nul(git(["ls-files", "--others", "--exclude-standard", "-z"], cwd));
   const files = [...new Set([...nul(git(["diff", "--name-only", "--no-renames", "-z", mergeBase, "--"], cwd)), ...untracked])].sort();
   return {
-    head, base: mergeBase, files,
+    head, base: mergeBase, behindBase, files,
     dirty: Boolean(git(["status", "--porcelain"], cwd).trim()),
     sourceHash: digest(diff + untracked.map((file) => `${file}\0${digest(readFileSync(join(cwd, file)))}`).join("\0")),
     lockHash: existsSync(join(cwd, "pnpm-lock.yaml")) ? digest(readFileSync(join(cwd, "pnpm-lock.yaml"))) : null,
@@ -36,6 +37,7 @@ function main() {
   }
   if (extra.some((file) => !SAFE_TEST_PATH.test(file) || !existsSync(file))) throw new Error("--test must name an existing test file");
   const source = localChange(base);
+  if (source.behindBase > 0) console.error(`Checkout is ${source.behindBase} commit(s) behind ${base}; read policy from the current task checkout or fetched main. Preserve active work; do not reset it.`);
   const policy = readCheckPolicy();
   const plan = selectCheckPlan({ files: source.files, policy, lines: changedCodeLines(source.base), mode: process.env.MAUSBOT_CI_MODE || "shadow" });
   console.log(JSON.stringify({ ...plan, source }, null, 2));
@@ -49,6 +51,8 @@ function main() {
   const command = ["node_modules/vitest/vitest.mjs", "run", ...files, "--reporter=default", "--reporter=json", `--outputFile.json=${resultFile}`];
   const env = { OMB_VITEST_WORKERS: "1", OMB_VITEST_E2E: "all", OMB_DASHBOARD_UI: files.includes("scripts/testing/local-dashboard-ui.e2e.test.ts") ? "1" : "0" };
   const result = spawnSync(process.execPath, command, { stdio: "inherit", env: { ...process.env, ...env } });
+  const durationMs = Date.now() - Date.parse(startedAt);
+  const budgetMs = action === "edit" ? 30_000 : 120_000;
   const endSource = localChange(base);
   const inputsStable = ["head", "base", "sourceHash", "lockHash"].every((key) => source[key] === endSource[key]);
   let counts = null;
@@ -60,12 +64,15 @@ function main() {
     version: 1, action, source, endSource, inputsStable, plan, command: [process.execPath, ...command],
     env: { ...env, CI: process.env.CI ?? "", TZ: Intl.DateTimeFormat().resolvedOptions().timeZone, LANG: process.env.LANG ?? "" },
     node: process.version, platform: process.platform, arch: process.arch,
-    startedAt, finishedAt: new Date().toISOString(), exitCode: result.status, signal: result.signal,
+    startedAt, finishedAt: new Date().toISOString(), durationMs, budgetMs, overBudget: durationMs > budgetMs,
+    exitCode: result.status, signal: result.signal,
     error: result.error?.message, counts, resultFile,
   };
   writeFileSync(join(directory, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
   console.log(`Validation receipt: ${directory}/receipt.json`);
-  console.log(`Merge evidence: ${plan.full ? "full CI required" : plan.scope.checks.join(", ")}; normal push hooks and independent review still apply.`);
+  console.log(`Local ${action}: ${(durationMs / 1000).toFixed(1)}s; target ${budgetMs / 1000}s. Global typecheck belongs in CI; pnpm build includes its own typecheck.`);
+  if (durationMs > budgetMs) console.error("Local feedback exceeded its target; record and fix the expensive phase instead of repeating unchanged checks.");
+  console.log(`Local validation: ${files.length} selected test files; ordinary PR CI runs the Ubuntu core and bounded affected tests, with full validation after integration and on the daily/release lanes. Normal push hooks and independent review still apply.`);
   if (!inputsStable) console.error("Source inputs changed during validation; this receipt cannot mark the current source ready.");
   process.exitCode = inputsStable ? result.status ?? 1 : 1;
 }

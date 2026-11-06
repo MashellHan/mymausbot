@@ -1,11 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import nativeText from "./native-text.cjs";
 import { accessToken, fixture, until } from "./fixtures/cloud-account.mjs";
 import { cancelSurvey, CHECKOUT_SOURCES, checkoutDestination, cloudMenuSublabel, createCloudAccountStore, cloudOrigin, cloudPlanSnapshot, CLOUD_ORIGIN } from "./cloud-account.mjs";
+
+test("session-only Cloud account grants forget on a new App run without touching old encrypted bytes", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "omb-cloud-session-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, "cloud-account.bin");
+  const oldBytes = Buffer.from("synthetic existing Cloud ciphertext");
+  await writeFile(file, oldBytes);
+  let encryptionCalls = 0;
+  const encryption = { available: async () => { encryptionCalls++; throw new Error("keychain touched"); },
+    encrypt: async () => { encryptionCalls++; throw new Error("keychain touched"); },
+    decrypt: async () => { encryptionCalls++; throw new Error("keychain touched"); } };
+  const store = createCloudAccountStore({ file, encryption, sessionOnly: true });
+  assert.equal(await store.read(), null);
+  await store.write({ token: accessToken });
+  assert.deepEqual(await store.read(), { token: accessToken });
+  await store.write(null);
+  assert.equal(await store.read(), null);
+  assert.deepEqual(await readFile(file), oldBytes);
+  assert.equal(encryptionCalls, 0);
+  assert.equal(await createCloudAccountStore({ file, encryption, sessionOnly: true }).read(), null);
+});
 
 
 test("Cloud origin is fixed; only explicit fixtures can use loopback", () => {

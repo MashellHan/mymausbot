@@ -34,3 +34,61 @@ that Remote access reports the MagicDNS name, then switch the phone from Wi-Fi
 to cellular with Tailscale connected on both devices. Keep public tunnel/DNS
 failures separate: a hosted URL returning a deployment 404 is not repaired by
 successful MagicDNS discovery.
+
+## Native phone pairing over an existing Funnel
+
+The local desktop's **Connect your phone** entry prefers a verified Tailscale
+Funnel. **Pair phone app** creates an `openmausbot://pair` QR containing the
+server's one-time credential and the verified HTTPS origin. Scan it from the
+native phone app's add-computer screen. The phone receives chat and approvals
+access; the separate browser/admin pairing action retains its scope selector.
+
+Discovery only reads `tailscale status --json` and `tailscale serve status
+--json`. It requires Funnel permission on the exact authority, a single root
+proxy to the current loopback harness port, and matching local/public
+environment descriptors. It neither starts Funnel nor changes its routes.
+
+```sh
+node --test electron/tailscale-funnel.node-test.mjs
+pnpm exec vitest run src/components/ServerPairingCard.funnel.dom.test.ts src/components/SettingsModal.serverPairing.test.ts shared/pairing-link.test.ts
+```
+
+For integration acceptance, launch an isolated fixture as described in the
+verification README. If a disposable Funnel is authorized, record the existing
+Serve configuration, route an unused HTTPS port to that fixture, and confirm
+the native QR redeems through the public relay. Verify authenticated chat,
+reconnection and refusal after session revocation. Remove only that temporary
+route and compare the remaining configuration with the recorded original.
+Never create a test pairing on the live workspace.
+
+These phones appear under the server's **Paired devices**, where **Sign out**
+revokes their sessions. They do not use the companion device registry or its
+remote-access switch. The computer must remain on with Tailscale/Funnel running;
+the phone needs ordinary internet access. Secure credential entry from the
+phone is not offered by this pairing path. Protocol and desktop acceptance do
+not replace scanning with an actual iPhone on cellular.
+
+## Snapshot compression through a reverse proxy
+
+Tailscale Funnel can forward directly to the server's loopback HTTP listener.
+Forwarded requests use the same JSON compression as the private tunnel
+listener: replies of at least 1 KB are gzipped when the client accepts gzip.
+Direct loopback requests keep their original response. Forwarding headers do
+not grant access; a remote phone still needs its paired session.
+
+```sh
+pnpm exec vitest run server/forwarded-json.e2e.test.ts server/harness/tunnel-gzip.test.ts
+```
+
+The regression launches an isolated fake-engine workspace, pairs a disposable
+client, and requests its initial `/api/bots?messages=50` snapshot through the
+real HTTP listener with proxy headers. It checks exact decompressed content,
+encoding negotiation, direct loopback behavior, an immediate uncompressed SSE
+hello before requesting the snapshot, client scope, and session revocation.
+All mutations belong to the fixture; no real phone or workspace is used.
+
+This verifies the server transport contract, not a three-second phone startup.
+The native client decides whether connection readiness waits for history
+synchronization. Moving that synchronization into the background needs the
+corresponding native source and cursor/replay tests so a snapshot cannot
+overwrite newer streamed messages.

@@ -55,6 +55,18 @@ test("What's new, Boat's credit offer and the Grok Bot move are the notices a pa
   }
 });
 
+test("credential mode is a nonsecret opt-in in the existing desktop preference record", () => {
+  let saved = { credentialMode: "session", seen: [] };
+  const prefs = createDesktopPrefs({ read: () => saved, write: value => { saved = structuredClone(value); } });
+  assert.equal(prefs.credentialMode(), "session");
+  prefs.setAnalytics(false);
+  assert.deepEqual(saved, { credentialMode: "session", seen: [], analytics: false });
+  assert.equal(createDesktopPrefs({ read: () => saved, write: () => {} }).credentialMode(), "session");
+  for (const raw of [null, {}, { credentialMode: "system" }, { credentialMode: "SESSION" }, { credentialMode: true }]) {
+    assert.equal(createDesktopPrefs({ read: () => raw, write: () => {} }).credentialMode(), "system");
+  }
+});
+
 test("a write that fails leaves the last whole record on disk, analytics opt-out included", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "desktop-prefs-"));
   try {
@@ -227,7 +239,7 @@ test("a page of the window says which language it shows, and main hears it only 
 });
 
 const PRELOAD = readFileSync(new URL("./preload.cjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-function preload(origin, { activation = false, saved = null, language = null } = {}) {
+function preload(origin, { activation = false, saved = null, language = null, credentialMode = "system" } = {}) {
   let bridge;
   const invoked = [], synced = [], sent = [], heard = new Map();
   vm.runInNewContext(PRELOAD, {
@@ -235,11 +247,21 @@ function preload(origin, { activation = false, saved = null, language = null } =
     location: { origin }, navigator: { userActivation: { isActive: activation } }, TextEncoder, localStorage: { getItem: () => null },
     require: () => ({ webUtils: {}, contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } },
       ipcRenderer: { on(channel, handler) { heard.set(channel, handler); }, removeListener() {}, send(...args) { sent.push(args); },
-        sendSync: channel => { synced.push(channel); return channel === "desktop-analytics:read" ? saved : channel === "desktop-language:read" ? language : undefined; },
+        sendSync: channel => { synced.push(channel); return channel === "desktop-analytics:read" ? saved : channel === "desktop-language:read" ? language
+          : channel === "credential-mode:read" ? credentialMode : undefined; },
         invoke: (...args) => { invoked.push(args); return Promise.resolve(true); } } }),
   });
   return { bridge, invoked, synced, sent, tell: (channel, ...args) => heard.get(channel)({}, ...args) };
 }
+
+test("only this computer's page sees the current App-run credential lifetime", () => {
+  const local = preload(LOCAL, { credentialMode: "session" });
+  assert.equal(local.bridge.credentialMode(), "session");
+  assert.deepEqual(local.synced, ["credential-mode:read"]);
+  for (const origin of [CLOUD, VPS]) assert.equal(preload(origin).bridge.credentialMode, undefined);
+  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  assert.match(main, /ipcMain\.on\("credential-mode:read", localOnlySync\(/);
+});
 
 test("the preload gives every page of the window the notices and the switch's state, and only This computer's page a way to set it", async () => {
   for (const origin of [CLOUD, VPS]) {

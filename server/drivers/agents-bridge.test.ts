@@ -115,7 +115,6 @@ describe("what a bridged turn is listed", () => {
   it("names every hot tool the catalog really has, so a renamed tool cannot fall out of the list unnoticed", () => {
     const everyName = new Set(everyProfile().flatMap(({ profile: turn }) => names(availableTools(turn))));
     for (const hot of BRIDGE_HOT_TOOL_NAMES) expect(everyName.has(hot), hot).toBe(true);
-    // 12 to 15 of them on any one turn, always fewer than the turn has
     for (const { name, profile: turn } of everyProfile()) {
       const tools = availableTools(turn);
       const hot = createToolBridge(tools as BridgeTool[]).listed.length - 2;
@@ -131,7 +130,6 @@ describe("what a bridged turn is listed", () => {
     expect(names(bridgeFor({ botId: WATCHER_OPTIONS_CARD_BOT_ID }).listed)[0]).toBe("create_options_card");
     expect(names(bridgeFor().listed)).not.toContain("create_options_card");
     expect(names(bridgeFor({ memory: false }).listed)).not.toContain("memory_update");
-    // A role and the other features change only what sits behind use_tool.
     for (const options of [{ chief: true }, { skills: true }, { shared: true }, { cloudHome: true }]) {
       expect(names(bridgeFor(options).listed), JSON.stringify(options)).toEqual(names(bridgeFor().listed));
     }
@@ -166,7 +164,6 @@ describe("what a bridged turn is listed", () => {
         for (const spelling of reportedAs(hidden.name)) expect(isOutboundTool(spelling), `${name}: ${spelling}`).toBe(false);
       }
     }
-    // today that is publish_page, listed for it alone, and the two the hot list names anyway
     expect(names(availableTools(profile({ ...FULL_CHIEF }))).filter((tool) => reportedAs(tool).some(isOutboundTool))).toEqual(["publish_page", "post_to_room", "send_voice_note"]);
     // and the bridge's own two names are not outward either
     for (const spelling of [...reportedAs(USE_TOOL), ...reportedAs(FIND_TOOL)]) expect(isOutboundTool(spelling), spelling).toBe(false);
@@ -414,6 +411,14 @@ describe("use_tool", () => {
     expect(bridgeFor().use(remember)).toEqual(remember);
     const hand = { name: "coordinate_bots", arguments: { bot_ids: ["bot-helper"], message: "please review the patch" } };
     expect(bridgeFor().use(hand)).toEqual(hand);
+  });
+
+  it("routes the local Mini App publisher through the bridge as a write", () => {
+    const bridge = bridgeFor();
+    const publish = { name: "mini_app_publish", arguments: { publication: { slug: "daily-report" } } };
+    expect(names(bridge.listed)).not.toContain(publish.name);
+    expect(names(bridge.hidden)).toContain(publish.name);
+    expect(bridge.use(publish)).toEqual(publish);
   });
 
   it("sends an outward action back to its own name instead of running it", () => {

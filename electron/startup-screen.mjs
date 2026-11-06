@@ -20,7 +20,7 @@ export function startupScreenHtml(iconPath, { t = nativeText.englishText.t, lang
 }
 
 export function createStartupScreen({
-  BrowserWindow, iconPath, platform = process.platform, isQuitting, onQuit,
+  BrowserWindow, browserSession, iconPath, platform = process.platform, isQuitting, onQuit,
   onHide, isHidden = () => false, onShow, onFinished, t, lang,
 }) {
   let disposed = false, revealed = false, fallback, resolveReady;
@@ -32,6 +32,7 @@ export function createStartupScreen({
     title: "OpenMaus Bot", autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true, sandbox: true, nodeIntegration: false,
+      ...(browserSession ? { session: browserSession } : {}),
       preload: fileURLToPath(new URL("./startup-screen-preload.cjs", import.meta.url)),
     },
   });

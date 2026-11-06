@@ -35,21 +35,25 @@ afterEach(() => {
 });
 
 describe("the computer panel's resize edge", () => {
-  it("widens with the arrow keys, stops at the maximum, and remembers the width", () => {
-    localStorage.setItem("omb-computer-panel-width", String(PANEL_MAX_WIDTH - 40));
+  it("opens at the maximum despite an older narrow width and still resizes while mounted", () => {
+    localStorage.setItem("omb-computer-panel-width", "400");
     act(() => root.render(createElement(Panel)));
-    expect(width).toBe(PANEL_MAX_WIDTH - 40);
-    press("ArrowLeft");
+    expect(width).toBe(PANEL_MAX_WIDTH);
     press("ArrowLeft");
     expect(width).toBe(PANEL_MAX_WIDTH);
     press("ArrowRight");
     expect(width).toBe(PANEL_MAX_WIDTH - 40);
-    expect(localStorage.getItem("omb-computer-panel-width")).toBe(String(PANEL_MAX_WIDTH - 40));
+    press("ArrowLeft");
+    expect(width).toBe(PANEL_MAX_WIDTH);
+    act(() => root.unmount());
+    root = createRoot(host);
+    act(() => root.render(createElement(Panel)));
+    expect(width).toBe(PANEL_MAX_WIDTH);
+    expect(localStorage.getItem("omb-computer-panel-width")).toBe("400");
   });
 
-  it("ignores a stored width outside the bounds", () => {
-    localStorage.setItem("omb-computer-panel-width", "5000");
+  it("opens at the maximum with no saved width", () => {
     act(() => root.render(createElement(Panel)));
-    expect(width).toBe(400);
+    expect(width).toBe(PANEL_MAX_WIDTH);
   });
 });

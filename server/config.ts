@@ -7,7 +7,6 @@ import { z } from "zod";
 import type { ImageGenerationConfig } from "../shared/image-generation.ts";
 import { imageGenConfigSchema, imageGenPatchSchema, keepKeysOutOfImageModels, type ImageGenCredentialPatch } from "./image-generation-config.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
-import { writeFileAtomic } from "./atomic.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "./bot-thread-limits.ts";
 import { anthropicKeyEnv } from "./anthropic-key-env.ts";
 import { withoutComputerEngine } from "./computer-engine-removal.ts";
@@ -29,6 +28,7 @@ import { deciderConfigSchema, type DeciderConfig } from "./decider/config.ts";
 import { liveConfigSchema, liveConfigWithEnv, liveSettingEnv, type LiveConfig } from "./live-config.ts";
 import { browserEngineConfigSchema, isValidCdpTarget, type BrowserEngineConfig } from "./browser/config.ts";
 import { roomContextSettings } from "./room-context-settings.ts";
+import { activeSessionConfig, assertSessionConfigWritable, readSessionConfigDisk, sessionCredentialsEnabled, withSessionSecrets, writeSessionConfig } from "./session-config.ts"; export { confirmSessionConfig, setSessionConfigPublisher, sessionCredentialsEnabled } from "./session-config.ts";
 import { MAX_LOCAL_VM_IDLE_TIMEOUT_MINUTES, MAX_LOCAL_VM_MAX_INSTANCES, MIN_LOCAL_VM_IDLE_TIMEOUT_MINUTES, MIN_LOCAL_VM_MAX_INSTANCES } from "./local-vm-settings.ts";
 export * from "./local-vm-settings.ts";
 
@@ -730,9 +730,11 @@ let lastIgnoredConfigWarning = "";
 const storedConfig = settledFileCache(() => join(DATA_DIR, "config.json"), () => parseStoredConfig(parseJson(readFileSync(join(DATA_DIR, "config.json"), "utf8"))));
 
 export function loadConfig(): AppConfig {
+  const sessionBase = activeSessionConfig();
   let cfg: AppConfig = {};
   try {
-    cfg = structuredClone(storedConfig.read());
+    const disk = structuredClone(storedConfig.read());
+    cfg = sessionBase ? parseStoredConfig(withSessionSecrets(disk as JsonObject, sessionBase)) : disk;
     lastIgnoredConfigWarning = "";
   } catch (error) {
     if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
@@ -791,7 +793,7 @@ export function loadConfig(): AppConfig {
     if (process.env.OMB_SIGNIN_EMAILS !== undefined) cfg.signIn.admins = splitEmails(process.env.OMB_SIGNIN_EMAILS);
     if (process.env.OMB_SIGNIN_MEMBER_EMAILS !== undefined) cfg.signIn.members = splitEmails(process.env.OMB_SIGNIN_MEMBER_EMAILS);
   }
-  return cfg;
+  return sessionBase ? withSessionSecrets(cfg as JsonObject, sessionBase) as AppConfig : cfg;
 }
 
 /** Memoizes derive(loadConfig()) until config.json's stat changes; a file saved in the last two seconds is re-read every call, since its mtime may not tick. */
@@ -918,15 +920,13 @@ export function saveConfig(
   },
   options: { replaceInstances?: boolean } = {},
 ): void {
+  assertSessionConfigWritable();
   const p = join(DATA_DIR, "config.json");
-  let disk: JsonObject = {};
-  try {
-    const parsed = jsonObjectSchema.safeParse(parseJson(readFileSync(p, "utf8")));
-    if (parsed.success) disk = parsed.data;
-  } catch {
-  }
+  const { previousDisk, previousBytes } = readSessionConfigDisk(p);
+  const previousSession = activeSessionConfig();
+  let disk: JsonObject = previousSession ? withSessionSecrets(previousDisk, previousSession) : structuredClone(previousDisk);
   const checkedPatch = appConfigSchema.partial().extend({ threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() }).parse(patch);
-  const before = configSaveListeners.size ? structuredClone(disk) : disk;
+  const before = configSaveListeners.size ? structuredClone(sessionCredentialsEnabled() ? previousDisk : disk) : disk;
   const keepImageModels = keepKeysOutOfImageModels(disk, checkedPatch.imageGen);
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
   if (storedProfiles.success) disk.browserProfiles = storedProfiles.data;
@@ -1026,11 +1026,11 @@ export function saveConfig(
     }
   }
   mkdirSync(DATA_DIR, { recursive: true });
-  writeFileAtomic(p, JSON.stringify(disk, null, 2), { mode: 0o600 });
+  const persisted = writeSessionConfig({ file: p, effective: disk, previousDisk, previousSession, previousBytes, patch: checkedPatch as JsonObject, forget: () => storedConfig.forget() });
   storedConfig.forget();
   for (const listener of configSaveListeners) {
     try {
-      listener(before, disk);
+      listener(before, persisted);
     } catch (error) {
       console.warn(`config: a save listener failed: ${error instanceof Error ? error.message : String(error)}`);
     }

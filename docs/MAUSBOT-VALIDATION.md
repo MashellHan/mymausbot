@@ -1,9 +1,11 @@
 # MausBot validation
 
-The target is about 80% less PR waiting time, measured separately from local
-feedback and delivery of a usable App. It is not a test-count reduction quota.
-The initial deployment uses `MAUSBOT_CI_MODE=shadow`; no area is admitted to
-reduced coverage in `scripts/testing/check-policy.json`.
+An ordinary PR's first required-gate attempt has five minutes from run creation,
+including queue and setup time. A rerun uses its current attempt start; the
+original run's age remains diagnostic. Local feedback and App
+delivery are measured separately; this is not a test-count reduction quota.
+`MAUSBOT_CI_MODE=shadow` and unadmitted areas remain available for the broader
+validation rollout; neither is a prerequisite for the ordinary fast PR gate.
 
 ## Developer loop
 
@@ -30,6 +32,29 @@ Targets are 5–30 seconds for ordinary edit feedback and 1–2 minutes for ordi
 local completion. Record a costly required step rather than dropping it to meet
 the target. A cold browser or dependency setup is part of the measured cost.
 
+Read this policy from the actual task checkout. Preserve an older dirty
+coordination root and inspect `git show origin/main:docs/MAUSBOT-VALIDATION.md`
+when its copy is missing. Start new source work from fetched main; do not reset
+an active feature branch merely because unrelated main work advances.
+
+When the affected contract requires local type validation, use
+`pnpm typecheck --project ui` or `pnpm typecheck --project server`.
+The TypeScript compiler always runs and invalidates affected source/imports;
+it maintains real incremental state under `.omb-scratch/typecheck/` rather than
+reusing a previous success receipt. Each worktree has its own state. CI and
+`--fresh` remove the selected compiler state before checking. `pnpm build`
+includes the same complete typecheck; do not separately invoke it immediately
+before the build. Emitting server/companion builds keep their existing checks.
+
+For new or edited Electron fixture entrypoints, run `pnpm check:fixtures` first.
+Electron's ESM entry must finish evaluating before readiness: await
+`app.whenReady()` in an invoked async function, never at module scope.
+Reuse existing launchers, scope selectors to the feature root, and preserve
+bounded startup/load/assertion phases with their failure output. Diagnose the
+failed phase once before retrying; retain the failure. Do not increase a global
+timeout to hide a launcher error. Keep local acceptance focused on the changed
+interaction and critical layout; broader unchanged permutations remain QA work.
+
 Dev records the exact head, local receipt and remaining checks in the PR body,
 including `QA-Handoff: <40-character head SHA>`. The queue hands that head to
 MausBot Lead only while the marker matches the current head. Updating the
@@ -37,51 +62,59 @@ handoff or marking a draft ready does not restart CI. Lead owns CI,
 independent review and merging while Dev can take independent work. New pushes
 require an updated handoff marker; a chat mention alone is not the handoff record.
 
+Freeze and hand off coherent source as soon as its focused checks pass. Start
+independent source review and CI in parallel with remaining isolated rendering
+or package acceptance. List each pending check with its owner; pending evidence
+cannot be claimed as passed. Source changes require delta review and their
+affected checks, while unchanged evidence remains valid. Root and specialists
+send nonblocking findings through Lead in one batch, avoiding repeated prompts
+and unrelated work on the delivery owner.
+
 ## Coverage boundaries
 
-`scripts/ci-scope.mjs` is the shared selector. CI reads the base revision's
-policy before considering reduction. A policy change forces full validation;
-a missing or invalid required test cannot pass selection. The two candidate
-areas are Usage presentation and Agent Team presentation, with exact source
-and contract lists in the manifest. The UI assertions use isolated fixtures at
-360, 400 and 960 pixels, in English and Chinese.
+`scripts/ci-scope.mjs` maps the full changed-file diff to contracts. An ordinary
+PR uses one cached Ubuntu static/setup path: applicable typecheck, lint, locale
+and source guards, the fixed 26-file security/data/dispatch core, and at most
+four portable affected test files. The selection artifact and log list
+additional affected files deferred to full validation, including browser and
+Electron tests and expensive E2E files under `scripts/testing/` and
+`server/browser/`. Missing or unsafe required tests fail selection; the bound
+does not silently turn a failed test into a skip.
 
-| Change/state | Merge evidence |
+| Change/state | Required evidence |
 | --- | --- |
-| Docs only | Existing static and docs/reference checks |
-| Admitted, fully mapped presentation change with healthy QA | Static, fixed core, affected contracts and fixture assertions |
-| Known area outside the admitted mapping, including a new file | Existing broader checks for that area |
-| Sensitive paths/changed lines, CI/policy/dependency/toolchain changes, unknown scope or broad integration | Full validation, including platform and specialist jobs |
-| Missing, stale, incomplete or unreadable QA report; affected untriaged failure | Disable reduction and retain broader checks |
+| Ordinary PR | One Ubuntu fast path and the current-head `CI` gate; first attempt includes queue time in its five-minute budget |
+| Explicit `ci:full`, `qa:repair` or `windows` label | Selected wider checks; this is an exception to the ordinary fast path, never a waiver of holds or review |
+| Main integration, daily 05:00 full QA, release | Deferred platform, Electron, browser, full E2E and packaging checks in their applicable lanes; daily/release retain the full set |
+| Missing or unreadable controls; applicable P0 or P1 hold | Fail closed or hold the affected merge; do not manufacture a green gate |
+| Stale full QA report without an applicable hold | Request shared recovery and restrict optional broader-lane reduction; ordinary fast PR selection remains available |
 
-Changed code involving auth, permissions, credentials, redaction, persistence,
-shared contracts, lifecycle, drivers or native behavior requires full relevant
-validation even inside a presentation file. The conservative path/text guard
-does not replace review of semantics. Reviewer adds `ci:full` for uncertain
-impact; adding/removing that label starts a new CI run. A label never waives
-coverage. Ordinary tiered main pushes keep core plus packaged-server startup;
-legacy/shadow main pushes retain the existing checks.
+Sensitive auth, permission, credential, redaction, persistence, dispatch,
+driver and native changes still receive the fixed core, affected contracts and
+full validation after integration. The path/text guard does not replace review
+of semantics. Reviewer may request an explicit wider run with `ci:full`; label
+changes start a new run. Shadow timing and area admission do not delay the
+ordinary five-minute path or relax current-head and QA-hold checks.
 
-The required check remains `CI` and is queued when the workflow starts, so a
-fresh full request cannot reuse the previous green check while its jobs wait.
-It binds the selection artifact to that run, revision and preflight attempt, then
-waits for all required jobs through the Actions API. Missing, skipped,
-cancelled or failed required jobs cannot pass. Full-required runs also require
-every selected platform and specialist job; deployments are excluded. The gate
-rechecks current PR controls, QA holds and reduced-coverage eligibility before
-returning green. If controls or health changed during the run, rerun CI with
-the required broader coverage. Unreadable current PR controls force full
-selection and grant no repair exemption; unreadable gate controls fail closed.
-Failed-jobs reruns reuse successful evidence from the same immutable run and
-revision, while the newest attempt of each job takes precedence. Expired plans
-or changed coverage requirements fail promptly with an actionable rerun request.
-A pass after a failed workflow attempt remains a finding for Lead to classify
-and cannot verify the incident until a later clean execution covers it.
+The required `CI` check starts with the workflow and binds its selection
+artifact to the run, revision and producing attempt. It waits for the selected
+required jobs, rechecks current PR controls and QA holds, and fails on missing,
+skipped, cancelled or failed required work. An ordinary fast run that exceeds
+five minutes from first-attempt creation, or from the current rerun attempt's
+start, is a CI performance incident, not a passing timeout. A real test failure
+takes priority over the timing incident. Explicit wider runs and post-integration
+validation keep their selected platform and specialist jobs. Unreadable
+controls fail closed; an unreadable issue list cannot grant an exemption.
+Failed-job reruns reuse valid
+successful evidence from the same immutable run and revision, with the newest
+attempt of each job taking precedence. A pass after a failed workflow attempt
+remains a finding for Lead to classify and cannot verify the incident until a
+later clean execution covers it.
 
 ## Automated QA and Lead rhythm
 
-The existing CI full lane runs on pinned main twice daily at **10:17 and 22:17
-Asia/Shanghai** (`17 2,14 * * *` UTC), including unchanged source. PR pushes
+The existing CI full lane runs on pinned main once daily at **05:00
+Asia/Shanghai** (`0 21 * * *` UTC), including unchanged source. PR pushes
 cannot cancel it. Root `pnpm test` alone is not a full QA run.
 
 `qa-report.yml` executes trusted main code with issue-write permission, separate
@@ -132,7 +165,9 @@ integration, and Lead closes with that evidence. The reporter sets `qa:verified`
 and leaves closure to Lead. Keep priority/owner/next-action/due-date records
 current; a `qa:triaged` label by itself is insufficient.
 
-No complete delivered full report within 14 hours disables reduced coverage.
+No complete delivered full report within 26 hours disables reduced coverage.
+This allows the 24-hour cadence plus a two-hour grace period; report health
+and shared execution recovery use the same window.
 The queue requests one shared recovery run per failed scheduled cycle, reusing
 any in-progress full run. A delivery failure retries reporting from durable
 results, without rerunning tests. The queue also backfills coalesced reporter
@@ -141,34 +176,68 @@ because it cannot enforce existing holds.
 
 ## Local candidate, merge and release
 
-A local App candidate may combine unmerged commits in an isolated worktree.
-Record its base, included commits, final source and dirty diff; test the combined
-behavior, run applicable static checks, build once and exercise startup plus
-the requested user action. Keep one package owner and reuse an unchanged
-artifact. Unrelated remote CI failures need evidence and an owner but need not
-delay that local candidate. Startup, authorization, data-safety and requested
-behavior failures do block acceptance.
+Every App shown to the user for preview, use or acceptance testing follows the
+[playbook's source policy](../.agents/team/playbook.md#local-candidate-delivery):
+use a clean checkout of the active repository's latest fetched `origin/main` by
+default. Fetch before packaging and recheck main before handoff; do not present
+an older or unmerged package as the latest main. Record the repository, exact
+main and source SHAs/trees, artifact and validation. An exception still uses a
+clean, exact checkout: unmerged PRs or cherry-picks may enter a user-facing App
+only when the user explicitly selects that branch or PR, or Lead documents a
+strong, concrete necessity. Before the preview, disclose the reason, all
+unmerged inclusions, validation and the condition for returning to main. Slow
+CI or convenience alone is insufficient.
+Requested features absent from main remain pending default delivery.
 
-Merge still requires current-head independent review, required green CI,
+Developer branch tests and isolated internal diagnostic builds may combine
+unmerged commits in a separate worktree; they do not automatically qualify for
+user preview. Test the combined source, run applicable static checks and keep
+one package owner. Reuse an unchanged artifact only when its source and bytes
+are verified. Classify unrelated CI failures with evidence and an owner, but
+do not use that classification to relax the user-facing source requirement.
+Startup, authorization, data-safety and requested-behavior failures block
+acceptance of any App presented to the user.
+
+Compatible ready changes receive one independent review of their final
+integrated diff against current main. Accepted unchanged hunks and stable-input
+checks carry into composition; a composition commit alone does not trigger a
+repeat review, test or build cycle. Recheck actual conflicts, new risks or
+findings with focused deltas. Merge still requires independent source acceptance
+on the current integrated diff, required green CI for the current head,
 current integration evidence and no applicable hold. Release additionally
 requires full evidence for its revision or identical tree, signing/native
 resources and package/install/update acceptance. Preserve the official App and
 real data; use the existing coordinated switch/recovery procedure.
 
+Use the [local runbook](MAUSBOT-LOCAL-RUNBOOK.md) for the read-only
+`check:delivery request`, `routines` and `inventory` commands. Request fields and
+source binding are checked before spending time on a package. A routine run's
+normal recovery state and initial queued-check assignments are separate from
+unchanged configuration and established run identity, routing and check authority.
+Unrecognized transitions need owner review, not automatic rollback. Only
+absent/null `shippedTemplateKind` is normalized in an inventory;
+grants, IDs, revisions and every other field remain exact. These checks do not
+replace credentials, pairing, signature, package, startup or rollback checks,
+and they do not authorize a live switch.
+
 ## Rollout and operations
 
 `MAUSBOT_CI_MODE` accepts `legacy`, `shadow` and `tiered`; unset or unknown values
-preserve existing coverage. `legacy` is the coverage rollback, not a bypass for
-failed checks, holds or full requests. Shadow runs the proposed core on candidate
-PRs as a separate advisory timing job while keeping the existing merge gate.
+preserve existing broader coverage. The ordinary five-minute PR path does not
+wait for area admission or a switch to `tiered`. `legacy` is a broader-coverage
+rollback, not a bypass for failed checks or holds. Shadow remains advisory and
+does not replace the required current-head gate.
 
-Before setting an area's `admitted` flag, require a representative real PR's
-shadow timing, selector/gate edge-case tests, two consecutive scheduled reports
-covering both slots, and a real failure → issue → triage → assignment → reviewed
-fix → verification → closure loop. Classify full-run failures and resolve
+Before enabling an area's optional broader-lane reduction, require a
+representative real PR's shadow timing, selector/gate edge-case tests and two
+consecutive scheduled reports from two daily cycles, plus a real failure →
+issue → triage → assignment →
+reviewed fix → verification → closure loop. Manual bootstrap and recovery runs
+do not count as scheduled cycles. Classify full-run failures and resolve
 selection misses in that area. Do not substitute calendar age or a PR count.
-Change admission through a reviewed full-validation PR, then set the repository
-variable to `tiered`. No 80% improvement is claimed merely by installing this.
+Change admission through reviewed full validation before setting the repository
+variable to `tiered`. This pilot does not authorize or delay the ordinary fast
+PR gate, and no timing improvement is claimed without measured runs.
 
 Report local feedback time, request-to-first-validated-candidate time, PR gate
 latency, eligibility fraction, runner time, queueing, escaped regressions,

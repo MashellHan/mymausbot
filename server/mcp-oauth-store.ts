@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { z } from "zod";
 
 import { writeFileAtomic } from "./atomic.ts";
+import { appSessionCredentials, sessionCredentialRefusal } from "./app-session-credentials.ts";
 
 const tokensSchema = z.object({
   access: z.string().min(1),
@@ -66,6 +67,7 @@ export class McpOAuthStore {
 
   // Read through on every call: another process may have changed the file.
   private read(): StoreFile {
+    if (appSessionCredentials()) return { servers: {} };
     try {
       const parsed = fileSchema.safeParse(JSON.parse(readFileSync(this.file, "utf8")));
       if (parsed.success) return parsed.data;
@@ -75,6 +77,7 @@ export class McpOAuthStore {
   }
 
   private write(data: StoreFile): void {
+    if (appSessionCredentials()) throw sessionCredentialRefusal("MCP OAuth sign-in");
     mkdirSync(dirname(this.file), { recursive: true });
     writeFileAtomic(this.file, JSON.stringify(data, null, 2), { mode: 0o600 });
   }

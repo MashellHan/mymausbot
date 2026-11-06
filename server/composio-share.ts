@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 import * as composio from "./composio.ts";
-import { saveConfig, syncCredentialEnv, type AppConfig } from "./config.ts";
+import { confirmSessionConfig, saveConfig, syncCredentialEnv, type AppConfig } from "./config.ts";
 
 export type ComposioMode = "managed" | "own";
 
@@ -114,6 +114,7 @@ export async function adoptOwnComposio(cfg: AppConfig, apiKey: string, userId: s
   }
   const prepared = await composio.prepareProjectSession(apiKey, { userId });
   saveConfig({ composio: prepared });
+  await confirmSessionConfig();
   syncCredentialEnv({ composio: prepared });
   cfg.composio = prepared;
   forgetComposioIdentity();

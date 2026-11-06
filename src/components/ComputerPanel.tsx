@@ -237,7 +237,7 @@ export function ComputerPanel({
   const panelTabs = computerPanelTabs({ advanced, androidConnected });
   const panelView = resolveComputerPanelView(storedPanelView, { advanced, androidConnected });
   const tabListRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => { if (tabListRef.current) revealSelectedTab(tabListRef.current); }, [panelView, advanced, androidConnected]);
+  useLayoutEffect(() => { if (tabListRef.current) revealSelectedTab(tabListRef.current); }, [panelView, advanced, androidConnected, separatorWidth]);
   const panelRef = useComputerPanelEntry(profileBot.id, panelView);
   const browserAvailableHere = browserAvailable(state.config);
   const browserEnabled = builtInBrowserEnabled(state.config) && bot.browser !== false
@@ -1277,7 +1277,7 @@ export function ComputerPanel({
             <DataPanel key={bot.id} bot={bot} requestedCard={dataRequest} />
           </Suspense>
         </div>
-      ) : panelView === "files" || panelView === "agent-team" || panelView === "usage" ? (
+      ) : panelView === "files" || panelView === "mini-apps" || panelView === "agent-team" || panelView === "usage" ? (
         <ComputerPanelInfoTab view={panelView} bot={bot} />
       ) : panelView === "android" && androidConnected ? (
         <div {...tabPanelProps("android")} className={cn("flex-1 overflow-y-auto px-4 pt-2", TAB_PANEL_FOCUS)}>

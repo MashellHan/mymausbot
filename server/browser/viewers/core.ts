@@ -481,11 +481,12 @@ export class ViewerHub {
     if (this.#applied === key && browser.viewport?.width === Math.max(size.width, MIN_WINDOW_WIDTH)) return;
     this.#applied = key;
     // The window is fitted by measuring the page, which an emulated size would misreport.
-    if (this.#emulated) {
+    const afterEmulation = this.#emulated;
+    if (afterEmulation) {
       for (const tab of this.host.tabs()) await tab.page.emulateSize(null).catch(() => {});
       this.#emulated = false;
     }
-    const fitted = await browser.setViewport({ width: Math.max(size.width, MIN_WINDOW_WIDTH), height: size.height }).catch(() => null);
+    const fitted = await browser.setViewport({ width: Math.max(size.width, MIN_WINDOW_WIDTH), height: size.height }, { afterEmulation }).catch(() => null);
     const layout = zoomedLayout(size, zoom);
     if (emulated) {
       for (const tab of this.host.tabs()) await tab.page.emulateSize(layout, zoom).catch(() => {});

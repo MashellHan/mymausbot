@@ -70,12 +70,16 @@ export interface LocalUsageCounts {
 
 /** Null means either date is incomplete; "new" means a positive value after a verified zero. */
 export type LocalUsageWeekChange = number | "new" | null;
+export type LocalUsagePeriodChange = LocalUsageWeekChange;
+export type LocalUsageCountComparison = Record<"prs" | "commits", LocalUsagePeriodChange>;
 
 /** Local-only repository identity, without checkout paths, credentials or event IDs. */
 export interface LocalUsageRepository extends LocalUsageCounts {
   id: string;
   name: string;
   category: LocalUsageCategory;
+  /** Previous equal-length period; its dates are on the enclosing window. */
+  comparison: LocalUsageCountComparison;
 }
 
 export interface LocalUsageRepositories {
@@ -103,6 +107,18 @@ export interface LocalUsagePrSourceCoverage {
   missing: number;
 }
 
+/** Percent changes against the immediately preceding, non-overlapping China-calendar period. */
+export interface LocalUsageComparison {
+  startDay: string;
+  endDay: string;
+  missingDays: string[];
+  unavailableTokenDays: string[];
+  prs: LocalUsagePeriodChange;
+  commits: LocalUsagePeriodChange;
+  totalTokens: LocalUsagePeriodChange;
+  categories: Record<LocalUsageCategory, LocalUsageCountComparison>;
+}
+
 /** Numeric values are observed totals when coverage is partial; non-null knownPrs is a lower bound when prs is null. */
 export interface LocalUsageWindow {
   days: 1 | 7 | 30;
@@ -118,8 +134,10 @@ export interface LocalUsageWindow {
   commits: number | null;
   newTokens: number | null;
   cacheRead: number | null;
+  totalTokens: number | null;
   categories: Record<LocalUsageCategory, LocalUsageCounts>;
   repositories: LocalUsageRepositories;
+  comparison: LocalUsageComparison;
 }
 
 /** Missing dates have null metrics. Token-unavailable dates have null token metrics. */
@@ -132,7 +150,66 @@ export interface LocalUsageTrendDay {
   commits: number | null;
   newTokens: number | null;
   cacheRead: number | null;
-  wow: Record<"prs" | "commits" | "newTokens", LocalUsageWeekChange>;
+  totalTokens: number | null;
+  categories: Record<LocalUsageCategory, LocalUsageCounts>;
+  wow: Record<"prs" | "commits" | "newTokens" | "totalTokens", LocalUsageWeekChange>;
+}
+
+/** Remotely merged PRs and their original non-merge commits, separate from created PRs and local Git history. */
+export interface LocalUsageMergedCounts {
+  prs: number | null;
+  knownPrs: number;
+  commits: number | null;
+  knownCommits: number;
+}
+
+export interface LocalUsageMergedRepository extends LocalUsageMergedCounts {
+  id: string;
+  name: string;
+  category: LocalUsageCategory;
+  comparison: LocalUsageCountComparison;
+}
+
+export interface LocalUsageMergedWindow extends LocalUsageMergedCounts {
+  days: 1 | 7 | 30;
+  startDay: string;
+  endDay: string;
+  asOf: number;
+  coverage: LocalUsageCoverage;
+  missingDays: string[];
+  categories: Record<LocalUsageCategory, LocalUsageMergedCounts>;
+  repositories: {
+    coverage: LocalUsageCoverage;
+    rows: LocalUsageMergedRepository[];
+    unattributedPrs: number | null;
+    unattributedCommits: number | null;
+    sharedCommits: number;
+  };
+  comparison: {
+    startDay: string;
+    endDay: string;
+    missingDays: string[];
+    prs: LocalUsagePeriodChange;
+    commits: LocalUsagePeriodChange;
+    categories: Record<LocalUsageCategory, LocalUsageCountComparison>;
+  };
+}
+
+export interface LocalUsageMergedTrendDay extends LocalUsageMergedCounts {
+  day: string;
+  coverage: LocalUsageCoverage;
+  categories: Record<LocalUsageCategory, LocalUsageMergedCounts>;
+  wow: Record<"prs" | "commits", LocalUsageWeekChange>;
+}
+
+export interface LocalUsageMergedResponse {
+  status: LocalUsageStatus;
+  asOf: number | null;
+  timeZone: "Asia/Shanghai";
+  sourceCoverage: { total: number; ready: number; partial: number; stale: number; unavailable: number } | null;
+  overlaps: { repeatedShas: number; categoryConflicts: number; dayConflicts: number } | null;
+  windows: Record<"1" | "7" | "30", LocalUsageMergedWindow> | null;
+  trend: LocalUsageMergedTrendDay[];
 }
 
 /** Windows include the capture date through asOf. The trend contains exactly the same 30 dates as window 30. */
@@ -145,4 +222,5 @@ export interface LocalUsageResponse {
   prCoverage: Record<LocalUsageCategory, "ready" | "partial"> | null;
   windows: Record<"1" | "7" | "30", LocalUsageWindow> | null;
   trend: LocalUsageTrendDay[];
+  merged?: LocalUsageMergedResponse;
 }

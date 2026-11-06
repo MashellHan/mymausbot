@@ -903,15 +903,15 @@ describe("Chat MCP servers past the tool limit", () => {
 describe("Chat MCP startup budgets", () => {
   /** Lets real I/O run, the faked clock standing still, until `condition`. */
   async function untilReal(condition: () => boolean): Promise<void> {
-    const started = Date.now();
-    while (!condition() && Date.now() - started < 15_000) await new Promise((resolve) => setImmediate(resolve));
+    const started = performance.now();
+    while (!condition() && performance.now() - started < 15_000) await new Promise((resolve) => setImmediate(resolve));
     expect(condition()).toBe(true);
   }
   /** Past a deadline: steps the faked clock too, by at most `budgetMs`, pausing in real time so a process can exit. */
   async function settleWithin(budgetMs: number, condition: () => boolean): Promise<void> {
     for (let spent = 0; !condition() && spent < budgetMs; spent += 25) {
-      const until = Date.now() + 20;
-      while (Date.now() < until) await new Promise((resolve) => setImmediate(resolve));
+      const until = performance.now() + 20;
+      while (performance.now() < until) await new Promise((resolve) => setImmediate(resolve));
       await vi.advanceTimersByTimeAsync(25);
     }
     expect(condition()).toBe(true);
@@ -942,7 +942,7 @@ describe("Chat MCP startup budgets", () => {
   });
 
   it("still gives a command server 8 seconds", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
       const f = fixture(`if (message.method === "tools/list") return;`);
       const mounting = watch(f.mount());

@@ -4,6 +4,31 @@ Before claiming a server or conversation change works, follow
 [`docs/verification/README.md`](docs/verification/README.md). Always launch an
 isolated fixture; never verify mutations against the user's live app or data.
 
+## Validation and delivery entry point
+
+Read `docs/MAUSBOT-VALIDATION.md` from the task's current checkout before choosing
+checks. Start new source tasks from freshly fetched `origin/main` in an isolated
+worktree. Preserve an older dirty coordination checkout; if its policy is absent,
+read `git show origin/main:docs/MAUSBOT-VALIDATION.md` and the current playbook
+before proceeding. A missing file in that checkout is not a missing policy.
+
+- Use `pnpm check:plan`, `pnpm check:edit` and one `pnpm check:ready` for handoff.
+  Global typecheck belongs in CI. When a local type check is necessary, use
+  `pnpm typecheck --project ui` or `--project server`; it revalidates compiler
+  state in this worktree. `pnpm build` includes typecheck, so do not prefix it
+  with another identical check. Retain the normal push hook.
+- Freeze a coherent source candidate and start review/CI alongside remaining
+  isolated UI acceptance. Pending evidence stays pending; only changed inputs,
+  findings or a failed check justify another check/review of that scope.
+- Run `pnpm check:fixtures` before running a new or edited Electron fixture.
+  Reuse its existing async entry, scoped selectors and bounded phase waits.
+- One owner builds and updates the App. Follow `docs/MAUSBOT-LOCAL-RUNBOOK.md`:
+  run `check:delivery request` before building, retain package/startup checks,
+  and reuse `check:delivery routines` / `inventory` for their preservation checks.
+  Those read-only checks grant no live mutation or test waiver.
+- Route nonblocking corrections through Lead in one batch at a safe boundary.
+  Keep cleanup, unrelated QA and new features outside the active delivery.
+
 ## Comments
 
 Write a comment only for what the code cannot say:
@@ -26,10 +51,10 @@ rule that guards correctness; fix the code.
 
 More specific `AGENTS.md` files override this note within their directories.
 
-## MausBot fork team
+## MausBot repository team
 
 Read `.agents/team/playbook.md` and the assigned role in `.agents/team/roles/`.
-The dedicated Herdr team owns this fork. Its lead and reviewer use
+The dedicated Herdr team owns this repository. Its lead and reviewer use
 `gpt-6-astra` with `max`; designer, frontend and backend use `gpt-6-sol`
 with `xhigh` and a requested 1,000,000-token context. The upstream integration
 developer uses the same Sol settings. Never silently substitute a model or claim

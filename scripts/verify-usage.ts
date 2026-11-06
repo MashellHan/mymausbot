@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { withMergedUsageFixture } from "./testing/merged-usage-fixture.ts";
 import type { AddressInfo } from "node:net";
 import type { LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../shared/local-dashboard.ts";
 import type { Bot } from "../src/state/store.tsx";
@@ -13,6 +14,12 @@ const bot = {
 
 const dates = (start: string) => Array.from({ length: 30 }, (_, index) =>
   new Date(Date.parse(`${start}T00:00:00Z`) + index * 86_400_000).toISOString().slice(0, 10));
+const shiftDay = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
+const missingCategories = {
+  work: { prs: null, knownPrs: null, commits: null },
+  personal: { prs: null, knownPrs: null, commits: null },
+  unclassified: { prs: null, knownPrs: null, commits: null },
+};
 
 function snapshot(scenario: string | null): LocalUsageResponse {
   if (scenario === "unavailable") return { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
@@ -25,34 +32,49 @@ function snapshot(scenario: string | null): LocalUsageResponse {
   const midnight = scenario === "midnight";
   const noMetrics = scenario === "no-metrics";
   const zero = scenario === "zero";
+  const noPrior = scenario === "no-prior";
+  const unclassified = scenario === "unclassified";
   const asOf = midnight ? Date.UTC(2025, 11, 31, 16, 5)
     : stale ? Date.UTC(2026, 10, 2, 15, 50) : Date.UTC(2026, 10, 3, 8, 30);
   const days = dates(midnight ? "2025-12-03" : stale ? "2026-10-04" : "2026-10-05");
   const trend: LocalUsageTrendDay[] = days.map((day, index) => {
     if (noMetrics) return { day, coverage: "unavailable", tokenStatus: "unavailable",
-      prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, wow: { prs: null, commits: null, newTokens: null } };
+      prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, totalTokens: null, categories: missingCategories,
+      wow: { prs: null, commits: null, newTokens: null, totalTokens: null } };
     if (missing && day === "2026-10-12") return { day, coverage: "unavailable", tokenStatus: "unavailable",
-      prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, wow: { prs: null, commits: null, newTokens: null } };
+      prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, totalTokens: null, categories: missingCategories,
+      wow: { prs: null, commits: null, newTokens: null, totalTokens: null } };
     const tokenGap = missing && day === "2026-10-15";
+    const prs = partialPr ? null : zero ? 0 : index % 3 === 0 ? 2 : 1;
+    const knownPrs = zero || pendingZero && day === "2026-10-12" ? 0 : index % 3 === 0 ? 2 : 1;
+    const commits = zero ? 0 : 1 + index % 4;
+    const newTokens = tokenGap ? null : zero ? 0 : 80 + index % 7 * 30;
+    const cacheRead = tokenGap ? null : zero ? 0 : 20 + index % 3 * 10;
+    const unclassifiedCommits = unclassified && index === 29 ? 1 : 0;
+    const workPrs = prs === null ? null : Math.floor(prs / 2);
+    const workKnownPrs = Math.floor(knownPrs / 2);
+    const workCommits = Math.floor((commits - unclassifiedCommits) / 2);
     return { day, coverage: partialPr ? "partial" : "ready", tokenStatus: tokenGap ? "unavailable" : missing ? "partial" : "ready",
-      prs: partialPr ? null : zero ? 0 : index % 3 === 0 ? 2 : 1,
-      knownPrs: zero || pendingZero && day === "2026-10-12" ? 0 : index % 3 === 0 ? 2 : 1,
-      commits: zero ? 0 : 1 + index % 4,
-      newTokens: tokenGap ? null : zero ? 0 : 80 + index % 7 * 30,
-      cacheRead: tokenGap ? null : zero ? 0 : 20 + index % 3 * 10,
-      wow: { prs: null, commits: null, newTokens: null } };
+      prs, knownPrs, commits, newTokens, cacheRead, totalTokens: newTokens === null || cacheRead === null ? null : newTokens + cacheRead,
+      categories: {
+        work: { prs: workPrs, knownPrs: workKnownPrs, commits: workCommits },
+        personal: { prs: prs === null ? null : prs - workPrs!, knownPrs: knownPrs - workKnownPrs, commits: commits - unclassifiedCommits - workCommits },
+        unclassified: { prs: 0, knownPrs: 0, commits: unclassifiedCommits },
+      },
+      wow: { prs: null, commits: null, newTokens: null, totalTokens: null } };
   });
   const change = (current: number | null, previous: number | null) => current === null || previous === null ? null
     : previous === 0 ? current === 0 ? 0 : "new" as const : (current - previous) / previous * 100;
   for (let index = 7; index < trend.length; index++) {
     const row = trend[index]!, previous = trend[index - 7]!;
     row.wow = { prs: change(row.prs, previous.prs), commits: missing ? null : change(row.commits, previous.commits),
-      newTokens: missing ? null : change(row.newTokens, previous.newTokens) };
+      newTokens: missing ? null : change(row.newTokens, previous.newTokens),
+      totalTokens: missing ? null : change(row.totalTokens, previous.totalTokens) };
   }
   const makeWindow = (count: 1 | 7 | 30): LocalUsageWindow => {
     const rows = trend.slice(-count);
-    const sum = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead") => rows.reduce((total, row) => total + (row[field] ?? 0), 0);
-    const available = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead") => rows.some((row) => row[field] !== null);
+    const sum = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead" | "totalTokens") => rows.reduce((total, row) => total + (row[field] ?? 0), 0);
+    const available = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead" | "totalTokens") => rows.some((row) => row[field] !== null);
     const result = { days: count, startDay: rows[0]!.day, endDay: rows.at(-1)!.day, asOf,
       coverage: noMetrics ? "unavailable" : partialPr ? "partial" : "ready", tokenCoverage: noMetrics ? "unavailable" : missing ? "partial" : "ready",
       missingDays: rows.filter((row) => row.coverage === "unavailable").map((row) => row.day),
@@ -60,15 +82,33 @@ function snapshot(scenario: string | null): LocalUsageResponse {
       prs: partialPr || noMetrics ? null : sum("knownPrs"), knownPrs: available("knownPrs") ? sum("knownPrs") : null,
       commits: available("commits") ? sum("commits") : null,
       newTokens: available("newTokens") ? sum("newTokens") : null,
-      cacheRead: available("cacheRead") ? sum("cacheRead") : null };
-    const work = { prs: result.prs === null ? null : Math.floor(result.prs / 2), knownPrs: result.knownPrs === null ? null : Math.floor(result.knownPrs / 2), commits: result.commits === null ? null : Math.floor(result.commits / 2) };
-    const personal = { prs: result.prs === null ? null : result.prs - (work.prs ?? 0), knownPrs: result.knownPrs === null ? null : result.knownPrs - (work.knownPrs ?? 0), commits: result.commits === null ? null : result.commits - (work.commits ?? 0) };
+      cacheRead: available("cacheRead") ? sum("cacheRead") : null,
+      totalTokens: available("totalTokens") ? sum("totalTokens") : null };
+    const unclassifiedCommits = unclassified && result.commits !== null ? 1 : 0;
+    const classifiedCommits = result.commits === null ? null : result.commits - unclassifiedCommits;
+    const work = { prs: result.prs === null ? null : Math.floor(result.prs / 2), knownPrs: result.knownPrs === null ? null : Math.floor(result.knownPrs / 2), commits: classifiedCommits === null ? null : Math.floor(classifiedCommits / 2) };
+    const personal = { prs: result.prs === null ? null : result.prs - (work.prs ?? 0), knownPrs: result.knownPrs === null ? null : result.knownPrs - (work.knownPrs ?? 0), commits: classifiedCommits === null ? null : classifiedCommits - (work.commits ?? 0) };
+    const priorStart = shiftDay(result.startDay, -count), priorEnd = shiftDay(result.startDay, -1);
+    const comparable = !noMetrics && !(noPrior && count === 30) && result.missingDays.length === 0;
+    const prComparison = comparable && !partialPr ? zero ? 0 : count === 1 ? 10 : count === 7 ? 20 : 30 : null;
+    const commitComparison = comparable ? zero ? 0 : count === 1 ? 10 : count === 7 ? 20 : 30 : null;
+    const tokenComparison = comparable && result.unavailableTokenDays.length === 0 ? zero ? 0 : count === 7 ? "new" as const : count === 1 ? 10 : 30 : null;
+    const comparison = { startDay: priorStart, endDay: priorEnd,
+      missingDays: noMetrics || (noPrior && count === 30) ? [priorStart] : [],
+      unavailableTokenDays: noMetrics || (noPrior && count === 30) ? [priorStart] : [],
+      prs: prComparison, commits: commitComparison, totalTokens: tokenComparison,
+      categories: {
+        work: { prs: prComparison === null ? null : zero ? 0 : 5, commits: commitComparison === null ? null : zero ? 0 : 10 },
+        personal: { prs: prComparison === null ? null : zero ? 0 : 15, commits: commitComparison === null ? null : zero ? 0 : 20 },
+        unclassified: { prs: unclassified && prComparison !== null ? 0 : null, commits: unclassified && commitComparison !== null ? 30 : null },
+      } };
     return { ...result, coverage: noMetrics ? "unavailable" : partialPr ? "partial" : "ready", tokenCoverage: noMetrics ? "unavailable" : missing ? "partial" : "ready",
-      categories: { work, personal, unclassified: { prs: noMetrics ? null : 0, knownPrs: noMetrics ? null : 0, commits: noMetrics ? null : 0 } },
-      repositories: { sharedCommits: 0, coverage: noMetrics ? "unavailable" : missing ? "partial" : "ready", unattributedPrs: result.knownPrs === null ? null : 0, unattributedCommits: result.commits === null ? null : 0,
+      comparison,
+      categories: { work, personal, unclassified: { prs: noMetrics ? null : 0, knownPrs: noMetrics ? null : 0, commits: result.commits === null ? null : unclassifiedCommits } },
+      repositories: { sharedCommits: 0, coverage: noMetrics ? "unavailable" : missing ? "partial" : "ready", unattributedPrs: result.knownPrs === null ? null : 0, unattributedCommits: result.commits === null ? null : unclassifiedCommits,
         rows: noMetrics || zero ? [] : [
-          { id: "sample-work", name: "example/workspace-tools", category: "work", ...work },
-          { id: "sample-personal", name: "example/personal-lab", category: "personal", ...personal },
+          { id: "sample-work", name: "example/workspace-tools", category: "work", ...work, comparison: comparison.categories.work },
+          { id: "sample-personal", name: "example/personal-lab", category: "personal", ...personal, comparison: comparison.categories.personal },
         ] } };
 
   };
@@ -100,7 +140,10 @@ try {
       { path: "/api/local-dashboard/usage", handler: (req, res) => {
         const scenario = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams.get("scenario");
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify(snapshot(scenario)));
+        const value = withMergedUsageFixture(snapshot(scenario));
+        if (scenario === "remote-only") res.end(JSON.stringify({ ...snapshot("unavailable"), merged: value.merged }));
+        else if (scenario === "legacy-only") res.end(JSON.stringify(snapshot("ready")));
+        else res.end(JSON.stringify(value));
       } },
     ],
   });

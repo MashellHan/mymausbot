@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { github, pages } from "./github.mjs";
+import { artifactFiles, fullRunEvidence, github, pages } from "./github.mjs";
 import { eligibleRun, issueLabels, triageOf } from "./contracts.mjs";
-import { qaHealth } from "./health.mjs";
+import { FULL_QA_FRESHNESS_MS, qaHealth } from "./health.mjs";
 
 export function queueItems(issues, prs, now = Date.now()) {
   const items = [];
@@ -25,12 +25,21 @@ export function queueItems(issues, prs, now = Date.now()) {
   return items;
 }
 
-export async function recoverQa(state, { api = github, health = qaHealth, now = Date.now(), repository = process.env.GITHUB_REPOSITORY } = {}) {
+export async function recoverQa(state, { api = github, readArtifact = artifactFiles, health = qaHealth, now = Date.now(), repository = process.env.GITHUB_REPOSITORY } = {}) {
   const runs = (await api("/actions/workflows/ci.yml/runs?branch=main&per_page=100")).workflow_runs.filter((run) => eligibleRun(run, repository, false));
-  const fullRuns = runs.filter((run) => eligibleRun(run, repository));
   const sinceInstallation = (run) => !state.startedAt || Date.parse(run.created_at) >= Date.parse(state.startedAt);
-  const latest = fullRuns.find((run) => run.status === "completed" && sinceInstallation(run));
-  const qa = await health({ api, repository, now });
+  const fullRuns = [];
+  let latest, pendingPlan = false, completedSeen = false;
+  for (const run of runs) {
+    if (completedSeen && run.status === "completed") continue;
+    const evidence = await fullRunEvidence(run, { api, readArtifact, repository, now });
+    if (evidence === "pending") pendingPlan = true;
+    if (run.status === "completed" && (evidence === "full" || evidence === "unknown")) completedSeen = true;
+    if (evidence !== "full") continue;
+    fullRuns.push(run);
+    if (run.status === "completed" && (sinceInstallation(run) || run.event === "push")) latest = run;
+  }
+  const qa = await health({ api, readArtifact, repository, now });
   const reporterRuns = (await api("/actions/workflows/qa-report.yml/runs?per_page=100")).workflow_runs;
   const reporting = reporterRuns.some((run) => run.status !== "completed");
   const reported = new Set(reporterRuns.filter((run) => run.conclusion === "success").map((run) => Number(run.display_title?.match(/^QA report (\d+)$/)?.[1])));
@@ -45,13 +54,25 @@ export async function recoverQa(state, { api = github, health = qaHealth, now = 
       state.reportRetry = { ...state.reportRetry, [key]: now };
     }
   }
-  const executionMissing = !latest || now - Date.parse(latest.updated_at) > 14 * 60 * 60_000 || qa.report && !qa.report.executionComplete;
-  const anchor = fullRuns.find((run) => run.event === "schedule")?.id ?? "bootstrap";
-  if (executionMissing && !fullRuns.some((run) => run.status !== "completed") && state.recoveryFor !== anchor) {
+  const executionMissing = !latest || now - Date.parse(latest.updated_at) > FULL_QA_FRESHNESS_MS || qa.report && !qa.report.executionComplete;
+  const anchor = runs.find((run) => run.event === "schedule")?.id ?? "bootstrap";
+  const activeFull = fullRuns.find((run) => run.status !== "completed");
+  const dispatch = executionMissing && !pendingPlan && !activeFull && state.recoveryFor !== anchor;
+  if (dispatch) {
     await api("/actions/workflows/ci.yml/dispatches", { method: "POST", body: { ref: "main" } });
     state.recoveryFor = anchor;
     state.recoveryRequestedAt = new Date(now).toISOString();
   }
+  const candidate = !executionMissing ? latest : activeFull;
+  state.lastRecoveryDecision = {
+    at: new Date(now).toISOString(),
+    action: dispatch ? "dispatch" : !executionMissing || activeFull ? "reuse" : pendingPlan ? "wait" : "hold",
+    reason: dispatch ? !latest ? "no_completed_full" : qa.report && !qa.report.executionComplete ? "incomplete_report" : "stale_completed_full"
+      : !executionMissing ? "fresh_completed_full" : activeFull ? "active_full" : pendingPlan ? "pending_plan" : "recovery_already_requested",
+    candidate: candidate ? { runId: candidate.id, sha: candidate.head_sha, attempt: candidate.run_attempt,
+      event: candidate.event, status: candidate.status } : null,
+    anchor,
+  };
   return qa;
 }
 
@@ -109,5 +130,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { version: 1 };
   const save = (value) => { writeFileSync(`${path}.tmp`, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 }); renameSync(`${path}.tmp`, path); };
   const result = await drainQueue(state, { save });
-  console.log(JSON.stringify({ at: new Date().toISOString(), sent: result.sent, uncertain: result.uncertain ?? false }));
+  console.log(JSON.stringify({ at: new Date().toISOString(), sent: result.sent, uncertain: result.uncertain ?? false,
+    recovery: result.state.lastRecoveryDecision }));
 }

@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 
 // The ci.yml jobs a pull request runs only when its change can affect them;
 // `static` and the `CI` gate always run. Besides these job ids a scope's checks
-// name the vitest job's parts: "linux-tests", "host-tests" (Windows, and macOS
-// where the event runs it), and the subsets in VITEST_SUBSETS.
+// name "build" (static's typecheck, Electron syntax check and UI build) and the
+// vitest job's parts: "linux-tests", "host-tests" (Windows, and macOS where the
+// event runs it), and the subsets in VITEST_SUBSETS.
 export const SELECTABLE_JOBS = [
-  "build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "cloudflared-linux-arm64",
+  "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "cloudflared-linux-arm64",
   "foss", "control-plane", "ui-smoke", "browser-identity", "package-linux", "browser-driver",
 ];
 
@@ -171,7 +172,7 @@ export const SRC_OUTSIDE_RENDERER = [
   "src/lib/random-uuid.ts",
 ];
 
-export const DOCS = /^(?:[^/]+\.md|docs\/.+\.md|\.github\/FUNDING\.yml)$/;
+export const DOCS = /^(?:[^/]+\.md|docs\/.+\.md|\.agents\/team\/(?:playbook|roles\/[^/]+)\.md|\.github\/FUNDING\.yml)$/;
 
 // The first matching rule names a path's area; a path no rule names can affect
 // anything. English is the source every test reads, so en.json is web.
@@ -208,7 +209,7 @@ export const MAIN_SCOPE = {
   ],
 };
 
-/** A push whose commit already passed the CI gate in the merge queue: only the control-plane checks the broker deploy needs. */
+/** A docs or version push already tested in the merge queue: only the control-plane checks the broker deploy needs. */
 export const QUEUED_SCOPE = { areas: ["tested in the merge queue"], checks: ["control-plane"] };
 
 /** A pull request's areas and the checks they select, from its changed files. */
@@ -223,6 +224,8 @@ export const POLICY_CHANGE = /^(?:\.github\/|scripts\/(?:ci-|check\.|qa\/|testin
 export const SENSITIVE_PATH = /^(?:shared\/|server\/(?:drivers?\/|host\/|routes\/|local-|request-auth|guarded|store|message-db|turn-|safety|pairing|secret)|electron\/|companion\/|enterprise\/)/;
 const SENSITIVE_LINE = /\b(?:auth|authorization|permission|credential|secret|redact|token|password|localStorage|sessionStorage|fetch|WebSocket|postMessage|ipcRenderer|persist|migration|dispatch|cancel|spawn|exec)\b/i;
 export const SAFE_TEST_PATH = /^(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.test\.[cm]?[jt]sx?$/;
+export const FAST_AFFECTED_LIMIT = 4;
+const FAST_EXPENSIVE_TEST = /^(?:scripts\/testing\/.*\.e2e\.test\.ts|server\/browser\/.*\.e2e\.test\.ts|electron\/.*\.electron\.test\.mjs|server\/index\.test\.ts)$/;
 const unique = (values) => [...new Set(values)].sort();
 
 export function readCheckPolicy(text = readFileSync(POLICY_PATH, "utf8"), present = existsSync) {
@@ -238,7 +241,7 @@ export function readCheckPolicy(text = readFileSync(POLICY_PATH, "utf8"), presen
   return policy;
 }
 
-export function selectCheckPlan({ files, policy, labels = [], lines = [], mode = "legacy", qa = { healthy: false, reason: "QA state unavailable" }, present = existsSync }) {
+export function selectCheckPlan({ files, policy, labels = [], lines = [], mode = "legacy", fastPr = false, forceFull = false, qa = { healthy: false, reason: "QA state unavailable" }, present = existsSync }) {
   const baseline = selectCiScope(files);
   const changed = Array.isArray(files) ? files : [];
   const areas = policy.areas.filter((area) => area.sources.some((file) => changed.includes(file)));
@@ -250,17 +253,19 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   });
   const affected = unique([...areas.flatMap((area) => area.tests), ...direct]);
   const reasons = [];
+  if (forceFull) reasons.push("full main validation after integration");
   if (labels.includes("ci:full") || labels.includes("qa:repair")) reasons.push("explicit full validation request");
   if (!changed.length || baseline.areas.includes("everything")) reasons.push("unknown or empty change scope");
   if (changed.some((file) => POLICY_CHANGE.test(file))) reasons.push("CI, policy, dependency or toolchain change");
   if (changed.some((file) => SENSITIVE_PATH.test(file)) || lines.some((line) => /^[+-](?![+-]{2})/.test(line) && SENSITIVE_LINE.test(line))) {
-    reasons.push("sensitive contract: retain full validation");
+    reasons.push(fastPr ? "sensitive contract: full validation after integration" : "sensitive contract: retain full validation");
   }
   if (labels.includes("upstream-sync") || (baseline.areas.length >= 3 && !baseline.areas.every((area) => area === "docs" || area === "locales"))) {
     reasons.push("broad integration change");
   }
-  const full = reasons.length > 0;
-  const candidate = !full && areas.length > 0 && changed.every((file) => mapped.has(file) && present(file) || DOCS.test(file));
+  const full = !fastPr && reasons.length > 0;
+  const mappedArea = areas.length > 0 && changed.every((file) => mapped.has(file) && present(file) || DOCS.test(file));
+  const candidate = !fastPr && !full && mappedArea;
   const qaBlocked = (qa.blockedAreas ?? []).some((area) => area === "global" || areas.some((hit) => hit.id === area));
   const admitted = candidate && areas.every((area) => area.admitted);
   const reduced = mode === "tiered" && admitted && qa.healthy && !qaBlocked;
@@ -270,14 +275,19 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   const docs = changed.length > 0 && changed.every((file) => areaOf(file) === "docs");
   const filesToRun = unique([...policy.core, ...affected]);
   if (filesToRun.some((file) => !SAFE_TEST_PATH.test(file) || !present(file))) throw new Error("Unsafe or missing selected test");
+  const additional = affected.filter((file) => !policy.core.includes(file));
+  const portable = additional.filter((file) => !FAST_EXPENSIVE_TEST.test(file));
+  const fastFiles = unique([...policy.core, ...portable.slice(0, FAST_AFFECTED_LIMIT)]);
+  const deferred = additional.filter((file) => !fastFiles.includes(file));
   return {
     version: policy.version, mode, files: changed, areas: baseline.areas, fastAreas: areas.map((area) => area.id),
-    holdAreas: candidate ? areas.map((area) => area.id) : ["global"],
-    full, candidate, admitted, reduced, reasons,
-    scope: full ? FULL_SCOPE : reduced ? { areas: areas.map((area) => area.id), checks: ["build", "core-tests"], files: filesToRun } : baseline,
+    holdAreas: !full && mappedArea ? areas.map((area) => area.id) : ["global"],
+    full, candidate, admitted, reduced, fast: fastPr, reasons,
+    scope: fastPr ? { areas: baseline.areas, checks: ["build"], files: fastFiles }
+      : full ? FULL_SCOPE : reduced ? { areas: areas.map((area) => area.id), checks: ["build", "core-tests"], files: filesToRun } : baseline,
     edit: docs ? [...VITEST_SUBSETS["docs-tests"].files, ...policy.guards] : affected,
     ready: docs ? unique([...VITEST_SUBSETS["docs-tests"].files, ...policy.guards]) : unique([...filesToRun, ...policy.guards]),
-    core: filesToRun,
+    core: filesToRun, fastFiles, deferred,
   };
 }
 
@@ -409,6 +419,7 @@ export function ciOutputs({ checks, files }, oses) {
     : job === "windows-cua" ? checks.includes(job) && oses.includes("windows-latest") : checks.includes(job)));
   return {
     jobs,
+    build: checks.includes("build"),
     vitest_os: oses,
     // macOS's packaged server smoke runs in the macOS smokes job.
     packaged_server_os: oses.filter((os) => os !== "macos-latest"),
@@ -505,7 +516,7 @@ async function passedMergeQueue(sha) {
   return false;
 }
 
-export async function runCiScope({ readPullRequest = pullRequestControls } = {}) {
+export async function runCiScope({ readPullRequest = pullRequestControls, fastPrEnabled = true } = {}) {
   const lane = laneOf(process.env.GITHUB_EVENT_NAME);
   let scope = lane === "main" ? MAIN_SCOPE : FULL_SCOPE;
   let vitestOs = lane === "main" ? WINDOWS_OS : ALL_OS;
@@ -554,7 +565,7 @@ export async function runCiScope({ readPullRequest = pullRequestControls } = {})
       files = changedFiles(range);
       const selected = selectPushScope(files, (rev, path) => git(["show", `${revs[rev]}:${path}`]));
       onlyVersion = !selected.runtime && files.length === 1 && files[0] === "package.json";
-      if (await passedMergeQueue(after)) {
+      if (await passedMergeQueue(after) && !selected.runtime) {
         scope = QUEUED_SCOPE;
       } else if (!selected.runtime && !(await previousCommitGreen(before))) {
         console.warn(`CI scope: using main's checks because ${before} has no green CI run of its own`);
@@ -581,7 +592,10 @@ export async function runCiScope({ readPullRequest = pullRequestControls } = {})
       policy = readCheckPolicy();
       labels.push("ci:full");
     }
-    const input = { files, policy, labels, lines: changedCodeLines(range), mode };
+    const fastPr = fastPrEnabled && lane === "pr" && !labels.some((label) => ["ci:full", "qa:repair", WINDOWS_LABEL].includes(label));
+    const input = { files, policy, labels, lines: changedCodeLines(range), mode, fastPr,
+      forceFull: process.env.GITHUB_EVENT_NAME === "push" && scope !== QUEUED_SCOPE
+        && scope.checks.some((check) => check !== "build") };
     plan = selectCheckPlan(input);
     if (mode === "tiered" && plan.candidate) {
       const { qaHealth } = await import("./qa/health.mjs");
@@ -597,6 +611,9 @@ export async function runCiScope({ readPullRequest = pullRequestControls } = {})
   const linuxInStatic = process.env.OMB_CI_LINUX_IN_STATIC === "true";
   const outputs = linuxInStatic ? moveLinuxIntoStatic(ciOutputs(scope, vitestOs)) : ciOutputs(scope, vitestOs);
   const { expectedJobs, MERGE_JOBS } = await import("./qa/contracts.mjs");
+  outputs.fast_pr = Boolean(plan?.fast);
+  outputs.fast_files = plan?.fast ? plan.fastFiles.join(" ") : "";
+  outputs.deferred_files = plan?.fast ? plan.deferred : [];
   outputs.full_required = lane === "full" || scope === FULL_SCOPE || Boolean(plan?.full);
   outputs.required_jobs = outputs.jobs.filter((job) => MERGE_JOBS.includes(job));
   outputs.expected_jobs = expectedJobs(outputs, outputs.full_required);
@@ -609,13 +626,14 @@ export async function runCiScope({ readPullRequest = pullRequestControls } = {})
   const receipt = { version: 1, sha: process.env.GITHUB_SHA, runId: Number(process.env.GITHUB_RUN_ID), attempt: Number(process.env.GITHUB_RUN_ATTEMPT || 1), createdAt: new Date().toISOString(), plan, outputs };
   writeFileSync("qa-plan.json", JSON.stringify(receipt, null, 2) + "\n");
   console.log(`CI scope: ${scope.areas.join(", ")} -> ${outputs.jobs.join(", ") || "static checks only"}`);
+  if (outputs.deferred_files.length) console.log(`CI scope: deferred affected tests to full main validation: ${outputs.deferred_files.join(", ")}`);
   if (linuxInStatic) {
     const { vitest, evals, packaged_server: packaged } = outputs.linux_lanes;
     console.log(`CI scope: this job runs ${vitest.length} Linux vitest lane(s)${evals ? ", behavior evals" : ""}${packaged ? ", the packaged server smoke" : ""}`);
   }
   appendFileSync(
     process.env.GITHUB_OUTPUT,
-    Object.entries(outputs).map(([key, value]) => `${key}=${typeof value === "boolean" ? value : JSON.stringify(value)}\n`).join(""),
+    Object.entries(outputs).map(([key, value]) => `${key}=${key === "fast_files" ? value : typeof value === "boolean" ? value : JSON.stringify(value)}\n`).join(""),
   );
 }
 

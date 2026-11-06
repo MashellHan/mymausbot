@@ -1,5 +1,6 @@
 import { userError, userErrorFields } from "../user-errors.ts";
 import { hostedWorkspaceConfiguration } from "../enterprise.ts";
+import { confirmSessionConfig, loadConfig, sessionCredentialsEnabled } from "../config.ts";
 import { runsElsewhere, type McpConfig, type McpConfigDeps, type McpConfigResult } from "../host/mcp-config.ts";
 import { McpOAuthError, McpSignInError, mcpCallbackOrigin } from "../mcp-oauth.ts";
 import { isRemoteMcpServer, mcpServerBody, mcpServerServes, parseMcpServerMutation, parseMcpServersImport, parseStoredMcpServer } from "../mcp-registry.ts";
@@ -52,6 +53,15 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
   const answer = (res: Parameters<typeof json>[0], send: typeof json, result: McpConfigResult) => "body" in result
     ? send(res, result.status, withServerDetails(result.body))
     : send(res, result.status, { error: result.error, ...userErrorFields(result), ...(result.code ? { code: result.code } : {}) });
+  const committed = async (res: Parameters<typeof json>[0], send: typeof json, result: McpConfigResult) => {
+    if ("body" in result && sessionCredentialsEnabled()) {
+      config.busy.set(true);
+      try { await confirmSessionConfig(); }
+      catch (error) { cfg.mcpServers = loadConfig().mcpServers; throw error; }
+      finally { config.busy.set(false); }
+    }
+    return answer(res, send, result);
+  };
   return async ({ req, res, path, method, auth, json, readBody }) => {
     if (method === "GET" && path === "/api/mcp/servers") {
       return json(res, 200, withServerDetails(mcpServerResponse()));
@@ -155,7 +165,7 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
       const name = typeof body?.name === "string" ? body.name : "";
       const parsed = parseMcpServerMutation(name, mcpServerBody(body));
       if (!parsed.ok) return json(res, 400, { error: parsed.error });
-      return answer(res, json, config.add(name, parsed.server));
+      return committed(res, json, config.add(name, parsed.server));
     }
 
     // The {"mcpServers": {...}} block other agent tools write; imported servers stay disabled until enabled.
@@ -163,7 +173,7 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
       if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
         return json(res, 415, { error: "content-type must be application/json" });
       }
-      return answer(res, json, await config.addMany(async () => {
+      return committed(res, json, await config.addMany(async () => {
         const body = await readBody(req);
         const text = typeof body?.json === "string" ? body.json : "";
         if (auth.kind === "session" && !sessions.isLive(auth.session.id)) {
@@ -181,7 +191,7 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       const name = mcpServerRoute[1]!;
-      if (method === "DELETE") return answer(res, json, config.remove(name));
+      if (method === "DELETE") return committed(res, json, config.remove(name));
       const body = await readBody(req);
       const current = cfg.mcpServers ?? {};
       if (!Object.hasOwn(current, name)) return json(res, 404, { error: "MCP server not found." });
@@ -192,11 +202,11 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
         if ((key !== "enabled" && key !== "apps") || typeof body[key] !== "boolean") {
           return json(res, 400, { error: "Only an enabled or apps boolean can be changed here." });
         }
-        return answer(res, json, key === "enabled" ? config.setEnabled(name, body.enabled) : config.setApps(name, body.apps));
+        return committed(res, json, key === "enabled" ? config.setEnabled(name, body.enabled) : config.setApps(name, body.apps));
       }
       const parsed = parseMcpServerMutation(name, body, existing.server);
       if (!parsed.ok) return json(res, 400, { error: parsed.error });
-      return answer(res, json, config.replace(name, parsed.server));
+      return committed(res, json, config.replace(name, parsed.server));
     }
     return PASS;
   };

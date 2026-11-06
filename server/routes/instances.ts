@@ -16,7 +16,7 @@ import {
   withClaudeEndpointInfo,
 } from "../claude-endpoints.ts";
 import { updateClaudeCli } from "../claude-update.ts";
-import { persistableInstanceConfigs, saveConfig, withInstanceCli, type AppConfig } from "../config.ts";
+import { confirmSessionConfig, persistableInstanceConfigs, saveConfig, withInstanceCli, type AppConfig } from "../config.ts";
 import { addEndpoint, addEndpointSchema, isAddedEndpoint, withEndpointUrls } from "../openai-compat-endpoints.ts";
 import type { InstanceConfigMap, ModelSelection, ProviderInstance } from "../contracts.ts";
 import { removeAntigravityProfile } from "../drivers/antigravity-acp.ts";
@@ -130,6 +130,7 @@ export function createInstanceRoutes(deps: InstanceRouteDeps): RouteHandler {
         const changed = withInstanceIcon(cfg, instanceIconPatch[1], parsed.data.icon);
         if (!changed.ok) return json(res, 404, { error: `unknown instance "${instanceIconPatch[1]}"` });
         saveConfig({ instances: changed.instances }, { replaceInstances: true });
+        await confirmSessionConfig();
         cfg.instances = changed.instances;
         broadcast({ kind: "config", ...configStatus() });
         return json(res, 200, { instances: await describeInstances() });

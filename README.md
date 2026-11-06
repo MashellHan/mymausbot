@@ -340,10 +340,12 @@ See the [Ubuntu Desktop guide](docs/linux-desktop.md) for installation, capabili
 Any desktop build can also pair as a client to another Windows, macOS, or Ubuntu host over Tailscale; see [desktop-to-desktop companion mode](docs/desktop-companion.md).
 
 
-**From source:**
+**From source (this repository):** [MashellHan/mymausbot](https://github.com/MashellHan/mymausbot)
+is the standalone development repository. The release links above remain
+from [upstream](https://github.com/milind-soni/OpenMausBot).
 
 ```sh
-git clone https://github.com/milind-soni/OpenMausBot && cd OpenMausBot
+git clone https://github.com/MashellHan/mymausbot.git && cd mymausbot
 pnpm install
 
 pnpm dev:server    # harness server → 127.0.0.1:8799

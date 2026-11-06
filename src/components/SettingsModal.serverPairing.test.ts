@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettingsSection } from "@/state/store";
 import { SettingsModal } from "./SettingsModal";
+import type { TailscaleFunnelConnection } from "../lib/tailscale-funnel";
 
 // These pin the card as always offered; the server decides who may act.
-const fixture = vi.hoisted(() => ({ section: "companion" as AppSettingsSection, config: undefined as { cloudHome?: boolean } | undefined, phonePairing: 0 }));
+const fixture = vi.hoisted(() => ({ section: "companion" as AppSettingsSection, config: undefined as { cloudHome?: boolean } | undefined, phonePairing: 0, funnel: null as TailscaleFunnelConnection | null }));
+vi.mock("@/lib/tailscale-funnel", () => ({ useTailscaleFunnel: () => fixture.funnel }));
 // Pinned to Advanced: these cover the Advanced rail; Simple has its own suite.
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => true, setAdvancedMode: () => {} }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({ capabilities: {} }) }));
@@ -25,6 +27,7 @@ beforeEach(() => {
   fixture.section = "companion";
   fixture.config = undefined;
   fixture.phonePairing = 0;
+  fixture.funnel = null;
   vi.stubGlobal("document", { documentElement: { dataset: {} } });
 });
 
@@ -61,6 +64,24 @@ describe("Settings → Remote access: server pairing card visibility", () => {
 });
 
 describe("Settings → Remote access opened by Connect your phone", () => {
+  it("waits for Funnel detection and reveals the native action when its HTTPS origin is verified", () => {
+    fixture.phonePairing = 3;
+    vi.stubGlobal("window", { ogb: { companion: {} } });
+    fixture.funnel = { checking: true, state: null, refresh: vi.fn() };
+    const pending = render();
+    expect(pending).toContain("COMPANION_SECTION focus=0");
+    expect(pending).toContain("SERVER_PAIRING_CARD_MARKER focus=0");
+    fixture.funnel = { ...fixture.funnel, checking: false, state: { status: "ready", origin: "https://computer.tail123.ts.net" } };
+    const ready = render();
+    expect(ready).toContain("SERVER_PAIRING_CARD_MARKER focus=3");
+    expect(ready).toContain("COMPANION_SECTION focus=0");
+    fixture.funnel = { ...fixture.funnel, state: { status: "unavailable", reason: "unverified" } };
+    const failed = render();
+    expect(failed).toContain("SERVER_PAIRING_CARD_MARKER focus=3");
+    expect(failed).toContain("COMPANION_SECTION focus=0");
+    fixture.funnel = { ...fixture.funnel, state: { status: "unavailable", reason: "not-configured" } };
+    expect(render()).toContain("COMPANION_SECTION focus=3");
+  });
   it("on this computer, reveals the phone flow, not the server's pairing code", () => {
     fixture.phonePairing = 3;
     vi.stubGlobal("window", { ogb: { companion: {} } });

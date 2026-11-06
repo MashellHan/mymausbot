@@ -197,9 +197,8 @@ const BROWSE_NOTE_MS = 10 * 60_000;
  * carries it (the session cookie). `myCloud()`: the saved server that is the person's own My Cloud, which the move's
  * project folders are lent to. `ownClouds()`: the saved servers that are the verified session's own Clouds, never a
  * Team Cloud: each is lent this computer by itself (automaticGrant) unless lending is paused. `screen()`: computer
- * control's state, whose `lent` says whether apps and screen are lent: computer control
- * works, or only macOS's permissions are missing, which `askForScreen(connection)` asks macOS for when a Cloud's bot
- * first needs them. `cloudPower(origin)`: the Admin's word on another Cloud of the person's own (the Clouds list's
+ * control's state, whose `lent` says whether apps and screen are lent: computer control works, or only macOS's
+ * permissions are missing. `cloudPower(origin)`: the Admin's word on another Cloud of the person's own (the Clouds list's
  * `power`), so a sleeping one is never dialled. While this app is open, paused or not, each of those Clouds hears how
  * this computer is and asks for it when a bot there needs it: `prompt(env, ask, signal)` shows the ask in this app's
  * own prompt, `startScreen()` starts computer control again (its state after), and `confirmTerminal()` turns on

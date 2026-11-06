@@ -69,6 +69,20 @@ visible while engine status is unavailable and retains setup when there is
 no conversation. These checks do not prove a real provider's login or a
 packaged Windows window.
 
+## Claude subscription usage
+
+```sh
+pnpm exec vitest run server/plan-usage.test.ts server/engine-limits.test.ts server/engine-limits.e2e.test.ts server/limit-resets.test.ts
+```
+
+Claude subscription usage is disabled before credential lookup, cache lookup or
+network access. The unit fixtures cover initial, cached, forced and expired reads
+and keep other providers available. The isolated server fixture checks ordinary
+and forced `/api/plan-usage` reads and the bot's scoped `usage_limits` capability:
+Claude has no quota figures and is reported as unsupported. These checks use
+synthetic credentials and a fake engine, without reading a real Keychain or
+calling a provider. Passive token totals collected from local logs are unchanged.
+
 ## Groq API setup
 
 ```sh
