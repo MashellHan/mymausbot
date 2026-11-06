@@ -69,6 +69,26 @@ describe("the page fills the panel", () => {
     await until(() => chrome().viewport, same(UNATTACHED_VIEWPORT));
   });
 
+  it("restores the window after cleared emulation takes time to reach page metrics", async () => {
+    const { watch, chrome, page } = await setup({ pageLimit: { width: 2560, height: 1457 } });
+    const { viewer } = await watch({ size: { width: 400, height: 750 } });
+    await until(() => page().emulated ?? null, same({ width: 1280, height: 2400 }));
+    expect(chrome().viewport).toEqual({ width: 1280, height: 1457 });
+
+    const fake = chrome();
+    const send = fake.send.bind(fake);
+    fake.send = (message) => {
+      if ((JSON.parse(message) as { method: string }).method !== "Emulation.clearDeviceMetricsOverride") return send(message);
+      const stale = page().emulated;
+      send(message);
+      page().emulated = stale;
+      setTimeout(() => { page().emulated = null; }, 600);
+    };
+
+    await viewer.close();
+    await until(() => chrome().viewport, same(UNATTACHED_VIEWPORT));
+  });
+
   it("gives a narrow panel a desktop page of its shape, never a phone's, and no taller than twice its width", async () => {
     const { watch, chrome, call } = await setup();
     const { viewer, outputs } = await watch({ size: { width: 400, height: 750 } });
