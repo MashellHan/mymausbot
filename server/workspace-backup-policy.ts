@@ -63,7 +63,8 @@ export function ephemeralWorkspaceTokenPath(path: string): boolean {
 
 /** Not a consistent snapshot while the engine holds it open (unflushed WAL), and reloadable from its sources. */
 export function liveDataEnginePath(path: string): boolean {
-  return /^bots\/[^/]+\/(?:data\.duckdb(?:\.wal)?$|data-tmp(?:\/|$))/.test(path);
+  return /^bots\/[^/]+\/(?:data\.duckdb(?:\.wal)?$|data-tmp(?:\/|$))/.test(path) ||
+    /^stores\/[^/]+\/(?:data\.duckdb\.wal$|data-tmp(?:\/|$))/.test(path);
 }
 
 /** Read the link text, never follow it. A link points at the bot's own skill, or at the same-named skill brought in

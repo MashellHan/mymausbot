@@ -102,6 +102,31 @@ it("keeps the server's connection check out of every turn and one-shot capture, 
   }
 });
 
+it("keeps prompt-scoped scripted calls out of another turn sharing the script file", async () => {
+  const home = mkdtempSync(join(tmpdir(), "omb-claude-script-"));
+  const script = join(home, "calls.json");
+  writeFileSync(script, JSON.stringify({ "main turn": [{ name: "Read", input: { file_path: "notes.txt" } }] }));
+  const run = async (prompt: string) => {
+    const child = spawn(process.execPath, [fileURLToPath(new URL("fake-claude-cli.ts", import.meta.url)), "--output-format", "stream-json"], {
+      cwd: home,
+      env: { ...process.env, HOME: home, USERPROFILE: home, FAKE_CLAUDE_MODE: "happy", FAKE_CLAUDE_EXIT_AFTER_TURN: "1",
+        FAKE_CLAUDE_TOOL_CALLS_FILE: script },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let output = "", error = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { error += chunk; });
+    const closed = new Promise<number | null>((resolve) => child.once("close", resolve));
+    child.stdin.end(JSON.stringify({ type: "user", message: { role: "user", content: prompt } }) + "\n");
+    try { expect(await closed, error).toBe(0); return output; }
+    finally { await waitForExit(child, { signal: "SIGTERM" }); }
+  };
+  try {
+    expect(await run("other turn")).not.toContain('"name":"Read"');
+    expect(await run("main turn")).toContain('"name":"Read"');
+  } finally { await removeTempDir(home); }
+});
+
 it("keeps a new bot's setup answers out of every turn and one-shot capture, failing at once without a reply file, and holds the reply back on request", async () => {
   const home = mkdtempSync(join(tmpdir(), "omb-claude-dump-"));
   const dump = join(home, "capture.json");

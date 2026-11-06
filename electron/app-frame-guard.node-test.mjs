@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { appFrameNavigationAllowed } from "./app-frame-guard.mjs";
+import { appFrameBlinkSettings, appFrameNavigationAllowed } from "./app-frame-guard.mjs";
 
 const appFrame = (url) => ({ isMainFrame: false, url, frame: { origin: "null", url: "" } });
+
+test("disables DNS speculation while preserving other Blink settings", () => {
+  assert.equal(appFrameBlinkSettings(), "dnsPrefetchingEnabled=false");
+  assert.equal(appFrameBlinkSettings("imagesEnabled=true,dnsPrefetchingEnabled=true"), "imagesEnabled=true,dnsPrefetchingEnabled=false");
+});
 
 test("an app frame may load its own document", () => {
   assert.equal(appFrameNavigationAllowed(appFrame("about:srcdoc")), true);
