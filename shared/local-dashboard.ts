@@ -155,6 +155,63 @@ export interface LocalUsageTrendDay {
   wow: Record<"prs" | "commits" | "newTokens" | "totalTokens", LocalUsageWeekChange>;
 }
 
+/** Remotely merged PRs and their original non-merge commits, separate from created PRs and local Git history. */
+export interface LocalUsageMergedCounts {
+  prs: number | null;
+  knownPrs: number;
+  commits: number | null;
+  knownCommits: number;
+}
+
+export interface LocalUsageMergedRepository extends LocalUsageMergedCounts {
+  id: string;
+  name: string;
+  category: LocalUsageCategory;
+  comparison: LocalUsageCountComparison;
+}
+
+export interface LocalUsageMergedWindow extends LocalUsageMergedCounts {
+  days: 1 | 7 | 30;
+  startDay: string;
+  endDay: string;
+  asOf: number;
+  coverage: LocalUsageCoverage;
+  missingDays: string[];
+  categories: Record<LocalUsageCategory, LocalUsageMergedCounts>;
+  repositories: {
+    coverage: LocalUsageCoverage;
+    rows: LocalUsageMergedRepository[];
+    unattributedPrs: number | null;
+    unattributedCommits: number | null;
+    sharedCommits: number;
+  };
+  comparison: {
+    startDay: string;
+    endDay: string;
+    missingDays: string[];
+    prs: LocalUsagePeriodChange;
+    commits: LocalUsagePeriodChange;
+    categories: Record<LocalUsageCategory, LocalUsageCountComparison>;
+  };
+}
+
+export interface LocalUsageMergedTrendDay extends LocalUsageMergedCounts {
+  day: string;
+  coverage: LocalUsageCoverage;
+  categories: Record<LocalUsageCategory, LocalUsageMergedCounts>;
+  wow: Record<"prs" | "commits", LocalUsageWeekChange>;
+}
+
+export interface LocalUsageMergedResponse {
+  status: LocalUsageStatus;
+  asOf: number | null;
+  timeZone: "Asia/Shanghai";
+  sourceCoverage: { total: number; ready: number; partial: number; stale: number; unavailable: number } | null;
+  overlaps: { repeatedShas: number; categoryConflicts: number; dayConflicts: number } | null;
+  windows: Record<"1" | "7" | "30", LocalUsageMergedWindow> | null;
+  trend: LocalUsageMergedTrendDay[];
+}
+
 /** Windows include the capture date through asOf. The trend contains exactly the same 30 dates as window 30. */
 export interface LocalUsageResponse {
   status: LocalUsageStatus;
@@ -165,4 +222,5 @@ export interface LocalUsageResponse {
   prCoverage: Record<LocalUsageCategory, "ready" | "partial"> | null;
   windows: Record<"1" | "7" | "30", LocalUsageWindow> | null;
   trend: LocalUsageTrendDay[];
+  merged?: LocalUsageMergedResponse;
 }

@@ -155,6 +155,30 @@ class MemoryAuthTests(unittest.TestCase):
             self.session.run(altered, 7)
         self.assertEqual(len(requests), 1)
 
+    def test_remote_merged_ado_pages_keep_only_bounded_get_paths_and_continuation_headers(self):
+        class Reply(io.BytesIO):
+            headers = {"x-ms-continuationtoken": "next-page"}
+
+        requests = []
+        def open_request(request, timeout):
+            requests.append((request, timeout))
+            return Reply(b'{"value":[]}')
+        self.session.http = types.SimpleNamespace(open=open_request)
+        allowed = [
+            "https://dev.azure.com/example/project/_apis/git/pullrequests?searchCriteria.status=completed",
+            "https://dev.azure.com/example/project/_apis/git/repositories/repo/pullrequests/7/commits?continuationToken=next-page",
+            "https://dev.azure.com/example/project/_apis/git/repositories/repo/commits/" + "a" * 40 + "?api-version=7.1",
+        ]
+        for url in allowed:
+            self.assertEqual(self.session.request(url, 7), ('{"value":[]}', "next-page"))
+        self.assertEqual(len(requests), len(allowed))
+        for url in ["https://dev.azure.com/example/project/_apis/git/repositories/repo/refs?api-version=7.1",
+                    "https://dev.azure.com/example/project/_apis/git/repositories/repo/pullrequests/7/commits/extra",
+                    "https://other.example.test/example/project/_apis/git/pullrequests"]:
+            with self.assertRaises(ValueError):
+                self.session.request(url, 7)
+        self.assertEqual(len(requests), len(allowed))
+
     def test_authenticated_redirects_are_not_followed(self):
         paths = []
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -242,6 +266,21 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         usage.refresh(collector, config, self.root, publish=False, skip_api=True, reuse_sources=True)
         self.assertEqual(json.loads(output.read_text()), {"historyDays": 59,
             "publish": False, "skipApi": True, "reuseSources": True})
+
+    def test_remote_refresh_stays_independent_when_local_logs_fail(self):
+        collector = self.root / "collector-fails.py"
+        collector.write_text('''def run(args, timeout=35):
+    raise AssertionError("No CLI should run in this fixture")
+def refresh(config, upload=False, skip_api=False, reuse_sources=False):
+    raise ValueError("local logs unavailable")
+''')
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER],
+                  "githubProfiles": [{"host": "github.com", "profile": "personal", "login": "owner", "category": "personal"}]}
+        with patch.object(usage.local_usage_merged, "refresh") as remote:
+            with self.assertRaisesRegex(ValueError, "local logs unavailable"):
+                usage.refresh(collector, config, self.root, skip_api=True)
+            self.assertTrue(remote.called)
+            self.assertTrue(remote.call_args.kwargs["skip_api"])
 
 
 if __name__ == "__main__":
