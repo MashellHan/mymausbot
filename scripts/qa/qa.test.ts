@@ -4,7 +4,7 @@ import { parse } from "yaml";
 import { expectedJobs, inspectJobs, eligibleRun, holdsFor, triageOf } from "./contracts.mjs";
 import { qaHealth } from "./health.mjs";
 import { github, runJobs } from "./github.mjs";
-import { deliverReport, makeReport, reportRun, sanitize, setupIncident, testFindings } from "./report.mjs";
+import { deliverReport, makeReport, reportRun, sanitize, setupIncident, supersedingMainRun, testFindings } from "./report.mjs";
 import { drainQueue, promptLead, queueItems, recoverQa } from "./queue.mjs";
 import { gateRun, verifyGate } from "./gate.mjs";
 
@@ -59,6 +59,42 @@ describe("complete CI and trusted QA health", () => {
     expect(inspectJobs(jobs, observed).passed).toBe(true);
     expect(inspectJobs(jobs, observed.slice(1))).toMatchObject({ passed: false, missing: [jobs[0].name] });
     for (const conclusion of ["skipped", "cancelled", "timed_out", "failure"]) expect(inspectJobs(jobs, [{ ...observed[0], conclusion }, ...observed.slice(1)]).passed).toBe(false);
+  });
+
+  it("keeps zero-job cancellation open while distinguishing a newer main push from unavailable execution", async () => {
+    const cancelled = { ...run, event: "push", status: "completed", conclusion: "cancelled", created_at: "2026-11-06T03:41:54Z",
+      updated_at: "2026-11-06T03:47:31Z" };
+    const newer = { ...cancelled, id: 101, head_sha: "b".repeat(40), status: "queued", conclusion: null,
+      created_at: "2026-11-06T03:47:30Z" };
+    expect(supersedingMainRun(cancelled, [newer], repository)).toEqual(newer);
+    const missing = makeReport({ run: cancelled, jobs: [] });
+    const superseded = makeReport({ run: cancelled, jobs: [], supersededBy: newer });
+    expect(superseded).toMatchObject({ executionDisposition: "superseded", executionComplete: false, testsPassed: false });
+    expect(superseded.findings[0].key).toBe(missing.findings[0].key);
+    expect(superseded.findings[0].assertion).toContain("newer main push 101");
+    expect(missing.executionDisposition).toBe("unavailable");
+    for (const patch of [{ head_sha: cancelled.head_sha }, { event: "workflow_dispatch" }, { head_branch: "feature" },
+      { head_repository: { full_name: "other/repo" } }, { created_at: "2026-11-06T03:47:32Z" }]) {
+      expect(supersedingMainRun(cancelled, [{ ...newer, ...patch }], repository)).toBeNull();
+    }
+    expect(supersedingMainRun({ ...cancelled, conclusion: "failure" }, [newer], repository)).toBeNull();
+    const calls: string[] = [];
+    const api = async (path: string, options: { method?: string; body?: object } = {}) => {
+      calls.push(`${options.method ?? "GET"} ${path}`);
+      if (path === "/actions/runs/100") return cancelled;
+      if (path.includes("/jobs?filter=all")) return { jobs: [] };
+      if (path.includes("/artifacts?")) return { artifacts: [] };
+      if (path === "/actions/workflows/ci.yml/runs?branch=main&per_page=100") return { workflow_runs: [newer] };
+      if (path === "/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=100") return { workflow_runs: [] };
+      if (path.startsWith("/issues?")) return [];
+      if (path === "/issues" && options.method === "POST") return { number: 1, body: options.body };
+      throw new Error(path);
+    };
+    const reported = await reportRun(cancelled.id, { api, repository });
+    expect(reported).toMatchObject({ executionDisposition: "superseded", executionComplete: false, testsPassed: false, deliveryComplete: true });
+    expect(reported.findings[0].key).toBe(missing.findings[0].key);
+    expect(calls).toContain("GET /actions/workflows/ci.yml/runs?branch=main&per_page=100");
+    expect(calls).toContain("POST /issues");
   });
 
   it("rejects PR execution and non-main manual runs as reporting sources", () => {

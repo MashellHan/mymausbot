@@ -72,7 +72,18 @@ export function setupIncident(job, log) {
   return { key: signature(`setup:${code}:${hostPath}`, "shared"), contract: `Dependency setup ${code}`, kind: "infrastructure", platform: "shared", assertion: `${code} at ${sanitize(hostPath)}`, jobs: [job.name], retries: 0 };
 }
 
-export function makeReport({ run, jobs, results = [], expected = expectedJobs(), infrastructure = [] }) {
+export function supersedingMainRun(run, runs, repository) {
+  if (!eligibleRun(run, repository, false) || run.event !== "push" || run.status !== "completed" || run.conclusion !== "cancelled"
+    || !/^[a-f\d]{40}$/i.test(run.head_sha ?? "") || !Array.isArray(runs)) return null;
+  const created = Date.parse(run.created_at), cancelled = Date.parse(run.updated_at);
+  if (!Number.isFinite(created) || !Number.isFinite(cancelled) || cancelled < created) return null;
+  return runs.find((candidate) => Number.isSafeInteger(candidate.id) && candidate.id > run.id
+    && eligibleRun(candidate, repository, false) && candidate.event === "push"
+    && /^[a-f\d]{40}$/i.test(candidate.head_sha ?? "") && candidate.head_sha !== run.head_sha
+    && Date.parse(candidate.created_at) >= created && Date.parse(candidate.created_at) <= cancelled) ?? null;
+}
+
+export function makeReport({ run, jobs, results = [], expected = expectedJobs(), infrastructure = [], supersededBy = null }) {
   const artifacts = new Set(results.filter((entry) => entry.valid).map((entry) => entry.name));
   const status = inspectJobs(expected, jobs);
   const findings = results.flatMap((entry) => entry.findings);
@@ -92,8 +103,10 @@ export function makeReport({ run, jobs, results = [], expected = expectedJobs(),
   }
   findings.push(...grouped.values());
   const unavailable = !staticJob && (preflight || jobs.length === 0) ? expected.filter((item) => !jobs.some((job) => job.name === item.name && !["skipped", "cancelled"].includes(job.conclusion))).map((item) => item.name) : [];
+  const superseded = unavailable.length && jobs.length === 0 && run.conclusion === "cancelled" && supersededBy;
   if (unavailable.length) findings.push({ key: signature("workflow:execution unavailable", "shared"), contract: "Workflow execution unavailable", kind: "infrastructure", platform: "shared",
-    assertion: "The completed workflow did not execute its required preflight or dependent validation.", jobs: unavailable, retries: 0 });
+    assertion: superseded ? `The zero-job main run was cancelled after newer main push ${supersededBy.id} was created; this revision was not validated.`
+      : "The completed workflow did not execute its required preflight or dependent validation.", jobs: unavailable, retries: 0 });
   for (const item of expected) {
     if (unavailable.includes(item.name) || blocked.includes(item.name)) continue;
     const job = jobs.find((entry) => entry.name === item.name);
@@ -120,6 +133,7 @@ export function makeReport({ run, jobs, results = [], expected = expectedJobs(),
   return {
     version: 1, runId: run.id, attempt: run.run_attempt, sha: run.head_sha, event: run.event, url: run.html_url,
     finishedAt: run.updated_at, executionComplete: executionComplete(expected, jobs, artifacts), testsPassed: status.passed && findings.length === 0,
+    ...(unavailable.length ? { executionDisposition: superseded ? "superseded" : "unavailable" } : {}),
     deliveryComplete: false, missing: status.missing, failedJobs: status.failed,
     findings: [...new Map(findings.map((finding) => [finding.key, finding])).values()], passed: [...new Set(passed)],
     jobs: jobs.filter((job) => expected.some((item) => item.name === job.name)).map(({ name, conclusion, html_url, started_at, completed_at }) => ({ name, conclusion, url: html_url, startedAt: started_at, finishedAt: completed_at })),
@@ -226,7 +240,16 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
     try { incident = setupIncident(job, String(await api(`/actions/jobs/${job.id}/logs`, { raw: true }))); } catch { /* The job remains an unclassified finding. */ }
     if (incident) infrastructure.push(incident);
   }
-  const report = makeReport({ run, jobs, results, expected, infrastructure });
+  let supersededBy = null;
+  if (run.event === "push" && run.conclusion === "cancelled" && jobs.length === 0) {
+    try {
+      const recent = await api("/actions/workflows/ci.yml/runs?branch=main&per_page=100");
+      supersededBy = supersedingMainRun(run, recent.workflow_runs, repository);
+    } catch (error) {
+      console.warn(`Could not verify a superseding main run: ${error.message}`);
+    }
+  }
+  const report = makeReport({ run, jobs, results, expected, infrastructure, supersededBy });
   const recent = await api("/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=100");
   report.lastGreenSha = recent.workflow_runs.find((item) => eligibleRun(item, repository) && item.id < run.id)?.head_sha ?? null;
   await deliverReport(report, { api });
