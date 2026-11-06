@@ -32,12 +32,43 @@ Targets are 5–30 seconds for ordinary edit feedback and 1–2 minutes for ordi
 local completion. Record a costly required step rather than dropping it to meet
 the target. A cold browser or dependency setup is part of the measured cost.
 
+Read this policy from the actual task checkout. Preserve an older dirty
+coordination root and inspect `git show origin/main:docs/MAUSBOT-VALIDATION.md`
+when its copy is missing. Start new source work from fetched main; do not reset
+an active feature branch merely because unrelated main work advances.
+
+When the affected contract requires local type validation, use
+`pnpm typecheck --project ui` or `pnpm typecheck --project server`.
+The TypeScript compiler always runs and invalidates affected source/imports;
+it maintains real incremental state under `.omb-scratch/typecheck/` rather than
+reusing a previous success receipt. Each worktree has its own state. CI and
+`--fresh` remove the selected compiler state before checking. `pnpm build`
+includes the same complete typecheck; do not separately invoke it immediately
+before the build. Emitting server/companion builds keep their existing checks.
+
+For new or edited Electron fixture entrypoints, run `pnpm check:fixtures` first.
+Electron's ESM entry must finish evaluating before readiness: await
+`app.whenReady()` in an invoked async function, never at module scope.
+Reuse existing launchers, scope selectors to the feature root, and preserve
+bounded startup/load/assertion phases with their failure output. Diagnose the
+failed phase once before retrying; retain the failure. Do not increase a global
+timeout to hide a launcher error. Keep local acceptance focused on the changed
+interaction and critical layout; broader unchanged permutations remain QA work.
+
 Dev records the exact head, local receipt and remaining checks in the PR body,
 including `QA-Handoff: <40-character head SHA>`. The queue hands that head to
 MausBot Lead only while the marker matches the current head. Updating the
 handoff or marking a draft ready does not restart CI. Lead owns CI,
 independent review and merging while Dev can take independent work. New pushes
 require an updated handoff marker; a chat mention alone is not the handoff record.
+
+Freeze and hand off coherent source as soon as its focused checks pass. Start
+independent source review and CI in parallel with remaining isolated rendering
+or package acceptance. List each pending check with its owner; pending evidence
+cannot be claimed as passed. Source changes require delta review and their
+affected checks, while unchanged evidence remains valid. Root and specialists
+send nonblocking findings through Lead in one batch, avoiding repeated prompts
+and unrelated work on the delivery owner.
 
 ## Coverage boundaries
 
@@ -177,6 +208,17 @@ current integration evidence and no applicable hold. Release additionally
 requires full evidence for its revision or identical tree, signing/native
 resources and package/install/update acceptance. Preserve the official App and
 real data; use the existing coordinated switch/recovery procedure.
+
+Use the [local runbook](MAUSBOT-LOCAL-RUNBOOK.md) for the read-only
+`check:delivery request`, `routines` and `inventory` commands. Request fields and
+source binding are checked before spending time on a package. A routine run's
+normal recovery state and initial queued-check assignments are separate from
+unchanged configuration and established run identity, routing and check authority.
+Unrecognized transitions need owner review, not automatic rollback. Only
+absent/null `shippedTemplateKind` is normalized in an inventory;
+grants, IDs, revisions and every other field remain exact. These checks do not
+replace credentials, pairing, signature, package, startup or rollback checks,
+and they do not authorize a live switch.
 
 ## Rollout and operations
 
