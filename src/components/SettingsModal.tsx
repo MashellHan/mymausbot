@@ -313,7 +313,7 @@ export function SettingsModal() {
 
   const phoneFocus = state.appSettingsPhonePairing;
   const computerPairs = currentPhonePairingTarget(state.config?.cloudHome === true) === "computer";
-  const funnelPairs = funnel?.state?.status === "ready";
+  const funnelPairs = funnel?.state?.status === "ready" || funnel?.state?.status === "unavailable" && funnel.state.reason === "unverified";
   const remoteAccess = {
     client: <RemoteComputerSection hideWhenUnavailable={!advanced} />,
     domain: remoteActive ? null : <CustomDomainSettings />,

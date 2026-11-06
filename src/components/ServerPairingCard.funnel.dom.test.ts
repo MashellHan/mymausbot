@@ -70,6 +70,18 @@ it("clears the old QR and does not issue another credential when verification fa
   expect(qr()).toBeNull();
   expect(fx.api.mock.calls.filter(([path]) => path === "/api/auth/pairing")).toHaveLength(1);
   expect(host.querySelector('[role="alert"]')?.textContent).toContain("Check Tailscale");
+  funnel = { ...funnel, state: { status: "unavailable", reason: "unverified" } };
+  await render();
+  expect(host.querySelector("[data-phone-pairing-action]")).toBe(host.querySelector("[data-funnel-pairing-action]"));
+  expect(host.querySelector("[data-funnel-pairing-action]")?.textContent).toBe("Check again");
+});
+
+it("refreshes the server device list while the native invitation is open", async () => {
+  await render(); await click("[data-funnel-pairing-action]");
+  fx.api.mockResolvedValueOnce({ sessions: [{ id: "native-phone", label: "Fixture iPhone", scopes: ["client"], lastSeenAt: Date.now(), expiresAt: Date.now() + 86400000 }] });
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+  expect(host.textContent).toContain("Fixture iPhone");
+  expect([...host.querySelectorAll("button")].some(button => button.textContent === "Sign out")).toBe(true);
 });
 
 it("removes an expired native QR and rejects malformed native credentials", async () => {
