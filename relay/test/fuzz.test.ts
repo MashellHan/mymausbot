@@ -152,11 +152,12 @@ const ACCEPT_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 function connected(): Promise<Socket> {
   return new Promise((resolve, reject) => {
     const socket = connect(t.relay.port, "127.0.0.1");
-    socket.on("error", () => {});
+    let failure: Error | null = null;
+    socket.on("error", (error) => { failure = error; });
     // A paused socket never reads the server's FIN, so it would never emit close.
     socket.resume();
     socket.once("connect", () => resolve(socket));
-    socket.once("close", () => reject(new Error("could not connect")));
+    socket.once("close", () => reject(new Error("could not connect", { cause: failure })));
   });
 }
 
