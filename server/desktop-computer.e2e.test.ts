@@ -24,7 +24,56 @@ describe("this computer belongs to the desktop app's own server", () => {
   let output = "";
   let child: ChildProcess | null = null;
   let base = "";
+  let caseLabel = "";
+  let startedAt = 0;
+  let phases: Array<{ name: string; atMs: number }> = [];
+  let serverPort: number | null = null;
+  let healthAttempts = 0;
+  let healthStatus: number | null = null;
+  let healthError: string | null = null;
+  let childError: Error | null = null;
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let lastOutputAtMs: number | null = null;
   const record = { mode: "embedded", status: "ready", socketPath: "", mcpCommand: "/fixture/cua-driver", mcpArgs: ["mcp"], mcpEnv: {} };
+
+  const mark = (name: string) => {
+    if (phases.length < 24) phases.push({ name, atMs: Math.round(performance.now() - startedAt) });
+  };
+  const beginCase = (label: string) => {
+    caseLabel = label;
+    startedAt = performance.now();
+    phases = [];
+    serverPort = null;
+    healthAttempts = 0;
+    healthStatus = null;
+    healthError = null;
+    childError = null;
+    stdoutBytes = 0;
+    stderrBytes = 0;
+    lastOutputAtMs = null;
+    mark("case.begin");
+  };
+  const observed = async <T>(name: string, run: () => Promise<T>): Promise<T> => {
+    mark(`${name}.begin`);
+    const value = await run();
+    mark(`${name}.done`);
+    return value;
+  };
+  const errorKind = (error: unknown) => {
+    if (!(error instanceof Error)) return typeof error;
+    const direct = (error as NodeJS.ErrnoException).code;
+    const cause = (error as { cause?: { code?: unknown } }).cause?.code;
+    return typeof direct === "string" ? direct : typeof cause === "string" ? cause : error.name;
+  };
+  const failureState = () => ({
+    case: caseLabel, elapsedMs: Math.round(performance.now() - startedAt), phases,
+    serverPort, health: { attempts: healthAttempts, status: healthStatus, error: healthError },
+    child: { pid: child?.pid ?? null, live: Boolean(child && child.exitCode === null && child.signalCode === null && !childError),
+      exitCode: child?.exitCode ?? null, signalCode: child?.signalCode ?? null, error: childError && errorKind(childError),
+      stdoutBytes, stderrBytes, lastOutputAtMs },
+    files: { dump: Boolean(dumpFile && existsSync(dumpFile)), finish: Boolean(finishFile && existsSync(finishFile)) },
+  });
 
   const resetTurn = () => {
     writeFileAtomic(stateFile, JSON.stringify({ noContainers: true }));
@@ -66,6 +115,7 @@ describe("this computer belongs to the desktop app's own server", () => {
 
   /** `desktop`: launched as the app launches its own server, hearing the driver record over the parent port. */
   async function start(desktop: boolean, env: Record<string, string> = {}) {
+    mark("startup.configure");
     data = mkdtempSync(join(home, "data-"));
     stateFile = join(data, "vm.json");
     dumpFile = join(data, "dump.json");
@@ -75,11 +125,14 @@ describe("this computer belongs to the desktop app's own server", () => {
       environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_DUMP: dumpFile,
         FAKE_CLAUDE_TEXT_DUMP: join(data, "text-dump.json"), FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile },
     } } }));
+    mark("startup.ports");
     const port = await freePortBlock([0, 1]);
+    serverPort = port;
     base = `http://127.0.0.1:${port}`;
     output = "";
     const hooks = ["--import", pathToFileURL(join(ROOT, "server/testing/group-local-vm-hooks.mjs")).href,
       ...(desktop ? ["--import", pathToFileURL(join(ROOT, "server/testing/desktop-parent.mjs")).href] : [])];
+    mark("startup.spawn");
     const proc = spawn(process.execPath, [...hooks, join(ROOT, "server/index.ts")], {
       cwd: ROOT, env: {
         PATH: dirname(process.execPath), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
@@ -94,12 +147,22 @@ describe("this computer belongs to the desktop app's own server", () => {
       }, stdio: ["ignore", "pipe", "pipe"],
     });
     child = proc;
-    proc.stdout!.on("data", chunk => { output += chunk; });
-    proc.stderr!.on("data", chunk => { output += chunk; });
+    proc.stdout!.on("data", chunk => { stdoutBytes += chunk.length; lastOutputAtMs = Math.round(performance.now() - startedAt); output += chunk; });
+    proc.stderr!.on("data", chunk => { stderrBytes += chunk.length; lastOutputAtMs = Math.round(performance.now() - startedAt); output += chunk; });
+    proc.on("error", error => { childError = error; });
+    mark("startup.health");
     await until(async () => {
+      if (childError) throw childError;
       if (proc.exitCode !== null) throw new Error(`server exited during boot:\n${output}`);
-      try { return (await fetch(base + "/api/health")).ok; } catch { return false; }
+      healthAttempts++;
+      try {
+        const response = await fetch(base + "/api/health");
+        healthStatus = response.status;
+        healthError = null;
+        return response.ok;
+      } catch (error) { healthError = errorKind(error); return false; }
     }, Boolean);
+    mark("startup.ready");
   }
   async function stop() {
     if (!child) return;
@@ -126,44 +189,59 @@ describe("this computer belongs to the desktop app's own server", () => {
     await stop();
     if (home) await removeTempDir(home);
   });
-  afterEach(async () => { await stop(); resetTurn(); });
+  afterEach(async ({ task }) => {
+    const failed = task.result?.state === "fail";
+    const owned = child;
+    if (failed) console.error("desktop fixture failure " + JSON.stringify(failureState()));
+    await stop();
+    resetTurn();
+    if (failed) console.error("desktop fixture cleanup " + JSON.stringify({ complete: true, exitCode: owned?.exitCode ?? null, signalCode: owned?.signalCode ?? null }));
+  });
 
   it("a server the app did not launch mounts no computer on Auto, though the app's record is on disk", async () => {
+    beginCase("non-app auto");
     await start(false);
-    const { bot } = await apiOk("POST", "/api/bots", { name: "Second Server Bot" });
-    const { task } = await apiOk("POST", `/api/bots/${bot.id}/tasks`, {});
+    const { bot } = await observed("bot.create", () => apiOk("POST", "/api/bots", { name: "Second Server Bot" }));
+    const { task } = await observed("task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
     resetTurn();
-    await apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Plan my week using my calendar.", threadId: task.threadId });
-    const sent = await dump();
+    mark("turn.reset");
+    await observed("turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Plan my week using my calendar.", threadId: task.threadId }));
+    const sent = await observed("dump.wait", dump);
     expect(sent.mcpConfig?.mcpServers?.computer).toBeUndefined();
     expect(JSON.stringify(sent)).not.toContain("/fixture/cua-driver");
     writeFileSync(finishFile, "finish");
-    await idle(bot.id, task.threadId);
+    mark("finish.released");
+    await observed("turn.idle", () => idle(bot.id, task.threadId));
   });
 
   it("a server the app did not launch refuses this computer even when the person picks it, in plain words", async () => {
+    beginCase("non-app refusal");
     await start(false);
-    const { bot } = await apiOk("POST", "/api/bots", { name: "Second Server Pin Bot" });
-    const { task } = await apiOk("POST", `/api/bots/${bot.id}/tasks`, {});
-    await apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" });
+    const { bot } = await observed("bot.create", () => apiOk("POST", "/api/bots", { name: "Second Server Pin Bot" }));
+    const { task } = await observed("task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
+    await observed("surface.set", () => apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" }));
     resetTurn();
-    await apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId });
-    const failed = await until(() => rows(task.threadId), (lines) => lines.some((line) => line.includes(NOT_THE_APP)));
+    mark("turn.reset");
+    await observed("turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId }));
+    const failed = await observed("refusal.wait", () => until(() => rows(task.threadId), (lines) => lines.some((line) => line.includes(NOT_THE_APP))));
     expect(failed.join("\n")).not.toMatch(/CUA|Cua Driver|DevTools|descriptor/);
     expect(existsSync(dumpFile)).toBe(false);
-    await idle(bot.id, task.threadId);
+    await observed("turn.idle", () => idle(bot.id, task.threadId));
   });
 
   itHost("the app's own server still uses this computer, from the record the app hands it", async () => {
+    beginCase("app-owned");
     await start(true);
-    const { bot } = await apiOk("POST", "/api/bots", { name: "Desktop Server Bot" });
-    const { task } = await apiOk("POST", `/api/bots/${bot.id}/tasks`, {});
-    await apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" });
+    const { bot } = await observed("bot.create", () => apiOk("POST", "/api/bots", { name: "Desktop Server Bot" }));
+    const { task } = await observed("task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
+    await observed("surface.set", () => apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" }));
     resetTurn();
-    await apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId });
-    const sent = await dump();
+    mark("turn.reset");
+    await observed("turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId }));
+    const sent = await observed("dump.wait", dump);
     expect(sent.mcpConfig.mcpServers.computer.env.OMB_CUA_COMMAND).toBe("/fixture/cua-driver");
     writeFileSync(finishFile, "finish");
-    await idle(bot.id, task.threadId);
+    mark("finish.released");
+    await observed("turn.idle", () => idle(bot.id, task.threadId));
   });
 });
