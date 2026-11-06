@@ -101,6 +101,9 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
       established.shutdown();
       await established.closed;
     }
+    const later = await waitFor(async () => rig.direct(await state(), paired.token).catch(() => null), 5_000);
+    later.shutdown();
+    await later.closed;
   }, 20_000);
 
   it("refuses another device's token inside a session", async () => {
