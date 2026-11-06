@@ -149,19 +149,19 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("Shaded columns: unavailable. Pale PR segments");
   });
 
-  it("marks China-calendar weekends through full, zero and unavailable bars with localized weekdays", async () => {
+  it("separates calendar weeks without weekend columns and preserves localized hover values", async () => {
     const marked = trend.map((day) => day.day === "2026-10-10" ? { ...day, commits: 1_000 }
       : day.day === "2026-10-11" ? { ...day, commits: 0 }
         : day.day === "2026-10-17" ? { ...trend[7]!, day: day.day } : day);
     await render({ ...sample, trend: marked });
     for (const metric of ["prs", "commits", "totalTokens"]) {
       const chart = host.querySelector<HTMLElement>(`[data-usage-trend="${metric}"]`)!;
-      for (const day of ["2026-10-10", "2026-10-11", "2026-10-17"]) {
-        const bar = chart.querySelector(`[data-usage-day="${day}"]`)!;
-        expect(bar.hasAttribute("data-usage-weekend")).toBe(true);
-        expect(bar.querySelector("[data-usage-weekend-tick]")).not.toBeNull();
-      }
-      expect(chart.querySelector('[data-usage-day="2026-10-12"]')?.hasAttribute("data-usage-weekend")).toBe(false);
+      const boundaries = [...chart.querySelectorAll("[data-usage-week-start]")];
+      expect(boundaries.map((line) => line.getAttribute("data-usage-week-start"))).toEqual([
+        "2026-10-12", "2026-10-19", "2026-10-26", "2026-11-02",
+      ]);
+      expect(boundaries[0]?.parentElement?.getAttribute("aria-hidden")).toBe("true");
+      expect(chart.querySelector("[data-usage-weekend], [data-usage-weekend-tick]")).toBeNull();
     }
     const chart = host.querySelector<HTMLElement>('[data-usage-trend="commits"]')!;
     const saturday = chart.querySelector<HTMLButtonElement>('[data-usage-day="2026-10-10"]')!;

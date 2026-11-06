@@ -112,12 +112,15 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
   }, [activeDay, active, focusDay, rovingDay]);
   return (
     <div className="relative min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric}>
-      <h4 className="text-[13px] font-medium text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</h4>
-      <div className="mt-2 flex h-16 items-end gap-[2px]">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 inset-x-2.5 grid gap-[2px]"
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, days.length)}, minmax(0, 1fr))` }}>
+        {days.map((day, index) => index > 0 && new Date(`${day.day}T00:00:00Z`).getUTCDay() === 1
+          ? <span key={day.day} data-usage-week-start={day.day} className="-ml-px border-l border-ink/[0.08]" style={{ gridColumn: index + 1 }} /> : null)}
+      </div>
+      <h4 className="relative text-[13px] font-medium text-ink-secondary"><span className="bg-inset pr-1">{t(`computer.usage.metric.${metric}`)}</span></h4>
+      <div className="relative mt-2 flex h-16 items-end gap-[2px]">
         {days.map((day, index) => {
           const date = new Date(`${day.day}T00:00:00Z`);
-          const weekday = date.getUTCDay();
-          const weekend = weekday === 0 || weekday === 6;
           const value = values[index];
           const label = metric === "prs" ? `${prText(day.prs, day.knownPrs)}${day.prs === null && day.knownPrs !== null ? ` · ${t("computer.usage.synced")}` : ""}` : metricText(value);
           const segments = metric === "totalTokens" ? [] : categoryOrder.map((category) => ({
@@ -125,7 +128,7 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
             partial: metric === "prs" && day.categories[category].prs === null,
           })).filter((segment) => segment.value > 0);
           const segmentTotal = segments.reduce((total, segment) => total + segment.value, 0);
-          return <button key={day.day} type="button" data-usage-day={day.day} data-usage-weekend={weekend ? "" : undefined}
+          return <button key={day.day} type="button" data-usage-day={day.day}
             ref={(element) => { if (element) buttons.current.set(day.day, element); else buttons.current.delete(day.day); }}
             tabIndex={day.day === rovingDay ? 0 : -1}
             aria-label={t("computer.usage.trendPoint", { day: `${day.day} ${weekdayFormat.format(date)}`, metric: t(`computer.usage.metric.${metric}`), value: label })}
@@ -140,7 +143,7 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
               if (next === null) return;
               event.preventDefault(); buttons.current.get(days[next]!.day)?.focus();
             }}
-            className={cn("relative flex h-full min-w-0 flex-1 items-end rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60", weekend && "bg-ink/[0.035]")}>
+            className="relative flex h-full min-w-0 flex-1 items-end rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
             {value === null ? <span aria-hidden="true" className="h-full w-full bg-warning/15" />
               : <span aria-hidden="true" className="flex w-full flex-col-reverse overflow-hidden rounded-t-sm"
                 style={{ height: value === 0 ? 0 : `${Math.max(5, value / max * 100)}%` }}>
@@ -149,7 +152,6 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
                     className={partial ? partialCategoryTone[category] : categoryTone[category]} style={{ height: `${part / segmentTotal * 100}%` }} />)
                     : <span className="h-full w-full bg-ink-secondary/30" />}
               </span>}
-            {weekend && <span aria-hidden="true" data-usage-weekend-tick className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-px bg-ink/25" />}
           </button>;
         })}
       </div>

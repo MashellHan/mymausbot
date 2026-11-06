@@ -105,13 +105,14 @@ describe("installed native Mini App dashboards", () => {
     expect(JSON.parse(calls.api.mock.calls[1]![1].body)).toEqual({ resource: "activity", expectedRevision: 3, agentId: "w1:p1" });
   });
 
-  it("renders the same Usage values and weekend marks from an app-scoped snapshot", async () => {
+  it("renders the same Usage values and weekly separators from an app-scoped snapshot", async () => {
     calls.api.mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot: usage });
     await render("usage");
     await vi.waitFor(() => expect(host.querySelectorAll("[data-usage-trend]")).toHaveLength(3));
     expect(host.textContent).toContain("1-day window");
     expect(host.textContent).toContain("2026-11-07");
-    expect(host.querySelector('[data-usage-day="2026-11-07"] [data-usage-weekend-tick]')).not.toBeNull();
+    expect(host.querySelector('[data-usage-week-start="2026-11-02"]')).not.toBeNull();
+    expect(host.querySelector('[data-usage-weekend-tick]')).toBeNull();
     expect(calls.api.mock.calls[0]![0]).toBe(`/api/mini-apps/${appId}/dashboard`);
     expect(JSON.parse(calls.api.mock.calls[0]![1].body)).toEqual({ resource: "usage", expectedRevision: 3 });
   });
