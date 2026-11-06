@@ -42,6 +42,7 @@ export function createBookkeepingPublish(input: {
     ...base, kind: "aggregate", groupBy, measures: [{ name: "count", op: "count" }, { name: "amount", op: "sum", field: "amount" }], ...extra,
   });
   const outflows: MiniAppFilter[] = [...filters, { field: "amount", op: "lt", literal: "0" }];
+  const inflows: MiniAppFilter[] = [...filters, { field: "amount", op: "gt", literal: "0" }];
   const binding: MiniAppDataBinding = {
     id: "ledger", datasetId: input.dataset.datasetId, source: { schema: input.table.schema, table: input.table.name }, fields,
     queries: {
@@ -52,11 +53,15 @@ export function createBookkeepingPublish(input: {
       ] },
       summary: aggregate(["currency"], { measures: [{ name: "count", op: "count" }, { name: "net", op: "sum", field: "amount" }] }),
       outflow: aggregate(["currency"], { filters: outflows }),
-      inflow: aggregate(["currency"], { filters: [...filters, { field: "amount", op: "gt", literal: "0" }] }),
+      inflow: aggregate(["currency"], { filters: inflows }),
       categories: aggregate(["currency", "category"], { filters: outflows, orderBy: [{ field: "amount", direction: "asc" }] }),
       category_options: aggregate(["currency", "category"], { measures: [{ name: "count", op: "count" }], orderBy: [{ field: "currency", direction: "asc" }, { field: "category", direction: "asc" }] }),
       trend_day: aggregate(["currency"], { filters: outflows, timeBucket: { field: "date", unit: "day", name: "bucket" }, orderBy: [{ field: "bucket", direction: "asc" }] }),
       trend_month: aggregate(["currency"], { filters: outflows, timeBucket: { field: "date", unit: "month", name: "bucket" }, orderBy: [{ field: "bucket", direction: "asc" }] }),
+      trend_day_inflow: aggregate(["currency"], { filters: inflows, timeBucket: { field: "date", unit: "day", name: "bucket" }, orderBy: [{ field: "bucket", direction: "asc" }] }),
+      trend_month_inflow: aggregate(["currency"], { filters: inflows, timeBucket: { field: "date", unit: "month", name: "bucket" }, orderBy: [{ field: "bucket", direction: "asc" }] }),
+      largest_expenses: { ...base, kind: "rows", columns: ["date", "amount", "currency", "category", "account", "book", "note"],
+        filters: outflows, orderBy: [{ field: "amount", direction: "asc" }, { field: "date", direction: "desc" }], pageSize: 30 },
       details: { ...base, kind: "rows", columns: ["date", "amount", "currency", "category", "account", "book", "note"],
         orderBy: [{ field: "date", direction: "desc" }], pageSize: 30 },
     },
