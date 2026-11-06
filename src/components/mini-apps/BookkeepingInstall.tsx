@@ -3,7 +3,7 @@ import { Database, Loader2 } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { randomUuid } from "@/lib/random-uuid";
 import { api } from "@/state/store";
-import type { MiniAppDataset, MiniAppMutationResult, MiniAppSources } from "../../../shared/mini-apps";
+import type { MiniAppDataset, MiniAppMutationResult, MiniAppSources, MiniAppSummary } from "../../../shared/mini-apps";
 import { BOOKKEEPING_FIELDS, createBookkeepingPublish, suggestedBookkeepingColumns, type BookkeepingColumns } from "../../../shared/bookkeeping-mini-app";
 import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?raw";
 import { SourceTablePreview } from "./SourceTablePreview";
@@ -96,10 +96,16 @@ export function BookkeepingInstall({ onCancel, onInstalled }: { onCancel(): void
     setBusy(true);
     setError("");
     try {
+      const inventory = await api<{ apps: MiniAppSummary[] }>("/api/mini-apps", { timeoutMs: 10_000 });
+      const existing = inventory.apps.find((entry) => entry.slug === "bookkeeping");
+      if (existing) {
+        if (existing.status === "active" && existing.shippedTemplateKind === "bookkeeping") { onInstalled(existing.id); return; }
+        throw new Error(t("computer.miniApps.catalog.nameInUse"));
+      }
       const publish = { ...createBookkeepingPublish({ dataset, table, columns, html: bookkeepingHtml,
         ...(publisherBotId ? { publisherBotId } : {}), requestKey: requestKey.current ??= randomUuid(),
         title: t("computer.miniApps.bookkeepingTitle") }),
-      description: t("computer.miniApps.bookkeepingDescription") };
+      description: t("computer.miniApps.bookkeepingDescription"), shippedTemplateKind: "bookkeeping" as const };
       const result = await api<MiniAppMutationResult>("/api/mini-apps", { method: "POST", body: JSON.stringify(publish), timeoutMs: 20_000 });
       onInstalled(result.app.id);
     } catch (cause) {

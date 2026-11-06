@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { AppWindow, Clock3, Loader2, RotateCw } from "lucide-react";
+import { Clock3, LayoutGrid, Loader2, RotateCw } from "lucide-react";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { randomUuid } from "@/lib/random-uuid";
@@ -7,11 +7,16 @@ import { useShowThreads } from "@/lib/thread-preferences";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { api, ApiError, openBot, useStore } from "@/state/store";
 import type { MiniAppDashboardKind, MiniAppDocument, MiniAppMutationResult, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
-import { REPORT_APPS, type ReportKind } from "../../../shared/report-mini-app";
+import type { ReportKind } from "../../../shared/report-mini-app";
+import { revealSelectedTab, scrollTabsWithWheel } from "../computer-panel-tabs";
 import { BookkeepingInstall } from "./BookkeepingInstall";
-import { DASHBOARD_APPS, DashboardInstall } from "./DashboardInstall";
+import { DashboardInstall } from "./DashboardInstall";
 import { MiniAppDashboard } from "./MiniAppDashboard";
 import { MiniAppFrame } from "./MiniAppFrame";
+import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
+import { MiniAppLibraryDialog } from "./MiniAppLibraryDialog";
+import { MiniAppLibraryEntries, SHIPPED, shippedAppDetails } from "./MiniAppLibraryEntries";
+import type { MiniAppIconKind } from "./MiniAppIcon";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { ReportInstall } from "./ReportInstall";
 
@@ -43,11 +48,14 @@ export function MiniAppsPanel() {
   const nativeGuard = miniAppNativeFrameGuard();
   const visible = usePageVisible();
   const [apps, setApps] = useState<MiniAppSummary[] | null>(null);
+  const [inventory, setInventory] = useState<MiniAppSummary[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [storageKey, setStorageKey] = useState<string | null>(null);
   const [document, setDocument] = useState<MiniAppDocument | null>(null);
   const [appState, setAppState] = useState<MiniAppState | null>(null);
   const [installing, setInstalling] = useState<"choose" | "bookkeeping" | ReportKind | MiniAppDashboardKind | null>(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryFocus, setLibraryFocus] = useState<MiniAppIconKind | null>(null);
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [stale, setStale] = useState(false);
@@ -58,6 +66,7 @@ export function MiniAppsPanel() {
   const stateRef = useRef(appState);
   const selectedRef = useRef(selectedId);
   const panelRef = useRef<HTMLDivElement>(null);
+  const tabListRef = useRef<HTMLDivElement>(null);
   const focusAfter = useRef<string | null>(null);
   const lastChoice = useRef<string | null>(null);
   const restored = useRef(false);
@@ -75,20 +84,36 @@ export function MiniAppsPanel() {
   const recoveryKind = currentHead && selected && document && !dashboard && !selected.dashboard && selected.dashboardIdentity
     && document.app.dashboardIdentity === selected.dashboardIdentity ? selected.dashboardIdentity : null;
   const dashboardInstalled = !!(selected?.dashboardIdentity || document?.app.dashboardIdentity || selected?.dashboard || dashboard);
+  const routineSetup = store.routinesLoadState === "loading" ? "loading" : store.routinesLoadState === "error" ? "error"
+    : store.routines.some((routine) => routine.enabled && routine.target === "bot" && routine.runOn === "maus"
+      && store.bots.some((bot) => bot.id === routine.botId)) ? "ready" : "needs";
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const target = focusAfter.current;
     if (!target) return;
     const element = target === "selected" && !installing
       ? [...panelRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []].find((tab) => tab.dataset.appId === selectedId)
       : target === "add" && !installing ? panelRef.current?.querySelector<HTMLButtonElement>('[data-mini-app-add]')
         : target === "choose-title" && installing === "choose" ? panelRef.current?.querySelector<HTMLElement>('#mini-app-chooser-title')
-          : installing === "choose" ? panelRef.current?.querySelector<HTMLButtonElement>(`[data-mini-app-choice="${target}"]`) : null;
+          : target === "install-title" && installing && installing !== "choose"
+            ? panelRef.current?.querySelector<HTMLElement>('#mini-app-install-title, #report-install-title, #dashboard-install-title')
+            : installing === "choose" ? panelRef.current?.querySelector<HTMLButtonElement>(`[data-mini-app-choice="${target}"]`) : null;
     if (!element) return;
     element.focus();
-    element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (target === "selected" && tabListRef.current) revealSelectedTab(tabListRef.current);
+    else element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     focusAfter.current = null;
-  }, [apps, installing, selectedId]);
+  }, [apps, installing, selectedId, libraryOpen]);
+
+  useLayoutEffect(() => {
+    const row = tabListRef.current;
+    if (!row) return;
+    revealSelectedTab(row);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => revealSelectedTab(row));
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [selectedId, installing, apps?.length]);
 
   useEffect(() => {
     let active = true;
@@ -116,6 +141,7 @@ export function MiniAppsPanel() {
       try {
         const inventory = await api<Inventory>("/api/mini-apps", { background: true, signal: controller.signal, timeoutMs: 10_000 });
         if (!active || !Array.isArray(inventory.apps)) return;
+        setInventory(inventory.apps);
         const activeApps = inventory.apps.filter((app) => app.status === "active");
         setApps(activeApps);
         const target = selectedRef.current && activeApps.some((app) => app.id === selectedRef.current) ? selectedRef.current
@@ -181,8 +207,10 @@ export function MiniAppsPanel() {
     setStale(false);
   };
 
-  const startChoice = (choice: "bookkeeping" | ReportKind | MiniAppDashboardKind) => {
+  const startChoice = (choice: MiniAppIconKind) => {
     lastChoice.current = choice;
+    focusAfter.current = "install-title";
+    setLibraryOpen(false);
     setInstalling(choice);
   };
   const returnToChooser = () => { focusAfter.current = lastChoice.current ?? "choose-title"; setInstalling("choose"); };
@@ -191,6 +219,7 @@ export function MiniAppsPanel() {
   const installed = (id: string) => {
     focusAfter.current = "selected";
     choose(id);
+    setLibraryOpen(false);
     setInstalling(null);
     setRefreshKey((current) => current + 1);
   };
@@ -207,7 +236,7 @@ export function MiniAppsPanel() {
     const button = buttons[next]!;
     choose(button.dataset.appId!);
     button.focus();
-    button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    revealSelectedTab(event.currentTarget);
   };
 
   const rollback = async (version: number) => {
@@ -244,13 +273,28 @@ export function MiniAppsPanel() {
         <div className="flex min-w-0 items-center justify-between gap-2">
           <h2 className="text-[15px] font-semibold text-ink">{t("computer.miniApps.heading")}</h2>
           <div className="flex items-center gap-1.5">
-            {owner === true && nativeGuard && <button type="button" data-mini-app-add className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" onClick={() => { focusAfter.current = "choose-title"; setInstalling("choose"); }}>{t("computer.miniApps.add")}</button>}
+            {owner === true && nativeGuard && <button type="button" data-mini-app-add disabled={apps === null} className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50" onClick={() => { focusAfter.current = "choose-title"; setInstalling("choose"); }}>{t("computer.miniApps.add")}</button>}
             <button type="button" disabled={checking || Boolean(installing)} aria-label={t("computer.miniApps.refresh")} title={t("computer.miniApps.refresh")} onClick={() => setRefreshKey((current) => current + 1)} className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"><RotateCw size={15} aria-hidden="true" /></button>
           </div>
         </div>
-        {!installing && !!apps?.length && <div role="tablist" aria-label={t("computer.miniApps.chooseApp")} onKeyDown={onNavKey} className="mt-3 flex min-w-0 gap-1 overflow-x-auto pb-1 [scrollbar-width:thin]">
-          {apps.map((app) => <button key={app.id} id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1} onClick={() => choose(app.id)} className={`shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}>{app.title}</button>)}
-        </div>}
+        {!installing && apps && <>
+          {apps.length === 0 && <p className="mt-2 text-[12px] text-ink-secondary">{t("computer.miniApps.catalog.explore")} · {t("computer.miniApps.catalog.noneInstalled")}</p>}
+          <div className="mt-2 flex min-w-0 items-center gap-2">
+          {apps.length ? <div ref={tabListRef} role="tablist" aria-label={t("computer.miniApps.chooseApp")} onKeyDown={onNavKey} onWheel={scrollTabsWithWheel} className="flex min-w-0 flex-1 flex-nowrap gap-1 overflow-x-auto whitespace-nowrap pb-1 [scrollbar-width:thin]">
+            {apps.map((app) => <button key={app.id} id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1} onClick={() => choose(app.id)} className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}><MiniAppIcon kind={iconKindForApp(app)} /><span>{app.title}</span></button>)}
+          </div> : <div data-mini-app-included-row aria-label={t("computer.miniApps.catalog.explore")} onWheel={scrollTabsWithWheel}
+            className="flex min-w-0 flex-1 flex-nowrap gap-1 overflow-x-auto whitespace-nowrap pb-1 [scrollbar-width:thin]">
+            {SHIPPED.map((kind) => <button key={kind} type="button" data-mini-app-included={kind}
+              onClick={() => { setLibraryFocus(kind); setLibraryOpen(true); }}
+              aria-label={t("computer.miniApps.catalog.detailsFor", { name: shippedAppDetails(kind).name })}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-inset px-2.5 py-1 text-[12px] font-medium text-ink hover:bg-control focus-visible:outline-2 focus-visible:outline-accent">
+              <MiniAppIcon kind={kind} /><span>{shippedAppDetails(kind).name}</span></button>)}
+          </div>}
+          <button type="button" data-mini-app-all aria-haspopup="dialog" aria-expanded={libraryOpen} aria-controls={libraryOpen ? "mini-app-library-dialog" : undefined}
+            onClick={() => { setLibraryFocus(null); setLibraryOpen(true); }} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-control px-2.5 py-1.5 text-[12px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">
+            <LayoutGrid size={14} aria-hidden="true" />{t("computer.miniApps.allApps")}</button>
+          </div>
+        </>}
         {!installing && selected && <div className="mt-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
           <p className="min-w-0 [overflow-wrap:anywhere]">{selected.description}</p>
           <p className="shrink-0 tabular-nums">{t("computer.miniApps.published", { time: stamp(selected.updatedAt) })}</p>
@@ -258,26 +302,18 @@ export function MiniAppsPanel() {
       </header>
       {installing === "choose" ? <section className="min-h-0 flex-1 overflow-y-auto px-4 pb-6" data-testid="mini-app-chooser" aria-labelledby="mini-app-chooser-title">
         <header className="flex items-start justify-between gap-3 pt-3"><div><h2 id="mini-app-chooser-title" tabIndex={-1} className="text-[16px] font-semibold text-ink outline-none">{t("computer.miniApps.add")}</h2><p className="mt-1 text-[13px] leading-5 text-ink-secondary">{t("computer.miniApps.chooseTemplate")}</p><p className="mt-1 text-[12px] leading-5 text-ink-tertiary">{t("computer.miniApps.dashboard.tabsRemain")}</p></div><button type="button" onClick={cancelChooser} className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.cancel")}</button></header>
-        <div className="mt-5 space-y-3">
-          {(["agent-team", "usage"] as const).map((kind) => {
-            const existing = apps?.find((entry) => entry.dashboard?.kind === kind);
-            const repairable = apps?.find((entry) => entry.dashboardIdentity === kind && !entry.dashboard);
-            const app = DASHBOARD_APPS[kind];
-            return <div key={kind} className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl bg-inset p-3"><div className="min-w-0"><h3 className="text-[14px] font-medium text-ink">{t(app.title)}</h3><p className="mt-1 text-[12px] leading-5 text-ink-secondary">{t(app.description)}</p></div><button type="button" data-mini-app-choice={kind} onClick={() => existing ? installed(existing.id) : startChoice(kind)} className="rounded-lg bg-control px-3 py-1.5 text-[13px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t(existing ? "computer.miniApps.dashboard.open" : repairable ? "computer.miniApps.dashboard.reauthorize" : "computer.miniApps.report.choose")}</button></div>;
-          })}
-          {(["x_ai_digest", "github_activity"] as const).map((kind) => {
-            const existing = apps?.find((entry) => entry.slug === REPORT_APPS[kind].slug);
-            return <div key={kind} className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl bg-inset p-3"><div className="min-w-0"><h3 className="text-[14px] font-medium text-ink">{t(kind === "x_ai_digest" ? "computer.miniApps.report.xTitle" : "computer.miniApps.report.githubTitle")}</h3><p className="mt-1 text-[12px] leading-5 text-ink-secondary">{t(kind === "x_ai_digest" ? "computer.miniApps.report.xDescription" : "computer.miniApps.report.githubDescription")}</p></div><button type="button" data-mini-app-choice={kind} onClick={() => existing ? installed(existing.id) : startChoice(kind)} className="rounded-lg bg-control px-3 py-1.5 text-[13px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t(existing ? "computer.miniApps.report.open" : "computer.miniApps.report.choose")}</button></div>;
-          })}
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-xl bg-inset p-3"><div className="min-w-0"><h3 className="text-[14px] font-medium text-ink">{t("computer.miniApps.bookkeepingTitle")}</h3><p className="mt-1 text-[12px] leading-5 text-ink-secondary">{t("computer.miniApps.bookkeepingDescription")}</p></div><button type="button" data-mini-app-choice="bookkeeping" onClick={() => startChoice("bookkeeping")} className="rounded-lg bg-control px-3 py-1.5 text-[13px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.report.choose")}</button></div>
-        </div>
+        <div className="mt-5"><MiniAppLibraryEntries inventory={inventory ?? []} routines={routineSetup} owner={owner}
+          nativeGuard={nativeGuard} onOpen={installed} onSetup={startChoice} /></div>
       </section> : installing === "bookkeeping" ? <BookkeepingInstall onCancel={returnToChooser} onInstalled={installed} />
         : installing === "agent-team" || installing === "usage" ? <DashboardInstall key={installing} kind={installing} onCancel={returnToChooser} onInstalled={installed} />
           : installing ? <ReportInstall key={installing} kind={installing} onCancel={returnToChooser} onInstalled={installed} /> : <>
         {stale && <p role="status" className="mx-4 mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.miniApps.stale")}</p>}
         {error && <p role="alert" className="mx-4 mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{error}</p>}
         {loading && apps === null && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>}
-        {apps?.length === 0 && !error && <div className="mx-4 mt-4 flex flex-col items-start gap-2 rounded-xl bg-card p-4 text-[13px] text-ink-secondary"><AppWindow size={21} aria-hidden="true" /><p>{t("computer.miniApps.empty")}</p>{!nativeGuard && <p>{t("computer.miniApps.desktopRequired")}</p>}</div>}
+        {apps?.length === 0 && !error && !libraryOpen && <section data-testid="mini-app-empty-library" className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
+          <p className="pt-4 text-[13px] text-ink-secondary">{t("computer.miniApps.empty")}</p>
+          <p className="mt-1 text-[12px] leading-5 text-ink-tertiary">{t("computer.miniApps.dashboard.tabsRemain")}</p>
+        </section>}
         {selected && <div id="mini-app-content" role="tabpanel" aria-labelledby={`mini-app-tab-${selected.id}`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-accent">
           {document && appState ? <>
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 px-4 py-2 text-[12px] text-ink-secondary">
@@ -304,6 +340,8 @@ export function MiniAppsPanel() {
           </> : !error && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.opening")}</p>}
         </div>}
       </>}
+      {libraryOpen && inventory && <MiniAppLibraryDialog inventory={inventory} routines={routineSetup} owner={owner}
+        nativeGuard={nativeGuard} focusKind={libraryFocus} onClose={() => setLibraryOpen(false)} onOpen={installed} onSetup={startChoice} />}
     </div>
   );
 }
