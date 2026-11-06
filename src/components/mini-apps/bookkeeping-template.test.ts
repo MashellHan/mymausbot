@@ -1,8 +1,16 @@
 import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BOOKKEEPING_FIELDS, createBookkeepingPublish } from "../../../shared/bookkeeping-mini-app";
+import type { MiniAppDataset, MiniAppSourceTable } from "../../../shared/mini-apps";
 
 const html = readFileSync(new URL("../../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8");
+const table = { schema: "main", name: "synthetic_ledger", rowCount: 0,
+  columns: BOOKKEEPING_FIELDS.map((name) => ({ name, type: name === "amount" ? "DECIMAL(18,2)" : name === "date" ? "DATE" : "VARCHAR" })) } as MiniAppSourceTable;
+const dataset = { datasetId: "synthetic-dataset", tables: [table] } as MiniAppDataset;
+const declarations = createBookkeepingPublish({ dataset, table,
+  columns: Object.fromEntries(BOOKKEEPING_FIELDS.map((name) => [name, name])) as Record<typeof BOOKKEEPING_FIELDS[number], string>,
+  html: "<html></html>", requestKey: "synthetic-request" }).bindings[0]!.queries;
 type Row = Record<string, string | number | null>;
 const record = (date: string, amount: string, category: string, note: string): Row => ({
   date, amount, category, currency: "人民币", account: "Sample card", book: "Sample ledger", note,
@@ -20,17 +28,27 @@ function page(rows: Row[], nextCursor?: string) {
     revision: 7, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-function fixture() {
+function fixture(fixtureOptions: { manyRows?: boolean } = {}) {
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   let changed: (() => void) | null = null;
   let failDaily = false;
   let exhaustDaily = false;
+  let failOctober = false;
+  let noDomesticCurrency = false;
+  let manyRows = fixtureOptions.manyRows ?? false;
+  let failSecondPage = false;
   const query = vi.fn(async (id: string, params: Record<string, unknown>, options?: { cursor?: string; expectedDataRevision?: number }) => {
+    const declaration = declarations[id];
+    if (!declaration) throw new Error(`Undeclared query ${id}`);
+    for (const key of Object.keys(params)) if (!Object.hasOwn(declaration.parameters, key)) throw new Error(`Undeclared parameter ${id}.${key}`);
     const from = String(params.from ?? "");
     const to = String(params.through ?? "");
     const prior = from.startsWith("2026-10") || from.startsWith("2025-");
     if (failDaily && id === "trend_day") throw new Error("private query detail");
-    if (id === "coverage") return page([
+    if (id === "coverage") return page(noDomesticCurrency ? [
+      { currency: "", count: "6", datedCount: "4", amountCount: "6", firstDate: "2025-03-01", lastDate: "2026-10-01" },
+      { currency: "美元", count: "1", datedCount: "0", amountCount: "1", firstDate: null, lastDate: null },
+    ] : [
       { currency: "人民币", count: "1135", datedCount: "1135", amountCount: "1135", firstDate: "2024-11-07", lastDate: "2026-11-06" },
       { currency: "", count: "6", datedCount: "4", amountCount: "6", firstDate: "2025-03-01", lastDate: "2026-10-01" },
       { currency: "美元", count: "1", datedCount: "0", amountCount: "1", firstDate: null, lastDate: null },
@@ -62,6 +80,13 @@ function fixture() {
     }
     if (id === "largest_expenses") return page([current[0]!, current[2]!]);
     if (id === "details") {
+      if (failOctober && from.startsWith("2026-10")) throw new Error("October read failed");
+      if (manyRows && from.startsWith("2026-11")) {
+        if (options?.cursor === "next" && failSecondPage) throw new Error("Second page failed");
+        const rows = Array.from({ length: 30 }, (_, index) => record(options?.cursor ? "2026-11-05" : "2026-11-06",
+          `-${index + 1}.00`, "Food", `Synthetic page ${options?.cursor ? "two" : "one"} ${index + 1}`));
+        return page(rows, options?.cursor ? undefined : "next");
+      }
       if (options?.cursor) return page([record("2026-11-04", "-2.00", "Food", "Synthetic extra")]);
       const rows = from.startsWith("2024-11") ? historical : from.startsWith("2026-10") ? october : current;
       const dated = from === to ? rows.filter((row) => row.date === from) : rows;
@@ -75,6 +100,10 @@ function fixture() {
   return {
     view, query, changed: () => changed?.(), failDaily: (value: boolean) => { failDaily = value; },
     exhaustDaily: () => { exhaustDaily = true; },
+    failOctober: (value: boolean) => { failOctober = value; },
+    noDomesticCurrency: () => { noDomesticCurrency = true; },
+    manyRows: () => { manyRows = true; },
+    failSecondPage: (value: boolean) => { failSecondPage = value; },
     text: (id: string) => view.document.getElementById(id)?.textContent ?? "",
     click: (id: string) => (view.document.getElementById(id) as unknown as HTMLButtonElement).click(),
     choose: (id: string, value: string) => {
@@ -100,7 +129,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     expect(app.text("excluded-currencies")).toContain("7 other or unknown currency records outside the totals");
     expect(app.text("excluded-currencies")).toContain("Currency blank · 6");
     expect(app.text("excluded-currencies")).toContain("美元 · 1");
-    expect(app.view.document.querySelectorAll("#details .date-group")).toHaveLength(2);
+    expect(app.view.document.querySelectorAll("#details .date-group")).toHaveLength(3);
     expect(app.text("details")).toContain("−100.00");
     expect(app.text("details")).toContain("+30.00");
     expect(app.text("details")).not.toContain("¥");
@@ -138,6 +167,12 @@ describe("Bookkeeping Manager local ledger views", () => {
     expect(app.query).toHaveBeenCalledWith("trend_day", expect.objectContaining({ from: "2026-11-01", through: "2026-11-06" }), { expectedDataRevision: 7 });
     expect(app.text("summary")).toContain("Outflow rose by 76.40");
     expect(app.text("summary")).not.toContain("¥");
+    const expense = app.view.document.querySelector("#largest .expense-open") as unknown as HTMLButtonElement | null;
+    expense?.click();
+    expect(app.text("expense-detail")).toContain("Synthetic groceries");
+    expect(app.text("expense-detail")).toContain("−100.00");
+    app.click("expense-detail-close");
+    expect(app.view.document.activeElement?.getAttribute("data-expense-index")).toBe("0");
     (app.view.document.querySelector('[data-stats-period="week"]') as unknown as HTMLButtonElement).click();
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.text("stats-range")).toContain("2026-11-02 to 2026-11-06");
@@ -168,6 +203,92 @@ describe("Bookkeeping Manager local ledger views", () => {
     app.click("record-drilldown-clear");
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.view.document.getElementById("record-drilldown")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("queries a closed month and complete prior month, and keeps category scope through clear and pagination", async () => {
+    const app = fixture(); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    app.click("tab-statistics");
+    await app.view.happyDOM.whenAsyncComplete();
+    app.choose("stats-date", "2026-04-04");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.text("stats-range")).toContain("2026-04-01 to 2026-04-30");
+    expect(app.text("stats-range")).toContain("Prior 2026-03-01 to 2026-03-31");
+    expect(app.query).toHaveBeenCalledWith("summary", { from: "2026-03-01", through: "2026-03-31", currencies: ["人民币"] }, { expectedDataRevision: 7 });
+    app.click("stats-latest");
+    await app.view.happyDOM.whenAsyncComplete();
+    app.manyRows();
+    const food = [...app.view.document.querySelectorAll("#categories button")].find((button) => button.textContent?.includes("Food")) as unknown as HTMLButtonElement | undefined;
+    food?.click();
+    await app.view.happyDOM.whenAsyncComplete();
+    const scope = app.text("records-range");
+    expect(scope).toContain("2026-11-01 to 2026-11-06");
+    expect(app.query).toHaveBeenCalledWith("details", { from: "2026-11-01", through: "2026-11-06", currencies: ["人民币"], category: "Food" }, { expectedDataRevision: 7 });
+    app.click("more");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.query).toHaveBeenCalledWith("details", { from: "2026-11-01", through: "2026-11-06", currencies: ["人民币"], category: "Food" }, { cursor: "next", expectedDataRevision: 7 });
+    app.click("record-drilldown-clear");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.text("records-range")).toBe(scope);
+    expect(app.view.document.getElementById("record-drilldown")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("restores committed scope and data on failed navigation, and marks a never-loaded view unavailable", async () => {
+    const app = fixture(); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    const beforeMoney = app.text("records-totals");
+    app.failOctober(true);
+    app.choose("records-month", "2026-10");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.text("records-title")).toContain("November 2026");
+    expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2026-11");
+    expect(app.text("records-totals")).toBe(beforeMoney);
+    expect(app.text("details")).toContain("Synthetic groceries");
+    expect(app.text("notice")).toContain("Showing the last results");
+    app.failDaily(true);
+    app.click("tab-calendar");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.text("calendar")).toContain("Records unavailable");
+    expect(app.text("notice")).not.toContain("Showing the last results");
+  });
+
+  it("clears every related view after a successful no-domestic-currency refresh", async () => {
+    const app = fixture(); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    app.click("tab-statistics");
+    await app.view.happyDOM.whenAsyncComplete();
+    (app.view.document.querySelector('[data-stats-period="year"]') as unknown as HTMLButtonElement).click();
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.text("year-breakdown")).toContain("156.40");
+    app.noDomesticCurrency(); app.changed();
+    await app.view.happyDOM.whenAsyncComplete();
+    for (const id of ["summary", "categories", "trend", "largest", "year-breakdown", "details", "calendar", "day-details"])
+      expect(app.text(id)).toContain("No recorded entries");
+    expect(app.text("records-totals")).toBe("");
+    expect(app.text("stats-range")).toBe("");
+    expect(app.view.document.getElementById("expense-detail")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("requeries loaded Records depth on auto refresh and retains 60 rows when page two fails", async () => {
+    const app = fixture({ manyRows: true }); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(30);
+    app.click("more");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
+    const scroller = app.view.document.scrollingElement;
+    if (scroller) scroller.scrollTop = 72;
+    const before = app.query.mock.calls.length;
+    app.changed();
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.query.mock.calls.slice(before).filter(([id]) => id === "details")).toHaveLength(2);
+    expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
+    expect(app.text("details")).toContain("Synthetic page two 30");
+    if (scroller) expect(scroller.scrollTop).toBe(72);
+    app.failSecondPage(true); app.changed();
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
+    expect(app.text("notice")).toContain("Showing the last results");
   });
 
   it("keeps tab and calendar context on automatic updates and retains readable stale results", async () => {

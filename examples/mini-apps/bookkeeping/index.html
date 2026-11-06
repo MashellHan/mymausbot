@@ -167,6 +167,15 @@
     .year-grid > :nth-child(4n + 1) { text-align: left; }
     .year-grid .year-head { color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-weight: 600; }
     .year-grid button { border: 0; border-radius: 0; background: transparent; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+    .expense-open { width: 100%; border: 0; background: transparent; text-align: left; }
+    .expense-open:hover { background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
+    .expense-detail { margin-top: 12px; border: 1px solid var(--color-border-secondary, light-dark(#e4e4e8, #333338)); border-radius: 12px; padding: 12px; }
+    .expense-detail[hidden] { display: none; }
+    .expense-detail header { display: flex; justify-content: space-between; gap: 12px; }
+    .expense-detail button { border-radius: 7px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 4px 8px; }
+    .expense-detail dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 10px 0 0; }
+    .expense-detail dt { color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 11px; }
+    .expense-detail dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 13px; }
     .coverage[data-quality="partial"] { color: var(--color-text-warning, light-dark(#775012, #f8ce81)); }
     @media (max-width: 600px) {
       .view-head { align-items: flex-start; }
@@ -229,7 +238,9 @@
       <section id="year-breakdown-section" class="section" aria-labelledby="year-breakdown-title" hidden><div class="section-head"><h2 id="year-breakdown-title" data-i18n="Monthly breakdown">Monthly breakdown</h2></div>
         <div id="year-breakdown"></div></section>
       <section class="section" aria-labelledby="largest-title"><div class="section-head"><h2 id="largest-title" data-i18n="Largest recorded outflows">Largest recorded outflows</h2></div>
-        <div id="largest"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div></section>
+        <div id="largest"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div>
+        <section id="expense-detail" class="expense-detail" aria-labelledby="expense-detail-title" hidden><header><h3 id="expense-detail-title" data-i18n="Record detail">Record detail</h3>
+          <button id="expense-detail-close" type="button" data-i18n="Close detail">Close detail</button></header><dl id="expense-detail-values"></dl></section></section>
     </section>
   </main>
   <script>
@@ -240,7 +251,9 @@
       const sdk = window.mausApp;
       const state = { coverage: [], coverageLoaded: false, loaded: false, dataRevision: null, cnyCurrencies: [], view: "records",
         recordsMonth: null, calendarMonth: null, selectedDay: null, statsPeriod: "month", statsAnchor: null,
-        recordCategory: null, recordRange: null, calendarOut: [], calendarIn: [], run: 0, details: [], nextCursor: null };
+        recordCategory: null, recordRange: null, selectedExpense: null, expenseTriggerIndex: null,
+        calendarOut: [], calendarIn: [], committed: { records: null, calendar: null, statistics: null },
+        run: 0, details: [], nextCursor: null };
       const maxAggregatePages = 48;
       let scheduledRefresh;
       let refreshing = false;
@@ -252,7 +265,7 @@
         "Overview": "概览",
         "Statistics": "统计",
         "Calendar": "日历",
-        "Records": "记录",
+        "Records": "明细",
         "Statistics period": "统计时段",
         "Previous period": "上一时段",
         "Next period": "下一时段",
@@ -264,6 +277,14 @@
         "Category: {category}": "分类：{category}",
         "Category records": "分类记录",
         "Monthly breakdown": "月度明细",
+        "Record detail": "记录详情",
+        "Close detail": "关闭详情",
+        "View record detail": "查看记录详情",
+        "Amount": "金额",
+        "Note": "备注",
+        "Account": "账户",
+        "Book": "账本",
+        "Date": "日期",
         "Recorded range {from} to {through}": "记录范围 {from} 至 {through}",
         "No domestic-currency records found.": "没有已记录的人民币条目。",
         "{count} record missing a date": "{count} 条记录缺失日期",
@@ -566,6 +587,7 @@
 
       function priorRange(range) {
         if (!range) return null;
+        const complete = range.through === range.fullEnd;
         const elapsed = Math.round((Date.parse(`${range.through}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) / 86_400_000) + 1;
         let from;
         if (state.statsPeriod === "week") from = dateBefore(range.from, 7);
@@ -573,7 +595,8 @@
         else from = `${Number(range.from.slice(0, 4)) - 1}-01-01`;
         if (state.statsPeriod === "week") return { from, through: dateAfter(from, elapsed - 1) };
         const month = state.statsPeriod === "month" ? from.slice(0, 7) : `${from.slice(0, 4)}-${range.through.slice(5, 7)}`;
-        const through = `${month}-${String(Math.min(Number(range.through.slice(8)), Number(monthLast(`${month}-01`).slice(8)))).padStart(2, "0")}`;
+        const through = complete ? fullPeriodEnd(from, state.statsPeriod)
+          : `${month}-${String(Math.min(Number(range.through.slice(8)), Number(monthLast(`${month}-01`).slice(8)))).padStart(2, "0")}`;
         return { from, through };
       }
 
@@ -608,6 +631,11 @@
         return { from, through: fullEnd < last ? fullEnd : last };
       }
 
+      function queryRange(range, category = null) {
+        return { from: range.from, through: range.through, currencies: state.cnyCurrencies,
+          ...(category ? { category } : {}) };
+      }
+
       function monthTitle(month) {
         return new Intl.DateTimeFormat(locale() === "zh" ? "zh-CN" : "en-US", { year: "numeric", month: "long", timeZone: "UTC" })
           .format(new Date(`${month}-01T00:00:00Z`));
@@ -618,7 +646,7 @@
         const first = earliestCnyDate();
         const last = latestCnyDate();
         if (!month || !last) return;
-        $("records-title").textContent = state.recordRange ? word("Category records") : monthTitle(month);
+        $("records-title").textContent = state.recordCategory ? word("Category records") : state.recordRange ? word("Records") : monthTitle(month);
         $("records-previous").disabled = !!first && month <= first.slice(0, 7);
         $("records-next").disabled = month >= last.slice(0, 7);
         const picker = $("records-month");
@@ -714,6 +742,12 @@
         const target = $("categories");
         if (rows.length === 0) return empty(target, word("No spending categories in this period."));
         const colors = ["#d9775e", "#e2a04b", "#5c9fc1", "#71a889", "#9785b0", "#96949b"];
+        const categoryColor = (value) => {
+          if (value === null || value === "") return colors.at(-1);
+          let hash = 0;
+          for (const character of String(value)) hash = (Math.imul(hash, 31) + character.codePointAt(0)) >>> 0;
+          return colors[hash % (colors.length - 1)];
+        };
         const merged = new Map();
         for (const row of rows) {
           const key = row.category === null ? "missing" : `value:${row.category}`;
@@ -738,7 +772,7 @@
           const outflow = magnitude(row);
           const amount = centsDecimal(outflow);
           const whole = centsDecimal(total);
-          const color = colors[index % colors.length];
+          const color = categoryColor(row.category);
           const entry = element("li", "category-row");
           const label = `${index + 1}. ${categoryText(row.category)}`;
           const name = row.category ? element("button", "category-name", label) : element("span", "category-name", label);
@@ -884,10 +918,48 @@
       function renderLargest(rows) {
         const target = $("largest");
         const outflows = rows.filter((row) => (signedCents(row.amount) ?? 0n) < 0n);
-        if (!outflows.length) return empty(target, word("No recorded outflow"));
+        if (!outflows.length) { state.selectedExpense = null; renderExpenseDetail(); return empty(target, word("No recorded outflow")); }
         const list = element("ol", "largest-list");
-        for (const [index, row] of outflows.slice(0, 10).entries()) list.append(recordItem(row, index + 1));
+        for (const [index, row] of outflows.slice(0, 10).entries()) {
+          const item = element("li");
+          const button = element("button", "record-row expense-open");
+          button.type = "button";
+          button.dataset.expenseIndex = String(index);
+          button.setAttribute("aria-label", `${word("View record detail")} · ${categoryText(row.category)} · ${row.date}`);
+          const content = recordItem(row, index + 1);
+          while (content.firstChild) button.append(content.firstChild);
+          button.addEventListener("click", () => {
+            state.selectedExpense = row;
+            state.expenseTriggerIndex = index;
+            if (state.committed.statistics) state.committed.statistics.selectedExpense = row;
+            renderExpenseDetail();
+            $("expense-detail-close").focus();
+          });
+          item.append(button);
+          list.append(item);
+        }
         target.replaceChildren(list);
+        if (state.selectedExpense) {
+          state.selectedExpense = outflows.find((row) => ["date", "amount", "currency", "category", "account", "book", "note"]
+            .every((field) => row[field] === state.selectedExpense[field])) ?? null;
+          renderExpenseDetail();
+        }
+      }
+
+      function renderExpenseDetail() {
+        const panel = $("expense-detail");
+        const row = state.selectedExpense;
+        panel.hidden = !row;
+        if (!row) { $("expense-detail-values").replaceChildren(); return; }
+        const values = [["Date", validDate(row.date) ? row.date : word("Date unavailable")],
+          ["Category", categoryText(row.category)], ["Amount", centsText(signedCents(row.amount))],
+          ["Account", row.account], ["Book", row.book], ["Note", row.note]];
+        const fields = values.filter(([, value]) => value !== null && String(value).trim() !== "").map(([label, value]) => {
+          const item = element("div");
+          item.append(element("dt", "", word(label)), element("dd", "", value));
+          return item;
+        });
+        $("expense-detail-values").replaceChildren(...fields);
       }
 
       function renderDayDetails(rows, hasMore = false) {
@@ -925,11 +997,9 @@
         $("more").hidden = state.nextCursor === null;
       }
 
-      function renderCalendar() {
+      function renderCalendarContext() {
         const month = state.calendarMonth;
         if (!month) return;
-        const first = `${month}-01`;
-        const last = monthLast(first);
         $("calendar-title").textContent = monthTitle(month);
         $("calendar-previous").disabled = !!earliestCnyDate() && month <= earliestCnyDate().slice(0, 7);
         $("calendar-next").disabled = !!latestCnyDate() && month >= latestCnyDate().slice(0, 7);
@@ -937,6 +1007,14 @@
         picker.value = month;
         picker.min = earliestCnyDate()?.slice(0, 7) ?? month;
         picker.max = latestCnyDate()?.slice(0, 7) ?? month;
+      }
+
+      function renderCalendar() {
+        const month = state.calendarMonth;
+        if (!month) return;
+        const first = `${month}-01`;
+        const last = monthLast(first);
+        renderCalendarContext();
         const out = bucketCents(state.calendarOut);
         const inflow = bucketCents(state.calendarIn);
         const grid = $("calendar");
@@ -957,12 +1035,7 @@
           button.append(element("span", "day-number", String(day)));
           if (spent !== null) button.append(element("span", "day-flow flow-out", centsText(-spent)));
           if (earned !== null) button.append(element("span", "day-flow flow-in", centsText(earned)));
-          button.addEventListener("click", () => {
-            state.selectedDay = date;
-            renderCalendar();
-            grid.querySelector(`[data-calendar-day="${date}"]`)?.focus();
-            void loadDay(date);
-          });
+          button.addEventListener("click", () => { void loadDay(date); });
           cells.push(button);
         }
         grid.replaceChildren(...cells);
@@ -970,14 +1043,17 @@
       }
 
       async function loadDay(day) {
-        if (!state.cnyCurrencies.length) return;
+        const snapshot = state.committed.calendar;
+        if (!snapshot || snapshot.incomplete || state.view !== "calendar") return;
         const run = state.run;
         try {
           const result = await query("details", { from: day, through: day, currencies: state.cnyCurrencies }, { expectedDataRevision: state.dataRevision });
-          if (run !== state.run || state.selectedDay !== day) return;
-          renderDayDetails(result.rows, result.nextCursor !== null);
+          if (run !== state.run || state.committed.calendar !== snapshot || state.view !== "calendar") return;
+          const updated = { ...snapshot, selectedDay: day, dayRows: result.rows, dayHasMore: result.nextCursor !== null };
+          state.committed.calendar = updated;
+          renderCalendarSnapshot(updated);
         } catch {
-          if (run === state.run && state.selectedDay === day) empty($("day-details"), word("Records unavailable. Check again later."));
+          if (run === state.run && state.view === "calendar") notice(word("Records unavailable. Check again later."), "error");
         }
       }
 
@@ -1040,6 +1116,103 @@
         return { net, outflow: spent === null ? null : -spent, inflow: earned, count };
       }
 
+      function renderRecordsSnapshot(snapshot) {
+        state.recordsMonth = snapshot.month;
+        state.recordRange = snapshot.rangeOverride;
+        state.recordCategory = snapshot.category;
+        state.details = [...snapshot.rows];
+        state.nextCursor = snapshot.nextCursor;
+        renderRecordsContext();
+        renderRecordsTotals(snapshot.metrics);
+        renderDetails();
+      }
+
+      function renderCalendarSnapshot(snapshot) {
+        state.calendarMonth = snapshot.month;
+        state.selectedDay = snapshot.selectedDay;
+        state.calendarOut = snapshot.outRows;
+        state.calendarIn = snapshot.inRows;
+        if (snapshot.incomplete) {
+          renderCalendarContext();
+          $("calendar").replaceChildren(element("p", "empty calendar-unavailable", word("Daily totals incomplete. Choose another month.")));
+          empty($("day-details"), word("Daily totals incomplete. Choose another month."));
+          return;
+        }
+        renderCalendar();
+        if (snapshot.selectedDay) renderDayDetails(snapshot.dayRows, snapshot.dayHasMore);
+        else empty($("day-details"), word("No recorded entries"));
+      }
+
+      function renderStatisticsSnapshot(snapshot) {
+        state.statsPeriod = snapshot.period;
+        state.statsAnchor = snapshot.anchor;
+        state.selectedExpense = snapshot.selectedExpense;
+        renderStatsContext(snapshot.range);
+        renderSummary(snapshot.current, snapshot.previous);
+        renderCategories(snapshot.categories, snapshot.categoriesTruncated);
+        if (snapshot.trendTruncated) {
+          empty($("trend"), word("Totals incomplete. Narrow the date range."));
+          if (snapshot.period === "year") empty($("year-breakdown"), word("Totals incomplete. Narrow the date range."));
+        } else {
+          renderTrend(snapshot.trendOut, snapshot.trendIn, snapshot.range);
+          renderYearBreakdown(snapshot.trendOut, snapshot.trendIn, snapshot.range);
+        }
+        renderLargest(snapshot.largest);
+        snapshot.selectedExpense = state.selectedExpense;
+      }
+
+      function restoreView() {
+        const snapshot = state.committed[state.view];
+        if (!snapshot) {
+          if (state.view === "records") { $("records-totals").replaceChildren(); empty($("details"), word("Records unavailable. Check again later.")); $("more").hidden = true; }
+          else if (state.view === "calendar") { empty($("calendar"), word("Records unavailable. Check again later.")); empty($("day-details"), word("Records unavailable. Check again later.")); }
+          else for (const id of ["summary", "categories", "trend", "largest", "year-breakdown"]) empty($(id), word("Records unavailable. Check again later."));
+          notice(word("Records unavailable. Check again later."), "error");
+          return;
+        }
+        if (state.view === "records") renderRecordsSnapshot(snapshot);
+        else if (state.view === "calendar") renderCalendarSnapshot(snapshot);
+        else renderStatisticsSnapshot(snapshot);
+        notice(word("Data could not be updated. Showing the last results."), "error");
+      }
+
+      function clearAllViews() {
+        state.committed = { records: null, calendar: null, statistics: null };
+        state.details = [];
+        state.nextCursor = null;
+        state.calendarOut = [];
+        state.calendarIn = [];
+        state.selectedDay = null;
+        state.selectedExpense = null;
+        state.recordCategory = null;
+        state.recordRange = null;
+        state.recordsMonth = null;
+        state.calendarMonth = null;
+        state.statsAnchor = null;
+        for (const id of ["details", "calendar", "day-details", "summary", "categories", "trend", "largest", "year-breakdown"]) empty($(id), word("No recorded entries"));
+        $("records-totals").replaceChildren();
+        $("expense-detail").hidden = true;
+        $("more").hidden = true;
+        $("record-drilldown").hidden = true;
+        for (const id of ["records-title", "calendar-title", "stats-title", "records-range", "stats-range"]) $(id).textContent = "";
+        for (const id of ["records-month", "calendar-month", "stats-date"]) $(id).value = "";
+        for (const id of ["records-previous", "records-next", "calendar-previous", "calendar-next", "stats-previous", "stats-next"]) $(id).disabled = true;
+      }
+
+      async function readDetailsDepth(params, pinned, targetCount, run) {
+        const rows = [];
+        let cursor = null;
+        for (let pageNumber = 0; pageNumber < 48; pageNumber++) {
+          const page = await query("details", params, { ...pinned, ...(cursor ? { cursor } : {}) });
+          if (run !== state.run) return null;
+          if (page.revision !== state.dataRevision) throw new Error("Data revision changed");
+          rows.push(...page.rows);
+          cursor = page.nextCursor;
+          if (!cursor || rows.length >= targetCount) return { rows, nextCursor: cursor };
+        }
+        throw new Error("Visible records could not be refreshed completely");
+      }
+
       async function refresh(keepVisible = false) {
         clearTimeout(scheduledRefresh);
         if (refreshing) {
@@ -1051,6 +1224,7 @@
         refreshing = true;
         const run = ++state.run;
         const scroll = keepVisible ? document.scrollingElement?.scrollTop ?? null : null;
+        const priorCoverage = { rows: state.coverage, currencies: state.cnyCurrencies, revision: state.dataRevision, loaded: state.coverageLoaded };
         $("more").disabled = true;
         if (!state.loaded) notice(word("Loading records…"));
         try {
@@ -1063,10 +1237,7 @@
             state.coverageLoaded = true;
           }
           if (!state.cnyCurrencies.length || !latestCnyDate()) {
-            if (state.view === "records") empty($("details"), word("No recorded entries"));
-            else if (state.view === "calendar") empty($("calendar"), word("No recorded entries"));
-            else for (const id of ["summary", "categories", "trend", "largest"]) empty($(id), word("No recorded entries"));
-            $("more").hidden = true;
+            clearAllViews();
             state.loaded = true;
             notice("");
             return;
@@ -1076,50 +1247,58 @@
           let incomplete = false;
           if (state.view === "records") {
             const range = recordsRange();
-            renderRecordsContext();
-            const params = { ...range, currencies: state.cnyCurrencies,
-              ...(state.recordCategory ? { category: state.recordCategory } : {}) };
+            const month = state.recordsMonth;
+            const category = state.recordCategory;
+            const rangeOverride = state.recordRange;
+            const params = queryRange(range, category);
+            const previous = state.committed.records;
+            const sameScope = previous && previous.month === month && previous.category === category
+              && previous.range.from === range.from && previous.range.through === range.through;
+            const depth = keepVisible && sameScope ? Math.max(30, previous.rows.length) : 30;
             const [summary, outflow, inflow, details] = await Promise.all([
               queryAll("summary", params, pinned, budget, run),
               queryAll("outflow", params, pinned, budget, run),
               queryAll("inflow", params, pinned, budget, run),
-              query("details", params, pinned),
+              readDetailsDepth(params, pinned, depth, run),
             ]);
-            if (run !== state.run) return;
-            renderRecordsTotals(moneyMetrics(summary, outflow, inflow));
-            state.details = details.rows;
-            state.nextCursor = details.nextCursor;
-            renderDetails();
+            if (run !== state.run || !details) return;
             incomplete = [summary, outflow, inflow].some((answer) => answer.truncated);
+            const snapshot = { month, rangeOverride, category, range: { from: range.from, through: range.through },
+              metrics: moneyMetrics(summary, outflow, inflow), rows: details.rows, nextCursor: details.nextCursor };
+            state.committed.records = snapshot;
+            renderRecordsSnapshot(snapshot);
           } else if (state.view === "calendar") {
             const month = state.calendarMonth;
-            const params = { from: `${month}-01`, through: monthLast(`${month}-01`), currencies: state.cnyCurrencies };
+            const params = queryRange({ from: `${month}-01`, through: monthLast(`${month}-01`) });
             const [dayOut, dayIn] = await Promise.all([
               queryAll("trend_day", params, pinned, budget, run),
               queryAll("trend_day_inflow", params, pinned, budget, run),
             ]);
             if (run !== state.run) return;
             incomplete = dayOut.truncated || dayIn.truncated;
-            if (incomplete) {
-              state.calendarOut = [];
-              state.calendarIn = [];
-              $("calendar").replaceChildren(element("p", "empty calendar-unavailable", word("Daily totals incomplete. Choose another month.")));
-              empty($("day-details"), word("Daily totals incomplete. Choose another month."));
-            } else {
-              state.calendarOut = dayOut.rows;
-              state.calendarIn = dayIn.rows;
+            let selectedDay = state.selectedDay;
+            let dayRows = [], dayHasMore = false;
+            if (!incomplete) {
               const observed = [...dayOut.rows, ...dayIn.rows].map((row) => row.bucket).filter(validDate).sort();
-              if (!state.selectedDay || state.selectedDay.slice(0, 7) !== month) state.selectedDay = observed.at(-1) ?? null;
-              renderCalendar();
-              if (state.selectedDay) await loadDay(state.selectedDay);
-              else empty($("day-details"), word("No recorded entries"));
+              if (!selectedDay || selectedDay.slice(0, 7) !== month) selectedDay = observed.at(-1) ?? null;
+              if (selectedDay) {
+                const day = await query("details", queryRange({ from: selectedDay, through: selectedDay }), pinned);
+                if (run !== state.run) return;
+                dayRows = day.rows;
+                dayHasMore = day.nextCursor !== null;
+              }
             }
+            const snapshot = { month, selectedDay, outRows: incomplete ? [] : dayOut.rows, inRows: incomplete ? [] : dayIn.rows,
+              dayRows, dayHasMore, incomplete };
+            state.committed.calendar = snapshot;
+            renderCalendarSnapshot(snapshot);
           } else {
+            const period = state.statsPeriod;
+            const anchor = state.statsAnchor;
             const range = periodRange();
-            renderStatsContext(range);
-            const params = { from: range.from, through: range.through, currencies: state.cnyCurrencies };
+            const params = queryRange(range);
             const prior = priorRange(range);
-            const trendId = state.statsPeriod === "year" ? "trend_month" : "trend_day";
+            const trendId = period === "year" ? "trend_month" : "trend_day";
             const [summary, outflow, inflow, categories, largest] = await Promise.all([
               queryAll("summary", params, pinned, budget, run),
               queryAll("outflow", params, pinned, budget, run),
@@ -1129,9 +1308,9 @@
             ]);
             if (run !== state.run) return;
             const [priorSummary, priorOutflow, priorInflow] = await Promise.all([
-              queryAll("summary", { ...params, from: prior.from, through: prior.through }, pinned, budget, run),
-              queryAll("outflow", { ...params, from: prior.from, through: prior.through }, pinned, budget, run),
-              queryAll("inflow", { ...params, from: prior.from, through: prior.through }, pinned, budget, run),
+              queryAll("summary", queryRange(prior), pinned, budget, run),
+              queryAll("outflow", queryRange(prior), pinned, budget, run),
+              queryAll("inflow", queryRange(prior), pinned, budget, run),
             ]);
             if (run !== state.run) return;
             const [trendOut, trendIn] = await Promise.all([
@@ -1141,28 +1320,29 @@
             if (run !== state.run) return;
             incomplete = [summary, outflow, inflow, categories, priorSummary, priorOutflow, priorInflow, trendOut, trendIn]
               .some((answer) => answer.truncated);
-            renderSummary(moneyMetrics(summary, outflow, inflow), moneyMetrics(priorSummary, priorOutflow, priorInflow));
-            renderCategories(categories.rows, categories.truncated);
-            if (trendOut.truncated || trendIn.truncated) {
-              empty($("trend"), word("Totals incomplete. Narrow the date range."));
-              if (state.statsPeriod === "year") empty($("year-breakdown"), word("Totals incomplete. Narrow the date range."));
-            } else {
-              renderTrend(trendOut.rows, trendIn.rows, range);
-              renderYearBreakdown(trendOut.rows, trendIn.rows, range);
-            }
-            renderLargest(largest.rows);
+            const previous = state.committed.statistics;
+            const sameScope = previous && previous.period === period && previous.anchor === anchor;
+            const snapshot = { period, anchor, range, current: moneyMetrics(summary, outflow, inflow),
+              previous: moneyMetrics(priorSummary, priorOutflow, priorInflow), categories: categories.rows,
+              categoriesTruncated: categories.truncated, trendOut: trendOut.rows, trendIn: trendIn.rows,
+              trendTruncated: trendOut.truncated || trendIn.truncated, largest: largest.rows,
+              selectedExpense: sameScope ? previous.selectedExpense : null };
+            state.committed.statistics = snapshot;
+            renderStatisticsSnapshot(snapshot);
           }
           state.loaded = true;
           notice(incomplete ? word("This view is incomplete because the source has more groups than can be read at once. Narrow the date range.") : "");
           if (scroll !== null && document.scrollingElement) document.scrollingElement.scrollTop = scroll;
         } catch {
           if (run === state.run) {
-            if (!state.loaded) {
-              if (state.view === "records") empty($("details"), word("Records unavailable. Check again later."));
-              else if (state.view === "calendar") empty($("calendar"), word("Records unavailable. Check again later."));
-              else for (const id of ["summary", "categories", "trend", "largest"]) empty($(id), word("Records unavailable. Check again later."));
-            }
-            notice(word(state.loaded ? "Data could not be updated. Showing the last results." : "Records unavailable. Check again later."), "error");
+            state.coverage = priorCoverage.rows;
+            state.cnyCurrencies = priorCoverage.currencies;
+            state.dataRevision = priorCoverage.revision;
+            state.coverageLoaded = priorCoverage.loaded;
+            if (priorCoverage.loaded) updateCoverage(priorCoverage.rows);
+            else { $("coverage").textContent = word("Reading record coverage…"); $("excluded-currencies").hidden = true; }
+            restoreView();
+            if (scroll !== null && document.scrollingElement) document.scrollingElement.scrollTop = scroll;
           }
         } finally {
           refreshing = false;
@@ -1177,18 +1357,17 @@
 
       async function loadMore() {
         if (refreshing || state.nextCursor === null || state.view !== "records") return;
+        const snapshot = state.committed.records;
+        if (!snapshot) return;
         const run = state.run;
-        const range = recordsRange();
-        if (!range) return;
         $("more").disabled = true;
         try {
-          const result = await query("details", { ...range, currencies: state.cnyCurrencies,
-            ...(state.recordCategory ? { category: state.recordCategory } : {}) },
-            { cursor: state.nextCursor, expectedDataRevision: state.dataRevision });
-          if (run !== state.run) return;
-          state.details.push(...result.rows);
-          state.nextCursor = result.nextCursor;
-          renderDetails();
+          const result = await query("details", queryRange(snapshot.range, snapshot.category),
+            { cursor: snapshot.nextCursor, expectedDataRevision: state.dataRevision });
+          if (run !== state.run || state.committed.records !== snapshot) return;
+          const updated = { ...snapshot, rows: [...snapshot.rows, ...result.rows], nextCursor: result.nextCursor };
+          state.committed.records = updated;
+          renderRecordsSnapshot(updated);
         } catch {
           if (run === state.run) notice(word("More entries could not be loaded. Try again."), "error");
         } finally { $("more").disabled = false; }
@@ -1249,7 +1428,6 @@
       });
       $("record-drilldown-clear").addEventListener("click", () => {
         state.recordCategory = null;
-        state.recordRange = null;
         scheduleRefresh();
       });
       for (const [id, delta] of [["calendar-previous", -1], ["calendar-next", 1]]) $(id).addEventListener("click", () => {
@@ -1292,6 +1470,13 @@
       $("stats-latest").addEventListener("click", () => {
         state.statsAnchor = latestCnyDate();
         scheduleRefresh();
+      });
+      $("expense-detail-close").addEventListener("click", () => {
+        const index = state.expenseTriggerIndex;
+        state.selectedExpense = null;
+        if (state.committed.statistics) state.committed.statistics.selectedExpense = null;
+        renderExpenseDetail();
+        $("largest").querySelector(`[data-expense-index="${index}"]`)?.focus();
       });
       $("more").addEventListener("click", () => { void loadMore(); });
       if (sdk && typeof sdk.onDataChanged === "function") sdk.onDataChanged(() => { void refresh(true); });
