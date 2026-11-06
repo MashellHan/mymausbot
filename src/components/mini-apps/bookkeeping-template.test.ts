@@ -22,6 +22,7 @@ function fixture(fixtureOptions: { latestDate?: string; aliases?: boolean } = {}
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   let changed: (() => void) | null = null;
   let failSummary = false;
+  let exhaustCalendarBudget = false;
   const query = vi.fn(async (id: string, parameters: Record<string, unknown>, options?: { cursor?: string; expectedDataRevision?: number }) => {
     if (failSummary && id === "summary") throw new Error("private query detail must not leak");
     const prior = String(parameters.from ?? "").startsWith("2026-10") || String(parameters.from ?? "").startsWith("2025-");
@@ -35,6 +36,12 @@ function fixture(fixtureOptions: { latestDate?: string; aliases?: boolean } = {}
       { currency: "USD", count: "1", datedCount: "1", amountCount: "1", firstDate: "2026-11-05", lastDate: "2026-11-05" },
       { currency: null, count: "1", datedCount: "1", amountCount: "1", firstDate: "2026-11-04", lastDate: "2026-11-04" },
     ]);
+    if (exhaustCalendarBudget && (id === "categories" || id === "category_options")) {
+      const index = options?.cursor ? Number(options.cursor.split("-").at(-1)) : 1;
+      const row = id === "categories" ? { currency: "CNY", category: "Food", amount: "-12.34", count: "1" }
+        : { currency: "CNY", category: "Food", count: "1" };
+      return page([row], index < 20 ? `${id}-${index + 1}` : undefined);
+    }
     if (fixtureOptions.aliases && id === "summary") return page([
       { currency: "CNY", net: "-100.00", count: "1" }, { currency: "RMB", net: "-20.00", count: "1" },
       { currency: "人民币", net: "30.00", count: "1" },
@@ -97,6 +104,7 @@ function fixture(fixtureOptions: { latestDate?: string; aliases?: boolean } = {}
   view.document.write(html);
   return {
     view, query, changed: () => changed?.(), fail: () => { failSummary = true; },
+    exhaustCalendarBudget: () => { exhaustCalendarBudget = true; },
     text: (id: string) => view.document.getElementById(id)?.textContent ?? "",
     select: (id: string, value: string) => {
       const control = view.document.getElementById(id) as unknown as HTMLSelectElement;
@@ -216,6 +224,25 @@ describe("Bookkeeping Manager Mini App", () => {
     expect(app.query).toHaveBeenCalledWith("details", { from: "2026-11-06", through: "2026-11-06", currencies: ["CNY", "RMB", "人民币"], category: "Food" }, { expectedDataRevision: 7 });
     expect(app.text("day-details")).toContain("¥100.00");
     expect(app.text("day-details")).toContain("¥20.00");
+  });
+
+  it("marks calendar dates unavailable when earlier complete pages exhaust the shared read cap", async () => {
+    const app = fixture(); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    app.exhaustCalendarBudget();
+    const before = app.query.mock.calls.length;
+    app.tab("calendar");
+    await app.view.happyDOM.whenAsyncComplete();
+    const calls = app.query.mock.calls.slice(before);
+    const budgeted = new Set(["summary", "outflow", "inflow", "categories", "category_options", "trend_month", "trend_month_inflow", "trend_day", "trend_day_inflow"]);
+    expect(calls.filter(([id]) => budgeted.has(id))).toHaveLength(48);
+    expect(calls.filter(([id]) => id === "categories")).toHaveLength(20);
+    expect(calls.filter(([id]) => id === "category_options")).toHaveLength(20);
+    expect(calls.some(([id]) => id === "trend_day" || id === "trend_day_inflow")).toBe(false);
+    expect(app.view.document.querySelectorAll("#calendar .calendar-day")).toHaveLength(0);
+    expect(app.text("calendar")).toContain("Daily totals incomplete. Narrow the date range and refresh.");
+    expect(app.text("notice")).toContain("This view is incomplete");
+    expect(app.text("calendar")).not.toContain("No recorded outflow");
   });
 
   it("rejects an invalid custom range without querying a fabricated zero", async () => {
