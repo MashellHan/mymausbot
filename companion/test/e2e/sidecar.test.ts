@@ -96,7 +96,7 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
       expect((await rig.control("GET", "/state")).e2e.enabled).toBe(true);
       expect((await http(established, "GET", "/api/health", { token: paired.token })).status).toBe(200);
     } finally {
-      for (const { ws } of pending) ws.terminate();
+      for (const { ws } of pending) ws.close();
       await Promise.all(pending.map(({ closed }) => closed));
       established.shutdown();
       await established.closed;
