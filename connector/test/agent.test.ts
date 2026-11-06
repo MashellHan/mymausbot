@@ -235,6 +235,27 @@ describe("the connector's connection to MausBot", () => {
     expect(savedConfig(saved.config, { ...record.current, boxId: "box_another00000" })).toBeNull();
   });
 
+  it("keeps the latest accepted or pending job gate when older or equal signed config arrives", async () => {
+    const { admin, record, saved, agent } = await connected({ accepted: true });
+    const box = record.current.boxId;
+    admin.sendConfig(box, { version: 3, state: "pending" });
+    await until(() => saved.config?.version === 3 && agent.state === "pending");
+    admin.sendConfig(box, { version: 2, state: "accepted" });
+    admin.sendConfig(box, { version: 3, state: "accepted" });
+    await admin.job("status", {}, "after-stale-config");
+    expect(agent.state).toBe("pending");
+    expect(saved.config?.version).toBe(3);
+    expect((await admin.job("stop", {}, "pending-still-refuses")).ok).toBe(false);
+
+    admin.sendConfig(box, { version: 4, state: "accepted" });
+    await until(() => saved.config?.version === 4 && agent.state === "accepted");
+    admin.sendConfig(box, { version: 3, state: "pending" });
+    await admin.job("status", {}, "after-old-pending");
+    expect(agent.state).toBe("accepted");
+    expect(saved.config?.version).toBe(4);
+    expect((await admin.job("stop", {}, "accepted-still-runs")).ok).toBe(true);
+  });
+
   it("pins the Admin's new keys only from a hello one of its pinned keys signed", async () => {
     const { admin, record, agent } = await connected({ accepted: true });
     const next = generateKeyPair();

@@ -171,11 +171,11 @@ export class FakeAdmin {
     return reply;
   }
 
-  sendConfig(boxId: string, patch: Partial<Pick<ConfigPayload, "schedule" | "policy">> & { version?: number } = {}): number {
+  sendConfig(boxId: string, patch: Partial<Pick<ConfigPayload, "schedule" | "policy" | "state">> & { version?: number } = {}): number {
     const version = patch.version ?? ++this.configVersion;
     this.configVersion = Math.max(this.configVersion, version);
     const payload: Omit<ConfigPayload, "kid"> = {
-      t: "config", box: boxId, iat: Date.now() + this.clockOffsetMs, version, state: this.boxes.get(boxId)!.state,
+      t: "config", box: boxId, iat: Date.now() + this.clockOffsetMs, version, state: patch.state ?? this.boxes.get(boxId)!.state,
       schedule: patch.schedule ?? { window: { days: [0], start: "02:00", end: "05:00", timeZone: "Europe/Berlin" }, ring: "standard", holdUntil: null, image: null },
       policy: patch.policy ?? { offlineHours: 72 },
     };

@@ -433,9 +433,9 @@ export class Agent {
     if (!opened.ok) return void this.options.log(`ignored a config MausBot did not sign (${opened.why})`);
     const config = checkConfig(opened.payload, identity.boxId);
     if (!config.ok) return void this.options.log(`ignored a config: ${config.message}`);
-    this.setState(config.value.state);
     const saved = this.options.config?.saved();
     if (saved && saved.version >= config.value.version) return;
+    this.setState(config.value.state);
     try {
       this.options.config?.save({ envelope, version: config.value.version, savedAt: this.now() });
     } catch (error) {
