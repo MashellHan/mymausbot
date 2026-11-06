@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { launchVerificationServer, runControlOmb, verificationServerEnvironment 
 import { handleToolCall, request } from "../scripts/mcp-server.ts";
 import { PEER_ACCESS_HELP } from "./peer-roster.ts";
 import { ENVELOPE_MARK } from "./runtime/envelope.ts";
+import { parseCompleteJsonLines } from "./testing/complete-json-lines.ts";
 import { waitForExit } from "./testing/cleanup.ts";
 import { readHandoffs } from "./testing/handoff-rows.ts";
 
@@ -466,12 +467,23 @@ it("keeps genuinely different room briefs separate", () => withRooms(async f => 
 
 it("runs a room member's turn a restart cut again once, told so, and resumes the sender told so", () => withRooms(async f => {
   const gateFile = join(f.session.info.dataDir, "engineer.gate");
+  const evidenceFile = join(f.session.info.dataDir, "room-plan.json.evidence.jsonl");
+  let childId: string | undefined;
   f.plan[f.target.id] = { reply: "Built CSV", gateFile };
   await f.start();
-  await expect.poll(() => f.nodes().find((node: any) => node.parentId)?.status, { timeout: 15_000 }).toBe("running");
+  await expect.poll(() => {
+    const nodes = f.nodes(), child = nodes.find((node: any) => node.parentId);
+    const parent = nodes.find((node: any) => node.id === child?.parentId);
+    const evidence = existsSync(evidenceFile)
+      ? parseCompleteJsonLines<{ botId: string; threadId: string }>(readFileSync(evidenceFile, "utf8")) : [];
+    const senderRecorded = Boolean(parent && evidence.some((turn) => turn.botId === parent.botId && turn.threadId === parent.threadId));
+    if (child?.status === "running" && senderRecorded) childId = child.id;
+    return { childStatus: child?.status, senderRecorded };
+  }, { timeout: 15_000 }).toMatchObject({ childStatus: "running", senderRecorded: true });
   await f.restart("SIGKILL");
   writeFileSync(gateFile, "open");
   await expect.poll(() => f.nodes().every((node: any) => node.status === "completed"), { timeout: 30_000 }).toBe(true);
+  expect(f.nodes().find((node: any) => node.id === childId)).toMatchObject({ status: "completed", restarts: 1, executions: 2 });
   const turns = f.provider();
   expect(turns.map((turn: any) => turn.botId)).toEqual([f.sender.id, f.target.id, f.sender.id]);
   const [, rerun, review] = turns;
