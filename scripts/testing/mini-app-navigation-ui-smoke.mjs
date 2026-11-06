@@ -3,15 +3,15 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, session } from "electron";
 
-const [mode, dataDir, previewUrl, evidence] = process.argv.slice(2);
-assert(["empty", "installed"].includes(mode) && dataDir && previewUrl && evidence);
-const profile = join(dataDir, `mini-app-nav-${mode}-profile`);
+const [dataDir, previewUrl, evidence] = process.argv.slice(2);
+assert(dataDir && previewUrl && evidence);
+const profile = join(dataDir, "mini-app-launcher-profile");
 mkdirSync(profile, { recursive: true });
 app.setPath("userData", profile);
 app.on("window-all-closed", () => {});
 const preload = join(profile, "synthetic-preload.cjs");
 writeFileSync(preload, 'require("electron").contextBridge.exposeInMainWorld("ogb", { platform: process.platform, app: { version: "source-fixture", ownPage: true, blocksOpaqueFrameNavigation: true } });');
-const result = { mode, source: "source Electron fixture with synthetic native marker", screenshots: [], geometry: [], checks: [], errors: [] };
+const result = { source: "source Electron fixture with synthetic native marker", screenshots: [], geometry: [], checks: [], errors: [] };
 const windows = [];
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function bounded(promise, label, timeoutMs = 20_000) {
@@ -21,7 +21,7 @@ async function bounded(promise, label, timeoutMs = 20_000) {
   finally { clearTimeout(timer); }
 }
 const evaluate = (window, expression) => bounded(window.webContents.executeJavaScript(expression), `renderer evaluate: ${expression.slice(0, 70)}`);
-async function until(probe, good, label, timeoutMs = 30_000) {
+async function until(probe, good, label, timeoutMs = 45_000) {
   const end = Date.now() + timeoutMs;
   for (;;) {
     const value = await probe();
@@ -39,12 +39,10 @@ function makeWindow(capability = true) {
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   return window;
 }
-const open = async (window, query) => {
-  console.log(`opening ${mode} ${query}`);
+const open = async (window, query, expected = 5) => {
   await bounded(window.loadURL(previewUrl + query), `window load ${query}`, 45_000);
-  await until(() => evaluate(window, 'document.querySelector("[data-testid=mini-apps-panel]") !== null'), Boolean, "Mini Apps panel");
-  await until(() => evaluate(window, 'document.querySelector("[data-mini-app-all]") !== null'), Boolean, "All apps control");
-  console.log(`ready ${mode} ${query}`);
+  await until(() => evaluate(window, 'document.querySelectorAll("[data-testid=mini-apps-panel] [role=tab]").length'),
+    (count) => count === expected, `${expected} persisted app tabs`);
 };
 async function resizePanel(window, width) {
   const widthNow = () => evaluate(window, 'document.querySelector("[data-computer-panel]")?.getBoundingClientRect().width');
@@ -53,7 +51,7 @@ async function resizePanel(window, width) {
     (value) => Math.abs(value - 960) <= 1, "resize signal ready");
   for (let expected = 920; expected >= width; expected -= 40) {
     await evaluate(window, `(() => { const separator = document.querySelector('[role=separator][aria-orientation=vertical]');
-      separator.focus(); separator.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })); return true; })()`);
+      separator.focus(); separator.dispatchEvent(new KeyboardEvent('keydown', { key:'ArrowRight', bubbles:true, cancelable:true })); return true; })()`);
     await until(widthNow, (value) => Math.abs(value - expected) <= 1, `${expected}px measured panel`);
     await until(() => evaluate(window, 'Number(document.querySelector("[role=separator][aria-orientation=vertical]")?.getAttribute("aria-valuenow"))'),
       (value) => Math.abs(value - expected) <= 1, `${expected}px resize signal`);
@@ -61,129 +59,114 @@ async function resizePanel(window, width) {
   return widthNow();
 }
 async function geometry(window, expected, name) {
-  const measured = await evaluate(window, `(() => {
-    const panel = document.querySelector('[data-computer-panel]');
-    const host = document.querySelector('[data-testid=mini-apps-panel]');
-    const row = host.querySelector('[data-mini-app-included-row], [role=tablist]');
-    const all = host.querySelector('[data-mini-app-all]');
-    const tabs = [...row.querySelectorAll(':scope > button')];
-    const r = (node) => { const b = node.getBoundingClientRect(); return { left:b.left, right:b.right, top:b.top, bottom:b.bottom, width:b.width }; };
-    return { panel:r(panel), host:r(host), row:r(row), all:r(all), items:tabs.map(r),
-      hostOverflow:host.scrollWidth-host.clientWidth, headerOverflow:host.querySelector('header').scrollWidth-host.querySelector('header').clientWidth,
-      installedTabs:host.querySelectorAll('[role=tab]').length, includedTiles:host.querySelectorAll('[data-mini-app-included]').length };
-  })()`);
-  assert(Math.abs(measured.panel.width - expected) <= 1, `${name}: actual panel width ${measured.panel.width}`);
-  assert(measured.items.length === 5 && measured.items.every((item) => Math.abs(item.top - measured.items[0].top) <= 1), `${name}: one app row`);
-  assert(measured.row.right <= measured.all.left + 1 && measured.all.right <= measured.host.right + 1, `${name}: fixed All apps stays visible`);
+  const measured = await evaluate(window, `(() => { const host=document.querySelector('[data-testid=mini-apps-panel]');
+    const panel=document.querySelector('[data-computer-panel]').getBoundingClientRect();
+    const row=host.querySelector('[role=tablist]').getBoundingClientRect();
+    const all=host.querySelector('[data-mini-app-all]').getBoundingClientRect();
+    const tiles=[...host.querySelectorAll('[role=tab]')].map(tab => {
+      const icon=tab.querySelector('[data-mini-app-icon]').getBoundingClientRect();
+      const label=tab.querySelector('span:last-child').getBoundingClientRect();
+      const rect=tab.getBoundingClientRect(); return { left:rect.left, right:rect.right, top:rect.top, iconBottom:icon.bottom, labelTop:label.top }; });
+    return { panelWidth:panel.width, rowLeft:row.left, rowRight:row.right, allLeft:all.left, allRight:all.right,
+      hostRight:host.getBoundingClientRect().right, headerOverflow:host.querySelector('header').scrollWidth-host.querySelector('header').clientWidth, tiles }; })()`);
+  assert(Math.abs(measured.panelWidth - expected) <= 1, `${name}: actual panel width ${measured.panelWidth}`);
+  assert(measured.tiles.length === 5 && measured.tiles.every((tile) => Math.abs(tile.top - measured.tiles[0].top) <= 1
+    && tile.iconBottom <= tile.labelTop + 1), `${name}: one launcher row with labels below icons`);
+  assert(measured.rowRight <= measured.allLeft + 1 && measured.allRight <= measured.hostRight + 1, `${name}: fixed All apps stays visible`);
   assert(measured.headerOverflow <= 1, `${name}: no header overflow`);
-  assert(mode === "empty" ? measured.includedTiles === 5 && measured.installedTabs === 0
-    : measured.installedTabs === 5 && measured.includedTiles === 0);
   result.geometry.push({ name, expected, ...measured });
 }
 async function capture(window, name, full = false) {
   await evaluate(window, '(async () => { await document.fonts.ready; await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); return true; })()');
-  const rect = full ? undefined : await evaluate(window, `(() => { const box = document.querySelector('[data-testid=mini-apps-panel]').getBoundingClientRect();
+  const rect = full ? undefined : await evaluate(window, `(() => { const box=document.querySelector('[data-testid=mini-apps-panel]').getBoundingClientRect();
     return { x:Math.floor(box.x), y:Math.floor(box.y), width:Math.ceil(box.width), height:Math.ceil(box.height) }; })()`);
   writeFileSync(join(evidence, name), (await window.webContents.capturePage(rect)).toPNG());
   result.screenshots.push(name);
 }
-async function click(window, selector) {
-  return evaluate(window, `(() => { const node = document.querySelector(${JSON.stringify(selector)});
-    if (!node || node.disabled) throw Error('Unavailable control: ' + ${JSON.stringify(selector)}); node.click(); return true; })()`);
-}
+const click = (window, selector) => evaluate(window, `(() => { const node=document.querySelector(${JSON.stringify(selector)});
+  if (!node || node.disabled) throw Error('Unavailable control: ' + ${JSON.stringify(selector)}); node.click(); return true; })()`);
+const inventory = (window) => evaluate(window, '(async () => (await (await fetch("/api/mini-apps")).json()).apps)()');
 
-const timeout = setTimeout(() => { result.errors.push("Navigation fixture timed out");
-  writeFileSync(join(evidence, `${mode}-result.json`), JSON.stringify(result, null, 2) + "\n");
-  console.error("Navigation fixture timed out"); app.exit(1); }, 170_000);
+const timeout = setTimeout(() => { result.errors.push("Launcher fixture timed out");
+  writeFileSync(join(evidence, "launcher-result.json"), JSON.stringify(result, null, 2) + "\n");
+  app.exit(1); }, 170_000);
 async function run() {
 try {
-  console.log(`starting ${mode} Electron fixture`);
   await bounded(app.whenReady(), "Electron ready", 30_000);
-  console.log(`Electron ready for ${mode}`);
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   const window = makeWindow();
-  const vectors = mode === "empty" ? [
-    { width: 960, locale: "en", skin: "atelier", name: "empty-960-atelier-en.png" },
-    { width: 400, locale: "en", skin: "midnight", name: "empty-400-midnight-en.png" },
-    { width: 360, locale: "zh", skin: "atelier", name: "empty-360-atelier-zh.png" },
-  ] : [
-    { width: 960, locale: "en", skin: "midnight", name: "installed-960-midnight-en.png" },
-    { width: 400, locale: "en", skin: "atelier", name: "installed-400-atelier-en.png" },
-    { width: 360, locale: "zh", skin: "midnight", name: "installed-360-midnight-zh.png" },
+  const vectors = [
+    { width: 960, locale: "en", skin: "atelier", name: "launcher-960-atelier-en.png" },
+    { width: 400, locale: "en", skin: "midnight", name: "launcher-400-midnight-en.png" },
+    { width: 360, locale: "zh", skin: "atelier", name: "launcher-360-atelier-zh.png" },
   ];
   for (const vector of vectors) {
     await open(window, `?locale=${vector.locale}&skin=${vector.skin}`);
     await resizePanel(window, vector.width);
     await geometry(window, vector.width, vector.name);
-    if (mode === "installed" && vector.width === 360) {
-      await evaluate(window, `(() => { const tab = document.querySelector('[data-testid=mini-apps-panel] [role=tab][aria-selected=true]'); tab.focus();
-        tab.dispatchEvent(new KeyboardEvent('keydown', { key:'End', bubbles:true, cancelable:true })); return true; })()`);
-      await until(() => evaluate(window, `(() => { const tabs=[...document.querySelectorAll('[data-testid=mini-apps-panel] [role=tab]')];
-        return tabs.at(-1)?.getAttribute('aria-selected') === 'true'; })()`), Boolean, "last app selected after End");
-      const visible = await evaluate(window, `(() => { const host=document.querySelector('[data-testid=mini-apps-panel]');
-        const row=host.querySelector('[role=tablist]').getBoundingClientRect();
-        const selected=host.querySelector('[role=tab][aria-selected=true]').getBoundingClientRect();
-        return selected.left >= row.left-1 && selected.right <= row.right+1; })()`);
-      assert.equal(visible, true, "selected tab fully visible after keyboard navigation");
-    }
+    assert.equal(await evaluate(window, 'document.body.innerText.includes("Current app version") || document.body.innerText.includes("0 installed")'), false);
     await capture(window, vector.name);
   }
-  result.checks.push("Measured 960/400/360px panel bounds and one-row navigation across EN/ZH and light/dark");
-
-  if (mode === "empty") {
-    assert.deepEqual(await evaluate(window, '(async () => (await (await fetch("/api/mini-apps")).json()).apps)()'), []);
-    await click(window, '[data-mini-app-included="agent-team"]');
-    await until(() => evaluate(window, 'document.activeElement?.dataset.miniAppCatalog'), (value) => value === "agent-team", "tile focuses library entry");
-    const statuses = await evaluate(window, `Object.fromEntries([...document.querySelectorAll('[data-mini-app-catalog]')].map(node => [node.dataset.miniAppCatalog,node.dataset.miniAppState]))`);
-    assert.equal(statuses.bookkeeping, "data");
-    assert.equal(statuses.x_ai_digest, "ready");
-    await capture(window, "empty-library-360-atelier-zh.png", true);
-    await click(window, '[data-mini-app-choice="agent-team"]');
-    await until(() => evaluate(window, 'document.querySelector("[data-testid=dashboard-install]") !== null'), Boolean, "dashboard disclosure");
-    assert(await evaluate(window, 'document.querySelector("[data-testid=dashboard-install]").innerText.includes("Herdr")'));
-    await until(() => evaluate(window, '[...document.querySelectorAll("[data-testid=dashboard-install] button")].some(button => button.textContent.includes("安装应用") && !button.disabled)'), Boolean, "owner install enabled");
-    await evaluate(window, `([...document.querySelectorAll('[data-testid=dashboard-install] button')].find(button => button.textContent.includes('安装应用'))).click()`);
-    const installed = await until(() => evaluate(window, '(async () => (await (await fetch("/api/mini-apps")).json()).apps.find(app => app.dashboardIdentity === "agent-team"))()'),
-      (app) => app?.status === "active" && app.dashboard?.kind === "agent-team", "explicit Team owner install");
-    assert.equal(installed.revision, 1);
-    result.checks.push("Empty registry stayed truthful; included tile opened focused library and explicit Team owner publication");
-    const denied = makeWindow(false);
-    await open(denied, "?locale=en&skin=midnight");
-    await click(denied, '[data-mini-app-all]');
-    await until(() => evaluate(denied, 'document.querySelector("#mini-app-library-dialog") !== null'), Boolean, "unsupported host library");
-    assert.equal(await evaluate(denied, 'document.querySelectorAll("#mini-app-library-dialog [data-mini-app-choice]").length'), 0);
-    result.checks.push("Unsupported host shows catalog without owner install actions");
-  } else {
-    const kinds = await evaluate(window, `[...document.querySelectorAll('[data-testid=mini-apps-panel] [role=tab] [data-mini-app-icon]')].map(node => node.dataset.miniAppIcon).sort()`);
-    assert.deepEqual(kinds, ["agent-team", "bookkeeping", "github_activity", "usage", "x_ai_digest"].sort());
-    await click(window, '[data-mini-app-all]');
-    await until(() => evaluate(window, 'document.querySelector("#mini-app-library-dialog") !== null'), Boolean, "installed library");
-    assert.equal(await evaluate(window, 'document.querySelectorAll("#mini-app-library-dialog [data-mini-app-open]").length'), 5);
-    assert.equal(await evaluate(window, `[...document.querySelectorAll('#mini-app-library-dialog [data-mini-app-catalog]')].filter(node => node.dataset.miniAppState === 'installed').length`), 5);
-    await capture(window, "installed-library-360-midnight-zh.png", true);
-    await evaluate(window, `document.querySelector('#mini-app-library-dialog').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`);
-    await open(window, "?shell=1&locale=en&skin=atelier");
-    await resizePanel(window, 960);
-    await until(() => evaluate(window, 'document.querySelector("textarea") !== null'), Boolean, "real chat composer");
-    const shell = await evaluate(window, `(() => { const panel=document.querySelector('[data-computer-panel]').getBoundingClientRect();
-      const composer=document.querySelector('textarea').getBoundingClientRect();
-      const controls=[...document.querySelectorAll('button')].filter(node => node.textContent.includes('Synthetic model')).map(node => node.getBoundingClientRect().right);
-      return { panelLeft:panel.left, panelWidth:panel.width, composerRight:composer.right,
-        modelCount:controls.length, modelRight:Math.max(...controls) }; })()`);
-    assert(shell.modelCount > 0 && shell.composerRight <= shell.panelLeft+1 && shell.modelRight <= shell.panelLeft+1,
-      "chat controls must not cover the Mini Apps panel");
-    result.geometry.push({ name: "installed-full-shell-1800x1100-atelier-en.png", ...shell });
-    await capture(window, "installed-full-shell-1800x1100-atelier-en.png", true);
-    result.checks.push("Five provenance-marked apps and one usable full shell keep chat controls clear");
-  }
+  const before = await inventory(window);
+  assert.equal(before.length, 5);
+  const team = before.find((entry) => entry.dashboardIdentity === "agent-team");
+  assert(team?.dashboard?.kind === "agent-team");
+  assert(before.some((entry) => entry.dashboardIdentity === "usage" && entry.title === "Work Tracker"));
+  await evaluate(window, `(() => { const host=document.querySelector('[data-testid=mini-apps-panel]');
+    const tabs=[...host.querySelectorAll('[role=tab]')]; tabs[0].focus();
+    tabs[0].dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true})); return true; })()`);
+  await until(() => evaluate(window, `(() => { const tabs=[...document.querySelectorAll('[data-testid=mini-apps-panel] [role=tab]')];
+    return tabs.at(-1)?.getAttribute('aria-selected') === 'true'; })()`), Boolean, "last launcher tab selected");
+  assert.equal(await evaluate(window, `(() => { const host=document.querySelector('[data-testid=mini-apps-panel]');
+    const row=host.querySelector('[role=tablist]').getBoundingClientRect(); const tab=host.querySelector('[role=tab][aria-selected=true]').getBoundingClientRect();
+    return tab.left >= row.left-1 && tab.right <= row.right+1; })()`), true);
+  await click(window, '[data-mini-app-all]');
+  await until(() => evaluate(window, 'document.querySelectorAll("[data-mini-app-popover] [data-mini-app-catalog]").length'), (count) => count === 5, "anchored app grid");
+  const menu = await evaluate(window, `(() => { const pop=document.querySelector('[data-mini-app-popover]');
+    const trigger=document.querySelector('[data-mini-app-all]');
+    return {modal:pop.getAttribute('aria-modal'),anchored:trigger.parentElement.contains(pop),
+      rightGap:Math.abs(pop.getBoundingClientRect().right-trigger.getBoundingClientRect().right)}; })()`);
+  assert(menu.modal === "false" && menu.anchored && menu.rightGap <= 1);
+  await capture(window, "launcher-grid-360-atelier-zh.png", true);
+  await click(window, '[data-mini-app-remove="agent-team"]');
+  await until(() => inventory(window), (apps) => apps.find((entry) => entry.id === team.id)?.status === "archived", "explicit app removal");
+  assert.equal(await evaluate(window, 'document.querySelectorAll("[data-testid=mini-apps-panel] [role=tab]").length'), 4);
+  await capture(window, "launcher-removed-360-atelier-zh.png");
+  await open(window, "?locale=zh&skin=atelier", 4);
+  await until(() => inventory(window), (apps) => apps.find((entry) => entry.id === team.id)?.status === "archived", "removed app stays removed on reopen");
+  assert.equal(await evaluate(window, 'document.querySelectorAll("[data-testid=mini-apps-panel] [role=tab]").length'), 4);
+  await click(window, '[data-mini-app-all]');
+  await click(window, '[data-mini-app-grid-item="agent-team"]');
+  await until(() => inventory(window), (apps) => apps.find((entry) => entry.id === team.id && entry.status === "active" && entry.dashboard?.kind === "agent-team"), "explicit same-id re-add");
+  const restored = (await inventory(window)).find((entry) => entry.id === team.id);
+  assert(restored.id === team.id && restored.revision > team.revision);
+  await capture(window, "launcher-restored-960-atelier-zh.png");
+  result.checks.push("Five owner-persisted defaults, one-row launcher, anchored grid, remove persistence and same-id Add");
+  await open(window, "?shell=1&locale=en&skin=atelier");
+  await resizePanel(window, 960);
+  await until(() => evaluate(window, 'document.querySelector("textarea") !== null'), Boolean, "real chat composer");
+  const shell = await evaluate(window, `(() => { const panel=document.querySelector('[data-computer-panel]').getBoundingClientRect();
+    const composer=document.querySelector('textarea').getBoundingClientRect();
+    const models=[...document.querySelectorAll('button')].filter(node => node.textContent.includes('Synthetic model')).map(node => node.getBoundingClientRect().right);
+    return { panelLeft:panel.left, panelWidth:panel.width, composerRight:composer.right, modelCount:models.length,
+      modelRight:Math.max(...models) }; })()`);
+  assert(shell.modelCount > 0 && shell.composerRight <= shell.panelLeft+1 && shell.modelRight <= shell.panelLeft+1);
+  result.geometry.push({ name: "launcher-full-shell-1800x1100-atelier-en.png", ...shell });
+  await capture(window, "launcher-full-shell-1800x1100-atelier-en.png", true);
+  const denied = makeWindow(false);
+  await open(denied, "?locale=en&skin=midnight");
+  await click(denied, '[data-mini-app-all]');
+  await until(() => evaluate(denied, 'document.querySelector("[data-mini-app-popover]") !== null'), Boolean, "unsupported host grid");
+  assert.equal(await evaluate(denied, '[...document.querySelectorAll("[data-mini-app-popover] [data-mini-app-grid-item]")].every(button => button.disabled)'), true);
+  result.checks.push("Real chat shell stays clear; unsupported host cannot add or open default apps");
 } catch (error) {
   result.errors.push(error instanceof Error ? error.stack ?? error.message : String(error));
 } finally {
   clearTimeout(timeout);
-  writeFileSync(join(evidence, `${mode}-result.json`), JSON.stringify(result, null, 2) + "\n");
+  writeFileSync(join(evidence, "launcher-result.json"), JSON.stringify(result, null, 2) + "\n");
   for (const window of windows) if (!window.isDestroyed()) window.destroy();
   if (result.errors.length) { console.error(result.errors.join("\n")); app.exit(1); }
-  else { console.log(JSON.stringify({ mode, checks: result.checks, screenshots: result.screenshots })); app.quit(); }
+  else { console.log(JSON.stringify({ checks: result.checks, screenshots: result.screenshots })); app.quit(); }
 }
 }
 void run();

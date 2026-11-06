@@ -15,6 +15,14 @@ resolved producer through the existing owner publication operation. Setup does
 not publish a sample edition or change the routine's prompt, cadence or other
 outputs. The existing Automation view remains the place to manage that routine.
 
+An installed active report adds a temporary publication reminder to its local
+Bot Automation turn only while that Bot still has the publisher grant, the app
+is bound to the Bot's current retained report Data, and `mini_app_report` is
+allowed. The saved prompt and schedule stay intact. Missing or archived apps,
+revoked grants, mismatched bindings and nonlocal or read-only turns keep their
+original prompt. The report tool checks authorization again when called; the
+reminder never grants access or invents an edition.
+
 Bots use their normal turn capability and tool policy:
 
 1. Call `mini_app_info` and discover the installed app by its stable slug.
