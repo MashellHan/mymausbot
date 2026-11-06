@@ -166,8 +166,9 @@ Dev leaves a durable PR-body handoff with `QA-Handoff: <current head SHA>`.
 The existing Lead owns review and CI follow-through while local delivery and
 independent development continue.
 
-The automated QA runner is the existing CI full lane, twice daily. It does not
-need another persistent model. Its trusted reporter files deduplicated issues;
+The automated QA runner is the existing CI full lane, once daily at 05:00
+Asia/Shanghai. It does not need another persistent model. Its trusted reporter
+files deduplicated issues;
 the ten-minute queue hands actionable work to mausbot-lead. Lead acknowledges,
 triages within thirty minutes, assigns an existing developer/maintainer and sets
 priority, scope, classification, next action and due date. Reviewer reviews fixes;

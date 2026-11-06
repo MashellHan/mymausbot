@@ -80,8 +80,8 @@ and cannot verify the incident until a later clean execution covers it.
 
 ## Automated QA and Lead rhythm
 
-The existing CI full lane runs on pinned main twice daily at **10:17 and 22:17
-Asia/Shanghai** (`17 2,14 * * *` UTC), including unchanged source. PR pushes
+The existing CI full lane runs on pinned main once daily at **05:00
+Asia/Shanghai** (`0 21 * * *` UTC), including unchanged source. PR pushes
 cannot cancel it. Root `pnpm test` alone is not a full QA run.
 
 `qa-report.yml` executes trusted main code with issue-write permission, separate
@@ -132,7 +132,9 @@ integration, and Lead closes with that evidence. The reporter sets `qa:verified`
 and leaves closure to Lead. Keep priority/owner/next-action/due-date records
 current; a `qa:triaged` label by itself is insufficient.
 
-No complete delivered full report within 14 hours disables reduced coverage.
+No complete delivered full report within 26 hours disables reduced coverage.
+This allows the 24-hour cadence plus a two-hour grace period; report health
+and shared execution recovery use the same window.
 The queue requests one shared recovery run per failed scheduled cycle, reusing
 any in-progress full run. A delivery failure retries reporting from durable
 results, without rerunning tests. The queue also backfills coalesced reporter
@@ -178,8 +180,9 @@ PRs as a separate advisory timing job while keeping the existing merge gate.
 
 Before setting an area's `admitted` flag, require a representative real PR's
 shadow timing, selector/gate edge-case tests, two consecutive scheduled reports
-covering both slots, and a real failure → issue → triage → assignment → reviewed
-fix → verification → closure loop. Classify full-run failures and resolve
+from two daily cycles, and a real failure → issue → triage → assignment →
+reviewed fix → verification → closure loop. Manual bootstrap and recovery runs
+do not count as scheduled cycles. Classify full-run failures and resolve
 selection misses in that area. Do not substitute calendar age or a PR count.
 Change admission through a reviewed full-validation PR, then set the repository
 variable to `tiered`. No 80% improvement is claimed merely by installing this.

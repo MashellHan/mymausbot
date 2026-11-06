@@ -59,7 +59,7 @@ sets (`laneOf` in `scripts/ci-scope.mjs`):
 | --- | --- | --- |
 | `pull_request` | its areas | the table above, with Linux shards, and Windows jobs only for a change that can break Windows (Windows below) |
 | `push` to main, `merge_group` | main | static (typecheck, lint, the build), the eight Linux and eight Windows shards with the Electron node tests, the macOS smokes job, behavior evals, the Linux and Windows packaged server smokes, the open-source edition, the control plane, the renderer smoke and Linux and Windows browser identity |
-| `schedule` (02:17 and 14:17 UTC), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
+| `schedule` (21:00 UTC daily, 05:00 Asia/Shanghai next day), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
 
 The main lane runs Linux, Windows and one macOS job. The macOS shards, the
 Windows CUA smoke and every smoke that needs a second macOS runner wait for
@@ -493,6 +493,7 @@ throughput for that guarantee.
 
 ## MausBot fork validation rhythm
 
-The fork adds shared local planning, shadow admission, twice-daily full QA,
-trusted issue reporting and a Lead queue. See [MausBot validation](MAUSBOT-VALIDATION.md)
+The fork adds shared local planning, shadow admission, daily full QA at 05:00
+Asia/Shanghai, trusted issue reporting and a Lead queue. See
+[MausBot validation](MAUSBOT-VALIDATION.md)
 for commands, exact boundaries, holds, recovery and rollout evidence.
