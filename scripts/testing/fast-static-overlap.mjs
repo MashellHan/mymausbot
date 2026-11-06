@@ -15,15 +15,22 @@ function terminate(child, signal) {
   try { process.kill(process.platform === "win32" ? child.pid : -child.pid, signal); } catch {}
 }
 
-function launch(argv, env, children) {
+function groupAlive(pid) {
+  try { process.kill(-pid, 0); return true; }
+  catch (error) { return error.code !== "ESRCH"; }
+}
+
+function launch(argv, env, children, groups) {
   return new Promise((resolveExit) => {
     const child = spawn(argv[0], argv.slice(1), { env, stdio: "inherit", detached: process.platform !== "win32" });
     children.add(child);
+    if (process.platform !== "win32" && child.pid) groups.add(child.pid);
     let settled = false;
     const done = (code) => {
       if (settled) return;
       settled = true;
       children.delete(child);
+      if (process.platform !== "win32" && child.pid && !groupAlive(child.pid)) groups.delete(child.pid);
       resolveExit(code);
     };
     child.once("error", (error) => { console.error(`${argv[0]} could not start: ${error.message}`); done(127); });
@@ -36,16 +43,32 @@ export async function runFastStatic({ core, typecheck, env = process.env, signal
   rmSync(location.path, { force: true });
   if (signal?.aborted) return 130;
   const children = new Set();
-  let killTimer;
+  const groups = new Set();
+  let cleanup;
+  const active = () => {
+    for (const pid of groups) if (!groupAlive(pid)) groups.delete(pid);
+    return groups.size > 0 || children.size > 0;
+  };
+  const waitForCleanup = async (ms) => {
+    const deadline = Date.now() + ms;
+    while (active() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+    return !active();
+  };
   const stop = () => {
-    for (const child of children) terminate(child, "SIGTERM");
-    killTimer = setTimeout(() => { for (const child of children) terminate(child, "SIGKILL"); }, 2_000);
-    killTimer.unref();
+    if (process.platform === "win32") for (const child of children) terminate(child, "SIGTERM");
+    else for (const pid of groups) try { process.kill(-pid, "SIGTERM"); } catch {}
+    cleanup = (async () => {
+      if (await waitForCleanup(2_000)) return;
+      for (const pid of groups) try { process.kill(-pid, "SIGKILL"); } catch {}
+      for (const child of children) terminate(child, "SIGKILL");
+      if (!await waitForCleanup(1_000)) throw new Error("Fast static process groups did not stop");
+    })();
+    void cleanup.catch(() => {});
   };
   signal?.addEventListener("abort", stop, { once: true });
   try {
-    const checking = typecheck ? launch(typecheck, env, children) : Promise.resolve(null);
-    const testing = launch(core, env, children);
+    const checking = typecheck ? launch(typecheck, env, children, groups) : Promise.resolve(null);
+    const testing = launch(core, env, children, groups);
     const [typecheckCode, coreCode] = await Promise.all([checking, testing]);
     if (signal?.aborted) return 130;
     if (typecheck) writeFileSync(location.path, JSON.stringify({ ...location, typecheckCode, coreCode }) + "\n", { mode: 0o600 });
@@ -53,7 +76,7 @@ export async function runFastStatic({ core, typecheck, env = process.env, signal
     return coreCode;
   } finally {
     signal?.removeEventListener("abort", stop);
-    if (killTimer) clearTimeout(killTimer);
+    if (cleanup) await cleanup;
     for (const child of children) terminate(child, "SIGKILL");
   }
 }
