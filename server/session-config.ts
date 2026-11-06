@@ -128,4 +128,3 @@ export function writeSessionConfig(input: {
   }
   return persisted;
 }
-
