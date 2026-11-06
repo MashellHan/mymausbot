@@ -1,9 +1,11 @@
+import datetime as dt
 import importlib.util
 import http.client
 import http.server
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import threading
 import types
@@ -281,6 +283,61 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
                 usage.refresh(collector, config, self.root, skip_api=True)
             self.assertTrue(remote.called)
             self.assertTrue(remote.call_args.kwargs["skip_api"])
+
+    def test_bounded_failed_root_keeps_previous_tokens_categories_commits_and_ado(self):
+        at = dt.datetime.fromisoformat("2026-11-06T08:00:00+00:00")
+        old = {"capturedAt": "2026-11-05T08:00:00Z", "tokens": [
+            {"key": "replayed", "at": "2026-11-06T07:00:00Z", "category": "work"},
+            {"key": "old-token", "at": "2026-11-06T06:00:00Z", "category": "personal"}],
+            "commits": [{"key": "old-commit", "at": "2026-11-06T06:00:00Z", "repository": {"id": "old"}}],
+            "adoRepos": ["https://dev.azure.com/example/project/_git/old"]}
+        fresh = {"start": "2026-11-06T00:00:00Z", "capturedAt": "2026-11-07T00:00:00Z",
+                 "status": "ok", "errors": [], "tokens": [{"key": "replayed", "at": "2026-11-06T07:00:00Z", "category": "unclassified"}],
+                 "commits": [{"key": "new-commit", "at": "2026-11-06T07:00:00Z", "repository": {"id": "new"}}],
+                 "adoRepos": ["https://dev.azure.com/example/project/_git/new"]}
+        calls = []
+        def worker(request, timeout):
+            calls.append((request, timeout))
+            if request["stage"] == "repositories" and request["config"]["repoRoots"] == ["/fixture/failed"]:
+                raise subprocess.TimeoutExpired("synthetic root", timeout)
+            if request["stage"] == "repositories":
+                return [{"path": "/fixture/ready", "name": "ready", "category": "work"}]
+            return fresh
+        collector = types.SimpleNamespace(read_json=lambda path, default: old,
+            instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
+        config = {"repoRoots": ["/fixture/ready", "/fixture/failed"], "storageDir": str(self.root)}
+        with patch.object(usage, "_run_worker", side_effect=worker), patch.object(usage, "load_collector", return_value=collector):
+            result = usage.collect_local(self.root / "collector.py", config, "fixture", at=at, history_days=59)
+        self.assertEqual([call[0]["stage"] for call in calls], ["repositories", "repositories", "collect"])
+        self.assertTrue(all(timeout <= 15 for _, timeout in calls[:2]))
+        self.assertLessEqual(calls[-1][1], 120)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["tokens"], [
+            {"key": "replayed", "at": "2026-11-06T07:00:00Z", "category": "work"},
+            {"key": "old-token", "at": "2026-11-06T06:00:00Z", "category": "personal"}])
+        self.assertEqual({row["key"] for row in result["commits"]}, {"old-commit", "new-commit"})
+        self.assertEqual(result["adoRepos"], [
+            "https://dev.azure.com/example/project/_git/new",
+            "https://dev.azure.com/example/project/_git/old"])
+        self.assertEqual(result["retainedCapturedAt"], old["capturedAt"])
+        self.assertEqual(result["errors"], [{"source": "repositories", "rootIndex": 2, "code": "TimeoutExpired"}])
+
+    def test_local_worker_timeout_kills_and_reaps_its_process_group(self):
+        class Worker:
+            pid = 123
+            returncode = None
+            calls = 0
+            def communicate(self, payload=None, timeout=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise subprocess.TimeoutExpired("synthetic worker", timeout)
+                return "", ""
+        worker = Worker()
+        with patch.object(usage.subprocess, "Popen", return_value=worker), patch.object(usage.os, "killpg") as kill:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                usage._run_worker({"stage": "collect"}, 0.1)
+        kill.assert_called_once_with(123, usage.signal.SIGKILL)
+        self.assertEqual(worker.calls, 2)
 
 
 if __name__ == "__main__":

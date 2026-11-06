@@ -9,14 +9,141 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
+import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import urllib.request
 
 import local_usage_merged
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
+LOCAL_COLLECT_TIMEOUT = 120
+REPOSITORY_TIMEOUT = 15
+
+
+def load_collector(collector_path):
+    spec = importlib.util.spec_from_file_location("local_activity_collector", collector_path)
+    if spec is None or spec.loader is None:
+        raise ValueError("The existing activity collector could not be loaded")
+    collector = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(collector)
+    return collector
+
+
+def _collect_worker():
+    try:
+        request = json.load(sys.stdin)
+        collector = load_collector(request["collector"])
+        if request["stage"] == "repositories":
+            if not Path(request["config"]["repoRoots"][0]).expanduser().is_dir():
+                raise ValueError("Repository root is unavailable")
+            original_walk = collector.os.walk
+
+            def walk(root):
+                def failed(error):
+                    raise error
+                return original_walk(root, onerror=failed)
+
+            collector.os.walk = walk
+            result = collector.repositories(request["config"])
+        else:
+            collector.repositories = lambda config: request["repositories"]
+            original_classify = collector.Classifier.classify
+            blocked = [os.path.abspath(os.path.expanduser(root)) for root in request["failedRoots"]]
+
+            def classify(self, cwd, context=None):
+                if cwd and any(os.path.commonpath([os.path.abspath(cwd), root]) == root for root in blocked):
+                    category = original_classify(self, None, context)
+                    if category == "unclassified":
+                        matches = {r["category"] for r in self.repos if r["name"] in Path(cwd).parts}
+                        if len(matches) == 1:
+                            category = matches.pop()
+                    return category
+                return original_classify(self, cwd, context)
+
+            collector.Classifier.classify = classify
+            result = collector.collect(request["config"], request["device"],
+                                       at=collector.instant(request["at"]),
+                                       history_days=request["history_days"])
+        json.dump(result, sys.stdout)
+    except Exception as error:
+        print(f"usage stage=local-collect failed type={type(error).__name__}", file=sys.stderr, flush=True)
+        raise SystemExit(1) from None
+
+
+def _run_worker(request, timeout):
+    command = [sys.executable, "-c", "import runpy,sys; runpy.run_path(sys.argv[1])['_collect_worker']()", str(Path(__file__).resolve())]
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        output, _ = process.communicate(json.dumps(request), timeout=timeout)
+    except BaseException as error:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            print("usage stage=local-collect cleanup-failed lock-retained", file=sys.stderr, flush=True)
+            os._exit(1)
+        if isinstance(error, subprocess.TimeoutExpired):
+            print("usage stage=local-collect timeout child-reaped", file=sys.stderr, flush=True)
+            raise subprocess.TimeoutExpired("local activity collection", timeout) from None
+        raise
+    if process.returncode:
+        raise ValueError("Local activity collection failed")
+    return json.loads(output)
+
+
+def collect_local(collector_path, config, device, at=None, history_days=30):
+    deadline = time.monotonic() + LOCAL_COLLECT_TIMEOUT
+    fields = ("home", "repoRoots", "authorEmails", "workGithubOrgs", "personalGithubOwners", "m365Repos")
+    request = {"collector": str(collector_path), "config": {k: config[k] for k in fields if k in config},
+               "device": device, "at": at.isoformat() if at else None, "history_days": history_days}
+    repositories, failed_roots, errors = [], [], []
+    for index, root in enumerate(config["repoRoots"], 1):
+        print(f"usage stage=repository root={index} begin", file=sys.stderr, flush=True)
+        try:
+            repositories.extend(_run_worker({**request, "stage": "repositories",
+                "config": {**request["config"], "repoRoots": [root]}},
+                min(REPOSITORY_TIMEOUT, max(0, deadline - time.monotonic()))))
+            print(f"usage stage=repository root={index} end", file=sys.stderr, flush=True)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            failed_roots.append(root)
+            errors.append({"source": "repositories", "rootIndex": index, "code": type(error).__name__})
+            print(f"usage stage=repository root={index} unavailable", file=sys.stderr, flush=True)
+    print("usage stage=local-records begin", file=sys.stderr, flush=True)
+    result = _run_worker({**request, "stage": "collect", "repositories": repositories,
+                          "failedRoots": failed_roots}, max(0, deadline - time.monotonic()))
+    if errors or result.get("errors"):
+        collector = load_collector(collector_path)
+        previous = collector.read_json(Path(config["storageDir"]).expanduser() / "machines" / (device + ".json"), {})
+        start, end = collector.instant(result["start"]), collector.instant(result["capturedAt"])
+        if failed_roots:
+            previous_tokens = {}
+            for record in previous.get("tokens", []):
+                previous_tokens.setdefault(record["key"], record)
+            for record in result["tokens"]:
+                previous_category = previous_tokens.get(record["key"], {}).get("category")
+                if record.get("category") == "unclassified" and previous_category in ("work", "personal"):
+                    record["category"] = previous_category
+        for field in ("tokens", "commits"):
+            def key(record):
+                return record["key"] if field == "tokens" else (record["key"], (record.get("repository") or {}).get("id"))
+            fresh_keys = {key(record) for record in result[field]}
+            result[field].extend(record for record in previous.get(field, [])
+                                 if key(record) not in fresh_keys
+                                 and (record_at := collector.instant(record.get("at"))) is not None
+                                 and start <= record_at < end)
+        result["adoRepos"] = sorted(set(result["adoRepos"]) | set(previous.get("adoRepos", [])))
+        result["status"] = "partial"
+        result["errors"].extend(errors)
+        result["retainedCapturedAt"] = previous.get("retainedCapturedAt") or previous.get("capturedAt")
+    return result
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -134,11 +261,7 @@ class AzureMemorySession:
 
 
 def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False):
-    spec = importlib.util.spec_from_file_location("local_activity_collector", collector_path)
-    if spec is None or spec.loader is None:
-        raise ValueError("The existing activity collector could not be loaded")
-    collector = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(collector)
+    collector = load_collector(collector_path)
     original_run = collector.run
     azure = AzureMemorySession(azure_config_dir, config["authorEmails"])
 
@@ -148,6 +271,9 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
         return original_run(args, timeout)
 
     collector.run = run
+    collector.collect = lambda config, device, at=None, history_days=30: collect_local(
+        collector_path, config, device, at, history_days
+    )
     options = {"upload": publish, "skip_api": skip_api, "reuse_sources": reuse_sources}
     if "history_days" in inspect.signature(collector.refresh).parameters:
         options["history_days"] = 59
