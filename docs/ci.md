@@ -62,32 +62,32 @@ Every other event runs one of two fixed sets (`laneOf` in `scripts/ci-scope.mjs`
 | --- | --- | --- |
 | Ordinary `pull_request` | fast | one cached Ubuntu `static` job with fixed core and bounded affected files, plus the required `CI` gate |
 | Explicit wider PR request | its areas | selected jobs from the wider area table above; current-head, review and hold gates remain |
-| `push` to main, `merge_group` | main | static (typecheck, lint, the build), the eight Linux and eight Windows shards with the Electron node tests, the macOS smokes job, behavior evals, the Linux and Windows packaged server smokes, the open-source edition, the control plane, the renderer smoke and Linux and Windows browser identity |
+| Runtime `push` to main | full | `FULL_SCOPE` on all platforms, including the long platform and specialist jobs, even when the commit passed a merge-group gate |
+| `merge_group` | main or full | validate the combined PR on current main; selected scope can widen for sensitive or broad changes |
+| Guarded docs-only or version-only `push` to main | scoped | use a smaller lane only when its prior-commit or exact merge-group evidence satisfies the existing guard |
 | `schedule` (21:00 UTC daily, 05:00 Asia/Shanghai next day), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
 
-The main integration lane runs Linux, Windows and one macOS job. The macOS
-shards, Windows CUA smoke and work needing a second macOS runner run in the
-daily full or release lane. An explicit `windows` PR request can bring Windows
-checks forward; otherwise cross-platform failures surface after integration,
+Runtime main pushes use the full lane. A merge group's main lane runs Linux,
+Windows and one macOS job; sensitive changes may widen it. An explicit
+`windows` PR request can bring Windows checks forward; otherwise cross-platform
+failures surface after integration,
 at daily 05:00 or for release. Those later results remain owned incidents, not
 retroactive proof that a faster PR gate covered their platform.
 
-- A push to main is scoped by its own commits (`before..after`): docs only
-  (root Markdown, Markdown under `docs/`, `.github/FUNDING.yml`), or a
-  `package.json` change that only bumps `"version"` (the release bump), skips
-  the runtime jobs. It does so only when the commit before the push has a green
-  CI run of its own. Main's waiting run is replaced by each push, so without
-  that check a replaced run's code would never be tested. Every other push runs
-  the main lane.
-- A push whose commit already passed the `CI` gate in a merge group runs only
-  the control-plane job (the broker deploy needs it). The merge queue lands
-  its group's own commit, so the merge group's run tested exactly what the push
-  brings; `ci-scope.mjs` reads that run's gate job, which can pass before the
-  run's last job has finished.
-- Merge groups always run the main lane, whatever they change. Empty or
-  unreadable push diffs, and a commit whose CI cannot be read, fall back to the
-  main lane; a pull request whose diff cannot be read falls back to every job
-  on every platform as a fail-closed exception, never as an ordinary fast pass.
+- A runtime push to main runs `FULL_SCOPE` on all platforms, including after a
+  successful merge-group gate. A docs-only or `package.json` version-only push
+  may omit runtime jobs only with its prior commit's own green CI or an exact
+  green merge-group gate. Main's waiting run can be replaced by each push, so
+  these guards prevent untested code from disappearing between runs.
+- For that docs/version-only case, an exact green merge-group `CI` gate may
+  allow a control-plane-only push (the broker deploy still needs it). The queue
+  lands the group's own commit; `ci-scope.mjs` reads its gate even if later
+  jobs in that same run are still finishing. This shortcut never applies to a
+  runtime push.
+- Merge groups validate their combined source on current main, using main or
+  full scope as selected. Empty or unreadable push diffs, or unreadable CI
+  evidence, fall back to broader checks; an unreadable PR diff selects every
+  platform as a fail-closed exception, never an ordinary fast pass.
 
 The single required `CI` check starts with the workflow and reads `static`'s
 selection artifact for the same run, revision and producing preflight attempt.
@@ -236,10 +236,9 @@ run (`CI scope: Windows runs for …`). Ordinary PRs leave Windows to main's
 integration run, daily full QA and release. In October 2026, before the fast
 path, path-based selection ran Windows on 37% of PRs instead of 81%.
 
-To run Windows on any PR, add the `windows` label, then re-run the CI workflow
-(or push): the static job reads the PR's labels when it runs. Adding the label
-alone starts nothing, because a run for every label change would cancel the
-PR's running checks.
+To run Windows on a PR, add the `windows` label. The workflow listens to
+`labeled` and `unlabeled` events, so the label change starts a fresh CI run
+automatically and supersedes the older PR run; no manual rerun or push is needed.
 
 ## Browser driver (S4)
 
