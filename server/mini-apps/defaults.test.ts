@@ -103,6 +103,17 @@ it("does not assign a report source when multiple producer Bots match", async ()
   expect((await defaults.ensure(owner, input)).apps.find((app) => app.shippedTemplateKind === "x_ai_digest")?.publisherBotIds).toEqual(["ledger"]);
 });
 
+it("keeps owner titles and descriptions when a waiting default gains its ledger", async () => {
+  const { defaults, apps, data } = fixture();
+  const app = (await defaults.ensure(owner, input)).apps.find((entry) => entry.shippedTemplateKind === "bookkeeping")!;
+  await apps.publish(owner, { ...publication(apps.document(owner, app.id)), title: "Family budget", description: "Our household records" }, app.id);
+  await (await data.forBot("ledger")).run(ledgerSql, { connection: "bot", businessMutation: true });
+  const connected = (await defaults.ensure(owner, input)).apps.find((entry) => entry.id === app.id)!;
+  expect(connected).toMatchObject({ title: "Family budget", description: "Our household records", revision: 3, publisherBotIds: ["ledger"] });
+  expect(apps.document(owner, app.id).bindings).toHaveLength(1);
+  expect((await defaults.ensure(owner, input)).apps.find((entry) => entry.id === app.id)).toEqual(connected);
+});
+
 it("does not add apps for Bots or read-only actors", () => {
   const { defaults, apps } = fixture();
   expect(() => defaults.ensure({ ...owner, botId: "ledger" }, input)).toThrow("Only the local workspace owner");

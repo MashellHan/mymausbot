@@ -76,6 +76,8 @@ export class DefaultMiniApps {
     }
     if (current && !publication.bindings.length && current.app.status === "active") return;
     publication.slug = current?.app.slug ?? this.availableSlug(apps, kind);
+    publication.title = current?.app.title ?? publication.title;
+    publication.description = current?.app.description ?? publication.description;
     publication.expectedRevision = current?.app.revision ?? 0;
     await this.deps.apps.publish(owner, publication, current?.app.id);
   }
