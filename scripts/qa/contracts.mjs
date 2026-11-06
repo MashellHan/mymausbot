@@ -14,7 +14,7 @@ const NAMES = {
 };
 
 export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true) {
-  const jobs = [{ id: "static", name: outputs.linux_lanes ? "typecheck + lint + Linux tests (Boat)" : "typecheck + lint", build: outputs.build, linux: Boolean(outputs.linux_lanes),
+  const jobs = [{ id: "static", name: outputs.linux_lanes ? "typecheck + lint + Linux tests (Boat)" : "typecheck + lint", build: outputs.build, fast: Boolean(outputs.fast_pr), linux: Boolean(outputs.linux_lanes),
     ...(outputs.linux_lanes?.vitest.length || outputs.linux_lanes?.evals ? { artifact: "qa-results-boat" } : {}) }];
   for (const id of outputs.jobs) {
     if (!full && !MERGE_JOBS.includes(id)) continue;
@@ -45,7 +45,7 @@ export function inspectJobs(expected, observed) {
 }
 
 const VALIDATION_STEPS = {
-  static: ["Verify CI selection and documentation references", "Validate locale catalogs", "pnpm lint", "Source guards", "pnpm typecheck", "pnpm check:electron", "production UI build"],
+  static: ["Verify CI selection and documentation references", "Validate locale catalogs", "pnpm lint", "Source guards", "Security, data and dispatch core with bounded affected tests", "pnpm typecheck", "pnpm check:electron", "production UI build"],
   vitest: ["Run tests"],
   "behavior-evals": ["Eval suite typecheck", "Eval vitest gate", "Tier 1 scenarios", "Tier 2 golden replay", "Tier 3 stays offline"],
   "packaged-server": ["pnpm test:packaged-server"],
@@ -65,7 +65,13 @@ export function executionComplete(expected, jobs, artifacts) {
     const job = jobs.find((entry) => entry.name === item.name);
     if (!job || job.status !== "completed" || !["success", "failure"].includes(job.conclusion)) return false;
     if (item.artifact && !artifacts.has(item.artifact)) return false;
-    const steps = VALIDATION_STEPS[item.id].filter((step) => item.id !== "static" || item.build !== false || !["pnpm typecheck", "pnpm check:electron", "production UI build"].includes(step));
+    const steps = VALIDATION_STEPS[item.id].filter((step) => {
+      if (item.id !== "static") return true;
+      if (step === "Security, data and dispatch core with bounded affected tests") return item.fast;
+      if (step === "pnpm typecheck") return item.build;
+      if (["pnpm check:electron", "production UI build"].includes(step)) return item.build && !item.fast;
+      return true;
+    });
     if (item.linux) steps.push("Linux tests (vitest shards, behavior evals, packaged server), side by side");
     if (item.nodeTests) steps.push("Broker and Electron unit tests");
     if (item.id === "browser-driver" && item.name.includes("ubuntu")) steps.push("S4 inside the server image's runtime");

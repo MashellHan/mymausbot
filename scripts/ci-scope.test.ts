@@ -17,7 +17,9 @@ import { HOST_E2E } from "./testing/host-e2e.ts";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const script = fileURLToPath(new URL("./ci-scope.mjs", import.meta.url));
 const scopeWithEventControls = ["--input-type=module", "-e", `import { runCiScope } from ${JSON.stringify(new URL("./ci-scope.mjs", import.meta.url).href)};
-  await runCiScope({ readPullRequest: async (pr) => ({ labels: (pr.labels ?? []).map(label => label.name), repairIds: [] }) });`];
+  await runCiScope({ fastPrEnabled: false, readPullRequest: async (pr) => ({ labels: (pr.labels ?? []).map(label => label.name), repairIds: [] }) });`];
+const legacyPrScope = ["--input-type=module", "-e", `import { runCiScope } from ${JSON.stringify(new URL("./ci-scope.mjs", import.meta.url).href)};
+  await runCiScope({ fastPrEnabled: false });`];
 const ALL = ["macos-latest", "ubuntu-latest", "windows-latest"];
 const PR = ["ubuntu-latest", "windows-latest"];
 const LINUX = ["ubuntu-latest"];
@@ -69,7 +71,7 @@ function run(directory: string, event: string, payload: unknown) {
 function outputs(text: string) {
   const parsed = Object.fromEntries(text.trimEnd().split("\n").map((line) => {
     const at = line.indexOf("=");
-    return [line.slice(0, at), JSON.parse(line.slice(at + 1))];
+    return [line.slice(0, at), line.slice(0, at) === "fast_files" ? line.slice(at + 1) : JSON.parse(line.slice(at + 1))];
   }));
   expect(typeof parsed.full_required).toBe("boolean");
   expect(parsed.expected_jobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: "static" })]));
@@ -657,7 +659,7 @@ describe("CI scope CLI on a push to main", () => {
     }
   });
 
-  it.each([["a code change", code], ["the version bump", bump]])("runs only the control-plane checks for %s the merge queue already passed", async (_, change) => {
+  it.each([["a code change", code, everything(ALL)], ["the version bump", bump, ciOutputs(QUEUED_SCOPE, MAIN)]])("retains postmerge coverage for %s the merge queue already passed", async (_, change, selection) => {
     const { directory, before, after } = pushFixture(change);
     // The queue lands its group's commit once the gate passes, before the run's last job has finished.
     const api = await fakeRunsApi({ [after]: [{ id: 77, event: "merge_group", status: "in_progress", conclusion: null }] }, {
@@ -665,7 +667,7 @@ describe("CI scope CLI on a push to main", () => {
     });
     try {
       const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(ciOutputs(QUEUED_SCOPE, MAIN));
+      expect(output).toEqual(selection);
       expect(stderr).toBe("");
     } finally {
       await api.close();
@@ -680,7 +682,7 @@ describe("CI scope CLI on a push to main", () => {
     const api = await fakeRunsApi({ [after]: [{ id: 78, event: "merge_group", status: "completed", conclusion: "failure" }] }, { 78: gateJobs });
     try {
       const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(mainLane());
+      expect(output).toEqual(everything(ALL));
       expect(stderr).toBe("");
       expect(api.requests).toEqual([runsOf(after), "GET /repos/o/r/actions/runs/78/jobs?per_page=100 Bearer t"]);
     } finally {
@@ -721,7 +723,7 @@ describe("CI scope CLI on a push to main", () => {
     const api = await fakeRunsApi({ [before]: green });
     try {
       const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(kind === "a code change" ? mainLane() : everything(ALL));
+      expect(output).toEqual(everything(ALL));
       expect(stderr).toBe("");
       expect(api.requests).toEqual([runsOf(after)]);
     } finally {
@@ -763,7 +765,7 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     return { env: { GITHUB_API_URL: url, GH_TOKEN: "t", GITHUB_REPOSITORY: "o/r" }, requests, close: () => new Promise((resolve) => server.close(resolve)) };
   }
 
-  async function runPullRequest(directory: string, payload: unknown, env: Record<string, string> = {}) {
+  async function runPullRequest(directory: string, payload: unknown, env: Record<string, string> = {}, fast = false) {
     const eventPath = join(directory, "event.json");
     const outputPath = join(directory, "output.txt");
     writeFileSync(eventPath, JSON.stringify(payload));
@@ -771,10 +773,10 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     try {
       const childEnv: NodeJS.ProcessEnv = { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, ...env, ...localApi?.env };
       const { stdout, stderr } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-        execFile(process.execPath, [script], { cwd: directory, env: childEnv, encoding: "utf8", timeout: 10_000 },
+        execFile(process.execPath, fast ? [script] : legacyPrScope, { cwd: directory, env: childEnv, encoding: "utf8", timeout: 10_000 },
           (error, out, err) => (error ? reject(new Error(`${error.message}\n${err}`)) : resolve({ stdout: out, stderr: err })));
       });
-      return { output: outputs(readFileSync(outputPath, "utf8")), stdout, stderr };
+      return { output: outputs(readFileSync(outputPath, "utf8")), plan: JSON.parse(readFileSync(join(directory, "qa-plan.json"), "utf8")), stdout, stderr };
     } finally { await localApi?.close(); }
   }
 
@@ -794,6 +796,16 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     expect(output).toEqual(serverJobs(LINUX));
     expect(stdout).toContain('label the PR "windows" and re-run');
     expect(stderr).toBe("");
+  });
+
+  it("uses the hosted static core for an ordinary PR even when rollout is shadow", async () => {
+    const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
+    const { output, plan, stderr } = await runPullRequest(directory, payload, { MAUSBOT_CI_MODE: "shadow" }, true);
+    expect(stderr).toBe("");
+    expect(output.jobs).toEqual([]);
+    expect(plan.outputs).toMatchObject({ fast_pr: true, full_required: false, reduced: false, required_jobs: [], fast_files: "server/core.test.ts" });
+    expect(plan.outputs.expected_jobs).toEqual([expect.objectContaining({ id: "static", fast: true, name: "typecheck + lint" })]);
+    expect(plan.plan).toMatchObject({ fast: true, candidate: false, admitted: false, scope: { checks: ["build"] } });
   });
 
   it("runs every platform for the sensitive desktop app", async () => {
