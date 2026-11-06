@@ -383,7 +383,7 @@ describe("complete CI and trusted QA health", () => {
       if (path.includes("/artifacts")) return { artifacts: [{ name: "qa-plan-attempt-1" }] };
       return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }] };
     };
-    const invoke = (value: object) => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(value) }), runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 });
+    const invoke = (value: object) => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(value) }), runId: run.id, attempt: 1, sha: run.head_sha, event: "schedule", deadlineMs: 0 });
     await expect(invoke(plan)).resolves.toBeUndefined();
     for (const patch of [{ sha: "old" }, { runId: 99 }, { attempt: 2 }]) await expect(invoke({ ...plan, ...patch })).rejects.toThrow("Missing current-run validation plan");
   });
@@ -400,7 +400,7 @@ describe("complete CI and trusted QA health", () => {
       if (path.includes("/artifacts")) return { artifacts: [{ name: "qa-plan-attempt-1", expired }] };
       return { jobs };
     };
-    const invoke = () => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }), runId: run.id, attempt: 2, sha: run.head_sha, wait: async () => { throw new Error("Unexpected wait for an impossible artifact"); } });
+    const invoke = () => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }), runId: run.id, attempt: 2, sha: run.head_sha, event: "schedule", wait: async () => { throw new Error("Unexpected wait for an impossible artifact"); } });
     await expect(invoke()).resolves.toBeUndefined();
     jobs[2]!.conclusion = "failure";
     await expect(invoke()).rejects.toThrow("Required validation failed");
@@ -423,19 +423,19 @@ describe("complete CI and trusted QA health", () => {
     let artifacts = plans;
     const api = async (path: string) => path.startsWith("/issues?") ? [] : path.includes("/jobs") ? { jobs } : { artifacts };
     expect(await runJobs(run.id, 2, api)).toMatchObject([{ id: original.id, run_attempt: 1 }]);
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).resolves.toBeUndefined();
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).resolves.toBeUndefined();
     expect(readArtifact.mock.calls[0]?.[0].name).toBe("qa-plan-attempt-1");
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, deadlineMs: 0 })).resolves.toBeUndefined();
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).resolves.toBeUndefined();
     expect(readArtifact.mock.calls[1]?.[0].name).toBe("qa-plan-attempt-3");
     artifacts = [plans[0]!];
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
     jobs = [copied];
     await expect(runJobs(run.id, 2, api)).rejects.toThrow("Ambiguous workflow job execution");
     jobs = [original, copied];
     artifacts = [plans[0]!, plans[0]!];
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("Ambiguous current-run validation plan");
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).rejects.toThrow("Ambiguous current-run validation plan");
     artifacts = [{ ...plans[0]!, workflow_run: { id: 99, head_sha: run.head_sha } }];
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
   });
 
   it("retries only bounded transient reads from GitHub", async () => {
