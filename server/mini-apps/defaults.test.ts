@@ -79,6 +79,12 @@ it("waits for one unambiguous ledger and connects it without creating unrelated 
   expect(connected.bindings[0]?.source.table).toBe("ledger_master");
   expect((await data.listDatasets("workspace-owner"))).toHaveLength(1);
   expect((await defaults.ensure(owner, input)).apps.find((entry) => entry.id === app.id)?.revision).toBe(2);
+  await first.run(`INSERT INTO ledger_master VALUES
+    ('Food', '2026-04-04', '-0.10', 'Card', 'Daily', 'CNY', 'First'),
+    ('Food', '2026-04-04', '-0.20', 'Card', 'Daily', 'RMB', 'Second'),
+    ('Food', '2026-04-04', '-10.00', 'Card', 'Daily', 'USD', 'Foreign')`, { connection: "bot", businessMutation: true });
+  const amounts = await apps.query(owner, app.id, { queryId: "outflow", expectedRevision: 2, parameters: { currencies: ["CNY", "RMB"] } });
+  expect(amounts.rows).toEqual([["CNY", "1", "-0.10"], ["RMB", "1", "-0.20"]]);
 });
 
 it("does not assign a report source when multiple producer Bots match", async () => {

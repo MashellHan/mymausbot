@@ -31,11 +31,12 @@ export function createBookkeepingPublish(input: {
   }
   const parameters: Record<string, MiniAppParameter> = {
     from: { type: "date", optional: true }, through: { type: "date", optional: true },
-    currency: { type: "text", optional: true }, category: { type: "text", optional: true },
+    currency: { type: "text", optional: true }, currencies: { type: "text", list: true, optional: true }, category: { type: "text", optional: true },
   };
   const filters: MiniAppFilter[] = [
     { field: "date", op: "gte", parameter: "from" }, { field: "date", op: "lte", parameter: "through" },
     { field: "currency", op: "eq", parameter: "currency" }, { field: "category", op: "eq", parameter: "category" },
+    { field: "currency", op: "in", parameter: "currencies" },
   ];
   const base = { parameters, filters, orderBy: [{ field: "currency", direction: "asc" as const }], pageSize: 100 };
   const aggregate = (groupBy: string[], extra: Partial<Extract<MiniAppNamedQuery, { kind: "aggregate" }>> = {}): MiniAppNamedQuery => ({
