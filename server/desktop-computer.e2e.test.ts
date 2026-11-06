@@ -24,40 +24,45 @@ describe("this computer belongs to the desktop app's own server", () => {
   let output = "";
   let child: ChildProcess | null = null;
   let base = "";
-  let caseLabel = "";
-  let startedAt = 0;
-  let phases: Array<{ name: string; atMs: number }> = [];
-  let serverPort: number | null = null;
-  let healthAttempts = 0;
-  let healthStatus: number | null = null;
-  let healthError: string | null = null;
-  let childError: Error | null = null;
-  let stdoutBytes = 0;
-  let stderrBytes = 0;
-  let lastOutputAtMs: number | null = null;
+  type CaseTrace = {
+    label: string;
+    startedAt: number;
+    phases: Array<{ name: string; atMs: number }>;
+    serverPort: number | null;
+    healthAttempts: number;
+    healthStatus: number | null;
+    healthError: string | null;
+    child: ChildProcess | null;
+    childError: Error | null;
+    stdoutBytes: number;
+    stderrBytes: number;
+    lastOutputAtMs: number | null;
+  };
+  let activeTrace: CaseTrace | null = null;
   const record = { mode: "embedded", status: "ready", socketPath: "", mcpCommand: "/fixture/cua-driver", mcpArgs: ["mcp"], mcpEnv: {} };
 
-  const mark = (name: string) => {
-    if (phases.length < 24) phases.push({ name, atMs: Math.round(performance.now() - startedAt) });
+  const active = (trace: CaseTrace) => activeTrace === trace;
+  const mark = (trace: CaseTrace, name: string) => {
+    if (active(trace) && trace.phases.length < 24) trace.phases.push({ name, atMs: Math.round(performance.now() - trace.startedAt) });
   };
-  const beginCase = (label: string) => {
-    caseLabel = label;
-    startedAt = performance.now();
-    phases = [];
-    serverPort = null;
-    healthAttempts = 0;
-    healthStatus = null;
-    healthError = null;
-    childError = null;
-    stdoutBytes = 0;
-    stderrBytes = 0;
-    lastOutputAtMs = null;
-    mark("case.begin");
+  const beginCase = (label: string): CaseTrace => {
+    const trace: CaseTrace = {
+      label, startedAt: performance.now(), phases: [], serverPort: null, healthAttempts: 0,
+      healthStatus: null, healthError: null, child: null, childError: null,
+      stdoutBytes: 0, stderrBytes: 0, lastOutputAtMs: null,
+    };
+    activeTrace = trace;
+    mark(trace, "case.begin");
+    return trace;
   };
-  const observed = async <T>(name: string, run: () => Promise<T>): Promise<T> => {
-    mark(`${name}.begin`);
+  const retire = (trace: CaseTrace) => { if (active(trace)) activeTrace = null; };
+  const updateOwned = (trace: CaseTrace, proc: ChildProcess, update: () => void) => {
+    if (active(trace) && trace.child === proc) update();
+  };
+  const observed = async <T>(trace: CaseTrace, name: string, run: () => Promise<T>): Promise<T> => {
+    mark(trace, `${name}.begin`);
     const value = await run();
-    mark(`${name}.done`);
+    mark(trace, `${name}.done`);
     return value;
   };
   const errorKind = (error: unknown) => {
@@ -66,12 +71,12 @@ describe("this computer belongs to the desktop app's own server", () => {
     const cause = (error as { cause?: { code?: unknown } }).cause?.code;
     return typeof direct === "string" ? direct : typeof cause === "string" ? cause : error.name;
   };
-  const failureState = () => ({
-    case: caseLabel, elapsedMs: Math.round(performance.now() - startedAt), phases,
-    serverPort, health: { attempts: healthAttempts, status: healthStatus, error: healthError },
-    child: { pid: child?.pid ?? null, live: Boolean(child && child.exitCode === null && child.signalCode === null && !childError),
-      exitCode: child?.exitCode ?? null, signalCode: child?.signalCode ?? null, error: childError && errorKind(childError),
-      stdoutBytes, stderrBytes, lastOutputAtMs },
+  const failureState = (trace: CaseTrace) => ({
+    case: trace.label, elapsedMs: Math.round(performance.now() - trace.startedAt), phases: trace.phases,
+    serverPort: trace.serverPort, health: { attempts: trace.healthAttempts, status: trace.healthStatus, error: trace.healthError },
+    child: { pid: trace.child?.pid ?? null, live: Boolean(trace.child && trace.child.exitCode === null && trace.child.signalCode === null && !trace.childError),
+      exitCode: trace.child?.exitCode ?? null, signalCode: trace.child?.signalCode ?? null, error: trace.childError && errorKind(trace.childError),
+      stdoutBytes: trace.stdoutBytes, stderrBytes: trace.stderrBytes, lastOutputAtMs: trace.lastOutputAtMs },
     files: { dump: Boolean(dumpFile && existsSync(dumpFile)), finish: Boolean(finishFile && existsSync(finishFile)) },
   });
 
@@ -114,8 +119,8 @@ describe("this computer belongs to the desktop app's own server", () => {
       .map((message) => String(message.tool?.name ?? message.text ?? ""));
 
   /** `desktop`: launched as the app launches its own server, hearing the driver record over the parent port. */
-  async function start(desktop: boolean, env: Record<string, string> = {}) {
-    mark("startup.configure");
+  async function start(trace: CaseTrace, desktop: boolean, env: Record<string, string> = {}) {
+    mark(trace, "startup.configure");
     data = mkdtempSync(join(home, "data-"));
     stateFile = join(data, "vm.json");
     dumpFile = join(data, "dump.json");
@@ -125,14 +130,15 @@ describe("this computer belongs to the desktop app's own server", () => {
       environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_DUMP: dumpFile,
         FAKE_CLAUDE_TEXT_DUMP: join(data, "text-dump.json"), FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile },
     } } }));
-    mark("startup.ports");
+    mark(trace, "startup.ports");
     const port = await freePortBlock([0, 1]);
-    serverPort = port;
+    if (active(trace)) trace.serverPort = port;
     base = `http://127.0.0.1:${port}`;
+    const healthUrl = `${base}/api/health`;
     output = "";
     const hooks = ["--import", pathToFileURL(join(ROOT, "server/testing/group-local-vm-hooks.mjs")).href,
       ...(desktop ? ["--import", pathToFileURL(join(ROOT, "server/testing/desktop-parent.mjs")).href] : [])];
-    mark("startup.spawn");
+    mark(trace, "startup.spawn");
     const proc = spawn(process.execPath, [...hooks, join(ROOT, "server/index.ts")], {
       cwd: ROOT, env: {
         PATH: dirname(process.execPath), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
@@ -147,22 +153,30 @@ describe("this computer belongs to the desktop app's own server", () => {
       }, stdio: ["ignore", "pipe", "pipe"],
     });
     child = proc;
-    proc.stdout!.on("data", chunk => { stdoutBytes += chunk.length; lastOutputAtMs = Math.round(performance.now() - startedAt); output += chunk; });
-    proc.stderr!.on("data", chunk => { stderrBytes += chunk.length; lastOutputAtMs = Math.round(performance.now() - startedAt); output += chunk; });
-    proc.on("error", error => { childError = error; });
-    mark("startup.health");
+    trace.child = proc;
+    proc.stdout!.on("data", chunk => updateOwned(trace, proc, () => {
+      trace.stdoutBytes += chunk.length;
+      trace.lastOutputAtMs = Math.round(performance.now() - trace.startedAt);
+      output += chunk;
+    }));
+    proc.stderr!.on("data", chunk => updateOwned(trace, proc, () => {
+      trace.stderrBytes += chunk.length;
+      trace.lastOutputAtMs = Math.round(performance.now() - trace.startedAt);
+      output += chunk;
+    }));
+    proc.on("error", error => updateOwned(trace, proc, () => { trace.childError = error; }));
+    mark(trace, "startup.health");
     await until(async () => {
-      if (childError) throw childError;
+      if (trace.childError) throw trace.childError;
       if (proc.exitCode !== null) throw new Error(`server exited during boot:\n${output}`);
-      healthAttempts++;
+      updateOwned(trace, proc, () => { trace.healthAttempts++; });
       try {
-        const response = await fetch(base + "/api/health");
-        healthStatus = response.status;
-        healthError = null;
+        const response = await fetch(healthUrl);
+        updateOwned(trace, proc, () => { trace.healthStatus = response.status; trace.healthError = null; });
         return response.ok;
-      } catch (error) { healthError = errorKind(error); return false; }
+      } catch (error) { updateOwned(trace, proc, () => { trace.healthError = errorKind(error); }); return false; }
     }, Boolean);
-    mark("startup.ready");
+    mark(trace, "startup.ready");
   }
   async function stop() {
     if (!child) return;
@@ -191,57 +205,84 @@ describe("this computer belongs to the desktop app's own server", () => {
   });
   afterEach(async ({ task }) => {
     const failed = task.result?.state === "fail";
-    const owned = child;
-    if (failed) console.error("desktop fixture failure " + JSON.stringify(failureState()));
+    const trace = activeTrace;
+    const owned = trace?.child ?? child;
+    if (failed && trace) console.error("desktop fixture failure " + JSON.stringify(failureState(trace)));
+    if (trace) retire(trace);
     await stop();
     resetTurn();
     if (failed) console.error("desktop fixture cleanup " + JSON.stringify({ complete: true, exitCode: owned?.exitCode ?? null, signalCode: owned?.signalCode ?? null }));
   });
 
   it("a server the app did not launch mounts no computer on Auto, though the app's record is on disk", async () => {
-    beginCase("non-app auto");
-    await start(false);
-    const { bot } = await observed("bot.create", () => apiOk("POST", "/api/bots", { name: "Second Server Bot" }));
-    const { task } = await observed("task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
+    const trace = beginCase("non-app auto");
+    await start(trace, false);
+    const { bot } = await observed(trace, "bot.create", () => apiOk("POST", "/api/bots", { name: "Second Server Bot" }));
+    const { task } = await observed(trace, "task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
     resetTurn();
-    mark("turn.reset");
-    await observed("turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Plan my week using my calendar.", threadId: task.threadId }));
-    const sent = await observed("dump.wait", dump);
+    mark(trace, "turn.reset");
+    await observed(trace, "turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Plan my week using my calendar.", threadId: task.threadId }));
+    const sent = await observed(trace, "dump.wait", dump);
     expect(sent.mcpConfig?.mcpServers?.computer).toBeUndefined();
     expect(JSON.stringify(sent)).not.toContain("/fixture/cua-driver");
     writeFileSync(finishFile, "finish");
-    mark("finish.released");
-    await observed("turn.idle", () => idle(bot.id, task.threadId));
+    mark(trace, "finish.released");
+    await observed(trace, "turn.idle", () => idle(bot.id, task.threadId));
   });
 
   it("a server the app did not launch refuses this computer even when the person picks it, in plain words", async () => {
-    beginCase("non-app refusal");
-    await start(false);
-    const { bot } = await observed("bot.create", () => apiOk("POST", "/api/bots", { name: "Second Server Pin Bot" }));
-    const { task } = await observed("task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
-    await observed("surface.set", () => apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" }));
+    const trace = beginCase("non-app refusal");
+    await start(trace, false);
+    const { bot } = await observed(trace, "bot.create", () => apiOk("POST", "/api/bots", { name: "Second Server Pin Bot" }));
+    const { task } = await observed(trace, "task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
+    await observed(trace, "surface.set", () => apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" }));
     resetTurn();
-    mark("turn.reset");
-    await observed("turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId }));
-    const failed = await observed("refusal.wait", () => until(() => rows(task.threadId), (lines) => lines.some((line) => line.includes(NOT_THE_APP))));
+    mark(trace, "turn.reset");
+    await observed(trace, "turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId }));
+    const failed = await observed(trace, "refusal.wait", () => until(() => rows(task.threadId), (lines) => lines.some((line) => line.includes(NOT_THE_APP))));
     expect(failed.join("\n")).not.toMatch(/CUA|Cua Driver|DevTools|descriptor/);
     expect(existsSync(dumpFile)).toBe(false);
-    await observed("turn.idle", () => idle(bot.id, task.threadId));
+    await observed(trace, "turn.idle", () => idle(bot.id, task.threadId));
   });
 
   itHost("the app's own server still uses this computer, from the record the app hands it", async () => {
-    beginCase("app-owned");
-    await start(true);
-    const { bot } = await observed("bot.create", () => apiOk("POST", "/api/bots", { name: "Desktop Server Bot" }));
-    const { task } = await observed("task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
-    await observed("surface.set", () => apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" }));
+    const trace = beginCase("app-owned");
+    await start(trace, true);
+    const { bot } = await observed(trace, "bot.create", () => apiOk("POST", "/api/bots", { name: "Desktop Server Bot" }));
+    const { task } = await observed(trace, "task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
+    await observed(trace, "surface.set", () => apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" }));
     resetTurn();
-    mark("turn.reset");
-    await observed("turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId }));
-    const sent = await observed("dump.wait", dump);
+    mark(trace, "turn.reset");
+    await observed(trace, "turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId }));
+    const sent = await observed(trace, "dump.wait", dump);
     expect(sent.mcpConfig.mcpServers.computer.env.OMB_CUA_COMMAND).toBe("/fixture/cua-driver");
     writeFileSync(finishFile, "finish");
-    mark("finish.released");
-    await observed("turn.idle", () => idle(bot.id, task.threadId));
+    mark(trace, "finish.released");
+    await observed(trace, "turn.idle", () => idle(bot.id, task.threadId));
+  });
+
+  it("retired diagnostic work cannot enter the next case", async () => {
+    stateFile = join(home, "trace-vm.json");
+    dumpFile = join(home, "trace-dump.json");
+    finishFile = join(home, "trace-finish");
+    const first = beginCase("first");
+    const oldChild = {} as ChildProcess;
+    first.child = oldChild;
+    let complete!: (value: string) => void;
+    const pending = observed(first, "dump.wait", () => new Promise<string>(resolve => { complete = resolve; }));
+    updateOwned(first, oldChild, () => { first.healthAttempts++; first.stdoutBytes += 5; });
+    retire(first);
+    const next = beginCase("next");
+    next.child = {} as ChildProcess;
+    mark(next, "task.wait");
+    const nextBefore = { phases: [...next.phases], healthAttempts: next.healthAttempts, stdoutBytes: next.stdoutBytes, stderrBytes: next.stderrBytes };
+    complete("done");
+    expect(await pending).toBe("done");
+    updateOwned(first, oldChild, () => { first.healthAttempts++; first.stdoutBytes += 7; });
+    updateOwned(next, oldChild, () => { next.stderrBytes++; });
+    expect(next).toMatchObject(nextBefore);
+    expect(first.phases.map(({ name }) => name)).toEqual(["case.begin", "dump.wait.begin"]);
+    expect(first.healthAttempts).toBe(1);
+    expect(first.stdoutBytes).toBe(5);
   });
 });
