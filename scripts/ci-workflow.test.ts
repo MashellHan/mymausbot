@@ -1,33 +1,23 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { EVALS_LANE, PACKAGED_SERVER_LANE, vitestLane } from "./ci-linux-lanes.mjs";
 import { SELECTABLE_JOBS, vitestMatrix } from "./ci-scope.mjs";
 import { interpolate } from "./testing/github-expression.ts";
+import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
 const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
 
-function runGate(needs: Record<string, unknown>) {
-  // Execute the actual gate, not a duplicate of its success/failure logic.
-  const command = workflow.jobs.gate.steps[0].run as string;
-  const script = command.match(/node --input-type=module -e '([\s\S]+)'/);
-  expect(script).not.toBeNull();
-  const check = spawnSync(process.execPath, ["--input-type=module", "-e", script![1]], {
-    env: { ...process.env, NEEDS: JSON.stringify(needs) },
-    encoding: "utf8",
-    timeout: 5_000,
-  });
-  expect(check.error).toBeUndefined();
-  return check;
+function runGate(state: ReturnType<typeof gateState>) {
+  return verifyGate(state.outputs, { deadlineMs: 0, api: async (path: string) => path.startsWith("/issues?") ? [] : { jobs: state.jobs } });
 }
 
-/** The gate's needs when static selected `selected`: each required job ran exactly when selected. */
-function gateNeeds(selected: string[]) {
+function gateState(selected: string[]) {
+  const required = requiredRuntimeJobs.filter((job) => selected.includes(job));
   return {
-    static: { result: "success", outputs: { jobs: JSON.stringify(selected) } },
-    ...Object.fromEntries(requiredRuntimeJobs.map((job) => [job, { result: selected.includes(job) ? "success" : "skipped" }])),
+    outputs: { expected_jobs: ["static", ...required].map((id) => ({ id, name: id })), required_jobs: required, qa_areas: ["global"], full_required: false, reduced: false },
+    jobs: ["static", ...requiredRuntimeJobs].map((name) => ({ name, run_attempt: 1, status: "completed", conclusion: name === "static" || required.includes(name) ? "success" : "skipped" })),
   };
 }
 
@@ -49,8 +39,8 @@ describe("CI concurrency", () => {
     );
   });
 
-  it("runs the full lane every night", () => {
-    expect(workflow.on.schedule).toEqual([{ cron: expect.stringMatching(/^\d+ \d+ \* \* \*$/) }]);
+  it("runs the full lane in both China daytime and evening slots", () => {
+    expect(workflow.on.schedule).toEqual([{ cron: "17 2,14 * * *" }]);
   });
 
   it("stops a closed PR's run by joining ci.yml's PR group", () => {
@@ -70,9 +60,10 @@ describe("CI concurrency", () => {
     expect(stop.permissions).toEqual({});
   });
 
-  it("allows cancelled summary jobs to stop without skipping failure reporting", () => {
+  it("creates the required check immediately so a new full request replaces old green evidence", () => {
     expect(workflow.jobs.gate.if).toBe("${{ !cancelled() }}");
-    expect(workflow.jobs.gate.needs).toEqual(["static", ...requiredRuntimeJobs]);
+    expect(workflow.jobs.gate.needs).toBeUndefined();
+    expect(workflow.jobs.gate.steps.some((step: { run?: string }) => step.run === "node scripts/qa/gate.mjs")).toBe(true);
   });
 
   it("schedules one read-only final gate over the selected platform matrix", () => {
@@ -173,11 +164,12 @@ describe("CI concurrency", () => {
     // ci-scope.mjs runs a push's docs- or version-only diff without the runtime
     // jobs only when the commit before it has its own green run, and a PR's
     // Windows jobs when it carries the windows label.
-    expect(workflow.jobs.static.permissions).toEqual({ contents: "read", actions: "read", "pull-requests": "read" });
+    expect(workflow.jobs.static.permissions).toEqual({ contents: "read", actions: "read", "pull-requests": "read", issues: "read" });
     const scope = workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope");
-    expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}", OMB_CI_LINUX_IN_STATIC: "${{ runner.environment == 'self-hosted' }}" });
+    expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}", MAUSBOT_CI_MODE: "${{ vars.MAUSBOT_CI_MODE }}", OMB_CI_LINUX_IN_STATIC: "${{ runner.environment == 'self-hosted' }}" });
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { permissions?: unknown }][]) {
-      if (name !== "static") expect(job.permissions, name).toBeUndefined();
+      if (name === "gate") expect(job.permissions).toEqual({ contents: "read", actions: "read", issues: "read", "pull-requests": "read" });
+      else if (name !== "static") expect(job.permissions, name).toBeUndefined();
     }
   });
 
@@ -190,15 +182,17 @@ describe("CI concurrency", () => {
     // The runner context exists only at step level, never in a job's env.
     expect(workflow.jobs.vitest.env).toBeUndefined();
     for (const step of [steps[tests]!, steps[report]!]) {
-      expect(step.env?.OMB_VITEST_RETRY_LOG).toBe("${{ runner.temp }}/vitest-retries.jsonl");
+      expect(step.env?.OMB_VITEST_RETRY_LOG).toBe("${{ github.workspace }}/qa-results/vitest-retries.jsonl");
     }
     expect(readFileSync(new URL("../vite.config.ts", import.meta.url), "utf8")).toContain('runner: "./scripts/testing/ci-retry-runner.ts"');
   });
 
-  it.each(requiredRuntimeJobs)("fails closed for every required %s outcome when selected", (job) => {
+  it.each(requiredRuntimeJobs)("fails closed for every required %s outcome when selected", async (job) => {
     for (const result of ["success", "failure", "cancelled", "skipped"]) {
-      const check = runGate({ ...gateNeeds(SELECTABLE_JOBS), [job]: { result } });
-      expect(check.status, check.stderr).toBe(result === "success" ? 0 : 1);
+      const state = gateState(SELECTABLE_JOBS);
+      state.jobs.find((item) => item.name === job)!.conclusion = result;
+      if (result === "success") await expect(runGate(state)).resolves.toBeUndefined();
+      else await expect(runGate(state)).rejects.toThrow("Required validation failed");
     }
   });
 
@@ -217,37 +211,50 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.vitest.needs).toBe("static");
   });
 
-  it.each(requiredRuntimeJobs)("accepts %s skipped only when static left it out", (job) => {
+  it.each(requiredRuntimeJobs)("allows an unselected %s to be skipped", async (job) => {
     const others = SELECTABLE_JOBS.filter((name) => name !== job);
-    expect(runGate(gateNeeds(others)).status).toBe(0);
-    for (const result of ["success", "failure", "cancelled"]) {
-      expect(runGate({ ...gateNeeds(others), [job]: { result } }).status).toBe(1);
-    }
+    await expect(runGate(gateState(others))).resolves.toBeUndefined();
   });
 
-  it("accepts every required job skipped on a docs-only PR, and nothing else", () => {
-    expect(runGate(gateNeeds([])).status).toBe(0);
-    for (const result of ["success", "failure", "cancelled"]) {
-      expect(runGate({ ...gateNeeds([]), vitest: { result } }).status).toBe(1);
-    }
+  it("accepts successful preflight when the selected plan has no runtime jobs", async () => {
+    await expect(runGate(gateState([]))).resolves.toBeUndefined();
   });
 
-  it("rejects failed preflight and missing or malformed selection", () => {
+  it("rejects failed preflight and missing or malformed selection", async () => {
     for (const result of ["failure", "cancelled", "skipped"]) {
-      expect(runGate({ ...gateNeeds([]), static: { result, outputs: { jobs: "[]" } } }).status).toBe(1);
+      const state = gateState([]);
+      state.jobs[0]!.conclusion = result;
+      await expect(runGate(state)).rejects.toThrow("Required validation failed");
     }
-    for (const jobs of ["", "yes", "true", "{}", "[1]", "null", '"vitest"']) {
-      expect(runGate({ ...gateNeeds([]), static: { result: "success", outputs: { jobs } } }).status, jobs).toBe(1);
+    for (const expected of [undefined, [], "yes", true, {}, [1], null]) {
+      const state = gateState([]);
+      Object.assign(state.outputs, { expected_jobs: expected });
+      await expect(runGate(state)).rejects.toThrow();
     }
-    expect(runGate({ ...gateNeeds([]), static: { result: "success", outputs: {} } }).status).toBe(1);
+  });
+
+  it("rejects a selected required job absent from the plan or observed execution", async () => {
+    const state = gateState(["vitest"]);
+    state.outputs.required_jobs.push("new-required-job");
+    await expect(runGate(state)).rejects.toThrow("Missing required validation plan");
+    const missing = gateState(["vitest"]);
+    missing.jobs = missing.jobs.filter((item) => item.name !== "vitest");
+    await expect(runGate(missing)).rejects.toThrow("Incomplete required validation");
   });
 
   it("always starts the workflow and validates selection and docs before fanout", () => {
-    expect(workflow.on.pull_request).toBeNull();
+    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened", "labeled", "unlabeled"]);
     expect(workflow.jobs.static.if).toBeUndefined();
     expect(workflow.jobs.static.steps[0].with["fetch-depth"]).toBe(0);
     expect(workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope").run).toBe("node scripts/ci-scope.mjs");
     expect(workflow.jobs.static.outputs).toEqual({
+      full_required: "${{ steps.scope.outputs.full_required }}",
+      required_jobs: "${{ steps.scope.outputs.required_jobs }}",
+      expected_jobs: "${{ steps.scope.outputs.expected_jobs }}",
+      reduced: "${{ steps.scope.outputs.reduced }}",
+      qa_areas: "${{ steps.scope.outputs.qa_areas }}",
+      repair_ids: "${{ steps.scope.outputs.repair_ids }}",
+      shadow: "${{ steps.scope.outputs.shadow }}",
       jobs: "${{ steps.scope.outputs.jobs }}",
       vitest_os: "${{ steps.scope.outputs.vitest_os }}",
       vitest_matrix: "${{ steps.scope.outputs.vitest_matrix }}",
@@ -261,16 +268,16 @@ describe("CI concurrency", () => {
       ["steps.scope.outputs.build == 'true'", "pnpm exec vite build"],
     ]);
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
-      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts",
+      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/qa/qa.test.ts",
     )).toBe(true);
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string }][]) {
-      if (["static", "gate"].includes(name)) continue;
+      if (["static", "gate", "shadow"].includes(name)) continue;
       // The one deploy job: after the control-plane checks, on main pushes only. It is
       // not part of the merge gate.
       if (name === "deploy-composio-broker") {
         expect(job.needs).toEqual(["control-plane"]);
         expect(job.if).toBe("github.event_name == 'push' && github.ref == 'refs/heads/main'");
-        expect(workflow.jobs.gate.needs).not.toContain(name);
+        expect(workflow.jobs.gate.needs).toBeUndefined();
         // Without the Cloudflare token the deploy is skipped with a warning, not failed:
         // every step after the token check waits on it.
         const [check, ...rest] = job.steps as { id?: string; if?: string; env?: Record<string, string>; run?: string }[];
@@ -291,7 +298,7 @@ describe("CI concurrency", () => {
       expect(job.if).toBe(`contains(needs.static.outputs.jobs, '"${name}"')`);
     }
     // ci-scope selects exactly the jobs the workflow has.
-    expect(Object.keys(workflow.jobs).filter((name) => !["static", "gate", "deploy-composio-broker"].includes(name)).sort())
+    expect(Object.keys(workflow.jobs).filter((name) => !["static", "gate", "shadow", "deploy-composio-broker"].includes(name)).sort())
       .toEqual([...SELECTABLE_JOBS].sort());
   });
 
@@ -364,7 +371,7 @@ describe("CI on Boat", () => {
     const boatOnly = steps.slice(steps.findIndex((step) => step.name === "production UI build") + 1);
     expect(boatOnly.map((step) => step.if)).toEqual([
       "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes",
-      "${{ !cancelled() && steps.scope.outputs.linux_lanes }}", "failure() && steps.scope.outputs.linux_lanes",
+      "${{ !cancelled() && steps.scope.outputs.linux_lanes }}", "failure() && steps.scope.outputs.linux_lanes", "always() && steps.scope.outputs.linux_lanes",
     ]);
     const lanes = boatOnly.find((step) => step.run === "node scripts/ci-linux-lanes.mjs")!;
     expect(lanes.env).toMatchObject({ OMB_CI_LINUX_LANES: "${{ steps.scope.outputs.linux_lanes }}", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" });
@@ -374,17 +381,17 @@ describe("CI on Boat", () => {
     const report = (workflow.jobs.vitest.steps as Step[]).find((step) => step.run === "node scripts/testing/ci-retry-summary.mjs")!;
     expect(boatOnly.find((step) => step.run === "node scripts/testing/ci-retry-summary.mjs")!.env).toEqual(report.env);
     const upload = (workflow.jobs["behavior-evals"].steps as Step[]).find((step) => step.uses?.startsWith("actions/upload-artifact@"))!;
-    expect(boatOnly.at(-1)).toEqual({ ...upload, if: "failure() && steps.scope.outputs.linux_lanes" });
+    expect(boatOnly.at(-2)).toEqual({ ...upload, if: "failure() && steps.scope.outputs.linux_lanes" });
   });
 
   it("runs on Boat exactly the commands the Linux jobs run on GitHub's runners", () => {
     const steps = (job: string) => workflow.jobs[job].steps as Step[];
     const work = (job: string) => steps(job).filter((step) => step.run && step.run !== "pnpm install --frozen-lockfile").map((step) => step.run);
     for (const entry of vitestMatrix(["ubuntu-latest"]).include.slice(0, 2)) {
-      const context = { matrix: entry, runner: { temp: "/t" } };
+      const context = { matrix: entry, runner: { temp: "/t" }, github: { workspace: "/w" } };
       const tests = steps("vitest").find((step) => step.name === "Run tests")!;
       const units = steps("vitest").find((step) => step.name === "Broker and Electron unit tests")!;
-      const lane = vitestLane(entry, "/t/vitest-retries.jsonl");
+      const lane = vitestLane(entry, "/w/qa-results/vitest-retries.jsonl");
       expect(lane.commands).toEqual([interpolate(tests.run!, context), ...(entry.node_tests ? [units.run] : [])]);
       expect(lane.env).toEqual(Object.fromEntries(Object.entries(tests.env!).map(([key, value]) => [key, interpolate(value, context)])));
     }

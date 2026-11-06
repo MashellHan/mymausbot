@@ -14,6 +14,7 @@ const {
 } = approvalModule;
 const REQUEST_ID = "123e4567-e89b-42d3-a456-426614174000";
 const REQUEST_ID_2 = "123e4567-e89b-42d3-a456-426614174001";
+const REQUEST_ID_3 = "123e4567-e89b-42d3-a456-426614174002";
 
 test("all-thread grants wait for committed thread modes and compensate the same scope on failure", async () => {
   for (const valid of [true, false]) {
@@ -110,6 +111,80 @@ function fakeProcess() {
   const messages = [];
   return { messages, postMessage: (message) => messages.push(message) };
 }
+
+test("default grants wait for the commit acknowledgement before returning the final bot", async () => {
+  for (const mode of ["full", "custom"]) {
+    for (const options of [{}, { threadId: "thread-1" }]) {
+      const proc = fakeProcess();
+      const coordinator = createTrustedApprovalModeCoordinator({ randomId: () => REQUEST_ID });
+      let settled = false;
+      const pending = coordinator.request(proc, "bot-1", mode, options).then(bot => { settled = true; return bot; });
+      const before = { id: "bot-1", approvalMode: mode, tasks: [{ threadId: "thread-1", approvalMode: "ask" }] };
+      coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID, ok: true, bot: before });
+      for (const phase of ["confirm", "activate", "finalize"]) coordinator.receive(proc, { type: `approval-trusted-mode-${phase}-result`, requestId: REQUEST_ID, ok: true });
+      await Promise.resolve();
+      assert.equal(settled, false, `${mode} must wait until the server commits`);
+      const after = { ...before, tasks: [{ threadId: "thread-1", approvalMode: options.threadId ? mode : "ask" }] };
+      coordinator.receive(proc, { type: "approval-trusted-mode-commit-result", requestId: REQUEST_ID, ok: true, bot: after });
+      assert.strictEqual(await pending, after);
+    }
+  }
+});
+
+test("default grant commit acknowledgements must match the bot and selected thread", async () => {
+  for (const mode of ["full", "custom"]) {
+    for (const invalid of ["bot", "default", "thread", "refused"]) {
+      const proc = fakeProcess();
+      const coordinator = createTrustedApprovalModeCoordinator({ randomId: idSequence(REQUEST_ID, REQUEST_ID_2, REQUEST_ID_3) });
+      const options = invalid === "thread" ? { threadId: "thread-1" } : {};
+      const pending = coordinator.request(proc, "bot-1", mode, options);
+      const bot = { id: "bot-1", approvalMode: mode, tasks: [{ threadId: "thread-1", approvalMode: "ask" }] };
+      coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID, ok: true, bot });
+      for (const phase of ["confirm", "activate", "finalize"]) coordinator.receive(proc, { type: `approval-trusted-mode-${phase}-result`, requestId: REQUEST_ID, ok: true });
+      coordinator.receive(proc, { type: "approval-trusted-mode-commit-result", requestId: REQUEST_ID, ok: invalid !== "refused",
+        bot: { ...bot, id: invalid === "bot" ? "bot-2" : bot.id, approvalMode: invalid === "default" ? "ask" : mode } });
+      assert.deepEqual(proc.messages.at(-1), { type: "approval-trusted-mode-set", requestId: REQUEST_ID_2, botId: "bot-1", mode: "ask" });
+      coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID_2, ok: true, bot: { ...bot, approvalMode: "ask" } });
+      if (options.threadId) {
+        await Promise.resolve();
+        assert.deepEqual(proc.messages.at(-1), { type: "approval-trusted-mode-set", requestId: REQUEST_ID_3, botId: "bot-1", mode: "ask", threadId: "thread-1", threadOnly: true });
+        coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID_3, ok: true, bot: { ...bot, approvalMode: "ask" } });
+      }
+      await assert.rejects(pending, /not committed/);
+    }
+  }
+});
+
+test("a lost default grant commit is revoked and a late acknowledgement cannot revive it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const proc = fakeProcess();
+  const coordinator = createTrustedApprovalModeCoordinator({ randomId: idSequence(REQUEST_ID, REQUEST_ID_2), timeoutMs: 100 });
+  const pending = coordinator.request(proc, "bot-1", "custom");
+  const bot = { id: "bot-1", approvalMode: "custom" };
+  coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID, ok: true, bot });
+  for (const phase of ["confirm", "activate", "finalize"]) coordinator.receive(proc, { type: `approval-trusted-mode-${phase}-result`, requestId: REQUEST_ID, ok: true });
+  t.mock.timers.tick(100);
+  assert.equal(proc.messages.at(-1).mode, "ask");
+  coordinator.receive(proc, { type: "approval-trusted-mode-commit-result", requestId: REQUEST_ID, ok: true, bot });
+  coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID_2, ok: true, bot: { ...bot, approvalMode: "ask" } });
+  await assert.rejects(pending, /did not answer/);
+});
+
+test("recovery from a targeted default grant does not overwrite a newer selection", async () => {
+  const proc = fakeProcess();
+  const coordinator = createTrustedApprovalModeCoordinator({ randomId: idSequence(REQUEST_ID, REQUEST_ID_2, REQUEST_ID_3) });
+  const pending = coordinator.request(proc, "bot-1", "full", { threadId: "thread-1" });
+  const bot = { id: "bot-1", approvalMode: "full", tasks: [{ threadId: "thread-1", approvalMode: "ask" }] };
+  coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID, ok: true, bot });
+  for (const phase of ["confirm", "activate", "finalize"]) coordinator.receive(proc, { type: `approval-trusted-mode-${phase}-result`, requestId: REQUEST_ID, ok: true });
+  coordinator.receive(proc, { type: "approval-trusted-mode-commit-result", requestId: REQUEST_ID, ok: false });
+  const newer = coordinator.request(proc, "bot-1", "auto");
+  coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID_2, ok: true, bot: { ...bot, approvalMode: "ask" } });
+  coordinator.receive(proc, { type: "approval-trusted-mode-result", requestId: REQUEST_ID_3, ok: true, bot: { ...bot, approvalMode: "auto" } });
+  await assert.rejects(pending, /not committed/);
+  assert.equal((await newer).approvalMode, "auto");
+  assert.equal(proc.messages.at(-1).mode, "auto");
+});
 
 test("confirmed model switches use only scoped Ask requests", () => {
   const selection = { instanceId: "claude", model: "sonnet" };
@@ -287,6 +362,7 @@ test("sends through one utility process and returns the matching server bot", as
     botId: "bot-1",
     mode: "custom",
   });
+  coordinator.receive(proc, { type: "approval-trusted-mode-commit-result", requestId: REQUEST_ID, ok: true, bot });
   assert.deepEqual(await pending, bot);
 });
 
@@ -344,7 +420,8 @@ test("another utility process cannot resolve a pending request", async () => {
   const proc = fakeProcess();
   const replacement = fakeProcess();
   const coordinator = createTrustedApprovalModeCoordinator({ randomId: () => REQUEST_ID, timeoutMs: 100 });
-  const pending = coordinator.request(proc, "bot-1", "full");
+  let settled = false;
+  const pending = coordinator.request(proc, "bot-1", "full").then(bot => { settled = true; return bot; });
   const result = {
     type: "approval-trusted-mode-result",
     requestId: REQUEST_ID,
@@ -384,6 +461,12 @@ test("another utility process cannot resolve a pending request", async () => {
     ok: true,
   }), true);
   assert.equal(proc.messages[4].type, "approval-trusted-mode-commit");
+  const committed = { ...result, type: "approval-trusted-mode-commit-result" };
+  coordinator.receive(replacement, committed);
+  coordinator.receive(proc, { ...committed, requestId: REQUEST_ID_2 });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  coordinator.receive(proc, committed);
   assert.equal((await pending).approvalMode, "full");
 });
 

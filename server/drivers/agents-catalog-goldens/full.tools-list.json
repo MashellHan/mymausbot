@@ -527,8 +527,149 @@
       }
     },
     {
+      "name": "mini_app_info",
+      "description": "Discover your granted local Mini Apps, or read an app's editable HTML, data bindings and versions with app_id. Check for an existing app before making a recurring dashboard/report. Set guide=true for the complete authoring and refresh contract. Local workspace only; read-only.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "guide": {
+            "type": "boolean"
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "mini_app_connect",
+      "description": "Connect this bot's existing local Data for reusable Mini Apps. Returns a stable datasetId and physical table schemas; bound Data survives bot deletion. Call once before first publishing. No arguments; cannot connect another bot's Data.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
+      "name": "mini_app_publish",
+      "description": "Create or update a persistent local Mini App in Computer > Mini Apps. Read mini_app_info with guide=true first. Pass app_id to update, publication with requestKey, expectedRevision, slug, title, description, self-contained html and declarative bindings. Data-only updates use Data tools and refresh automatically. Does not publish to the internet.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publication"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "publication": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "name": "mini_app_rollback",
+      "description": "Restore a granted Mini App's earlier templateVersion with its current expectedRevision and a new requestKey. Advances app revision; does not rewind business Data.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "app_id",
+          "requestKey",
+          "expectedRevision",
+          "templateVersion"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestKey": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "expectedRevision": {
+            "type": "integer"
+          },
+          "templateVersion": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "name": "mini_app_archive",
+      "description": "Archive a granted local Mini App when requested. Hides it from the active library; keeps its immutable templates and bound Data. Requires the current revision and a new requestKey.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "app_id",
+          "requestKey",
+          "expectedRevision"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestKey": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "expectedRevision": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "name": "mini_app_report",
+      "description": "Prepare this bot's retained report Data and an install draft, or publish one immutable X AI/GitHub edition. Prepare takes action and kind only. Publish also takes edition with editionKey for interactive/backfill work; an Automation uses its original scheduled China day. Same key and content replay, different content conflicts. Source URLs are recorded data, never fetched by this tool.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "kind"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "prepare",
+              "publish"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "x_ai_digest",
+              "github_activity"
+            ]
+          },
+          "edition": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
       "name": "post_to_room",
-      "description": "Put one message into a shared room you belong to, for example when the user asks you to tell the team something. Get group_id from list_rooms. This posts and returns: no room member's turn starts, nobody replies, and nothing comes back except confirmation — so never use it to ask a question or hand out work (use coordinate_bots for those). Post once, say it in full, and tell the user what you posted. Set attach_voice_note true to attach this turn's voice note. If a post is refused, do not retry it: say what you wanted to post in your reply instead.",
+      "description": "Put one message into a shared room you belong to, for example when the user asks you to tell the team something. Get group_id from list_rooms. This posts and returns: no room member's turn starts, nobody replies, and nothing comes back except confirmation — so never use it to ask a question or hand out work (use coordinate_bots for those). Post once, say it in full, and tell the user what you posted. Set attach_voice_note true to attach this turn's voice note. If a post is refused, do not retry it unless the refusal says how: say what you wanted to post in your reply instead.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
@@ -544,6 +685,13 @@
           "attach_voice_note": {
             "type": "boolean",
             "description": "True to attach this turn's send_voice_note recording; the message is its caption. Call send_voice_note first."
+          },
+          "mention_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ids of the bots a shared @name in message means."
           }
         },
         "required": [
@@ -805,7 +953,7 @@
     },
     {
       "name": "request_credential",
-      "description": "Ask the person for a secret on a secure card in the app or a QR-paired phone, never in chat. credential_id: a key OpenMausBot keeps (onePasswordToken: a 1Password service account token). Other secrets: label, reason, delivery. You never see the value; end the turn, and you resume when they save or decline.",
+      "description": "Ask the person for a secret on a secure card in the app or a QR-paired phone, never in chat. credential_id: a key OpenMausBot keeps (onePasswordToken: a 1Password service account token; email: a mailbox on any mail host, one card for its address and password). Other secrets: label, reason, delivery. You never see the value; end the turn, and you resume when they save or decline.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -829,8 +977,13 @@
               "groqApiKey",
               "greenferenceApiKey",
               "metaApiKey",
-              "deepseekApiKey"
+              "deepseekApiKey",
+              "email"
             ]
+          },
+          "address": {
+            "type": "string",
+            "description": "credential_id email only: the mailbox's address, when you know it."
           },
           "label": {
             "type": "string",

@@ -287,11 +287,12 @@ export async function loadPlanUsage(input: {
   timeoutMs?: number;
 }): Promise<PlanUsageReport> {
   const now = input.now ?? Date.now();
-  const key = planUsageCacheKey(input.accounts);
+  const accounts = input.accounts.filter((account) => account.driver !== "claude");
+  const key = planUsageCacheKey(accounts);
   if (!input.refresh && cachedReport && cachedReport.key === key && now - cachedReport.at < PLAN_USAGE_CACHE_MS) {
     return cachedReport.report;
   }
-  const report = await fetchPlanUsage(input.accounts, {
+  const report = await fetchPlanUsage(accounts, {
     fetch: input.fetch ?? ((url, init) => globalThis.fetch(url, init)),
     credentials: input.credentials ?? defaultCredentialReader(input.env),
     now: () => now,
