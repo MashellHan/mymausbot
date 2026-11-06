@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { routineReportPublicationPrompt, routineReportTurnPrompt, type RoutineReportPublicationContext } from "./routine-report-publication.ts";
+import { dispatchRoutineReportTurn, routineReportPublicationPrompt, routineReportTurnPrompt, type RoutineReportPublicationContext, type RoutineReportTurnContext } from "./routine-report-publication.ts";
 
 const original = '[Scheduled routine "Daily report" — do this now:]\nTrigger id: report-routine\nCollect the report and reply.';
 
 function context(): RoutineReportPublicationContext {
   return {
-    run: { routineId: "report-routine", botId: "producer", target: "bot", runOn: "maus", status: "running", triggerSource: "schedule" },
+    run: { id: "run-1", routineId: "report-routine", botId: "producer", target: "bot", runOn: "maus", status: "running", triggerSource: "schedule" },
     routine: { id: "report-routine", name: "X 每日 AI 动态", prompt: "Collect the report and reply.", botId: "producer",
       target: "bot", runOn: "maus", enabled: true },
     bot: { id: "producer", toolScope: { allow: ["mcp:agents:mini_app_report"] } },
@@ -60,6 +60,8 @@ describe("installed report reminder for a local Routine turn", () => {
     const wrongBot = context(); wrongBot.bot!.id = "another-bot";
     const missingBot = context(); missingBot.bot = null;
     const readOnly = context(); readOnly.writeAllowed = false;
+    const readOnlyRun = context(); readOnlyRun.run!.access = "read-and-draft";
+    const readOnlyRoutine = context(); readOnlyRoutine.routine!.access = "read-and-draft";
     const webhook = context(); webhook.run!.triggerSource = "webhook";
     const appEvent = context(); appEvent.run!.eventSource = "app";
     const denied = context(); denied.bot!.toolScope = { deny: ["mcp:agents:mini_app_report"] };
@@ -67,7 +69,7 @@ describe("installed report reminder for a local Routine turn", () => {
     const explicit = context(); explicit.routine!.prompt = "Use mini_app_report for x_ai_digest.";
     const unrelated = context(); unrelated.routine!.name = "Check my inbox";
     for (const input of [nonlocal, cloud, cloudRoutine, room, roomRoutine, disabled, deleted, waiting, differentRun,
-      wrongProducer, wrongBot, missingBot, readOnly, webhook, appEvent, denied, otherTool, explicit, unrelated]) {
+      wrongProducer, wrongBot, missingBot, readOnly, readOnlyRun, readOnlyRoutine, webhook, appEvent, denied, otherTool, explicit, unrelated]) {
       expect(routineReportPublicationPrompt(original, input)).toBe(original);
     }
   });
@@ -76,10 +78,14 @@ describe("installed report reminder for a local Routine turn", () => {
     const input = context();
     const reportAppsForBot = vi.fn(async () => input.apps);
     const routines = { runForThread: vi.fn(() => input.run), listRoutines: vi.fn(() => [input.routine!]) };
-    const current = { routines, bot: input.bot, reportAppsForBot, localEnabled: true, writeAllowed: true };
+    const current = { routines, botForId: () => input.bot, reportAppsForBot,
+      localEnabled: () => true, writeAllowed: () => true, stopped: () => false };
     const added = await routineReportTurnPrompt(original, "producer", "run-thread", current);
     expect(added).toContain('kind "x_ai_digest"');
     expect(reportAppsForBot).toHaveBeenCalledExactlyOnceWith("producer");
+    const startTurn = vi.fn(async (_prompt: string) => {});
+    await dispatchRoutineReportTurn(original, "producer", "run-thread", current, startTurn);
+    expect(startTurn).toHaveBeenCalledExactlyOnceWith(added);
     input.apps = [{ ...input.apps[0]!, reportBoundToProducer: false }];
     expect(await routineReportTurnPrompt(original, "producer", "run-thread", current)).toBe(original);
     input.apps = [{ ...input.apps[0]!, reportBoundToProducer: true }];
@@ -91,5 +97,50 @@ describe("installed report reminder for a local Routine turn", () => {
     reportAppsForBot.mockClear();
     expect(await routineReportTurnPrompt(original, "another-bot", "run-thread", current)).toBe(original);
     expect(reportAppsForBot).not.toHaveBeenCalled();
+  });
+
+  it("does not start a cancelled, replaced or shut-down run after report lookup resolves", async () => {
+    for (const change of ["cancel", "replace", "shutdown"] as const) {
+      const input = context();
+      let stopped = false;
+      let resolveApps!: (apps: RoutineReportPublicationContext["apps"]) => void;
+      const reportAppsForBot = vi.fn(() => new Promise<RoutineReportPublicationContext["apps"]>((resolve) => { resolveApps = resolve; }));
+      const current: RoutineReportTurnContext = {
+        routines: { runForThread: () => input.run ? { ...input.run } : null, listRoutines: () => [{ ...input.routine! }] },
+        botForId: () => input.bot ? { ...input.bot } : null, reportAppsForBot,
+        localEnabled: () => true, writeAllowed: () => true, stopped: () => stopped,
+      };
+      const startTurn = vi.fn(async (_prompt: string) => {});
+      const pending = dispatchRoutineReportTurn(original, "producer", "run-thread", current, startTurn);
+      expect(reportAppsForBot, change).toHaveBeenCalledExactlyOnceWith("producer");
+      if (change === "cancel") input.run!.status = "cancelled";
+      if (change === "replace") input.run!.id = "run-2";
+      if (change === "shutdown") stopped = true;
+      resolveApps(input.apps);
+      await pending;
+      expect(startTurn, change).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rechecks the current run, routine, bot and write fence after the lookup", async () => {
+    for (const change of ["run-fence", "routine-fence", "scope-revoked", "write-fence"] as const) {
+      const input = context();
+      let writeAllowed = true;
+      let resolveApps!: (apps: RoutineReportPublicationContext["apps"]) => void;
+      const reportAppsForBot = vi.fn(() => new Promise<RoutineReportPublicationContext["apps"]>((resolve) => { resolveApps = resolve; }));
+      const current: RoutineReportTurnContext = {
+        routines: { runForThread: () => input.run ? { ...input.run } : null, listRoutines: () => [{ ...input.routine! }] },
+        botForId: () => input.bot ? { ...input.bot } : null, reportAppsForBot,
+        localEnabled: () => true, writeAllowed: () => writeAllowed, stopped: () => false,
+      };
+      const pending = routineReportTurnPrompt(original, "producer", "run-thread", current);
+      expect(reportAppsForBot, change).toHaveBeenCalledOnce();
+      if (change === "run-fence") input.run!.access = "read-and-draft";
+      if (change === "routine-fence") input.routine!.access = "read-and-draft";
+      if (change === "scope-revoked") input.bot!.toolScope = { deny: ["mcp:agents:mini_app_report"] };
+      if (change === "write-fence") writeAllowed = false;
+      resolveApps(input.apps);
+      expect(await pending, change).toBe(original);
+    }
   });
 });
