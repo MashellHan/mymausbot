@@ -101,7 +101,11 @@ async function metadataInteractions(window) {
   })()`);
   assert.deepEqual(installed.publisherBotIds, []);
   await open(window, "?locale=en&skin=midnight");
-  await click(window, `[data-testid=mini-apps-panel] [role=tab][data-app-id="${installed.id}"]`);
+  await evaluate(window, `(() => {
+    const tab = document.querySelector('[data-testid=mini-apps-panel] [role=tab][data-app-id="${installed.id}"]');
+    if (tab.getAttribute('aria-selected') !== 'true') tab.click();
+    return true;
+  })()`);
   await until(() => evaluate(window, `(() => {
     const frame = document.querySelector('[data-testid=mini-apps-panel] iframe');
     return frame?.srcdoc.includes('fixture-note') && frame.sandbox.contains('allow-scripts')
