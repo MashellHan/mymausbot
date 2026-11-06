@@ -11,16 +11,17 @@ import { appDocRefs } from "../message-db.ts";
 import type { json as sendJson } from "../harness/http.ts";
 import { MINI_APP_TOOL_ROUTES } from "../drivers/agents-mini-app-tools.ts";
 import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "../mini-apps/registry.ts";
-import { appFailure } from "../mini-apps/validation.ts";
+import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
 import { ReportStore } from "../mini-apps/report-store.ts";
 import { parseReportTool, reportKindSchema } from "../mini-apps/report-schema.ts";
+import { localDashboardProviders, type LocalDashboardProviders } from "./local-dashboard.ts";
 import type { RoutineManager } from "../routines.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
 const ROOT = "/api/mini-apps";
 const REPORT_SOURCE = `${ROOT}/report-source`;
-const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|publish|rollback|archive))?$/;
+const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive))?$/;
 const SOURCE = z.object({ botId: z.string().regex(/^[\w-]{1,128}$/) }).strict();
 const INTERNAL_ID = z.object({ app_id: z.uuid() }).strict();
 const CONNECT = z.object({}).strict();
@@ -41,11 +42,13 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   store: Parameters<typeof createChatApps>[0]["store"];
   dataDir: string;
   validPublisher(id: string): boolean;
+  dashboardProviders?: LocalDashboardProviders;
 }) {
-  const { store, dataDir, validPublisher, ...shared } = input;
+  const { store, dataDir, validPublisher, dashboardProviders, ...shared } = input;
   const chatApps = createChatApps({ store, dataDir,
     references: () => [...appDocRefs(), ...miniAppDocRefs()] });
-  const deps = { ...shared, apps: new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher }),
+  const deps = { ...shared, apps: new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
+    dashboardProviders: dashboardProviders ?? localDashboardProviders }),
     reports: new ReportStore(shared.data, createReportTemplate) };
   return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps) };
 }
@@ -139,6 +142,7 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       if (method === "GET" && !action) return json(res, 200, deps.apps.document(owner, id));
       if (method === "GET" && action === "state") return json(res, 200, await deps.apps.state(owner, id));
       if (method !== "POST") throw appFailure(405, "Method not allowed.");
+      if (action === "dashboard") return json(res, 200, await deps.apps.dashboardRead(owner, id, await readBody(req, 4096)));
       const body: unknown = await readBody(req, action === "publish" ? 900_000 : 20_000);
       if (action === "query") return json(res, 200, await deps.apps.query(owner, id, body));
       if (action === "publish") return json(res, 200, await deps.apps.publish(owner, body, id));
@@ -185,7 +189,8 @@ export function createMiniAppsInternalRoutes(deps: MiniAppRouteDeps) {
       if (name === "mini_app_info") {
         const info = z.object({ app_id: z.uuid().optional(), guide: z.boolean().optional() }).strict().safeParse(raw);
         if (!info.success) throw appFailure(400, "mini_app_info takes an optional app_id and guide.");
-        const result = info.data.app_id ? deps.apps.document(actor, info.data.app_id) : { apps: deps.apps.list(actor) };
+        const result = info.data.app_id ? deps.apps.document(actor, info.data.app_id)
+          : { apps: deps.apps.list(actor), dashboards: deps.apps.dashboardCatalog(actor) };
         return ctx.json(ctx.res, 200, { ...result, ...(info.data.guide ? { guide: MINI_APP_AUTHOR_GUIDE } : {}) });
       }
       if (name === "mini_app_connect") {
@@ -212,10 +217,10 @@ export function createMiniAppsInternalRoutes(deps: MiniAppRouteDeps) {
       if (name === "mini_app_publish") {
         const body = z.object({ app_id: z.uuid().optional(), publication: z.unknown() }).strict().safeParse(raw);
         if (!body.success || body.data.publication === undefined) throw appFailure(400, "mini_app_publish takes publication and optionally app_id.");
-        const own = await deps.data.promoteForBot(ctx.botId, MINI_APPS_OWNER);
-        ownDataset = own.datasetId;
+        const publication = parsePublish(body.data.publication);
+        if (publication.bindings.length) ownDataset = (await deps.data.promoteForBot(ctx.botId, MINI_APPS_OWNER)).datasetId;
         assertActive();
-        return ctx.json(ctx.res, 200, await deps.apps.publish(actor, body.data.publication, body.data.app_id));
+        return ctx.json(ctx.res, 200, await deps.apps.publish(actor, publication, body.data.app_id));
       }
       const body = INTERNAL_ID.extend({ requestKey: z.string(), expectedRevision: z.number(), ...(name === "mini_app_rollback" ? { templateVersion: z.number() } : {}) }).safeParse(raw);
       if (!body.success) throw appFailure(400, "Pass app_id, requestKey and expectedRevision, and the templateVersion for rollback.");

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { MiniAppPublish, MiniAppQuery } from "../../shared/mini-apps.ts";
+import type { MiniAppDashboardRead, MiniAppPublish, MiniAppQuery } from "../../shared/mini-apps.ts";
 
 const name = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/);
 const sourceName = z.string().min(1).max(200).refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32));
@@ -42,6 +42,7 @@ export const publishSchema = z.object({
   title: z.string().trim().min(1).max(120), description: z.string().trim().max(1000),
   html: z.string().min(1).max(512 * 1024), bindings: z.array(binding).max(16),
   publisherBotIds: z.array(z.string().regex(/^[\w-]{1,128}$/)).max(32).optional(),
+  dashboardKind: z.enum(["agent-team", "usage"]).nullable().optional(),
 }).strict();
 export const rollbackSchema = z.object({ ...mutationKey, templateVersion: z.number().int().positive() }).strict();
 export const archiveSchema = z.object(mutationKey).strict();
@@ -49,6 +50,13 @@ export const querySchema = z.object({
   queryId: name, parameters: z.record(name, z.union([z.string().max(500), z.array(z.string().max(500)).min(1).max(50)])),
   expectedRevision: z.number().int().positive(), expectedDataRevision: z.number().int().nonnegative().optional(), cursor: z.string().max(4096).optional(),
 }).strict();
+const dashboardRevision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER - 1);
+export const dashboardReadSchema = z.discriminatedUnion("resource", [
+  z.object({ resource: z.literal("teams"), expectedRevision: dashboardRevision }).strict(),
+  z.object({ resource: z.literal("activity"), expectedRevision: dashboardRevision,
+    agentId: z.string().regex(/^w\d+:p\d+$/) }).strict(),
+  z.object({ resource: z.literal("usage"), expectedRevision: dashboardRevision }).strict(),
+]);
 
 export function appFailure(status: number, message: string): Error & { status: number } {
   return Object.assign(new Error(message), { status });
@@ -68,5 +76,11 @@ export function parsePublish(raw: unknown): MiniAppPublish {
 export function parseQuery(raw: unknown): MiniAppQuery {
   const parsed = querySchema.safeParse(raw);
   if (!parsed.success) throw appFailure(400, "Invalid Mini App named query.");
+  return parsed.data;
+}
+
+export function parseDashboardRead(raw: unknown): MiniAppDashboardRead {
+  const parsed = dashboardReadSchema.safeParse(raw);
+  if (!parsed.success) throw appFailure(400, "Invalid Mini App dashboard read.");
   return parsed.data;
 }
