@@ -368,6 +368,54 @@ def repositories(config):
         self.assertEqual(result, [{"path": str(repository), "cwd": str(unrelated.resolve()),
                                    "home": str(home), "pythonPath": None}])
 
+    def test_detached_child_keeps_refresh_lock_after_collection_timeout(self):
+        collector = self.root / "collector.py"
+        collector.write_text('''import subprocess
+import sys
+from pathlib import Path
+class Classifier:
+    def classify(self, cwd, context=None):
+        return "unclassified"
+def instant(value):
+    return value
+def run(args, timeout=35):
+    raise AssertionError("No external command is expected")
+def collect(config, device, at=None, history_days=30):
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True)
+    Path(config["home"]).joinpath("detached.pid").write_text(str(child.pid))
+    child.wait(timeout=30)
+def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_days=30):
+    lock = Path(config["storageDir"]) / ".refresh.lock"
+    lock.mkdir()
+    try:
+        collect(config, "fixture", history_days=history_days)
+    finally:
+        lock.rmdir()
+''')
+        pid_file = self.root / "detached.pid"
+        lock = self.root / ".refresh.lock"
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER],
+                  "storageDir": str(self.root), "home": str(self.root), "repoRoots": [],
+                  "githubProfiles": [{"host": "github.com"}]}
+        try:
+            with patch.object(usage, "LOCAL_COLLECT_TIMEOUT", 6), patch.object(usage.local_usage_merged, "refresh") as remote:
+                with self.assertRaises(OSError):
+                    usage.refresh(collector, config, self.root, skip_api=True)
+                remote.assert_called_once()
+            self.assertTrue((lock / ".detached-child-unverified").is_dir())
+            pid = int(pid_file.read_text())
+            self.assertEqual(os.getpgid(pid), pid)
+        finally:
+            if pid_file.exists():
+                pid = int(pid_file.read_text())
+                try:
+                    if os.getpgid(pid) == pid:
+                        os.killpg(pid, usage.signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -93,7 +93,7 @@ def _run_worker(request, timeout):
             print("usage stage=local-collect cleanup-failed lock-retained", file=sys.stderr, flush=True)
             os._exit(1)
         if isinstance(error, subprocess.TimeoutExpired):
-            print("usage stage=local-collect timeout child-reaped", file=sys.stderr, flush=True)
+            print("usage stage=local-collect timeout worker-reaped", file=sys.stderr, flush=True)
             raise subprocess.TimeoutExpired("local activity collection", timeout) from None
         raise
     if process.returncode:
@@ -119,8 +119,18 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
             errors.append({"source": "repositories", "rootIndex": index, "code": type(error).__name__})
             print(f"usage stage=repository root={index} unavailable", file=sys.stderr, flush=True)
     print("usage stage=local-records begin", file=sys.stderr, flush=True)
-    result = _run_worker({**request, "stage": "collect", "repositories": repositories,
-                          "failedRoots": failed_roots}, max(0, deadline - time.monotonic()))
+    try:
+        result = _run_worker({**request, "stage": "collect", "repositories": repositories,
+                              "failedRoots": failed_roots}, max(0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        lock = Path(config["storageDir"]).expanduser() / ".refresh.lock"
+        try:
+            (lock / ".detached-child-unverified").mkdir(exist_ok=True)
+        except OSError:
+            print("usage stage=local-collect timeout lock-marker-failed", file=sys.stderr, flush=True)
+            os._exit(1)
+        print("usage stage=local-collect timeout lock-retained", file=sys.stderr, flush=True)
+        raise RuntimeError("Local activity worker cleanup is unverified") from None
     if errors or result.get("errors"):
         collector = load_collector(collector_path)
         previous = collector.read_json(Path(config["storageDir"]).expanduser() / "machines" / (device + ".json"), {})
