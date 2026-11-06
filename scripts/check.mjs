@@ -65,7 +65,7 @@ function main() {
   };
   writeFileSync(join(directory, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
   console.log(`Validation receipt: ${directory}/receipt.json`);
-  console.log(`Merge evidence: ${plan.full ? "full CI required" : plan.scope.checks.join(", ")}; normal push hooks and independent review still apply.`);
+  console.log(`Local validation: ${files.length} selected test files; ordinary PR CI runs the Ubuntu core and bounded affected tests, with full validation after integration and on the daily/release lanes. Normal push hooks and independent review still apply.`);
   if (!inputsStable) console.error("Source inputs changed during validation; this receipt cannot mark the current source ready.");
   process.exitCode = inputsStable ? result.status ?? 1 : 1;
 }

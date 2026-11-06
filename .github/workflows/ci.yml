@@ -1,11 +1,11 @@
 # Boat (https://docs.boat.dev/ci): while the repository variable BOAT_CI is "on", a run from this repository's own
-# branches (a push to main, a pull request, a merge group) that the repository owner both authored and started does its
+# branches (a push to main or a merge group) that the repository owner both authored and started does its
 # Linux work on one 16 vCPU Boat VM, one Boat start per run: the static job runs on boat-xlarge and, after its checks,
 # runs the Linux vitest shards, behavior evals and the Linux packaged server smoke side by side
 # (scripts/ci-linux-lanes.mjs) instead of as GitHub-hosted jobs. Boat runs a public repository's job only for the users
 # on its allow-list (`boat ci public`) and fails any other at once, so every other run, a fork's, the nightly and manual
 # runs (the release lane among them), and every run while BOAT_CI is anything else run on GitHub's runners exactly as
-# before. `boat ci` and the dashboard's CI on Boat VMs tab list the Boat jobs (docs/ci.md).
+# before. Pull requests use the hosted Ubuntu fast path. `boat ci` and the dashboard's CI on Boat VMs tab list the Boat jobs (docs/ci.md).
 name: CI
 
 on:
@@ -24,7 +24,7 @@ on:
   # The full lane every night on main's newest commit: every platform's shards
   # and smokes, which pushes to main and merge groups leave out (docs/ci.md).
   schedule:
-    - cron: "17 2,14 * * *"
+    - cron: "0 21 * * *"
 
 # least privilege: CI only reads the checkout, it never writes back
 permissions:
@@ -51,18 +51,18 @@ jobs:
   # aggregates the required jobs (see docs/ci.md for ruleset migration).
   static:
     name: >-
-      ${{ vars.BOAT_CI == 'on' && contains(fromJSON('["push", "pull_request", "merge_group"]'), github.event_name)
+      ${{ vars.BOAT_CI == 'on' && contains(fromJSON('["push", "merge_group"]'), github.event_name)
       && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
       && github.event.pull_request.user.login == github.repository_owner)
       && 'typecheck + lint + Linux tests (Boat)' || 'typecheck + lint' }}
     runs-on: >-
-      ${{ vars.BOAT_CI == 'on' && contains(fromJSON('["push", "pull_request", "merge_group"]'), github.event_name)
+      ${{ vars.BOAT_CI == 'on' && contains(fromJSON('["push", "merge_group"]'), github.event_name)
       && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
       && github.event.pull_request.user.login == github.repository_owner)
       && 'boat-xlarge' || 'ubuntu-latest' }}
-    timeout-minutes: ${{ vars.BOAT_CI == 'on' && 45 || 15 }}
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 15 || vars.BOAT_CI == 'on' && 45 || 15 }}
     permissions:
       contents: read
       # ci-scope reads whether the commit before a push got its own green run,
@@ -83,6 +83,9 @@ jobs:
       qa_areas: ${{ steps.scope.outputs.qa_areas }}
       repair_ids: ${{ steps.scope.outputs.repair_ids }}
       shadow: ${{ steps.scope.outputs.shadow }}
+      fast_pr: ${{ steps.scope.outputs.fast_pr }}
+      fast_files: ${{ steps.scope.outputs.fast_files }}
+      deferred_files: ${{ steps.scope.outputs.deferred_files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,14 +108,14 @@ jobs:
           MAUSBOT_CI_MODE: ${{ vars.MAUSBOT_CI_MODE }}
           OMB_CI_LINUX_IN_STATIC: ${{ runner.environment == 'self-hosted' }}
         run: node scripts/ci-scope.mjs
-      - run: pnpm install --frozen-lockfile
-      - name: Verify CI selection and documentation references
-        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/qa/qa.test.ts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: qa-plan-attempt-${{ github.run_attempt }}
           path: qa-plan.json
           retention-days: 7
+      - run: pnpm install --frozen-lockfile
+      - name: Verify CI selection and documentation references
+        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/qa/qa.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
       - run: pnpm lint
@@ -120,14 +123,28 @@ jobs:
         # The tests that only read the source: seconds here, and they stay in the shards. On Nov 3-4 2026 one of them was
         # red on main for 11 hours, and each PR heard about it after about 70 minutes, once its shards had found a runner.
         run: pnpm exec vitest run src/locales/ scripts/testing/file-size-ratchet.test.ts scripts/testing/index-route-ratchet.test.ts scripts/testing/tighten-ratchets.test.ts scripts/testing/comment-history.test.ts scripts/testing/lazy-server-modules.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/host-e2e.test.ts scripts/testing/ci-retry-list.test.ts src/lib/copy-text.guard.test.ts src/components/Select.guard.test.ts --reporter=default --reporter=github-actions
+      - name: Security, data and dispatch core with bounded affected tests
+        if: steps.scope.outputs.fast_pr == 'true'
+        env:
+          OMB_VITEST_E2E: all
+          OMB_VITEST_WORKERS: 4
+          OMB_VITEST_SUBSET: ${{ steps.scope.outputs.fast_files }}
+        run: pnpm exec vitest run ${{ steps.scope.outputs.fast_files }} --reporter=default --reporter=github-actions --reporter=json --outputFile.json=qa-results/vitest.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.scope.outputs.fast_pr == 'true'
+        with:
+          name: qa-results-fast-attempt-${{ github.run_attempt }}
+          path: qa-results/
+          if-no-files-found: warn
+          retention-days: 7
       # A pull request that changes only docs, tests under scripts/ or the
       # control plane cannot change what these three check.
       - if: steps.scope.outputs.build == 'true'
         run: pnpm typecheck
-      - if: steps.scope.outputs.build == 'true'
+      - if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'
         run: pnpm check:electron
       - name: production UI build
-        if: steps.scope.outputs.build == 'true'
+        if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'
         run: pnpm exec vite build
       # The rest runs only on a Boat VM, where ci-scope moved the Linux jobs' work into this job.
       - name: Remove what Boat installs and GitHub's runners lack
@@ -193,6 +210,7 @@ jobs:
     # the same --shard and OMB_VITEST_E2E reproduce it locally.
     name: vitest (${{ matrix.os }}, ${{ matrix.part }})
     strategy:
+      max-parallel: 4
       fail-fast: false
       matrix: ${{ fromJSON(needs.static.outputs.vitest_matrix) }}
     runs-on: ${{ matrix.os }}
