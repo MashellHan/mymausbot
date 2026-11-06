@@ -1,21 +1,36 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { expectedJobs, inspectJobs, eligibleRun, holdsFor, triageOf } from "./contracts.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, WINDOWS_OS } from "../ci-scope.mjs";
+import { executionComplete, expectedJobs, fullPushPlan, inspectJobs, eligibleRun, holdsFor, MERGE_JOBS, narrowPushPlan, triageOf } from "./contracts.mjs";
+import { fullRunEvidence, github, runJobs } from "./github.mjs";
 import { qaHealth } from "./health.mjs";
-import { github, runJobs } from "./github.mjs";
 import { deliverReport, makeReport, reportRun, sanitize, setupIncident, testFindings } from "./report.mjs";
 import { drainQueue, promptLead, queueItems, recoverQa } from "./queue.mjs";
 import { gateRun, verifyGate } from "./gate.mjs";
 
 const repository = "example/mausbot";
 const now = Date.parse("2026-11-05T05:00:00Z");
+const HOUR_MS = 60 * 60_000;
 const run = { id: 100, run_attempt: 1, head_sha: "a".repeat(40), path: ".github/workflows/ci.yml", head_branch: "main", head_repository: { full_name: repository }, event: "schedule", status: "completed", created_at: new Date(now - 60_000).toISOString(), updated_at: new Date(now).toISOString(), html_url: "https://github.com/example/mausbot/actions/runs/100" };
 const report = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, finishedAt: run.updated_at, executionComplete: true, deliveryComplete: true };
 const expected = [{ id: "vitest", name: "vitest (ubuntu-latest, shard 1/8)", artifact: "qa-results-vitest-ubuntu-latest-1", nodeTests: false }];
 const job = { ...expected[0], id: 77, run_attempt: 1, status: "completed", conclusion: "failure", steps: [{ name: "Run tests", conclusion: "failure" }], html_url: run.html_url + "/job/77" };
 const firstExecution = { created_at: "2026-11-05T12:18:00Z", started_at: "2026-11-05T12:18:19Z", completed_at: "2026-11-05T12:22:32Z" };
 const nextExecution = { created_at: "2026-11-05T12:47:31Z", started_at: "2026-11-05T12:47:32Z", completed_at: "2026-11-05T12:47:34Z" };
+const pushRun = { ...run, event: "push", status: "in_progress", created_at: new Date(now - 120_000).toISOString() };
+function pushPlan(selected = ciOutputs(FULL_SCOPE, ALL_OS), source = pushRun) {
+  return { version: 1, runId: source.id, attempt: 1, sha: source.head_sha,
+    plan: { full: true, reduced: false, scope: FULL_SCOPE, candidate: false, admitted: false },
+    outputs: { ...selected, full_required: true, reduced: false, qa_areas: ["global"],
+      required_jobs: selected.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selected) } };
+}
+function narrowPlan(source = pushRun) {
+  const selected = ciOutputs(MAIN_SCOPE, WINDOWS_OS);
+  const plan = pushPlan(selected, source);
+  return { ...plan, plan: { ...plan.plan, full: false, scope: MAIN_SCOPE },
+    outputs: { ...plan.outputs, full_required: false, expected_jobs: expectedJobs(selected, false) } };
+}
 const testFile = "server/request-auth.test.ts";
 function result(status = "failed") {
   return { "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: status === "failed" ? 1 : 0, numPendingTests: status === "pending" ? 1 : 0,
@@ -48,6 +63,136 @@ function issueApi() {
 }
 
 describe("complete CI and trusted QA health", () => {
+  it("requires the fast core and typecheck steps without claiming an Electron or UI build", () => {
+    const selection = { ...ciOutputs({ checks: ["build"] }, ["ubuntu-latest"]), fast_pr: true };
+    const [staticJob] = expectedJobs(selection);
+    expect(staticJob).toMatchObject({ fast: true, build: true });
+    const names = ["Verify CI selection and documentation references", "Validate locale catalogs", "pnpm lint", "Source guards",
+      "Security, data and dispatch core with bounded affected tests", "pnpm typecheck"];
+    const observed = [{ name: staticJob.name, status: "completed", conclusion: "success", steps: names.map((name) => ({ name, conclusion: "success" })) }];
+    expect(executionComplete([staticJob], observed, new Set())).toBe(true);
+    expect(executionComplete([staticJob], [{ ...observed[0], steps: observed[0].steps.slice(0, -2) }], new Set())).toBe(false);
+  });
+
+  it("counts fast PR queue and setup from creation, prioritizing real test failures", async () => {
+    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
+      expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const createdAt = 1_000_000;
+    const staticJob = { name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success",
+      started_at: new Date(createdAt + 90_000).toISOString(), completed_at: new Date(createdAt + 290_000).toISOString() };
+    const jobs = [staticJob];
+    const api = async (path: string) => path.startsWith("/issues?") ? [] : { jobs };
+    await expect(verifyGate(outputs, { api, createdAt, now: () => createdAt + 299_000 })).resolves.toBeUndefined();
+    await expect(verifyGate(outputs, { api, createdAt, now: () => createdAt + 300_001 })).rejects.toThrow(/CI performance: fast PR exceeded 5 minutes.*static-queue=90s.*static-checks=200s/);
+    jobs[0] = { ...staticJob, conclusion: "failure" };
+    await expect(verifyGate(outputs, { api, createdAt, now: () => createdAt + 300_001 })).rejects.toThrow("Required validation failed");
+  });
+
+  it("reports a failed required core step while static is still uploading its result", async () => {
+    const createdAt = 1_000_000;
+    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
+      expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress", conclusion: null,
+      steps: [{ name: "Security, data and dispatch core with bounded affected tests", conclusion: "failure" },
+        { name: "Upload fast results", conclusion: null }] };
+    const api = async (path: string) => path.startsWith("/issues?") ? [] : { jobs: [preflight] };
+    await expect(verifyGate(outputs, { api, createdAt, now: () => createdAt + 300_001 })).rejects.toThrow(
+      "Required validation failed: typecheck + lint > Security, data and dispatch core with bounded affected tests");
+  });
+
+  it("classifies a queued ordinary PR with no plan at five minutes", async () => {
+    const createdAt = 1_000_000;
+    const prHead = "b".repeat(40);
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress", conclusion: null as string | null,
+      steps: [] as { name: string; conclusion: string | null }[] };
+    const api = async (path: string) => path === "/actions/runs/100"
+      ? { id: run.id, run_attempt: 1, event: "pull_request", head_sha: prHead, created_at: new Date(createdAt).toISOString() }
+      : path === "/pulls/7" ? { head: { sha: prHead }, labels: [] }
+        : path.includes("/jobs") ? { jobs: [preflight] } : { artifacts: [] };
+    const invoke = () => gateRun({ api, runId: run.id, attempt: 1, sha: run.head_sha, event: "pull_request",
+      eventPayload: { pull_request: { number: 7, head: { sha: prHead }, labels: [] } }, now: () => createdAt + 300_001, deadlineMs: 400_000 });
+    await expect(invoke()).rejects.toThrow("CI performance: fast PR validation plan unavailable after 5 minutes");
+    preflight.steps = [{ name: "Security, data and dispatch core with bounded affected tests", conclusion: "failure" },
+      { name: "Upload fast results", conclusion: null }];
+    await expect(invoke()).rejects.toThrow("Preflight failed: Security, data and dispatch core with bounded affected tests");
+    preflight.steps = [];
+    preflight.status = "completed";
+    preflight.conclusion = "failure";
+    await expect(invoke()).rejects.toThrow("Preflight failure");
+  });
+
+  it("uses current PR controls for a no-plan budget even when event labels are stale", async () => {
+    const createdAt = 1_000_000, prHead = "b".repeat(40);
+    let currentLabels: string[] = [], currentHead = prHead, readError = false;
+    const api = async (path: string) => path === "/actions/runs/100"
+      ? { id: run.id, run_attempt: 1, event: "pull_request", head_sha: prHead, created_at: new Date(createdAt).toISOString() }
+      : path === "/pulls/7" ? readError ? Promise.reject(new Error("current controls unavailable"))
+        : { head: { sha: currentHead }, labels: currentLabels.map((name) => ({ name })) }
+        : path.includes("/jobs") ? { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "in_progress", conclusion: null }] }
+          : { artifacts: [] };
+    const invoke = (eventLabels: string[]) => gateRun({ api, runId: run.id, attempt: 1, sha: run.head_sha,
+      event: "pull_request", eventPayload: { pull_request: { number: 7, head: { sha: prHead }, labels: eventLabels.map((name) => ({ name })) } },
+      now: () => createdAt + 300_001, deadlineMs: 400_000, wait: async () => { throw new Error("waiting for full plan"); } });
+    for (const control of ["ci:full", "qa:repair", "windows"]) {
+      currentLabels = [control];
+      await expect(invoke([])).rejects.toThrow("waiting for full plan");
+    }
+    currentLabels = [];
+    await expect(invoke(["ci:full"])).rejects.toThrow("CI performance: fast PR validation plan unavailable after 5 minutes");
+    currentHead = "c".repeat(40);
+    await expect(invoke([])).rejects.toThrow("PR head changed");
+    currentHead = prHead;
+    readError = true;
+    await expect(invoke([])).rejects.toThrow("current controls unavailable");
+  });
+
+  it("binds the PR API head to the event while the plan uses the merge SHA", async () => {
+    const prHead = "b".repeat(40), mergeSha = "c".repeat(40), createdAt = 1_000_000;
+    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
+      pr_number: 7, pr_head: prHead, expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const plan = { version: 1, runId: run.id, attempt: 1, sha: mergeSha, outputs };
+    let apiHead = prHead;
+    const api = async (path: string) => path === "/actions/runs/100"
+      ? { id: run.id, run_attempt: 1, event: "pull_request", head_sha: apiHead, created_at: new Date(createdAt).toISOString() }
+      : path.startsWith("/issues?") ? []
+        : path === "/pulls/7" ? { head: { sha: prHead }, labels: [] }
+          : path.includes("/jobs") ? { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }] }
+            : { artifacts: [{ name: "qa-plan-attempt-1", workflow_run: { id: run.id } }] };
+    const invoke = () => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }),
+      runId: run.id, attempt: 1, sha: mergeSha, event: "pull_request", eventPayload: { pull_request: { number: 7, head: { sha: prHead }, labels: [] } },
+      now: () => createdAt + 120_000 });
+    await expect(invoke()).resolves.toBeUndefined();
+    apiHead = "d".repeat(40);
+    await expect(invoke()).rejects.toThrow("Invalid current PR run creation evidence");
+  });
+
+  it("budgets a rerun from its current attempt start while retaining the original run age", async () => {
+    const prHead = "b".repeat(40), mergeSha = "c".repeat(40), original = 1_000_000, rerun = 10_000_000;
+    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
+      expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const plan = { version: 1, runId: run.id, attempt: 2, sha: mergeSha, outputs };
+    const staticJob = { name: "typecheck + lint", run_attempt: 2, status: "completed", conclusion: "success",
+      created_at: new Date(rerun).toISOString(), started_at: new Date(rerun + 30_000).toISOString(), completed_at: new Date(rerun + 100_000).toISOString() };
+    const api = async (path: string) => path === "/actions/runs/100"
+      ? { id: run.id, run_attempt: 2, event: "pull_request", head_sha: prHead, created_at: new Date(original).toISOString(), run_started_at: new Date(rerun).toISOString() }
+      : path.startsWith("/issues?") ? []
+        : path.includes("/jobs") ? { jobs: [staticJob] }
+          : { artifacts: [{ name: "qa-plan-attempt-2", workflow_run: { id: run.id } }] };
+    const invoke = (elapsed: number) => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }),
+      runId: run.id, attempt: 2, sha: mergeSha, event: "pull_request", eventPayload: { pull_request: { number: 7, head: { sha: prHead }, labels: [] } },
+      now: () => rerun + elapsed });
+    await expect(invoke(120_000)).resolves.toBeUndefined();
+    await expect(invoke(300_001)).rejects.toThrow(/CI performance: fast PR exceeded 5 minutes.*original-created-to-gate=/);
+  });
+
+  it("invalidates a fast plan when the Windows request is added after selection", async () => {
+    const prHead = "b".repeat(40);
+    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"], pr_number: 7, pr_head: prHead,
+      expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const api = async (path: string) => path === "/pulls/7" ? { head: { sha: prHead }, labels: [{ name: "windows" }] } : [];
+    await expect(verifyGate(outputs, { api, createdAt: 1_000_000, now: () => 1_120_000 })).rejects.toThrow("Current PR controls require a fresh full CI run");
+  });
+
   it("includes every specialist job and every matrix row, excluding deployment", () => {
     const jobs = expectedJobs();
     const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -61,8 +206,75 @@ describe("complete CI and trusted QA health", () => {
     for (const conclusion of ["skipped", "cancelled", "timed_out", "failure"]) expect(inspectJobs(jobs, [{ ...observed[0], conclusion }, ...observed.slice(1)]).passed).toBe(false);
   });
 
+  it("recognizes only a full selected push plan, including the equivalent relocated Linux lane", () => {
+    const plan = pushPlan();
+    const narrow = narrowPlan();
+    expect(plan.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
+    expect(narrow.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
+    expect(plan.outputs.expected_jobs).toHaveLength(37);
+    expect(fullPushPlan(plan)).toBe(true);
+    expect(fullPushPlan(pushPlan(moveLinuxIntoStatic(ciOutputs(FULL_SCOPE, ALL_OS))))).toBe(true);
+    expect(narrowPushPlan(narrow)).toBe(true);
+    expect(narrowPushPlan(plan)).toBe(false);
+    expect(narrowPushPlan({ ...narrow, plan: { ...narrow.plan, scope: FULL_SCOPE } })).toBe(false);
+    for (const candidate of [
+      { ...plan, outputs: { ...plan.outputs, full_required: false } },
+      { ...plan, outputs: { ...plan.outputs, reduced: true } },
+      { ...plan, outputs: { ...plan.outputs, expected_jobs: plan.outputs.expected_jobs.slice(1) } },
+      { ...plan, outputs: { ...plan.outputs, jobs: ["vitest"] } },
+      { ...plan, outputs: { ...plan.outputs, required_jobs: [] } },
+      { ...plan, outputs: { ...plan.outputs, vitest_matrix: { include: plan.outputs.vitest_matrix.include.slice(1) } } },
+      { ...plan, outputs: { ...plan.outputs, qa_areas: ["usage"] } },
+      { ...plan, plan: { ...plan.plan, full: false } },
+      { ...plan, plan: { ...plan.plan, candidate: true } },
+      { ...plan, plan: { ...plan.plan, admitted: true } },
+      { ...plan, plan: { ...plan.plan, scope: { areas: ["main"], checks: [] } } },
+    ]) expect(fullPushPlan(candidate)).toBe(false);
+  });
+
+  it("binds a push plan to its trusted run, SHA and producing attempt without treating absent evidence as full", async () => {
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
+    let artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }];
+    let value = pushPlan();
+    const api = async (path: string) => {
+      if (path.includes("/jobs?filter=all")) return { jobs: [preflight] };
+      if (path.includes("/artifacts?")) return { artifacts };
+      throw new Error(path);
+    };
+    const readArtifact = async () => ({ "qa-plan.json": JSON.stringify(value) });
+    const check = (candidate = pushRun) => fullRunEvidence(candidate, { api, readArtifact, repository, now });
+    expect(await check()).toBe("full");
+    expect(await check({ ...pushRun, run_attempt: 2 })).toBe("full");
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }, { name: "qa-plan-attempt-2", id: 10, expired: true }];
+    expect(await check({ ...pushRun, run_attempt: 2 })).toBe("full");
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }];
+    for (const patch of [{ sha: "b".repeat(40) }, { runId: 99 }, { attempt: 2 }]) {
+      value = { ...pushPlan(), ...patch };
+      expect(await check()).toBe("unknown");
+    }
+    value = pushPlan();
+    expect(await fullRunEvidence(pushRun, { api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(narrowPlan()) }), repository, now })).toBe("ineligible");
+    expect(await check({ ...pushRun, head_branch: "feature" })).toBe("ineligible");
+    expect(await check({ ...pushRun, head_repository: { full_name: "outsider/fork" } })).toBe("ineligible");
+    expect(await check({ ...pushRun, path: ".github/workflows/untrusted.yml" })).toBe("ineligible");
+    expect(await check({ ...pushRun, head_sha: "not-a-sha" })).toBe("unknown");
+    artifacts = [];
+    expect(await check()).toBe("pending");
+    preflight.status = "completed";
+    expect(await check()).toBe("unknown");
+    preflight.status = "in_progress";
+    expect(await check({ ...pushRun, status: "completed" })).toBe("unknown");
+    expect(await check({ ...pushRun, created_at: new Date(now - 15 * 60 * 60_000).toISOString() })).toBe("unknown");
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: true }];
+    expect(await check()).toBe("unknown");
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9, expired: false }];
+    expect(await fullRunEvidence(pushRun, { api, readArtifact: async () => { throw new Error("unreadable"); }, repository, now })).toBe("unknown");
+  });
+
   it("rejects PR execution and non-main manual runs as reporting sources", () => {
     expect(eligibleRun(run, repository)).toBe(true);
+    expect(eligibleRun({ ...run, event: "workflow_dispatch" }, repository)).toBe(true);
+    expect(eligibleRun({ ...run, event: "push" }, repository)).toBe(false);
     for (const patch of [{ event: "pull_request" }, { head_branch: "feature" }, { head_repository: { full_name: "outsider/fork" } }, { path: ".github/workflows/untrusted.yml" }]) {
       expect(eligibleRun({ ...run, ...patch }, repository)).toBe(false);
     }
@@ -82,7 +294,15 @@ describe("complete CI and trusted QA health", () => {
     };
     const readArtifact = async () => ({ "qa-report.json": JSON.stringify(report) });
     expect(await qaHealth({ api, readArtifact, now, repository })).toMatchObject({ healthy: true, blockedAreas: ["usage"] });
-    for (const patch of [{ executionComplete: false }, { deliveryComplete: false }, { sha: "wrong" }, { attempt: 2 }, { finishedAt: new Date(now - 15 * 60 * 60_000).toISOString() }]) {
+    for (const hours of [24, 26]) {
+      const aged = { ...report, finishedAt: new Date(now - hours * HOUR_MS).toISOString() };
+      expect((await qaHealth({ api, readArtifact: async () => ({ "qa-report.json": JSON.stringify(aged) }), now, repository })).healthy).toBe(true);
+    }
+    const expired = { ...report, finishedAt: new Date(now - 26 * HOUR_MS - 1).toISOString() };
+    const expiredHealth = await qaHealth({ api, readArtifact: async () => ({ "qa-report.json": JSON.stringify(expired) }), now, repository });
+    expect(expiredHealth).toMatchObject({ healthy: false, blockedAreas: ["global"] });
+    expect(expiredHealth.reason).toContain("twenty-six hours");
+    for (const patch of [{ executionComplete: false }, { deliveryComplete: false }, { sha: "wrong" }, { attempt: 2 }]) {
       expect((await qaHealth({ api, readArtifact: async () => ({ "qa-report.json": JSON.stringify({ ...report, ...patch }) }), now, repository })).healthy).toBe(false);
     }
     for (const patch of [{ deliveryComplete: false }, { sha: "wrong" }, { version: 2 }, { finishedAt: "invalid" }]) {
@@ -90,6 +310,45 @@ describe("complete CI and trusted QA health", () => {
     }
     expect((await qaHealth({ api: async () => { throw new Error("offline"); }, now, repository })).healthy).toBe(false);
     expect((await qaHealth({ api: async (path: string) => path === "/actions/runs/200" ? { ...await api(path), event: "pull_request" } : api(path), readArtifact, now, repository })).healthy).toBe(false);
+  });
+
+  it("fails closed on unreadable newer push evidence while skipping a proven narrow push", async () => {
+    const current = { ...pushRun, id: 101, head_sha: "b".repeat(40), status: "completed", updated_at: new Date(now).toISOString() };
+    let plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), current);
+    let delivered = { ...report, runId: current.id, sha: current.head_sha };
+    let unreadableJobs = false, unreadablePlan = false;
+    const api = async (path: string) => {
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [current, run] };
+      if (path.includes("/jobs?filter=all")) {
+        if (unreadableJobs) throw new Error("jobs unavailable");
+        return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }] };
+      }
+      if (path.startsWith(`/actions/runs/${current.id}/artifacts?`)) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path.startsWith("/actions/artifacts?")) return { artifacts: [{ name: "mausbot-qa-report", workflow_run: { id: 200 } }] };
+      if (path === "/actions/runs/200") return { path: ".github/workflows/qa-report.yml", head_branch: "main", head_repository: { full_name: repository }, event: "workflow_run", conclusion: "success" };
+      if (path.startsWith("/issues?")) return [];
+      throw new Error(path);
+    };
+    const readArtifact = async (artifact: { name: string }) => {
+      if (!artifact.name.startsWith("qa-plan")) return { "qa-report.json": JSON.stringify(delivered) };
+      if (unreadablePlan) throw new Error("plan unavailable");
+      return { "qa-plan.json": JSON.stringify(plan) };
+    };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(true);
+    delivered = { ...delivered, runId: run.id };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    delivered = { ...delivered, runId: current.id, deliveryComplete: false };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    delivered = { ...report };
+    unreadableJobs = true;
+    expect(await qaHealth({ api, readArtifact, now, repository })).toMatchObject({ healthy: false,
+      reason: expect.stringMatching(/unclassifiable validation evidence/) });
+    unreadableJobs = false;
+    unreadablePlan = true;
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    unreadablePlan = false;
+    plan = narrowPlan(current);
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(true);
   });
 
   it("cannot pass a selected missing full job or a newly unavailable reduced-coverage guard", async () => {
@@ -124,7 +383,7 @@ describe("complete CI and trusted QA health", () => {
       if (path.includes("/artifacts")) return { artifacts: [{ name: "qa-plan-attempt-1" }] };
       return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }] };
     };
-    const invoke = (value: object) => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(value) }), runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 });
+    const invoke = (value: object) => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(value) }), runId: run.id, attempt: 1, sha: run.head_sha, event: "schedule", deadlineMs: 0 });
     await expect(invoke(plan)).resolves.toBeUndefined();
     for (const patch of [{ sha: "old" }, { runId: 99 }, { attempt: 2 }]) await expect(invoke({ ...plan, ...patch })).rejects.toThrow("Missing current-run validation plan");
   });
@@ -141,7 +400,7 @@ describe("complete CI and trusted QA health", () => {
       if (path.includes("/artifacts")) return { artifacts: [{ name: "qa-plan-attempt-1", expired }] };
       return { jobs };
     };
-    const invoke = () => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }), runId: run.id, attempt: 2, sha: run.head_sha, wait: async () => { throw new Error("Unexpected wait for an impossible artifact"); } });
+    const invoke = () => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }), runId: run.id, attempt: 2, sha: run.head_sha, event: "schedule", wait: async () => { throw new Error("Unexpected wait for an impossible artifact"); } });
     await expect(invoke()).resolves.toBeUndefined();
     jobs[2]!.conclusion = "failure";
     await expect(invoke()).rejects.toThrow("Required validation failed");
@@ -164,19 +423,19 @@ describe("complete CI and trusted QA health", () => {
     let artifacts = plans;
     const api = async (path: string) => path.startsWith("/issues?") ? [] : path.includes("/jobs") ? { jobs } : { artifacts };
     expect(await runJobs(run.id, 2, api)).toMatchObject([{ id: original.id, run_attempt: 1 }]);
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).resolves.toBeUndefined();
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).resolves.toBeUndefined();
     expect(readArtifact.mock.calls[0]?.[0].name).toBe("qa-plan-attempt-1");
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, deadlineMs: 0 })).resolves.toBeUndefined();
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).resolves.toBeUndefined();
     expect(readArtifact.mock.calls[1]?.[0].name).toBe("qa-plan-attempt-3");
     artifacts = [plans[0]!];
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
     jobs = [copied];
     await expect(runJobs(run.id, 2, api)).rejects.toThrow("Ambiguous workflow job execution");
     jobs = [original, copied];
     artifacts = [plans[0]!, plans[0]!];
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("Ambiguous current-run validation plan");
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).rejects.toThrow("Ambiguous current-run validation plan");
     artifacts = [{ ...plans[0]!, workflow_run: { id: 99, head_sha: run.head_sha } }];
-    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
   });
 
   it("retries only bounded transient reads from GitHub", async () => {
@@ -502,6 +761,155 @@ describe("Lead queue and bounded recovery", () => {
     await recoverQa(state, { api, health: incomplete, now, repository });
     await recoverQa(state, { api, health: incomplete, now, repository });
     expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+  });
+
+  it("waits through the daily grace window, recovers once, and leaves a running bootstrap alone", async () => {
+    const scheduled = { ...run, updated_at: new Date(now - 24 * HOUR_MS).toISOString() };
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("qa-report.yml")) return { workflow_runs: [{ status: "completed", conclusion: "success", display_title: `QA report ${scheduled.id}` }] };
+      return { workflow_runs: [scheduled] };
+    };
+    const state = {};
+    const health = async () => ({ healthy: true, report: { ...report, executionComplete: true } });
+    await recoverQa(state, { api, health, now, repository });
+    expect(calls).toEqual([]);
+    scheduled.updated_at = new Date(now - 26 * HOUR_MS).toISOString();
+    await recoverQa(state, { api, health, now, repository });
+    expect(calls).toEqual([]);
+    await recoverQa(state, { api, health, now: now + 1, repository });
+    await recoverQa(state, { api, health, now: now + 1, repository });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+
+    const bootstrap = { ...run, id: 200, event: "workflow_dispatch", status: "in_progress" };
+    const bootstrapApi = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      return { workflow_runs: path.includes("qa-report.yml") ? [] : [bootstrap] };
+    };
+    calls.length = 0;
+    await recoverQa({}, { api: bootstrapApi, health: async () => ({ healthy: false }), now, repository });
+    expect(calls).toEqual([]);
+  });
+
+  it("reuses a bound full push that began before queue installation and requests only its missing report", async () => {
+    const current = { ...pushRun };
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [current] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [preflight] };
+      if (path.includes("/artifacts?")) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
+      throw new Error(path);
+    };
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    const readArtifact = async () => ({ "qa-plan.json": JSON.stringify(pushPlan()) });
+    const health = async () => ({ healthy: false, reason: "report missing" });
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual([]);
+    current.status = "completed";
+    preflight.status = "completed";
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual(["/actions/workflows/qa-report.yml/dispatches"]);
+  });
+
+  it("waits only for an active push's pending plan, then recovers when coverage is absent or narrow", async () => {
+    const current = { ...pushRun };
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
+    const calls: string[] = [];
+    let artifacts: { name: string; id: number }[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [current] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [preflight] };
+      if (path.includes("/artifacts?")) return { artifacts };
+      throw new Error(path);
+    };
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    const health = async () => ({ healthy: false, reason: "report missing" });
+    const narrow = narrowPlan();
+    const readArtifact = async () => ({ "qa-plan.json": JSON.stringify(narrow) });
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual([]);
+    artifacts = [{ name: "qa-plan-attempt-1", id: 9 }];
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+    calls.length = 0;
+    current.status = "completed";
+    artifacts = [];
+    await recoverQa({ startedAt: new Date(now - 60_000).toISOString() }, { api, readArtifact, health, now, repository });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+  });
+
+  it("does not report an older full push ahead of a newer pre-installation scheduled run", async () => {
+    const newer = { ...run, id: 201, created_at: new Date(now - 120_000).toISOString() };
+    const older = { ...pushRun, id: 200, head_sha: "b".repeat(40), status: "completed",
+      created_at: new Date(now - 180_000).toISOString() };
+    const plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), older);
+    expect(fullPushPlan(plan)).toBe(true);
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [newer, older] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed" }] };
+      if (path.startsWith("/actions/artifacts?")) return { artifacts: [{ name: "mausbot-qa-report", workflow_run: { id: 300 } }] };
+      if (path.includes("/artifacts?")) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path === "/actions/runs/300") return { path: ".github/workflows/qa-report.yml", head_branch: "main", head_repository: { full_name: repository }, event: "workflow_run", conclusion: "success" };
+      throw new Error(path);
+    };
+    const readArtifact = vi.fn(async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(plan) } : { "qa-report.json": JSON.stringify({ ...report, runId: older.id, sha: older.head_sha }) });
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    await recoverQa(state, { api, readArtifact, now, repository });
+    await recoverQa(state, { api, readArtifact, now, repository });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+    expect(state).toMatchObject({ recoveryFor: newer.id });
+    expect(readArtifact).toHaveBeenCalled();
+    expect(readArtifact.mock.calls.every(([artifact]) => artifact.name === "mausbot-qa-report")).toBe(true);
+  });
+
+  it.each([
+    { name: "pre-installation full run without report", event: "schedule", createdOffset: -120_000, incomplete: false, pending: false },
+    { name: "delivered but incomplete full run", event: "schedule", createdOffset: -30_000, incomplete: true, pending: false },
+    { name: "completed push with unknown evidence", event: "push", createdOffset: -120_000, incomplete: false, pending: false },
+    { name: "pre-installation run while the older push plan is pending", event: "schedule", createdOffset: -120_000, incomplete: false, pending: true },
+  ])("keeps an older active push in flight behind a newer $name", async ({ event, createdOffset, incomplete, pending }) => {
+    const newer = { ...run, id: 201, event, head_sha: "c".repeat(40), created_at: new Date(now + createdOffset).toISOString() };
+    const older = { ...pushRun, id: 200, head_sha: "b".repeat(40), created_at: new Date(now - 180_000).toISOString() };
+    const plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), older);
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [newer, older] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: incomplete
+        ? [{ status: "completed", conclusion: "success", display_title: `QA report ${newer.id}` }] : [] };
+      if (path.includes("/jobs?filter=all")) {
+        if (path.includes(`/runs/${newer.id}/`)) throw new Error("newer jobs unavailable");
+        return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "in_progress" }] };
+      }
+      if (path.startsWith("/actions/artifacts?")) return { artifacts: incomplete
+        ? [{ name: "mausbot-qa-report", workflow_run: { id: 300 } }] : [] };
+      if (path.includes("/artifacts?")) return { artifacts: pending ? [] : [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path === "/actions/runs/300") return { path: ".github/workflows/qa-report.yml", head_branch: "main",
+        head_repository: { full_name: repository }, event: "workflow_run", conclusion: "success" };
+      if (path.startsWith("/issues?")) return [];
+      throw new Error(path);
+    };
+    const readArtifact = vi.fn(async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(plan) } : { "qa-report.json": JSON.stringify({ ...report, runId: newer.id,
+        sha: newer.head_sha, executionComplete: false }) });
+    const state = { startedAt: new Date(now - 60_000).toISOString() };
+    expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
+    await recoverQa(state, { api, readArtifact, now, repository });
+    await recoverQa(state, { api, readArtifact, now, repository });
+    expect(calls).toEqual([]);
+    expect(state).not.toHaveProperty("recoveryFor");
+    expect(readArtifact.mock.calls.some(([artifact]) => artifact.name === "qa-plan-attempt-1")).toBe(!pending);
   });
 
   it("does not backfill pre-installation runs that lack structured evidence", async () => {
