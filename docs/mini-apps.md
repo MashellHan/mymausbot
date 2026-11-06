@@ -1,15 +1,55 @@
 # Local Mini Apps
 
 Mini Apps are persistent applications in **Computer → Mini Apps**. An app has a
-stable identity, an editable HTML template, declared Data queries and immutable
-template versions. It belongs to the local workspace owner, independently of
-the chat or bot that created it. Opening, filtering and refreshing an app does
-not start an AI turn.
+stable identity, immutable template versions and explicit read permissions. Most
+apps use editable HTML and declared Data queries; Agent Team and Usage use
+registered built-in views. Each app belongs to the local workspace owner,
+independently of the chat or bot that created it. Opening, filtering and
+refreshing an app does not start an AI turn.
 
 Bookkeeping, Daily X AI digest and GitHub activity use the same registry, retained
 Data and frame host. An inventory fixture also exercises these APIs independently
 of the built-in templates. The two report apps keep current and historical
 editions published by an existing bot or Automation.
+
+## Install Agent Team or Usage
+
+Open **Computer → Mini Apps → Add Mini App**, choose Agent Team or Usage, read
+its access disclosure and install. The existing Agent Team and Usage Computer
+tabs remain available. Both surfaces use the same providers and shared views;
+the installed apps do not start a collector, copy snapshots into another store
+or change a schedule.
+
+Agent Team reads local Herdr member status, models and bounded task hints. An
+expanded activity disclosure reads recent redacted user and assistant messages;
+it starts folded, and no office is selected initially. The app cannot control
+agents. Team observations refresh every two seconds while visible, and activity
+reads stop when the disclosure closes or the app is hidden.
+
+Usage reads the existing five-minute aggregate, including its coverage and
+capture time. Manual refresh rereads the current provider snapshot immediately
+without changing the automatic cadence or selected office. Its 1/7/30-day windows include the current partial China-calendar
+day. Commit totals use the existing local non-merge, commit-hash deduplication,
+including local and unmerged branches; they are not GitHub contribution-calendar
+totals. PR counts, total tokens and cache-read tokens retain the existing
+[metric definitions](verification/local-dashboard.md#usage-definitions).
+Unavailable data remains unavailable; partial counts, stale snapshots and
+verified zero values retain their separate meanings.
+
+These two views are built into the host. Their registered metadata identifies
+`renderer: "native"`, `htmlRole: "fallback-only"` and the editable title and
+description fields. Publishing HTML changes only the fallback document, never
+the live panel layout or its observations. The installer does not offer a chat
+editor for these views. Other Mini Apps retain normal editable HTML behavior.
+
+Uninstalling archives the app and clears its dashboard read grant while keeping
+its identity and history. Reinstalling uses that same app ID and requires an
+explicit owner grant at the current revision. Rolling back a template or
+restoring a workspace backup cannot restore a revoked dashboard grant.
+The library offers an explicit access-recovery action for a registered built-in
+app after restore or revocation. Its persistent `dashboardIdentity` identifies
+that entry but grants no reads; a custom app with the same slug is never silently
+replaced or granted access.
 
 ## Install a report
 
@@ -56,7 +96,7 @@ The local `agents` tool catalog exposes:
 
 | Tool | Purpose |
 | --- | --- |
-| `mini_app_info` | Discover apps this bot may edit; read a document, bindings and history; obtain the complete author guide with `guide: true`. |
+| `mini_app_info` | Discover apps this bot may edit and metadata for installed dashboards; read a granted document, bindings and history; obtain the complete author guide with `guide: true`. |
 | `mini_app_connect` | Retain this bot's Data and return its stable dataset ID and physical table schemas. |
 | `mini_app_publish` | Create an app or publish a new immutable template and binding version. |
 | `mini_app_rollback` | Activate an earlier template while retaining current business data. |
@@ -69,6 +109,12 @@ Data-only changes use the existing Data tools; the two built-in report kinds use
 behavior or binding changes publish a new template. The author guide is returned
 by `mini_app_info`; the built-in `data-dashboards` skill follows this path for
 reusable local reports.
+
+Dashboard discovery exposes app identity, declared resources and editing limits,
+not owner snapshots. An active built-in app remains discoverable when its read
+grant needs owner repair. Bots cannot grant `dashboardKind` or read dashboard
+resources. An existing publisher grant still permits only the supported
+publication behavior; it does not make the built-in panel an HTML editor.
 
 Publication uses `requestKey` and `expectedRevision`. A successful retry returns
 the original receipt; reusing the key with different content or publishing over
@@ -99,6 +145,8 @@ flowchart LR
   Catalog --> Host[Mini Apps host]
   DuckDB -->|Named read + revision| Host
   Host -->|Bounded messages| Frame[Sandboxed local page]
+  Providers[Existing local dashboard providers] -->|App grant + revision| Host
+  Host --> Views[Shared built-in views]
 ```
 
 - The existing application SQLite owns app metadata, version pointers, publisher
@@ -125,17 +173,19 @@ through capture. They include closed retained stores, their identity/revision/ha
 manifest, app metadata and referenced documents. Restore checks identities,
 checksums, template references and the native DuckDB revision before replacing
 anything. Untracked stores, unfinished promotion journals and missing references
-fail the operation. Restore clears publisher grants so old backups cannot revive
-revoked editing access. Apps, Data, versions and receipts remain; the owner can
-regrant editors through an owner publication using the restored current revision.
+fail the operation. Restore clears publisher and dashboard grants so old backups
+cannot revive revoked access. Apps, Data, versions and receipts remain; the owner
+can explicitly regrant access through an owner publication using the restored
+current revision.
 Private Mini Apps cannot accompany a shared-workspace export.
 
 ## Runtime boundaries
 
-Mini Apps run in a guarded desktop window. A browser or older desktop without the
-native opaque-frame navigation capability displays a desktop-required state and
-does not mount an app or bridge its Data. The native guard blocks frame self-
-navigation; CSP restricts scripts, resources, connections, forms and nested frames.
+Both HTML and built-in Mini Apps require a guarded desktop window. A browser or
+older desktop without the native opaque-frame navigation capability displays a
+desktop-required state and does not mount an app or read its data. For HTML apps,
+the native guard blocks frame self-navigation; CSP restricts scripts, resources,
+connections, forms and nested frames.
 Desktop startup also disables Chromium DNS prefetching, which otherwise allows
 DNS hints from an opaque frame despite the connection policy. Normal network
 request resolution remains enabled for the surrounding application.
@@ -147,6 +197,15 @@ trust, hosted/shared workspaces and Cloud homes are refused. Bot mutations requi
 an active scoped capability, enabled tool policy and a current publisher grant.
 Consult turns cannot mutate apps. A late response is discarded after revocation,
 an app change or a Data revision change.
+
+Built-in dashboard reads are bound to an installed app ID and current revision.
+The fixed Agent Team grant permits only teams and per-pane activity; Usage
+permits only the existing aggregate. The server checks owner access, active
+status, revision and resource before and after each provider read. The host
+aborts pending reads on hide/unmount and clears observations on revocation.
+These resources are not added to the iframe SDK, and app HTML gains no host URL,
+file, command or general fetch capability. Dashboard replies are capped at 1 MiB
+and share the existing per-app read limits.
 
 Bindings name exact physical base tables, typed columns and declarative query
 plans. The reader validates the source schema, binds parameters and uses a separate
