@@ -38,7 +38,7 @@ function fixture(fixtureOptions: { latestDate?: string; aliases?: boolean } = {}
     ]);
     if (exhaustCalendarBudget && (id === "categories" || id === "category_options")) {
       const index = options?.cursor ? Number(options.cursor.split("-").at(-1)) : 1;
-      const row = id === "categories" ? { currency: "CNY", category: "Food", amount: "-12.34", count: "1" }
+      const row: Row = id === "categories" ? { currency: "CNY", category: "Food", amount: "-12.34", count: "1" }
         : { currency: "CNY", category: "Food", count: "1" };
       return page([row], index < 20 ? `${id}-${index + 1}` : undefined);
     }
@@ -153,7 +153,7 @@ describe("Bookkeeping Manager Mini App", () => {
     expect(app.query).toHaveBeenCalledWith("summary", expect.objectContaining({ from: "2026-01-01", through: "2026-11-06" }), { expectedDataRevision: 7 });
     app.tab("calendar");
     await app.view.happyDOM.whenAsyncComplete();
-    const day = app.view.document.querySelector<HTMLButtonElement>('[data-calendar-day="2026-11-06"]');
+    const day = app.view.document.querySelector('[data-calendar-day="2026-11-06"]') as unknown as HTMLButtonElement | null;
     expect(day?.getAttribute("aria-label")).toContain("Outflow ¥12.34");
     day?.click();
     await app.view.happyDOM.whenAsyncComplete();
@@ -183,7 +183,7 @@ describe("Bookkeeping Manager Mini App", () => {
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.query).toHaveBeenCalledWith("details", expect.objectContaining({ currencies: ["CNY"] }), { cursor: "next", expectedDataRevision: 7 });
     expect(app.text("details")).toContain("2026-11-05");
-    const food = [...app.view.document.querySelectorAll<HTMLButtonElement>("#categories button")].find((button) => button.textContent?.includes("Food"));
+    const food = [...app.view.document.querySelectorAll("#categories button")].find((button) => button.textContent?.includes("Food")) as unknown as HTMLButtonElement | undefined;
     food?.click();
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.view.document.getElementById("tab-records")?.getAttribute("aria-selected")).toBe("true");
@@ -217,7 +217,7 @@ describe("Bookkeeping Manager Mini App", () => {
     await app.view.happyDOM.whenAsyncComplete();
     app.tab("calendar");
     await app.view.happyDOM.whenAsyncComplete();
-    const day = app.view.document.querySelector<HTMLButtonElement>('[data-calendar-day="2026-11-06"]');
+    const day = app.view.document.querySelector('[data-calendar-day="2026-11-06"]') as unknown as HTMLButtonElement | null;
     expect(day?.getAttribute("aria-label")).toContain("Outflow ¥120.00");
     day?.click();
     await app.view.happyDOM.whenAsyncComplete();
