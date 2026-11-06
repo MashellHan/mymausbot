@@ -15,8 +15,8 @@ const unavailableUsage: LocalUsageResponse = {
   prSourceCoverage: null, prCoverage: null, windows: null, trend: [],
 };
 
-export function MiniAppDashboard({ document, state, onRevoked, onChanged }: {
-  document: MiniAppDocument; state: MiniAppState; onRevoked(): void; onChanged(): void;
+export function MiniAppDashboard({ document, state, refreshKey, onRevoked, onChanged }: {
+  document: MiniAppDocument; state: MiniAppState; refreshKey: number; onRevoked(): void; onChanged(): void;
 }) {
   const visible = usePageVisible();
   const kind = document.app.dashboard?.kind;
@@ -77,7 +77,7 @@ export function MiniAppDashboard({ document, state, onRevoked, onChanged }: {
     };
     void refresh();
     return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [kind, read, revision, valid, visible, stopFor]);
+  }, [kind, read, refreshKey, revision, valid, visible, stopFor]);
 
   const readActivity = useCallback(async (agentId: string, signal: AbortSignal): Promise<LocalAgentActivityResponse> => {
     try {

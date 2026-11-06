@@ -65,7 +65,7 @@ const revoked = vi.fn();
 const changed = vi.fn();
 const render = async (kind: "agent-team" | "usage", revision = 3) => {
   await act(async () => root.render(createElement(MiniAppDashboard, {
-    key: `${kind}:${revision}`, document: documentFor(kind, revision), state: stateFor(revision), onRevoked: revoked, onChanged: changed,
+    key: `${kind}:${revision}`, document: documentFor(kind, revision), state: stateFor(revision), refreshKey: 0, onRevoked: revoked, onChanged: changed,
   })));
 };
 
