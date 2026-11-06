@@ -31,6 +31,7 @@ let duringDownload: (() => void) | undefined;
 let midDownload: (() => Promise<void>) | undefined;
 /** Runs when the sandbox gets an upload's first bytes. */
 let onFirstUploadChunk: (() => void) | undefined;
+let afterUploadCommitted: ((res: ServerResponse) => Promise<void> | void) | undefined;
 /** Holds the sandbox's answer to a transfer until released. */
 let stall: Promise<void> | undefined;
 /** What the sandbox received for each upload, by path. */
@@ -78,7 +79,8 @@ async function sandbox(req: IncomingMessage, res: ServerResponse, url: URL) {
       bytes += chunk.length;
     }
     uploads.set(path, { bytes, chunks, head, tail });
-    res.end();
+    await afterUploadCommitted?.(res);
+    if (!res.destroyed) res.end();
     return;
   }
   res.writeHead(405); res.end();
@@ -129,7 +131,7 @@ beforeEach(() => {
   disk.clear();
   uploads.clear();
   expireLinks = false;
-  mintAnswer = duringDownload = midDownload = onFirstUploadChunk = stall = undefined;
+  mintAnswer = duringDownload = midDownload = onFirstUploadChunk = afterUploadCommitted = stall = undefined;
   root = mkdtempSync(join(tmpdir(), "omb-computer-files-"));
   folder = join(root, "folder");
   outside = join(root, "outside");
@@ -304,6 +306,27 @@ describe("copy_to_computer", () => {
     await expect(to("empty.txt", "/tmp/empty.txt")).resolves.toEqual({ path: "/tmp/empty.txt", bytes: 0 });
   });
 
+  it("reports unknown remote completion after an upload commits but its answer is lost", async () => {
+    writeFileSync(join(folder, "upload.txt"), "current edition");
+    afterUploadCommitted = (res) => { res.destroy(); };
+    const result = await to("upload.txt", "/tmp/upload.txt");
+    expect(uploads.get("/tmp/upload.txt")?.head.toString()).toBe("current edition");
+    expect(result).toEqual({ error: expect.stringContaining("It may have replaced the cloud file. Check that file before retrying.") });
+    expect(JSON.stringify(result)).not.toContain(minted.at(-1));
+  });
+
+  it("reports unknown remote completion when an upload commits before its answer stalls", async () => {
+    writeFileSync(join(folder, "upload.txt"), "current edition");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    afterUploadCommitted = () => held;
+    try {
+      const call = rpc("copy_to_computer", { from: "upload.txt", path: "/tmp/upload.txt" }, { budgetMs: 300 });
+      await vi.waitFor(() => expect(uploads.has("/tmp/upload.txt")).toBe(true));
+      expect(await call.done).toEqual({ isError: true, content: [{ type: "text", text: tools.CLOUD_COMPUTER_UPLOAD_LATE }] });
+    } finally { release(); }
+  });
+
   it("reads a big file from disk as it is sent, never holding it whole", async () => {
     const size = 64 * MiB, file = join(folder, "big.bin");
     closeSync(openSync(file, "w"));
@@ -385,13 +408,13 @@ describe("as cloud computer tools", () => {
     expect(call.gated()).toBe(1);
   });
 
-  it("stops a copy that outlasts its budget, says nothing changed, and leaves nothing behind", async () => {
+  it("reports directional copy timeouts and removes an incomplete local download", async () => {
     disk.set("/tmp/slow.bin", { bytes: Buffer.alloc(MiB) });
     writeFileSync(join(folder, "slow.txt"), "slow");
     let release!: () => void;
     stall = new Promise(resolve => { release = resolve; });
     for (const [name, args] of [["copy_from_computer", { path: "/tmp/slow.bin" }], ["copy_to_computer", { from: "slow.txt", path: "/tmp/slow.txt" }]] as const) {
-      expect(await rpc(name, args, { budgetMs: 300 }).done).toEqual({ isError: true, content: [{ type: "text", text: tools.CLOUD_COMPUTER_COPY_LATE }] });
+      expect(await rpc(name, args, { budgetMs: 300 }).done).toEqual({ isError: true, content: [{ type: "text", text: name === "copy_to_computer" ? tools.CLOUD_COMPUTER_UPLOAD_LATE : tools.CLOUD_COMPUTER_COPY_LATE }] });
     }
     release();
     expect(leftovers()).toEqual([]);

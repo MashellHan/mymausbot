@@ -171,7 +171,7 @@ export async function copyFromComputer(
   return { path: relative(placed.root, target), bytes };
 }
 
-/** Streams the file from disk as the upload's body; the computer keeps its old file unless the whole upload lands. */
+/** Streams the file from disk as the upload's body. A lost acknowledgement leaves its remote outcome unknown. */
 export async function copyToComputer(
   cfg: AppConfig,
   boxId: string,
@@ -206,7 +206,7 @@ export async function copyToComputer(
       } as RequestInit);
     } catch {
       signal.throwIfAborted();
-      return { error: `The upload of ${args.from} was interrupted; the cloud computer still has its old file, if any. Try again.` };
+      return { error: `The upload of ${args.from} was interrupted without a confirmation. It may have replaced the cloud file. Check that file before retrying.` };
     }
     await response.body?.cancel().catch(() => {});
     if (!response.ok) return { error: linkRefusal(response.status, args.path) };

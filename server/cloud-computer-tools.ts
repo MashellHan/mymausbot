@@ -44,7 +44,8 @@ export const CLOUD_COMPUTER_TOOLS = [
 /** A call the gate let through while no Boat had landed for the turn. */
 export const CLOUD_COMPUTER_NOT_READY = "The cloud computer is not ready. This call was not performed. Take a fresh screenshot in a moment.";
 export const CLOUD_COMPUTER_LATE = "The cloud computer did not answer in time. This call may still have run; take a fresh screenshot before repeating it.";
-export const CLOUD_COMPUTER_COPY_LATE = "The copy did not finish within 9 minutes and was stopped; nothing was changed. Make the file smaller on the cloud computer first (filter, compress or split it), then copy the parts.";
+export const CLOUD_COMPUTER_COPY_LATE = "The download did not finish within 9 minutes and was stopped; the partial local file was removed. Make the file smaller on the cloud computer first (filter, compress or split it), then copy the parts.";
+export const CLOUD_COMPUTER_UPLOAD_LATE = "The upload did not confirm completion within 9 minutes. It may have replaced the cloud file. Check that file before retrying.";
 const COPY_TOOLS = new Set(["copy_from_computer", "copy_to_computer"]);
 export const cloudComputerCallBudgetMs = (name: unknown): number =>
   typeof name === "string" && COPY_TOOLS.has(name) ? COMPUTER_COPY_BUDGET_MS : HARNESS_CALL_BUDGET_MS;
@@ -159,7 +160,9 @@ export async function cloudComputerRpc(
     result = await runCloudComputerTool(deps.cfg, boxId, params.name as string, args as Record<string, unknown>, AbortSignal.any([deps.signal, late]), deps.folder?.());
   } catch (error) {
     if (!late.aborted || deps.signal.aborted) throw error;
-    return { isError: true, content: [{ type: "text", text: commandLateText(params.name, args) ?? (copy ? CLOUD_COMPUTER_COPY_LATE : CLOUD_COMPUTER_LATE) }] };
+    const lateText = commandLateText(params.name, args) ?? (params.name === "copy_to_computer"
+      ? CLOUD_COMPUTER_UPLOAD_LATE : copy ? CLOUD_COMPUTER_COPY_LATE : CLOUD_COMPUTER_LATE);
+    return { isError: true, content: [{ type: "text", text: lateText }] };
   }
   deps.assertActive();
   return result;
