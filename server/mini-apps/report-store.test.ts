@@ -52,6 +52,7 @@ describe("retained report editions", () => {
         parameters, scope: "synthetic-report" });
     expect(prepared.dataset.tables.find((table) => table.name === "omb_report_editions_v1")).toMatchObject({ schema: "main", rowCount: 0 });
     expect(prepared.publication).toMatchObject({ expectedRevision: 0, slug: "x-ai-digest", bindings: [binding] });
+    expect(prepared.publication.shippedTemplateKind).toBeUndefined();
     expect((await read("x_ai_digest", "current")).rows).toEqual([]);
     expect((await reports.prepare("producer", "github_activity")).dataset.datasetId).toBe(prepared.dataset.datasetId);
 

@@ -218,6 +218,7 @@ export function createMiniAppsInternalRoutes(deps: MiniAppRouteDeps) {
         const body = z.object({ app_id: z.uuid().optional(), publication: z.unknown() }).strict().safeParse(raw);
         if (!body.success || body.data.publication === undefined) throw appFailure(400, "mini_app_publish takes publication and optionally app_id.");
         const publication = parsePublish(body.data.publication);
+        if (publication.shippedTemplateKind !== undefined) throw appFailure(403, "Only the workspace owner can identify a shipped template.");
         if (publication.bindings.length) ownDataset = (await deps.data.promoteForBot(ctx.botId, MINI_APPS_OWNER)).datasetId;
         assertActive();
         return ctx.json(ctx.res, 200, await deps.apps.publish(actor, publication, body.data.app_id));

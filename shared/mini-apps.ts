@@ -8,6 +8,7 @@ export const MINI_APP_DASHBOARD_RESOURCES = {
 } as const;
 export type MiniAppDashboardKind = keyof typeof MINI_APP_DASHBOARD_RESOURCES;
 export type MiniAppDashboardResource = "teams" | "activity" | "usage";
+export type MiniAppShippedTemplateKind = "bookkeeping" | "x_ai_digest" | "github_activity";
 /** A native dashboard grant belongs to the installed app, independent of its HTML template. */
 export type MiniAppDashboardDeclaration = {
   [K in MiniAppDashboardKind]: { kind: K; renderer: "native"; htmlRole: "fallback-only";
@@ -43,6 +44,8 @@ export interface MiniAppSummary {
   dashboard?: MiniAppDashboardDeclaration | null;
   /** Installed built-in identity survives grant revocation; it grants no dashboard reads. */
   dashboardIdentity?: MiniAppDashboardKind | null;
+  /** Owner-assigned display provenance; it grants no publisher, Data or dashboard access. */
+  shippedTemplateKind?: MiniAppShippedTemplateKind | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -80,6 +83,8 @@ export interface MiniAppPublish {
   publisherBotIds?: string[];
   /** Only the workspace owner may set or revoke a native dashboard grant. */
   dashboardKind?: MiniAppDashboardKind | null;
+  /** Only the workspace owner may label an installed shipped template. */
+  shippedTemplateKind?: MiniAppShippedTemplateKind;
 }
 
 export interface MiniAppRollback {
