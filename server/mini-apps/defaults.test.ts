@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as DuckDB from "@duckdb/node-api";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { MiniAppDefaultsInput, MiniAppDocument, MiniAppPublish } from "../../shared/mini-apps.ts";
 import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
 import { AppDocs } from "../app-docs.ts";
@@ -13,6 +13,18 @@ import { DefaultMiniApps } from "./defaults.ts";
 import { MiniApps, type MiniAppActor } from "./registry.ts";
 import { ReportStore } from "./report-store.ts";
 import { reportAppsForBot } from "./report-apps.ts";
+import { DEFAULT_APPS } from "./default-documents.ts";
+
+vi.mock("./default-template-history.ts", async (original) => {
+  const { SHIPPED_TEMPLATE_SHA256 } = await original<typeof import("./default-template-history.ts")>();
+  const { createHash } = await import("node:crypto");
+  const digest = (html: string) => createHash("sha256").update(html).digest("hex");
+  return { SHIPPED_TEMPLATE_SHA256: {
+    bookkeeping: [...SHIPPED_TEMPLATE_SHA256.bookkeeping, digest("<h1>Ledger</h1>")],
+    x_ai_digest: [...SHIPPED_TEMPLATE_SHA256.x_ai_digest, digest("<h1>Bundled report</h1>")],
+    github_activity: [...SHIPPED_TEMPLATE_SHA256.github_activity, digest("<h1>Bundled report</h1>")],
+  } };
+});
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
@@ -120,6 +132,91 @@ it("does not add apps for Bots or read-only actors", () => {
   expect(() => defaults.ensure({ ...owner, writeAllowed: false }, input)).toThrow("Only the local workspace owner");
   expect(() => defaults.ensure(owner, { ...input, restore: "unknown" })).toThrow("Pass the bundled");
   expect(apps.list(owner)).toEqual([]);
+});
+
+it("updates an untouched bundled page in place without rediscovering Data or restoring publisher grants", async () => {
+  const { defaults, apps, data, restarted } = fixture();
+  const ledger = await data.forBot("ledger");
+  await ledger.run(ledgerSql, { connection: "bot", businessMutation: true });
+  await ledger.run(`INSERT INTO ledger_master VALUES
+    ('Food', '2025-03-01', '-12.34', 'Card', 'Daily', 'CNY', 'Lunch')`, { connection: "bot", businessMutation: true });
+  const app = (await defaults.ensure(owner, input)).apps.find((entry) => entry.shippedTemplateKind === "bookkeeping")!;
+  const before = apps.document(owner, app.id);
+  await apps.publish(owner, { ...publication(before), title: "Family ledger", description: "Our records", publisherBotIds: [] }, app.id);
+  await (await data.forBot("reports")).run(ledgerSql, { connection: "bot", businessMutation: true });
+  const updatedInput = { bookkeepingHtml: "<main>Updated ledger</main>" };
+  const result = await restarted().ensure(owner, updatedInput);
+  expect(result.issues).toEqual([]);
+  const updated = apps.document(owner, app.id);
+  expect(updated.app).toMatchObject({ id: app.id, slug: app.slug, title: "Family ledger", description: "Our records",
+    publisherBotIds: [], revision: 3, templateVersion: 3 });
+  expect(updated.html).toBe(updatedInput.bookkeepingHtml);
+  expect(updated.bindings).toEqual(before.bindings);
+  expect((await data.listDatasets("workspace-owner"))).toHaveLength(1);
+  expect((await apps.query(owner, app.id, { queryId: "summary", parameters: {}, expectedRevision: 3 })).rows)
+    .toEqual([["CNY", "1", "-12.34"]]);
+  await defaults.ensure(owner, updatedInput);
+  expect(apps.document(owner, app.id)).toEqual(updated);
+  await apps.rollback(owner, app.id, { requestKey: "keep-previous-page", expectedRevision: 3, templateVersion: 2 });
+  const rollback = apps.document(owner, app.id);
+  await defaults.ensure(owner, updatedInput);
+  expect(apps.document(owner, app.id)).toEqual(rollback);
+});
+
+it("preserves custom pages and query edits, and only updates a removed app when explicitly restored", async () => {
+  const { defaults, apps, data } = fixture();
+  await (await data.forBot("ledger")).run(ledgerSql, { connection: "bot", businessMutation: true });
+  const app = (await defaults.ensure(owner, input)).apps.find((entry) => entry.shippedTemplateKind === "bookkeeping")!;
+  const original = apps.document(owner, app.id);
+  const updatedInput = { bookkeepingHtml: "<main>Updated ledger</main>" };
+  const custom = await apps.publish(owner, { ...publication(original), html: "<main>My custom page</main>" }, app.id);
+  expect((await defaults.ensure(owner, updatedInput)).apps.find((entry) => entry.id === app.id)).toEqual(custom.app);
+  const bindings = structuredClone(original.bindings);
+  bindings[0]!.queries.details!.pageSize = 10;
+  const customQuery = await apps.publish(owner, { ...publication(apps.document(owner, app.id)),
+    requestKey: "query-edit", html: input.bookkeepingHtml, bindings }, app.id);
+  expect((await defaults.ensure(owner, updatedInput)).apps.find((entry) => entry.id === app.id)).toEqual(customQuery.app);
+  await apps.publish(owner, { ...publication(apps.document(owner, app.id)), requestKey: "bundled-page", bindings: original.bindings }, app.id);
+  const current = apps.document(owner, app.id);
+  apps.archive(owner, app.id, { requestKey: "remove", expectedRevision: current.app.revision });
+  const archived = apps.document(owner, app.id);
+  await defaults.ensure(owner, updatedInput);
+  expect(apps.document(owner, app.id)).toEqual(archived);
+  await defaults.ensure(owner, { ...updatedInput, restore: "bookkeeping" });
+  expect(apps.document(owner, app.id)).toMatchObject({ html: updatedInput.bookkeepingHtml, bindings: original.bindings,
+    app: { id: app.id, status: "active", revision: archived.app.revision + 1 } });
+});
+
+it("upgrades bundled report pages without changing their retained editions or publisher grants", async () => {
+  for (const kind of ["x_ai_digest", "github_activity"] as const) {
+    const { defaults, apps, data } = fixture();
+    const reports = new ReportStore(data, () => "<h1>Bundled report</h1>");
+    const source = await reports.prepare("reports", kind);
+    await reports.publish("reports", kind, { editionKey: "2025-03-01", windowStartAt: null, windowEndAt: null,
+      sourceAsOfAt: null, coverageStatus: "partial", coverageNote: "Synthetic fixture", items: [{
+        title: "Fixture project", summary: "A retained report item", sourceLabel: "Fixture source",
+        sourceUrl: "https://github.com/example/project", sourcePublishedAt: null, attribution: "primary",
+        repoFullName: "example/project", selectionBasis: "Synthetic fixture",
+      }] });
+    const published = await apps.publish(owner, { ...source.publication, requestKey: `install-${kind}`, shippedTemplateKind: kind,
+      title: kind === "github_activity" ? "GitHub activity" : "My AI digest", publisherBotIds: [] });
+    const before = apps.document(owner, published.app.id);
+    const dataBefore = (await apps.state(owner, published.app.id)).data;
+    const result = await defaults.ensure(owner, input);
+    expect(result.issues).toEqual([]);
+    const updated = apps.document(owner, published.app.id);
+    expect(updated.html).toBe(createReportTemplate(kind));
+    expect(updated.bindings).toEqual(before.bindings);
+    expect((await apps.state(owner, published.app.id)).data).toEqual(dataBefore);
+    const edition = await apps.query(owner, published.app.id, { queryId: "current", parameters: {}, expectedRevision: 2 });
+    expect(edition.rows).toHaveLength(1);
+    expect(edition.rows[0]).toContain("2025-03-01");
+    expect(updated.app).toMatchObject({ id: published.app.id, revision: 2, publisherBotIds: [],
+      title: kind === "github_activity" ? DEFAULT_APPS.github_activity.title : "My AI digest" });
+    const state = await apps.state(owner, published.app.id);
+    await defaults.ensure(owner, input);
+    expect(await apps.state(owner, published.app.id)).toEqual(state);
+  }
 });
 
 it("advertises only the producer's current exact report binding without relying on a fixed slug", async () => {

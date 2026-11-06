@@ -9,6 +9,7 @@ import type { DataEngine } from "../data/types.ts";
 import type { Routine } from "../routines.ts";
 import { DEFAULT_APPS, NATIVE_DEFAULT_HTML, pendingDefaultHtml } from "./default-documents.ts";
 import { existingBookkeepingSource } from "./default-sources.ts";
+import { defaultMiniAppUpdate } from "./default-updates.ts";
 import type { MiniAppActor, MiniApps } from "./registry.ts";
 import type { ReportStore } from "./report-store.ts";
 import { appFailure } from "./validation.ts";
@@ -63,6 +64,11 @@ export class DefaultMiniApps {
     if (existing?.status === "archived" && input.restore !== kind) return;
     const current = existing ? this.deps.apps.document(owner, existing.id) : null;
     if (current && !this.waiting(current, kind)) {
+      const update = defaultMiniAppUpdate(current, kind, input.bookkeepingHtml);
+      if (update) {
+        await this.deps.apps.publish(owner, update, current.app.id);
+        return;
+      }
       if (input.restore === kind && (current.app.status === "archived" || nativeKind(kind) && !current.app.dashboard)) {
         await this.restore(owner, current, kind);
       }
