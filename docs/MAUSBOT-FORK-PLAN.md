@@ -3,6 +3,8 @@
 Current canonical repository: https://github.com/MashellHan/mymausbot. The plan below
 retains its November 3 repository and evidence context.
 
+Current follow-up work is tracked in the [MausBot backlog](MAUSBOT-BACKLOG.md).
+
 Owner: 大雄 (menha). Historical repository: https://github.com/MashellHan/openmausbot.
 Upstream: https://github.com/milind-soni/OpenMausBot.
 
