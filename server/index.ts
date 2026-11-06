@@ -229,7 +229,7 @@ import { createOneOnOneGoals } from "./host/one-on-one-goals.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { openCodeProviderKeysAllowed, setOpenCodeProviderKeyPolicy } from "./drivers/acp/opencode-go.ts";
-import { openCardRows, readMessageText, recallMessages, recentMessages, closeMessageSearch, closeMessageDb, chatFollowups, cancelledChatFollowup, settleChatFollowups, threadsReferencing, logNotification, lastRowAt, threadsWithCardsSince, appDocRefs } from "./message-db.ts";
+import { openCardRows, readMessageText, recallMessages, recentMessages, closeMessageSearch, closeMessageDb, chatFollowups, cancelledChatFollowup, settleChatFollowups, threadsReferencing, logNotification, lastRowAt, threadsWithCardsSince } from "./message-db.ts";
 import { briefCrossingLabel, claimRecallCrossings, recallCrossingLabel } from "./recall-disclosure.ts";
 import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine } from "./recent-work.ts";
 import { chiefEscalationsEnabled, NEEDS_INPUT_GATE, peerApprovalGate, RAISED_GATE } from "./escalations.ts";
@@ -454,10 +454,8 @@ import { parseTriggerRequest, triggerTarget } from "./trigger-tools.ts"; import 
 import { appliesNow, directApply, UNDO_STALE, type DirectApply } from "./direct-apply.ts";
 import { createTeamMemoryRequests } from "./team-memory-requests.ts";
 import { createAgentCard } from "./chat-widgets.ts";
-import { createChatAppRoutes, createChatApps, createChatAppsMcp } from "./routes/chat-apps.ts";
-import { MiniApps, miniAppDocRefs } from "./mini-apps/registry.ts";
-import { createMiniAppRoutes, createMiniAppsInternalRoutes } from "./routes/mini-apps.ts";
-import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts";
+import { createChatAppRoutes, createChatAppsMcp } from "./routes/chat-apps.ts";
+import { createMiniAppRouteHandlers } from "./routes/mini-apps.ts"; import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts";
 import { buildBotOverview, type BotOverview, connectedAppsFacts } from "./bot-overview.ts";
 import { ProfileRequestService } from "./profile-requests.ts";
 import { ModelRequestService } from "./model-requests.ts";
@@ -12106,8 +12104,7 @@ const workspaceBackupAccess = {
     if (keepLocked && teamComputers.list().some(computer => computer.section !== null)) {
       throw Object.assign(new Error("Unassign team computers before restoring this workspace"), { status: 409 });
     }
-    assertMiniAppExportPrivacy(DATA_DIR, sharedMembership() || HOSTED_WORKSPACE);
-    return withMiniAppBackup(DATA_DIR, dataEngine, work);
+    assertMiniAppExportPrivacy(DATA_DIR, sharedMembership() || HOSTED_WORKSPACE); return withMiniAppBackup(DATA_DIR, dataEngine, work);
   }, {
     idle: () => !providerFleetReloading && !providerAuthSessions.active && !browserEngineInstall &&
       !routines?.isTicking && !calendarCalls?.isTicking && !botWaits.isTicking &&
@@ -12156,10 +12153,7 @@ ROUTES.push(createBotMessageRoutes({
   relayedReaction: (threadId, messageId, person, emoji) => void store.setReaction(threadId, messageId, relayedPersonKey(person),
     { emoji, name: person.name ?? person.email, at: Date.now() }),
 }));
-const chatApps = createChatApps({ store, dataDir: DATA_DIR, references: () => [...appDocRefs(), ...miniAppDocRefs()] });
-const miniApps = new MiniApps({ docs: chatApps.docs, data: dataEngine, validPublisher: (id) => Boolean(store.bot(id)) });
-const miniAppDeps = { apps: miniApps, data: dataEngine, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots };
-const miniAppsInternal = createMiniAppsInternalRoutes(miniAppDeps); ROUTES.push(createMiniAppRoutes(miniAppDeps));
+const { chatApps, owner: miniAppsRoute, internal: miniAppsInternal } = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, validPublisher: (id) => Boolean(store.bot(id)), localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots }); ROUTES.push(miniAppsRoute);
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, storedServers: () => cfg.mcpServers ?? {}, mountedServers: engineMcpServers, personMcp: teamConnections.personMcp, oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc }));
 const { react } = createReactions({
