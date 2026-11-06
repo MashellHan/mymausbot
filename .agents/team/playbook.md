@@ -1,8 +1,10 @@
 # MausBot development team
 
-The user is 大雄 (menha). This dedicated Herdr team develops the personal
-MashellHan/openmausbot fork in `/Users/mengxionghan/workspace/OpenMausBot`.
-The original repository remains the upstream. Preserve its license and notices.
+The user is 大雄 (menha). This dedicated Herdr team develops the standalone
+personal repository `MashellHan/mymausbot` (`fork=false`) in
+`/Users/mengxionghan/workspace/OpenMausBot`. The old `MashellHan/openmausbot`
+holds historical PR, issue, review and CI records. The original repository
+remains the read-only upstream. Preserve its license and notices.
 
 ## Roles
 
@@ -81,7 +83,11 @@ Chinese text. Code comments must also be in English. Keep actual conversation,
 task and automation identifiers in local handoff records, not public documents.
 Respect upstream AGENTS.md, required hooks/checks and verification fixtures.
 Consult the github-accounts skill for identity and repository-specific auth.
-Only push feature branches and PRs to the user's fork; do not push upstream.
+Root alone switches shared `origin`, config, QA and Actions. Until Root explicitly
+releases the cutover, write to neither repository. After release, verify `origin`
+points to `MashellHan/mymausbot`; push feature branches and PRs only there.
+Never push to upstream or the old repository. Map historical PR and issue
+numbers through Root before citing their new counterparts.
 The user requested commit/PR history. Preserve intermediate meaningful commits;
 do not manufacture commit counts, force-push others' work or bypass checks.
 
@@ -89,10 +95,11 @@ Lead should dispatch ready changes to reviewer immediately, with exact commit,
 diff scope and validation. Review may run alongside independent next work.
 Use one focused review, one correction batch and delta review of changed hunks
 plus affected contracts. Repeat broad review only for new risk or unresolved
-findings. The user has authorized reviewed merges into the personal fork. Lead
-decides merge order and merges only after Reviewer has no unresolved
-findings and required checks pass. Creating and pushing reviewable PRs is
-authorized here.
+findings. The user has authorized reviewed merges into the personal repository
+after Root releases the cutover. Lead decides merge order and merges only after
+Reviewer has no unresolved findings and required checks pass. Creating and
+pushing reviewable PRs is
+authorized only after that release.
 Never equate a green badge or an idle agent with completed work.
 
 ## Local candidate delivery
