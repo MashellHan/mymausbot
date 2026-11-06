@@ -51,8 +51,9 @@ it("renews through one stable controller timer while polling and rejects a forei
         return state;
       }),
       renewPairing: vi.fn(async () => {
-        state = { ...state, pairing: { code: "654321", token: token("c"), expiresAt: Date.now() + 120_000 } };
-        valid.add(state.pairing.token);
+        const pairing = { code: "654321", token: token("c"), expiresAt: Date.now() + 120_000 };
+        state = { ...state, pairing };
+        valid.add(pairing.token);
         return state;
       }),
     },
