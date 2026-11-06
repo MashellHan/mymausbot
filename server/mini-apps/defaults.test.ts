@@ -13,13 +13,14 @@ import { DefaultMiniApps } from "./defaults.ts";
 import { MiniApps, type MiniAppActor } from "./registry.ts";
 import { ReportStore } from "./report-store.ts";
 import { reportAppsForBot } from "./report-apps.ts";
-import { DEFAULT_APPS } from "./default-documents.ts";
+import { DEFAULT_APPS, pendingDefaultHtml } from "./default-documents.ts";
 
 vi.mock("./default-template-history.ts", async (original) => {
-  const { SHIPPED_TEMPLATE_SHA256 } = await original<typeof import("./default-template-history.ts")>();
+  const history = await original<typeof import("./default-template-history.ts")>();
+  const { SHIPPED_TEMPLATE_SHA256 } = history;
   const { createHash } = await import("node:crypto");
   const digest = (html: string) => createHash("sha256").update(html).digest("hex");
-  return { SHIPPED_TEMPLATE_SHA256: {
+  return { ...history, SHIPPED_TEMPLATE_SHA256: {
     bookkeeping: [...SHIPPED_TEMPLATE_SHA256.bookkeeping, digest("<h1>Ledger</h1>")],
     x_ai_digest: [...SHIPPED_TEMPLATE_SHA256.x_ai_digest, digest("<h1>Bundled report</h1>")],
     github_activity: [...SHIPPED_TEMPLATE_SHA256.github_activity, digest("<h1>Bundled report</h1>")],
@@ -217,6 +218,30 @@ it("upgrades bundled report pages without changing their retained editions or pu
     await defaults.ensure(owner, input);
     expect(await apps.state(owner, published.app.id)).toEqual(state);
   }
+});
+
+it("connects a stock report waiting under its previous name without replacing custom or removed pages", async () => {
+  const { defaults, apps, routines } = fixture();
+  const app = (await defaults.ensure(owner, input)).apps.find((entry) => entry.shippedTemplateKind === "github_activity")!;
+  const legacyHtml = pendingDefaultHtml("github_activity").replaceAll(DEFAULT_APPS.github_activity.title, "GitHub activity");
+  const custom = await apps.publish(owner, { ...publication(apps.document(owner, app.id)),
+    html: `${legacyHtml}<p>My report notes</p>` }, app.id);
+  routines.push({ id: "github", botId: "reports", name: "GitHub discovery report", prompt: "Gather sources.",
+    enabled: true, target: "bot", runOn: "maus", schedule: { type: "interval", everyMinutes: 1440, anchorAt: 1 },
+    durationMinutes: 0, nextRunAt: null, createdAt: 1, updatedAt: 1 });
+  expect((await defaults.ensure(owner, input)).apps.find((entry) => entry.id === app.id)).toEqual(custom.app);
+  const legacy = await apps.publish(owner, { ...publication(apps.document(owner, app.id)),
+    requestKey: "previous-default", title: "GitHub activity", html: legacyHtml }, app.id);
+  const archived = apps.archive(owner, app.id, { requestKey: "remove", expectedRevision: legacy.app.revision });
+  expect((await defaults.ensure(owner, input)).apps.find((entry) => entry.id === app.id)).toEqual(archived.app);
+  const restored = await defaults.ensure(owner, { ...input, restore: "github_activity" });
+  expect(restored.issues).toEqual([]);
+  expect(restored.apps.find((entry) => entry.id === app.id)).toMatchObject({ title: DEFAULT_APPS.github_activity.title,
+    revision: archived.app.revision + 1, status: "active", publisherBotIds: ["reports"] });
+  const connected = apps.document(owner, app.id);
+  expect(connected.bindings).toHaveLength(1);
+  expect(connected.html).toBe(createReportTemplate("github_activity"));
+  expect((await defaults.ensure(owner, input)).apps.find((entry) => entry.id === app.id)).toEqual(connected.app);
 });
 
 it("advertises only the producer's current exact report binding without relying on a fixed slug", async () => {

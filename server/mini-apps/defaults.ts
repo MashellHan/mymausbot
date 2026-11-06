@@ -7,7 +7,7 @@ import type { ReportKind } from "../../shared/report-mini-app.ts";
 import { reportKindForRoutine } from "../../shared/report-routine.ts";
 import type { DataEngine } from "../data/types.ts";
 import type { Routine } from "../routines.ts";
-import { DEFAULT_APPS, NATIVE_DEFAULT_HTML, pendingDefaultHtml } from "./default-documents.ts";
+import { DEFAULT_APPS, matchesPendingDefaultHtml, NATIVE_DEFAULT_HTML, pendingDefaultHtml, updatedDefaultAppTitle } from "./default-documents.ts";
 import { existingBookkeepingSource } from "./default-sources.ts";
 import { defaultMiniAppUpdate } from "./default-updates.ts";
 import type { MiniAppActor, MiniApps } from "./registry.ts";
@@ -82,7 +82,7 @@ export class DefaultMiniApps {
     }
     if (current && !publication.bindings.length && current.app.status === "active") return;
     publication.slug = current?.app.slug ?? this.availableSlug(apps, kind);
-    publication.title = current?.app.title ?? publication.title;
+    publication.title = current ? updatedDefaultAppTitle(kind, current.app.title) : publication.title;
     publication.description = current?.app.description ?? publication.description;
     publication.expectedRevision = current?.app.revision ?? 0;
     await this.deps.apps.publish(owner, publication, current?.app.id);
@@ -90,7 +90,7 @@ export class DefaultMiniApps {
 
   private waiting(document: MiniAppDocument, kind: DefaultMiniAppKind): boolean {
     return !nativeKind(kind) && !document.bindings.length && !document.app.publisherBotIds.length
-      && document.html === pendingDefaultHtml(kind);
+      && matchesPendingDefaultHtml(kind, document.html);
   }
 
   private availableSlug(apps: MiniAppSummary[], kind: DefaultMiniAppKind): string {
