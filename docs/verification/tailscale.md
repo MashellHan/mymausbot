@@ -34,3 +34,28 @@ that Remote access reports the MagicDNS name, then switch the phone from Wi-Fi
 to cellular with Tailscale connected on both devices. Keep public tunnel/DNS
 failures separate: a hosted URL returning a deployment 404 is not repaired by
 successful MagicDNS discovery.
+
+## Snapshot compression through a reverse proxy
+
+Tailscale Funnel can forward directly to the server's loopback HTTP listener.
+Forwarded requests use the same JSON compression as the private tunnel
+listener: replies of at least 1 KB are gzipped when the client accepts gzip.
+Direct loopback requests keep their original response. Forwarding headers do
+not grant access; a remote phone still needs its paired session.
+
+```sh
+pnpm exec vitest run server/forwarded-json.e2e.test.ts server/harness/tunnel-gzip.test.ts
+```
+
+The regression launches an isolated fake-engine workspace, pairs a disposable
+client, and requests its initial `/api/bots?messages=50` snapshot through the
+real HTTP listener with proxy headers. It checks exact decompressed content,
+encoding negotiation, direct loopback behavior, an immediate uncompressed SSE
+hello before requesting the snapshot, client scope, and session revocation.
+All mutations belong to the fixture; no real phone or workspace is used.
+
+This verifies the server transport contract, not a three-second phone startup.
+The native client decides whether connection readiness waits for history
+synchronization. Moving that synchronization into the background needs the
+corresponding native source and cursor/replay tests so a snapshot cannot
+overwrite newer streamed messages.

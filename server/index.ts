@@ -15503,7 +15503,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   }
 };
 
-const server = createServer(IDLE_HTTP_SERVER, handleRequest);
+const server = createServer(IDLE_HTTP_SERVER, (req, res) => (isProxied(req) ? gzipTunnelReplies(handleRequest) : handleRequest)(req, res));
 upgrades.attach(server, handleRequest);
 
 moveFreeze.hold(() => calendarCalls.start(), () => calendarCalls.stop());
