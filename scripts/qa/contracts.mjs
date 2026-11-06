@@ -1,6 +1,17 @@
 import { ALL_OS, ciOutputs, FULL_SCOPE } from "../ci-scope.mjs";
 
 export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
+const PREFLIGHT_NAMES = {
+  hosted: ["preflight", "typecheck + lint"],
+  boat: ["preflight + Linux tests (Boat)", "typecheck + lint + Linux tests (Boat)"],
+};
+
+export function preflightJob(jobs) {
+  const matches = jobs.filter((job) => [...PREFLIGHT_NAMES.hosted, ...PREFLIGHT_NAMES.boat].includes(job.name));
+  if (matches.length > 1) throw new Error("Ambiguous workflow preflight");
+  return matches[0] ?? null;
+}
+
 const NAMES = {
   build: "typecheck + build",
   "behavior-evals": "behavior evals (offline tiers 1-3)",
@@ -13,8 +24,10 @@ const NAMES = {
   "package-linux": "package + smoke (Ubuntu 24.04 x64)",
 };
 
-export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true) {
-  const jobs = [{ id: "static", name: outputs.linux_lanes ? "typecheck + lint + Linux tests (Boat)" : "typecheck + lint", linux: Boolean(outputs.linux_lanes),
+export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true, preflightName) {
+  const names = outputs.linux_lanes ? PREFLIGHT_NAMES.boat : PREFLIGHT_NAMES.hosted;
+  if (preflightName !== undefined && !names.includes(preflightName)) throw new Error("Invalid workflow preflight");
+  const jobs = [{ id: "static", name: preflightName ?? names[0], linux: Boolean(outputs.linux_lanes),
     ...(outputs.linux_lanes?.vitest.length || outputs.linux_lanes?.evals ? { artifact: "qa-results-boat" } : {}) }];
   for (const id of outputs.jobs) {
     if (!full && !MERGE_JOBS.includes(id)) continue;
@@ -66,7 +79,7 @@ export function executionComplete(expected, jobs, artifacts) {
     const job = jobs.find((entry) => entry.name === item.name);
     if (!job || job.status !== "completed" || !["success", "failure"].includes(job.conclusion)) return false;
     if (item.artifact && !artifacts.has(item.artifact)) return false;
-    const steps = VALIDATION_STEPS[item.id];
+    const steps = [...VALIDATION_STEPS[item.id]];
     if (item.linux) steps.push("Linux tests (vitest shards, behavior evals, packaged server), side by side");
     if (item.nodeTests) steps.push("Broker and Electron unit tests");
     if (item.id === "browser-driver" && item.name.includes("ubuntu")) steps.push("S4 inside the server image's runtime");

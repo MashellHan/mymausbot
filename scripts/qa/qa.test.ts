@@ -23,7 +23,7 @@ function result(status = "failed") {
       assertionResults: [{ ancestorTitles: ["auth"], title: "rejects a foreign owner", status, failureMessages: ["Expected 403, received 200"] }] }] }) };
 }
 
-function passedPreflight(name = "typecheck + lint") {
+function passedPreflight(name = "preflight") {
   const steps = ["Verify CI selection and documentation references", "Validate locale catalogs", "pnpm lint", "Source guards"];
   if (name.includes("Boat")) steps.push("Linux tests (vitest shards, behavior evals, packaged server), side by side");
   return { name, run_attempt: 1, status: "completed", conclusion: "success", steps: steps.map((name) => ({ name, conclusion: "success" })) };
@@ -51,12 +51,72 @@ describe("complete CI and trusted QA health", () => {
   it("keeps the separate build required and its checks out of static", () => {
     const contracts = expectedJobs({ jobs: ["build"], vitest_os: [], packaged_server_os: [], vitest_matrix: { include: [] } }, false);
     expect(contracts.map(({ id, name }) => ({ id, name }))).toEqual([
-      { id: "static", name: "typecheck + lint" }, { id: "build", name: "typecheck + build" },
+      { id: "static", name: "preflight" }, { id: "build", name: "typecheck + build" },
     ]);
     const preflight = passedPreflight();
     const build = { name: "typecheck + build", status: "completed", conclusion: "success", steps: ["pnpm typecheck", "pnpm check:electron", "production UI build"].map((name) => ({ name, conclusion: "success" })) };
     expect(executionComplete(contracts, [preflight, build], new Set())).toBe(true);
     expect(executionComplete(contracts, [preflight, { ...build, steps: build.steps.slice(1) }], new Set())).toBe(false);
+  });
+
+  it("uses the hosted and Boat preflight names, while accepting exact historical producers", async () => {
+    const hosted = { jobs: [], vitest_os: [], packaged_server_os: [], vitest_matrix: { include: [] } };
+    const boat = { ...hosted, linux_lanes: { vitest: [], evals: false, packaged_server: false } };
+    expect(expectedJobs(hosted)[0].name).toBe("preflight");
+    expect(expectedJobs(boat)[0].name).toBe("preflight + Linux tests (Boat)");
+    expect(expectedJobs(hosted, true, "typecheck + lint")[0].name).toBe("typecheck + lint");
+    expect(() => expectedJobs(hosted, true, "preflight + Linux tests (Boat)")).toThrow("Invalid workflow preflight");
+
+    for (const name of ["preflight", "preflight + Linux tests (Boat)", "typecheck + lint", "typecheck + lint + Linux tests (Boat)"]) {
+      const outputs = { full_required: false, expected_jobs: [{ id: "static", name }], required_jobs: [], qa_areas: ["global"], reduced: false };
+      const plan = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs };
+      const api = async (path: string) => path.startsWith("/issues?") ? [] : path.includes("/artifacts")
+        ? { artifacts: [{ name: "qa-plan-attempt-1", workflow_run: { id: run.id } }] }
+        : { jobs: [passedPreflight(name)] };
+      await expect(gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }), runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 })).resolves.toBeUndefined();
+    }
+    const api = async (path: string) => path.includes("/jobs")
+      ? { jobs: [passedPreflight("preflight"), passedPreflight("typecheck + lint")] } : { artifacts: [] };
+    await expect(gateRun({ api, runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("Ambiguous workflow preflight");
+    for (const name of ["preflight", "preflight + Linux tests (Boat)"]) {
+      const failedApi = async (path: string) => path.includes("/jobs")
+        ? { jobs: [{ ...passedPreflight(name), conclusion: "failure" }] } : { artifacts: [] };
+      await expect(gateRun({ api: failedApi, runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("Preflight failure");
+    }
+  });
+
+  it("keeps conditional validation steps per row across calls", () => {
+    const steps = (...names: string[]) => names.map((name) => ({ name, conclusion: "success" }));
+    const complete = (item: object, names: string[]) => ({ ...item, status: "completed", conclusion: "success", steps: steps(...names) });
+    const hosted = { id: "static", name: "preflight" };
+    const shard1 = { id: "vitest", name: "vitest (ubuntu-latest, shard 1/8)", nodeTests: true, artifact: "shard-1" };
+    const shard2 = { id: "vitest", name: "vitest (ubuntu-latest, shard 2/8)", nodeTests: false, artifact: "shard-2" };
+    const first = complete(shard1, ["Run tests", "Broker and Electron unit tests"]);
+    const second = complete(shard2, ["Run tests"]);
+    const shards = [hosted, shard1, shard2];
+    const observed = [passedPreflight(), first, second];
+    const artifacts = new Set(["shard-1", "shard-2"]);
+    expect(executionComplete(shards, observed, artifacts)).toBe(true);
+    expect(executionComplete(shards, observed, artifacts)).toBe(true);
+    expect(executionComplete(shards, [observed[0], complete(shard1, ["Run tests"]), second], artifacts)).toBe(false);
+    expect(executionComplete(shards, observed, new Set(["shard-1"]))).toBe(false);
+
+    const drivers = ["ubuntu-latest", "windows-latest", "macos-latest"].map((os) => ({ id: "browser-driver", name: `browser driver S4 (${os})`, artifact: `driver-${os}` }));
+    const driverJobs = drivers.map((item) => complete(item, ["S4 on the runner's Google Chrome",
+      ...(item.name.includes("ubuntu") ? ["S4 inside the server image's runtime"] : []),
+      ...(item.name.includes("macos") ? ["The runner's Google Chrome did not change"] : [])]));
+    const driverArtifacts = new Set(drivers.map((item) => item.artifact));
+    expect(executionComplete(drivers, driverJobs, driverArtifacts)).toBe(true);
+    expect(executionComplete(drivers, driverJobs, driverArtifacts)).toBe(true);
+    expect(executionComplete(drivers, [complete(drivers[0], ["S4 on the runner's Google Chrome"]), ...driverJobs.slice(1)], driverArtifacts)).toBe(false);
+    expect(executionComplete(drivers, [...driverJobs.slice(0, 2), complete(drivers[2], ["S4 on the runner's Google Chrome"])], driverArtifacts)).toBe(false);
+
+    const boat = { id: "static", name: "preflight + Linux tests (Boat)", linux: true };
+    const boatJob = passedPreflight(boat.name);
+    expect(executionComplete([boat], [boatJob], new Set())).toBe(true);
+    expect(executionComplete([hosted], [passedPreflight()], new Set())).toBe(true);
+    expect(executionComplete([boat], [{ ...boatJob, steps: boatJob.steps.slice(0, -1) }], new Set())).toBe(false);
+    expect(executionComplete([hosted], [passedPreflight()], new Set())).toBe(true);
   });
 
   it("includes every specialist job and every matrix row, excluding deployment", () => {
@@ -104,7 +164,7 @@ describe("complete CI and trusted QA health", () => {
   });
 
   it("cannot pass a selected missing full job or a newly unavailable reduced-coverage guard", async () => {
-    const outputs = { full_required: true, expected_jobs: [{ id: "static", name: "typecheck + lint" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false };
+    const outputs = { full_required: true, expected_jobs: [{ id: "static", name: "preflight" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false };
     const api = async (path: string) => path.startsWith("/issues?") ? [] : { jobs: [] };
     await expect(verifyGate(outputs, { api, deadlineMs: 0 })).rejects.toThrow("Incomplete required validation");
     await expect(verifyGate({ ...outputs, full_required: false, reduced: true }, { api, health: async () => ({ healthy: false, reason: "stale", blockedAreas: [] }) })).rejects.toThrow("stale");
@@ -113,7 +173,7 @@ describe("complete CI and trusted QA health", () => {
   });
 
   it("rechecks holds and authoritative repair controls after required jobs finish", async () => {
-    const outputs = { full_required: true, expected_jobs: [{ id: "static", name: "typecheck + lint" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false, pr_number: 7, pr_head: "head" };
+    const outputs = { full_required: true, expected_jobs: [{ id: "static", name: "preflight" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false, pr_number: 7, pr_head: "head" };
     let completed = false;
     let labels: string[] = [];
     const api = async (path: string) => {
@@ -128,12 +188,12 @@ describe("complete CI and trusted QA health", () => {
   });
 
   it("accepts only a selection artifact from the exact run, attempt and revision", async () => {
-    const outputs = { full_required: false, expected_jobs: [{ id: "static", name: "typecheck + lint" }], required_jobs: [], qa_areas: ["global"], reduced: false };
+    const outputs = { full_required: false, expected_jobs: [{ id: "static", name: "preflight" }], required_jobs: [], qa_areas: ["global"], reduced: false };
     const plan = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs };
     const api = async (path: string) => {
       if (path.startsWith("/issues?")) return [];
       if (path.includes("/artifacts")) return { artifacts: [{ name: "qa-plan-attempt-1" }] };
-      return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }] };
+      return { jobs: [{ name: "preflight", run_attempt: 1, status: "completed", conclusion: "success" }] };
     };
     const invoke = (value: object) => gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(value) }), runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 });
     await expect(invoke(plan)).resolves.toBeUndefined();
@@ -141,9 +201,9 @@ describe("complete CI and trusted QA health", () => {
   });
 
   it("carries successful same-run evidence for failed-jobs reruns while enforcing current controls", async () => {
-    const outputs = { full_required: false, expected_jobs: [{ id: "static", name: "typecheck + lint" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false, pr_number: 7, pr_head: run.head_sha };
+    const outputs = { full_required: false, expected_jobs: [{ id: "static", name: "preflight" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false, pr_number: 7, pr_head: run.head_sha };
     const plan = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs };
-    const jobs = [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, ...nextExecution, run_attempt: 2, conclusion: "success" }];
+    const jobs = [{ name: "preflight", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, ...nextExecution, run_attempt: 2, conclusion: "success" }];
     let labels: string[] = [];
     let expired = false;
     const api = async (path: string) => {
@@ -294,7 +354,7 @@ describe("QA findings and idempotent delivery", () => {
     const plan = { version: 1, sha: run.head_sha, runId: run.id, attempt: 1, outputs };
     const api = async (path: string, options?: object) => {
       if (path === `/actions/runs/${run.id}`) return current;
-      if (path.includes("/jobs")) return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, ...nextExecution, run_attempt: 2, conclusion: "success", steps: [{ name: "Run tests", conclusion: "success" }] }] };
+      if (path.includes("/jobs")) return { jobs: [{ name: "preflight", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, ...nextExecution, run_attempt: 2, conclusion: "success", steps: [{ name: "Run tests", conclusion: "success" }] }] };
       if (path.includes("/artifacts")) return { artifacts: [{ name: `${expected[0].artifact}-attempt-1` }, { name: `${expected[0].artifact}-attempt-2` }, { name: "qa-plan-attempt-1" }] };
       if (path.includes("ci.yml/runs")) return { workflow_runs: [] };
       return issuesApi(path, options);
@@ -319,7 +379,7 @@ describe("QA findings and idempotent delivery", () => {
     let artifacts = [resultName, `${expected[0].artifact}-attempt-2`, "qa-plan-attempt-1"].map((name) => ({ name, workflow_run: { id: run.id, head_sha: run.head_sha } }));
     const api = async (path: string, options?: object) => {
       if (path === `/actions/runs/${run.id}`) return current;
-      if (path.includes("/jobs")) return { jobs: [passedPreflight(), executed, copied] };
+      if (path.includes("/jobs")) return { jobs: [passedPreflight("typecheck + lint"), executed, copied] };
       if (path.includes("/artifacts")) return { artifacts };
       if (path.includes("ci.yml/runs")) return { workflow_runs: [] };
       return issuesApi(path, options);

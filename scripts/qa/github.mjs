@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { preflightJob } from "./contracts.mjs";
 
 const closedSocket = (error) => error instanceof TypeError && ["fetch failed", "terminated"].includes(error.message)
   && error.cause?.code === "UND_ERR_SOCKET" && error.cause?.message === "other side closed";
@@ -83,7 +84,7 @@ function producingJob(job, jobs) {
 }
 
 export async function runPlan(run, jobs, artifacts, { api = github, readArtifact = artifactFiles } = {}) {
-  const preflight = jobs.find((job) => job.name.startsWith("typecheck + lint"));
+  const preflight = preflightJob(jobs);
   if (!preflight) return null;
   const matches = artifacts.filter((item) => item.name === `qa-plan-attempt-${preflight.run_attempt}`);
   if (matches.length > 1) throw new Error("Ambiguous current-run validation plan");

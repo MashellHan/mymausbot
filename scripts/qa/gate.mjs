@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
-import { holdsFor, inspectJobs } from "./contracts.mjs";
+import { holdsFor, inspectJobs, preflightJob } from "./contracts.mjs";
 import { qaHealth } from "./health.mjs";
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -47,7 +47,7 @@ export async function gateRun({ api = github, readArtifact = artifactFiles, runI
   const started = Date.now();
   while (true) {
     const jobs = await runJobs(runId, attempt, api);
-    const preflight = jobs.find((job) => job.name.startsWith("typecheck + lint"));
+    const preflight = preflightJob(jobs);
     if (preflight?.status === "completed" && preflight.conclusion !== "success") throw new Error(`Preflight ${preflight.conclusion}`);
     const artifacts = await pages(`/actions/runs/${runId}/artifacts`, "artifacts", api);
     const plan = await runPlan({ id: Number(runId), run_attempt: Number(attempt), head_sha: sha }, jobs, artifacts, { api, readArtifact });
