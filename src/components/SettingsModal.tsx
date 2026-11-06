@@ -25,6 +25,7 @@ import { ActivitySection } from "./ActivitySection";
 import { AccessOverview } from "./bot-access/AccessOverview";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { currentPhonePairingTarget, phonePairingSettingsAction } from "@/lib/phone-pairing";
+import { useTailscaleFunnel } from "@/lib/tailscale-funnel";
 import { CustomDomainSettings } from "./CustomDomainSettings";
 import { BuiltInBrowserRow, ServerSitesRow } from "./BrowserSettingsRows";
 import { LoginsSettings } from "./LoginsSettings";
@@ -180,6 +181,7 @@ export function SettingsModal() {
   const { state, dispatch } = useStore();
   const advanced = useAdvancedMode();
   const remoteActive = window.ogb?.remoteClient?.active === true;
+  const funnel = useTailscaleFunnel(!remoteActive && state.config?.cloudHome !== true);
   const requested = state.appSettingsSection;
   const section: AppSettingsSection =
     (remoteActive && !["appearance", "desktopWorkspaces"].includes(requested)) || requested === "remote"
@@ -311,12 +313,13 @@ export function SettingsModal() {
 
   const phoneFocus = state.appSettingsPhonePairing;
   const computerPairs = currentPhonePairingTarget(state.config?.cloudHome === true) === "computer";
+  const funnelPairs = funnel?.state?.status === "ready" || funnel?.state?.status === "unavailable" && funnel.state.reason === "unverified";
   const remoteAccess = {
     client: <RemoteComputerSection hideWhenUnavailable={!advanced} />,
     domain: remoteActive ? null : <CustomDomainSettings />,
     // Security: the server decides who may pair (an owner or admin session), not this gate.
-    pairing: <ServerPairingCard cloudHome={state.config?.cloudHome === true} focusRequest={computerPairs ? 0 : phoneFocus} team={state.config?.team?.name} teamPhoneBlocked={state.config?.managedPolicy?.remoteAccess === false ? t("policy.teamRemoteBlocked", { organization: state.config.managedPolicy.organizationName }) : null} simple={!advanced} />,
-    companion: remoteActive ? null : <CompanionSection profileEmail={state.config?.profile?.email} focusRequest={computerPairs ? phoneFocus : 0} />,
+    pairing: <ServerPairingCard cloudHome={state.config?.cloudHome === true} focusRequest={!computerPairs || funnelPairs ? phoneFocus : 0} team={state.config?.team?.name} teamPhoneBlocked={state.config?.managedPolicy?.remoteAccess === false ? t("policy.teamRemoteBlocked", { organization: state.config.managedPolicy.organizationName }) : null} simple={!advanced} funnel={funnel} />,
+    companion: remoteActive ? null : <CompanionSection profileEmail={state.config?.profile?.email} focusRequest={computerPairs && !funnel?.checking && !funnelPairs ? phoneFocus : 0} />,
   };
 
   const renderSection = (id: AppSettingsSection) => {
