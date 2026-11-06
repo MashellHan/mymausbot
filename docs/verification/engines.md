@@ -49,6 +49,20 @@ prove real OAuth login or native Windows execution.
   provider.
 - Model-picker rendering is Electron UI and remains outside this first map.
 
+## Claude subscription usage
+
+```sh
+pnpm exec vitest run server/plan-usage.test.ts server/engine-limits.test.ts server/engine-limits.e2e.test.ts server/limit-resets.test.ts
+```
+
+Claude subscription usage is disabled before credential lookup, cache lookup or
+network access. The unit fixtures cover initial, cached, forced and expired reads
+and keep other providers available. The isolated server fixture checks ordinary
+and forced `/api/plan-usage` reads and the bot's scoped `usage_limits` capability:
+Claude has no quota figures and is reported as unsupported. These checks use
+synthetic credentials and a fake engine, without reading a real Keychain or
+calling a provider. Passive token totals collected from local logs are unchanged.
+
 ## Groq API setup
 
 ```sh
