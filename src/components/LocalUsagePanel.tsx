@@ -91,6 +91,7 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
   const focusedButton = useRef<HTMLButtonElement | null>(null);
   const lastFocused = useRef<Element | null>(null);
   const tooltipId = useId();
+  const weekdayFormat = new Intl.DateTimeFormat(activeLocale(), { weekday: "short", timeZone: "UTC" });
   const values = days.map((day) => trendValue(day, metric));
   const max = Math.max(1, ...values.filter((value): value is number => value !== null));
   const active = days.find((day) => day.day === activeDay) ?? null;
@@ -114,6 +115,9 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
       <h4 className="text-[13px] font-medium text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</h4>
       <div className="mt-2 flex h-16 items-end gap-[2px]">
         {days.map((day, index) => {
+          const date = new Date(`${day.day}T00:00:00Z`);
+          const weekday = date.getUTCDay();
+          const weekend = weekday === 0 || weekday === 6;
           const value = values[index];
           const label = metric === "prs" ? `${prText(day.prs, day.knownPrs)}${day.prs === null && day.knownPrs !== null ? ` · ${t("computer.usage.synced")}` : ""}` : metricText(value);
           const segments = metric === "totalTokens" ? [] : categoryOrder.map((category) => ({
@@ -121,9 +125,10 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
             partial: metric === "prs" && day.categories[category].prs === null,
           })).filter((segment) => segment.value > 0);
           const segmentTotal = segments.reduce((total, segment) => total + segment.value, 0);
-          return <button key={day.day} type="button" data-usage-day={day.day} ref={(element) => { if (element) buttons.current.set(day.day, element); else buttons.current.delete(day.day); }}
+          return <button key={day.day} type="button" data-usage-day={day.day} data-usage-weekend={weekend ? "" : undefined}
+            ref={(element) => { if (element) buttons.current.set(day.day, element); else buttons.current.delete(day.day); }}
             tabIndex={day.day === rovingDay ? 0 : -1}
-            aria-label={t("computer.usage.trendPoint", { day: day.day, metric: t(`computer.usage.metric.${metric}`), value: label })}
+            aria-label={t("computer.usage.trendPoint", { day: `${day.day} ${weekdayFormat.format(date)}`, metric: t(`computer.usage.metric.${metric}`), value: label })}
             aria-describedby={activeDay === day.day ? tooltipId : undefined}
             onMouseEnter={() => setActiveDay(day.day)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setActiveDay(null); }}
             onFocus={(event) => { focusedButton.current = event.currentTarget; setFocusDay(day.day); setActiveDay(day.day); }}
@@ -135,7 +140,7 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
               if (next === null) return;
               event.preventDefault(); buttons.current.get(days[next]!.day)?.focus();
             }}
-            className="flex h-full min-w-0 flex-1 items-end rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
+            className={cn("relative flex h-full min-w-0 flex-1 items-end rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60", weekend && "bg-ink/[0.035]")}>
             {value === null ? <span aria-hidden="true" className="h-full w-full bg-warning/15" />
               : <span aria-hidden="true" className="flex w-full flex-col-reverse overflow-hidden rounded-t-sm"
                 style={{ height: value === 0 ? 0 : `${Math.max(5, value / max * 100)}%` }}>
@@ -144,13 +149,14 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
                     className={partial ? partialCategoryTone[category] : categoryTone[category]} style={{ height: `${part / segmentTotal * 100}%` }} />)
                     : <span className="h-full w-full bg-ink-secondary/30" />}
               </span>}
+            {weekend && <span aria-hidden="true" data-usage-weekend-tick className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-px bg-ink/25" />}
           </button>;
         })}
       </div>
       {active && <div id={tooltipId} role="tooltip" data-usage-tooltip
         className="pointer-events-none absolute bottom-2 right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2 py-1.5 text-[12px] text-ink shadow-lg">
         <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
-          <time className="font-medium">{active.day}</time>
+          <time dateTime={active.day} className="font-medium">{active.day} · {weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}</time>
           <span>{t(`computer.usage.metric.${metric}`)}: {metric === "prs" ? <PrCount prs={active.prs} knownPrs={active.knownPrs} /> : metricText(trendValue(active, metric))}</span>
         </div>
         {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
