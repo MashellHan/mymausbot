@@ -25,6 +25,12 @@ describe("isOutboundTool", () => {
       "mcp__x__post",
       "mcp__other__x_post",
       "TWITTER_X_POST",
+      "mcp__other__mini_app_publish",
+      "mcp__agents__mini_app_publish_public",
+      "agents__mini_app_publish_external",
+      "agents_mini_app_publish_external",
+      "mcp__agents__other_mini_app_publish",
+      "publish_page",
     ]) {
       expect(isOutboundTool(name), name).toBe(true);
     }
@@ -52,11 +58,21 @@ describe("isOutboundTool", () => {
       "agents_x_post",
       "x_post",
       "mcp__agents__x_user_posts",
+      "mini_app_publish",
+      "mcp__agents__mini_app_publish",
+      "agents__mini_app_publish",
+      "agents_mini_app_publish",
       "Bash",
       "Read",
       "Edit",
     ]) {
       expect(isOutboundTool(name), name).toBe(false);
+    }
+  });
+
+  it("keeps the local Mini App publisher a write, not a read", () => {
+    for (const name of ["mini_app_publish", "mcp__agents__mini_app_publish", "agents__mini_app_publish", "agents_mini_app_publish"]) {
+      expect(isReadOnlyTool(name), name).toBe(false);
     }
   });
 });

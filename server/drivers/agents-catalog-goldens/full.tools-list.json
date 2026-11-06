@@ -527,6 +527,115 @@
       }
     },
     {
+      "name": "mini_app_info",
+      "description": "Discover your granted local Mini Apps, or read an app's editable HTML, data bindings and versions with app_id. Check for an existing app before making a recurring dashboard/report. Set guide=true for the complete authoring and refresh contract. Local workspace only; read-only.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "guide": {
+            "type": "boolean"
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "mini_app_connect",
+      "description": "Connect this bot's existing local Data for reusable Mini Apps. Returns a stable datasetId and physical table schemas; bound Data survives bot deletion. Call once before first publishing. No arguments; cannot connect another bot's Data.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
+      "name": "mini_app_publish",
+      "description": "Create or update a persistent local Mini App in Computer > Mini Apps. Read mini_app_info with guide=true first. Pass app_id to update, publication with requestKey, expectedRevision, slug, title, description, self-contained html and declarative bindings. Data-only updates use Data tools and refresh automatically. Does not publish to the internet.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publication"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "publication": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    {
+      "name": "mini_app_rollback",
+      "description": "Restore a granted Mini App's earlier templateVersion with its current expectedRevision and a new requestKey. Advances app revision; does not rewind business Data.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "app_id",
+          "requestKey",
+          "expectedRevision",
+          "templateVersion"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestKey": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "expectedRevision": {
+            "type": "integer"
+          },
+          "templateVersion": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "name": "mini_app_archive",
+      "description": "Archive a granted local Mini App when requested. Hides it from the active library; keeps its immutable templates and bound Data. Requires the current revision and a new requestKey.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "app_id",
+          "requestKey",
+          "expectedRevision"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestKey": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "expectedRevision": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
       "name": "post_to_room",
       "description": "Put one message into a shared room you belong to, for example when the user asks you to tell the team something. Get group_id from list_rooms. This posts and returns: no room member's turn starts, nobody replies, and nothing comes back except confirmation — so never use it to ask a question or hand out work (use coordinate_bots for those). Post once, say it in full, and tell the user what you posted. Set attach_voice_note true to attach this turn's voice note. If a post is refused, do not retry it unless the refusal says how: say what you wanted to post in your reply instead.",
       "inputSchema": {

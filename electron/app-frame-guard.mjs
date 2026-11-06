@@ -8,6 +8,11 @@
 
 const OWN_DOCUMENTS = new Set(["about:srcdoc", "about:blank"]);
 
+// Chromium 150 permits DNS hints from opaque frames despite connect-src 'none'; normal request resolution remains enabled.
+export function appFrameBlinkSettings(value = "") {
+  return [...value.split(",").map(setting => setting.trim()).filter(setting => setting && !setting.startsWith("dnsPrefetchingEnabled=")), "dnsPrefetchingEnabled=false"].join(",");
+}
+
 /**
  * @param {{ isMainFrame?: boolean, url?: string, frame?: { origin?: string } | null } | null | undefined} details
  * @returns {boolean} false when the navigation must be cancelled

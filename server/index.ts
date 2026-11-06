@@ -454,7 +454,8 @@ import { parseTriggerRequest, triggerTarget } from "./trigger-tools.ts"; import 
 import { appliesNow, directApply, UNDO_STALE, type DirectApply } from "./direct-apply.ts";
 import { createTeamMemoryRequests } from "./team-memory-requests.ts";
 import { createAgentCard } from "./chat-widgets.ts";
-import { createChatAppRoutes, createChatApps, createChatAppsMcp } from "./routes/chat-apps.ts";
+import { createChatAppRoutes, createChatAppsMcp } from "./routes/chat-apps.ts";
+import { createMiniAppRouteHandlers } from "./routes/mini-apps.ts"; import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts";
 import { buildBotOverview, type BotOverview, connectedAppsFacts } from "./bot-overview.ts";
 import { ProfileRequestService } from "./profile-requests.ts";
 import { ModelRequestService } from "./model-requests.ts";
@@ -9179,8 +9180,7 @@ async function deleteBotWithLifecycle(botId: string, revalidate: () => void = ()
           localVmIdles.get(target.key)?.cancel();
           localVmIdles.delete(target.key);
           // Re-check the reviewed receipt at the final durable mutation, so a concurrent profile edit cannot be erased under a stale approval.
-          revalidate();
-          store.deleteBot(bot.id, setupRequest);
+          await dataEngine.withBotDeletion(bot.id, () => { revalidate(); return store.deleteBot(bot.id, setupRequest); });
           skillReview.dropBot(bot.id);
           memoryUpkeep.forgetBot(bot.id);
           calendarCalls!.removeBot(bot.id);
@@ -9188,7 +9188,6 @@ async function deleteBotWithLifecycle(botId: string, revalidate: () => void = ()
           cacheKeepWarm.cancelBot(bot.id); warmSummaries.forgetBot(bot.id);
           await forgetTemporaryBrowser(bot.id);
           dataSheets.delete(bot.id);
-          if (dataEngine.unavailable() === null) await dataEngine.deleteBot(bot.id).catch((error) => console.warn(`data: could not delete ${bot.id}'s database`, error));
         } catch (error) {
           if (browserCleanupRequest) {
             if (store.bot(bot.id)) browserCleanup.abort(browserCleanupRequest);
@@ -12105,7 +12104,7 @@ const workspaceBackupAccess = {
     if (keepLocked && teamComputers.list().some(computer => computer.section !== null)) {
       throw Object.assign(new Error("Unassign team computers before restoring this workspace"), { status: 409 });
     }
-    return work();
+    assertMiniAppExportPrivacy(DATA_DIR, sharedMembership() || HOSTED_WORKSPACE); return withMiniAppBackup(DATA_DIR, dataEngine, work);
   }, {
     idle: () => !providerFleetReloading && !providerAuthSessions.active && !browserEngineInstall &&
       !routines?.isTicking && !calendarCalls?.isTicking && !botWaits.isTicking &&
@@ -12154,7 +12153,7 @@ ROUTES.push(createBotMessageRoutes({
   relayedReaction: (threadId, messageId, person, emoji) => void store.setReaction(threadId, messageId, relayedPersonKey(person),
     { emoji, name: person.name ?? person.email, at: Date.now() }),
 }));
-const chatApps = createChatApps({ store, dataDir: DATA_DIR });
+const { chatApps, owner: miniAppsRoute, internal: miniAppsInternal } = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, validPublisher: (id) => Boolean(store.bot(id)), localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots }); ROUTES.push(miniAppsRoute);
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, storedServers: () => cfg.mcpServers ?? {}, mountedServers: engineMcpServers, personMcp: teamConnections.personMcp, oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc }));
 const { react } = createReactions({
@@ -13063,6 +13062,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           throw Object.assign(new Error("the internal turn capability has expired"), { status: 401 });
         }
       };
+      if (await miniAppsInternal({ method, path, res, json, botId: internalSender.id, readBody: readInternalBody, requireActive: requireActiveInternalCapability, writeAllowed: () => coordinator.node(internalCapability.roomHandoffId ?? internalCapability.generation)?.mode !== "consult" }) !== PASS) return;
       const botFolders = async () => ({ roots: messageFileRootsForThread(internalSender.id, internalCapability.threadId).filter((root) => root !== ATTACHMENTS_DIR), vmWorkspace: (await attachmentVmForTurn(internalCapability))?.workspaceDir ?? null }); if (await internalToolRoutes({ method, path, res, json, botId: internalSender.id, threadId: internalCapability.threadId, readBody: readInternalBody, folders: botFolders }) !== PASS || await waitRoutes({ method, path, res, json, botId: internalSender.id, threadId: internalCapability.threadId, readBody: readInternalBody, ...waitTurnChecks(internalCapability, internalSender) }) !== PASS || await teamMessages.internal({ method, path, res, json, botId: internalSender.id, threadId: internalCapability.threadId, readBody: readInternalBody }) !== PASS || await devsReports.internal({ method, path, res, json, botId: internalSender.id, threadId: internalCapability.threadId, readBody: readInternalBody }) !== PASS || (computerAsks && await computerAsks.internal({ method, path, res, json, turn: internalCapability, readBody: readInternalBody }) !== PASS)) return; const pagesCall = new AbortController(); res.once("close", () => { if (!res.writableEnded) pagesCall.abort(); }); if (await publishedPages.internal({ method, path, res, json, botId: internalSender.id, threadId: internalCapability.threadId, readBody: readInternalBody, requireActive: requireActiveInternalCapability, signal: pagesCall.signal, folders: botFolders, post: (text, publishedPage, bundle) => { const source = connectorThread(internalSender.id, internalCapability.threadId); return !source ? null : (!source.group && bundle && publishedPages.show({ threadId: internalCapability.threadId, card: publishedPage, bundle })) || store.appendMessage(internalCapability.threadId, { role: "bot", kind: "text", text, publishedPage, ...(source.group ? { from: { botId: internalSender.id, name: internalSender.name, color: internalSender.color } } : {}) }).id; } }) !== PASS) return;
       const delegatedThisTurn = (taskId: string) => {
         (internalCapability.delegatedThisTurn ??= new Set()).add(taskId);
