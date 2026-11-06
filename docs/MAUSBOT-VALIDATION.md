@@ -141,13 +141,27 @@ because it cannot enforce existing holds.
 
 ## Local candidate, merge and release
 
-A local App candidate may combine unmerged commits in an isolated worktree.
-Record its base, included commits, final source and dirty diff; test the combined
-behavior, run applicable static checks, build once and exercise startup plus
-the requested user action. Keep one package owner and reuse an unchanged
-artifact. Unrelated remote CI failures need evidence and an owner but need not
-delay that local candidate. Startup, authorization, data-safety and requested
-behavior failures do block acceptance.
+Every App shown to the user for preview, use or acceptance testing follows the
+[playbook's source policy](../.agents/team/playbook.md#local-candidate-delivery):
+use a clean checkout of the active repository's latest fetched `origin/main` by
+default. Fetch before packaging and recheck main before handoff; do not present
+an older or unmerged package as the latest main. Record the repository, exact
+main and source SHAs/trees, artifact and validation. An exception still uses a
+clean, exact checkout: unmerged PRs or cherry-picks may enter a user-facing App
+only when the user explicitly selects that branch or PR, or Lead documents a
+strong, concrete necessity. Before the preview, disclose the reason, all
+unmerged inclusions, validation and the condition for returning to main. Slow
+CI or convenience alone is insufficient.
+Requested features absent from main remain pending default delivery.
+
+Developer branch tests and isolated internal diagnostic builds may combine
+unmerged commits in a separate worktree; they do not automatically qualify for
+user preview. Test the combined source, run applicable static checks and keep
+one package owner. Reuse an unchanged artifact only when its source and bytes
+are verified. Classify unrelated CI failures with evidence and an owner, but
+do not use that classification to relax the user-facing source requirement.
+Startup, authorization, data-safety and requested-behavior failures block
+acceptance of any App presented to the user.
 
 Merge still requires current-head independent review, required green CI,
 current integration evidence and no applicable hold. Release additionally

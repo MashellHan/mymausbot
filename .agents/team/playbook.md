@@ -103,20 +103,36 @@ Never equate a green badge or an idle agent with completed work.
 
 ## Local candidate delivery
 
-When the requested outcome is a runnable local App, build and validate that
-candidate independently of PR merging. Combine the needed pinned commits in an
-isolated integration worktree, record the base and resulting source revision,
-and test the combined source. Individual PR test results do not prove their
-integration. Completion of every PR's remote CI and merge is not a prerequisite
-for producing the local candidate.
+Every App shown to the user for preview, use or acceptance testing defaults to
+a clean checkout of the active personal repository's latest fetched `origin/main`.
+Fetch before packaging and record the exact main commit and source tree. Recheck
+main before handoff; if it advanced, refresh and validate the candidate instead
+of presenting an old package as the latest main. A local branch named `main`
+does not establish this provenance. Do not silently include unmerged PRs,
+cherry-picks, dirty source patches or packages built from another branch.
 
-Run the affected functional/integration checks and applicable static checks,
-then one package build and isolated startup acceptance for that source. Include
-the package/resource checks needed by the changed behavior. Demonstrate the
-requested user action in an isolated fixture; startup alone is not feature
-acceptance. Reuse identical
-evidence and checks already performed by the build; do not remove required
-build checks or bypass push hooks. Changed source may require a new artifact.
+An exception requires the user's explicit selection of that branch or PR, or
+Lead's documented strong, concrete necessity. The exception source must also
+be a clean, exact checkout. Before showing the App, disclose the reason, exact
+source and main SHAs, every included unmerged PR or commit, validation results
+and the condition for returning to main. Slow CI or delivery convenience alone
+is insufficient. Lead and Reviewer verify this boundary; an exception does not
+waive applicable tests or review. Requested features still
+confined to unmerged PRs remain pending in the default main-based delivery.
+
+Developer branch tests and isolated internal diagnostic builds may combine
+pinned commits in a separate worktree. They do not automatically qualify as an
+App to show the user. Test the combined source: individual PR tests do not prove
+its integration. Incomplete PR CI or merges may coexist with internal diagnostics,
+not with an undisclosed user-facing candidate.
+
+For a user-facing App, run affected functional/integration checks and applicable
+static checks on the exact source, then one package build and isolated startup
+acceptance. Include package/resource checks needed by the changed behavior.
+Demonstrate the requested user action in an isolated fixture; startup alone is
+not feature acceptance. Reuse identical evidence and checks already performed
+by the build; do not remove required build checks or bypass push hooks. Changed
+source may require a new artifact.
 
 Run inexpensive lint and repository guards before handing off for review or
 starting a package build, so file-size and declaration failures do not arrive
@@ -125,19 +141,20 @@ inputs. For a local arm64 build, reuse verified dependency/resource caches and
 unchanged build outputs; rebuild only the outputs whose inputs changed. Record
 stage durations in the existing build log instead of adding a separate audit.
 
-Classify a remote CI failure by its effect on the candidate. A confirmed
-unrelated failure can be tracked separately with its run link, evidence and
-follow-up owner; repairing it is not a local-build dependency. Age alone does
-not establish irrelevance. Failures affecting startup, authorization, data
-safety or the requested behavior block candidate acceptance even if preexisting.
+Classify remote CI failures with a run link, evidence and follow-up owner.
+Unrelated CI debt does not change the required source for user preview. Age
+alone does not establish irrelevance. Failures affecting startup, authorization,
+data safety or the requested behavior block candidate acceptance even if preexisting.
 Investigate uncertain relevance with a focused check before declaring it unrelated.
 
-Use the existing private build/handoff records to report candidate readiness,
-included revisions, local evidence and pending/failed remote checks separately.
-Candidate readiness does not establish merge or release readiness, or completion
-of all outcomes in feature-delivery-ready.json. Lead follows the PRs through
-their required CI and independent review while local delivery proceeds. Verify
-with isolated fixtures; preserve the official App and real data, and follow the
+Use the existing private build/handoff records to report the repository, exact
+source SHA/tree, fetched main SHA, App artifact, validation and any disclosed
+exception alongside pending/failed remote checks.
+Internal candidate readiness or a disclosed exception does not establish merge
+or release readiness, or completion of all outcomes in
+feature-delivery-ready.json. Lead follows PRs through required CI and independent
+review while internal diagnostics or a disclosed exception proceed. Verify with
+isolated fixtures; preserve the official App and real data, and follow the
 existing coordinated procedure for an actual App switch.
 
 ## Testing and QA rhythm
