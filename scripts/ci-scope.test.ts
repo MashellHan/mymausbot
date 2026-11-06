@@ -107,6 +107,7 @@ describe("CI path scope", () => {
   it("runs only the docs tests, without the build, for documentation, its evidence and the docs site", () => {
     expect(selectCiScope([
       "README.md", "AGENTS.md", "docs/guide.md", "docs/nested/guide.md", ".github/FUNDING.yml", "apps/docs/content/index.mdx",
+      ".agents/team/playbook.md", ".agents/team/roles/leader.md", ".agents/team/roles/upstream.md",
       "docs/verification/evidence/mentions/rtl-dom.json", "docs/screenshots/home.png",
     ])).toEqual({ areas: ["docs"], checks: ["docs-tests"] });
   });
@@ -161,6 +162,8 @@ describe("CI path scope", () => {
 
   it.each([
     [], [""], ["docs/../server/file.md"], ["./src/App.tsx"],
+    [".agents/team/playbook.mjs"], [".agents/team/roles/leader.json"], [".agents/hooks/pre-push.sh"], [".agents/team/unknown.md"],
+    [".agents/team/playbook.md", ".github/workflows/ci.yml"],
     [".github/workflows/ci.yml"], ["scripts/ci-scope.mjs"], ["scripts/testing/host-e2e.ts"], [".gitattributes"],
     ["package.json"], ["pnpm-lock.yaml"], ["pnpm-workspace.yaml"], ["tsconfig.json"], ["vite.config.ts"], [".oxlintrc.json"],
     ["third_party/browser/agent-browser-windows-stdio.patch"], ["scripts/testing/ci-retry-runner.ts"], ["unknown/file"], ["src/App.tsx", "package.json"],
@@ -454,9 +457,9 @@ describe("the repository's import graph", () => {
 });
 
 describe("CI scope CLI", () => {
-  it("runs only the docs tests, without the build, for a docs-only pull request", () => {
-    const { directory, git, base } = fixture("docs/guide.md");
-    writeFileSync(join(directory, "docs/guide.md"), "updated guide\n");
+  it.each(["docs/guide.md", ".agents/team/playbook.md", ".agents/team/roles/leader.md"])("runs only the docs tests for a PR changing %s", (source) => {
+    const { directory, git, base } = fixture(source);
+    writeFileSync(join(directory, source), "updated guide\n");
     git("commit", "--quiet", "-am", "docs");
     const { output, stderr } = run(directory, "pull_request", {
       pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
