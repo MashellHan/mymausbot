@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { LocalAgentActivityResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "../../../shared/local-dashboard";
 import type { MiniAppDashboardRead, MiniAppDashboardReadResult, MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
 import { usePageVisible } from "@/lib/page-visible";
+import { retainUsageSnapshot } from "@/lib/local-usage-view";
 import { api, ApiError } from "@/state/store";
 import { AgentTeamView } from "../AgentTeamPanel";
 import { LocalUsageView } from "../LocalUsagePanel";
@@ -64,13 +65,12 @@ export function MiniAppDashboard({ document, state, refreshKey, onRevoked, onCha
         if (!active) return;
         if (result.resource === "teams") setTeams((previous) => result.snapshot.status === "unavailable" && previous?.updatedAt != null
           ? { ...previous, status: "stale" } : result.snapshot);
-        else if (result.resource === "usage") setUsage((previous) => result.snapshot.status === "unavailable" && previous?.asOf != null
-          ? { ...previous, status: "stale" } : result.snapshot);
+        else if (result.resource === "usage") setUsage((previous) => retainUsageSnapshot(previous, result.snapshot));
       } catch (error) {
         if (!active || controller.signal.aborted) return;
         if (stopFor(error)) { active = false; controller.abort(); return; }
         if (resource === "teams") setTeams((previous) => previous?.updatedAt != null ? { ...previous, status: "stale" } : unavailableTeams);
-        else setUsage((previous) => previous?.asOf != null ? { ...previous, status: "stale" } : unavailableUsage);
+        else setUsage((previous) => retainUsageSnapshot(previous, unavailableUsage));
       } finally {
         if (active) timer = setTimeout(refresh, resource === "teams" ? Math.max(0, TEAM_REFRESH_MS - (Date.now() - started)) : USAGE_REFRESH_MS);
       }
