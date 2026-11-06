@@ -13,12 +13,14 @@ const fixture = vi.hoisted(() => ({
   denied: false,
   dispatch: vi.fn(),
   frameMounts: 0,
+  dashboardReads: [] as string[],
+  bots: [] as Array<{ id: string }>,
 }));
 
 vi.mock("@/state/store", () => ({
   api: fixture.api,
   ApiError: class ApiError extends Error { constructor(message: string, readonly status: number) { super(message); } },
-  useStore: () => ({ state: { bots: [] }, dispatch: fixture.dispatch }),
+  useStore: () => ({ state: { bots: fixture.bots }, dispatch: fixture.dispatch }),
 }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
 vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => true }));
@@ -31,6 +33,14 @@ vi.mock("./BookkeepingInstall", () => ({ BookkeepingInstall: ({ onInstalled }: {
 vi.mock("./ReportInstall", () => ({ ReportInstall: ({ kind, onCancel }: { kind: string; onCancel(): void }) => createElement("div", { "data-testid": "fixture-report-install", "data-kind": kind }, createElement("button", { onClick: onCancel }, "Cancel")) }));
 
 import { MiniAppsPanel } from "./MiniAppsPanel";
+
+const dashboard = { kind: "agent-team", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["teams", "activity"] } as const;
+const teams = { status: "ready", updatedAt: 1_000, teamCount: 1, teams: [
+  { id: "w1", name: "Synthetic team", agentCount: 1, activeAgentCount: 1, agents: [
+    { id: "w1:p1", name: "Pine", kind: "codex", role: "Developer", model: "model-a", reasoningEffort: "high",
+      contextUsed: 100, contextWindow: 1_000, state: "working", taskHint: "Synthetic task" },
+  ] },
+] };
 
 const app = (id: string, title: string): MiniAppSummary => ({
   id, slug: id, title, description: `${title} description`, status: "active", revision: 3, templateVersion: 2,
@@ -62,6 +72,8 @@ beforeEach(() => {
   fixture.failState = false;
   fixture.denied = false;
   fixture.frameMounts = 0;
+  fixture.dashboardReads = [];
+  fixture.bots = [];
   fixture.dispatch.mockReset();
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/.well-known/openmausbot/environment") return { environmentId: "fixture-environment" };
@@ -69,8 +81,22 @@ beforeEach(() => {
     if (path.endsWith("/state")) {
       if (fixture.denied) throw Object.assign(new Error("Forbidden"), { status: 403 });
       if (fixture.failState) throw new Error("Fixture offline");
+      const summary = fixture.apps.find((entry) => entry.id === path.split("/")[3]);
       return { appId: path.split("/")[3], revision: fixture.stateRevision, templateVersion: 2, status: "active",
-        data: [{ datasetId: "dataset_demo", revision: fixture.dataRevision }] };
+        data: summary?.dashboardIdentity ? [] : [{ datasetId: "dataset_demo", revision: fixture.dataRevision }] };
+    }
+    if (path.endsWith("/dashboard") && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { resource: string };
+      fixture.dashboardReads.push(body.resource);
+      return { appId: path.split("/")[3], revision: fixture.stateRevision, resource: body.resource,
+        snapshot: body.resource === "teams" ? teams : { agentId: "w1:p1", status: "ready", updatedAt: 1_000,
+          truncated: false, events: [{ id: "e1", kind: "assistant", at: null, tool: null, text: "Synthetic recent reply" }] } };
+    }
+    if (path.endsWith("/publish") && init?.method === "POST") {
+      const id = path.split("/")[3]!;
+      fixture.stateRevision += 1;
+      fixture.apps = fixture.apps.map((entry) => entry.id === id ? { ...entry, revision: fixture.stateRevision, dashboard } : entry);
+      return { app: fixture.apps.find((entry) => entry.id === id), replayed: false };
     }
     if (path.endsWith("/rollback") && init?.method === "POST") {
       fixture.stateRevision += 1;
@@ -137,9 +163,12 @@ describe("Mini Apps panel", () => {
     await render();
     await vi.waitFor(() => expect(host.textContent).toContain("Installed Mini Apps appear here"));
     await act(async () => { button("Add Mini App").click(); });
+    expect(host.textContent).toContain("Agent Team");
+    expect(host.textContent).toContain("Usage");
+    expect(host.textContent).toContain("The original Agent Team and Usage Computer tabs remain available.");
     expect(host.textContent).toContain("Daily X AI digest");
     expect(host.textContent).toContain("GitHub activity & discovery");
-    await act(async () => { button("Choose").click(); });
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.parentElement?.textContent?.includes("Daily X AI digest") && item.textContent === "Choose")!.click(); });
     expect(host.querySelector('[data-testid="fixture-report-install"]')?.getAttribute("data-kind")).toBe("x_ai_digest");
     await act(async () => { button("Cancel").click(); });
     await act(async () => { [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.parentElement?.textContent?.includes("Bookkeeping") && item.textContent === "Choose")!.click(); });
@@ -170,6 +199,35 @@ describe("Mini Apps panel", () => {
     await act(async () => { button("Open report").click(); });
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe("report_existing"));
     expect(host.querySelector('[data-testid="fixture-report-install"]')).toBeNull();
+  });
+
+  it("replaces a same-revision revoked dashboard with explicit same-id repair and no fallback frame", async () => {
+    const installedApp = { ...app("app_team", "Agent Team"), slug: "agent-team", dashboardIdentity: "agent-team" as const,
+      dashboard, publisherBotIds: ["editor"] };
+    fixture.apps = [installedApp];
+    fixture.bots = [{ id: "editor" }];
+    await render();
+    await vi.waitFor(() => expect(host.querySelectorAll("[data-team-house]")).toHaveLength(1));
+    expect(frame()).toBeNull();
+    expect(host.textContent).not.toContain("Open publisher chat");
+    const selectedTab = selected();
+    fixture.apps = [{ ...installedApp, dashboard: null }];
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-recovery"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("Synthetic team");
+    expect(frame()).toBeNull();
+    expect(selected()).toBe(selectedTab);
+
+    await act(async () => button("Reauthorize app").click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-install"]')).not.toBeNull());
+    await act(async () => button("Reauthorize app").click());
+    await vi.waitFor(() => expect(host.querySelectorAll("[data-team-house]")).toHaveLength(1));
+    const [path, options] = fixture.api.mock.calls.find(([url, init]) => String(url).endsWith("/publish") && init?.method === "POST")!;
+    expect(path).toBe("/api/mini-apps/app_team/publish");
+    expect(JSON.parse(options.body)).toMatchObject({ expectedRevision: 3, dashboardKind: "agent-team", bindings: [], publisherBotIds: ["editor"], html: "<p>Fixture</p>" });
+    expect(selected()?.dataset.appId).toBe("app_team");
+    expect(document.activeElement).toBe(selected());
   });
 
   it("keeps archived apps out of the active navigation", async () => {

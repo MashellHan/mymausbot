@@ -6,7 +6,7 @@ import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { AgentTown, teamActivity } from "./AgentTown";
-import { AgentActivityDetails } from "./AgentActivityDetails";
+import { AgentActivityDetails, type AgentActivityReader } from "./AgentActivityDetails";
 
 const ROUTE = "/api/local-dashboard/agents";
 const REFRESH_MS = 2_000;
@@ -28,7 +28,7 @@ const stateDot = {
   unknown: "bg-ink-secondary/30",
 } as const;
 
-function memberRow(member: LocalAgentMember, stale: boolean, active: boolean) {
+function memberRow(member: LocalAgentMember, stale: boolean, active: boolean, readActivity?: AgentActivityReader) {
   const number = (value: number | null) => value === null ? "—" : value.toLocaleString(activeLocale());
   const context = member.contextUsed !== null && member.contextWindow !== null && member.contextWindow > 0
     ? Math.round(member.contextUsed / member.contextWindow * 100) : null;
@@ -56,13 +56,15 @@ function memberRow(member: LocalAgentMember, stale: boolean, active: boolean) {
         <p dir="auto" title={member.taskHint ?? undefined} className="mt-1.5 line-clamp-2 text-[12px] leading-4 text-ink-secondary [overflow-wrap:anywhere]">
           <span className="font-medium text-ink-secondary">{t("computer.agentTeam.latestInstruction")}: </span>{member.taskHint ?? t("computer.agentTeam.instructionUnavailable")}
         </p>
-        <AgentActivityDetails agentId={member.id} active={active} />
+        <AgentActivityDetails agentId={member.id} active={active} readActivity={readActivity} />
       </div>
     </li>
   );
 }
 
-export function AgentTeamView({ snapshot, active = true }: { snapshot: LocalAgentTeamsResponse | null; active?: boolean }) {
+export function AgentTeamView({ snapshot, active = true, readActivity }: {
+  snapshot: LocalAgentTeamsResponse | null; active?: boolean; readActivity?: AgentActivityReader;
+}) {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const baseId = useId();
   const selectorRef = useRef<HTMLDivElement>(null);
@@ -121,7 +123,7 @@ export function AgentTeamView({ snapshot, active = true }: { snapshot: LocalAgen
           </div>
         </header>
         <div className="px-3 pb-1">
-          {selectedTeam.agents.length ? <ul>{selectedTeam.agents.map((member) => memberRow(member, stale, active))}</ul>
+          {selectedTeam.agents.length ? <ul>{selectedTeam.agents.map((member) => memberRow(member, stale, active, readActivity))}</ul>
             : <p className="py-3 text-[12px] text-ink-tertiary">{t("computer.agentTeam.noAgents")}</p>}
         </div>
       </section>}

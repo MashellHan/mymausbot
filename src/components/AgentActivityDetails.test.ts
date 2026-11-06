@@ -27,7 +27,9 @@ const ready: LocalAgentActivityResponse = { agentId, status: "ready", updatedAt:
 
 let host: HTMLDivElement;
 let root: Root;
-const render = async (id = agentId, active = true) => { await act(async () => root.render(createElement(AgentActivityDetails, { key: id, agentId: id, active }))); };
+const render = async (id = agentId, active = true, readActivity?: (id: string, signal: AbortSignal) => Promise<LocalAgentActivityResponse>) => {
+  await act(async () => root.render(createElement(AgentActivityDetails, { key: id, agentId: id, active, readActivity })));
+};
 const button = () => host.querySelector<HTMLButtonElement>("button")!;
 const list = () => host.querySelector<HTMLOListElement>('ol[role="region"]');
 
@@ -51,6 +53,18 @@ afterEach(async () => {
 });
 
 describe("AgentActivityDetails", () => {
+  it("uses an injected scoped reader without calling the native owner route", async () => {
+    const readActivity = vi.fn(async (_id: string, _signal: AbortSignal) => ready);
+    await render(agentId, true, readActivity);
+    await act(async () => button().click());
+    expect(readActivity).toHaveBeenCalledWith(agentId, expect.any(AbortSignal));
+    expect(calls.api).not.toHaveBeenCalled();
+    expect(list()?.children).toHaveLength(2);
+    const signal = readActivity.mock.calls[0]![1];
+    await render(agentId, false, readActivity);
+    expect(signal.aborted).toBe(true);
+  });
+
   it("starts folded, keeps keyboard focus, and shows readable chat rows in either skin", async () => {
     calls.api.mockResolvedValue(ready);
     await render();

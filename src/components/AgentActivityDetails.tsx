@@ -10,8 +10,13 @@ import { cn } from "@/lib/cn";
 const REFRESH_MS = 2_000;
 const unavailable = (agentId: string): LocalAgentActivityResponse => ({ agentId, status: "unavailable", updatedAt: null, truncated: false, events: [] });
 type ScrollAnchor = { bottom: true } | { bottom: false; id: string | null; offset: number; top: number };
+export type AgentActivityReader = (agentId: string, signal: AbortSignal) => Promise<LocalAgentActivityResponse>;
+const readActivityFromLocalDashboard: AgentActivityReader = (agentId, signal) => api<LocalAgentActivityResponse>(
+  `/api/local-dashboard/agents/${encodeURIComponent(agentId)}/activity`, { background: true, signal, timeoutMs: 5_000 });
 
-export function AgentActivityDetails({ agentId, active = true }: { agentId: string; active?: boolean }) {
+export function AgentActivityDetails({ agentId, active = true, readActivity = readActivityFromLocalDashboard }: {
+  agentId: string; active?: boolean; readActivity?: AgentActivityReader;
+}) {
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<LocalAgentActivityResponse | null>(null);
   const [authLost, setAuthLost] = useState(false);
@@ -49,8 +54,7 @@ export function AgentActivityDetails({ agentId, active = true }: { agentId: stri
     const refresh = async () => {
       controller = new AbortController();
       try {
-        const next = await api<LocalAgentActivityResponse>(`/api/local-dashboard/agents/${encodeURIComponent(agentId)}/activity`,
-          { background: true, signal: controller.signal, timeoutMs: 5_000 });
+        const next = await readActivity(agentId, controller.signal);
         if (!mounted) return;
         if (next.agentId !== agentId) { stopped = true; setSnapshot(unavailable(agentId)); return; }
         rememberScroll();
@@ -66,7 +70,7 @@ export function AgentActivityDetails({ agentId, active = true }: { agentId: stri
     };
     void refresh();
     return () => { mounted = false; controller?.abort(); clearTimeout(timer); };
-  }, [agentId, open, active, pageVisible, authLost]);
+  }, [agentId, open, active, pageVisible, authLost, readActivity]);
 
   const toggle = () => {
     setOpen((value) => !value);
