@@ -5,13 +5,19 @@ restoration or deletion against the running personal workspace.
 
 ## Library discovery and navigation
 
-Start with an empty isolated registry. The library must show Bookkeeping, Daily X
-AI digest, GitHub activity, Agent Team and Usage without claiming they are
-installed. Opening the library must not publish records, grant access or create
-an Automation. Follow the existing explicit owner installers and check their
-real prerequisites, including unknown unconnected Bot Data and reports with no
-published edition. Keep a custom app with a colliding slug and verify it is not
-overwritten or silently classified as a shipped app.
+Start with an empty isolated registry and a synthetic existing Bot ledger. Open
+the library through the owner defaults endpoint and verify five real persisted
+apps, automatic ledger binding and native grants. Repeat concurrently and after
+restart: identities and revisions remain stable, deleted apps stay archived, and
+explicit Add restores the same identity. A custom colliding slug is preserved.
+No wizard, column picker or installer is part of the default flow.
+
+Run `server/mini-apps/defaults.e2e.test.ts` for the real isolated server workflow.
+It checks ongoing Bot writes, exact named finance reads, archive/restart/re-add,
+custom-page preservation, paired-device refusal and a waiting report connecting
+when its existing Automation appears. `server/mini-apps/defaults.test.ts` covers
+ambiguous sources, absence of empty-store creation, revoked native grants and
+owner-only initialization.
 
 Check that owner-recorded `shippedTemplateKind` survives a bot's HTML update,
 version changes, archive and restore without granting any new reads. Legacy
@@ -20,7 +26,7 @@ the existing native identity, grant and revision tests when their code is
 unchanged.
 
 Verify the single row of installed apps, distinct shipped icons, the custom-app
-fallback and the accessible **All apps** surface. Exercise keyboard selection,
+fallback and the accessible **All apps** button-anchored popover. Exercise keyboard selection,
 Escape/close and focus return. Measure the actual panel bounds at 960, 400 and
 360 pixels before capturing light/dark and English/Chinese evidence; a query
 parameter or screenshot filename is not width evidence. Drive the existing
@@ -31,12 +37,13 @@ panels together to check overlap in both the row and expanded-library states.
 Use the affected contract tests and the existing renderer fixture once on stable
 source. Package acceptance uses an isolated profile and the actual production
 preload. Normal-App delivery checks the installed source and real inventory
-read-only; templates visible in the catalog are not installed-instance evidence.
+read-only. Default migration may create the five included entries and retain their
+existing Data sources; count and metadata alone do not prove displayed contents.
 
 ## Built-in Agent Team and Usage
 
 Use the existing synthetic dashboard snapshots with an isolated Mini Apps
-registry. Install both entries through the library, open them and compare their
+registry. Open both default entries through the library and compare their
 values with the old tabs on the same captured data. Keep Bookkeeping and both
 report apps installed to check that their ordinary HTML path still works.
 
@@ -46,7 +53,7 @@ The focused contracts are:
 pnpm exec vitest run server/mini-apps/registry.test.ts server/routes/mini-apps.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts server/mini-apps/mini-apps.e2e.test.ts src/components/AgentActivityDetails.test.ts src/components/mini-apps/DashboardInstall.test.ts src/components/mini-apps/MiniAppDashboard.test.ts src/components/mini-apps/MiniAppsPanel.test.ts
 ```
 
-Exercise owner disclosure and grants, an app reading an ungranted resource,
+Exercise owner initialization and grants, an app reading an ungranted resource,
 paired/service denial, and a pending read during archive, revision change or
 revocation. An old registry without the dashboard column must migrate with no
 grant. Archive and workspace restore clear grants; rollback cannot revive them.
