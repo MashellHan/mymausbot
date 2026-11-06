@@ -1215,6 +1215,23 @@ beforeAll(async () => {
         + 'process.exit(fs.existsSync(path.join(base, "browser-clear-fails")) ? 1 : 0);';
       return spawn(process.execPath, ["-e", program, ...args], options);
     };
+    const rename = fs.renameSync;
+    fs.renameSync = function(from, to) {
+      try { return rename(from, to); }
+      catch (error) {
+        const key = path.join(base, ".openmausbot", "browser-engine-key");
+        const marker = path.join(base, "browser-key-write-fails-once");
+        if (to === key && fs.existsSync(marker) && fs.existsSync(key) && fs.statSync(key).isDirectory()) {
+          const pending = fs.readFileSync(path.join(base, ".openmausbot", "browser-cleanups.json"), "utf8");
+          fs.rmSync(key, { recursive: true });
+          const backup = key + ".fixture-backup";
+          if (fs.existsSync(backup)) rename(backup, key);
+          fs.writeFileSync(marker + ".observed", pending);
+          fs.rmSync(marker);
+        }
+        throw error;
+      }
+    };
     const read = fs.read;
     fs.read = Object.defineProperties(function(input, ...args) {
       const gate = path.join(base, "browser-upload-read-gate");
@@ -3268,10 +3285,13 @@ describe("harness HTTP API", () => {
     const key = join(home, ".openmausbot", "browser-engine-key");
     const backup = `${key}.fixture-backup`;
     const failureMarker = join(home, "browser-clear-fails");
+    const keyFaultOnce = join(home, "browser-key-write-fails-once");
+    const keyFaultObserved = `${keyFaultOnce}.observed`;
     const hadKey = existsSync(key);
     if (failure === "key-write") {
       if (hadKey) renameSync(key, backup);
       mkdirSync(key); // deterministic EISDIR, even when the fixture runs as root
+      writeFileSync(keyFaultOnce, "");
     } else {
       writeFileSync(failureMarker, "fail");
     }
@@ -3282,13 +3302,20 @@ describe("harness HTTP API", () => {
         : await api("PATCH", "/api/config", { browserProfiles: [] });
       expect(deleted.status).toBe(503);
       expect(deleted.body.error).toMatch(/could not confirm.*browser data was erased/i);
-      expect(journal()).toContainEqual(expect.objectContaining({ id, phase: "committed" }));
+      const pendingAtFailure = failure === "key-write"
+        ? JSON.parse(readFileSync(keyFaultObserved, "utf8")) as Array<{ id: string; phase: string }>
+        : journal();
+      expect(pendingAtFailure).toContainEqual(expect.objectContaining({ id, phase: "committed" }));
       expect((await api("GET", "/api/health")).status).toBe(200);
       expect(child.exitCode).toBeNull();
     } finally {
       if (failure === "key-write") {
-        rmSync(key, { recursive: true });
-        if (hadKey) renameSync(backup, key);
+        if (!existsSync(keyFaultObserved)) {
+          rmSync(key, { recursive: true });
+          if (hadKey) renameSync(backup, key);
+        }
+        rmSync(keyFaultOnce, { force: true });
+        rmSync(keyFaultObserved, { force: true });
       } else {
         rmSync(failureMarker);
       }
