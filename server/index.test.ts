@@ -1217,20 +1217,28 @@ beforeAll(async () => {
     };
     const rename = fs.renameSync;
     fs.renameSync = function(from, to) {
-      try { return rename(from, to); }
-      catch (error) {
-        const key = path.join(base, ".openmausbot", "browser-engine-key");
-        const marker = path.join(base, "browser-key-write-fails-once");
-        if (to === key && fs.existsSync(marker) && fs.existsSync(key) && fs.statSync(key).isDirectory()) {
-          const pending = fs.readFileSync(path.join(base, ".openmausbot", "browser-cleanups.json"), "utf8");
+      const key = path.join(base, ".openmausbot", "browser-engine-key");
+      const marker = path.join(base, "browser-key-write-fails-once");
+      const retryable = path.join(base, "browser-key-rename-retryable");
+      const release = () => {
+        if (to !== key || !fs.existsSync(marker) || !fs.existsSync(key) || !fs.statSync(key).isDirectory()) return;
+        const pending = fs.readFileSync(path.join(base, ".openmausbot", "browser-cleanups.json"), "utf8");
+        fs.rmSync(marker);
+        queueMicrotask(() => {
           fs.rmSync(key, { recursive: true });
           const backup = key + ".fixture-backup";
           if (fs.existsSync(backup)) rename(backup, key);
+          fs.rmSync(retryable, { force: true });
           fs.writeFileSync(marker + ".observed", pending);
-          fs.rmSync(marker);
-        }
-        throw error;
+        });
+      };
+      if (to === key && fs.existsSync(retryable)) {
+        fs.appendFileSync(retryable + ".attempts", "x");
+        release();
+        throw Object.assign(new Error("synthetic blocked rename"), { code: "EPERM" });
       }
+      try { return rename(from, to); }
+      catch (error) { release(); throw error; }
     };
     const read = fs.read;
     fs.read = Object.defineProperties(function(input, ...args) {
@@ -3274,7 +3282,7 @@ describe("harness HTTP API", () => {
 
   it.each([
     ["bot", "key-write"], ["bot", "engine-exit"],
-    ["profile", "key-write"], ["profile", "engine-exit"],
+    ["profile", "key-write"], ["profile", "key-write-retryable"], ["profile", "engine-exit"],
   ])("keeps failed browser %s cleanup pending without crashing (%s)", async (target, failure) => {
     const bot = (await api("POST", "/api/bots")).body.bot;
     const id = target === "bot" ? bot.id : `cleanup-${failure}`;
@@ -3287,11 +3295,14 @@ describe("harness HTTP API", () => {
     const failureMarker = join(home, "browser-clear-fails");
     const keyFaultOnce = join(home, "browser-key-write-fails-once");
     const keyFaultObserved = `${keyFaultOnce}.observed`;
+    const retryableRename = join(home, "browser-key-rename-retryable");
+    const keyWrite = failure.startsWith("key-write");
     const hadKey = existsSync(key);
-    if (failure === "key-write") {
+    if (keyWrite) {
       if (hadKey) renameSync(key, backup);
-      mkdirSync(key); // deterministic EISDIR, even when the fixture runs as root
+      mkdirSync(key);
       writeFileSync(keyFaultOnce, "");
+      if (failure === "key-write-retryable") writeFileSync(retryableRename, "");
     } else {
       writeFileSync(failureMarker, "fail");
     }
@@ -3302,20 +3313,23 @@ describe("harness HTTP API", () => {
         : await api("PATCH", "/api/config", { browserProfiles: [] });
       expect(deleted.status).toBe(503);
       expect(deleted.body.error).toMatch(/could not confirm.*browser data was erased/i);
-      const pendingAtFailure = failure === "key-write"
+      if (failure === "key-write-retryable") expect(readFileSync(`${retryableRename}.attempts`, "utf8")).toHaveLength(6);
+      const pendingAtFailure = keyWrite
         ? JSON.parse(readFileSync(keyFaultObserved, "utf8")) as Array<{ id: string; phase: string }>
         : journal();
       expect(pendingAtFailure).toContainEqual(expect.objectContaining({ id, phase: "committed" }));
       expect((await api("GET", "/api/health")).status).toBe(200);
       expect(child.exitCode).toBeNull();
     } finally {
-      if (failure === "key-write") {
+      if (keyWrite) {
         if (!existsSync(keyFaultObserved)) {
           rmSync(key, { recursive: true });
           if (hadKey) renameSync(backup, key);
         }
         rmSync(keyFaultOnce, { force: true });
         rmSync(keyFaultObserved, { force: true });
+        rmSync(retryableRename, { force: true });
+        rmSync(`${retryableRename}.attempts`, { force: true });
       } else {
         rmSync(failureMarker);
       }
