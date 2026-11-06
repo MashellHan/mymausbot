@@ -2,13 +2,16 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocale, setLocale } from "@/lib/i18n";
 import type { LocalUsageResponse } from "../../../shared/local-dashboard";
 import type { MiniAppDocument, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
-import type { Routine } from "../../../shared/routines";
 
 const fixture = vi.hoisted(() => ({
   api: vi.fn(),
   apps: [] as MiniAppSummary[],
+  defaultApps: null as MiniAppSummary[] | null,
+  defaultCalls: [] as Array<{ restore?: string; bookkeepingHtml: string }>,
+  defaultIssues: [] as Array<{ kind: string; error: string }>,
   stateRevision: 3,
   dataRevision: 7,
   failState: false,
@@ -18,8 +21,6 @@ const fixture = vi.hoisted(() => ({
   frameMounts: 0,
   dashboardReads: [] as string[],
   bots: [] as Array<{ id: string }>,
-  routines: [] as Routine[],
-  routinesLoadState: "ready" as "loading" | "ready" | "error",
   owner: true as boolean,
   visible: true,
   usageValue: 1,
@@ -29,7 +30,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("@/state/store", () => ({
   api: fixture.api,
   ApiError: class ApiError extends Error { constructor(message: string, readonly status: number) { super(message); } },
-  useStore: () => ({ state: { bots: fixture.bots, routines: fixture.routines, routinesLoadState: fixture.routinesLoadState }, dispatch: fixture.dispatch }),
+  useStore: () => ({ state: { bots: fixture.bots }, dispatch: fixture.dispatch }),
 }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.owner }));
 vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => fixture.visible }));
@@ -38,8 +39,6 @@ vi.mock("./MiniAppFrame", () => ({ MiniAppFrame: ({ document, state }: { documen
   fixture.frameMounts += 1;
   return createElement("div", { "data-testid": "fixture-frame", "data-id": document.app.id, "data-data-revision": state.data[0]?.revision });
 } }));
-vi.mock("./BookkeepingInstall", () => ({ BookkeepingInstall: ({ onInstalled }: { onInstalled(id: string): void }) => createElement("button", { onClick: () => onInstalled("app_new"), "data-testid": "fixture-install" }, "Finish install") }));
-vi.mock("./ReportInstall", () => ({ ReportInstall: ({ kind, onCancel }: { kind: string; onCancel(): void }) => createElement("div", { "data-testid": "fixture-report-install", "data-kind": kind }, createElement("button", { onClick: onCancel }, "Cancel")) }));
 
 import { MiniAppsPanel } from "./MiniAppsPanel";
 
@@ -73,12 +72,18 @@ const app = (id: string, title: string): MiniAppSummary => ({
   id, slug: id, title, description: `${title} description`, status: "active", revision: 3, templateVersion: 2,
   publisherBotIds: [], createdAt: 1_000, updatedAt: 2_000,
 });
+const shippedDefaults = (): MiniAppSummary[] => [
+  { ...app("bookkeeping", "记账管家"), slug: "bookkeeping", shippedTemplateKind: "bookkeeping" },
+  { ...app("x_digest", "Daily X AI digest"), slug: "x-ai-digest", shippedTemplateKind: "x_ai_digest" },
+  { ...app("github", "GitHub activity"), slug: "github-activity", shippedTemplateKind: "github_activity" },
+  { ...app("team", "Agent Team"), slug: "agent-team", dashboardIdentity: "agent-team", dashboard },
+  { ...app("usage", "Usage"), slug: "usage", dashboardIdentity: "usage", dashboard: usageDashboard },
+];
 
 let root: Root;
 let host: HTMLDivElement;
 let stored: Map<string, string>;
 const frame = () => host.querySelector<HTMLElement>('[data-testid="fixture-frame"]');
-const freshness = () => host.querySelector<HTMLElement>('[data-testid="mini-app-freshness"]')?.textContent ?? "";
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label)!;
 const refresh = () => host.querySelector<HTMLButtonElement>('[aria-label="Check for updates"]')!;
 const selected = () => host.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
@@ -89,11 +94,15 @@ const render = async () => {
 };
 
 beforeEach(() => {
+  setLocale("en");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true } });
   stored = new Map();
   vi.stubGlobal("localStorage", { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => void stored.set(key, value) });
   fixture.apps = [app("app_a", "First report"), app("app_b", "Second report")];
+  fixture.defaultApps = null;
+  fixture.defaultCalls = [];
+  fixture.defaultIssues = [];
   fixture.stateRevision = 3;
   fixture.dataRevision = 7;
   fixture.failState = false;
@@ -102,8 +111,6 @@ beforeEach(() => {
   fixture.frameMounts = 0;
   fixture.dashboardReads = [];
   fixture.bots = [];
-  fixture.routines = [];
-  fixture.routinesLoadState = "ready";
   fixture.owner = true;
   fixture.visible = true;
   fixture.usageValue = 1;
@@ -111,37 +118,41 @@ beforeEach(() => {
   fixture.dispatch.mockReset();
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/.well-known/openmausbot/environment") return { environmentId: "fixture-environment" };
-    if (path === "/api/mini-apps" && init?.method === "POST") {
-      const body = JSON.parse(String(init.body)) as { dashboardKind: "agent-team" | "usage" };
-      const id = `installed_${body.dashboardKind}`;
-      const next = { ...app(id, body.dashboardKind), slug: body.dashboardKind, revision: 1, templateVersion: 1,
-        dashboardIdentity: body.dashboardKind, dashboard: body.dashboardKind === "agent-team" ? dashboard : usageDashboard };
-      fixture.apps.push(next);
-      fixture.stateRevision = 1;
-      return { app: next, replayed: false };
+    if (path === "/api/mini-apps/defaults" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { restore?: string; bookkeepingHtml: string };
+      fixture.defaultCalls.push(body);
+      if (!body.restore && fixture.defaultApps) for (const candidate of fixture.defaultApps) {
+        if (!fixture.apps.some((entry) => entry.dashboardIdentity === candidate.dashboardIdentity && candidate.dashboardIdentity
+          || entry.shippedTemplateKind === candidate.shippedTemplateKind && candidate.shippedTemplateKind)) fixture.apps.push(candidate);
+      }
+      if (body.restore) fixture.apps = fixture.apps.map((entry) => entry.dashboardIdentity === body.restore || entry.shippedTemplateKind === body.restore
+        ? { ...entry, status: "active", revision: entry.revision + 1,
+          dashboard: entry.dashboardIdentity === "agent-team" ? dashboard : entry.dashboardIdentity === "usage" ? usageDashboard : entry.dashboard }
+        : entry);
+      return { apps: fixture.apps, issues: fixture.defaultIssues };
     }
-    if (path === "/api/mini-apps") return { apps: fixture.apps };
+    if (path === "/api/mini-apps" && (!init?.method || init.method === "GET")) return { apps: fixture.apps };
+    if (path.endsWith("/archive") && init?.method === "POST") {
+      const id = path.split("/")[3]!;
+      fixture.apps = fixture.apps.map((entry) => entry.id === id ? { ...entry, status: "archived", revision: entry.revision + 1, dashboard: null } : entry);
+      return { app: fixture.apps.find((entry) => entry.id === id), replayed: false };
+    }
     if (path.endsWith("/state")) {
       if (fixture.denied) throw Object.assign(new Error("Forbidden"), { status: 403 });
       if (fixture.failState) throw new Error("Fixture offline");
       const summary = fixture.apps.find((entry) => entry.id === path.split("/")[3]);
-      return { appId: path.split("/")[3], revision: fixture.stateRevision, templateVersion: summary?.templateVersion ?? 2, status: "active",
+      return { appId: path.split("/")[3], revision: summary?.revision ?? fixture.stateRevision, templateVersion: summary?.templateVersion ?? 2, status: summary?.status ?? "active",
         data: summary?.dashboardIdentity ? [] : [{ datasetId: "dataset_demo", revision: fixture.dataRevision }] };
     }
     if (path.endsWith("/dashboard") && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { resource: string };
       fixture.dashboardReads.push(body.resource);
-      return { appId: path.split("/")[3], revision: fixture.stateRevision, resource: body.resource,
+      const summary = fixture.apps.find((entry) => entry.id === path.split("/")[3]);
+      return { appId: path.split("/")[3], revision: summary?.revision ?? fixture.stateRevision, resource: body.resource,
         snapshot: body.resource === "teams" ? teams : body.resource === "usage"
           ? fixture.usageDeferred ? await fixture.usageDeferred : usageFor(fixture.usageValue)
           : { agentId: "w1:p1", status: "ready", updatedAt: 1_000,
           truncated: false, events: [{ id: "e1", kind: "assistant", at: null, tool: null, text: "Synthetic recent reply" }] } };
-    }
-    if (path.endsWith("/publish") && init?.method === "POST") {
-      const id = path.split("/")[3]!;
-      fixture.stateRevision += 1;
-      fixture.apps = fixture.apps.map((entry) => entry.id === id ? { ...entry, status: "active", revision: fixture.stateRevision, dashboard } : entry);
-      return { app: fixture.apps.find((entry) => entry.id === id), replayed: false };
     }
     if (path.endsWith("/rollback") && init?.method === "POST") {
       fixture.stateRevision += 1;
@@ -161,7 +172,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 
-afterEach(() => { root.unmount(); host.remove(); vi.unstubAllGlobals(); });
+afterEach(() => { root.unmount(); host.remove(); vi.unstubAllGlobals(); setLocale("en"); });
 
 describe("Mini Apps panel", () => {
   it("restores the selected app for this local environment and keeps keyboard navigation inside the app strip", async () => {
@@ -176,22 +187,22 @@ describe("Mini Apps panel", () => {
     expect(stored.get("omb-mini-app:fixture-environment")).toBe("app_a");
   });
 
-  it("labels the app version separately from report editions while freshness becomes stale and recovers", async () => {
+  it("removes the version status row while stale data remains marked and refreshable", async () => {
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("7"));
-    expect(freshness()).toBe("Current app version");
+    expect(host.querySelector('[data-testid="mini-app-freshness"]')).toBeNull();
+    expect(host.textContent).not.toContain("Current app version");
     expect(host.textContent).toContain("App updated");
     fixture.dataRevision = 8;
     await act(async () => { refresh().click(); });
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("8"));
     fixture.failState = true;
     await act(async () => { refresh().click(); });
-    await vi.waitFor(() => expect(freshness()).toContain("Showing the last loaded version"));
-    expect(freshness()).not.toContain("Current app version");
+    await vi.waitFor(() => expect(host.textContent).toContain("Showing the last loaded version"));
     expect(frame()?.dataset.dataRevision).toBe("8");
     fixture.failState = false;
     await act(async () => { refresh().click(); });
-    await vi.waitFor(() => expect(freshness()).toBe("Current app version"));
+    await vi.waitFor(() => expect(host.textContent).not.toContain("Showing the last loaded version"));
     expect(frame()?.dataset.dataRevision).toBe("8");
   });
 
@@ -204,101 +215,96 @@ describe("Mini Apps panel", () => {
     expect(JSON.parse(call![1].body)).toMatchObject({ expectedRevision: 3, templateVersion: 1 });
   });
 
-  it("opens the generic source picker when no app is installed", async () => {
+  it("registers five persisted defaults on opening without another install click", async () => {
     fixture.apps = [];
+    fixture.defaultApps = shippedDefaults();
     await render();
-    await vi.waitFor(() => expect(host.textContent).toContain("No Mini Apps installed yet"));
-    expect(host.querySelectorAll('[data-mini-app-included]')).toHaveLength(5);
-    expect(host.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(0);
-    expect(host.querySelectorAll('[role="tab"]')).toHaveLength(0);
-    expect(host.textContent).toContain("0 installed");
-    await act(async () => { button("Add Mini App").click(); });
-    expect(host.querySelector('[data-mini-app-catalog="bookkeeping"]')?.getAttribute("data-mini-app-state")).toBe("data");
-    expect(host.querySelector('[data-mini-app-catalog="x_ai_digest"]')?.getAttribute("data-mini-app-state")).toBe("automation");
-    expect(host.textContent).toContain("Agent Team");
-    expect(host.textContent).toContain("Usage");
-    expect(host.textContent).toContain("The original Agent Team and Usage Computer tabs remain available.");
-    expect(host.textContent).toContain("Daily X AI digest");
-    expect(host.textContent).toContain("GitHub activity & discovery");
-    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-choice="x_ai_digest"]')!.click(); });
-    expect(host.querySelector('[data-testid="fixture-report-install"]')?.getAttribute("data-kind")).toBe("x_ai_digest");
-    await act(async () => { button("Cancel").click(); });
-    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-choice="bookkeeping"]')!.click(); });
-    expect(host.querySelector('[data-testid="fixture-install"]')).not.toBeNull();
-  });
-
-  it("installs Agent Team explicitly from the empty library and keeps the count truthful until publication", async () => {
-    fixture.apps = [];
-    await render();
-    await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-app-empty-library"]')).not.toBeNull());
-    expect(host.textContent).toContain("0 installed");
-    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-included="agent-team"]')!.click(); });
-    const dialog = document.querySelector<HTMLElement>('#mini-app-library-dialog')!;
-    expect(document.activeElement).toBe(dialog.querySelector('[data-mini-app-catalog="agent-team"]'));
-    expect(dialog.querySelector('[data-mini-app-catalog="bookkeeping"]')?.getAttribute("data-mini-app-state")).toBe("data");
-    await act(async () => { dialog.querySelector<HTMLButtonElement>('[data-mini-app-choice="agent-team"]')!.click(); });
-    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-install"]')).not.toBeNull());
-    await vi.waitFor(() => expect(button("Install app").disabled).toBe(false));
-    await act(async () => { button("Install app").click(); });
-    await vi.waitFor(() => expect(selected()?.dataset.appId).toBe("installed_agent-team"));
-    await vi.waitFor(() => expect(host.querySelector('[data-team-house]')).not.toBeNull());
-    const request = fixture.api.mock.calls.find(([path, init]) => path === "/api/mini-apps" && init?.method === "POST")!;
-    expect(JSON.parse(String(request[1].body))).toMatchObject({ dashboardKind: "agent-team", bindings: [], expectedRevision: 0 });
-    expect(fixture.apps).toHaveLength(1);
-  });
-
-  it("keeps archived native identity in the library for explicit same-id repair", async () => {
-    fixture.apps = [{ ...app("old_team", "Agent Team"), slug: "agent-team", status: "archived",
-      dashboardIdentity: "agent-team", dashboard: null }];
-    await render();
-    await vi.waitFor(() => expect(host.querySelectorAll('[data-mini-app-included]')).toHaveLength(5));
-    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
-    const dialog = document.querySelector<HTMLElement>('#mini-app-library-dialog')!;
-    expect(dialog.querySelector('[data-mini-app-catalog="agent-team"]')?.getAttribute("data-mini-app-state")).toBe("repair");
-    await act(async () => { dialog.querySelector<HTMLButtonElement>('[data-mini-app-choice="agent-team"]')!.click(); });
-    await vi.waitFor(() => expect(button("Reinstall app").disabled).toBe(false));
-    await act(async () => { button("Reinstall app").click(); });
-    await vi.waitFor(() => expect(selected()?.dataset.appId).toBe("old_team"));
-    expect(fixture.apps).toHaveLength(1);
-    const request = fixture.api.mock.calls.find(([path, init]) => path === "/api/mini-apps/old_team/publish" && init?.method === "POST")!;
-    expect(JSON.parse(String(request[1].body))).toMatchObject({ expectedRevision: 3, dashboardKind: "agent-team", bindings: [] });
-  });
-
-  it("keeps an unrelated report slug as a custom app and refuses catalog adoption", async () => {
-    fixture.apps = [{ ...app("custom", "My own report"), slug: "x-ai-digest", shippedTemplateKind: null }];
-    await render();
-    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("custom"));
-    expect(selected()?.querySelector('[data-mini-app-icon="custom"]')).not.toBeNull();
-    await act(async () => { button("Add Mini App").click(); });
-    expect(host.querySelector('[data-mini-app-catalog="x_ai_digest"]')?.getAttribute("data-mini-app-state")).toBe("conflict");
-    expect(host.querySelector('[data-mini-app-choice="x_ai_digest"]')).toBeNull();
-    expect(host.textContent).toContain("Another app uses this name");
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(5));
+    expect(fixture.defaultCalls).toHaveLength(1);
+    expect(fixture.defaultCalls[0]?.restore).toBeUndefined();
+    expect(fixture.defaultCalls[0]?.bookkeepingHtml.length).toBeGreaterThan(100);
+    expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [data-mini-app-icon]')).toHaveLength(5);
+    expect(host.textContent).toContain("Work Tracker");
+    expect(host.textContent).not.toContain("Explore included apps");
+    expect(host.textContent).not.toContain("0 installed");
+    expect(host.textContent).not.toContain("The original Agent Team and Usage Computer tabs remain available.");
     expect(fixture.api.mock.calls.some(([path, init]) => path === "/api/mini-apps" && init?.method === "POST")).toBe(false);
   });
 
-  it("retains a shipped report identity and icon after its HTML is edited", async () => {
+  it("keeps a removed default archived on reopen and adds the same app id only after a click", async () => {
+    fixture.apps = shippedDefaults();
+    await render();
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(5));
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-remove="agent-team"]')!.click(); });
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(4));
+    expect(fixture.apps.find((entry) => entry.id === "team")?.status).toBe("archived");
+    expect(fixture.defaultCalls).toHaveLength(1);
+    await act(async () => { root.render(null); });
+    await render();
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(4));
+    expect(fixture.apps.find((entry) => entry.id === "team")?.status).toBe("archived");
+    await act(async () => { button("Add Mini App").click(); });
+    expect(host.querySelector('[data-mini-app-catalog="agent-team"]')?.getAttribute("data-mini-app-state")).toBe("removed");
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="agent-team"]')!.click(); });
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(5));
+    expect(selected()?.dataset.appId).toBe("team");
+    expect(fixture.defaultCalls.at(-1)?.restore).toBe("agent-team");
+    expect(fixture.apps.find((entry) => entry.id === "team")?.status).toBe("active");
+  });
+
+  it("uses explicit Add to repair a revoked native grant on the same id without an HTML frame", async () => {
+    fixture.apps = [{ ...app("old_team", "Agent Team"), slug: "agent-team",
+      dashboardIdentity: "agent-team", dashboard: null }];
+    await render();
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-recovery"]')).not.toBeNull());
+    expect(frame()).toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    expect(host.querySelector('[data-mini-app-catalog="agent-team"]')?.getAttribute("data-mini-app-state")).toBe("needs-access");
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="agent-team"]')!.click(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-team-house]')).not.toBeNull());
+    expect(selected()?.dataset.appId).toBe("old_team");
+    expect(fixture.defaultCalls.at(-1)?.restore).toBe("agent-team");
+    expect(fixture.frameMounts).toBe(0);
+  });
+
+  it("keeps a custom slug occupant separate from the included app identity", async () => {
+    fixture.apps = [{ ...app("custom", "My own report"), slug: "x-ai-digest", shippedTemplateKind: null },
+      { ...app("included", "Daily X AI digest"), slug: "x-ai-digest-included-1", shippedTemplateKind: "x_ai_digest" }];
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("custom"));
+    expect(selected()?.querySelector('[data-mini-app-icon="custom"]')).not.toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    expect(host.querySelector('[data-mini-app-catalog="x_ai_digest"]')?.getAttribute("data-mini-app-state")).toBe("active");
+    expect(host.querySelector('[data-mini-app-custom="custom"]')).not.toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="x_ai_digest"]')!.click(); });
+    await vi.waitFor(() => expect(selected()?.dataset.appId).toBe("included"));
+  });
+
+  it("keeps a provenance-marked report recognizable after its HTML is edited", async () => {
     fixture.apps = [{ ...app("edited_report", "My edited digest"), slug: "x-ai-digest", shippedTemplateKind: "x_ai_digest" }];
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe("edited_report"));
     expect(selected()?.querySelector('[data-mini-app-icon="x_ai_digest"]')).not.toBeNull();
-    await act(async () => { button("Add Mini App").click(); });
-    expect(host.querySelector('[data-mini-app-catalog="x_ai_digest"]')?.getAttribute("data-mini-app-state")).toBe("installed");
-    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-choice="x_ai_digest"]')!.click(); });
-    expect(selected()?.dataset.appId).toBe("edited_report");
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    expect(host.querySelector('[data-mini-app-catalog="x_ai_digest"]')?.getAttribute("data-mini-app-state")).toBe("active");
   });
 
-  it("opens the full library outside the tablist and returns focus on Escape", async () => {
+  it("anchors a nonmodal icon grid to All apps and returns focus on Escape", async () => {
     await render();
     await vi.waitFor(() => expect(frame()).not.toBeNull());
     const trigger = host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!;
     expect(host.querySelector('[role="tablist"]')?.contains(trigger)).toBe(false);
     trigger.focus();
     await act(async () => { trigger.click(); });
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-labelledby="mini-app-library-title"]')!;
-    expect(dialog).not.toBeNull();
-    expect(dialog.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(5);
-    await act(async () => { dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
-    expect(document.querySelector('[role="dialog"][aria-labelledby="mini-app-library-title"]')).toBeNull();
+    const popover = host.querySelector<HTMLElement>('[data-mini-app-popover]')!;
+    expect(popover).not.toBeNull();
+    expect(trigger.parentElement?.contains(popover)).toBe(true);
+    expect(popover.getAttribute("aria-modal")).toBe("false");
+    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(5);
+    expect(document.activeElement?.getAttribute("data-mini-app-grid-item")).toBe("bookkeeping");
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    expect(host.querySelector('[data-mini-app-popover]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
 
@@ -326,42 +332,41 @@ describe("Mini Apps panel", () => {
     expect(row.scrollLeft).toBe(150);
   });
 
-  it("shows bundled apps without owner install actions when owner access is denied", async () => {
+  it("shows the anchored grid without automatic registration or add actions when owner access is denied", async () => {
     fixture.apps = [];
     fixture.owner = false;
     await render();
-    await vi.waitFor(() => expect(host.querySelectorAll('[data-mini-app-included]')).toHaveLength(5));
+    await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('[data-mini-app-all]')).not.toBeNull());
+    expect(fixture.defaultCalls).toHaveLength(0);
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
-    const dialog = document.querySelector<HTMLElement>('#mini-app-library-dialog')!;
-    expect(dialog.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(5);
-    expect(dialog.querySelectorAll('[data-mini-app-choice]')).toHaveLength(0);
-    expect(dialog.textContent).toContain("Only the local owner can install this app.");
+    const popover = host.querySelector<HTMLElement>('[data-mini-app-popover]')!;
+    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(5);
+    expect([...popover.querySelectorAll<HTMLButtonElement>('[data-mini-app-grid-item]')].every((item) => item.disabled)).toBe(true);
+    expect(fixture.api.mock.calls.some(([path, init]) => path === "/api/mini-apps" && init?.method === "POST")).toBe(false);
   });
 
-  it("opens the newly installed document when both apps share the same revisions and Data", async () => {
+  it("shows a real default-binding issue in the grid without claiming data was installed", async () => {
+    fixture.apps = shippedDefaults();
+    fixture.defaultIssues = [{ kind: "bookkeeping", error: "More than one existing ledger matches." }];
     await render();
-    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
-    await act(async () => { button("Add Mini App").click(); });
-    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-choice="bookkeeping"]')!.click(); });
-    fixture.apps.push(app("app_new", "Installed report"));
-    await act(async () => { button("Finish install").click(); });
-    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_new"));
-    expect(selected()?.dataset.appId).toBe("app_new");
-    const installedFrame = frame();
-    fixture.dataRevision += 1;
-    await act(async () => { refresh().click(); });
-    await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("8"));
-    expect(frame()).toBe(installedFrame);
+    await vi.waitFor(() => expect(selected()).not.toBeNull());
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    const tile = host.querySelector<HTMLElement>('[data-mini-app-catalog="bookkeeping"]')!;
+    expect(tile.textContent).toContain("More than one existing ledger matches.");
+    expect(fixture.defaultCalls).toHaveLength(1);
+    expect(fixture.defaultCalls[0]?.restore).toBeUndefined();
   });
 
-  it("opens an installed report slug from the chooser without starting another install", async () => {
-    fixture.apps = [app("app_a", "First report"), { ...app("report_existing", "Daily X AI digest"), slug: "x-ai-digest", shippedTemplateKind: "x_ai_digest" }];
+  it("labels the native Usage Mini App Work Tracker in English and Chinese while keeping its id", async () => {
+    fixture.apps = [{ ...app("usage", "Usage"), slug: "usage", dashboardIdentity: "usage", dashboard: usageDashboard }];
     await render();
-    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
-    await act(async () => { button("Add Mini App").click(); });
-    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-choice="x_ai_digest"]')!.click(); });
-    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("report_existing"));
-    expect(host.querySelector('[data-testid="fixture-report-install"]')).toBeNull();
+    await vi.waitFor(() => expect(selected()?.dataset.appId).toBe("usage"));
+    expect(selected()?.textContent).toBe("Work Tracker");
+    await loadLocale("zh");
+    setLocale("zh");
+    await act(async () => { root.render(createElement(MiniAppsPanel)); });
+    expect(selected()?.textContent).toBe("工作追踪");
+    expect(selected()?.dataset.appId).toBe("usage");
   });
 
   it("replaces a same-revision revoked dashboard with explicit same-id repair and no fallback frame", async () => {
@@ -383,12 +388,9 @@ describe("Mini Apps panel", () => {
     expect(selected()).toBe(selectedTab);
 
     await act(async () => button("Reauthorize app").click());
-    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-install"]')).not.toBeNull());
-    await act(async () => button("Reauthorize app").click());
     await vi.waitFor(() => expect(host.querySelectorAll("[data-team-house]")).toHaveLength(1));
-    const [path, options] = fixture.api.mock.calls.find(([url, init]) => String(url).endsWith("/publish") && init?.method === "POST")!;
-    expect(path).toBe("/api/mini-apps/app_team/publish");
-    expect(JSON.parse(options.body)).toMatchObject({ expectedRevision: 3, dashboardKind: "agent-team", bindings: [], publisherBotIds: ["editor"], html: "<p>Fixture</p>" });
+    expect(fixture.defaultCalls.at(-1)?.restore).toBe("agent-team");
+    expect(fixture.api.mock.calls.some(([path, init]) => String(path).endsWith("/publish") && init?.method === "POST")).toBe(false);
     expect(selected()?.dataset.appId).toBe("app_team");
     expect(document.activeElement).toBe(selected());
   });

@@ -1,95 +1,75 @@
-import type { MiniAppSummary } from "../../../shared/mini-apps";
-import { REPORT_APPS } from "../../../shared/report-mini-app";
+import { Loader2 } from "lucide-react";
 import { t } from "@/lib/i18n";
-import type { LocaleKey } from "@/locales";
+import { DEFAULT_MINI_APP_KINDS, type DefaultMiniAppKind, type MiniAppDefaultsResult, type MiniAppSummary } from "../../../shared/mini-apps";
+import { REPORT_APPS } from "../../../shared/report-mini-app";
 import { DASHBOARD_APPS } from "./DashboardInstall";
-import { MiniAppIcon, iconKindForApp, type MiniAppIconKind } from "./MiniAppIcon";
+import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
+import { miniAppDisplayName } from "./mini-app-display";
 
-export const SHIPPED: MiniAppIconKind[] = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage"];
-
-export const shippedAppDetails = (kind: MiniAppIconKind) => kind === "bookkeeping"
-  ? { slug: "bookkeeping", name: t("computer.miniApps.bookkeepingTitle"), description: t("computer.miniApps.bookkeepingDescription") }
+export const shippedAppDetails = (kind: DefaultMiniAppKind) => kind === "bookkeeping"
+  ? { name: t("computer.miniApps.bookkeepingTitle"), description: t("computer.miniApps.bookkeepingDescription") }
   : kind === "agent-team" || kind === "usage"
-    ? { slug: DASHBOARD_APPS[kind].slug, name: t(DASHBOARD_APPS[kind].title), description: t(DASHBOARD_APPS[kind].description) }
-    : { slug: REPORT_APPS[kind].slug,
-      name: t(kind === "x_ai_digest" ? "computer.miniApps.report.xTitle" : "computer.miniApps.report.githubTitle"),
-      description: t(kind === "x_ai_digest" ? "computer.miniApps.report.xDescription" : "computer.miniApps.report.githubDescription") };
+    ? { name: t(DASHBOARD_APPS[kind].title), description: t(DASHBOARD_APPS[kind].description) }
+    : { name: t(kind === "x_ai_digest" ? "computer.miniApps.report.xTitle" : "computer.miniApps.report.githubTitle"),
+      description: REPORT_APPS[kind].description };
 
-export function MiniAppLibraryEntries({ inventory, routines, owner, nativeGuard, onOpen, onSetup }: {
+export function MiniAppLibraryEntries({ inventory, issues, busyKind, owner, nativeGuard, onOpen, onAdd, onRemove }: {
   inventory: MiniAppSummary[];
-  routines: "ready" | "needs" | "loading" | "error";
+  issues: MiniAppDefaultsResult["issues"];
+  busyKind: DefaultMiniAppKind | null;
   owner: boolean | null;
   nativeGuard: boolean;
   onOpen(id: string): void;
-  onSetup(kind: MiniAppIconKind): void;
+  onAdd(kind: DefaultMiniAppKind): void;
+  onRemove(app: MiniAppSummary): void;
 }) {
-  const active = inventory.filter((app) => app.status === "active");
-  return <div data-mini-app-library className="space-y-5">
-    {active.length > 0 && <section aria-labelledby="mini-app-library-installed">
-      <h3 id="mini-app-library-installed" className="text-[13px] font-semibold text-ink">{t("computer.miniApps.catalog.installed")}</h3>
-      <ul className="mt-2 divide-y divide-hairline/60 border-y border-hairline/60">
-        {active.map((app) => {
-          const kind = iconKindForApp(app);
-          return <li key={app.id} className="flex min-w-0 flex-wrap items-center gap-3 py-3">
-            <MiniAppIcon kind={kind} large />
-            <div className="min-w-0 flex-1"><p className="text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{app.title}</p>
-              <p className="mt-0.5 text-[12px] leading-5 text-ink-secondary [overflow-wrap:anywhere]">{app.description}</p></div>
-            <button type="button" data-mini-app-open={app.id} onClick={() => onOpen(app.id)} disabled={owner !== true || !nativeGuard}
-              aria-label={`${t("computer.miniApps.catalog.open")} ${app.title}`}
-              className="rounded-lg bg-control px-3 py-1.5 text-[13px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">
-              {t("computer.miniApps.catalog.open")}</button>
-          </li>;
-        })}
+  const defaultApps = new Set(inventory.filter((app) => iconKindForApp(app) !== null).map((app) => app.id));
+  const custom = inventory.filter((app) => !defaultApps.has(app.id));
+  return <div data-mini-app-library className="space-y-4">
+    <ul className="grid grid-cols-[repeat(auto-fit,minmax(78px,1fr))] gap-2" aria-label={t("computer.miniApps.catalog.included") }>
+      {DEFAULT_MINI_APP_KINDS.map((kind) => {
+        const matches = inventory.filter((app) => iconKindForApp(app) === kind);
+        const app = matches.length === 1 ? matches[0] : null;
+        const name = app ? miniAppDisplayName(app) : shippedAppDetails(kind).name;
+        const nativeNeedsGrant = app && (kind === "agent-team" || kind === "usage") && !app.dashboard;
+        const canOpen = app?.status === "active" && !nativeNeedsGrant;
+        const canAct = owner === true && nativeGuard && matches.length <= 1;
+        const issue = issues.find((entry) => entry.kind === kind);
+        const state = matches.length > 1 ? "conflict" : !app ? "missing" : app.status === "archived" ? "removed"
+          : nativeNeedsGrant ? "needs-access" : "active";
+        return <li key={kind} data-mini-app-catalog={kind} data-mini-app-state={state}
+          className="flex min-w-0 flex-col items-center rounded-xl bg-inset/60 px-1.5 py-2 text-center">
+          <button type="button" data-mini-app-grid-item={kind} disabled={!canAct || busyKind !== null}
+            onClick={() => canOpen ? onOpen(app!.id) : onAdd(kind)}
+            aria-label={`${t(canOpen ? "computer.miniApps.catalog.open" : "computer.miniApps.catalog.add")} ${name}`}
+            title={name} className="flex min-w-0 flex-col items-center gap-1 rounded-lg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">
+            <MiniAppIcon kind={kind} launcher />
+            <span className="w-full text-[11px] leading-4 text-ink [overflow-wrap:anywhere]">{name}</span>
+          </button>
+          {busyKind === kind && <Loader2 size={12} className="mt-1 animate-spin text-ink-secondary" aria-hidden="true" />}
+          {state !== "active" && <span className="mt-1 text-[10px] leading-3 text-ink-secondary">{t(state === "removed" ? "computer.miniApps.catalog.removed"
+            : state === "needs-access" ? "computer.miniApps.catalog.needsAccessShort"
+              : state === "conflict" ? "computer.miniApps.catalog.nameInUseShort" : "computer.miniApps.catalog.available")}</span>}
+          {issue && <span role="status" className="mt-1 text-[10px] leading-3 text-warning [overflow-wrap:anywhere]">{issue.error}</span>}
+          {canOpen && canAct && <button type="button" data-mini-app-remove={kind} disabled={busyKind !== null}
+            onClick={() => onRemove(app!)} aria-label={`${t("computer.miniApps.catalog.remove")} ${name}`}
+            className="mt-1 rounded px-1.5 py-0.5 text-[10px] text-ink-secondary hover:bg-control hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">
+            {t("computer.miniApps.catalog.remove")}</button>}
+        </li>;
+      })}
+    </ul>
+    {custom.length > 0 && <section aria-labelledby="mini-app-custom-title">
+      <h3 id="mini-app-custom-title" className="text-[12px] font-semibold text-ink">{t("computer.miniApps.catalog.other")}</h3>
+      <ul className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(78px,1fr))] gap-2">
+        {custom.map((app) => <li key={app.id} data-mini-app-custom={app.id} className="flex min-w-0 flex-col items-center rounded-xl bg-inset/60 px-1.5 py-2 text-center">
+          <button type="button" data-mini-app-grid-item={app.id} disabled={app.status !== "active" || owner !== true || !nativeGuard || busyKind !== null}
+            onClick={() => onOpen(app.id)} aria-label={`${t("computer.miniApps.catalog.open")} ${app.title}`}
+            className="flex min-w-0 flex-col items-center gap-1 rounded-lg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">
+            <MiniAppIcon kind={null} launcher /><span className="w-full text-[11px] leading-4 text-ink [overflow-wrap:anywhere]">{app.title}</span>
+          </button>
+          {app.status === "archived" && <span className="mt-1 text-[10px] text-ink-secondary">{t("computer.miniApps.archived")}</span>}
+        </li>)}
       </ul>
     </section>}
-    <section aria-labelledby="mini-app-library-included">
-      <h3 id="mini-app-library-included" className="text-[13px] font-semibold text-ink">{t("computer.miniApps.catalog.included")}</h3>
-      <ul className="mt-2 divide-y divide-hairline/60 border-y border-hairline/60">
-        {SHIPPED.map((kind) => {
-          const { slug, name, description } = shippedAppDetails(kind);
-          const identities = kind === "agent-team" || kind === "usage"
-            ? inventory.filter((app) => app.dashboardIdentity === kind) : [];
-          const identity = identities.length === 1 ? identities[0] : null;
-          const sameSlug = inventory.find((app) => app.slug === slug);
-          const state = kind === "agent-team" || kind === "usage"
-            ? identities.length > 1 || (!identity && sameSlug) ? "conflict"
-              : identity?.status === "active" && identity.dashboard?.kind === kind ? "installed"
-                : identity ? "repair" : "ready"
-            : sameSlug?.status === "active" && sameSlug.shippedTemplateKind === kind ? "installed"
-              : sameSlug ? "conflict"
-                    : kind === "bookkeeping" ? "data"
-                      : routines === "ready" ? "ready" : routines === "needs" ? "automation"
-                        : routines;
-          const blocked = owner !== true || !nativeGuard;
-          const statusKey: LocaleKey = blocked ? owner === null ? "computer.miniApps.catalog.checkingAccess"
-            : !nativeGuard ? "computer.miniApps.desktopRequired" : "computer.miniApps.catalog.ownerOnly"
-            : state === "installed" ? "computer.miniApps.catalog.isInstalled"
-              : state === "repair" ? "computer.miniApps.catalog.needsAccess"
-                : state === "conflict" ? "computer.miniApps.catalog.nameInUse"
-                  : state === "data" ? "computer.miniApps.catalog.needsData"
-                      : state === "automation" ? "computer.miniApps.catalog.needsAutomation"
-                        : state === "loading" ? "computer.miniApps.catalog.checkingAutomations"
-                          : state === "error" ? "computer.miniApps.catalog.automationsUnavailable"
-                            : "computer.miniApps.catalog.ready";
-          const actionKey: LocaleKey = state === "installed" ? "computer.miniApps.catalog.open"
-            : state === "repair" ? "computer.miniApps.dashboard.reauthorize"
-              : state === "data" || state === "automation" || state === "error" || state === "loading"
-                ? "computer.miniApps.catalog.setup" : "computer.miniApps.catalog.install";
-          const canAct = !blocked && state !== "conflict";
-          return <li key={kind} data-mini-app-catalog={kind} data-mini-app-state={state} tabIndex={-1}
-            className="flex min-w-0 flex-wrap items-center gap-3 py-3 focus-visible:outline-2 focus-visible:outline-accent">
-            <MiniAppIcon kind={kind} large />
-            <div className="min-w-0 flex-1"><p className="text-[13px] font-medium text-ink">{name}</p>
-              <p className="mt-0.5 text-[12px] leading-5 text-ink-secondary">{description}</p>
-              <p className="mt-1 text-[12px] text-ink-secondary">{t(statusKey)}</p></div>
-            {canAct && <button type="button" data-mini-app-choice={kind}
-              onClick={() => state === "installed" && (identity || sameSlug) ? onOpen((identity ?? sameSlug)!.id) : onSetup(kind)}
-              aria-label={`${t(actionKey)} ${name}`}
-              className="rounded-lg bg-control px-3 py-1.5 text-[13px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">
-              {t(actionKey)}</button>}
-          </li>;
-        })}
-      </ul>
-    </section>
   </div>;
 }
