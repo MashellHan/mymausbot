@@ -33,6 +33,7 @@ SEARCH = """query($search: String!, $after: String) {
 COMMITS = """query($id: ID!, $after: String) {
   viewer { login }
   node(id: $id) { ... on PullRequest {
+    baseRefOid headRefOid repository { nameWithOwner }
     commits(first: 100, after: $after) {
       totalCount pageInfo { hasNextPage endCursor }
       nodes { commit { oid parents(first: 2) { totalCount } } }
@@ -120,8 +121,39 @@ def github_query(config, profile, query, variables, run):
     return data
 
 
+def github_compare_commits(config, profile, pr, total, known, run, monitor):
+    base, head = pr["baseRefOid"], pr["headRefOid"]
+    repo = pr["repository"]["nameWithOwner"]
+    if any(not isinstance(oid, str) or not SHA.fullmatch(oid) for oid in (base, head)):
+        raise ValueError("Invalid PR comparison refs")
+    if (not isinstance(repo, str) or len(repo) > 300 or len(repo.split("/")) != 2 or
+            any(part in (".", "..") or not re.fullmatch(r"[A-Za-z0-9_.-]+", part) for part in repo.split("/"))):
+        raise ValueError("Invalid PR comparison repository")
+    commits, seen = [], {}
+    for page in range(1, MAX_PAGES + 1):
+        endpoint = "repos/" + repo + "/compare/" + base + "..." + head + "?per_page=100&page=" + str(page)
+        data = checked_json(run, [sys.executable, config["githubHelper"], "gh", profile["profile"], "api", endpoint])
+        rows = data["commits"]
+        if (type(data["total_commits"]) is not int or data["total_commits"] != total or
+                data["base_commit"]["sha"].lower() != base.lower() or
+                not isinstance(rows, list) or not rows or len(rows) > 100):
+            raise ValueError("Incomplete PR comparison page")
+        for row in rows:
+            oid, parents = row["sha"].lower(), row["parents"]
+            if not SHA.fullmatch(oid) or oid in seen or not isinstance(parents, list):
+                raise ValueError("Invalid PR comparison commit")
+            seen[oid] = len(parents)
+            if len(parents) <= 1:
+                commits.append(monitor.digest("original-pr-commit", oid))
+        if len(seen) >= total:
+            if len(seen) != total or any(seen.get(oid) != parents for oid, parents in known.items()):
+                raise ValueError("PR comparison does not match original commits")
+            return commits
+    raise ValueError("PR comparison pagination limit")
+
+
 def github_commits(config, profile, pr_id, run, monitor):
-    commits, seen, cursor, total = [], set(), None, None
+    commits, seen, cursor, total = [], {}, None, None
     for _ in range(MAX_PAGES):
         data = github_query(config, profile, COMMITS, {"id": pr_id, "after": cursor}, run)
         connection = data["node"]["commits"]
@@ -135,9 +167,12 @@ def github_commits(config, profile, pr_id, run, monitor):
             parents = commit["parents"]["totalCount"]
             if not SHA.fullmatch(oid) or type(parents) is not int or parents < 0 or oid in seen:
                 raise ValueError("Invalid PR commit page")
-            seen.add(oid)
+            seen[oid] = parents
             if parents <= 1:
                 commits.append(monitor.digest("original-pr-commit", oid))
+        # GitHub's v4 PR commit connection can stop at 250 nodes while reporting a larger total.
+        if total > 250:
+            return github_compare_commits(config, profile, data["node"], total, seen, run, monitor)
         page = connection["pageInfo"]
         if not page["hasNextPage"]:
             if len(seen) != total:
