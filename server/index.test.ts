@@ -6761,7 +6761,7 @@ describe("harness HTTP API", () => {
       const firstCard = (await first.json()) as { messageId: string };
 
       // A second connection holds the database write lock, so the fresh card's append fails mid-request.
-      const acquisitionTimeoutMs = 2_000;
+      const acquisitionTimeoutMs = 5_000;
       const lockDb = new DatabaseSync(join(home, ".openmausbot", "messages.db"), { timeout: acquisitionTimeoutMs });
       let lockHeld = false;
       const acquisitionStartedAt = Date.now();

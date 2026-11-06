@@ -271,6 +271,17 @@ test("the link signs in like the poll, takes My Cloud's word for this computer's
   }
 });
 
+test("a link that opened is never ended by its opening limit", async () => {
+  class OpensAtOnce { constructor() { queueMicrotask(() => this.onopen?.()); } send() {} close() {} }
+  const stop = new AbortController();
+  let opened = 0;
+  const running = runDeviceLink({ url: "ws://127.0.0.1:9/link", WebSocket: OpensAtOnce, signal: stop.signal, openMs: 20, onOpen: () => opened++, egress: { interfaces: () => ({}) } });
+  await delay(100);
+  stop.abort();
+  assert.equal(opened, 1);
+  assert.deepEqual(await running, { code: 1000, reason: "stopped" });
+});
+
 test("a My Cloud that stops answering ends the link here within the silence limit, so nothing hangs on it", async (t) => {
   const end = await cloudEnd(t, { answerPings: false, greet: false });
   const started = Date.now();

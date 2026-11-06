@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ALL_OS, ciOutputs, FULL_SCOPE, moveLinuxIntoStatic } from "../ci-scope.mjs";
 
-export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
+export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "relay"];
 const PREFLIGHT_NAMES = {
   hosted: ["typecheck + lint", "preflight"],
   boat: ["typecheck + lint + Linux tests (Boat)", "preflight + Linux tests (Boat)"],
@@ -23,6 +23,7 @@ const NAMES = {
   "control-plane": "control-plane check + workerd tests + dry run",
   "ui-smoke": "renderer smoke (control-omb ui, Ubuntu 24.04)",
   "package-linux": "package + smoke (Ubuntu 24.04 x64)",
+  relay: "relay typecheck + tests + fuzz + audit",
 };
 
 export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true, preflightName) {
@@ -73,6 +74,7 @@ const VALIDATION_STEPS = {
   "ui-smoke": ["Drive the real renderer through control-omb ui"],
   "browser-identity": ["Drive a real Chrome through the launcher"],
   "package-linux": ["Prove overlay-free X11 input routing", "Package from the verified offline CUA stage", "node scripts/verify-linux-package.mjs", "Reproduce and verify an in-place DEB upgrade", "Verify the installed browser", "Launch packaged app"],
+  relay: ["Audit the production dependencies", "pnpm check", "pnpm test"],
   "browser-driver": ["S4 on the runner's Google Chrome"],
 };
 

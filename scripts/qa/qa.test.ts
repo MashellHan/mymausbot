@@ -63,6 +63,17 @@ function issueApi() {
 }
 
 describe("complete CI and trusted QA health", () => {
+  it("requires the relay's audit, check and test on a selected wider lane", () => {
+    const selection = ciOutputs({ checks: ["relay"] }, ["ubuntu-latest"]);
+    const relay = expectedJobs(selection, false).find((item) => item.id === "relay")!;
+    expect(MERGE_JOBS).toContain("relay");
+    expect(relay.name).toBe("relay typecheck + tests + fuzz + audit");
+    const steps = ["Audit the production dependencies", "pnpm check", "pnpm test"].map((name) => ({ name, conclusion: "success" }));
+    const observed = { name: relay.name, status: "completed", conclusion: "success", steps };
+    expect(executionComplete([relay], [observed], new Set())).toBe(true);
+    expect(executionComplete([relay], [{ ...observed, steps: steps.slice(0, -1) }], new Set())).toBe(false);
+  });
+
   it("keeps the separate build required and its checks out of static", () => {
     const contracts = expectedJobs({ jobs: ["build"], vitest_os: [], packaged_server_os: [], vitest_matrix: { include: [] } }, false, "preflight");
     expect(contracts.map(({ id, name }) => ({ id, name }))).toEqual([
