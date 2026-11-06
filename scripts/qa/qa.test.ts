@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { expectedJobs, inspectJobs, eligibleRun, holdsFor, triageOf } from "./contracts.mjs";
 import { qaHealth } from "./health.mjs";
+import { github, runJobs } from "./github.mjs";
 import { deliverReport, makeReport, reportRun, sanitize, setupIncident, testFindings } from "./report.mjs";
 import { drainQueue, promptLead, queueItems, recoverQa } from "./queue.mjs";
 import { gateRun, verifyGate } from "./gate.mjs";
@@ -13,6 +14,8 @@ const run = { id: 100, run_attempt: 1, head_sha: "a".repeat(40), path: ".github/
 const report = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, finishedAt: run.updated_at, executionComplete: true, deliveryComplete: true };
 const expected = [{ id: "vitest", name: "vitest (ubuntu-latest, shard 1/8)", artifact: "qa-results-vitest-ubuntu-latest-1", nodeTests: false }];
 const job = { ...expected[0], id: 77, run_attempt: 1, status: "completed", conclusion: "failure", steps: [{ name: "Run tests", conclusion: "failure" }], html_url: run.html_url + "/job/77" };
+const firstExecution = { created_at: "2026-11-05T12:18:00Z", started_at: "2026-11-05T12:18:19Z", completed_at: "2026-11-05T12:22:32Z" };
+const nextExecution = { created_at: "2026-11-05T12:47:31Z", started_at: "2026-11-05T12:47:32Z", completed_at: "2026-11-05T12:47:34Z" };
 const testFile = "server/request-auth.test.ts";
 function result(status = "failed") {
   return { "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: status === "failed" ? 1 : 0, numPendingTests: status === "pending" ? 1 : 0,
@@ -129,7 +132,7 @@ describe("complete CI and trusted QA health", () => {
   it("carries successful same-run evidence for failed-jobs reruns while enforcing current controls", async () => {
     const outputs = { full_required: false, expected_jobs: [{ id: "static", name: "typecheck + lint" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false, pr_number: 7, pr_head: run.head_sha };
     const plan = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs };
-    const jobs = [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, run_attempt: 2, conclusion: "success" }];
+    const jobs = [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, ...nextExecution, run_attempt: 2, conclusion: "success" }];
     let labels: string[] = [];
     let expired = false;
     const api = async (path: string) => {
@@ -148,6 +151,110 @@ describe("complete CI and trusted QA health", () => {
     labels = [];
     expired = true;
     await expect(invoke()).rejects.toThrow("rerun all jobs for this revision");
+  });
+
+  it("uses the producing execution for copied preflight rows and a fresh plan for attempt three", async () => {
+    const original = { ...passedPreflight(), ...firstExecution, id: 10 };
+    const copied = { ...original, id: 11, run_attempt: 2, created_at: nextExecution.created_at };
+    const fresh = { ...original, id: 12, run_attempt: 3, created_at: "2026-11-05T12:58:20Z", started_at: "2026-11-05T12:58:21Z", completed_at: "2026-11-05T13:00:00Z" };
+    const outputs = { full_required: false, expected_jobs: [{ id: "static", name: original.name }], required_jobs: [], qa_areas: ["global"], reduced: false };
+    const plans = [1, 3].map((attempt) => ({ name: `qa-plan-attempt-${attempt}`, workflow_run: { id: run.id, head_sha: "b".repeat(40) } }));
+    const readArtifact = vi.fn(async (artifact: { name: string }) => ({ "qa-plan.json": JSON.stringify({ version: 1, runId: run.id, attempt: Number(artifact.name.at(-1)), sha: run.head_sha, outputs }) }));
+    let jobs = [original, copied, fresh];
+    let artifacts = plans;
+    const api = async (path: string) => path.startsWith("/issues?") ? [] : path.includes("/jobs") ? { jobs } : { artifacts };
+    expect(await runJobs(run.id, 2, api)).toMatchObject([{ id: original.id, run_attempt: 1 }]);
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).resolves.toBeUndefined();
+    expect(readArtifact.mock.calls[0]?.[0].name).toBe("qa-plan-attempt-1");
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, deadlineMs: 0 })).resolves.toBeUndefined();
+    expect(readArtifact.mock.calls[1]?.[0].name).toBe("qa-plan-attempt-3");
+    artifacts = [plans[0]!];
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 3, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
+    jobs = [copied];
+    await expect(runJobs(run.id, 2, api)).rejects.toThrow("Ambiguous workflow job execution");
+    jobs = [original, copied];
+    artifacts = [plans[0]!, plans[0]!];
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("Ambiguous current-run validation plan");
+    artifacts = [{ ...plans[0]!, workflow_run: { id: 99, head_sha: run.head_sha } }];
+    await expect(gateRun({ api, readArtifact, runId: run.id, attempt: 2, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("rerun all jobs for this revision");
+  });
+
+  it("retries only bounded transient reads from GitHub", async () => {
+    vi.stubEnv("GITHUB_REPOSITORY", repository);
+    vi.stubEnv("GITHUB_API_URL", "https://api.github.test");
+    vi.stubEnv("GH_TOKEN", "synthetic-token");
+    vi.stubEnv("MAUSBOT_GH_COMMAND", "");
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    try {
+      fetcher.mockResolvedValueOnce(new Response(null, { status: 502 })).mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValueOnce(Response.json({ jobs: [] }));
+      await expect(github("/actions/runs/100/jobs?filter=all")).resolves.toEqual({ jobs: [] });
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      fetcher.mockClear();
+      fetcher.mockResolvedValue(new Response(null, { status: 504 }));
+      await expect(github("/actions/runs/100/jobs")).rejects.toThrow("GitHub GET /actions/runs/100/jobs: HTTP 504");
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      fetcher.mockClear();
+      fetcher.mockResolvedValue(new Response(null, { status: 502 }));
+      await expect(github("/issues", { method: "POST", body: { title: "Synthetic" } })).rejects.toThrow("GitHub POST /issues: HTTP 502");
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      fetcher.mockClear();
+      fetcher.mockResolvedValue(new Response(null, { status: 500 }));
+      await expect(github("/actions/runs/100/jobs")).rejects.toThrow("GitHub GET /actions/runs/100/jobs: HTTP 500");
+      expect(fetcher).toHaveBeenCalledTimes(1);
+
+      const socketError = (message: string) => new TypeError(message, { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) });
+      fetcher.mockReset();
+      fetcher.mockRejectedValueOnce(socketError("fetch failed")).mockResolvedValueOnce(Response.json({ jobs: [] }));
+      await expect(github("/actions/runs/100/jobs")).resolves.toEqual({ jobs: [] });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      fetcher.mockReset();
+      fetcher.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.reject(socketError("terminated")) }).mockResolvedValueOnce(Response.json({ jobs: [] }));
+      await expect(github("/actions/runs/100/jobs")).resolves.toEqual({ jobs: [] });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      fetcher.mockReset();
+      fetcher.mockResolvedValueOnce({ ok: true, status: 200, arrayBuffer: () => Promise.reject(socketError("terminated")) }).mockResolvedValueOnce(new Response("ok"));
+      await expect(github("/actions/artifacts/3/zip", { raw: true })).resolves.toEqual(Buffer.from("ok"));
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      fetcher.mockReset();
+      const exhausted = socketError("terminated");
+      fetcher.mockRejectedValue(exhausted);
+      await expect(github("/actions/runs/100/jobs")).rejects.toBe(exhausted);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+
+      for (const options of [{ method: "POST", body: { title: "Synthetic" } }, { method: "GET", body: { filter: "all" } }]) {
+        fetcher.mockReset();
+        const closed = socketError("fetch failed");
+        fetcher.mockRejectedValue(closed);
+        await expect(github("/issues", options)).rejects.toBe(closed);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+      }
+
+      for (const error of [new SyntaxError("invalid JSON"), new TypeError("fetch failed", { cause: new Error("connection reset") }),
+        socketError("unrelated message"), new DOMException("aborted", "AbortError"), new DOMException("deadline", "TimeoutError")]) {
+        fetcher.mockReset();
+        if (error instanceof SyntaxError) fetcher.mockResolvedValue({ ok: true, status: 200, json: () => Promise.reject(error) });
+        else fetcher.mockRejectedValue(error);
+        await expect(github("/actions/runs/100/jobs")).rejects.toBe(error);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+      }
+
+      fetcher.mockReset();
+      const deadline = socketError("terminated");
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
+      try {
+        fetcher.mockRejectedValue(deadline);
+        await expect(github("/actions/runs/100/jobs")).rejects.toBe(deadline);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(fetcher.mock.calls[0]?.[1].signal.aborted).toBe(true);
+      } finally { timeout.mockRestore(); }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
   });
 });
 
@@ -176,7 +283,7 @@ describe("QA findings and idempotent delivery", () => {
     const plan = { version: 1, sha: run.head_sha, runId: run.id, attempt: 1, outputs };
     const api = async (path: string, options?: object) => {
       if (path === `/actions/runs/${run.id}`) return current;
-      if (path.includes("/jobs")) return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, run_attempt: 2, conclusion: "success", steps: [{ name: "Run tests", conclusion: "success" }] }] };
+      if (path.includes("/jobs")) return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }, job, { ...job, ...nextExecution, run_attempt: 2, conclusion: "success", steps: [{ name: "Run tests", conclusion: "success" }] }] };
       if (path.includes("/artifacts")) return { artifacts: [{ name: `${expected[0].artifact}-attempt-1` }, { name: `${expected[0].artifact}-attempt-2` }, { name: "qa-plan-attempt-1" }] };
       if (path.includes("ci.yml/runs")) return { workflow_runs: [] };
       return issuesApi(path, options);
@@ -188,6 +295,30 @@ describe("QA findings and idempotent delivery", () => {
     expect(actual.passed).not.toContain(testFindings(result("passed"), "linux").passed[0]);
     expect(issues).toHaveLength(1);
     expect(readArtifact).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a carried job's result from its producing attempt", async () => {
+    const { api: issuesApi } = issueApi();
+    const current = { ...run, event: "push", run_attempt: 2 };
+    const outputs = { build: false, jobs: ["vitest"], full_required: false, vitest_matrix: { include: [{ os: "ubuntu-latest", part: "shard 1/8", shard: 1 }] } };
+    const plan = { version: 1, sha: run.head_sha, runId: run.id, attempt: 1, outputs };
+    const executed = { ...job, ...firstExecution, conclusion: "success", steps: [{ name: "Run tests", conclusion: "success" }] };
+    const copied = { ...executed, id: 78, run_attempt: 2, created_at: nextExecution.created_at };
+    const resultName = `${expected[0].artifact}-attempt-1`;
+    let artifacts = [resultName, `${expected[0].artifact}-attempt-2`, "qa-plan-attempt-1"].map((name) => ({ name, workflow_run: { id: run.id, head_sha: run.head_sha } }));
+    const api = async (path: string, options?: object) => {
+      if (path === `/actions/runs/${run.id}`) return current;
+      if (path.includes("/jobs")) return { jobs: [passedPreflight(), executed, copied] };
+      if (path.includes("/artifacts")) return { artifacts };
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [] };
+      return issuesApi(path, options);
+    };
+    const readArtifact = vi.fn(async (artifact: { name: string }) => artifact.name.startsWith("qa-plan") ? { "qa-plan.json": JSON.stringify(plan) } : result(artifact.name === resultName ? "passed" : "failed"));
+    const actual = await reportRun(run.id, { api, readArtifact, repository });
+    expect(actual.counts).toMatchObject({ total: 1, failed: 0 });
+    expect(readArtifact.mock.calls.map(([artifact]) => artifact.name)).toEqual(["qa-plan-attempt-1", resultName]);
+    artifacts = [artifacts[0]!, artifacts[0]!, artifacts[2]!];
+    await expect(reportRun(run.id, { api, readArtifact, repository })).rejects.toThrow("Ambiguous result artifact");
   });
 
   it("groups only proven shared setup failures", () => {
