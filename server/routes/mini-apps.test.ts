@@ -1,7 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { expect, it, vi } from "vitest";
 
-import { createMiniAppsInternalRoutes } from "./mini-apps.ts";
+import { createMiniAppRoutes, createMiniAppsInternalRoutes } from "./mini-apps.ts";
 
 it("rejects local Mini App writes before reading a write-disallowed turn", async () => {
   const deps = {
@@ -24,4 +24,47 @@ it("rejects local Mini App writes before reading a write-disallowed turn", async
   expect(requireActive).toHaveBeenCalledTimes(2);
   expect(writeAllowed).toHaveBeenCalledTimes(2);
   expect(readBody).not.toHaveBeenCalled();
+});
+
+it("publishes a metadata-only app without promoting the bot's Data", async () => {
+  const publish = vi.fn(async () => ({ app: { id: "installed" }, replayed: false }));
+  const promoteForBot = vi.fn(async () => { throw new Error("unrelated Data is unavailable"); });
+  const deps = { localEnabled: () => true, bots: () => [{ id: "producer", name: "Producer" }],
+    apps: { publish }, data: { promoteForBot } } as unknown as Parameters<typeof createMiniAppsInternalRoutes>[0];
+  const route = createMiniAppsInternalRoutes(deps);
+  const response = {} as ServerResponse;
+  const json = vi.fn();
+  const publication = { requestKey: "metadata", expectedRevision: 0, slug: "dashboard", title: "Dashboard",
+    description: "Synthetic", html: "<p>Fallback</p>", bindings: [] };
+  await route({ method: "POST", path: "/api/internal/mini-apps/publish", res: response, json,
+    botId: "producer", threadId: "turn", readBody: async () => ({ publication }), requireActive: () => undefined,
+    writeAllowed: () => true });
+  expect(json).toHaveBeenCalledWith(response, 200, { app: { id: "installed" }, replayed: false });
+  expect(publish).toHaveBeenCalledWith(expect.objectContaining({ botId: "producer" }), publication, undefined);
+  expect(promoteForBot).not.toHaveBeenCalled();
+});
+
+it("keeps app-scoped dashboard reads behind the existing local owner gate", async () => {
+  const dashboardRead = vi.fn(async () => ({ appId: "fixture", revision: 1, resource: "teams", snapshot: {} }));
+  const deps = { localEnabled: () => true, apps: { dashboardRead } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
+  const route = createMiniAppRoutes(deps);
+  const response = { setHeader: vi.fn() } as unknown as ServerResponse;
+  const json = vi.fn();
+  const path = "/api/mini-apps/11111111-1111-4111-8111-111111111111/dashboard";
+  const readBody = vi.fn(async () => ({ resource: "teams", expectedRevision: 1 }));
+  const call = (auth: unknown, peer = "127.0.0.1") => route({ method: "POST", path, url: new URL(`http://127.0.0.1${path}`),
+    req: { socket: { remoteAddress: peer } }, res: response, auth, json, readBody } as Parameters<typeof route>[0]);
+  for (const [auth, peer] of [
+    [{ kind: "session", scopes: ["admin"] }, "127.0.0.1"],
+    [{ kind: "loopback", scopes: ["admin"], trust: "service" }, "127.0.0.1"],
+    [{ kind: "loopback", scopes: ["admin"], companionDevice: "phone" }, "127.0.0.1"],
+    [{ kind: "loopback", scopes: ["admin"] }, "203.0.113.8"],
+  ] as const) await call(auth, peer);
+  expect(json).toHaveBeenCalledTimes(4);
+  expect(json.mock.calls.every(([, status]) => status === 403)).toBe(true);
+  expect(readBody).not.toHaveBeenCalled();
+  expect(dashboardRead).not.toHaveBeenCalled();
+  await call({ kind: "loopback", scopes: ["admin"] });
+  expect(dashboardRead).toHaveBeenCalledWith(expect.objectContaining({ writeAllowed: true }),
+    "11111111-1111-4111-8111-111111111111", { resource: "teams", expectedRevision: 1 });
 });

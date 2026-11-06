@@ -1,5 +1,33 @@
 import type { MiniAppDataBinding, MiniAppNamedPage, MiniAppSourceTable } from "./mini-app-data.ts";
+import type { LocalAgentActivityResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "./local-dashboard.ts";
 export type { MiniAppSourceTable } from "./mini-app-data.ts";
+
+export const MINI_APP_DASHBOARD_RESOURCES = {
+  "agent-team": ["teams", "activity"],
+  usage: ["usage"],
+} as const;
+export type MiniAppDashboardKind = keyof typeof MINI_APP_DASHBOARD_RESOURCES;
+export type MiniAppDashboardResource = "teams" | "activity" | "usage";
+/** A native dashboard grant belongs to the installed app, independent of its HTML template. */
+export type MiniAppDashboardDeclaration = {
+  [K in MiniAppDashboardKind]: { kind: K; renderer: "native"; htmlRole: "fallback-only";
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES[K] }
+}[MiniAppDashboardKind];
+export interface MiniAppDashboardDiscovery {
+  id: string;
+  revision: number;
+  dashboardIdentity: MiniAppDashboardKind;
+  dashboard: MiniAppDashboardDeclaration | null;
+}
+
+export type MiniAppDashboardRead =
+  | { resource: "teams"; expectedRevision: number }
+  | { resource: "activity"; expectedRevision: number; agentId: string }
+  | { resource: "usage"; expectedRevision: number };
+export type MiniAppDashboardReadResult =
+  | { appId: string; revision: number; resource: "teams"; snapshot: LocalAgentTeamsResponse }
+  | { appId: string; revision: number; resource: "activity"; snapshot: LocalAgentActivityResponse }
+  | { appId: string; revision: number; resource: "usage"; snapshot: LocalUsageResponse };
 
 /** Local apps belong to the workspace owner; publisher grants do not transfer ownership. */
 export interface MiniAppSummary {
@@ -11,6 +39,10 @@ export interface MiniAppSummary {
   revision: number;
   templateVersion: number;
   publisherBotIds: string[];
+  /** Present on current host replies; old saved receipts may omit it. */
+  dashboard?: MiniAppDashboardDeclaration | null;
+  /** Installed built-in identity survives grant revocation; it grants no dashboard reads. */
+  dashboardIdentity?: MiniAppDashboardKind | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -46,6 +78,8 @@ export interface MiniAppPublish {
   html: string;
   bindings: MiniAppDataBinding[];
   publisherBotIds?: string[];
+  /** Only the workspace owner may set or revoke a native dashboard grant. */
+  dashboardKind?: MiniAppDashboardKind | null;
 }
 
 export interface MiniAppRollback {
