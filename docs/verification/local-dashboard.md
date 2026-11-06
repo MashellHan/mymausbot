@@ -8,52 +8,55 @@ bounded, redacted latest instruction are available only through those routes.
 ## Usage definitions
 
 - The 1, 7 and 30 day windows include the capture date through the displayed
-  timestamp in Asia/Shanghai. The trend uses the same 30 dates.
-- PRs count authored PRs created in the window across configured account and
-  repository API sources. A complete API result is independent of whether a
-  device is offline. An unused unclassified category does not make the PR total
-  incomplete. Missing configured PR sources still do.
-- An incomplete PR value is its confirmed numeric count with a **Synced** label.
-  No observation is unavailable, including when a source has never returned a
-  valid result. A successful empty result is a real zero.
-- Enterprise and personal classifications reuse the collector's configured
-  categories. Commits retain its author filter and global commit-hash deduplication.
-- WoW compares each metric with the date seven China-calendar days earlier.
-  Both dates must be covered for that metric. Commit and Token changes use the same
-  successfully collected machines in one snapshot when at least one is ready
-  and every other configured machine has never supplied a sample. These are
-  changes within the synced scope; a partial or stale machine suppresses them.
-  The collector marks observed Token dates partial when any machine is missing;
-  those dates remain comparable within the sampled scope. Missing or unavailable
-  Token dates still suppress a change, as do partial dates without an unsampled
-  missing machine. Token changes include cache reads. Complete PR changes are
-  independent of machine status. Zero to zero is 0%;
-  zero to a positive count is **New** only for a covered metric. The current
-  date is incomplete in time, so it is compared with a full prior date with
-  that limitation stated beside the table. The oldest six trend dates may lack
-  baselines in a 31-day snapshot.
-- Repository rows deduplicate a commit within each repository across clones and
-  devices. A commit shared by different repositories appears in each row but
-  once in the summary. Extra appearances are disclosed separately. Events with
-  no repository identity retain their counts in an unattributed row.
+  timestamp in Asia/Shanghai. The trend uses the same 30 dates. Window changes
+  compare the previous non-overlapping period; daily changes compare the same
+  China-calendar date one week earlier. The capture day is still in progress.
+- PRs count PRs authored by the verified account owner and merged remotely in
+  the window. Their creation date and the device performing the merge do not
+  affect the count. Closed but unmerged PRs are excluded.
+- Commits count the original non-merge commits returned by those merged PRs,
+  including other contributors' commits within an owner-authored PR. A PR with
+  five original commits contributes five even after squash merge. Direct pushes,
+  unmerged branches and merge commits do not contribute. Both metrics use the
+  PR merge date, rather than a local author or commit timestamp.
+- PR identity includes the host and stable remote identity. Original commit SHAs
+  are deduplicated across PRs, devices and clones, and assigned to the earliest
+  observed merge within retained history. Conflicting categories are unclassified.
+  Repository rows deduplicate each SHA at its earliest merge within that repository;
+  a SHA shared by repositories can appear in several rows but once in the summary.
+- Enterprise and personal classification follows the existing repository rules.
+  GitHub/GHE searches cover the configured verified accounts. Azure DevOps queries
+  cover all repositories in each configured project, without requiring local
+  clones. `mergedAdoProjects` accepts HTTPS project URLs; known `adoRemotes` also
+  identify projects. Preserve known project configuration when moving devices.
+- Complete remote results are exact totals. Incomplete results show confirmed
+  numeric counts with a **Synced** label; unobserved values are unavailable.
+  Only a successful complete empty result is a verified zero. Incomplete PR or
+  commit periods do not produce percentage comparisons. Zero to zero is 0%;
+  zero to a positive count is **New** only for a comparable metric.
+- Tokens remain local, including cache reads. Their existing synced-device
+  comparison scope is preserved. Remote and token captures have independent
+  timestamps; hover the displayed timestamp to inspect both. If capture dates
+  differ, tokens are joined by calendar date to the displayed remote windows.
+  Missing token dates stay unavailable, and an unavailable comparison stays null.
+  Missing remote data never falls back to created PRs or local Git commits.
 
-The provider reads the existing five-minute collector's private `latest.json`.
-The visible Usage panel reads it every five minutes without overlapping requests.
-A snapshot older than fifteen minutes, or from an earlier China-calendar date,
-is stale and retains its actual counts and capture timestamp. Collection reuses
-the existing local routine with cron `*/5 * * * *` in `Asia/Shanghai`; the separate
-daily publication keeps its schedule. No second collection routine is created.
-The aggregate's optional `localRepositories` object has `version: 1`, `rows` and `attribution`.
-Each row contains a SHA-256 identity, a display name, a category and sparse
-`daily` entries with `day`, `knownPrs` and `commits`. `attribution` contains unique
-global events with known repository identity, using the same daily fields.
-The provider validates dates, identities, accounting and bounds; a malformed
-repository extension does not discard valid headline totals. Older snapshots
-without the extension show repository details as unavailable.
+The existing five-minute `scripts/refresh-local-usage.py` job writes the private
+`~/.local/share/mymausbot/usage/merged-v1.json` sidecar through its adjacent
+`local_usage_merged.py` module. Deploy both files together. No new scheduler runs
+inside the App, and the disabled chat-notifying collection routine is not needed.
+The visible Usage tab and the installed Usage Mini App read every five minutes.
+Remote collection retains 60 China-calendar days for current and previous
+30-day periods. API/page/time limits and unavailable credentials are coverage
+gaps, not zero. Completed per-PR commit lists can be reused during later refreshes.
 
-The Agent Town collector and both of its public transports use an independent
-aggregate whitelist. `localRepositories` must never be added to that whitelist.
-No additional scheduler or network collection runs inside OpenMausBot.
+The existing Agent Town `latest.json`, public aggregate whitelist and nightly
+report retain their original definitions for compatibility. The App reads local
+Token metrics from that aggregate and remote PR/commit metrics from the separate
+optional `merged` response field. The sidecar is private with mode 0600; event
+identifiers are hashed, and credentials are never written to it. Remote events
+and repository metadata are not added to public transports. Stale data retains
+its actual event dates; transient API/read failures do not erase a good stream.
 
 ### Microsoft authentication held in memory
 
@@ -71,19 +74,21 @@ rewritten. The macOS authentication broker is disabled for this client.
 
 The collector path points to the existing Agent Town `activity-monitor.py`.
 Its source, overlap lock, identity checks, date filters, aggregation and private
-output files retain their existing behavior. Only its Azure CLI REST calls are
-handled by the in-memory client. GitHub collection uses the existing helper.
+output files retain their existing behavior. Its Azure CLI REST calls and the merged-PR adapter use the same in-memory
+client. GitHub collection uses the existing account-pinned helper.
 The client supports existing AzureCloud user accounts whose identity matches
 the configured author emails. It accepts only HTTPS Azure DevOps identity and
 PR GET endpoints and refuses redirects carrying authentication. An unavailable
 login leaves the corresponding source stale through the collector's normal
 failure handling; it does not open a login prompt or fall back to the CLI.
 
-Use this command in the existing five-minute routine. Add `--publish` only to an
+Use this command in the existing five-minute job. Add `--publish` only to an
 already authorized publication task; the normal refresh does not publish.
 `--reuse-sources` and `--skip-api` keep the collector's recovery semantics.
 
-Run `python3 scripts/refresh-local-usage.test.py` for synthetic memory lifetime,
+Run `python3 scripts/local_usage_merged.test.py` for merged-PR pagination,
+original-commit accounting and bounded cache recovery. Run
+`python3 scripts/refresh-local-usage.test.py` for synthetic memory lifetime,
 cross-tenant identity, endpoint/redirect, interrupted HTTP response and
 collector-routing checks. A real identity GET is a separate read-only
 acceptance check; keep its private receipt and never log token contents or
@@ -129,7 +134,7 @@ polls without overlap only while open and visible, and clears on 401/403.
 Run the affected contracts and owner-access fixture:
 
 ```sh
-pnpm exec vitest run server/local-agent-teams.test.ts server/local-agent-activity.test.ts server/local-usage.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts src/components/AgentTeamPanel.test.ts src/components/AgentTeamPanel.auth.test.ts src/components/AgentActivityDetails.test.ts src/components/LocalUsagePanel.test.ts
+pnpm exec vitest run server/local-agent-teams.test.ts server/local-agent-activity.test.ts server/local-usage.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts src/components/AgentTeamPanel.test.ts src/components/AgentTeamPanel.auth.test.ts src/components/AgentActivityDetails.test.ts src/components/LocalUsagePanel.test.ts src/lib/local-usage-view.test.ts
 ```
 
 Launch each synthetic renderer fixture directly in a separate terminal:
@@ -143,6 +148,9 @@ Use their printed URLs, never a live app URL. Check `width=360`, `400` and `960`
 `skin=midnight` and `atelier`, and `locale=en` and `zh`. Verify three stacked
 trends, initially collapsed daily details, all three WoW values, and keyboard
 navigation of repository period tabs. Check unavailable, stale and zero states.
+Use `scenario=remote-only` to verify merged counts without local logs and
+`scenario=legacy-only` to verify that old PR/commit/repository values are not
+relabeled as merged. Faint full-height Monday separators mark each week.
 In both locales at 360px, expand the daily table and scroll fully right. Each
 WoW metric name and value must remain visible beside the fixed date column.
 
