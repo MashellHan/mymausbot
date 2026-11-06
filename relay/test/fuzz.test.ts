@@ -162,7 +162,7 @@ function connected(): Promise<Socket> {
 }
 
 /** Runs `make` `count` times, `batch` at a time: macOS caps a listener's accept queue at kern.ipc.somaxconn (128). */
-async function inBatches<T>(count: number, make: () => Promise<T>, batch = 16): Promise<T[]> {
+async function inBatches<T>(count: number, make: () => Promise<T>, batch = 1): Promise<T[]> {
   const out: T[] = [];
   for (let start = 0; start < count; start += batch) out.push(...(await Promise.all(Array.from({ length: Math.min(batch, count - start) }, make))));
   return out;
