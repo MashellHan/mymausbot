@@ -93,19 +93,19 @@ describe("this computer belongs to the desktop app's own server", () => {
       return count;
     } catch { return null; }
   };
-  const taskFailureState = async (trace: CaseTrace) => {
-    if (!trace.base || !trace.botId || !trace.threadId) return { read: "not_ready" };
+  const taskFailureState = async ({ base, botId, threadId }: Pick<CaseTrace, "base" | "botId" | "threadId">) => {
+    if (!base || !botId || !threadId) return { read: "not_ready" };
     const signal = AbortSignal.timeout(750);
     try {
       const [botsResponse, messagesResponse] = await Promise.all([
-        fetch(`${trace.base}/api/bots?messages=0`, { signal }),
-        fetch(`${trace.base}/api/threads/${encodeURIComponent(trace.threadId)}/messages?limit=20`, { signal }),
+        fetch(`${base}/api/bots?messages=0`, { signal }),
+        fetch(`${base}/api/threads/${encodeURIComponent(threadId)}/messages?limit=20`, { signal }),
       ]);
       if (!botsResponse.ok || !messagesResponse.ok) return { read: "http_error", botsStatus: botsResponse.status, messagesStatus: messagesResponse.status };
       const bots = (await botsResponse.json() as { bots?: any[] }).bots ?? [];
       const messages = (await messagesResponse.json() as { messages?: any[] }).messages ?? [];
-      const bot = bots.find((item) => item.id === trace.botId);
-      const task = bot?.tasks?.find((item: any) => item.threadId === trace.threadId);
+      const bot = bots.find((item) => item.id === botId);
+      const task = bot?.tasks?.find((item: any) => item.threadId === threadId);
       const terminal = messages.findLast((item) => typeof item.turnSucceeded === "boolean");
       const failures = messages.filter((item) => item.role === "bot" && item.kind === "activity" && item.tool?.ok === false);
       const lastFailure = failures.at(-1)?.tool?.name;
@@ -117,26 +117,30 @@ describe("this computer belongs to the desktop app's own server", () => {
         failedActivityCount: failures.length, failureKind };
     } catch { return { read: "unavailable", reasonCode: signal.aborted ? "timeout" : "read_error" }; }
   };
-  const failureState = async (trace: CaseTrace) => {
+  const captureFailure = (trace: CaseTrace) => {
     const brokerLine = output.slice(-8192).split("\n").find((line) => line.includes("permission broker unavailable on"));
     const prefix = trace.threadId?.replace(/[^\w-]/g, "").slice(0, 4) ?? "xxxx";
     return {
-      case: trace.label, elapsedMs: Math.round(performance.now() - trace.startedAt), phases: trace.phases,
-      serverPort: trace.serverPort, health: { attempts: trace.healthAttempts, status: trace.healthStatus, error: trace.healthError },
-      child: { pid: trace.child?.pid ?? null, live: Boolean(trace.child && trace.child.exitCode === null && trace.child.signalCode === null && !trace.childError),
-        exitCode: trace.child?.exitCode ?? null, signalCode: trace.child?.signalCode ?? null, error: trace.childError && errorKind(trace.childError),
-        stdoutBytes: trace.stdoutBytes, stderrBytes: trace.stderrBytes, lastOutputAtMs: trace.lastOutputAtMs },
-      files: { dump: Boolean(dumpFile && existsSync(dumpFile)), finish: Boolean(finishFile && existsSync(finishFile)), textDump: Boolean(trace.textDumpFile && existsSync(trace.textDumpFile)) },
-      engine: { instanceId: trace.instanceId, sendKind: trace.sendKind,
-        probeEntries: markerEntries(trace.probeFile), promptEntries: markerEntries(trace.promptFile),
-        socketPathBytes: trace.dataDir && trace.tempRoot ? {
-          primary: Buffer.byteLength(join(trace.dataDir, `perm-${prefix}xxxx.sock`)),
-          fallback: Buffer.byteLength(join(trace.tempRoot, `omb-perm-${"x".repeat(16)}.sock`)),
-        } : null,
-        brokerLogCode: brokerLine ? brokerLine.includes("EINVAL") ? "broker_bind_einval" : "broker_bind_other" : null },
-      task: await taskFailureState(trace),
+      target: { base: trace.base, botId: trace.botId, threadId: trace.threadId },
+      record: {
+        case: trace.label, elapsedMs: Math.round(performance.now() - trace.startedAt), phases: trace.phases.map((phase) => ({ ...phase })),
+        serverPort: trace.serverPort, health: { attempts: trace.healthAttempts, status: trace.healthStatus, error: trace.healthError },
+        child: { pid: trace.child?.pid ?? null, live: Boolean(trace.child && trace.child.exitCode === null && trace.child.signalCode === null && !trace.childError),
+          exitCode: trace.child?.exitCode ?? null, signalCode: trace.child?.signalCode ?? null, error: trace.childError && errorKind(trace.childError),
+          stdoutBytes: trace.stdoutBytes, stderrBytes: trace.stderrBytes, lastOutputAtMs: trace.lastOutputAtMs },
+        files: { dump: Boolean(dumpFile && existsSync(dumpFile)), finish: Boolean(finishFile && existsSync(finishFile)), textDump: Boolean(trace.textDumpFile && existsSync(trace.textDumpFile)) },
+        engine: { instanceId: trace.instanceId, sendKind: trace.sendKind,
+          probeEntries: markerEntries(trace.probeFile), promptEntries: markerEntries(trace.promptFile),
+          socketPathBytes: trace.dataDir && trace.tempRoot ? {
+            primary: Buffer.byteLength(join(trace.dataDir, `perm-${prefix}xxxx.sock`)),
+            fallback: Buffer.byteLength(join(trace.tempRoot, `omb-perm-${"x".repeat(16)}.sock`)),
+          } : null,
+          brokerLogCode: brokerLine ? brokerLine.includes("EINVAL") ? "broker_bind_einval" : "broker_bind_other" : null },
+      },
     };
   };
+  const failureState = async (snapshot: ReturnType<typeof captureFailure>, readTask = taskFailureState) =>
+    ({ ...snapshot.record, task: await readTask(snapshot.target) });
 
   const resetTurn = () => {
     writeFileAtomic(stateFile, JSON.stringify({ noContainers: true }));
@@ -272,8 +276,9 @@ describe("this computer belongs to the desktop app's own server", () => {
     const failed = task.result?.state === "fail";
     const trace = activeTrace;
     const owned = trace?.child ?? child;
-    if (failed && trace) console.error("desktop fixture failure " + JSON.stringify(await failureState(trace)));
+    const snapshot = failed && trace ? captureFailure(trace) : null;
     if (trace) retire(trace);
+    if (snapshot) console.error("desktop fixture failure " + JSON.stringify(await failureState(snapshot)));
     await stop();
     resetTurn();
     if (failed) console.error("desktop fixture cleanup " + JSON.stringify({ complete: true, exitCode: owned?.exitCode ?? null, signalCode: owned?.signalCode ?? null }));
@@ -348,24 +353,46 @@ describe("this computer belongs to the desktop app's own server", () => {
     const first = beginCase("first");
     const oldChild = {} as ChildProcess;
     first.child = oldChild;
+    first.base = "http://127.0.0.1:9";
+    first.botId = "bot-first";
+    first.threadId = "thread-first";
     let complete!: (value: string) => void;
     const pending = observed(first, "dump.wait", () => new Promise<string>(resolve => { complete = resolve; }));
     updateOwned(first, oldChild, () => { first.healthAttempts++; first.stdoutBytes += 5; });
+    const frozen = captureFailure(first);
     retire(first);
+    let finishRead!: () => void;
+    const diagnostic = failureState(frozen, async (target) => {
+      expect(target).toEqual({ base: "http://127.0.0.1:9", botId: "bot-first", threadId: "thread-first" });
+      return new Promise<{ read: string }>((resolve) => { finishRead = () => resolve({ read: "unavailable" }); });
+    });
     const next = beginCase("next");
-    next.child = {} as ChildProcess;
-    mark(next, "task.wait");
-    const nextBefore = { phases: [...next.phases], healthAttempts: next.healthAttempts, stdoutBytes: next.stdoutBytes, stderrBytes: next.stderrBytes };
-    complete("done");
-    expect(await pending).toBe("done");
-    updateOwned(first, oldChild, () => { first.healthAttempts++; first.stdoutBytes += 7; });
-    updateOwned(next, oldChild, () => { next.stderrBytes++; });
-    expect(next).toMatchObject(nextBefore);
-    expect(first.phases.map(({ name }) => name)).toEqual(["case.begin", "dump.wait.begin"]);
-    expect(first.healthAttempts).toBe(1);
-    expect(first.stdoutBytes).toBe(5);
+    try {
+      next.child = {} as ChildProcess;
+      mark(next, "task.wait");
+      const nextBefore = { phases: [...next.phases], healthAttempts: next.healthAttempts, stdoutBytes: next.stdoutBytes, stderrBytes: next.stderrBytes };
+      complete("done");
+      expect(await pending).toBe("done");
+      updateOwned(first, oldChild, () => { first.healthAttempts++; first.stdoutBytes += 7; });
+      updateOwned(next, oldChild, () => { next.stderrBytes++; });
+      first.base = "http://127.0.0.1:99";
+      first.botId = "changed";
+      first.threadId = "changed";
+      expect(frozen.target).toEqual({ base: "http://127.0.0.1:9", botId: "bot-first", threadId: "thread-first" });
+      expect(frozen.record.phases.map(({ name }) => name)).toEqual(["case.begin", "dump.wait.begin"]);
+      expect(frozen.record.health.attempts).toBe(1);
+      expect(frozen.record.child.stdoutBytes).toBe(5);
+      expect(next).toMatchObject(nextBefore);
+      expect(first.phases.map(({ name }) => name)).toEqual(["case.begin", "dump.wait.begin"]);
+      expect(first.healthAttempts).toBe(1);
+      expect(first.stdoutBytes).toBe(5);
+    } finally { finishRead(); }
+    const captured = await diagnostic;
+    expect(captured.phases).toEqual(frozen.record.phases);
+    expect(captured.phases.every((phase) => phase.atMs <= captured.elapsedMs)).toBe(true);
+    expect(captured.task).toEqual({ read: "unavailable" });
     output = "permission broker unavailable on /private/synthetic-secret: EINVAL";
-    const snapshot = JSON.stringify(await failureState(next));
+    const snapshot = JSON.stringify(await failureState(captureFailure(next)));
     expect(snapshot).toContain('"brokerLogCode":"broker_bind_einval"');
     expect(snapshot).not.toContain("synthetic-secret");
   });
