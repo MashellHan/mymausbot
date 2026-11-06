@@ -18,6 +18,10 @@ export const LICENSE_EXPIRED_CODE = "admin_license_expired";
 const safeText = (value, max) => typeof value === "string" && value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value);
 const licenseExpired = error => error?.status === 503 && error?.apiCode === LICENSE_EXPIRED_CODE;
 
+export function managedRemoteAccessRefusal(policy) {
+  return policy?.remoteAccess === false ? `${policy.organizationName} does not allow remote access to this computer.` : null;
+}
+
 /** Unknown fields are ignored so a newer Admin stays compatible; a malformed known field rejects the whole object. */
 export function parseDesktopPolicy(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
