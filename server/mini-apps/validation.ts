@@ -43,6 +43,7 @@ export const publishSchema = z.object({
   html: z.string().min(1).max(512 * 1024), bindings: z.array(binding).max(16),
   publisherBotIds: z.array(z.string().regex(/^[\w-]{1,128}$/)).max(32).optional(),
   dashboardKind: z.enum(["agent-team", "usage"]).nullable().optional(),
+  shippedTemplateKind: z.enum(["bookkeeping", "x_ai_digest", "github_activity"]).optional(),
 }).strict();
 export const rollbackSchema = z.object({ ...mutationKey, templateVersion: z.number().int().positive() }).strict();
 export const archiveSchema = z.object(mutationKey).strict();
