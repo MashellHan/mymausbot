@@ -27,8 +27,7 @@ import { deciderConfigSchema, type DeciderConfig } from "./decider/config.ts";
 import { liveConfigSchema, liveConfigWithEnv, liveSettingEnv, type LiveConfig } from "./live-config.ts";
 import { browserEngineConfigSchema, isValidCdpTarget, type BrowserEngineConfig } from "./browser/config.ts";
 import { roomContextSettings } from "./room-context-settings.ts";
-import { activeSessionConfig, assertSessionConfigWritable, readSessionConfigDisk, sessionCredentialsEnabled, withSessionSecrets, writeSessionConfig } from "./session-config.ts";
-export { confirmSessionConfig, setSessionConfigPublisher, sessionCredentialsEnabled } from "./session-config.ts";
+import { activeSessionConfig, assertSessionConfigWritable, readSessionConfigDisk, sessionCredentialsEnabled, withSessionSecrets, writeSessionConfig } from "./session-config.ts"; export { confirmSessionConfig, setSessionConfigPublisher, sessionCredentialsEnabled } from "./session-config.ts";
 import { MAX_LOCAL_VM_IDLE_TIMEOUT_MINUTES, MAX_LOCAL_VM_MAX_INSTANCES, MIN_LOCAL_VM_IDLE_TIMEOUT_MINUTES, MIN_LOCAL_VM_MAX_INSTANCES } from "./local-vm-settings.ts";
 export * from "./local-vm-settings.ts";
 
@@ -1036,8 +1035,7 @@ export function saveConfig(
     }
   }
   mkdirSync(DATA_DIR, { recursive: true });
-  const persisted = writeSessionConfig({ file: p, effective: disk, previousDisk, previousSession, previousBytes,
-    patch: checkedPatch as JsonObject, forget: () => storedConfig.forget() });
+  const persisted = writeSessionConfig({ file: p, effective: disk, previousDisk, previousSession, previousBytes, patch: checkedPatch as JsonObject, forget: () => storedConfig.forget() });
   storedConfig.forget();
   for (const listener of configSaveListeners) {
     try {

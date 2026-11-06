@@ -33,6 +33,18 @@ describe("Full access delivery", () => {
 });
 
 describe("autoVerdict", () => {
+  it("treats the exact built-in Mini App publisher as a local write without granting it approval", () => {
+    for (const tool of ["mini_app_publish", "mcp__agents__mini_app_publish", "agents__mini_app_publish", "agents_mini_app_publish"]) {
+      expect(autoVerdict("ask", tool)).toEqual({ approve: null, source: "no-grant" });
+      expect(autoVerdict("edits", tool)).toEqual({ approve: null, source: "no-grant" });
+      expect(autoVerdict("auto", tool)).toEqual({ approve: null, source: "native-approval" });
+      expect(autoVerdict("custom", tool)).toEqual({ approve: null, source: "native-approval" });
+      expect(autoVerdict("auto", tool, { requiresExplicitApproval: true })).toEqual({ approve: null, source: "explicit-approval-block" });
+    }
+    for (const tool of ["mcp__other__mini_app_publish", "mcp__agents__mini_app_publish_external", "publish_page", "GMAIL_SEND_EMAIL"]) {
+      expect(autoVerdict("auto", tool)).toEqual({ approve: null, source: "outbound-guard" });
+    }
+  });
   it("never uses a saved command grant to silently send on the person's behalf", () => {
     for (const mode of ["ask", "edits", "auto", "custom"] as const) {
       expect(autoVerdict(mode, "mcp__composio__GMAIL_SEND_DRAFT", { commandAllowed: true })).toEqual({ approve: null, source: "outbound-guard" });

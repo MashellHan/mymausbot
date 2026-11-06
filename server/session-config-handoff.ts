@@ -1,4 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { setSessionConfigPublisher } from "./session-config.ts";
+
+export type UtilityParentPort = {
+  on(event: "message", listener: (event: { data?: object }) => void): void;
+  postMessage(message: object): void;
+};
+
+export function installSessionConfigHandoff(port: UtilityParentPort | undefined, credentialMode: string | undefined) {
+  if (credentialMode !== "session" || !port) return null;
+  const handoff = createSessionConfigHandoff((message) => port.postMessage(message));
+  setSessionConfigPublisher((config) => handoff.publish(config));
+  return handoff;
+}
 
 export function createSessionConfigHandoff(post: (message: object) => void, timeoutMs = 5_000) {
   const pending = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout; expected: "prepared" | "committed" }>();

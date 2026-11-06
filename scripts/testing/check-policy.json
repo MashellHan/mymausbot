@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "core": [
+    "server/request-auth.test.ts",
+    "server/request-auth.e2e.test.ts",
+    "shared/pairing-link.test.ts",
+    "server/guarded-requests.test.ts",
+    "server/safety-floor.test.ts",
+    "server/safety-floor-gate.test.ts",
+    "server/safety-floor.e2e.test.ts",
+    "server/full-access-default.e2e.test.ts",
+    "shared/system-message-guard.test.ts",
+    "server/store.test.ts",
+    "server/message-db.test.ts",
+    "server/turn-dispatch-guard.test.ts",
+    "shared/client-cancel.test.ts",
+    "server/cancelled-turn.e2e.test.ts",
+    "server/bot-continuity.e2e.test.ts",
+    "server/quote-context.e2e.test.ts",
+    "scripts/control-omb.test.ts",
+    "server/local-agent-teams.test.ts",
+    "src/components/AgentTeamPanel.test.ts",
+    "src/components/AgentTeamPanel.auth.test.ts",
+    "server/local-usage.test.ts",
+    "src/components/LocalUsagePanel.test.ts",
+    "server/section-context.test.ts",
+    "src/components/SidebarSectionPicker.test.ts",
+    "src/components/SidebarSectionHeader.naming.dom.test.ts",
+    "src/components/ChatView.reply.test.ts"
+  ],
+  "guards": [
+    "scripts/ci-scope.test.ts",
+    "scripts/ci-linux-lanes.test.ts",
+    "scripts/ci-workflow.test.ts",
+    "scripts/testing/verification-docs.test.ts",
+    "scripts/check.test.ts",
+    "scripts/qa/qa.test.ts"
+  ],
+  "areas": [
+    {
+      "id": "usage",
+      "sources": [
+        "src/components/LocalUsagePanel.tsx",
+        "src/components/LocalUsageValues.tsx",
+        "src/components/LocalUsageTables.tsx"
+      ],
+      "tests": [
+        "server/local-usage.test.ts",
+        "server/routes/local-dashboard.test.ts",
+        "server/local-dashboard.e2e.test.ts",
+        "src/components/LocalUsagePanel.test.ts",
+        "scripts/testing/local-dashboard-ui.e2e.test.ts"
+      ],
+      "admitted": false
+    },
+    {
+      "id": "agents",
+      "sources": [
+        "src/components/AgentTeamPanel.tsx",
+        "src/components/AgentTown.tsx"
+      ],
+      "tests": [
+        "server/local-agent-teams.test.ts",
+        "server/local-agent-activity.test.ts",
+        "server/local-dashboard.e2e.test.ts",
+        "server/routes/local-dashboard.test.ts",
+        "src/components/AgentTeamPanel.test.ts",
+        "src/components/AgentTeamPanel.auth.test.ts",
+        "src/components/AgentActivityDetails.test.ts",
+        "scripts/testing/local-dashboard-ui.e2e.test.ts"
+      ],
+      "admitted": false
+    }
+  ]
+}

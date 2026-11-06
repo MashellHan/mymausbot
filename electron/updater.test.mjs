@@ -39,15 +39,23 @@ function mainRule({ sessionOnly = false } = {}) {
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   expect(source.includes("registerUpdaterIpc({ pageAllowed: updaterPageAllowed });"), "main.mjs wires the updater to updaterPageAllowed").toBe(true);
+  const storeStart = source.indexOf("const cloudEncryption = {"), storeEnd = source.indexOf("\nfunction ensureCloudAccount()", storeStart);
   const signInStart = source.indexOf("function ensureCloudAccount() {"), signInEnd = source.indexOf("\n}\n", signInStart) + 3;
-  expect(signInStart).toBeGreaterThanOrEqual(0);
+  const ringStart = source.indexOf("const accountRing = createDesktopRing("), ringEnd = source.indexOf("; const accounts = installAccounts(", ringStart) + 1;
+  expect(storeStart).toBeGreaterThanOrEqual(0);
+  expect(storeEnd).toBeGreaterThan(storeStart);
+  expect(signInStart).toBeGreaterThan(storeEnd);
+  expect(ringStart).toBeGreaterThan(signInEnd);
+  expect(ringEnd).toBeGreaterThan(ringStart);
   const window = { isDestroyed: () => false, webContents: null };
   const listeners = new Map();
   const signIn = { options: null, storeOptions: null, state: { status: "signed-out", message: "restoring" } };
+  let ringOptions = null, placeFileCalls = 0;
   const context = vm.createContext({
     ipcMain: { handle: () => {}, on: (channel, listener) => listeners.set(channel, listener) },
     senderIsLocal: localOriginModule.isLocalSender, workspaceSenderAllowed: environments.workspaceSenderAllowed, cloudPageSenderAllowed, myCloudOrigin, otherOwnClouds,
     activeEnvironment: environments.activeEnvironment, rendererOrigin: () => LOCAL, desktopRemoteAccess: false,
+    persistEnvironments: () => {}, slog: () => {},
     mainWindow: window,
     environmentsState: { environments: [], activeId: environments.LOCAL_ID },
     cloudAccount: { homeTarget: () => ({ origin: CLOUD }), state: () => ({ status: "connected", account: { id: "a1" } }), isOwnCloud: () => false },
@@ -56,7 +64,9 @@ function mainRule({ sessionOnly = false } = {}) {
     app: { isPackaged: true, getPath: () => "/unused", getVersion: () => "1.0.0" }, process: { platform: "darwin", env: {} }, cloudTarget,
     SESSION_CREDENTIALS: sessionOnly,
     path: { join: (...parts) => parts.join("/") }, os: { hostname: () => "mac" }, shell: {}, safeStorage: {},
-    createCloudAccountStore: (options) => { signIn.storeOptions = options; return {}; }, cloudEncryption: {}, accounts: { tell: () => {} }, rememberCloudHome: () => {}, rememberedCloudHome, computerSharing: null, updatesConsent: null,
+    createCloudAccountStore: (options) => { signIn.storeOptions = options; return {}; }, cloudSync: { accountChanged: () => {} }, accounts: { tell: () => {} }, rememberCloudHome: () => {}, rememberedCloudHome, computerSharing: null, updatesConsent: null,
+    createDesktopRing: (options) => { ringOptions = options; return () => null; },
+    jsonFile: () => { placeFileCalls++; return { read: () => null, write: () => {} }; },
     sendUpdaterState: () => {}, refreshCloudMenus: () => {}, announceCloudReady: () => {}, installCloudPlanIpc: () => {},
     includedX: { onState: async () => {} }, includedPages: { onState: async () => {} }, cloudPower: { changed: () => {}, awaiting: () => false }, cloudLogins: { kick: () => {} },
     createCloudAccountClient: (options) => {
@@ -68,7 +78,7 @@ function mainRule({ sessionOnly = false } = {}) {
       };
     },
   });
-  vm.runInContext(`${source.slice(start, end)}\n${source.slice(signInStart, signInEnd)}`, context);
+  vm.runInContext(`${source.slice(storeStart, storeEnd)}\n${source.slice(start, end)}\n${source.slice(signInStart, signInEnd)}\n${source.slice(ringStart, ringEnd)}`, context);
   const show = (shown, activeId = environments.LOCAL_ID) => {
     window.webContents = shown.webContents;
     context.environmentsState = {
@@ -92,16 +102,27 @@ function mainRule({ sessionOnly = false } = {}) {
     context.cloudSignInRestored = true;
     signIn.options.onState(state);
   };
-  return { context, window, show, offered, launching, signedIn, signIn, pageAllowed: vm.runInContext("updaterPageAllowed", context) };
+  return { context, window, show, offered, launching, signedIn, signIn, ringOptions, placeFileCalls: () => placeFileCalls,
+    pageAllowed: vm.runInContext("updaterPageAllowed", context) };
 }
 
 it("keeps Cloud account store mode tied to the App's selected credential lifetime", () => {
   const secure = mainRule();
   secure.launching();
   expect(secure.signIn.storeOptions.sessionOnly).toBe(false);
+  secure.ringOptions.savedStore();
+  expect(secure.signIn.storeOptions.sessionOnly).toBe(false);
+  secure.ringOptions.stash();
+  expect(secure.placeFileCalls()).toBe(1);
   const ephemeral = mainRule({ sessionOnly: true });
   ephemeral.launching();
   expect(ephemeral.signIn.storeOptions.sessionOnly).toBe(true);
+  ephemeral.ringOptions.savedStore();
+  expect(ephemeral.signIn.storeOptions.sessionOnly).toBe(true);
+  const stash = ephemeral.ringOptions.stash();
+  stash.write({ account: "session only" });
+  expect(stash.read()).toEqual({ account: "session only" });
+  expect(ephemeral.placeFileCalls()).toBe(0);
 });
 
 async function load(pageAllowed) {

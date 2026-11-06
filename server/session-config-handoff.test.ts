@@ -1,8 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSessionConfigMemory } from "../electron/session-config.mjs";
-import { createSessionConfigHandoff } from "./session-config-handoff.ts";
+import { createSessionConfigHandoff, installSessionConfigHandoff } from "./session-config-handoff.ts";
 
 describe("App-run config handoff", () => {
+  it("installs only for a session-mode utility parent", async () => {
+    const sent: any[] = [];
+    const port = { on: () => {}, postMessage: (message: object) => { sent.push(message); } };
+    expect(installSessionConfigHandoff(undefined, "session")).toBeNull();
+    expect(installSessionConfigHandoff(port, "system")).toBeNull();
+    expect(sent).toEqual([]);
+    const handoff = installSessionConfigHandoff(port, "session")!;
+    const ready = handoff.publish({ openai: { key: "synthetic" } });
+    const requestId = sent[0].requestId;
+    handoff.receive({ type: "openmausbot:session-config-result", requestId, phase: "prepared", ok: true });
+    handoff.receive({ type: "openmausbot:session-config-result", requestId, phase: "committed", ok: true });
+    await expect(ready).resolves.toBeUndefined();
+    expect(sent.map((message) => message.type)).toEqual([
+      "openmausbot:session-config", "openmausbot:session-config-commit", "openmausbot:session-config-finish",
+    ]);
+  });
+
   it("confirms only the matching parent reply", async () => {
     const sent: any[] = [];
     const handoff = createSessionConfigHandoff((message) => { sent.push(message); });
