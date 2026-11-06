@@ -232,14 +232,14 @@ export interface ChatFollowup {
   status: FollowupStatus;
   payload: FollowupPayload;
 }
-
-/** A 202/cancel/dispatch claim must reach disk (FULL sync) before its result is published. */
-function writeFollowups(write: (connection: DatabaseSync) => void): void {
+export { db as applicationDatabase };
+export function withApplicationWrite<T>(write: (connection: DatabaseSync) => T): T {
   const connection = db();
+  if (connection.isTransaction) throw new Error("An application write cannot join another transaction");
   connection.exec("PRAGMA synchronous = FULL");
   try {
     connection.exec("BEGIN IMMEDIATE");
-    try { write(connection); connection.exec("COMMIT"); }
+    try { const result = write(connection); connection.exec("COMMIT"); return result; }
     catch (error) { connection.exec("ROLLBACK"); throw error; }
   } finally { connection.exec("PRAGMA synchronous = NORMAL"); }
 }
@@ -338,7 +338,7 @@ export function markThreadNotificationLogRead(threadId: string, includeSpend = t
 }
 
 export function saveChatFollowup(followup: Omit<ChatFollowup, "status">): void {
-  writeFollowups((connection) => connection.prepare(
+  withApplicationWrite((connection) => connection.prepare(
     "INSERT INTO chat_followups(id, kind, owner_id, thread_id, send_id, status, payload) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
   ).run(followup.id, followup.kind, followup.ownerId, followup.threadId, followup.payload.sendId ?? null, JSON.stringify(followup.payload)));
 }
@@ -346,7 +346,7 @@ export function saveChatFollowup(followup: Omit<ChatFollowup, "status">): void {
 /** Cancellation tombstones remain so a retried sendId cannot resurrect a dispatch. */
 export function settleChatFollowups(ids: string[], status: FollowupStatus | null): void {
   if (!ids.length) return;
-  writeFollowups((connection) => {
+  withApplicationWrite((connection) => {
     const statement = connection.prepare(status === null
       ? "DELETE FROM chat_followups WHERE id = ?"
       : status === "cancelled"
@@ -669,7 +669,7 @@ export function deleteThread(threadId: string): void {
 /** One transaction: every listed thread goes, or none does; `beforeCommit` throwing keeps them all. */
 export function deleteThreads(threadIds: readonly string[], beforeCommit?: () => void): void {
   if (threadIds.length === 0 && !beforeCommit) return;
-  writeFollowups((connection) => {
+  withApplicationWrite((connection) => {
     const statements = [
       connection.prepare("DELETE FROM chat_followups WHERE thread_id = ?"),
       connection.prepare("DELETE FROM messages WHERE thread_id = ?"),

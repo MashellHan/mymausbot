@@ -97,6 +97,15 @@ describe("serialized secure credential state", () => {
     expect(writes).toEqual([{ apiKey: "new" }, { apiKey: "old" }]);
   });
 
+  it("rolls back a memory-only credential when the embedded server rejects its save", async () => {
+    let writes = 0;
+    const state = createSecureCredentialState({}, async () => { writes++; });
+    await expect(state.update((credentials) => ({ ...credentials, openaiLiveKey: "synthetic-session-key" }),
+      async () => { throw new Error("fixture server rejected the key"); })).rejects.toThrow("fixture server rejected the key");
+    expect(state.read()).toEqual({});
+    expect(writes).toBe(2, "the existing serialized rollback still calls persistence for next and previous copies");
+  });
+
   it("does not publish state when encrypted persistence fails", async () => {
     const state = createSecureCredentialState({ value: "old" }, async () => {
       throw new Error("keychain unavailable");

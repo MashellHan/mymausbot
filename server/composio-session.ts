@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { saveConfig, type AppConfig } from "./config.ts";
+import { confirmSessionConfig, saveConfig, type AppConfig } from "./config.ts";
 import {
   apiBase,
   canonicalToolkitSlug,
@@ -192,9 +192,10 @@ async function adoptProjectSession(
   sessionId: string,
 ): Promise<SessionResponse> {
   multiAccountUpgradeAttempted.add(sessionId);
+  saveConfig({ composio: { userId, sessionId } });
+  await confirmSessionConfig();
   composio.userId = userId;
   composio.sessionId = sessionId;
-  saveConfig({ composio: { userId, sessionId } });
   const created = await getProjectSession(apiKey, sessionId);
   if (!created) throw new Error("Composio Session disappeared after creation");
   return created;

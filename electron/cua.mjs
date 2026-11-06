@@ -1,7 +1,7 @@
 // Packaged: an embedded cua-driver daemon, so macOS TCC grants attribute to OpenMausBot; dev attaches to CuaDriver.app.
 // Agents use the stdio MCP proxy, which executes nothing; the host-owned daemon does.
 
-import { app, ipcMain } from "electron";
+import { app, ipcMain, systemPreferences } from "electron";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
@@ -193,12 +193,13 @@ async function loadEmbeddedSdk() {
   return import(pathToFileURL(path.join(process.resourcesPath, "cua-sdk", "cua-sdk.mjs")).href);
 }
 
-async function attachStandalone(signal) {
+async function attachStandalone(signal, allowLaunch = false) {
   // Windows must stay on the owned embedded host, never an unrelated daemon.
   if (process.platform !== "darwin") return null;
   const driver = fs.existsSync(INSTALLED_DRIVER) ? INSTALLED_DRIVER : null;
   if (!driver) return null;
   if (!(await socketAlive(STANDALONE_SOCKET))) {
+    if (!allowLaunch) return null;
     signal.throwIfAborted();
     // Through LaunchServices so Accessibility/Screen Recording stay on com.trycua.driver, the identity already granted.
     const launch = execFileAsync("/usr/bin/open", ["-a", "CuaDriver"], {
@@ -226,13 +227,20 @@ async function attachStandalone(signal) {
   };
 }
 
-async function startEmbedded(binary, signal) {
+function currentMacPermissions() {
+  return {
+    accessibility: systemPreferences.isTrustedAccessibilityClient(false),
+    screenRecording: systemPreferences.getMediaAccessStatus("screen") === "granted",
+  };
+}
+
+async function startEmbedded(binary, signal, requestPermissions) {
   // The packaged app ships no general node_modules, so a bare package import only works in dev.
   const sdk = await loadEmbeddedSdk();
   signal.throwIfAborted();
-  // CUA's embedding contract needs grants before the daemon starts, asked from Electron main so macOS attributes them here.
+  // CUA SDK 0.28.2 needs both grants before daemon start; only an explicit retry requests them.
   if (process.platform === "darwin") {
-    const permissionStatus = sdk.requestMacOSPermissions();
+    const permissionStatus = requestPermissions ? sdk.requestMacOSPermissions() : currentMacPermissions();
     if (!sdk.hasRequiredMacOSPermissions(permissionStatus)) {
       const missing = [
         !permissionStatus.accessibility && "Accessibility",
@@ -264,7 +272,7 @@ async function startEmbedded(binary, signal) {
   }
 }
 
-export async function startCua({ attempt = 0 } = {}) {
+export async function startCua({ attempt = 0, requestPermissions = false } = {}) {
   if (process.platform === "linux") return ensureLinuxRuntime().initialize();
   clearTimeout(retryTimer);
   retryTimer = null;
@@ -286,11 +294,11 @@ export async function startCua({ attempt = 0 } = {}) {
 
   if (wantEmbedded) {
     try {
-      nextConnection = await startEmbedded(binary, signal);
+      nextConnection = await startEmbedded(binary, signal, requestPermissions);
     } catch (err) {
       signal.throwIfAborted();
       try {
-        nextConnection = await attachStandalone(signal);
+        nextConnection = await attachStandalone(signal, requestPermissions);
       } catch (standaloneError) {
         signal.throwIfAborted();
         nextConnection = {
@@ -333,6 +341,7 @@ export async function startCua({ attempt = 0 } = {}) {
 export async function cuaPermissionsStatus() {
   const binary = resolveDriverBinary();
   if (!binary) return { available: false };
+  if (process.platform === "darwin") return { available: true, ...currentMacPermissions() };
   const out = await execFileAsync(binary, ["permissions", "status", "--json"], {
     encoding: "utf8",
     timeout: 5000,
@@ -385,7 +394,7 @@ function restartCua() {
       const generation = lifecycleGeneration;
       await stopping;
       if (generation !== lifecycleGeneration) throw new Error("Computer use restart cancelled");
-      const connection = await startCua();
+      const connection = await startCua({ requestPermissions: true });
       const ready = connection?.mode === "embedded" || connection?.mode === "standalone";
       return {
         enabled: ready,

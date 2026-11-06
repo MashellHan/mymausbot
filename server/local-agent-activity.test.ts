@@ -28,7 +28,40 @@ async function fixture(lines: object[], recordedId = SESSION) {
 }
 
 describe("bounded per-agent Codex activity", () => {
-  it("returns only visible user, assistant, tool call and result excerpts from the exact session", async () => {
+  it("reads visible current-format messages without duplicating legacy copies or exposing hidden content", async () => {
+    const secret = "ghp_" + "x".repeat(36);
+    const home = await fixture([
+      row("event_msg", { type: "user_message", message: "Plan briefly" }),
+      row("response_item", { type: "message", role: "user", content: [
+        { type: "input_text", text: "Plan" }, { type: "input_image", image_url: "HIDDEN_IMAGE" }, { type: "input_text", text: "briefly" },
+      ] }),
+      row("event_msg", { type: "agent_message", message: "Checking synthetic notes" }),
+      row("response_item", { type: "message", role: "assistant", phase: "commentary", status: "completed", content: [
+        { type: "output_text", text: "Checking synthetic notes" }, { type: "tool_result", text: "HIDDEN_TOOL" },
+      ] }),
+      row("response_item", { type: "message", role: "assistant", phase: "analysis", status: "completed",
+        content: [{ type: "output_text", text: "HIDDEN_ANALYSIS" }] }),
+      row("response_item", { type: "message", role: "assistant", phase: "commentary", channel: "analysis",
+        content: [{ type: "output_text", text: "HIDDEN_CHANNEL" }] }),
+      row("response_item", { type: "message", role: "system", content: [{ type: "input_text", text: "HIDDEN_SYSTEM" }] }),
+      row("response_item", { type: "message", role: "developer", content: [{ type: "input_text", text: "HIDDEN_DEVELOPER" }] }),
+      row("response_item", { type: "function_call", name: "functions.exec", arguments: "HIDDEN_CALL" }),
+      row("response_item", { type: "function_call_output", output: "HIDDEN_RESULT" }),
+      row("response_item", { type: "message", role: "assistant", phase: "final_answer", status: "completed", content: [
+        { type: "output_text", text: `Synthetic answer. ${secret}` }, { type: "output_image", data: "HIDDEN_IMAGE" },
+      ] }),
+      row("event_msg", { type: "user_message", message: "Legacy-only question" }),
+    ]);
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
+    const result = await provider.get(pane);
+    expect(result).toMatchObject({ status: "ready", truncated: false });
+    expect(result.events.map((event) => [event.kind, event.text?.startsWith("Synthetic answer") ? "Synthetic answer" : event.text])).toEqual([
+      ["user", "Plan briefly"], ["assistant", "Checking synthetic notes"], ["assistant", "Synthetic answer"], ["user", "Legacy-only question"],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/ghp_|HIDDEN_|functions\.exec/);
+  });
+
+  it("returns only redacted user and assistant messages from the exact session", async () => {
     const secret = "ghp_" + "x".repeat(36);
     const home = await fixture([
       row("event_msg", { type: "user_message", message: `Review /Users/fixture/private/notes.txt ${secret} ` + "x".repeat(700) }),
@@ -46,15 +79,32 @@ describe("bounded per-agent Codex activity", () => {
     const first = await provider.get(pane);
     expect(first).toMatchObject({ agentId: pane, status: "ready", updatedAt: 1234, truncated: true });
     expect(first.events.map((event) => [event.kind, event.tool])).toEqual([
-      ["user", null], ["assistant", null], ["tool-call", "functions.exec"], ["tool-result", "functions.exec"],
+      ["user", null], ["assistant", null],
     ]);
     expect(first.events.every((event) => (event.text?.length ?? 0) <= 600)).toBe(true);
     expect(first.events[0]?.at).toBe(Date.parse("2026-11-05T01:00:00.000Z"));
     expect((await provider.get(pane)).events.map((event) => event.id)).toEqual(first.events.map((event) => event.id));
-    expect(JSON.stringify(first)).not.toMatch(/ghp_|Users\/fixture|private\/report|tmp\/private|private\.test|abcdefghijklmnop|SYSTEM_SECRET|DEVELOPER_SECRET|HIDDEN_/);
+    expect(JSON.stringify(first)).not.toMatch(/ghp_|Users\/fixture|private\/report|tmp\/private|private\.test|abcdefghijklmnop|SYSTEM_SECRET|DEVELOPER_SECRET|HIDDEN_|functions\.exec/);
   });
 
-  it("keeps the most recent 60 visible events and reports omitted history", async () => {
+  it("does not let more than 60 tool events crowd out chat messages", async () => {
+    const tools = Array.from({ length: 75 }, (_, index) => [
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: `call-${index}`, arguments: "synthetic tool input" }),
+      row("response_item", { type: "function_call_output", call_id: `call-${index}`, output: "synthetic tool output" }),
+    ]).flat();
+    const home = await fixture([
+      row("event_msg", { type: "user_message", message: "First question" }),
+      ...tools,
+      row("event_msg", { type: "agent_message", message: "Final reply" }),
+    ]);
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
+    const result = await provider.get(pane);
+    expect(result).toMatchObject({ status: "ready", truncated: false });
+    expect(result.events.map((event) => [event.kind, event.text])).toEqual([["user", "First question"], ["assistant", "Final reply"]]);
+    expect(JSON.stringify(result)).not.toContain("synthetic tool");
+  });
+
+  it("keeps the most recent 60 visible messages and reports omitted history", async () => {
     const home = await fixture(Array.from({ length: 70 }, (_, index) => row("event_msg", { type: "user_message", message: `message ${index}` })));
     const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
     const result = await provider.get(pane);

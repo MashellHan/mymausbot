@@ -282,7 +282,15 @@ describe("a bot's database", () => {
   it("drops a result on the panel's connection without waiting behind the bot's statement", async () => {
     await ready;
     await db.materialise("SELECT 1 AS one", "aside", bot);
+    const internal = db as unknown as { storeLane: { readers: number }; state: Promise<{ lanes: { bot: { running: unknown } } }> };
+    const opened = await internal.state;
     const long = db.run(LONG_QUERY, bot);
+    let settled = false;
+    void long.then(() => { settled = true; }, () => { settled = true; });
+    while (internal.storeLane.readers === 0 || !opened.lanes.bot.running) {
+      if (settled) throw new Error("The bot statement ended before its reader slot and execution were observed.");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     const started = Date.now();
     await db.dropResult("aside", "panel");
     expect(Date.now() - started).toBeLessThan(2_000);

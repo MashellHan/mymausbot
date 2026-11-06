@@ -27,6 +27,10 @@ export function SecretRequestCard({
 }) {
   const { dispatch } = useStore();
   const secret = message.secret!;
+  const sessionMode = window.ogb?.credentialMode?.() === "session";
+  const sessionOnly = sessionMode && secret.target !== CUSTOM_SECRET_TARGET && isConfigCredentialTarget(secret.target);
+  const sessionUnavailable = sessionMode && (secret.target === "onePasswordToken" ||
+    (secret.target === CUSTOM_SECRET_TARGET && (secret.delivery === "file" || secret.delivery === "email")));
   const [value, setValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedLocally, setSavedLocally] = useState(false);
@@ -50,10 +54,10 @@ export function SecretRequestCard({
     ? "This request was replaced by a newer one for the same key. Use the newest card to provide it."
     : provided
     ? stopped
-      ? "Saved securely."
+      ? sessionOnly ? t("secretCard.sessionSaved") : "Saved securely."
       : secret.resumed
-      ? "Saved securely. Your bot is continuing the task."
-      : "Saved securely. Your bot will continue when its current turn settles."
+      ? sessionOnly ? t("secretCard.sessionContinuing") : "Saved securely. Your bot is continuing the task."
+      : sessionOnly ? t("secretCard.sessionWaiting") : "Saved securely. Your bot will continue when its current turn settles."
     : declined
       ? `You chose not to provide this credential. ${productName()} could not resume the bot yet.`
       : custom && secret.reason ? secret.reason : secret.description;
@@ -191,7 +195,7 @@ export function SecretRequestCard({
         action={retry}
         detail={error && <p role="alert" className="ms-[19px] mt-1 text-[12px] text-danger">{error}</p>}
       >
-        <span className="text-ink-secondary" title={description}>{provided ? `${secret.label} saved securely` : secret.label}</span>
+        <span className="text-ink-secondary" title={description}>{provided ? `${secret.label} ${sessionOnly ? t("secretCard.sessionShort") : "saved securely"}` : secret.label}</span>
         <span className={declined ? "text-danger" : undefined}> · {footerLabel}</span>
       </AskSettledLine>
     );
@@ -211,6 +215,8 @@ export function SecretRequestCard({
         <div className="text-[13px] leading-relaxed text-ink-secondary">
           This key must be saved on the host computer. Open this conversation on the host to continue securely.
         </div>
+      ) : sessionUnavailable ? (
+        <p role="status" className="text-[13px] leading-relaxed text-ink-secondary">{t("secretCard.sessionUnavailable")}</p>
       ) : (
         <form onSubmit={(event) => void save(event)}>
           {email && (
@@ -234,13 +240,13 @@ export function SecretRequestCard({
             />
             <button type="submit" disabled={saving || (!value.trim() && !savedLocally) || (email && !address.trim())} {...askPrimary(color)}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : <LockKeyhole size={14} />}
-              {savedLocally ? "Continue task" : "Save securely"}
+              {savedLocally ? "Continue task" : sessionOnly ? t("secretCard.sessionUse") : "Save securely"}
             </button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-tertiary">
             <span className="flex items-center gap-1">
               <LockKeyhole size={11} />{" "}
-              {!custom ? `Stored securely by ${productName()} and never added to chat.` : email ? t("secretCard.email") : secret.delivery === "file" ? t("secretCard.file") : t("secretCard.ref")}
+              {!custom ? sessionOnly ? t("secretCard.sessionStorage") : `Stored securely by ${productName()} and never added to chat.` : email ? t("secretCard.email") : secret.delivery === "file" ? t("secretCard.file") : t("secretCard.ref")}
             </span>
             {secret.helpUrl && (
               <a

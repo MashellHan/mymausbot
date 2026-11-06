@@ -8,10 +8,12 @@ import { z } from "zod";
 
 import { writeFileAtomic } from "../atomic.ts";
 import { decryptBrowserState, encryptBrowserState } from "../browser-sites.ts";
+import { sessionCredentialsEnabled } from "../session-config.ts";
 
 export const EMAIL_FILE = "email.json.enc";
 export const EMAIL_KEY_FILE = "email-key";
 export const MAX_EMAIL_ACCOUNTS = 10;
+export const EMAIL_SESSION_REFUSAL = "Email connections need saved credentials and are unavailable in session mode.";
 
 const serverSchema = z.object({ host: z.string().min(1).max(253), port: z.number().int().min(1).max(65_535), secure: z.boolean() });
 const accountSchema = z.object({
@@ -41,6 +43,7 @@ export function parseEmailAccount(value: unknown): EmailAccount | null {
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 export class EmailStore {
+  readonly sessionOnly = sessionCredentialsEnabled();
   private readonly file: string;
   private readonly keyFile: string;
   private cache: StoreFile | null = null;
@@ -64,6 +67,7 @@ export class EmailStore {
   }
 
   private read(): StoreFile {
+    if (this.sessionOnly) return EMPTY;
     if (this.cache) return this.cache;
     let data = EMPTY;
     if (existsSync(this.file)) {
@@ -82,6 +86,7 @@ export class EmailStore {
   }
 
   private write(accounts: EmailAccount[]): void {
+    if (this.sessionOnly) throw new Error(EMAIL_SESSION_REFUSAL);
     const parsed = fileSchema.parse({ version: 1, accounts });
     const key = this.key(true)!;
     mkdirSync(join(this.file, ".."), { recursive: true });
@@ -103,6 +108,7 @@ export class EmailStore {
   }
 
   remove(address: string): boolean {
+    if (this.sessionOnly) throw new Error(EMAIL_SESSION_REFUSAL);
     const kept = this.list().filter((account) => !same(account.address, address));
     if (kept.length === this.list().length) return false;
     if (kept.length) this.write(kept);
@@ -112,6 +118,7 @@ export class EmailStore {
 
   /** Says the password stopped working, only while it is still the one that failed. */
   markProblem(address: string, password: string, problem: string | undefined): void {
+    if (this.sessionOnly) throw new Error(EMAIL_SESSION_REFUSAL);
     const current = this.get(address);
     if (!current || current.password !== password || current.problem === problem) return;
     const { problem: _problem, ...rest } = current;

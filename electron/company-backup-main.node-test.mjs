@@ -28,7 +28,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-function fixture() {
+function fixture({ sessionOnly = false } = {}) {
   const handlers = new Map(), sent = [], requests = [];
   const frame = { url: `${ORIGIN}/` };
   const contents = { mainFrame: frame, send: (...args) => sent.push(args) };
@@ -51,9 +51,10 @@ function fixture() {
   const context = vm.createContext({
     AbortController, AbortSignal, Date, Headers, setTimeout, clearTimeout, path, randomUUID, Buffer,
     app: { isPackaged: true, getPath: () => "/unused-synthetic-backup-fixture", getVersion: () => "fixture" },
+    SESSION_CREDENTIALS: sessionOnly,
     os: { hostname: () => "Fixture computer" }, process: { platform: "fixture" },
     createManagedDesktopStore: options => {
-      const store = { file: options.file, read: async () => f.savedSchedule, write: async value => { f.savedSchedule = structuredClone(value); } };
+      const store = { file: options.file, sessionOnly: options.sessionOnly, read: async () => f.savedSchedule, write: async value => { f.savedSchedule = structuredClone(value); } };
       f.stores.push(store);
       return store;
     },
@@ -97,6 +98,7 @@ test("ensureManagedDesktop gives the organization library its own record, the fi
   const f = fixture(), options = f.libraryOptions;
   assert.equal(options.dataDir, path.join("/synthetic-fixture-workspace", "org-library"));
   assert.deepEqual(f.stores.map(store => path.basename(store.file)), ["company-connection.bin", "company-library.bin", "company-backup-schedule.bin"]);
+  assert.deepEqual(f.stores.map(store => store.sessionOnly), [false, false, false]);
   assert.equal(options.store, f.stores[1], "a separate OS-encrypted record, not the connection's");
   assert.equal(f.clientOptions.store, f.stores[0]);
   assert.equal(f.clientOptions.library, f.library, "every session sync reaches the library");
@@ -108,6 +110,13 @@ test("ensureManagedDesktop gives the organization library its own record, the fi
   assert.equal(f.librarySent.length, 1);
   assert.equal(f.librarySent[0].proc, f.context.serverProc, "only to the current local runtime");
   assert.equal(f.librarySent[0].library, library);
+});
+
+test("session mode selects memory-only stores for all three company records", () => {
+  const f = fixture({ sessionOnly: true });
+  assert.deepEqual(f.stores.map(store => store.sessionOnly), [true, true, true]);
+  assert.equal(f.libraryOptions.store, f.stores[1]);
+  assert.equal(f.clientOptions.store, f.stores[0]);
 });
 
 test("main hands the library a restarted runtime, the runtime's own messages and the quit", () => {

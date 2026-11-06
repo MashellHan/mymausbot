@@ -2,6 +2,7 @@
 import { writeFileSync } from "node:fs";
 
 import type { DataColumn, DataColumnStats, DataHistogram, DataPage } from "../../shared/data-surface.ts";
+import type { MiniAppSourceTable } from "../../shared/mini-app-data.ts";
 import { DataFailure, type BotDatabase, type DataConnection, type DescribeResult, type MaterialiseResult, type RunOptions, type RunResult } from "../data/types.ts";
 
 type Rows = RunResult["rows"];
@@ -149,6 +150,14 @@ export class FakeDataDatabase implements BotDatabase {
       ...(/^[a-z_][a-z0-9_]*$/.test(name) ? {} : { sqlName: `"${name.replaceAll('"', '""')}"` }),
       rowCount: table.rows.length,
       columns: table.columns,
+    }));
+  }
+
+  async listSourceTables(): Promise<MiniAppSourceTable[]> {
+    this.calls.push({ method: "listSourceTables" });
+    return [...this.tables.entries()].map(([name, table]) => ({
+      schema: "main", name, rowCount: table.rows.length,
+      columns: table.columns.map(({ name: columnName, type }) => ({ name: columnName, type })),
     }));
   }
 

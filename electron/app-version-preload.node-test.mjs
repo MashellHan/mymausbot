@@ -19,10 +19,17 @@ function app(origin, argv = [`--omb-local-origin=${LOCAL}`, "--omb-company-deskt
 }
 
 test("every page in the window learns this app's own version, and only this computer's page counts as this app's own", () => {
-  assert.deepEqual(app(LOCAL), { version: "0.1.127", ownPage: true });
-  assert.deepEqual(app("https://bots.example.test"), { version: "0.1.127", ownPage: false }, "a server added in the Server menu");
-  assert.deepEqual(app("https://home-7f3k2.fly.dev"), { version: "0.1.127", ownPage: false }, "My Cloud");
+  assert.deepEqual(app(LOCAL), { version: "0.1.127", ownPage: true, blocksOpaqueFrameNavigation: false });
+  assert.deepEqual(app("https://bots.example.test"), { version: "0.1.127", ownPage: false, blocksOpaqueFrameNavigation: false }, "a server added in the Server menu");
+  assert.deepEqual(app("https://home-7f3k2.fly.dev"), { version: "0.1.127", ownPage: false, blocksOpaqueFrameNavigation: false }, "My Cloud");
   assert.equal(app(LOCAL, [`--omb-local-origin=${LOCAL}`]).version, "", "no version passed: About keeps the page's own");
+});
+
+test("only a window configured with the native navigation guard advertises it", () => {
+  assert.equal(app(LOCAL, [`--omb-local-origin=${LOCAL}`, "--omb-opaque-frame-navigation=1"]).blocksOpaqueFrameNavigation, true);
+  assert.equal(app(LOCAL, [`--omb-local-origin=${LOCAL}`]).blocksOpaqueFrameNavigation, false);
+  assert.ok(MAIN.includes('"--omb-opaque-frame-navigation=1"'));
+  assert.ok(MAIN.includes('if (!appFrameNavigationAllowed(details)) return void details.preventDefault();'));
 });
 
 test("main passes the app's version to the window it opens", () => {

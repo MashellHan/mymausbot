@@ -162,6 +162,9 @@ renderer components and isolated HTTP routes.
 The [desktop server connection smoke](desktop-server-connection.md) mounts the
 real Settings connection component in disposable Electron windows.
 
+[Session-only desktop credentials](../desktop-session-credentials.md) describes the
+opt-in App-run preference, supported memory stores, and isolated verification boundary.
+
 The [loading screen and tray smoke](startup-tray.md) checks the startup close
 button, hidden handoff, tray restore, and Quit in a disposable Electron profile.
 
@@ -234,6 +237,10 @@ digest rows and real message-scoped downloads from a disposable workspace.
 The [Data viewer fixture](data.md) checks real DuckDB loading, querying, export,
 restart persistence, result history and the full renderer's 100,000-row grid
 in a disposable workspace with synthetic data.
+
+The [local Mini Apps fixtures](mini-apps.md) check retained Data sources, named
+queries, bot publication, template rollback, backup/restore and the bookkeeping
+portal in a disposable desktop profile with synthetic records.
 
 The [people invitation fixture](people.md) checks hosted workspace sign-in,
 roles and device revocation through the real HTTP API with a stubbed email

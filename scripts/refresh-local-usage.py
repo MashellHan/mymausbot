@@ -4,6 +4,7 @@
 import argparse
 import http.client
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -138,7 +139,10 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
         return original_run(args, timeout)
 
     collector.run = run
-    collector.refresh(config, upload=publish, skip_api=skip_api, reuse_sources=reuse_sources)
+    options = {"upload": publish, "skip_api": skip_api, "reuse_sources": reuse_sources}
+    if "history_days" in inspect.signature(collector.refresh).parameters:
+        options["history_days"] = 59
+    collector.refresh(config, **options)
 
 
 def main():
