@@ -46,6 +46,8 @@ import {
   isReadyBoatState,
   resolveBoatPanelAction,
   shouldPollCloudPreview,
+  type LocalVmStatus,
+  type VpsComputerStatus,
 } from "@/lib/local-computer";
 import { moveBetweenTabs, PANEL_TABS, panelTabProps, revealSelectedTab, scrollTabsWithWheel, TAB_PANEL_FOCUS, tabPanelProps, useAndroidTabFallback } from "./computer-panel-tabs";
 import { releaseComputerPanelFocus, useComputerPanelEntry } from "@/lib/computer-panel-focus";
@@ -62,15 +64,6 @@ import { openPlaceAction, placeBlocked, placeFacts, placeHasIssue, placeViewFor,
 import { cloudRefusal, type PlaceActionId, type PlaceFacts, type PlaceView } from "../../shared/place-view";
 import { t } from "@/lib/i18n";
 import { LocalizedPanelError, panelErrorText } from "@/lib/computer-messages";
-
-interface VpsComputerStatus {
-  configured: boolean;
-  imageMatches: boolean;
-  managed: boolean;
-  container: "running" | "stopped" | "missing";
-  ready: boolean;
-  problem: string | null;
-}
 
 type Phase =
   | "checking"
@@ -95,26 +88,6 @@ type Phase =
   | "browser"
   | "off"
   | "error";
-
-interface LocalVmStatus {
-  resumable?: boolean;
-  stop_reason?: "idle" | null;
-  mode: "shared" | "per-bot" | "pool";
-  max_instances: number;
-  image: boolean;
-  create_supported: boolean;
-  container: "running" | "stopped" | "missing";
-  imageMatches: boolean;
-  managed: boolean;
-  network: "loopback" | "unsafe" | "unknown";
-  security: "hardened" | "unsafe" | "unknown";
-  persistence: "durable" | "unsafe" | "unknown";
-  desktopReady: boolean;
-  ready: boolean;
-  problem: string | null;
-  viewer_url: string;
-  target_key: string;
-}
 
 const computerControlSnapshotSchema = z.object({
   held: z.boolean().optional().default(false),
