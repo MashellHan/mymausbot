@@ -91,11 +91,14 @@ citing their new counterparts.
 The user requested commit/PR history. Preserve intermediate meaningful commits;
 do not manufacture commit counts, force-push others' work or bypass checks.
 
-Lead should dispatch ready changes to reviewer immediately, with exact commit,
-diff scope and validation. Review may run alongside independent next work.
-Use one focused review, one correction batch and delta review of changed hunks
-plus affected contracts. Repeat broad review only for new risk or unresolved
-findings. The user has authorized reviewed merges into the personal repository.
+Lead sends compatible ready changes for one focused independent review of the
+final integrated diff against current main, with exact head, scope and
+validation. Review may run alongside independent next work. Carry accepted
+unchanged hunks and checks on stable inputs. A composition commit alone does
+not trigger another review, test or build cycle; recheck only actual conflicts,
+new risks or findings with focused deltas. Required current-head CI and source
+acceptance still gate merging. The user has authorized reviewed merges into the
+personal repository.
 Lead decides merge order and merges only after Reviewer has no unresolved
 findings and required checks pass. Creating and pushing reviewable PRs is
 authorized here.
@@ -189,7 +192,7 @@ admission requires the documented pilot evidence.
 
 ## Upstream integration
 
-The user's assistant owns the existing daily 09:00 Asia/Shanghai schedule;
+The user's assistant owns the existing daily 00:00 Asia/Shanghai schedule;
 do not create another scheduler. The upstream developer works in an isolated
 worktree, checks existing sync branches and PRs, and compares fetched
 `upstream/main` with `origin/main` before integrating. Record exact source SHAs,

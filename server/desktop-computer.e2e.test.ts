@@ -2,7 +2,7 @@
 // from source, a demo) finds the app's driver record on disk, in the folder the app keeps it in, and still never mounts
 // this computer or drives it; the app's own server, which hears the record over its parent port, still can.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,7 +24,123 @@ describe("this computer belongs to the desktop app's own server", () => {
   let output = "";
   let child: ChildProcess | null = null;
   let base = "";
+  type CaseTrace = {
+    label: string;
+    startedAt: number;
+    phases: Array<{ name: string; atMs: number }>;
+    serverPort: number | null;
+    healthAttempts: number;
+    healthStatus: number | null;
+    healthError: string | null;
+    child: ChildProcess | null;
+    childError: Error | null;
+    stdoutBytes: number;
+    stderrBytes: number;
+    lastOutputAtMs: number | null;
+    base: string;
+    dataDir: string;
+    tempRoot: string;
+    botId: string | null;
+    threadId: string | null;
+    instanceId: string | null;
+    sendKind: "queued" | "direct" | "unknown" | null;
+    probeFile: string;
+    promptFile: string;
+    textDumpFile: string;
+  };
+  let activeTrace: CaseTrace | null = null;
   const record = { mode: "embedded", status: "ready", socketPath: "", mcpCommand: "/fixture/cua-driver", mcpArgs: ["mcp"], mcpEnv: {} };
+
+  const active = (trace: CaseTrace) => activeTrace === trace;
+  const mark = (trace: CaseTrace, name: string) => {
+    if (active(trace) && trace.phases.length < 24) trace.phases.push({ name, atMs: Math.round(performance.now() - trace.startedAt) });
+  };
+  const beginCase = (label: string): CaseTrace => {
+    const trace: CaseTrace = {
+      label, startedAt: performance.now(), phases: [], serverPort: null, healthAttempts: 0,
+      healthStatus: null, healthError: null, child: null, childError: null,
+      stdoutBytes: 0, stderrBytes: 0, lastOutputAtMs: null,
+      base: "", dataDir: "", tempRoot: "", botId: null, threadId: null, instanceId: null, sendKind: null,
+      probeFile: "", promptFile: "", textDumpFile: "",
+    };
+    activeTrace = trace;
+    mark(trace, "case.begin");
+    return trace;
+  };
+  const retire = (trace: CaseTrace) => { if (active(trace)) activeTrace = null; };
+  const updateOwned = (trace: CaseTrace, proc: ChildProcess, update: () => void) => {
+    if (active(trace) && trace.child === proc) update();
+  };
+  const observed = async <T>(trace: CaseTrace, name: string, run: () => Promise<T>): Promise<T> => {
+    mark(trace, `${name}.begin`);
+    const value = await run();
+    mark(trace, `${name}.done`);
+    return value;
+  };
+  const errorKind = (error: unknown) => {
+    if (!(error instanceof Error)) return typeof error;
+    const direct = (error as NodeJS.ErrnoException).code;
+    const cause = (error as { cause?: { code?: unknown } }).cause?.code;
+    return typeof direct === "string" ? direct : typeof cause === "string" ? cause : error.name;
+  };
+  const safeInstanceId = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(value) ? value : null;
+  const markerEntries = (file: string): number | null => {
+    if (!file || !existsSync(file)) return 0;
+    try {
+      if (statSync(file).size > 1_048_576) return null;
+      let count = 0;
+      for (const byte of readFileSync(file)) if (byte === 10) count++;
+      return count;
+    } catch { return null; }
+  };
+  const taskFailureState = async ({ base, botId, threadId }: Pick<CaseTrace, "base" | "botId" | "threadId">) => {
+    if (!base || !botId || !threadId) return { read: "not_ready" };
+    const signal = AbortSignal.timeout(750);
+    try {
+      const [botsResponse, messagesResponse] = await Promise.all([
+        fetch(`${base}/api/bots?messages=0`, { signal }),
+        fetch(`${base}/api/threads/${encodeURIComponent(threadId)}/messages?limit=20`, { signal }),
+      ]);
+      if (!botsResponse.ok || !messagesResponse.ok) return { read: "http_error", botsStatus: botsResponse.status, messagesStatus: messagesResponse.status };
+      const bots = (await botsResponse.json() as { bots?: any[] }).bots ?? [];
+      const messages = (await messagesResponse.json() as { messages?: any[] }).messages ?? [];
+      const bot = bots.find((item) => item.id === botId);
+      const task = bot?.tasks?.find((item: any) => item.threadId === threadId);
+      const terminal = messages.findLast((item) => typeof item.turnSucceeded === "boolean");
+      const failures = messages.filter((item) => item.role === "bot" && item.kind === "activity" && item.tool?.ok === false);
+      const lastFailure = failures.at(-1)?.tool?.name;
+      const failureKind = typeof lastFailure !== "string" ? null
+        : lastFailure.includes("permission broker could not bind a local socket") ? "broker_bind"
+          : lastFailure.includes("stdin write failed") ? "stdin_write_failed" : "other_failed_turn";
+      return { read: "ok", busy: typeof task?.busy === "boolean" ? task.busy : null,
+        terminal: typeof terminal?.turnSucceeded === "boolean" ? terminal.turnSucceeded : null,
+        failedActivityCount: failures.length, failureKind };
+    } catch { return { read: "unavailable", reasonCode: signal.aborted ? "timeout" : "read_error" }; }
+  };
+  const captureFailure = (trace: CaseTrace) => {
+    const brokerLine = output.slice(-8192).split("\n").find((line) => line.includes("permission broker unavailable on"));
+    const prefix = trace.threadId?.replace(/[^\w-]/g, "").slice(0, 4) ?? "xxxx";
+    return {
+      target: { base: trace.base, botId: trace.botId, threadId: trace.threadId },
+      record: {
+        case: trace.label, elapsedMs: Math.round(performance.now() - trace.startedAt), phases: trace.phases.map((phase) => ({ ...phase })),
+        serverPort: trace.serverPort, health: { attempts: trace.healthAttempts, status: trace.healthStatus, error: trace.healthError },
+        child: { pid: trace.child?.pid ?? null, live: Boolean(trace.child && trace.child.exitCode === null && trace.child.signalCode === null && !trace.childError),
+          exitCode: trace.child?.exitCode ?? null, signalCode: trace.child?.signalCode ?? null, error: trace.childError && errorKind(trace.childError),
+          stdoutBytes: trace.stdoutBytes, stderrBytes: trace.stderrBytes, lastOutputAtMs: trace.lastOutputAtMs },
+        files: { dump: Boolean(dumpFile && existsSync(dumpFile)), finish: Boolean(finishFile && existsSync(finishFile)), textDump: Boolean(trace.textDumpFile && existsSync(trace.textDumpFile)) },
+        engine: { instanceId: trace.instanceId, sendKind: trace.sendKind,
+          probeEntries: markerEntries(trace.probeFile), promptEntries: markerEntries(trace.promptFile),
+          socketPathBytes: trace.dataDir && trace.tempRoot ? {
+            primary: Buffer.byteLength(join(trace.dataDir, `perm-${prefix}xxxx.sock`)),
+            fallback: Buffer.byteLength(join(trace.tempRoot, `omb-perm-${"x".repeat(16)}.sock`)),
+          } : null,
+          brokerLogCode: brokerLine ? brokerLine.includes("EINVAL") ? "broker_bind_einval" : "broker_bind_other" : null },
+      },
+    };
+  };
+  const failureState = async (snapshot: ReturnType<typeof captureFailure>, readTask = taskFailureState) =>
+    ({ ...snapshot.record, task: await readTask(snapshot.target) });
 
   const resetTurn = () => {
     writeFileAtomic(stateFile, JSON.stringify({ noContainers: true }));
@@ -65,21 +181,33 @@ describe("this computer belongs to the desktop app's own server", () => {
       .map((message) => String(message.tool?.name ?? message.text ?? ""));
 
   /** `desktop`: launched as the app launches its own server, hearing the driver record over the parent port. */
-  async function start(desktop: boolean, env: Record<string, string> = {}) {
+  async function start(trace: CaseTrace, desktop: boolean, env: Record<string, string> = {}) {
+    mark(trace, "startup.configure");
     data = mkdtempSync(join(home, "data-"));
+    trace.dataDir = data;
+    trace.tempRoot = home;
+    trace.probeFile = join(data, "probes.log");
+    trace.promptFile = join(data, "prompts.jsonl");
+    trace.textDumpFile = join(data, "text-dump.json");
     stateFile = join(data, "vm.json");
     dumpFile = join(data, "dump.json");
     finishFile = join(data, "finish");
     writeFileSync(join(data, "config.json"), JSON.stringify({ instances: { claude: {
       driver: "claudeAgent", config: { cli: join(ROOT, "server/testing/fake-claude-cli.ts") },
       environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_DUMP: dumpFile,
-        FAKE_CLAUDE_TEXT_DUMP: join(data, "text-dump.json"), FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile },
+        FAKE_CLAUDE_TEXT_DUMP: trace.textDumpFile, FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile,
+        FAKE_CLAUDE_PROBE_LOG: trace.probeFile, FAKE_CLAUDE_PROMPTS: trace.promptFile },
     } } }));
+    mark(trace, "startup.ports");
     const port = await freePortBlock([0, 1]);
+    if (active(trace)) trace.serverPort = port;
     base = `http://127.0.0.1:${port}`;
+    trace.base = base;
+    const healthUrl = `${base}/api/health`;
     output = "";
     const hooks = ["--import", pathToFileURL(join(ROOT, "server/testing/group-local-vm-hooks.mjs")).href,
       ...(desktop ? ["--import", pathToFileURL(join(ROOT, "server/testing/desktop-parent.mjs")).href] : [])];
+    mark(trace, "startup.spawn");
     const proc = spawn(process.execPath, [...hooks, join(ROOT, "server/index.ts")], {
       cwd: ROOT, env: {
         PATH: dirname(process.execPath), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
@@ -94,12 +222,30 @@ describe("this computer belongs to the desktop app's own server", () => {
       }, stdio: ["ignore", "pipe", "pipe"],
     });
     child = proc;
-    proc.stdout!.on("data", chunk => { output += chunk; });
-    proc.stderr!.on("data", chunk => { output += chunk; });
+    trace.child = proc;
+    proc.stdout!.on("data", chunk => updateOwned(trace, proc, () => {
+      trace.stdoutBytes += chunk.length;
+      trace.lastOutputAtMs = Math.round(performance.now() - trace.startedAt);
+      output += chunk;
+    }));
+    proc.stderr!.on("data", chunk => updateOwned(trace, proc, () => {
+      trace.stderrBytes += chunk.length;
+      trace.lastOutputAtMs = Math.round(performance.now() - trace.startedAt);
+      output += chunk;
+    }));
+    proc.on("error", error => updateOwned(trace, proc, () => { trace.childError = error; }));
+    mark(trace, "startup.health");
     await until(async () => {
+      if (trace.childError) throw trace.childError;
       if (proc.exitCode !== null) throw new Error(`server exited during boot:\n${output}`);
-      try { return (await fetch(base + "/api/health")).ok; } catch { return false; }
+      updateOwned(trace, proc, () => { trace.healthAttempts++; });
+      try {
+        const response = await fetch(healthUrl);
+        updateOwned(trace, proc, () => { trace.healthStatus = response.status; trace.healthError = null; });
+        return response.ok;
+      } catch (error) { updateOwned(trace, proc, () => { trace.healthError = errorKind(error); }); return false; }
     }, Boolean);
+    mark(trace, "startup.ready");
   }
   async function stop() {
     if (!child) return;
@@ -111,7 +257,7 @@ describe("this computer belongs to the desktop app's own server", () => {
   const itHost = process.platform === "linux" ? it.skip : it;
 
   beforeAll(() => {
-    home = mkdtempSync(join(tmpdir(), "omb-desktop-computer-"));
+    home = mkdtempSync(join(tmpdir(), "omb-d-"));
     ui = join(home, "static");
     record.socketPath = join(home, "cua.sock");
     mkdirSync(join(ui, "assets"), { recursive: true });
@@ -126,44 +272,128 @@ describe("this computer belongs to the desktop app's own server", () => {
     await stop();
     if (home) await removeTempDir(home);
   });
-  afterEach(async () => { await stop(); resetTurn(); });
+  afterEach(async ({ task }) => {
+    const failed = task.result?.state === "fail";
+    const trace = activeTrace;
+    const owned = trace?.child ?? child;
+    const snapshot = failed && trace ? captureFailure(trace) : null;
+    if (trace) retire(trace);
+    if (snapshot) console.error("desktop fixture failure " + JSON.stringify(await failureState(snapshot)));
+    await stop();
+    resetTurn();
+    if (failed) console.error("desktop fixture cleanup " + JSON.stringify({ complete: true, exitCode: owned?.exitCode ?? null, signalCode: owned?.signalCode ?? null }));
+  });
 
   it("a server the app did not launch mounts no computer on Auto, though the app's record is on disk", async () => {
-    await start(false);
-    const { bot } = await apiOk("POST", "/api/bots", { name: "Second Server Bot" });
-    const { task } = await apiOk("POST", `/api/bots/${bot.id}/tasks`, {});
+    const trace = beginCase("non-app auto");
+    await start(trace, false);
+    const { bot } = await observed(trace, "bot.create", () => apiOk("POST", "/api/bots", { name: "Second Server Bot" }));
+    trace.botId = bot.id;
+    trace.instanceId = safeInstanceId(bot.modelSelection?.instanceId);
+    const { task } = await observed(trace, "task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
+    trace.threadId = task.threadId;
+    trace.instanceId = safeInstanceId(task.modelSelection?.instanceId) ?? trace.instanceId;
     resetTurn();
-    await apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Plan my week using my calendar.", threadId: task.threadId });
-    const sent = await dump();
+    mark(trace, "turn.reset");
+    const sendReceipt = await observed(trace, "turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Plan my week using my calendar.", threadId: task.threadId }));
+    trace.sendKind = sendReceipt?.ok === true ? sendReceipt.queued === true ? "queued" : "direct" : "unknown";
+    const sent = await observed(trace, "dump.wait", dump);
     expect(sent.mcpConfig?.mcpServers?.computer).toBeUndefined();
     expect(JSON.stringify(sent)).not.toContain("/fixture/cua-driver");
     writeFileSync(finishFile, "finish");
-    await idle(bot.id, task.threadId);
+    mark(trace, "finish.released");
+    await observed(trace, "turn.idle", () => idle(bot.id, task.threadId));
   });
 
   it("a server the app did not launch refuses this computer even when the person picks it, in plain words", async () => {
-    await start(false);
-    const { bot } = await apiOk("POST", "/api/bots", { name: "Second Server Pin Bot" });
-    const { task } = await apiOk("POST", `/api/bots/${bot.id}/tasks`, {});
-    await apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" });
+    const trace = beginCase("non-app refusal");
+    await start(trace, false);
+    const { bot } = await observed(trace, "bot.create", () => apiOk("POST", "/api/bots", { name: "Second Server Pin Bot" }));
+    trace.botId = bot.id;
+    trace.instanceId = safeInstanceId(bot.modelSelection?.instanceId);
+    const { task } = await observed(trace, "task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
+    trace.threadId = task.threadId;
+    trace.instanceId = safeInstanceId(task.modelSelection?.instanceId) ?? trace.instanceId;
+    await observed(trace, "surface.set", () => apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" }));
     resetTurn();
-    await apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId });
-    const failed = await until(() => rows(task.threadId), (lines) => lines.some((line) => line.includes(NOT_THE_APP)));
+    mark(trace, "turn.reset");
+    const sendReceipt = await observed(trace, "turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId }));
+    trace.sendKind = sendReceipt?.ok === true ? sendReceipt.queued === true ? "queued" : "direct" : "unknown";
+    const failed = await observed(trace, "refusal.wait", () => until(() => rows(task.threadId), (lines) => lines.some((line) => line.includes(NOT_THE_APP))));
     expect(failed.join("\n")).not.toMatch(/CUA|Cua Driver|DevTools|descriptor/);
     expect(existsSync(dumpFile)).toBe(false);
-    await idle(bot.id, task.threadId);
+    await observed(trace, "turn.idle", () => idle(bot.id, task.threadId));
   });
 
   itHost("the app's own server still uses this computer, from the record the app hands it", async () => {
-    await start(true);
-    const { bot } = await apiOk("POST", "/api/bots", { name: "Desktop Server Bot" });
-    const { task } = await apiOk("POST", `/api/bots/${bot.id}/tasks`, {});
-    await apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" });
+    const trace = beginCase("app-owned");
+    await start(trace, true);
+    const { bot } = await observed(trace, "bot.create", () => apiOk("POST", "/api/bots", { name: "Desktop Server Bot" }));
+    trace.botId = bot.id;
+    trace.instanceId = safeInstanceId(bot.modelSelection?.instanceId);
+    const { task } = await observed(trace, "task.create", () => apiOk("POST", `/api/bots/${bot.id}/tasks`, {}));
+    trace.threadId = task.threadId;
+    trace.instanceId = safeInstanceId(task.modelSelection?.instanceId) ?? trace.instanceId;
+    await observed(trace, "surface.set", () => apiOk("PATCH", `/api/bots/${bot.id}/tasks/${task.threadId}`, { surface: "local" }));
     resetTurn();
-    await apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId });
-    const sent = await dump();
+    mark(trace, "turn.reset");
+    const sendReceipt = await observed(trace, "turn.send", () => apiOk("POST", `/api/bots/${bot.id}/messages`, { text: "Open Chrome on this computer.", threadId: task.threadId }));
+    trace.sendKind = sendReceipt?.ok === true ? sendReceipt.queued === true ? "queued" : "direct" : "unknown";
+    const sent = await observed(trace, "dump.wait", dump);
     expect(sent.mcpConfig.mcpServers.computer.env.OMB_CUA_COMMAND).toBe("/fixture/cua-driver");
     writeFileSync(finishFile, "finish");
-    await idle(bot.id, task.threadId);
+    mark(trace, "finish.released");
+    await observed(trace, "turn.idle", () => idle(bot.id, task.threadId));
+  });
+
+  it("retired diagnostic work cannot enter the next case", async () => {
+    stateFile = join(home, "trace-vm.json");
+    dumpFile = join(home, "trace-dump.json");
+    finishFile = join(home, "trace-finish");
+    const first = beginCase("first");
+    const oldChild = {} as ChildProcess;
+    first.child = oldChild;
+    first.base = "http://127.0.0.1:9";
+    first.botId = "bot-first";
+    first.threadId = "thread-first";
+    let complete!: (value: string) => void;
+    const pending = observed(first, "dump.wait", () => new Promise<string>(resolve => { complete = resolve; }));
+    updateOwned(first, oldChild, () => { first.healthAttempts++; first.stdoutBytes += 5; });
+    const frozen = captureFailure(first);
+    retire(first);
+    let finishRead!: () => void;
+    const diagnostic = failureState(frozen, async (target) => {
+      expect(target).toEqual({ base: "http://127.0.0.1:9", botId: "bot-first", threadId: "thread-first" });
+      return new Promise<{ read: string }>((resolve) => { finishRead = () => resolve({ read: "unavailable" }); });
+    });
+    const next = beginCase("next");
+    try {
+      next.child = {} as ChildProcess;
+      mark(next, "task.wait");
+      const nextBefore = { phases: [...next.phases], healthAttempts: next.healthAttempts, stdoutBytes: next.stdoutBytes, stderrBytes: next.stderrBytes };
+      complete("done");
+      expect(await pending).toBe("done");
+      updateOwned(first, oldChild, () => { first.healthAttempts++; first.stdoutBytes += 7; });
+      updateOwned(next, oldChild, () => { next.stderrBytes++; });
+      first.base = "http://127.0.0.1:99";
+      first.botId = "changed";
+      first.threadId = "changed";
+      expect(frozen.target).toEqual({ base: "http://127.0.0.1:9", botId: "bot-first", threadId: "thread-first" });
+      expect(frozen.record.phases.map(({ name }) => name)).toEqual(["case.begin", "dump.wait.begin"]);
+      expect(frozen.record.health.attempts).toBe(1);
+      expect(frozen.record.child.stdoutBytes).toBe(5);
+      expect(next).toMatchObject(nextBefore);
+      expect(first.phases.map(({ name }) => name)).toEqual(["case.begin", "dump.wait.begin"]);
+      expect(first.healthAttempts).toBe(1);
+      expect(first.stdoutBytes).toBe(5);
+    } finally { finishRead(); }
+    const captured = await diagnostic;
+    expect(captured.phases).toEqual(frozen.record.phases);
+    expect(captured.phases.every((phase) => phase.atMs <= captured.elapsedMs)).toBe(true);
+    expect(captured.task).toEqual({ read: "unavailable" });
+    output = "permission broker unavailable on /private/synthetic-secret: EINVAL";
+    const snapshot = JSON.stringify(await failureState(captureFailure(next)));
+    expect(snapshot).toContain('"brokerLogCode":"broker_bind_einval"');
+    expect(snapshot).not.toContain("synthetic-secret");
   });
 });

@@ -73,6 +73,7 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
         expect(await read<number>("document.querySelectorAll('[data-testid=selected-agent-team]').length")).toBe(0);
         await read("document.querySelector('[data-team-house]').click()");
         await expect.poll(() => read<number>("document.querySelectorAll('[data-testid=selected-agent-team]').length")).toBe(1);
+        expect(Math.abs(await read<number>("document.querySelector('[data-testid=agent-team-panel]').getBoundingClientRect().width") - width)).toBeLessThanOrEqual(1);
         expect(await read<number>("(() => { const p = document.querySelector('[data-testid=agent-team-panel]'); return p.scrollWidth - p.clientWidth; })()")).toBeLessThanOrEqual(1);
       }
     }

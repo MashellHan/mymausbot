@@ -167,7 +167,12 @@ do not use that classification to relax the user-facing source requirement.
 Startup, authorization, data-safety and requested-behavior failures block
 acceptance of any App presented to the user.
 
-Merge still requires current-head independent review, required green CI,
+Compatible ready changes receive one independent review of their final
+integrated diff against current main. Accepted unchanged hunks and stable-input
+checks carry into composition; a composition commit alone does not trigger a
+repeat review, test or build cycle. Recheck actual conflicts, new risks or
+findings with focused deltas. Merge still requires independent source acceptance
+on the current integrated diff, required green CI for the current head,
 current integration evidence and no applicable hold. Release additionally
 requires full evidence for its revision or identical tree, signing/native
 resources and package/install/update acceptance. Preserve the official App and

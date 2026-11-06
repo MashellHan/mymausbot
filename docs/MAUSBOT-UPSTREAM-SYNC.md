@@ -1,6 +1,6 @@
 # Upstream synchronization
 
-The user's assistant owns the existing daily 09:00 Asia/Shanghai schedule.
+The user's assistant owns the existing daily 00:00 Asia/Shanghai schedule.
 The upstream developer checks the personal repository when that schedule runs; no
 second scheduler is needed.
 
