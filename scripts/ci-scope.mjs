@@ -75,7 +75,7 @@ export const SRC_OUTSIDE_RENDERER = [
   "src/lib/random-uuid.ts",
 ];
 
-export const DOCS = /^(?:[^/]+\.md|docs\/.+\.md|\.github\/FUNDING\.yml)$/;
+export const DOCS = /^(?:[^/]+\.md|docs\/.+\.md|\.agents\/team\/(?:playbook|roles\/[^/]+)\.md|\.github\/FUNDING\.yml)$/;
 
 // The first matching rule names a path's area; a path no rule names can affect
 // anything. English is the source every test reads, so en.json is web.
