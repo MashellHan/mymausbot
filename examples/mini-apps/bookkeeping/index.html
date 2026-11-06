@@ -121,6 +121,7 @@
     .calendar-legend { display: flex; gap: 14px; margin-top: 9px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 11px; }
     .legend-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; }
     .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; margin-top: 12px; }
+    .calendar-unavailable { grid-column: 1 / -1; }
     .calendar-weekday { padding: 5px 0; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 11px; text-align: center; }
     .calendar-day { min-width: 0; min-height: 73px; border-radius: 8px; background: var(--color-background-secondary, light-dark(#f8f7f5, #26262a)); padding: 6px; text-align: left; font-variant-numeric: tabular-nums; }
     .calendar-day[aria-pressed="true"] { outline: 2px solid var(--color-ring-primary, #1084fe); }
@@ -229,6 +230,7 @@
         "Next month": "下个月",
         "Selected day": "选中日期",
         "Choose a date to see its records.": "选择日期查看记录。",
+        "Daily totals incomplete. Narrow the date range and refresh.": "每日汇总未读全。请缩小日期范围并刷新。",
         "Showing first 30 records.": "仅显示前 30 条记录。",
         "Prior corresponding period": "上期同期",
         "Previous period unavailable": "上期数据不可用",
@@ -892,16 +894,24 @@
             query("largest_expenses", filtered, pinned),
           ]);
           if (run !== state.run) return;
+          let dayOut = null, dayIn = null;
           if (state.view === "calendar" && state.calendarMonth) {
             const calendarBase = { ...filtered, from: `${state.calendarMonth}-01`, through: monthLast(`${state.calendarMonth}-01`) };
-            const [dayOut, dayIn] = await Promise.all([
+            [dayOut, dayIn] = await Promise.all([
               queryAll("trend_day", calendarBase, pinned, budget, run),
               queryAll("trend_day_inflow", calendarBase, pinned, budget, run),
             ]);
             if (run !== state.run) return;
-            state.calendarOut = dayOut.rows;
-            state.calendarIn = dayIn.rows;
-            renderCalendar();
+            if (dayOut.truncated || dayIn.truncated) {
+              state.calendarOut = [];
+              state.calendarIn = [];
+              $("calendar").replaceChildren(element("p", "empty calendar-unavailable", word("Daily totals incomplete. Narrow the date range and refresh.")));
+              empty($("day-details"), word("Daily totals incomplete. Narrow the date range and refresh."));
+            } else {
+              state.calendarOut = dayOut.rows;
+              state.calendarIn = dayIn.rows;
+              renderCalendar();
+            }
           }
           const options = [...new Set(categoryOptions.rows.filter((row) => row.category !== null && String(row.category).trim() !== "").map((row) => String(row.category)))].sort();
           if (state.category && !options.includes(state.category)) options.push(state.category);
@@ -920,10 +930,10 @@
           state.nextCursor = details.nextCursor;
           renderDetails();
           state.loaded = true;
-          notice([summary, outflow, inflow, categories, categoryOptions, priorSummary, priorOutflow, priorInflow, trendOut, trendIn]
+          notice([summary, outflow, inflow, categories, categoryOptions, priorSummary, priorOutflow, priorInflow, trendOut, trendIn, dayOut, dayIn]
             .some((answer) => answer?.truncated)
             ? word("This view is incomplete because the source has more groups than can be read at once. Narrow the date range.") : "");
-          if (state.view === "calendar" && state.selectedDay) void loadDay(state.selectedDay);
+          if (state.view === "calendar" && state.selectedDay && !dayOut?.truncated && !dayIn?.truncated) void loadDay(state.selectedDay);
         } catch (error) {
           if (run === state.run) {
             if (!state.loaded) for (const id of ["summary", "categories", "trend", "largest", "details"]) empty($(id), word("Records unavailable. Try Refresh."));
