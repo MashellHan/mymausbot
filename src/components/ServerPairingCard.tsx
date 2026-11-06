@@ -101,7 +101,10 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
 
   useEffect(() => {
     if (!offer) return;
-    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      if (offer.nativeUrl && offer.expiresAt > Date.now()) void loadDevices();
+    }, 15_000);
     return () => clearInterval(timer);
   }, [offer]);
 
@@ -125,6 +128,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
   const expired = offer ? offer.expiresAt <= now : false;
   const listed = shownDevices(devices, cloudHome);
   const nativeReady = !cloudHome && funnel?.state?.status === "ready";
+  const showFunnel = pairingCodes && !cloudHome && Boolean(funnel?.checking || nativeReady || funnel?.state?.status === "unavailable" && funnel.state.reason === "unverified");
   const link = offer?.nativeUrl ?? offer?.url;
 
   async function create(native = false) {
@@ -200,9 +204,9 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
   const nameRow = (className: string) => pairingCodes && !cloudHome && computerName !== null
     ? <ComputerNameRow saved={computerName} onSaved={setComputerName} className={className} /> : null;
   const scopeName = (device: PairedDevice) => t(device.scopes.includes("admin") ? "remote.serverPairing.scope.admin" : "remote.serverPairing.scope.client");
-  const funnelRow = pairingCodes && !cloudHome && funnel && (funnel.checking || nativeReady || funnel.state?.status === "unavailable" && funnel.state.reason === "unverified") ? (
+  const funnelRow = showFunnel && funnel ? (
     <SettingRow title={t("remote.serverPairing.funnel.title")} subtitle={funnel.checking ? t("remote.serverPairing.funnel.checking") : nativeReady ? t("remote.serverPairing.funnel.detail") : t("remote.serverPairing.funnel.unavailable")} className={simple ? "px-4 py-2.5" : "mb-4"}>
-      <button type="button" data-phone-pairing-action={nativeReady || undefined} data-funnel-pairing-action disabled={busy || funnel.checking}
+      <button type="button" data-phone-pairing-action data-funnel-pairing-action disabled={busy || funnel.checking}
         onClick={() => nativeReady ? void create(true) : void funnel.refresh()} className={button}>
         {busy ? t("remote.serverPairing.creating") : t(nativeReady ? "remote.serverPairing.funnel.create" : "remote.serverPairing.funnel.retry")}
       </button>
@@ -225,7 +229,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
                     <option value="client">{t("remote.serverPairing.scope.client")}</option>
                   </Select>
                 )}
-                <button type="button" data-phone-pairing-action={!nativeReady || undefined} onClick={() => void create()} disabled={busy} className="ui-button">
+                <button type="button" data-phone-pairing-action={!showFunnel || undefined} onClick={() => void create()} disabled={busy} className="ui-button">
                   {busy ? t("remote.serverPairing.creating") : t("settings.simple.computer.createCode")}
                 </button>
               </div>
@@ -272,7 +276,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
             {t("remote.serverPairing.scope.client")}
           </label>
         </>}
-        <button type="button" data-phone-pairing-action={!nativeReady || undefined} onClick={() => void create()} disabled={busy} className={nativeReady ? quiet : button}>
+        <button type="button" data-phone-pairing-action={!showFunnel || undefined} onClick={() => void create()} disabled={busy} className={showFunnel ? quiet : button}>
           {busy ? t("remote.serverPairing.creating") : t("remote.serverPairing.create")}
         </button>
       </div> : <p data-server-pairing-portal className="mt-3 text-[13px] text-ink-secondary">{t("remote.serverPairing.portal")}</p>}

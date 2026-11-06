@@ -75,6 +75,10 @@ describe("Settings → Remote access opened by Connect your phone", () => {
     const ready = render();
     expect(ready).toContain("SERVER_PAIRING_CARD_MARKER focus=3");
     expect(ready).toContain("COMPANION_SECTION focus=0");
+    fixture.funnel = { ...fixture.funnel, state: { status: "unavailable", reason: "unverified" } };
+    const failed = render();
+    expect(failed).toContain("SERVER_PAIRING_CARD_MARKER focus=3");
+    expect(failed).toContain("COMPANION_SECTION focus=0");
     fixture.funnel = { ...fixture.funnel, state: { status: "unavailable", reason: "not-configured" } };
     expect(render()).toContain("COMPANION_SECTION focus=3");
   });
