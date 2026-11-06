@@ -101,7 +101,9 @@ export function PhoneRow({ device, connected, state, c, onRemoved, defaultOpen =
           </div>
           <button
             disabled={c.busy}
-            onClick={() => void c.act((companion) => companion.revoke(device.id)).then(() => onRemoved(device.name))}
+            onClick={() => void c.act((companion) => companion.revoke(device.id)).then((next) => {
+              if (next && !next.devices.some((current) => current.id === device.id)) onRemoved(device.name);
+            })}
             aria-label={t("remote.devices.remove", { name: device.name })}
             className="self-start text-[12px] text-danger hover:underline disabled:opacity-40"
           >

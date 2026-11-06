@@ -392,22 +392,23 @@ export async function companionPairing(open, expectedToken) {
 }
 
 export async function companionRevoke(deviceId) {
-  if (!proc) return companionState();
+  if (!proc) throw new Error("Phone connection is unavailable");
   // the id came from the renderer, so it does not get to shape a path
-  if (!/^[\w-]{1,64}$/.test(String(deviceId ?? ""))) return companionState();
-  await control("DELETE", `/devices/${deviceId}`).catch(() => {});
+  if (!/^[\w-]{1,64}$/.test(String(deviceId ?? ""))) throw new Error("Invalid phone identity");
+  const state = await control("DELETE", `/devices/${deviceId}`);
+  if (!Array.isArray(state.devices) || state.devices.some((device) => device.id === deviceId)) {
+    throw new Error("Phone removal was not confirmed");
+  }
   e2eHooks.changed();
-  return companionState();
+  return { enabled: true, keepAwake: companionKeepAwakeAtRest(), ...state };
 }
 
 /** A fresh code while the pairing screen stays open; the previous one keeps its last seconds. */
 export async function companionPairingRenew() {
-  if (!proc) return companionState();
-  try {
-    return { enabled: true, keepAwake: companionKeepAwakeAtRest(), ...(await control("POST", "/pairing/renew")) };
-  } catch {
-    return companionPairing(true);
-  }
+  if (!proc) throw new Error("Phone connection is unavailable");
+  const state = await control("POST", "/pairing/renew");
+  if (!state.pairing?.token) throw new Error("Phone pairing renewal was not confirmed");
+  return { enabled: true, keepAwake: companionKeepAwakeAtRest(), ...state };
 }
 
 /** "any" or "local" (Wi-Fi and Tailscale only). */

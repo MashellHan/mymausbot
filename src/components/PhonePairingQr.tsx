@@ -29,13 +29,14 @@ export function PhonePairingQr({ c, signedIn }: { c: PhoneSetupController; signe
   const [storeOpen, setStoreOpen] = useState(false);
   const state = c.state;
   const renewing = Boolean(state?.pairing);
+  const renewPairing = c.renewPairing;
   useEffect(() => {
     if (!renewing) return;
     const timer = setInterval(() => {
-      void c.act((companion) => (companion.renewPairing ? companion.renewPairing() : companion.pairing(true)));
+      void renewPairing();
     }, PAIRING_RENEW_MS);
     return () => clearInterval(timer);
-  }, [renewing, c]);
+  }, [renewing, renewPairing]);
   if (!state || !c.pairingLink) return null;
   const lan = state.lan ?? state.addresses?.[0] ?? null;
   const relay = state.e2e?.descriptor?.r?.length ? state.e2e.relay : null;

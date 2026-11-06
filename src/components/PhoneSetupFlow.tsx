@@ -154,8 +154,9 @@ export interface PhoneSetupController {
   retryAccount: () => void;
   cancel: () => void;
   refreshCode: () => void;
+  renewPairing: () => Promise<void>;
   finish: () => void;
-  act: (call: (companion: CompanionBridge) => Promise<CompanionState>) => Promise<void>;
+  act: (call: (companion: CompanionBridge) => Promise<CompanionState>) => Promise<CompanionState | void>;
   accountAct: (call: (remote: AccountBridge) => Promise<CompanionAccountState>) => Promise<void>;
 }
 
@@ -184,6 +185,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     async () => {},
   );
   const pairingRoutePinRef = useRef<OwnedCompanionPairingRoutePin | null>(null);
+  const pairingRenewal = useRef<{ generation: number; token: string } | null>(null);
   const [pairingRoutePinState, setPairingRoutePinState] =
     useState<OwnedCompanionPairingRoutePin | null>(null);
   const setupGeneration = useRef(0);
@@ -213,6 +215,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
       if (
         next.companion
         && companionStateRefreshIsCurrent(companionMutationEpoch, refreshEpoch)
+        && !pairingRenewal.current
       ) {
         setState(next.companion);
       }
@@ -239,7 +242,10 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
 
   const act = useCallback(async (call: (companion: CompanionBridge) => Promise<CompanionState>) => {
     const companion = companionBridge();
-    if (!companion) return;
+    if (!companion) {
+      setError(t("phone.error.desktopOnly"));
+      return;
+    }
     setActionBusy(true);
     setError(null);
     try {
@@ -248,6 +254,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
         () => call(companion),
       );
       if (mounted.current) setState(next);
+      return next;
     } catch (cause) {
       if (mounted.current) setError(
         normalizePhoneSetupActionError(
@@ -459,6 +466,41 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     setPairingBusy(true);
     if (decision === "start") void runPairingAttemptRef.current(request);
   }, []);
+
+  const renewPairing = useCallback(async () => {
+    const pin = pairingRoutePinRef.current;
+    const companion = companionBridge();
+    const renew = companion?.renewPairing;
+    if (!pin || !renew || pairingRenewal.current || !mounted.current || setupGeneration.current !== pin.generation) return;
+    const renewal = { generation: pin.generation, token: pin.token };
+    pairingRenewal.current = renewal;
+    try {
+      const next = await mutateCompanionBridgeState(companionMutationEpoch, () => renew());
+      if (!mounted.current || setupGeneration.current !== renewal.generation || pairingRoutePinRef.current?.token !== renewal.token) {
+        await closePhonePairingIfOwned(next, () => companion.state(),
+          () => mutateCompanionBridgeState(companionMutationEpoch, () => companion.pairing(false, next.pairing?.token)),
+          () => !pairingRoutePinRef.current || pairingRoutePinRef.current.generation === renewal.generation);
+        return;
+      }
+      if (!next.pairing || !companionPairingRoutePinAvailable(next, pin)) {
+        setState(next);
+        return;
+      }
+      if (next.pairing.token === renewal.token) {
+        setError(t("phone.error.remoteUpdate"));
+        return;
+      }
+      publishPairingRoutePin({ ...pin, token: next.pairing.token });
+      setState(next);
+      setError(null);
+    } catch (cause) {
+      if (mounted.current && setupGeneration.current === renewal.generation) {
+        setError(normalizePhoneSetupActionError(cause, t("phone.error.remoteUpdate")));
+      }
+    } finally {
+      if (pairingRenewal.current === renewal) pairingRenewal.current = null;
+    }
+  }, [publishPairingRoutePin]);
 
   const start = useCallback(() => {
     const baseline = phoneSetupBaseline(state?.devices ?? null);
@@ -820,6 +862,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
       const generation = ++setupGeneration.current;
       void openPairing(pairingRouteMode, undefined, generation);
     },
+    renewPairing,
     finish: () => {
       const generation = setupGeneration.current;
       setupGeneration.current += 1;

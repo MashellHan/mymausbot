@@ -46,3 +46,27 @@ test("browser access reaches only the fixed sidecar path, refuses bad ids, and r
   fail = true;
   await assert.rejects(change("phone-1", true), /save failed/);
 });
+
+test("phone removal requires the sidecar's confirmed durable response", async () => {
+  const source = readFileSync(new URL("./companion.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("export async function companionRevoke");
+  const end = source.indexOf("/** A fresh code", start);
+  assert.ok(start >= 0 && end > start);
+  let changed = 0;
+  const context = vm.createContext({
+    proc: {},
+    control: async () => { throw new Error("save failed"); },
+    e2eHooks: { changed: () => { changed++; } },
+    companionKeepAwakeAtRest: () => false,
+  });
+  vm.runInContext(source.slice(start, end).replace("export ", ""), context);
+  await assert.rejects(context.companionRevoke("phone-1"), /save failed/);
+  assert.equal(changed, 0);
+  context.control = async () => ({ error: "no such device" });
+  await assert.rejects(context.companionRevoke("phone-1"), /not confirmed/);
+  context.control = async () => ({ devices: [] });
+  assert.equal((await context.companionRevoke("phone-1")).devices.length, 0);
+  assert.equal(changed, 1);
+  context.proc = null;
+  await assert.rejects(context.companionRevoke("phone-1"), /unavailable/);
+});
