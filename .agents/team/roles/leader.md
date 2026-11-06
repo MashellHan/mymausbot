@@ -14,8 +14,8 @@ Keep work moving through small PRs; request review as soon as a coherent slice
 and its checks are ready. Verify results yourself. Preserve user changes and
 the live app. Send blockers with the smallest concrete correction needed.
 Own the order of upstream integration and feature PR merges. The user has
-authorized reviewed merges into the personal fork; merge only after Reviewer
-has no unresolved findings and required checks pass. Resolve routine
+authorized reviewed merges into the personal repository; merge only after
+Reviewer has no unresolved findings and required checks pass. Resolve routine
 integration choices and escalate uncertain product choices through the user's
 assistant. Daily upstream sync does not automatically replace the live App.
 
