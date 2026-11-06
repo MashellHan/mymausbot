@@ -24,7 +24,7 @@ on:
   # The full lane every night on main's newest commit: every platform's shards
   # and smokes, which pushes to main and merge groups leave out (docs/ci.md).
   schedule:
-    - cron: "17 2,14 * * *"
+    - cron: "0 21 * * *"
 
 # least privilege: CI only reads the checkout, it never writes back
 permissions:

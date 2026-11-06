@@ -1,6 +1,8 @@
 import { artifactFiles, github, pages } from "./github.mjs";
 import { eligibleRun, issueAreas, issueLabels, triageOf } from "./contracts.mjs";
 
+export const FULL_QA_FRESHNESS_MS = 26 * 60 * 60_000;
+
 export async function qaHealth({ api = github, readArtifact = artifactFiles, now = Date.now(), repository = process.env.GITHUB_REPOSITORY } = {}) {
   let report;
   try {
@@ -20,7 +22,7 @@ export async function qaHealth({ api = github, readArtifact = artifactFiles, now
     }
     if (!report) throw new Error("Latest full run has no trusted delivered report");
     const age = now - Date.parse(report.finishedAt);
-    if (!Number.isFinite(age) || age < -60_000 || age > 14 * 60 * 60 * 1000) throw new Error("Full QA report is older than fourteen hours or has invalid time");
+    if (!Number.isFinite(age) || age < -60_000 || age > FULL_QA_FRESHNESS_MS) throw new Error("Full QA report is older than twenty-six hours or has invalid time");
     const issues = (await pages("/issues?state=open&labels=qa", null, api)).filter((issue) => !issue.pull_request);
     const blockedAreas = [...new Set(issues.filter((issue) => !triageOf(issue).complete || issueLabels(issue).some((label) => ["qa:p0", "qa:p1"].includes(label))).flatMap(issueAreas))];
     return { healthy: report.executionComplete, reason: report.executionComplete ? "" : "Full QA execution was incomplete", report, issues, blockedAreas };

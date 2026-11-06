@@ -9,6 +9,7 @@ import { gateRun, verifyGate } from "./gate.mjs";
 
 const repository = "example/mausbot";
 const now = Date.parse("2026-11-05T05:00:00Z");
+const HOUR_MS = 60 * 60_000;
 const run = { id: 100, run_attempt: 1, head_sha: "a".repeat(40), path: ".github/workflows/ci.yml", head_branch: "main", head_repository: { full_name: repository }, event: "schedule", status: "completed", created_at: new Date(now - 60_000).toISOString(), updated_at: new Date(now).toISOString(), html_url: "https://github.com/example/mausbot/actions/runs/100" };
 const report = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, finishedAt: run.updated_at, executionComplete: true, deliveryComplete: true };
 const expected = [{ id: "vitest", name: "vitest (ubuntu-latest, shard 1/8)", artifact: "qa-results-vitest-ubuntu-latest-1", nodeTests: false }];
@@ -79,7 +80,15 @@ describe("complete CI and trusted QA health", () => {
     };
     const readArtifact = async () => ({ "qa-report.json": JSON.stringify(report) });
     expect(await qaHealth({ api, readArtifact, now, repository })).toMatchObject({ healthy: true, blockedAreas: ["usage"] });
-    for (const patch of [{ executionComplete: false }, { deliveryComplete: false }, { sha: "wrong" }, { attempt: 2 }, { finishedAt: new Date(now - 15 * 60 * 60_000).toISOString() }]) {
+    for (const hours of [24, 26]) {
+      const aged = { ...report, finishedAt: new Date(now - hours * HOUR_MS).toISOString() };
+      expect((await qaHealth({ api, readArtifact: async () => ({ "qa-report.json": JSON.stringify(aged) }), now, repository })).healthy).toBe(true);
+    }
+    const expired = { ...report, finishedAt: new Date(now - 26 * HOUR_MS - 1).toISOString() };
+    const expiredHealth = await qaHealth({ api, readArtifact: async () => ({ "qa-report.json": JSON.stringify(expired) }), now, repository });
+    expect(expiredHealth).toMatchObject({ healthy: false, blockedAreas: ["global"] });
+    expect(expiredHealth.reason).toContain("twenty-six hours");
+    for (const patch of [{ executionComplete: false }, { deliveryComplete: false }, { sha: "wrong" }, { attempt: 2 }]) {
       expect((await qaHealth({ api, readArtifact: async () => ({ "qa-report.json": JSON.stringify({ ...report, ...patch }) }), now, repository })).healthy).toBe(false);
     }
     for (const patch of [{ deliveryComplete: false }, { sha: "wrong" }, { version: 2 }, { finishedAt: "invalid" }]) {
@@ -371,6 +380,35 @@ describe("Lead queue and bounded recovery", () => {
     await recoverQa(state, { api, health: incomplete, now, repository });
     await recoverQa(state, { api, health: incomplete, now, repository });
     expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+  });
+
+  it("waits through the daily grace window, recovers once, and leaves a running bootstrap alone", async () => {
+    const scheduled = { ...run, updated_at: new Date(now - 24 * HOUR_MS).toISOString() };
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("qa-report.yml")) return { workflow_runs: [{ status: "completed", conclusion: "success", display_title: `QA report ${scheduled.id}` }] };
+      return { workflow_runs: [scheduled] };
+    };
+    const state = {};
+    const health = async () => ({ healthy: true, report: { ...report, executionComplete: true } });
+    await recoverQa(state, { api, health, now, repository });
+    expect(calls).toEqual([]);
+    scheduled.updated_at = new Date(now - 26 * HOUR_MS).toISOString();
+    await recoverQa(state, { api, health, now, repository });
+    expect(calls).toEqual([]);
+    await recoverQa(state, { api, health, now: now + 1, repository });
+    await recoverQa(state, { api, health, now: now + 1, repository });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+
+    const bootstrap = { ...run, id: 200, event: "workflow_dispatch", status: "in_progress" };
+    const bootstrapApi = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      return { workflow_runs: path.includes("qa-report.yml") ? [] : [bootstrap] };
+    };
+    calls.length = 0;
+    await recoverQa({}, { api: bootstrapApi, health: async () => ({ healthy: false }), now, repository });
+    expect(calls).toEqual([]);
   });
 
   it("does not backfill pre-installation runs that lack structured evidence", async () => {

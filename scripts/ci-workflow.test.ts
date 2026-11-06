@@ -39,8 +39,8 @@ describe("CI concurrency", () => {
     );
   });
 
-  it("runs the full lane in both China daytime and evening slots", () => {
-    expect(workflow.on.schedule).toEqual([{ cron: "17 2,14 * * *" }]);
+  it("runs the full lane once daily at 05:00 China time", () => {
+    expect(workflow.on.schedule).toEqual([{ cron: "0 21 * * *" }]);
   });
 
   it("stops a closed PR's run by joining ci.yml's PR group", () => {

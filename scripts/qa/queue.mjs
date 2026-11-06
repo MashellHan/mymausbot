@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { github, pages } from "./github.mjs";
 import { eligibleRun, issueLabels, triageOf } from "./contracts.mjs";
-import { qaHealth } from "./health.mjs";
+import { FULL_QA_FRESHNESS_MS, qaHealth } from "./health.mjs";
 
 export function queueItems(issues, prs, now = Date.now()) {
   const items = [];
@@ -45,7 +45,7 @@ export async function recoverQa(state, { api = github, health = qaHealth, now = 
       state.reportRetry = { ...state.reportRetry, [key]: now };
     }
   }
-  const executionMissing = !latest || now - Date.parse(latest.updated_at) > 14 * 60 * 60_000 || qa.report && !qa.report.executionComplete;
+  const executionMissing = !latest || now - Date.parse(latest.updated_at) > FULL_QA_FRESHNESS_MS || qa.report && !qa.report.executionComplete;
   const anchor = fullRuns.find((run) => run.event === "schedule")?.id ?? "bootstrap";
   if (executionMissing && !fullRuns.some((run) => run.status !== "completed") && state.recoveryFor !== anchor) {
     await api("/actions/workflows/ci.yml/dispatches", { method: "POST", body: { ref: "main" } });
