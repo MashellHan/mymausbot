@@ -122,6 +122,7 @@ const __APP_VERSION__: string;
       app?: { version: string; ownPage: boolean };
       organization?: import("../../electron/managed-desktop.mjs").ManagedDesktopBridge;
       cloudAccount?: import("../../electron/cloud-account.mjs").CloudAccountBridge;
+      tailscaleFunnel?: import("../../electron/tailscale-funnel.mjs").TailscaleFunnelBridge;
       accounts?: import("../../electron/cloud-account.mjs").AccountsBridge;
       accountSheet?: import("../../electron/cloud-account.mjs").AccountSheetBridge;
       /** Either page in this app: the one-time move's line (on its way, what arrived, coming home). */
