@@ -4,11 +4,11 @@ The user's assistant owns the existing daily 09:00 Asia/Shanghai schedule.
 The upstream developer checks the personal repository when that schedule runs; no
 second scheduler is needed.
 
-After Root explicitly releases the repository cutover, new writes target
-`MashellHan/mymausbot`. Root alone verifies and switches shared `origin`, config,
-QA and Actions. The old `MashellHan/openmausbot` PR, review and CI links remain
-historical; use Root's mapping for new PR and issue numbers. Upstream remains
-read-only. While the migration freeze is active, do not fetch or publish.
+`origin` targets the standalone `MashellHan/mymausbot` repository. `upstream`
+tracks read-only `milind-soni/OpenMausBot`; `legacy-fork` names the old
+`MashellHan/openmausbot` repository and its historical PR, review and CI links.
+Use the authoritative migration mapping for new PR and issue numbers. Never
+publish to `upstream` or `legacy-fork`.
 
 1. Verify the personal GitHub identity and canonical `origin`, then inspect
    existing sync branches and PRs. Fetch `origin/main` and the upstream default
