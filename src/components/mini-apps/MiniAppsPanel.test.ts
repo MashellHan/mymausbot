@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LocalUsageResponse } from "../../../shared/local-dashboard";
 import type { MiniAppDocument, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
 
 const fixture = vi.hoisted(() => ({
@@ -15,6 +16,9 @@ const fixture = vi.hoisted(() => ({
   frameMounts: 0,
   dashboardReads: [] as string[],
   bots: [] as Array<{ id: string }>,
+  visible: true,
+  usageValue: 1,
+  usageDeferred: null as Promise<LocalUsageResponse> | null,
 }));
 
 vi.mock("@/state/store", () => ({
@@ -23,7 +27,7 @@ vi.mock("@/state/store", () => ({
   useStore: () => ({ state: { bots: fixture.bots }, dispatch: fixture.dispatch }),
 }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
-vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => true }));
+vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => fixture.visible }));
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => false }));
 vi.mock("./MiniAppFrame", () => ({ MiniAppFrame: ({ document, state }: { document: MiniAppDocument; state: MiniAppState }) => {
   fixture.frameMounts += 1;
@@ -35,12 +39,30 @@ vi.mock("./ReportInstall", () => ({ ReportInstall: ({ kind, onCancel }: { kind: 
 import { MiniAppsPanel } from "./MiniAppsPanel";
 
 const dashboard = { kind: "agent-team", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["teams", "activity"] } as const;
+const usageDashboard = { kind: "usage", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["usage"] } as const;
 const teams = { status: "ready", updatedAt: 1_000, teamCount: 1, teams: [
   { id: "w1", name: "Synthetic team", agentCount: 1, activeAgentCount: 1, agents: [
     { id: "w1:p1", name: "Pine", kind: "codex", role: "Developer", model: "model-a", reasoningEffort: "high",
       contextUsed: 100, contextWindow: 1_000, state: "working", taskHint: "Synthetic task" },
   ] },
 ] };
+const usageFor = (value: number): LocalUsageResponse => {
+  const blank = { prs: 0, knownPrs: 0, commits: 0 };
+  const comparison = { startDay: "2026-10-31", endDay: "2026-11-06", missingDays: [], unavailableTokenDays: [],
+    prs: null, commits: null, totalTokens: null,
+    categories: { work: { prs: null, commits: null }, personal: { prs: null, commits: null }, unclassified: { prs: null, commits: null } } };
+  const window = (days: 1 | 7 | 30) => ({ days, startDay: days === 1 ? "2026-11-07" : days === 7 ? "2026-11-01" : "2026-10-09",
+    endDay: "2026-11-07", asOf: Date.UTC(2026, 10, 7, 8), coverage: "ready" as const, tokenCoverage: "ready" as const,
+    missingDays: [], unavailableTokenDays: [], prs: value * days, knownPrs: value * days, commits: value * days,
+    newTokens: value * days, cacheRead: 0, totalTokens: value * days, comparison,
+    categories: { work: { prs: value * days, knownPrs: value * days, commits: value * days }, personal: blank, unclassified: blank },
+    repositories: { sharedCommits: 0, coverage: "ready" as const, unattributedPrs: 0, unattributedCommits: 0, rows: [] } });
+  return { status: "ready", asOf: Date.UTC(2026, 10, 7, 8), timeZone: "Asia/Shanghai",
+    sourceCoverage: { total: 1, ready: 1, partial: 0, stale: 0, missing: 0 },
+    prSourceCoverage: { total: 1, ready: 1, stale: 0, unavailable: 0, missing: 0 },
+    prCoverage: { work: "ready", personal: "ready", unclassified: "ready" },
+    windows: { "1": window(1), "7": window(7), "30": window(30) }, trend: [] };
+};
 
 const app = (id: string, title: string): MiniAppSummary => ({
   id, slug: id, title, description: `${title} description`, status: "active", revision: 3, templateVersion: 2,
@@ -74,6 +96,9 @@ beforeEach(() => {
   fixture.frameMounts = 0;
   fixture.dashboardReads = [];
   fixture.bots = [];
+  fixture.visible = true;
+  fixture.usageValue = 1;
+  fixture.usageDeferred = null;
   fixture.dispatch.mockReset();
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/.well-known/openmausbot/environment") return { environmentId: "fixture-environment" };
@@ -89,7 +114,9 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body)) as { resource: string };
       fixture.dashboardReads.push(body.resource);
       return { appId: path.split("/")[3], revision: fixture.stateRevision, resource: body.resource,
-        snapshot: body.resource === "teams" ? teams : { agentId: "w1:p1", status: "ready", updatedAt: 1_000,
+        snapshot: body.resource === "teams" ? teams : body.resource === "usage"
+          ? fixture.usageDeferred ? await fixture.usageDeferred : usageFor(fixture.usageValue)
+          : { agentId: "w1:p1", status: "ready", updatedAt: 1_000,
           truncated: false, events: [{ id: "e1", kind: "assistant", at: null, tool: null, text: "Synthetic recent reply" }] } };
     }
     if (path.endsWith("/publish") && init?.method === "POST") {
@@ -228,6 +255,33 @@ describe("Mini Apps panel", () => {
     expect(JSON.parse(options.body)).toMatchObject({ expectedRevision: 3, dashboardKind: "agent-team", bindings: [], publisherBotIds: ["editor"], html: "<p>Fixture</p>" });
     expect(selected()?.dataset.appId).toBe("app_team");
     expect(document.activeElement).toBe(selected());
+  });
+
+  it("refreshes a same-revision Usage snapshot immediately, cancelling the old read and staying quiet while hidden", async () => {
+    fixture.apps = [{ ...app("app_usage", "Usage"), slug: "usage", dashboardIdentity: "usage", dashboard: usageDashboard }];
+    await render();
+    const value = () => host.querySelector('[data-testid="local-usage-panel"] section dd > span')?.textContent;
+    await vi.waitFor(() => expect(value()).toBe("1"));
+    let finish!: (snapshot: LocalUsageResponse) => void;
+    fixture.usageDeferred = new Promise((resolve) => { finish = resolve; });
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(fixture.dashboardReads).toEqual(["usage", "usage"]));
+    const pending = fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/dashboard")).at(-1)![1].signal as AbortSignal;
+    fixture.usageDeferred = null;
+    fixture.usageValue = 2;
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(value()).toBe("2"));
+    expect(pending.aborted).toBe(true);
+    await act(async () => finish(usageFor(99)));
+    expect(value()).toBe("2");
+
+    const reads = fixture.dashboardReads.length;
+    fixture.visible = false;
+    await act(async () => root.render(createElement(MiniAppsPanel)));
+    await act(async () => refresh().click());
+    expect(fixture.dashboardReads).toHaveLength(reads);
   });
 
   it("keeps archived apps out of the active navigation", async () => {
