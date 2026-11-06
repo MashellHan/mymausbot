@@ -162,6 +162,17 @@ existing coordinated procedure for an actual App switch.
 Follow [the validation mechanism](../../docs/MAUSBOT-VALIDATION.md). Use
 check:plan, check:edit and check:ready for the small local loop; retain normal
 push hooks and avoid repeating identical checks immediately before them.
+An ordinary PR's first required-gate attempt has five minutes from run creation,
+including queue time; a rerun uses its current attempt start, with the original
+age kept as diagnostic. One cached Ubuntu static/setup path retains typecheck,
+lint and source guards, then runs the 26-file security/data/dispatch core and
+at most four portable affected files. Record deferred affected files, including
+expensive browser and Electron tests. The `ci:full`, `qa:repair` and `windows`
+labels request explicit wider checks.
+Long platform, Electron, browser, full E2E and packaging checks belong to the
+applicable post-integration, daily 05:00 and release lanes. A failed or
+over-budget gate is a CI incident, not a waived check; current-head review
+and QA holds still control merging.
 Dev leaves a durable PR-body handoff with `QA-Handoff: <current head SHA>`.
 The existing Lead owns review and CI follow-through while local delivery and
 independent development continue.
