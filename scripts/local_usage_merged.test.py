@@ -139,8 +139,7 @@ class RemoteMergedTests(unittest.TestCase):
         items = first["sources"][0]["items"]
         self.assertEqual(len(items), 3)
         self.assertEqual([len(item["commits"]) for item in items], [5, 1, 1])
-        self.assertIn("merged:>=", " ".join(str(call) for call in github.calls))
-        self.assertIn("merged:<", " ".join(str(call) for call in github.calls))
+        self.assertIn("merged:2026-09-07T16:00:00Z..2026-11-06T07:59:59Z", " ".join(str(call) for call in github.calls))
         self.assertNotIn("created:", " ".join(str(call) for call in github.calls))
         self.assertTrue(all("pr-" not in json.dumps(item) and sha(1) not in json.dumps(item) for item in items))
         github.calls.clear()
@@ -165,6 +164,20 @@ class RemoteMergedTests(unittest.TestCase):
         cached = merged.refresh(self.config, self.monitor, github, file=self.file, at=AT)
         self.assertEqual(cached["sources"][0]["status"], "ready")
         self.assertEqual(cached["sources"][0]["items"], source["items"])
+
+    def test_github_search_preserves_both_bounds_and_excludes_the_capture_instant(self):
+        for at, last_second in ((AT, "2026-11-06T07:59:59Z"),
+                                (AT + dt.timedelta(microseconds=1), "2026-11-06T08:00:00Z")):
+            with self.subTest(at=at):
+                def empty(args, timeout):
+                    fields = dict(arg.split("=", 1) for index, arg in enumerate(args) if index > 0 and args[index - 1] == "-f")
+                    self.assertEqual(fields["search"], "is:pr is:merged author:" + OWNER +
+                                     " merged:2026-09-07T16:00:00Z.." + last_second)
+                    return json.dumps({"data": {"viewer": {"login": OWNER}, "search": {"issueCount": 0,
+                        "nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}})
+                result = merged.refresh(self.config, self.monitor, empty, file=self.file, at=at)
+                self.assertEqual(result["sources"][0]["status"], "ready")
+                self.assertEqual(result["sources"][0]["items"], [])
 
     def test_large_pr_comparison_rejects_mismatched_or_incomplete_pages(self):
         for problem in ("missing", "different", "parents", "count", "base"):

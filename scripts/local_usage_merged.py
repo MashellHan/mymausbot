@@ -191,7 +191,8 @@ def github_source(config, profile, previous, start, at, run, monitor):
         raise ValueError("Unsupported GitHub host")
     prior = {item["key"]: item for item in previous.get("items", []) if isinstance(item, dict) and isinstance(item.get("key"), str)}
     items, seen, cursor, expected = [], set(), None, None
-    search = "is:pr is:merged author:" + profile["login"] + " merged:>=" + stamp(start) + " merged:<" + stamp(at)
+    last_second = (at - dt.timedelta(microseconds=1)).replace(microsecond=0)
+    search = "is:pr is:merged author:" + profile["login"] + " merged:" + stamp(start) + ".." + stamp(last_second)
     try:
         for _ in range(MAX_PAGES):
             data = github_query(config, profile, SEARCH, {"search": search, "after": cursor}, run)
