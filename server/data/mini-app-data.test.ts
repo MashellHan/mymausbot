@@ -90,6 +90,52 @@ const firstRows = `CREATE TABLE synthetic_ledger AS SELECT * FROM (VALUES
 ) AS rows(day_text, amount_text, category_text)`;
 
 describe("promoted Mini App Data", () => {
+  it("parses strict timestamp text as dates for coverage, filters and buckets", async () => {
+    const { engine } = fixture();
+    const writer = await engine.forBot("writer");
+    await writer.run(`CREATE TABLE synthetic_ledger AS SELECT * FROM (VALUES
+      ('2024-11-07 19:25:25', '-10.00', 'Food'), ('2026-11-06', '-2.00', 'Food'),
+      ('2024-02-30 12:00:00', '-1.00', 'Invalid'), ('2025-01-01 99:99:99', '-1.00', 'Invalid'),
+      ('05/11/2025', '-1.00', 'Ambiguous'), (NULL, '-1.00', 'Missing')
+    ) AS rows(day_text, amount_text, category_text)`, { connection: "bot", businessMutation: true });
+    await writer.run(`CREATE TABLE native_ledger AS SELECT * FROM (VALUES
+      (TIMESTAMP '2024-11-07 19:25:25', DATE '2024-11-07', '-10.00', 'Food'),
+      (TIMESTAMP '2026-11-06 00:00:00', DATE '2026-11-06', '-2.00', 'Food'),
+      (NULL::TIMESTAMP, NULL::DATE, '-1.00', 'Missing')
+    ) AS rows(native_timestamp, native_date, amount_text, category_text)`, { connection: "bot", businessMutation: true });
+    const promoted = await engine.promoteForBot("writer", "owner");
+    const dataBinding = binding(promoted.datasetId);
+    dataBinding.queries.coverage = {
+      kind: "aggregate", groupBy: [], measures: [
+        { name: "dated", op: "count", field: "day" }, { name: "first", op: "min", field: "day" },
+        { name: "last", op: "max", field: "day" },
+      ], parameters: {}, filters: [], orderBy: [], pageSize: 10,
+    };
+    dataBinding.queries.selected = {
+      kind: "rows", columns: ["day", "category"], parameters: { from: { type: "date" } },
+      filters: [{ field: "day", op: "gte", parameter: "from" }], orderBy: [{ field: "day", direction: "asc" }], pageSize: 10,
+    };
+    dataBinding.queries.monthly = {
+      kind: "aggregate", groupBy: [], timeBucket: { field: "day", unit: "month", name: "month" },
+      measures: [{ name: "count", op: "count" }], parameters: {}, filters: [],
+      orderBy: [{ field: "month", direction: "asc" }], pageSize: 10,
+    };
+    await engine.validateBinding("owner", dataBinding);
+    const read = (queryId: string, parameters: Record<string, string> = {}) => engine.readNamed({
+      ownerId: "owner", binding: dataBinding, queryId, parameters, scope: "app-mount",
+    });
+    expect((await read("coverage")).rows).toEqual([["2", "2024-11-07", "2026-11-06"]]);
+    expect((await read("selected", { from: "2025-01-01" })).rows).toEqual([["2026-11-06", "Food"]]);
+    expect((await read("monthly")).rows).toEqual([["2024-11-01", "1"], ["2026-11-01", "1"], [null, "4"]]);
+    for (const [column, sourceType] of [["native_timestamp", "TIMESTAMP"], ["native_date", "DATE"]] as const) {
+      const nativeBinding: MiniAppDataBinding = { ...dataBinding, source: { schema: "main", table: "native_ledger" },
+        fields: { ...dataBinding.fields, day: { column, sourceType, as: "date" } } };
+      await engine.validateBinding("owner", nativeBinding);
+      expect((await engine.readNamed({ ownerId: "owner", binding: nativeBinding, queryId: "coverage", parameters: {}, scope: "app-mount" })).rows)
+        .toEqual([["2", "2024-11-07", "2026-11-06"]]);
+    }
+  });
+
   it("keeps exact decimal reads and the same authoring store after bot deletion", async () => {
     const { engine, root } = fixture();
     const writer = await engine.forBot("writer");

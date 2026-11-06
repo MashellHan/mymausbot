@@ -53,7 +53,9 @@ function sourceField(field: MiniAppField): string {
   if (field.as === "text") return `left(CAST(${column} AS VARCHAR), 2000)`;
   if (field.as === "decimal") return decimalField(column, field);
   if (/^(?:VARCHAR|TEXT|STRING|CHAR)(?:\([0-9]+\))?$/i.test(field.sourceType)) {
-    return `CASE WHEN regexp_full_match(${column}, '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') THEN TRY_CAST(${column} AS DATE) ELSE NULL END`;
+    return `CASE WHEN regexp_full_match(${column}, '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') THEN TRY_CAST(${column} AS DATE)
+      WHEN regexp_full_match(${column}, '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$')
+      THEN CAST(TRY_CAST(${column} AS TIMESTAMP) AS DATE) ELSE NULL END`;
   }
   return `TRY_CAST(${column} AS DATE)`;
 }
