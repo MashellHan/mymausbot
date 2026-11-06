@@ -28,8 +28,9 @@ too) into areas, and runs only the jobs some area can affect:
 | control plane | `cloudflare/control-plane/` | the control-plane job |
 | everything | anything else: `.github/` workflows, `package.json`, the lockfile and workspace, tsconfig, vite and vitest config, `third_party/`, `scripts/` code, unknown paths | every job |
 
-The build is static's typecheck, Electron syntax check and UI build. Several
-areas run the union of their jobs. Why the mapping is what it is:
+The build is the `build` job: typecheck, Electron syntax check and UI build,
+about three minutes, beside the shards rather than ahead of them. Several areas
+run the union of their jobs. Why the mapping is what it is:
 
 - The server imports a few renderer files (`SRC_OUTSIDE_RENDERER`), and the
   renderer imports Electron modules, so a server or desktop change can affect
@@ -58,7 +59,7 @@ sets (`laneOf` in `scripts/ci-scope.mjs`):
 | Event | Lane | What runs |
 | --- | --- | --- |
 | `pull_request` | its areas | the table above, with Linux shards, and Windows jobs only for a change that can break Windows (Windows below) |
-| `push` to main, `merge_group` | main | static (typecheck, lint, the build), the eight Linux and eight Windows shards with the Electron node tests, the macOS smokes job, behavior evals, the Linux and Windows packaged server smokes, the open-source edition, the control plane, the renderer smoke and Linux and Windows browser identity |
+| `push` to main, `merge_group` | main | static (selection, docs tests, locale, lint and source guards), the separate typecheck and build job, the eight Linux and eight Windows shards with the Electron node tests, the macOS smokes job, behavior evals, the Linux and Windows packaged server smokes, the open-source edition, the control plane, the renderer smoke and Linux and Windows browser identity |
 | `schedule` (02:17 and 14:17 UTC), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
 
 The main lane runs Linux, Windows and one macOS job. The macOS shards, the
@@ -88,7 +89,8 @@ lane, which only an emergency `ship_without_ci` release skips.
 The single `CI` check starts with the workflow and reads `static`'s selection
 artifact for the same run, revision and producing preflight attempt. Failed-job
 reruns carry unchanged successful evidence, with each job's newest attempt
-taking precedence. It waits for every selected
+taking precedence. A selected `build` runs typecheck, Electron syntax and the
+UI build beside the shards. The gate waits for every selected
 required job and rechecks current PR controls and QA holds before passing.
 Missing jobs, failures, cancellations, unexpected skips and missing or malformed
 selection fail the gate. Full-required runs include the platform and specialist
@@ -390,7 +392,7 @@ instead (Settings → Secrets and variables → Actions → Variables; anything 
   list and to the condition in `ci.yml`'s `static` job. To run Windows on a PR
   as well, label it `windows` (Windows above).
 - **What changes.** `static` runs on `boat-xlarge` (16 vCPU, 32 GB) and is
-  named "typecheck + lint + Linux tests (Boat)". After its usual checks it
+  named "preflight + Linux tests (Boat)". After its usual checks it
   runs the Linux vitest shards, behavior evals and the Linux packaged server
   smoke side by side as lanes of that VM (`scripts/ci-linux-lanes.mjs`, the
   same commands as their GitHub jobs), and prints each lane's log in a group

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { expectedJobs, inspectJobs, eligibleRun, holdsFor, triageOf } from "./contracts.mjs";
+import { executionComplete, expectedJobs, inspectJobs, eligibleRun, holdsFor, triageOf } from "./contracts.mjs";
 import { qaHealth } from "./health.mjs";
 import { github, runJobs } from "./github.mjs";
 import { deliverReport, makeReport, reportRun, sanitize, setupIncident, testFindings } from "./report.mjs";
@@ -48,6 +48,17 @@ function issueApi() {
 }
 
 describe("complete CI and trusted QA health", () => {
+  it("keeps the separate build required and its checks out of static", () => {
+    const contracts = expectedJobs({ jobs: ["build"], vitest_os: [], packaged_server_os: [], vitest_matrix: { include: [] } }, false);
+    expect(contracts.map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: "static", name: "typecheck + lint" }, { id: "build", name: "typecheck + build" },
+    ]);
+    const preflight = passedPreflight();
+    const build = { name: "typecheck + build", status: "completed", conclusion: "success", steps: ["pnpm typecheck", "pnpm check:electron", "production UI build"].map((name) => ({ name, conclusion: "success" })) };
+    expect(executionComplete(contracts, [preflight, build], new Set())).toBe(true);
+    expect(executionComplete(contracts, [preflight, { ...build, steps: build.steps.slice(1) }], new Set())).toBe(false);
+  });
+
   it("includes every specialist job and every matrix row, excluding deployment", () => {
     const jobs = expectedJobs();
     const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
