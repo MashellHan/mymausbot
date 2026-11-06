@@ -29,9 +29,10 @@ it("starts the person's own line ahead of a hand-off that was already waiting fo
   const [chief, first, second, person] = [await f.bot("Clive"), await f.bot("First"), await f.bot("Second"), await f.bot("Person's bot")];
   await f.api(`/api/bots/${chief.id}`, { chiefOfStaff: true, managedSections: ["Team"], acknowledgePeerScope: true }, "PATCH");
   const gate = join(f.dataDir, "first-may-finish");
+  const firstReady = join(f.dataDir, "first-at-gate");
   writeFileSync(f.planPath, JSON.stringify({
     [chief.id]: { steps: [{ arguments: { bot_ids: [first.id], message: "First job" } }, { arguments: { bot_ids: [second.id], message: "Second job" } }], reply: "Sent", resumeReply: "Done" },
-    [first.id]: { gateFile: gate, reply: "First done" },
+    [first.id]: { readyFile: firstReady, gateFile: gate, reply: "First done" },
     [second.id]: { reply: "Second done" },
     [person.id]: { reply: "Yours" },
   }));
@@ -47,6 +48,8 @@ it("starts the person's own line ahead of a hand-off that was already waiting fo
     expect((db.prepare("SELECT kind, detail FROM assignment_events WHERE assignment_id = ? AND kind = 'held'").all(held.id) as Array<{ detail: string }>).map((row) => row.detail)[0]).toMatch(/^memory: \d+ running, \d+ ahead$/);
   } finally { db.close(); }
 
+  await expect.poll(() => existsSync(firstReady), { timeout: 30_000 }).toBe(true);
+  expect(existsSync(gate)).toBe(false);
   await f.cli("send", "--bot", person.id, "--task", person.activeTaskId, "--text", "My own question.");
   await expect.poll(async () => (await f.messages(person.activeTaskId)).some((message: any) => message.tool?.name?.includes("Waiting for memory")), { timeout: 30_000 }).toBe(true);
   writeFileSync(gate, "finish");

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -122,6 +122,69 @@ export function selectCiScope(files) {
   return { areas, checks: [...new Set(areas.flatMap((area) => AREA_CHECKS[area]))].sort() };
 }
 
+export const POLICY_PATH = "scripts/testing/check-policy.json";
+export const POLICY_CHANGE = /^(?:\.github\/|scripts\/(?:ci-|check\.|qa\/|testing\/(?:check-policy|ci-retry|host-e2e|duration-sequencer|vitest-shard))|(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|vite\.config\.ts|tsconfig[^/]*|\.npmrc|\.node-version)$)/;
+export const SENSITIVE_PATH = /^(?:shared\/|server\/(?:drivers?\/|host\/|routes\/|local-|request-auth|guarded|store|message-db|turn-|safety|pairing|secret)|electron\/|companion\/|enterprise\/)/;
+const SENSITIVE_LINE = /\b(?:auth|authorization|permission|credential|secret|redact|token|password|localStorage|sessionStorage|fetch|WebSocket|postMessage|ipcRenderer|persist|migration|dispatch|cancel|spawn|exec)\b/i;
+export const SAFE_TEST_PATH = /^(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.test\.[cm]?[jt]sx?$/;
+const unique = (values) => [...new Set(values)].sort();
+
+export function readCheckPolicy(text = readFileSync(POLICY_PATH, "utf8"), present = existsSync) {
+  const policy = JSON.parse(text);
+  const tests = [...(policy.core ?? []), ...(policy.guards ?? []), ...(policy.areas ?? []).flatMap((area) => area.tests ?? [])];
+  if (policy.version !== 1 || !policy.core?.length || !policy.guards?.length || !Array.isArray(policy.areas)
+    || tests.some((file) => !SAFE_TEST_PATH.test(file) || !present(file))
+    || policy.areas.some((area) => !/^[a-z][a-z-]+$/.test(area.id) || !area.sources?.length || !area.tests?.length
+      || typeof area.admitted !== "boolean" || area.sources.some((file) => areaOf(file) === "everything"))
+    || new Set(policy.areas.map((area) => area.id)).size !== policy.areas.length) {
+    throw new Error("Invalid check policy or missing required test");
+  }
+  return policy;
+}
+
+export function selectCheckPlan({ files, policy, labels = [], lines = [], mode = "legacy", qa = { healthy: false, reason: "QA state unavailable" }, present = existsSync }) {
+  const baseline = selectCiScope(files);
+  const changed = Array.isArray(files) ? files : [];
+  const areas = policy.areas.filter((area) => area.sources.some((file) => changed.includes(file)));
+  const mapped = new Set(areas.flatMap((area) => [...area.sources, ...area.tests]));
+  const direct = changed.flatMap((file) => {
+    if (SAFE_TEST_PATH.test(file)) return present(file) ? [file] : [];
+    const stem = file.replace(/\.[cm]?[jt]sx?$/, "");
+    return [`${stem}.test.ts`, `${stem}.test.tsx`, `${stem}.test.mjs`, `${stem}.e2e.test.ts`].filter(present);
+  });
+  const affected = unique([...areas.flatMap((area) => area.tests), ...direct]);
+  const reasons = [];
+  if (labels.includes("ci:full") || labels.includes("qa:repair")) reasons.push("explicit full validation request");
+  if (!changed.length || baseline.areas.includes("everything")) reasons.push("unknown or empty change scope");
+  if (changed.some((file) => POLICY_CHANGE.test(file))) reasons.push("CI, policy, dependency or toolchain change");
+  if (changed.some((file) => SENSITIVE_PATH.test(file)) || lines.some((line) => /^[+-](?![+-]{2})/.test(line) && SENSITIVE_LINE.test(line))) {
+    reasons.push("sensitive contract: retain full validation");
+  }
+  if (labels.includes("upstream-sync") || (baseline.areas.length >= 3 && !baseline.areas.every((area) => area === "docs" || area === "locales"))) {
+    reasons.push("broad integration change");
+  }
+  const full = reasons.length > 0;
+  const candidate = !full && areas.length > 0 && changed.every((file) => mapped.has(file) && present(file) || DOCS.test(file));
+  const qaBlocked = (qa.blockedAreas ?? []).some((area) => area === "global" || areas.some((hit) => hit.id === area));
+  const admitted = candidate && areas.every((area) => area.admitted);
+  const reduced = mode === "tiered" && admitted && qa.healthy && !qaBlocked;
+  if (candidate && !admitted) reasons.push("area awaiting pilot evidence");
+  if (candidate && (!qa.healthy || qaBlocked)) reasons.push(qa.reason || "untriaged or held QA findings affect this area");
+  if (candidate && mode !== "tiered") reasons.push(`${mode}: retain existing coverage`);
+  const docs = changed.length > 0 && changed.every((file) => areaOf(file) === "docs");
+  const filesToRun = unique([...policy.core, ...affected]);
+  if (filesToRun.some((file) => !SAFE_TEST_PATH.test(file) || !present(file))) throw new Error("Unsafe or missing selected test");
+  return {
+    version: policy.version, mode, files: changed, areas: baseline.areas, fastAreas: areas.map((area) => area.id),
+    holdAreas: candidate ? areas.map((area) => area.id) : ["global"],
+    full, candidate, admitted, reduced, reasons,
+    scope: full ? FULL_SCOPE : reduced ? { areas: areas.map((area) => area.id), checks: ["build", "core-tests"], files: filesToRun } : baseline,
+    edit: docs ? [...VITEST_SUBSETS["docs-tests"].files, ...policy.guards] : affected,
+    ready: docs ? unique([...VITEST_SUBSETS["docs-tests"].files, ...policy.guards]) : unique([...filesToRun, ...policy.guards]),
+    core: filesToRun,
+  };
+}
+
 /** The pull request label that runs the Windows jobs whatever the change. */
 export const WINDOWS_LABEL = "windows";
 
@@ -230,9 +293,13 @@ export function vitestMatrix(oses) {
 
 /** What ci.yml runs for a scope on an event whose suite covers `oses`: the
  * selected job ids, whether `static` builds, and the vitest matrix. */
-export function ciOutputs({ checks }, oses) {
+export function ciOutputs({ checks, files }, oses) {
   const platforms = oses.filter((os) => checks.includes(os === "ubuntu-latest" ? "linux-tests" : "host-tests"));
   const { include } = vitestMatrix(platforms);
+  if (checks.includes("core-tests") && !platforms.includes("ubuntu-latest")) {
+    if (!Array.isArray(files) || !files.length || files.some((file) => !SAFE_TEST_PATH.test(file))) throw new Error("Invalid core test selection");
+    include.push({ os: "ubuntu-latest", part: "core + affected", shard: 1, shards: 1, files: files.join(" "), e2e: "all", node_tests: false, workers: 4 });
+  }
   for (const [check, { part, files, shards, nodeTests }] of Object.entries(VITEST_SUBSETS)) {
     if (platforms.includes("ubuntu-latest") || !checks.includes(check)) continue;
     for (let shard = 1; shard <= shards; shard++) {
@@ -282,7 +349,7 @@ const SHA = /^[a-f\d]{40}(?:[a-f\d]{24})?$/i;
 
 const git = (args) => execFileSync("git", args, { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
 
-function changedFiles(range) {
+export function changedFiles(range) {
   // Disabling rename detection retains both old and new paths, including deletions.
   const diff = git(["diff", "--name-only", "--no-renames", "-z", range, "--"]);
   if (!diff || !diff.endsWith("\0")) throw new Error("Empty or invalid changed-path output");
@@ -290,7 +357,7 @@ function changedFiles(range) {
 }
 
 /** The added and removed lines of a range's code, docs and translations left out. */
-function changedCodeLines(range) {
+export function changedCodeLines(range) {
   return execFileSync("git", [
     "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", range, "--", ".", ":(exclude)*.md", ":(exclude)docs/**", ":(exclude)src/locales/**",
   ], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }).split("\n");
@@ -309,16 +376,18 @@ async function github(path) {
 
 const ciRuns = async (sha) => (await github(`/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=100`)).workflow_runs;
 
-/** A pull request's labels as they are now, so a label added after the push counts when the run is re-run; the
- * event's own list when GitHub cannot be read. */
-async function pullRequestLabels(pr) {
+export async function pullRequestControls(pr, api = github) {
   const fromEvent = (Array.isArray(pr?.labels) ? pr.labels : []).map((label) => label?.name).filter((name) => typeof name === "string");
-  if (!Number.isSafeInteger(pr?.number) || !process.env.GH_TOKEN || !process.env.GITHUB_REPOSITORY) return fromEvent;
   try {
-    return (await github(`/issues/${pr.number}/labels?per_page=100`)).map((label) => label.name);
+    if (!Number.isSafeInteger(pr?.number)) throw new Error("Missing pull request number");
+    const current = await api(`/issues/${pr.number}`);
+    if (!Array.isArray(current.labels)) throw new Error("Missing current pull request labels");
+    const labels = current.labels.map((label) => label.name);
+    const repairIds = labels.includes("qa:repair") ? [...String(current.body ?? "").matchAll(/^QA-Repair:\s*#(\d+)\s*$/gm)].map((hit) => Number(hit[1])) : [];
+    return { labels, repairIds };
   } catch (error) {
-    console.warn(`CI scope: reading the pull request's labels from its event (${error.message})`);
-    return fromEvent;
+    console.warn(`CI scope: requiring full validation because current PR controls are unavailable (${error.message})`);
+    return { labels: [...new Set([...fromEvent, "ci:full"])], repairIds: [] };
   }
 }
 
@@ -341,25 +410,31 @@ async function passedMergeQueue(sha) {
   return false;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+export async function runCiScope({ readPullRequest = pullRequestControls } = {}) {
   const lane = laneOf(process.env.GITHUB_EVENT_NAME);
   let scope = lane === "main" ? MAIN_SCOPE : FULL_SCOPE;
   let vitestOs = lane === "main" ? WINDOWS_OS : ALL_OS;
+  const mode = ["legacy", "shadow", "tiered"].includes(process.env.MAUSBOT_CI_MODE) ? process.env.MAUSBOT_CI_MODE : "legacy";
+  let plan, labels = [], repairIds = [], base, files, range, prNumber = null, prHead = null, onlyVersion = false;
   if (lane === "pr") {
     try {
       const { pull_request: pr } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-      const base = pr?.base?.sha;
+      base = pr?.base?.sha;
       const head = pr?.head?.sha;
+      prNumber = pr?.number ?? null;
+      prHead = head ?? null;
       if (![base, head].every((sha) => typeof sha === "string" && SHA.test(sha))) {
         throw new Error("Missing or invalid pull request commit SHAs");
       }
-      const files = changedFiles(`${base}...${head}`);
+      range = `${base}...${head}`;
+      files = changedFiles(range);
+      ({ labels, repairIds } = await readPullRequest(pr));
       scope = selectCiScope(files);
       vitestOs = LINUX_OS;
       if (scope.checks.includes("host-tests")) {
         const why = windowsReason({
           files,
-          labels: await pullRequestLabels(pr),
+          labels,
           hostE2e: Object.keys((await import("./testing/host-e2e.ts")).HOST_E2E),
           lines: () => changedCodeLines(`${base}...${head}`),
         });
@@ -379,7 +454,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         throw new Error("Missing or invalid push commit SHAs");
       }
       const revs = { before, after };
-      const selected = selectPushScope(changedFiles(`${before}..${after}`), (rev, path) => git(["show", `${revs[rev]}:${path}`]));
+      base = before;
+      range = `${before}..${after}`;
+      files = changedFiles(range);
+      const selected = selectPushScope(files, (rev, path) => git(["show", `${revs[rev]}:${path}`]));
+      onlyVersion = !selected.runtime && files.length === 1 && files[0] === "package.json";
       if (await passedMergeQueue(after)) {
         scope = QUEUED_SCOPE;
       } else if (!selected.runtime && !(await previousCommitGreen(before))) {
@@ -388,11 +467,52 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         scope = { areas: ["docs or version only"], checks: ["build"] };
       }
     } catch (error) {
-      console.warn(`CI scope: using main's checks because the push diff or its CI is unavailable: ${error.message}`);
+      if (!files) { scope = FULL_SCOPE; vitestOs = ALL_OS; }
+      console.warn(`CI scope: using ${files ? "main's checks" : "all checks"} because the push diff or its CI is unavailable: ${error.message}`);
+    }
+  }
+  if (process.env.GITHUB_EVENT_NAME === "merge_group") {
+    const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+    base = event.merge_group?.base_sha;
+    const head = event.merge_group?.head_sha;
+    if (![base, head].every((sha) => SHA.test(sha ?? ""))) throw new Error("Invalid merge group revisions");
+    range = `${base}...${head}`;
+    files = changedFiles(range);
+  }
+  if (files && !onlyVersion) {
+    let policy;
+    try { policy = readCheckPolicy(git(["show", `${base}:${POLICY_PATH}`])); }
+    catch {
+      policy = readCheckPolicy();
+      labels.push("ci:full");
+    }
+    const input = { files, policy, labels, lines: changedCodeLines(range), mode };
+    plan = selectCheckPlan(input);
+    if (mode === "tiered" && plan.candidate) {
+      const { qaHealth } = await import("./qa/health.mjs");
+      plan = selectCheckPlan({ ...input, qa: await qaHealth() });
+    }
+    if (plan.full) { scope = FULL_SCOPE; vitestOs = ALL_OS; }
+    else if (lane === "pr") scope = plan.scope;
+    else if (plan.reduced) {
+      scope = { ...plan.scope, checks: [...plan.scope.checks, "packaged-server"] };
+      vitestOs = LINUX_OS;
     }
   }
   const linuxInStatic = process.env.OMB_CI_LINUX_IN_STATIC === "true";
   const outputs = linuxInStatic ? moveLinuxIntoStatic(ciOutputs(scope, vitestOs)) : ciOutputs(scope, vitestOs);
+  const { expectedJobs, MERGE_JOBS } = await import("./qa/contracts.mjs");
+  outputs.full_required = lane === "full" || scope === FULL_SCOPE || Boolean(plan?.full);
+  outputs.required_jobs = outputs.jobs.filter((job) => MERGE_JOBS.includes(job));
+  outputs.expected_jobs = expectedJobs(outputs, outputs.full_required);
+  outputs.reduced = Boolean(plan?.reduced);
+  outputs.qa_areas = plan?.holdAreas ?? ["global"];
+  outputs.repair_ids = repairIds;
+  outputs.pr_number = prNumber;
+  outputs.pr_head = prHead;
+  outputs.shadow = mode === "shadow" && plan?.candidate ? plan.core : [];
+  const receipt = { version: 1, sha: process.env.GITHUB_SHA, runId: Number(process.env.GITHUB_RUN_ID), attempt: Number(process.env.GITHUB_RUN_ATTEMPT || 1), createdAt: new Date().toISOString(), plan, outputs };
+  writeFileSync("qa-plan.json", JSON.stringify(receipt, null, 2) + "\n");
   console.log(`CI scope: ${scope.areas.join(", ")} -> ${outputs.jobs.join(", ") || "static checks only"}`);
   if (linuxInStatic) {
     const { vitest, evals, packaged_server: packaged } = outputs.linux_lanes;
@@ -402,4 +522,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.env.GITHUB_OUTPUT,
     Object.entries(outputs).map(([key, value]) => `${key}=${typeof value === "boolean" ? value : JSON.stringify(value)}\n`).join(""),
   );
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  runCiScope().catch((error) => { console.error(error); process.exitCode = 1; });
 }

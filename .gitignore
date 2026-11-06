@@ -40,3 +40,7 @@ deploy/podman/.env
 deploy/podman/.env.*
 !deploy/podman/.env.example
 /.env
+
+/qa-plan.json
+/qa-report.json
+/qa-results/
