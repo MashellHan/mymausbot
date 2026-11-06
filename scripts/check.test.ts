@@ -33,6 +33,28 @@ describe("shared local and CI check policy", () => {
     expect(plan(files, { qa: { healthy: true, blockedAreas: ["agents"] } }).reduced).toBe(true);
   });
 
+  it("selects the fixed core and at most four affected tests for an ordinary PR in every rollout mode", () => {
+    for (const mode of ["legacy", "shadow", "tiered"]) {
+      const selected = plan(["src/components/AgentTown.tsx"], { policy, mode, fastPr: true });
+      expect(selected).toMatchObject({ fast: true, full: false, reduced: false, candidate: false, admitted: false });
+      expect(selected.scope).toEqual({ areas: ["web"], checks: ["build"], files: selected.fastFiles });
+      expect(selected.fastFiles).toEqual(expect.arrayContaining(policy.core));
+      expect(selected.fastFiles.filter((file: string) => !policy.core.includes(file))).toHaveLength(4);
+      expect(selected.deferred).toEqual(["scripts/testing/local-dashboard-ui.e2e.test.ts"]);
+      expect(selected.fastFiles).not.toContain(selected.deferred[0]);
+    }
+    const sensitive = plan(["server/request-auth.ts"], { policy, fastPr: true });
+    expect(sensitive.scope.checks).toEqual(["build"]);
+    expect(sensitive.holdAreas).toEqual(["global"]);
+  });
+
+  it("defers Electron and real-browser fixtures without dropping the fixed core", () => {
+    const expensive = ["electron/updater-handoff.electron.test.mjs", "server/browser/cdp/s4-identity.e2e.test.ts"];
+    const selected = plan(expensive, { policy, fastPr: true });
+    expect(selected.fastFiles).toEqual([...policy.core].sort());
+    expect(selected.deferred).toEqual(expensive.sort());
+  });
+
   it("combines affected areas but preserves the broader checks for known new files and deletions", () => {
     const both = plan(["src/components/LocalUsagePanel.tsx", "src/components/AgentTown.tsx"]);
     expect(both.fastAreas).toEqual(["usage", "agents"]);
@@ -108,6 +130,8 @@ describe("shared local and CI check policy", () => {
     const run = (change: string) => spawnSync(process.execPath, [script, "edit", "--base", "HEAD", "--test", "server/core.test.ts"], { cwd: directory, encoding: "utf8", env: { ...process.env, FIXTURE_CHANGE: change } });
     const stable = run("0");
     expect(stable.status, stable.stderr).toBe(0);
+    expect(stable.stdout).toContain("ordinary PR CI runs the Ubuntu core and bounded affected tests");
+    expect(stable.stdout).not.toContain("full CI required");
     const changed = run("1");
     expect(changed.status, changed.stderr).toBe(1);
     expect(changed.stderr).toContain("Source inputs changed during validation");
