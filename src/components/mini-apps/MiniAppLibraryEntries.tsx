@@ -51,7 +51,7 @@ export function MiniAppLibraryEntries({ inventory, issues, busyKind, owner, nati
             : state === "needs-access" ? "computer.miniApps.catalog.needsAccessShort"
               : state === "conflict" ? "computer.miniApps.catalog.nameInUseShort" : "computer.miniApps.catalog.available")}</span>}
           {issue && <span role="status" className="mt-1 text-[10px] leading-3 text-warning [overflow-wrap:anywhere]">{issue.error}</span>}
-          {canOpen && canAct && <button type="button" data-mini-app-remove={kind} disabled={busyKind !== null}
+          {app?.status === "active" && canAct && <button type="button" data-mini-app-remove={kind} disabled={busyKind !== null}
             onClick={() => onRemove(app!)} aria-label={`${t("computer.miniApps.catalog.remove")} ${name}`}
             className="mt-1 rounded px-1.5 py-0.5 text-[10px] text-ink-secondary hover:bg-control hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">
             {t("computer.miniApps.catalog.remove")}</button>}

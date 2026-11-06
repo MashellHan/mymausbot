@@ -268,6 +268,24 @@ describe("Mini Apps panel", () => {
     expect(fixture.frameMounts).toBe(0);
   });
 
+  it("keeps Remove available after native read revocation and restores only after Add", async () => {
+    fixture.apps = [{ ...app("revoked_team", "Agent Team"), slug: "agent-team",
+      dashboardIdentity: "agent-team", dashboard: null }];
+    await render();
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-recovery"]')).not.toBeNull());
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    expect(host.querySelector('[data-mini-app-catalog="agent-team"]')?.getAttribute("data-mini-app-state")).toBe("needs-access");
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-remove="agent-team"]')!.click(); });
+    await vi.waitFor(() => expect(fixture.apps[0]?.status).toBe("archived"));
+    expect(host.querySelector('[data-mini-app-catalog="agent-team"]')?.getAttribute("data-mini-app-state")).toBe("removed");
+    expect(fixture.defaultCalls).toHaveLength(1);
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="agent-team"]')!.click(); });
+    await vi.waitFor(() => expect(fixture.apps[0]?.dashboard?.kind).toBe("agent-team"));
+    expect(fixture.apps[0]?.id).toBe("revoked_team");
+    expect(fixture.defaultCalls.at(-1)?.restore).toBe("agent-team");
+    expect(fixture.frameMounts).toBe(0);
+  });
+
   it("keeps a custom slug occupant separate from the included app identity", async () => {
     fixture.apps = [{ ...app("custom", "My own report"), slug: "x-ai-digest", shippedTemplateKind: null },
       { ...app("included", "Daily X AI digest"), slug: "x-ai-digest-included-1", shippedTemplateKind: "x_ai_digest" }];
