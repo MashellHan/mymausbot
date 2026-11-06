@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bookkeeping</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 13px/1.5 var(--font-sans, system-ui, sans-serif);
+      background: var(--color-background-primary, light-dark(#fff, #1c1c1f));
+      color: var(--color-text-primary, light-dark(#1d1d1f, #ececee));
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input, select { font: inherit; color: inherit; }
+    button, select, input { border: 1px solid var(--color-border-primary, light-dark(#d8d8de, #3a3a40)); }
+    button:focus-visible, select:focus-visible, input:focus-visible {
+      outline: 2px solid var(--color-ring-primary, #1084fe);
+      outline-offset: 2px;
+    }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .5; }
+    ::selection { background: var(--color-background-info, #dceeff); color: var(--color-text-primary, #1d1d1f); }
+    .portal { max-width: 860px; min-height: 100%; margin: 0 auto; padding: 18px 20px 28px; }
+    .heading { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 8px 16px; }
+    h1 { margin: 0; font-size: 19px; line-height: 1.25; font-weight: 650; letter-spacing: -.02em; }
+    h2 { margin: 0; font-size: 15px; line-height: 1.3; font-weight: 620; }
+    h3 { margin: 0; font-size: 13px; font-weight: 620; }
+    p { margin: 0; }
+    .muted { color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    .coverage { margin-top: 4px; font-size: 12px; }
+    .refresh { border-radius: 8px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 5px 9px; }
+    .refresh:hover:not(:disabled), .more:hover:not(:disabled) { background: var(--color-background-tertiary, light-dark(#e9e9ee, #333338)); }
+    .notice { margin-top: 12px; border-radius: 8px; padding: 9px 11px; background: var(--color-background-warning, light-dark(#fff5df, #342817)); color: var(--color-text-warning, light-dark(#704b08, #f8ce81)); }
+    .notice[data-kind="error"] { background: var(--color-background-danger, light-dark(#fff0ee, #351e1e)); color: var(--color-text-danger, light-dark(#9e3232, #ffaaaa)); }
+    .notice[hidden], .custom-range[hidden], .more[hidden] { display: none; }
+    .filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; padding: 12px; border-radius: 12px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
+    .filter { min-width: 0; display: grid; gap: 4px; font-size: 12px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    .filter select, .filter input { width: 100%; min-width: 0; border-radius: 7px; background: var(--color-background-primary, light-dark(#fff, #1c1c1f)); padding: 6px 8px; font-size: 13px; color: var(--color-text-primary, light-dark(#1d1d1f, #ececee)); }
+    .custom-range { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .section { margin-top: 24px; }
+    .section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-bottom: 10px; }
+    .section-note { font-size: 12px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    .currency-group + .currency-group { margin-top: 15px; padding-top: 14px; border-top: 1px solid var(--color-border-secondary, light-dark(#e4e4e8, #333338)); }
+    .currency-title { margin-bottom: 7px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    .totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0; }
+    .totals div { min-width: 0; padding: 9px 10px; border-radius: 8px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
+    .totals dt { font-size: 11px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    .totals dd { margin: 3px 0 0; font-size: 15px; font-variant-numeric: tabular-nums; font-weight: 600; overflow-wrap: anywhere; }
+    .category-list, .trend-list, .entry-list { list-style: none; margin: 0; padding: 0; }
+    .category-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 7px 0; border-bottom: 1px solid var(--color-border-tertiary, light-dark(#eee, #303035)); }
+    .category-name { min-width: 0; overflow-wrap: anywhere; }
+    .category-amount { font-variant-numeric: tabular-nums; font-weight: 560; }
+    .category-track { grid-column: 1 / -1; height: 4px; border-radius: 4px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
+    .category-track span { display: block; height: 100%; border-radius: inherit; background: var(--color-ring-info, #1084fe); }
+    .category-share { font-size: 11px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    .trend-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
+    .trend-toggle button { border: 0; border-radius: 6px; background: transparent; padding: 3px 8px; font-size: 12px; }
+    .trend-toggle button[aria-pressed="true"] { background: var(--color-background-primary, light-dark(#fff, #1c1c1f)); font-weight: 600; }
+    .trend-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 5px 0; font-variant-numeric: tabular-nums; }
+    .trend-label { font-size: 12px; white-space: nowrap; }
+    .trend-track { height: 7px; border-radius: 4px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); overflow: hidden; }
+    .trend-track span { display: block; height: 100%; background: var(--color-ring-info, #1084fe); }
+    .trend-amount { min-width: 5.5ch; text-align: right; font-size: 12px; }
+    .entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--color-border-tertiary, light-dark(#eee, #303035)); }
+    .entry-main { min-width: 0; font-weight: 560; overflow-wrap: anywhere; }
+    .entry-amount { font-variant-numeric: tabular-nums; font-weight: 620; white-space: nowrap; }
+    .entry-meta { min-width: 0; grid-column: 1 / -1; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; overflow-wrap: anywhere; }
+    .more { margin-top: 10px; border-radius: 8px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 6px 10px; }
+    .empty { border-radius: 8px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 13px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    @media (max-width: 530px) {
+      .portal { padding: 14px 14px 24px; }
+      .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .filters > .filter:first-child { grid-column: 1 / -1; }
+      .totals { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="portal">
+    <header class="heading">
+      <div>
+        <h1 data-i18n="Bookkeeping">Bookkeeping</h1>
+        <p id="coverage" class="coverage muted" data-i18n="Reading record coverage…">Reading record coverage…</p>
+      </div>
+      <button id="refresh" class="refresh" type="button" data-i18n="Refresh">Refresh</button>
+    </header>
+    <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+    <section class="filters" aria-label="Filters" data-i18n-aria-label="Filters">
+      <label class="filter"><span data-i18n="Period">Period</span>
+        <select id="period">
+          <option value="latest" data-i18n="Latest recorded month">Latest recorded month</option>
+          <option value="last30" data-i18n="30 days through latest record">30 days through latest record</option>
+          <option value="all" data-i18n="All dated records">All dated records</option>
+          <option value="custom" data-i18n="Custom range">Custom range</option>
+        </select>
+      </label>
+      <label class="filter"><span data-i18n="Currency">Currency</span><select id="currency"><option value="" data-i18n="All currencies">All currencies</option></select></label>
+      <label class="filter"><span data-i18n="Category">Category</span><select id="category"><option value="" data-i18n="All categories">All categories</option></select></label>
+      <div id="custom-range" class="custom-range" hidden>
+        <label class="filter"><span data-i18n="From">From</span><input id="from" type="date"></label>
+        <label class="filter"><span data-i18n="Through">Through</span><input id="through" type="date"></label>
+      </div>
+    </section>
+    <section class="section" aria-labelledby="summary-title">
+      <div class="section-head"><h2 id="summary-title" data-i18n="Cash flow">Cash flow</h2><p id="range-label" class="section-note"></p></div>
+      <div id="summary" aria-live="polite"><p class="empty" data-i18n="Reading totals…">Reading totals…</p></div>
+    </section>
+    <section class="section" aria-labelledby="categories-title">
+      <div class="section-head"><h2 id="categories-title" data-i18n="Spending by category">Spending by category</h2><p class="section-note" data-i18n="Share of outflow, within each currency">Share of outflow, within each currency</p></div>
+      <div id="categories"><p class="empty" data-i18n="Reading categories…">Reading categories…</p></div>
+    </section>
+    <section class="section" aria-labelledby="trend-title">
+      <div class="section-head"><h2 id="trend-title" data-i18n="Outflow trend">Outflow trend</h2><div class="trend-toggle" role="group" aria-label="Trend interval" data-i18n-aria-label="Trend interval"><button id="day" type="button" aria-pressed="true" data-i18n="Day">Day</button><button id="month" type="button" aria-pressed="false" data-i18n="Month">Month</button></div></div>
+      <div id="trend"><p class="empty" data-i18n="Reading trend…">Reading trend…</p></div>
+    </section>
+    <section class="section" aria-labelledby="details-title">
+      <div class="section-head"><h2 id="details-title" data-i18n="Entries">Entries</h2><p class="section-note" data-i18n="Up to 30 at a time">Up to 30 at a time</p></div>
+      <div id="details"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div>
+      <button id="more" class="more" type="button" data-i18n="Load more entries" hidden>Load more entries</button>
+    </section>
+  </main>
+  <script>
+    (() => {
+      "use strict";
+
+      const $ = (id) => document.getElementById(id);
+      const sdk = window.mausApp;
+      const state = { coverage: [], coverageLoaded: false, loaded: false, dataRevision: null, currency: "", category: "", period: "latest", bucket: "day", run: 0, details: [], nextCursor: null };
+      const maxAggregatePages = 48;
+      let scheduledRefresh;
+      let refreshing = false;
+      let pendingRefresh = false;
+      let pendingKeepVisible = false;
+      const chinese = {
+        "Bookkeeping": "记账",
+        "Reading record coverage…": "正在读取记录范围…",
+        "Refresh": "刷新",
+        "Filters": "筛选",
+        "Period": "时段",
+        "Latest recorded month": "最近有记录的月份",
+        "30 days through latest record": "截至最近记录的 30 天",
+        "All dated records": "全部有日期的记录",
+        "Custom range": "自定义区间",
+        "Currency": "货币",
+        "All currencies": "全部货币",
+        "Category": "分类",
+        "All categories": "全部分类",
+        "From": "开始日期",
+        "Through": "结束日期",
+        "Cash flow": "收支汇总",
+        "Reading totals…": "正在读取汇总…",
+        "Spending by category": "按分类的支出",
+        "Share of outflow, within each currency": "占该货币支出的比例",
+        "Reading categories…": "正在读取分类…",
+        "Outflow trend": "支出趋势",
+        "Trend interval": "趋势间隔",
+        "Day": "按日",
+        "Month": "按月",
+        "Reading trend…": "正在读取趋势…",
+        "Entries": "明细",
+        "Up to 30 at a time": "每次最多 30 条",
+        "Reading entries…": "正在读取明细…",
+        "Load more entries": "加载更多明细",
+        "Currency missing": "缺失货币",
+        "Currency blank": "空白货币",
+        "Currency {value}": "货币 {value}",
+        "Category missing": "缺失分类",
+        "Category blank": "空白分类",
+        "Category {value}": "分类 {value}",
+        "No dated entries match these filters.": "这些条件下没有带完整日期的记录。",
+        "No outflow matches these filters.": "这些条件下没有支出。",
+        "Outflow": "支出",
+        "Inflow": "流入",
+        "Net": "净额",
+        "No spending categories in this period.": "此时段没有支出分类。",
+        "Share unavailable: categories are incomplete": "分类未读全，比例不可用",
+        "{share} of outflow": "占支出 {share}",
+        "No entries match these filters.": "没有符合条件的明细。",
+        "Date unavailable": "日期不可用",
+        "Dated records {first} to {last}": "有效日期范围 {first} 至 {last}",
+        "No usable dates in the source": "来源中没有可用的完整日期",
+        "{count} incomplete date excluded": "已排除 {count} 条日期不完整的记录",
+        "{count} incomplete dates excluded": "已排除 {count} 条日期不完整的记录",
+        "{count} invalid or unrepresentable amount excluded": "已排除 {count} 条金额无效或无法精确表示的记录",
+        "{count} invalid or unrepresentable amounts excluded": "已排除 {count} 条金额无效或无法精确表示的记录",
+        "Source quality counts unavailable": "来源质量计数不可用",
+        "Checking for updated records…": "正在检查更新的记录…",
+        "Loading records…": "正在加载记录…",
+        "A valid dated range is unavailable.": "没有可用的完整日期区间。",
+        "Choose a valid From and Through date.": "请选择有效的开始和结束日期。",
+        "The source has no complete dates to summarize.": "来源中没有可汇总的完整日期。",
+        "{from} to {through}": "{from} 至 {through}",
+        "This view is incomplete because the source has more groups than can be read at once. Narrow the date range or choose a currency.": "分组过多，此视图未读全。请缩小日期范围或选择一种货币。",
+        "Records unavailable. Try Refresh.": "记录不可用，请刷新。",
+        "Records could not be refreshed. Try again.": "无法刷新记录，请重试。",
+        "More entries could not be loaded. Try again.": "无法加载更多明细，请重试。",
+      };
+
+      function locale() { return document.documentElement.lang.toLowerCase().startsWith("zh") ? "zh" : "en"; }
+      function word(key, values = {}) {
+        const phrase = locale() === "zh" ? chinese[key] ?? key : key;
+        return phrase.replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(values, name) ? String(values[name]) : match);
+      }
+      function translate() {
+        document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = word(node.dataset.i18n); });
+        document.querySelectorAll("[data-i18n-aria-label]").forEach((node) => { node.setAttribute("aria-label", word(node.dataset.i18nAriaLabel)); });
+      }
+      translate();
+      new MutationObserver(() => { translate(); if (state.loaded) void refresh(true); })
+        .observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+
+      function element(tag, className, value) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (value !== undefined) node.textContent = String(value);
+        return node;
+      }
+
+      function rowsOf(answer) {
+        if (!answer || !Array.isArray(answer.columns) || !Array.isArray(answer.rows)) throw new Error("This app received an invalid data result.");
+        const names = answer.columns.map((column) => typeof column === "string" ? column : column && column.name);
+        if (names.some((name) => typeof name !== "string")) throw new Error("This app received unnamed data columns.");
+        if (!Number.isSafeInteger(answer.revision)) throw new Error("This app received an invalid data revision.");
+        return { rows: answer.rows.map((row) => {
+          if (!Array.isArray(row)) throw new Error("This app received an invalid data row.");
+          return Object.fromEntries(names.map((name, index) => [name, row[index] ?? null]));
+        }), revision: answer.revision, nextCursor: answer.nextCursor ?? null };
+      }
+
+      async function query(queryId, parameters, options) {
+        if (!sdk || typeof sdk.query !== "function") throw new Error("The Mini Apps data connection is unavailable.");
+        return rowsOf(await sdk.query(queryId, parameters, options));
+      }
+
+      async function queryAll(queryId, parameters, options, budget, run) {
+        const rows = [];
+        let cursor;
+        let revision;
+        for (;;) {
+          if (run !== state.run) return { rows, revision, truncated: true };
+          if (budget.remaining === 0) return { rows, revision, truncated: true };
+          budget.remaining -= 1;
+          const page = await query(queryId, parameters, { ...options, ...(cursor ? { cursor } : {}) });
+          if (revision !== undefined && page.revision !== revision) throw new Error("Data changed while this report was being read. Refresh to try again.");
+          revision = page.revision;
+          rows.push(...page.rows);
+          if (!page.nextCursor) return { rows, revision, truncated: false };
+          cursor = page.nextCursor;
+        }
+      }
+
+      function decimalParts(value) {
+        if (value === null || value === undefined) return null;
+        const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(String(value).trim());
+        return match ? { negative: match[1] === "-", digits: match[2], fraction: match[3] ?? "" } : null;
+      }
+
+      function decimalText(value) {
+        const parts = decimalParts(value);
+        if (!parts) return "—";
+        const grouped = parts.digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        return `${parts.negative ? "−" : ""}${grouped}${parts.fraction ? `.${parts.fraction}` : ""}`;
+      }
+
+      function absoluteDecimal(value) {
+        const parts = decimalParts(value);
+        return parts ? `${parts.digits}${parts.fraction ? `.${parts.fraction}` : ""}` : null;
+      }
+
+      function zeroLike(value) {
+        const parts = decimalParts(value);
+        return parts ? `0${parts.fraction ? `.${"0".repeat(parts.fraction.length)}` : ""}` : null;
+      }
+
+      function decimalPercent(part, whole) {
+        const numerator = decimalParts(part);
+        const denominator = decimalParts(whole);
+        if (!numerator || !denominator || numerator.negative || denominator.negative) return "—";
+        const left = BigInt(numerator.digits + numerator.fraction) * 10n ** BigInt(denominator.fraction.length);
+        const right = BigInt(denominator.digits + denominator.fraction) * 10n ** BigInt(numerator.fraction.length);
+        if (right === 0n) return "—";
+        const tenths = (left * 1_000n + right / 2n) / right;
+        return `${tenths / 10n}.${tenths % 10n}%`;
+      }
+
+      function barWidth(part, whole) {
+        const numerator = decimalParts(part);
+        const denominator = decimalParts(whole);
+        if (!numerator || !denominator || numerator.negative || denominator.negative) return "0%";
+        const left = BigInt(numerator.digits + numerator.fraction) * 10n ** BigInt(denominator.fraction.length);
+        const right = BigInt(denominator.digits + denominator.fraction) * 10n ** BigInt(numerator.fraction.length);
+        if (right === 0n) return "0%";
+        const percent = left * 100n / right;
+        return `${Number(percent > 100n ? 100n : percent)}%`;
+      }
+
+      function compareDecimals(left, right) {
+        const a = decimalParts(left);
+        const b = decimalParts(right);
+        if (!a || !b || a.negative || b.negative) return 0;
+        const lhs = BigInt(a.digits + a.fraction) * 10n ** BigInt(b.fraction.length);
+        const rhs = BigInt(b.digits + b.fraction) * 10n ** BigInt(a.fraction.length);
+        return lhs > rhs ? 1 : lhs < rhs ? -1 : 0;
+      }
+
+      function sumDecimals(values) {
+        const parts = values.map(decimalParts);
+        if (parts.some((part) => !part || part.negative)) return null;
+        const scale = Math.max(0, ...parts.map((part) => part.fraction.length));
+        const total = parts.reduce((sum, part) => sum + BigInt(part.digits + part.fraction) * 10n ** BigInt(scale - part.fraction.length), 0n);
+        const text = total.toString().padStart(scale + 1, "0");
+        return scale ? `${text.slice(0, -scale)}.${text.slice(-scale)}` : text;
+      }
+
+      function countValue(value) {
+        if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+        return typeof value === "string" && /^\d+$/.test(value) ? BigInt(value) : null;
+      }
+
+      function countText(value) {
+        const count = countValue(value);
+        return count === null ? "—" : count.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      }
+
+      function currencyText(value) { return value === null ? word("Currency missing") : value === "" ? word("Currency blank") : String(value).trim() === "" ? word("Currency {value}", { value: JSON.stringify(value) }) : String(value); }
+      function categoryText(value) { return value === null ? word("Category missing") : value === "" ? word("Category blank") : String(value).trim() === "" ? word("Category {value}", { value: JSON.stringify(value) }) : String(value); }
+      function currencyKey(value) { return value === null ? "missing" : value === "" ? "blank" : `known:${String(value)}`; }
+      function currencyValue(key) { return key.startsWith("known:") ? key.slice(6) : null; }
+      function currencyName(key) { return key === "missing" ? word("Currency missing") : key === "blank" ? word("Currency blank") : currencyText(currencyValue(key)); }
+
+      function validDate(value) {
+        if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+        const time = Date.parse(`${value}T00:00:00Z`);
+        return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value;
+      }
+
+      function dateBefore(value, days) {
+        const date = new Date(`${value}T00:00:00Z`);
+        date.setUTCDate(date.getUTCDate() - days);
+        return date.toISOString().slice(0, 10);
+      }
+
+      function visibleCoverage() {
+        return state.currency ? state.coverage.filter((row) => currencyKey(row.currency) === state.currency) : state.coverage;
+      }
+
+      function periodRange() {
+        const coverage = visibleCoverage();
+        const dates = coverage.flatMap((row) => [row.firstDate, row.lastDate]).filter(validDate).sort();
+        if (dates.length === 0) return null;
+        const first = dates[0];
+        const last = dates[dates.length - 1];
+        if (state.period === "custom") {
+          const from = $("from").value;
+          const through = $("through").value;
+          return validDate(from) && validDate(through) && from <= through ? { from, through } : null;
+        }
+        if (state.period === "all") return { from: first, through: last };
+        if (state.period === "last30") return { from: dateBefore(last, 29), through: last };
+        return { from: `${last.slice(0, 7)}-01`, through: last };
+      }
+
+      function notice(message, kind = "info") {
+        const node = $("notice");
+        node.hidden = !message;
+        node.dataset.kind = kind;
+        node.setAttribute("role", kind === "error" ? "alert" : "status");
+        node.textContent = message;
+      }
+
+      function empty(container, message) { container.replaceChildren(element("p", "empty", message)); }
+      function grouped(rows) {
+        const groups = new Map();
+        for (const row of rows) {
+          const key = currencyKey(row.currency);
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(row);
+        }
+        return groups;
+      }
+
+      function groupHeading(key) { return element("h3", "currency-title", currencyName(key)); }
+
+      function renderSummary(rows) {
+        const target = $("summary");
+        if (rows.length === 0) return empty(target, word("No dated entries match these filters."));
+        const sections = [];
+        for (const [key, items] of grouped(rows)) {
+          const row = items[0];
+          const section = element("div", "currency-group");
+          section.append(groupHeading(key));
+          const totals = element("dl", "totals");
+          for (const [label, value] of [[word("Outflow"), decimalText(row.outflow)], [word("Inflow"), decimalText(row.inflow)], [word("Net"), decimalText(row.net)], [word("Entries"), countText(row.count)]]) {
+            const item = element("div");
+            item.append(element("dt", "", label), element("dd", "", value));
+            totals.append(item);
+          }
+          section.append(totals);
+          sections.push(section);
+        }
+        target.replaceChildren(...sections);
+      }
+
+      function renderCategories(rows, truncated) {
+        const target = $("categories");
+        if (rows.length === 0) return empty(target, word("No spending categories in this period."));
+        const sections = [];
+        for (const [key, items] of grouped(rows)) {
+          const section = element("div", "currency-group");
+          section.append(groupHeading(key));
+          const list = element("ul", "category-list");
+          const total = truncated ? null : sumDecimals(items.map((row) => absoluteDecimal(row.amount)));
+          for (const row of items) {
+            const entry = element("li", "category-row");
+            const outflow = absoluteDecimal(row.amount);
+            const share = decimalPercent(outflow, total);
+            entry.append(element("span", "category-name", categoryText(row.category)), element("span", "category-amount", decimalText(outflow)));
+            const track = element("div", "category-track");
+            track.setAttribute("aria-hidden", "true");
+            const fill = element("span");
+            fill.style.width = barWidth(outflow, total);
+            track.append(fill);
+            entry.append(track, element("span", "category-share", truncated ? word("Share unavailable: categories are incomplete") : word("{share} of outflow", { share })));
+            list.append(entry);
+          }
+          section.append(list);
+          sections.push(section);
+        }
+        target.replaceChildren(...sections);
+      }
+
+      function renderTrend(rows) {
+        const target = $("trend");
+        if (rows.length === 0) return empty(target, word("No outflow matches these filters."));
+        const sections = [];
+        for (const [key, items] of grouped(rows)) {
+          const section = element("div", "currency-group");
+          section.append(groupHeading(key));
+          const max = items.reduce((largest, row) => {
+            const outflow = absoluteDecimal(row.amount);
+            return compareDecimals(outflow, largest) > 0 ? outflow : largest;
+          }, "0");
+          const list = element("ul", "trend-list");
+          for (const row of items) {
+            const entry = element("li", "trend-row");
+            entry.append(element("span", "trend-label", row.bucket));
+            const track = element("span", "trend-track");
+            track.setAttribute("aria-hidden", "true");
+            const fill = element("span");
+            const outflow = absoluteDecimal(row.amount);
+            fill.style.width = barWidth(outflow, max);
+            track.append(fill);
+            entry.append(track, element("span", "trend-amount", decimalText(outflow)));
+            list.append(entry);
+          }
+          section.append(list);
+          sections.push(section);
+        }
+        target.replaceChildren(...sections);
+      }
+
+      function renderDetails() {
+        const target = $("details");
+        if (state.details.length === 0) {
+          empty(target, word("No entries match these filters."));
+          $("more").hidden = true;
+          return;
+        }
+        const list = element("ol", "entry-list");
+        for (const row of state.details) {
+          const entry = element("li", "entry");
+          entry.append(element("span", "entry-main", `${validDate(row.date) ? row.date : word("Date unavailable")} · ${categoryText(row.category)}`));
+          entry.append(element("span", "entry-amount", `${decimalText(row.amount)} ${currencyText(row.currency)}`));
+          const meta = [row.account, row.book, row.note].filter((value) => value !== null && String(value).trim() !== "").map(String);
+          if (meta.length) entry.append(element("span", "entry-meta", meta.join(" · ")));
+          list.append(entry);
+        }
+        target.replaceChildren(list);
+        $("more").hidden = state.nextCursor === null;
+      }
+
+      function setOptions(select, values, current, allLabel) {
+        const option = (value, label) => { const node = element("option", "", label); node.value = value; return node; };
+        const options = [option("", allLabel)];
+        for (const [value, label] of values) options.push(option(value, label));
+        select.replaceChildren(...options);
+        select.value = values.some(([value]) => value === current) ? current : "";
+        return select.value;
+      }
+
+      function updateCoverage(rows) {
+        state.coverage = rows;
+        const first = rows.map((row) => row.firstDate).filter(validDate).sort()[0];
+        const last = rows.map((row) => row.lastDate).filter(validDate).sort().at(-1);
+        const missing = (field) => rows.reduce((total, row) => {
+          const all = countValue(row.count);
+          const known = countValue(row[field]);
+          return total !== null && all !== null && known !== null && all >= known ? total + all - known : null;
+        }, 0n);
+        const incomplete = missing("datedCount");
+        const invalid = missing("amountCount");
+        const parts = [first && last ? word("Dated records {first} to {last}", { first, last }) : word("No usable dates in the source")];
+        if (incomplete !== null && incomplete > 0n) parts.push(word(incomplete === 1n ? "{count} incomplete date excluded" : "{count} incomplete dates excluded", { count: countText(incomplete.toString()) }));
+        if (invalid !== null && invalid > 0n) parts.push(word(invalid === 1n ? "{count} invalid or unrepresentable amount excluded" : "{count} invalid or unrepresentable amounts excluded", { count: countText(invalid.toString()) }));
+        if (incomplete === null || invalid === null) parts.push(word("Source quality counts unavailable"));
+        $("coverage").removeAttribute("data-i18n");
+        $("coverage").textContent = parts.join(" · ");
+        const currencies = [...new Map(rows.filter((row) => row.currency !== null && String(row.currency).trim() !== "").map((row) => [currencyKey(row.currency), currencyText(row.currency)])).entries()];
+        state.currency = setOptions($("currency"), currencies, state.currency, word("All currencies"));
+        $("from").value ||= first ?? "";
+        $("through").value ||= last ?? "";
+      }
+
+      async function refresh(keepVisible = false) {
+        clearTimeout(scheduledRefresh);
+        if (refreshing) {
+          pendingRefresh = true;
+          pendingKeepVisible ||= keepVisible;
+          state.run += 1;
+          return;
+        }
+        refreshing = true;
+        const run = ++state.run;
+        $("refresh").disabled = true;
+        $("more").disabled = true;
+        notice(word(keepVisible ? "Checking for updated records…" : "Loading records…"));
+        try {
+          if (!state.coverageLoaded || keepVisible) {
+            const coverage = await queryAll("coverage", {}, {}, { remaining: maxAggregatePages }, run);
+            if (run !== state.run) return;
+            if (coverage.truncated) throw new Error("Coverage has too many currency groups to summarize safely.");
+            updateCoverage(coverage.rows);
+            state.dataRevision = coverage.revision;
+            state.coverageLoaded = true;
+          }
+          const range = periodRange();
+          if (!range) {
+            $("range-label").textContent = "";
+            for (const id of ["summary", "categories", "trend", "details"]) empty($(id), word("A valid dated range is unavailable."));
+            $("more").hidden = true;
+            notice(word(state.period === "custom" ? "Choose a valid From and Through date." : "The source has no complete dates to summarize."));
+            return;
+          }
+          const base = { from: range.from, through: range.through, ...(state.currency ? { currency: currencyValue(state.currency) } : {}) };
+          const filtered = { ...base, ...(state.category ? { category: state.category } : {}) };
+          const pinned = { expectedDataRevision: state.dataRevision };
+          const budget = { remaining: maxAggregatePages };
+          const [summary, outflow, inflow, categories, categoryOptions, trend, details] = await Promise.all([
+            queryAll("summary", filtered, pinned, budget, run),
+            queryAll("outflow", filtered, pinned, budget, run),
+            queryAll("inflow", filtered, pinned, budget, run),
+            queryAll("categories", filtered, pinned, budget, run),
+            queryAll("category_options", base, pinned, budget, run),
+            queryAll(`trend_${state.bucket}`, filtered, pinned, budget, run),
+            query("details", filtered, pinned),
+          ]);
+          if (run !== state.run) return;
+          const outflows = new Map(outflow.rows.map((row) => [currencyKey(row.currency), row.amount]));
+          const inflows = new Map(inflow.rows.map((row) => [currencyKey(row.currency), row.amount]));
+          const combined = summary.rows.map((row) => {
+            const key = currencyKey(row.currency);
+            const zero = zeroLike(row.net);
+            return { ...row,
+              outflow: outflows.has(key) ? absoluteDecimal(outflows.get(key)) : outflow.truncated ? null : zero,
+              inflow: inflows.has(key) ? inflows.get(key) : inflow.truncated ? null : zero,
+            };
+          });
+          const options = [...new Set(categoryOptions.rows.filter((row) => row.category !== null && String(row.category).trim() !== "").map((row) => String(row.category)))].sort();
+          if (state.category && !options.includes(state.category)) options.push(state.category);
+          state.category = setOptions($("category"), options.map((name) => [name, name]), state.category, word("All categories"));
+          $("range-label").textContent = word("{from} to {through}", range);
+          renderSummary(combined);
+          renderCategories(categories.rows, categories.truncated);
+          renderTrend(trend.rows);
+          state.details = details.rows;
+          state.nextCursor = details.nextCursor;
+          renderDetails();
+          state.loaded = true;
+          notice([summary, outflow, inflow, categories, categoryOptions, trend].some((answer) => answer.truncated)
+            ? word("This view is incomplete because the source has more groups than can be read at once. Narrow the date range or choose a currency.")
+            : "");
+        } catch (error) {
+          if (run === state.run) {
+            if (!state.loaded) for (const id of ["summary", "categories", "trend", "details"]) empty($(id), word("Records unavailable. Try Refresh."));
+            notice(`${word("Records could not be refreshed. Try again.")}${locale() === "en" && error instanceof Error ? ` ${error.message}` : ""}`, "error");
+          }
+        } finally {
+          refreshing = false;
+          if (pendingRefresh) {
+            const keep = pendingKeepVisible;
+            pendingRefresh = false;
+            pendingKeepVisible = false;
+            void refresh(keep);
+          } else if (run === state.run) {
+            $("refresh").disabled = false;
+            $("more").disabled = false;
+          }
+        }
+      }
+
+      async function loadMore() {
+        if (refreshing || state.nextCursor === null) return;
+        const run = state.run;
+        const range = periodRange();
+        if (!range) return;
+        $("more").disabled = true;
+        try {
+          const cursor = state.nextCursor;
+          const parameters = { from: range.from, through: range.through, ...(state.currency ? { currency: currencyValue(state.currency) } : {}), ...(state.category ? { category: state.category } : {}) };
+          const result = await query("details", parameters, { cursor, expectedDataRevision: state.dataRevision });
+          if (run !== state.run) return;
+          state.details.push(...result.rows);
+          state.nextCursor = result.nextCursor;
+          renderDetails();
+        } catch (error) {
+          if (run === state.run) notice(`${word("More entries could not be loaded. Try again.")}${locale() === "en" && error instanceof Error ? ` ${error.message}` : ""}`, "error");
+        } finally {
+          $("more").disabled = false;
+        }
+      }
+
+      function scheduleRefresh() {
+        state.run += 1;
+        clearTimeout(scheduledRefresh);
+        scheduledRefresh = setTimeout(() => { void refresh(); }, 150);
+      }
+
+      $("period").addEventListener("change", (event) => {
+        state.period = event.target.value;
+        $("custom-range").hidden = state.period !== "custom";
+        scheduleRefresh();
+      });
+      $("currency").addEventListener("change", (event) => { state.currency = event.target.value; scheduleRefresh(); });
+      $("category").addEventListener("change", (event) => { state.category = event.target.value; scheduleRefresh(); });
+      for (const id of ["from", "through"]) $(id).addEventListener("change", () => { if (state.period === "custom") scheduleRefresh(); });
+      for (const bucket of ["day", "month"]) $(bucket).addEventListener("click", () => {
+        state.bucket = bucket;
+        $("day").setAttribute("aria-pressed", String(bucket === "day"));
+        $("month").setAttribute("aria-pressed", String(bucket === "month"));
+        scheduleRefresh();
+      });
+      $("refresh").addEventListener("click", () => { void refresh(true); });
+      $("more").addEventListener("click", () => { void loadMore(); });
+      if (sdk && typeof sdk.onDataChanged === "function") sdk.onDataChanged(() => { void refresh(true); });
+      void refresh();
+    })();
+  </script>
+</body>
+</html>

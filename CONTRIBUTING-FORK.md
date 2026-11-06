@@ -1,7 +1,10 @@
-# Personal fork workflow
+# Personal repository workflow
 
-This fork preserves upstream licensing and history. `upstream` tracks
-milind-soni/OpenMausBot; `origin` is MashellHan/openmausbot. Never push to upstream.
+This standalone repository (`fork=false`) preserves upstream licensing and history.
+`origin` is `MashellHan/mymausbot`; `upstream` tracks read-only
+`milind-soni/OpenMausBot`. `legacy-fork` names the former
+`MashellHan/openmausbot` repository, whose PR, issue, review and CI links are
+historical. Never push to `upstream` or `legacy-fork`.
 
 - Commit each coherent, working slice with a message describing behavior and
   purpose. Keep useful checkpoints; do not split changes just to inflate counts.
@@ -21,9 +24,12 @@ milind-soni/OpenMausBot; `origin` is MashellHan/openmausbot. Never push to upstr
 - Lead resolves routine scope decisions, verifies acceptance and reports PR
   links. A review is complete only with actual findings/approval, not a submitted
   prompt. No skipped checks, invented passes or automatic approval by timeout.
-- The user has authorized reviewed merges into the personal fork. Lead decides
-  merge order and merges only after Reviewer has no unresolved findings
-  and required checks pass. PR creation and feature-branch pushes are authorized.
+- The user has authorized reviewed merges into the personal repository. Lead
+  decides merge order and merges only after Reviewer has no unresolved findings
+  and required checks pass. Create PRs and push feature branches only to
+  verified `origin` at `MashellHan/mymausbot`.
+- Old `MashellHan/openmausbot` PR and issue numbers are historical. Use the
+  authoritative migration mapping for new numbers; do not infer them from old links.
 - For upstream sync, record exact source SHAs and any new upstream commit range.
   If there are no new commits or pending integration changes, record the check
   without an empty commit or PR. Daily sync does not replace the live App.

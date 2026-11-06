@@ -1,14 +1,14 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../config.ts";
 import { mcpServerConfigHash } from "../mcp-app-catalog.ts";
 import { claimedNotice, createMcpServersHost, startCheckTimeout } from "./mcp-servers-host.ts";
 
 const dirs: string[] = [];
-afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.unstubAllEnvs(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 const IRIS = { id: "iris", name: "Iris" }, PAUL = { id: "paul", name: "Paul" }, ROSA = { id: "rosa", name: "Rosa", mcpServers: [] as string[] };
 const NOTES_ONLY = { id: "nina", name: "Nina", toolScope: { allow: ["mcp:notes:*"] } }, NO_SERVERS = { id: "otto", name: "Otto" };
@@ -98,6 +98,19 @@ it("moves servers over once: a server added in Settings afterwards stays every b
   again.boot();
   expect(first.cfg.mcpServers!.shared).not.toHaveProperty("bot");
   expect(Object.keys(again.mounted(PAUL))).toContain("shared");
+});
+
+it("rechecks boxed MCP ownership on each session-only App run while the old config stays untouched", () => {
+  vi.stubEnv("OMB_DESKTOP_PARENT", "1");
+  vi.stubEnv("OMB_CREDENTIAL_MODE", "session");
+  const first = setup();
+  first.host.boot();
+  expect((first.cfg.mcpServers!.blender as { bot?: string }).bot).toBe("iris");
+  expect(existsSync(join(first.data, "mcp-bot-servers.json"))).toBe(false);
+  const nextRun = setup({ data: first.data });
+  nextRun.host.boot();
+  expect((nextRun.cfg.mcpServers!.blender as { bot?: string }).bot).toBe("iris");
+  expect(existsSync(join(first.data, "mcp-bot-servers.json"))).toBe(false);
 });
 
 it("never makes a server the own of a deleted bot whose folder was left behind", () => {

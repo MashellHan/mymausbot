@@ -51,7 +51,7 @@ afterEach(async () => {
 });
 
 describe("AgentActivityDetails", () => {
-  it("starts folded, keeps keyboard focus, and shows bounded labelled rows in either skin", async () => {
+  it("starts folded, keeps keyboard focus, and shows readable chat rows in either skin", async () => {
     calls.api.mockResolvedValue(ready);
     await render();
     expect(button().getAttribute("aria-expanded")).toBe("false");
@@ -62,16 +62,50 @@ describe("AgentActivityDetails", () => {
     expect(document.activeElement).toBe(button());
     expect(button().getAttribute("aria-expanded")).toBe("true");
     expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/agents/w6%3Ap3/activity", expect.objectContaining({ background: true, signal: expect.any(AbortSignal) }));
-    expect(list()?.children).toHaveLength(4);
+    expect(list()?.children).toHaveLength(2);
     expect(list()?.getAttribute("tabindex")).toBe("0");
     expect(list()?.className).toContain("max-h-56");
-    expect(host.textContent).toMatch(/User.*Assistant.*Tool call.*Tool result/s);
+    expect(host.textContent).toMatch(/Input.*Reply/s);
+    expect(host.textContent).not.toMatch(/Tool call|Tool result|functions\.exec|\[path\]/);
+    const [input, reply] = [...list()!.children] as HTMLElement[];
+    expect(input.className).toContain("bg-accent/5");
+    expect(input.querySelector("span")?.className).toContain("text-accent-text");
+    expect(reply.className).toContain("bg-card");
+    expect(input.querySelector("p")?.className).toContain("text-[13px] leading-[18px]");
+    expect(reply.querySelector("p")?.className).toContain("text-[13px] leading-[18px]");
     expect(host.textContent).toContain("Showing a bounded recent excerpt");
     host.dataset.skin = "atelier";
     setLocale("zh");
     await render();
-    expect(host.textContent).toContain("工具调用");
-    expect(host.textContent).toContain("最近活动");
+    expect(host.textContent).toContain("输入");
+    expect(host.textContent).toContain("回复");
+    expect(host.textContent).toContain("最近消息");
+    expect(host.textContent).not.toContain("工具调用");
+  });
+
+  it("shows the message empty state when an older response contains only tool rows", async () => {
+    calls.api.mockResolvedValue({ ...ready, truncated: false, events: ready.events.filter((event) => event.kind === "tool-call" || event.kind === "tool-result") });
+    await render();
+    await act(async () => button().click());
+    expect(list()).toBeNull();
+    expect(host.textContent).toContain("No recent messages.");
+    expect(host.textContent).not.toMatch(/functions\.exec|Tool call|Tool result/);
+  });
+
+  it("opens at the latest reply", async () => {
+    calls.api.mockResolvedValue(ready);
+    const prototype = Object.getPrototypeOf(document.createElement("ol")) as object;
+    const original = Object.getOwnPropertyDescriptor(prototype, "scrollHeight");
+    Object.defineProperty(prototype, "scrollHeight", { configurable: true, get: () => 480 });
+    try {
+      await render();
+      await act(async () => button().click());
+      expect(list()?.scrollTop).toBe(480);
+      expect(list()?.lastElementChild?.textContent).toContain("I checked it.");
+    } finally {
+      if (original) Object.defineProperty(prototype, "scrollHeight", original);
+      else Reflect.deleteProperty(prototype, "scrollHeight");
+    }
   });
 
   it("polls without overlap and stops an in-flight read when folded or switched", async () => {
@@ -95,11 +129,32 @@ describe("AgentActivityDetails", () => {
     expect(button().getAttribute("aria-expanded")).toBe("false");
   });
 
+  it("keeps expanded history while inactive without polling and resumes on return", async () => {
+    calls.api.mockResolvedValue(ready);
+    await render();
+    await act(async () => button().click());
+    const history = list();
+    const signal = calls.api.mock.calls[0]?.[1]?.signal as AbortSignal;
+    expect(history?.textContent).toContain("Check the release");
+
+    await render(agentId, false);
+    expect(signal.aborted).toBe(true);
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+    expect(list()).toBe(history);
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(calls.api).toHaveBeenCalledTimes(1);
+
+    await render(agentId, true);
+    expect(button().getAttribute("aria-expanded")).toBe("true");
+    expect(list()?.textContent).toContain("Check the release");
+    expect(calls.api).toHaveBeenCalledTimes(2);
+  });
+
   it("clears rows and stops after authorization loss; hidden details cancel their request", async () => {
     calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new ApiError("unauthorized", 401));
     await render();
     await act(async () => button().click());
-    expect(list()?.children).toHaveLength(4);
+    expect(list()?.children).toHaveLength(2);
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
     expect(list()).toBeNull();
     expect(host.textContent).toContain("unavailable");
@@ -123,7 +178,7 @@ describe("AgentActivityDetails", () => {
     await render();
     await act(async () => button().click());
     expect(host.textContent?.toLowerCase()).toContain(status === "stale" ? "last observed" : status === "unsupported" ? "not supported" : status);
-    expect(list()?.children.length ?? 0).toBe(status === "stale" ? 4 : 0);
+    expect(list()?.children.length ?? 0).toBe(status === "stale" ? 2 : 0);
   });
 
   it("keeps changing as-of times outside the live status region", async () => {

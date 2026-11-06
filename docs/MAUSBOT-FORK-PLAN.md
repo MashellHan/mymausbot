@@ -1,6 +1,9 @@
-# MausBot fork delivery, 2026-11-03
+# Historical MausBot fork delivery plan, 2026-11-03
 
-Owner: 大雄 (menha). Repository: https://github.com/MashellHan/openmausbot.
+Current canonical repository: https://github.com/MashellHan/mymausbot. The plan below
+retains its November 3 repository and evidence context.
+
+Owner: 大雄 (menha). Historical repository: https://github.com/MashellHan/openmausbot.
 Upstream: https://github.com/milind-soni/OpenMausBot.
 
 ## Accepted scope

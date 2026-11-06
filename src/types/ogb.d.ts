@@ -119,9 +119,15 @@ const __APP_VERSION__: string;
       platform: NodeJS.Platform;
       /** This app's own version, and whether this page is this app's own: false on a server added in the Server menu,
        * whose page carries that server's version. Absent in desktop builds before it. */
-      app?: { version: string; ownPage: boolean };
+      app?: {
+        version: string;
+        ownPage: boolean;
+        /** The native window blocks opaque subframes from navigating to external documents. */
+        blocksOpaqueFrameNavigation?: boolean;
+      };
       organization?: import("../../electron/managed-desktop.mjs").ManagedDesktopBridge;
       cloudAccount?: import("../../electron/cloud-account.mjs").CloudAccountBridge;
+      tailscaleFunnel?: import("../../electron/tailscale-funnel.mjs").TailscaleFunnelBridge;
       accounts?: import("../../electron/cloud-account.mjs").AccountsBridge;
       accountSheet?: import("../../electron/cloud-account.mjs").AccountSheetBridge;
       /** Either page in this app: the one-time move's line (on its way, what arrived, coming home). */
@@ -415,11 +421,13 @@ const __APP_VERSION__: string;
       openLogsFolder?(): Promise<{ folder: string; opened: boolean; error?: string }>;
       /** This app's own login item, which opens the window. `available`: false in a build that cannot add one. */
       openAtLogin?: { state(): Promise<{ available: boolean; on: boolean }>; set(on: boolean): Promise<{ available: boolean; on: boolean }> };
-      /** Save a provider credential through Electron's OS-backed store. */
+      /** Save a provider credential through the active desktop store. */
       setCredential?(
         name: "composioApiKey" | "xaiApiKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey" | "fishAudioKey" | "geminiTtsKey" | "jevApiKey" | "openrouterDeciderKey" | "workersAiToken" | "openaiImageApiKey" | "customImageApiKey" | "openaiLiveKey" | "tregApiKey" | "postizApiKey",
         value: string,
       ): Promise<ConfigStatus>;
+      /** This App run's credential lifetime; a remote page is never given it. */
+      credentialMode?(): "system" | "session";
       /** In-app auto-update (packaged app only; dormant in dev). Updates
        * download by themselves. On this computer's page and the person's own
        * Cloud page; any other server's page gets no state. onState fires

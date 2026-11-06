@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlertTriangle, Loader2, Shield } from "lucide-react";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { macCuaPermissionMessage, missingMacCuaPermissions } from "@/lib/mac-cua-permissions";
@@ -10,7 +10,6 @@ export function MacLocalControl() {
   const reason = capabilities.localComputer.available ? null : capabilities.localComputer.message;
   const permissionMessage = macCuaPermissionMessage(missingMacCuaPermissions(reason));
   const [pending, setPending] = useState(false);
-  const [awaitingGrant, setAwaitingGrant] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const retry = async () => {
@@ -27,33 +26,13 @@ export function MacLocalControl() {
 
   const openSettings = async () => {
     setError(null);
-    setAwaitingGrant(true);
     try {
       await window.ogb?.permOpenSettings?.("accessibility");
       await window.ogb?.permOpenSettings?.("screen");
     } catch (reason) {
-      setAwaitingGrant(false);
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   };
-
-  useEffect(() => {
-    if (!awaitingGrant) return;
-    let used = false;
-    const onFocus = () => {
-      if (used) return;
-      if (document.visibilityState !== "visible") return;
-      used = true;
-      setAwaitingGrant(false);
-      void retry();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onFocus);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onFocus);
-    };
-  }, [awaitingGrant]);
 
   if (capabilities.host.platform !== "darwin" || capabilities.localComputer.reasonCode === "remote-server") return null;
   if (capabilities.localComputer.available) return null;

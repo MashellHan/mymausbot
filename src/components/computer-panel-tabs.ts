@@ -1,5 +1,5 @@
 import { useEffect, type KeyboardEvent, type WheelEvent } from "react";
-import { CalendarClock, ChartNoAxesCombined, Database, FolderOpen, Globe, Monitor, Smartphone, UsersRound, type LucideIcon } from "lucide-react";
+import { AppWindow, CalendarClock, ChartNoAxesCombined, Database, FolderOpen, Globe, Monitor, Smartphone, UsersRound, type LucideIcon } from "lucide-react";
 import { readComputerPanelView, writeComputerPanelView, type ComputerPanelView } from "@/lib/computer-panel-view";
 import type { AndroidUsbDevicesStatus } from "./AndroidDevicePanel";
 import type { LocaleKey } from "@/locales";
@@ -11,6 +11,7 @@ export const PANEL_TABS: Record<ComputerPanelView, { Icon: LucideIcon; label: Lo
   browser: { Icon: Globe, label: "computer.tab.browser", tour: "computer-browser" },
   data: { Icon: Database, label: "computer.tab.data", tour: "computer-data" },
   files: { Icon: FolderOpen, label: "computer.tab.files" },
+  "mini-apps": { Icon: AppWindow, label: "computer.tab.miniApps" },
   "agent-team": { Icon: UsersRound, label: "computer.tab.agentTeam" },
   usage: { Icon: ChartNoAxesCombined, label: "computer.tab.usage" },
 };

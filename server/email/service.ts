@@ -8,7 +8,7 @@ import { secretForms } from "../login-store.ts";
 import { HELD_SECRET_MASK } from "../redact.ts";
 import { EmailError, openGuard, pinned, testMailbox, testSending, type EmailGuard } from "./client.ts";
 import { discoverMailServers, liveDiscoverDeps, type DiscoverDeps, type MailCandidates } from "./discover.ts";
-import { EmailStore, MAX_EMAIL_ACCOUNTS, parseEmailAccount, type EmailAccount, type EmailServer } from "./store.ts";
+import { EMAIL_SESSION_REFUSAL, EmailStore, MAX_EMAIL_ACCOUNTS, parseEmailAccount, type EmailAccount, type EmailServer } from "./store.ts";
 
 const ADDRESS = /^[^\s@<>()",;:]{1,200}@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/iu;
 const HOST = /^[a-z0-9.-]{1,253}$/iu;
@@ -54,6 +54,8 @@ function typed(request: EmailConnectRequest): MailCandidates | null {
 
 export function createEmailService(deps: EmailServiceDeps) {
   const store = new EmailStore(deps.dataDir);
+  const sessionRefusal = store.sessionOnly ? EMAIL_SESSION_REFUSAL : null;
+  const refusal = sessionRefusal ?? deps.refusal;
   /** Masks every saved password, in every form it might be written, in whatever a bot or a transcript can read. */
   const scrub = (text: string) => store.secretValues().flatMap(secretForms).reduce((safe, form) => (safe.includes(form) ? safe.split(form).join(HELD_SECRET_MASK) : safe), text);
   const guard = deps.guard ?? (deps.publicOnly ? publicGuard : openGuard);
@@ -66,8 +68,8 @@ export function createEmailService(deps: EmailServiceDeps) {
   const discover = deps.discover ?? liveDiscoverDeps(allowed);
   const now = deps.now ?? Date.now;
 
-  const status = (): EmailStatus => (deps.refusal
-    ? { state: "unavailable", accounts: [], reason: deps.refusal }
+  const status = (): EmailStatus => (refusal
+    ? { state: "unavailable", accounts: [], reason: refusal }
     : { state: store.list().length ? "connected" : "signed-out", accounts: store.list().map(view) });
 
   /** Tries each place in turn. A server that refuses the password ends it there: the password goes to no other host. */
@@ -96,12 +98,12 @@ export function createEmailService(deps: EmailServiceDeps) {
     guard,
     status,
     scrub,
-    mounted: () => !deps.refusal && store.list().length > 0,
+    mounted: () => !refusal && store.list().length > 0,
     slug: EMAIL_SLUG,
 
     /** Connects a mailbox, or says why not. Nothing is saved until a real header has been read back. */
     async connect(request: EmailConnectRequest): Promise<EmailConnectAnswer> {
-      if (deps.refusal) return { ok: false, error: deps.refusal };
+      if (refusal) return { ok: false, error: refusal };
       const address = request.address.trim();
       const password = request.password;
       if (!ADDRESS.test(address)) return { ok: false, error: "Enter your whole email address, like you@example.com." };
@@ -145,12 +147,14 @@ export function createEmailService(deps: EmailServiceDeps) {
     },
 
     disconnect(address: string): EmailStatus {
+      if (sessionRefusal) return status();
       store.remove(address);
       return status();
     },
 
     /** A mailbox that moved from the person's computer, with its password; My Cloud keeps one of its own at that address. */
     adopt(values: unknown[]): { adopted: number; kept: number } {
+      if (sessionRefusal) throw new Error(sessionRefusal);
       let adopted = 0, kept = 0;
       for (const value of values) {
         const account = parseEmailAccount(value);

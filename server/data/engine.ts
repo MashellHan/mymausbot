@@ -1,21 +1,32 @@
 // The binding loads on first use through a dynamic require so esbuild never bundles it (the packaged app ships no
 // node_modules). DuckDB's interrupt() is per connection, so each connection runs one statement at a time.
 import { existsSync, mkdirSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import type * as DuckDB from "@duckdb/node-api";
 
 import { DATA_LIMITS, DATA_RESULTS_SCHEMA } from "../../shared/data-surface.ts";
+import type { MiniAppDataBinding, MiniAppNamedPage, MiniAppNamedRead, MiniAppSourceTable } from "../../shared/mini-app-data.ts";
 import { botFolder as defaultBotFolder } from "../bot-folder.ts";
 import { DATA_DIR } from "../config.ts";
+import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
+import { DataAdmission, DataStoreLane } from "./admission.ts";
+import { DataCatalog, type DataCatalogAccess } from "./catalog.ts";
+import { DataCursorCodec } from "./cursor.ts";
+import { closeKnownDatabases, copyDataSnapshots, listOwnerDatasets, promoteDataStore, recoverPromotions } from "./managed-stores.ts";
+import { validateDataBindings } from "./named-query.ts";
+import { executeNamedRead, listSourceTables, readNamedPage, verifyBaseTable, type NamedConnection } from "./named-reader.ts";
+import { commitBusinessCreate, ensureRevision, readRevision } from "./revision.ts";
+import { quoteIdentifier } from "./sql-identifiers.ts";
+import { removeSourceStore, retainedStoreFile, storeFolder, DATA_DB_FILE, DATA_TMP_DIR } from "./storage.ts";
 import {
   DataFailure,
   type BotDatabase,
   type DataColumn,
   type DataColumnStats,
   type DataConnection,
+  type DataChanged,
   type DataEngine,
   type DataExtension,
   type DataHistogram,
@@ -24,13 +35,13 @@ import {
   type MaterialiseResult,
   type RunOptions,
   type RunResult,
+  type DataSnapshotManifest,
 } from "./types.ts";
 
 type Binding = typeof DuckDB;
 type Cell = string | number | boolean | null;
 
-export const DATA_DB_FILE = "data.duckdb";
-export const DATA_TMP_DIR = "data-tmp";
+export { DATA_DB_FILE, DATA_TMP_DIR } from "./storage.ts";
 const IDLE_CLOSE_MS = 10 * 60_000;
 export const EXTENSION_INSTALL_TIMEOUT_MS = 5 * 60_000;
 const HISTOGRAM_BINS = 20;
@@ -47,6 +58,7 @@ export interface DataEngineOptions {
   env?: NodeJS.ProcessEnv;
   idleMs?: number;
   binding?: Binding;
+  catalog?: DataCatalogAccess | null;
 }
 
 /** Null means the server's own node_modules. */
@@ -87,9 +99,7 @@ export function instanceSettings(folder: string, dataDir: string, duckdbVersion:
   };
 }
 
-export function quoteIdentifier(name: string): string {
-  return `"${name.replaceAll('"', '""')}"`;
-}
+export { quoteIdentifier } from "./sql-identifiers.ts";
 
 function quoteLiteral(text: string): string {
   return `'${text.replaceAll("'", "''")}'`;
@@ -279,12 +289,23 @@ class BotDb implements BotDatabase {
   private inFlight = 0;
   private readonly statsCache = new Map<string, DataColumnStats>();
   private statsRevision = 0;
+  private readonly storeLane = new DataStoreLane();
+  private folderPath: string;
+  private managed: boolean;
+  private revoked = false;
+  private unsafe = false;
 
   readonly botId: string;
   private readonly engine: Engine;
-  constructor(botId: string, engine: Engine) { this.botId = botId; this.engine = engine; }
+  constructor(botId: string, folder: string, engine: Engine, managed = false) { this.botId = botId; this.folderPath = folder; this.engine = engine; this.managed = managed; }
+
+  relocate(folder: string): void { this.folderPath = folder; this.managed = true; }
+
+  revoke(): void { this.revoked = true; }
 
   private open(): Promise<Open> {
+    this.engine.requireReady();
+    if (this.revoked || this.unsafe) throw new DataFailure({ code: "engine_unavailable", message: "This Data store is closed; resolve it again." });
     if (!this.state) {
       // The file admits one instance per process: a reopen waits for a close that may still be draining.
       const previous = this.closing ?? Promise.resolve();
@@ -300,10 +321,11 @@ class BotDb implements BotDatabase {
 
   private async openNow(): Promise<Open> {
     const binding = this.engine.binding();
-    const folder = this.engine.folder(this.botId);
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const folder = this.folderPath;
+    if (!this.managed) mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const file = this.managed ? retainedStoreFile(folder) : join(folder, DATA_DB_FILE);
     const settings = instanceSettings(folder, this.engine.dataDir, binding.version(), this.engine.env);
-    const instance = await binding.DuckDBInstance.create(join(folder, DATA_DB_FILE), settings);
+    const instance = await binding.DuckDBInstance.create(file, settings);
     let bot: DuckDB.DuckDBConnection | undefined;
     let panel: DuckDB.DuckDBConnection | undefined;
     try {
@@ -332,11 +354,14 @@ class BotDb implements BotDatabase {
     this.idleTimer.unref();
   }
 
-  private async statement<T>(connection: DataConnection, sql: string, options: { timeoutMs?: number; signal?: AbortSignal }, work: (open: Open, conn: DuckDB.DuckDBConnection) => Promise<T>): Promise<T> {
+  private async statement<T>(connection: DataConnection, sql: string, options: { timeoutMs?: number; signal?: AbortSignal; readOnly?: boolean; resultCleanup?: true }, work: (open: Open, conn: DuckDB.DuckDBConnection) => Promise<T>): Promise<T> {
     this.inFlight++;
     try {
-      const open = await this.open();
-      return await open.lanes[connection].run(sql, options, (conn) => work(open, conn));
+      const shared = options.resultCleanup === true || (options.readOnly ?? /^(?:SELECT|SHOW|DESCRIBE)\b/i.test(sql.trim()));
+      return await this.engine.admission.enter(() => this.storeLane.run(shared, async () => {
+        const open = await this.open();
+        return open.lanes[connection].run(sql, options, (conn) => work(open, conn));
+      }));
     } catch (error) {
       if (error instanceof DataFailure && error.error.code === "table_not_found" && !error.error.candidates) {
         const wanted = missingTableName(error.error.message);
@@ -363,9 +388,9 @@ class BotDb implements BotDatabase {
     return Array.from({ length: result.columnCount }, (_, i) => ({ name: result.columnName(i), type: result.columnType(i).toString() }));
   }
 
-  private async read(open: Open, conn: DuckDB.DuckDBConnection, sql: string, maxRows = Infinity): Promise<RunResult> {
+  private async read(open: Open, conn: DuckDB.DuckDBConnection, sql: string, maxRows = Infinity, values?: DuckDB.DuckDBValue[]): Promise<RunResult> {
     const started = performance.now();
-    const result = await conn.run(sql);
+    const result = await conn.run(sql, values);
     if (result.statementType !== open.binding.StatementType.SELECT && result.statementType !== open.binding.StatementType.EXPLAIN) {
       this.statsCache.clear();
       this.statsRevision++;
@@ -383,7 +408,51 @@ class BotDb implements BotDatabase {
   async run(sql: string, options: RunOptions): Promise<RunResult> {
     const maxRows = options.maxRows === undefined ? Infinity : Math.max(0, options.maxRows);
     await this.loadExtensions(options);
+    if (options.businessMutation) return this.businessCreate(sql, options);
     return this.statement(options.connection, sql, options, (open, conn) => this.read(open, conn, sql, maxRows));
+  }
+
+  private async businessCreate(sql: string, options: RunOptions): Promise<RunResult> {
+    return this.statement(options.connection, sql, options, async (open, conn) => {
+      await ensureRevision((statement) => conn.run(statement));
+      const { result, revision } = await commitBusinessCreate(sql, options.maxRows ?? Infinity,
+        (statement, limit) => this.read(open, conn, statement, limit), (statement) => conn.run(statement));
+      this.engine.changed(this, revision);
+      return result;
+    });
+  }
+
+  revision(): Promise<number> {
+    const sql = "SELECT revision FROM omb_data_internal.revision";
+    return this.statement("panel", sql, { readOnly: false }, async (open, conn) =>
+      readRevision((statement) => this.read(open, conn, statement, 1), (statement) => conn.run(statement)));
+  }
+
+  async revisionForBarrier(): Promise<number> {
+    const open = await this.open();
+    const sql = "SELECT revision FROM omb_data_internal.revision";
+    return open.lanes.panel.run(sql, {}, async (conn) =>
+      readRevision((statement) => this.read(open, conn, statement, 1), (statement) => conn.run(statement)));
+  }
+
+  private namedConnection(open: Open, conn: DuckDB.DuckDBConnection): NamedConnection {
+    return { read: (sql, maxRows, values) => this.read(open, conn, sql, maxRows, values), run: (sql) => conn.run(sql) };
+  }
+
+  validateBinding(binding: MiniAppDataBinding): Promise<void> {
+    validateDataBindings([binding]);
+    const sql = "Validate named Data source";
+    return this.statement("panel", sql, { readOnly: true }, async (open, conn) => verifyBaseTable(this.namedConnection(open, conn), binding));
+  }
+
+  namedRead(input: MiniAppNamedRead, offset: number): Promise<{ page: MiniAppNamedPage; hasMore: boolean }> {
+    return this.statement("panel", "Named Data read", { timeoutMs: DATA_LIMITS.sqlTimeoutMs, readOnly: true }, async (open, conn) =>
+      executeNamedRead(this.namedConnection(open, conn), input, offset));
+  }
+
+  listSourceTables(): Promise<MiniAppSourceTable[]> {
+    return this.statement("panel", "List Data source tables", { readOnly: true }, async (open, conn) =>
+      listSourceTables(this.namedConnection(open, conn)));
   }
 
   /** A first-time INSTALL is a download, so extensions load as their own step, off the statement's timeout. */
@@ -399,7 +468,7 @@ class BotDb implements BotDatabase {
     const table = `${DATA_RESULTS_SCHEMA}.${name}`;
     const body = sql.trim().replace(/;+\s*$/, "");
     const create = `CREATE OR REPLACE TABLE ${table} AS ${body}`;
-    return this.statement(options.connection, sql, options, async (open, conn) => {
+    return this.statement(options.connection, sql, { ...options, readOnly: false }, async (open, conn) => {
       const started = performance.now();
       const created = await this.read(open, conn, create);
       const described = await this.read(open, conn, `DESCRIBE ${table}`);
@@ -415,7 +484,7 @@ class BotDb implements BotDatabase {
   async dropResult(name: string, connection: DataConnection = "bot"): Promise<void> {
     if (!RESULT_NAME.test(name)) throw new DataFailure({ code: "invalid_input", message: `Result name "${name}" must be a plain identifier (letters, digits, underscore).` });
     const sql = `DROP TABLE IF EXISTS ${DATA_RESULTS_SCHEMA}.${name}`;
-    await this.statement(connection, sql, {}, (open, conn) => this.read(open, conn, sql));
+    await this.statement(connection, sql, { resultCleanup: true }, (open, conn) => this.read(open, conn, sql));
   }
 
   private async catalog(connection: DataConnection = "panel"): Promise<CatalogEntry[]> {
@@ -641,7 +710,7 @@ FROM ${from}, omb_range WHERE ${id} IS NOT NULL GROUP BY bin ORDER BY bin`;
   }
 
   async listTables(): Promise<Array<{ name: string; sqlName?: string; rowCount: number; columns: DataColumn[] }>> {
-    const entries = (await this.catalog()).filter((entry) => entry.schema !== DATA_RESULTS_SCHEMA);
+    const entries = (await this.catalog()).filter((entry) => entry.schema !== DATA_RESULTS_SCHEMA && entry.schema !== "omb_data_internal");
     if (!entries.length) return [];
     const open = await this.open();
     const columnsSql = "SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns WHERE table_catalog = current_database() ORDER BY table_schema, table_name, ordinal_position";
@@ -672,13 +741,17 @@ FROM ${from}, omb_range WHERE ${id} IS NOT NULL GROUP BY bin ORDER BY bin`;
     void this.state.then((open) => open.lanes[connection].interrupt(), () => undefined);
   }
 
-  async close(): Promise<void> {
+  async close(strict = false): Promise<void> {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
     const pending = this.state;
-    if (!pending) return this.closing ?? undefined;
+    if (!pending) {
+      await this.closing;
+      if (strict && this.unsafe) throw new DataFailure({ code: "timeout", message: "Data store did not drain before its safety barrier." });
+      return;
+    }
     this.state = null;
     this.statsCache.clear();
     const closing = (async () => {
@@ -687,23 +760,38 @@ FROM ${from}, omb_range WHERE ${id} IS NOT NULL GROUP BY bin ORDER BY bin`;
       // Closing a connection with a statement in flight is undefined: interrupt first, then let the lanes drain.
       for (const lane of Object.values(open.lanes)) lane.interrupt();
       if (!await drainLanes(Object.values(open.lanes), CLOSE_DRAIN_MS)) {
+        this.unsafe = true;
+        if (strict) throw new DataFailure({ code: "timeout", message: "Data store did not drain before its safety barrier." });
         console.warn(`data: ${this.botId}'s database still had a statement running after ${CLOSE_DRAIN_MS} ms; its handles are left to the process`);
         return;
       }
+      let checkpointError: unknown;
+      if (strict) {
+        try { await open.lanes.bot.run("CHECKPOINT", { timeoutMs: CLOSE_DRAIN_MS }, async (conn) => { await conn.run("CHECKPOINT"); }); }
+        catch (error) { checkpointError = error; this.unsafe = true; }
+      }
       for (const lane of Object.values(open.lanes)) lane.connection.closeSync();
       open.instance.closeSync();
+      if (checkpointError) throw checkpointError;
     })();
     this.closing = closing;
     try { await closing; } finally { if (this.closing === closing) this.closing = null; }
   }
 
-  get isOpen(): boolean {
-    return this.state !== null;
-  }
+  get isOpen(): boolean { return this.state !== null; }
 }
 
 class Engine implements DataEngine {
   private readonly databases = new Map<string, BotDb>();
+  private readonly storeDatabases = new Map<string, BotDb>();
+  private readonly catalog: DataCatalog | null;
+  private recovery: Promise<void> | null = null;
+  private recoveryHandle: unknown = null;
+  private blocked = false;
+  private readonly listeners = new Set<(event: DataChanged) => void>();
+  private readonly datasetByDb = new WeakMap<BotDb, string>();
+  private cursors = new DataCursorCodec();
+  readonly admission = new DataAdmission();
   private loaded: { binding: Binding } | { reason: string } | null = null;
   readonly env: NodeJS.ProcessEnv;
   readonly dataDir: string;
@@ -715,8 +803,55 @@ class Engine implements DataEngine {
     this.dataDir = options.dataDir ?? DATA_DIR;
     this.idleMs = options.idleMs ?? IDLE_CLOSE_MS;
     this.folder = options.botFolder ?? defaultBotFolder;
+    const catalog = options.catalog === undefined && options.dataDir === undefined && options.botFolder === undefined
+      ? { getDatabase: applicationDatabase, withWrite: withApplicationWrite }
+      : options.catalog;
+    this.catalog = catalog ? new DataCatalog(catalog) : null;
     if (options.binding) this.loaded = { binding: options.binding };
   }
+
+  private requireCatalog(): DataCatalog {
+    if (!this.catalog) throw new DataFailure({ code: "engine_unavailable", message: "The Data catalog is unavailable." });
+    return this.catalog;
+  }
+
+  private async recover(): Promise<void> {
+    if (!this.catalog) return;
+    const handle = this.catalog.currentDatabase();
+    if (handle !== this.recoveryHandle) {
+      const hadHandle = this.recoveryHandle !== null;
+      this.recoveryHandle = handle;
+      this.blocked = true;
+      this.recovery = this.admission.barrier(async () => {
+        if (hadHandle) {
+          await closeKnownDatabases(this.databases.values(), this.storeDatabases.values(), true);
+          this.databases.clear(); this.storeDatabases.clear(); this.cursors = new DataCursorCodec();
+        }
+        await recoverPromotions(this.catalog!, this.dataDir, this.folder);
+        this.blocked = false;
+      });
+    }
+    if (!this.recovery) {
+      this.recovery = this.admission.barrier(async () => {
+        await recoverPromotions(this.catalog!, this.dataDir, this.folder);
+        this.blocked = false;
+      });
+    }
+    await this.recovery;
+  }
+
+  changed(database: BotDb, revision: number): void {
+    const datasetId = this.datasetByDb.get(database);
+    if (!datasetId) return;
+    for (const listener of this.listeners) {
+      try { listener({ datasetId, revision }); }
+      catch (error) { console.warn("data: change listener failed", error); }
+    }
+  }
+
+  requireReady(): void { if (this.blocked) throw new DataFailure({ code: "engine_unavailable", message: "Data promotion recovery is required before this store can be used." }); }
+
+  onChanged(listener: (event: DataChanged) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 
   private load(): { binding: Binding } | { reason: string } {
     if (this.loaded) return this.loaded;
@@ -740,37 +875,120 @@ class Engine implements DataEngine {
     throw new DataFailure({ code: "engine_unavailable", message: loaded.reason });
   }
 
-  unavailable(): string | null {
-    const loaded = this.load();
-    return "reason" in loaded ? loaded.reason : null;
-  }
+  unavailable(): string | null { const loaded = this.load(); return "reason" in loaded ? loaded.reason : null; }
 
   async forBot(botId: string): Promise<BotDatabase> {
     if (!botId || /[\\/]|^\.\.?$/.test(botId)) throw new DataFailure({ code: "invalid_input", message: `Not a bot id: "${botId}".` });
     this.binding();
+    await this.recover();
     let db = this.databases.get(botId);
     if (!db) {
-      db = new BotDb(botId, this);
+      const alias = this.catalog?.forBot(botId);
+      db = alias
+        ? this.storeDatabases.get(alias.storeId) ?? new BotDb(botId, storeFolder(this.dataDir, alias.storeId), this, true)
+        : new BotDb(botId, this.folder(botId), this);
       this.databases.set(botId, db);
+      if (alias) { this.storeDatabases.set(alias.storeId, db); this.datasetByDb.set(db, alias.datasetId); }
     }
     return db;
   }
 
-  async deleteBot(botId: string): Promise<void> {
-    const db = this.databases.get(botId);
-    this.databases.delete(botId);
-    await db?.close();
-    const folder = this.folder(botId);
-    for (const name of [DATA_DB_FILE, `${DATA_DB_FILE}.wal`, DATA_TMP_DIR]) {
-      // Windows keeps a just-closed file busy for a moment; rm retries EBUSY/EPERM.
-      await rm(join(folder, name), { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  async forDataset(datasetId: string, ownerId: string): Promise<BotDatabase> {
+    this.binding();
+    await this.recover();
+    const dataset = this.requireCatalog().forDataset(datasetId, ownerId);
+    if (!dataset) throw new DataFailure({ code: "source_not_found", message: "No such Data dataset for this owner." });
+    let db = this.storeDatabases.get(dataset.storeId);
+    if (!db) {
+      db = new BotDb(`dataset:${datasetId}`, storeFolder(this.dataDir, dataset.storeId), this, true);
+      this.storeDatabases.set(dataset.storeId, db);
     }
+    this.datasetByDb.set(db, datasetId);
+    return db;
+  }
+
+  async validateBinding(ownerId: string, binding: MiniAppDataBinding): Promise<void> {
+    const db = await this.forDataset(binding.datasetId, ownerId) as BotDb;
+    await db.validateBinding(binding);
+  }
+
+  async readNamed(input: MiniAppNamedRead): Promise<MiniAppNamedPage> {
+    return readNamedPage(input, this.cursors, async (offset) =>
+      (await this.forDataset(input.binding.datasetId, input.ownerId) as BotDb).namedRead(input, offset));
+  }
+
+  async listDatasets(ownerId: string): Promise<Array<{ datasetId: string; storeId: string; revision: number }>> {
+    await this.recover();
+    return listOwnerDatasets(this.requireCatalog(), ownerId, async (entry) =>
+      (await this.forDataset(entry.datasetId, ownerId) as BotDb).revision());
+  }
+
+  async promoteForBot(botId: string, ownerId: string): Promise<{ datasetId: string; storeId: string; revision: number }> {
+    if (!ownerId || ownerId.length > 200) throw new DataFailure({ code: "invalid_input", message: "A Data owner is required." });
+    const db = await this.forBot(botId) as BotDb;
+    const catalog = this.requireCatalog();
+    return this.admission.barrier(async () => {
+      try {
+        const existing = catalog.forBot(botId);
+        if (existing) {
+          if (existing.ownerId !== ownerId) throw new DataFailure({ code: "write_refused", message: "Data belongs to another owner." });
+          return { ...existing, revision: await db.revisionForBarrier() };
+        }
+        return await promoteDataStore(catalog, this.dataDir, this.folder, botId, ownerId, async () => {
+          const revision = await db.revisionForBarrier();
+          await db.close(true);
+          return revision;
+        }, (dataset) => {
+          db.relocate(storeFolder(this.dataDir, dataset.storeId));
+          this.storeDatabases.set(dataset.storeId, db);
+          this.datasetByDb.set(db, dataset.datasetId);
+        });
+      } catch (error) {
+        this.blocked = true;
+        this.recovery = null;
+        throw error;
+      }
+    });
+  }
+
+  async withBotDeletion(botId: string, removeBot: () => boolean | Promise<boolean>): Promise<boolean> {
+    await this.recover();
+    return this.admission.barrier(async () => {
+      const alias = this.catalog?.forBot(botId);
+      const db = this.databases.get(botId) ?? (alias ? this.storeDatabases.get(alias.storeId) : undefined);
+      await db?.close(true);
+      const removed = await removeBot();
+      if (!removed) return false;
+      this.databases.delete(botId);
+      if (alias) this.storeDatabases.delete(alias.storeId);
+      db?.revoke();
+      this.catalog?.detachBot(botId);
+      return true;
+    });
+  }
+
+  async withSnapshot<T>(directory: string, capture: (manifest: DataSnapshotManifest) => Promise<T>): Promise<T> {
+    await this.recover();
+    const catalog = this.requireCatalog();
+    return this.admission.barrier(async () => {
+      const manifest = await copyDataSnapshots(catalog, this.dataDir, directory, async (dataset) => {
+        const db = this.storeDatabases.get(dataset.storeId) ?? new BotDb(`dataset:${dataset.datasetId}`, storeFolder(this.dataDir, dataset.storeId), this, true);
+        const revision = await db.revisionForBarrier();
+        await db.close(true);
+        return revision;
+      });
+      return capture(manifest);
+    });
+  }
+
+  async deleteBot(botId: string): Promise<void> {
+    await this.withBotDeletion(botId, async () => { await removeSourceStore(this.folder(botId)); return true; });
   }
 
   async closeAll(): Promise<void> {
-    const open = [...this.databases.values()];
-    this.databases.clear();
-    await Promise.all(open.map((db) => db.close()));
+    await this.admission.barrier(async () => {
+      await closeKnownDatabases(this.databases.values(), this.storeDatabases.values());
+    });
   }
 }
 

@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 import { writeFileAtomic } from "../atomic.ts";
+import { appSessionCredentials, sessionCredentialRefusal } from "../app-session-credentials.ts";
 import type { ModelCatalog, ProviderAuthenticationStart, ProviderAuthenticationStatus, ProviderSnapshot } from "../contracts.ts";
 
 const ISSUER = "https://auth.openai.com";
@@ -107,6 +108,7 @@ export class ChatGptPlanAuthController {
     privateDirectory(this.options.directory);
   }
   private read(): Credentials | null {
+    if (appSessionCredentials()) return null;
     const raw = readJson(join(this.options.directory, "credentials.json"));
     if (raw === null) return null;
     const record = object(raw);
@@ -237,6 +239,7 @@ export class ChatGptPlanAuthController {
   }
 
   async start(): Promise<ProviderAuthenticationStart> {
+    if (appSessionCredentials()) throw sessionCredentialRefusal("ChatGPT plan sign-in");
     if (this.starting) return this.starting;
     this.starting = this.begin();
     try { return await this.starting; } finally { this.starting = null; }
@@ -344,6 +347,7 @@ export class ChatGptPlanAuthController {
   }
   async dispose(): Promise<void> { this.disposed = true; await this.cancel(); this.flow = null; }
   async snapshot(): Promise<{ authenticated: boolean; account?: ProviderSnapshot["account"]; reason?: string }> {
+    if (appSessionCredentials()) return { authenticated: false, reason: "ChatGPT plan sign-in is unavailable in session-only credential mode." };
     const record = this.read();
     return { authenticated: !!record?.tokens?.scopes.includes(DIRECT_SCOPE),
       ...(record ? { account: { method: "login" as const, ...(record.email ? { email: record.email } : {}), organization: `ChatGPT · ${record.clientId.slice(-8)}` } } : {}),
@@ -351,6 +355,7 @@ export class ChatGptPlanAuthController {
     };
   }
   async accessToken(): Promise<string> {
+    if (appSessionCredentials()) throw sessionCredentialRefusal("ChatGPT plan sign-in");
     if (this.disposed) throw new Error("This ChatGPT provider was removed.");
     this.prepare();
     return locked(this.options.directory, async () => {
@@ -412,6 +417,7 @@ export class ChatGptPlanAuthController {
     return { default: options[0]?.id ?? "", options };
   }
   async signOut(): Promise<void> {
+    if (appSessionCredentials()) return;
     if (this.disposed) throw new Error("This provider was removed.");
     await this.cancel();
     this.prepare();
