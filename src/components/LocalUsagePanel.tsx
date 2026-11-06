@@ -1,7 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { LocalUsageCategory, LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
+import type { LocalUsageCategory, LocalUsageResponse } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
-import { metricText, prText, PrCount, UsageChange, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
+import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
+import { metricText, countText, UsageCount, UsageChange, usageMetricHint, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable } from "./LocalUsageTables";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
@@ -21,15 +22,15 @@ function asOfTime(value: number) {
   });
 }
 
-function coverageText(coverage: LocalUsageWindow["coverage"]) {
+function coverageText(coverage: UsageWindow["coverage"]) {
   return t(coverage === "ready" ? "computer.usage.coverage.ready"
     : coverage === "partial" ? "computer.usage.coverage.partial" : "computer.usage.coverage.unavailable");
 }
 
-function WindowCard({ window }: { window: LocalUsageWindow }) {
+function WindowCard({ window }: { window: UsageWindow }) {
   const rows = [
-    ["prs", prText(window.prs, window.knownPrs), window.comparison.prs],
-    ["commits", metricText(window.commits), window.comparison.commits],
+    ["prs", countText(window.prs, window.knownPrs), window.comparison.prs],
+    ["commits", countText(window.commits, window.knownCommits), window.comparison.commits],
     ["totalTokens", window.totalTokens !== null && window.totalTokens >= 1_000_000
       ? new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(window.totalTokens) : metricText(window.totalTokens), window.comparison.totalTokens],
   ] as const;
@@ -43,9 +44,9 @@ function WindowCard({ window }: { window: LocalUsageWindow }) {
       <dl className="mt-2 grid grid-cols-3 gap-2">
         {rows.map(([metric, value, comparison]) => (
           <div key={metric} className="min-w-0">
-            <dt className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
+            <dt title={usageMetricHint(metric)} className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
             <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
-              <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <PrCount prs={window.prs} knownPrs={window.knownPrs} /> : value}</span>
+              <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
               <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric} />
             </dd>
           </div>
@@ -53,11 +54,11 @@ function WindowCard({ window }: { window: LocalUsageWindow }) {
       </dl>
       <div className="mt-2 border-t border-hairline/40 pt-2 text-[13px] tabular-nums">
         <div className="mb-1 grid grid-cols-[1fr_1fr_1fr] gap-2 text-ink-secondary" aria-hidden="true"><span /><span className="text-right">{t("computer.usage.metric.prs")}</span><span className="text-right">{t("computer.usage.metric.commits")}</span></div>
-        {(["work", "personal", "unclassified"] as const).filter((key) => key !== "unclassified" || (window.categories[key].knownPrs ?? 0) + (window.categories[key].commits ?? 0) > 0).map((key) => <div key={key} data-usage-category-row={key} className="grid grid-cols-[1fr_1fr_1fr] gap-2 py-0.5">
+        {(["work", "personal", "unclassified"] as const).filter((key) => key !== "unclassified" || (window.categories[key].knownPrs ?? 0) + (window.categories[key].commits ?? window.categories[key].knownCommits ?? 0) > 0).map((key) => <div key={key} data-usage-category-row={key} className="grid grid-cols-[1fr_1fr_1fr] gap-2 py-0.5">
           <span className="text-ink-secondary">{t(`computer.usage.category.${key}`)}</span>
-          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.prs")}: </span><PrCount prs={window.categories[key].prs} knownPrs={window.categories[key].knownPrs} />
+          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.prs")}: </span><UsageCount value={window.categories[key].prs} known={window.categories[key].knownPrs} />
             <UsageChange value={window.comparison.categories[key].prs} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="prs" className="block text-[13px] text-ink-secondary" /></span>
-          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.commits")}: </span>{metricText(window.categories[key].commits)}
+          <span className="text-right text-ink"><span className="sr-only">{t("computer.usage.metric.commits")}: </span><UsageCount value={window.categories[key].commits} known={window.categories[key].knownCommits} />
             <UsageChange value={window.comparison.categories[key].commits} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="commits" className="block text-[13px] text-ink-secondary" /></span>
         </div>)}
       </div>
@@ -67,8 +68,8 @@ function WindowCard({ window }: { window: LocalUsageWindow }) {
   );
 }
 
-function trendValue(day: LocalUsageTrendDay, metric: Metric): number | null {
-  return metric === "prs" ? day.prs ?? day.knownPrs : day[metric];
+function trendValue(day: UsageTrendDay, metric: Metric): number | null {
+  return metric === "prs" ? day.prs ?? day.knownPrs : metric === "commits" ? day.commits ?? day.knownCommits : day.totalTokens;
 }
 
 const categoryOrder = ["work", "personal", "unclassified"] as const;
@@ -79,12 +80,12 @@ const partialCategoryTone: Record<LocalUsageCategory, string> = {
   work: "bg-accent/35", personal: "bg-ink-secondary/35", unclassified: "bg-warning/30",
 };
 
-function categoryValue(day: LocalUsageTrendDay, metric: "prs" | "commits", category: LocalUsageCategory): number | null {
+function categoryValue(day: UsageTrendDay, metric: "prs" | "commits", category: LocalUsageCategory): number | null {
   const counts = day.categories[category];
-  return metric === "prs" ? counts.prs ?? counts.knownPrs : counts.commits;
+  return metric === "prs" ? counts.prs ?? counts.knownPrs : counts.commits ?? counts.knownCommits;
 }
 
-function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metric }) {
+function TrendChart({ days, metric }: { days: UsageTrendDay[]; metric: Metric }) {
   const [activeDay, setActiveDay] = useState<string | null>(null);
   const [focusDay, setFocusDay] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -117,15 +118,16 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
         {days.map((day, index) => index > 0 && new Date(`${day.day}T00:00:00Z`).getUTCDay() === 1
           ? <span key={day.day} data-usage-week-start={day.day} className="-ml-px border-l border-ink/[0.08]" style={{ gridColumn: index + 1 }} /> : null)}
       </div>
-      <h4 className="relative text-[13px] font-medium text-ink-secondary"><span className="bg-inset pr-1">{t(`computer.usage.metric.${metric}`)}</span></h4>
+      <h4 title={usageMetricHint(metric)} className="relative text-[13px] font-medium text-ink-secondary"><span className="bg-inset pr-1">{t(`computer.usage.metric.${metric}`)}</span></h4>
       <div className="relative mt-2 flex h-16 items-end gap-[2px]">
         {days.map((day, index) => {
           const date = new Date(`${day.day}T00:00:00Z`);
           const value = values[index];
-          const label = metric === "prs" ? `${prText(day.prs, day.knownPrs)}${day.prs === null && day.knownPrs !== null ? ` · ${t("computer.usage.synced")}` : ""}` : metricText(value);
+          const known = metric === "prs" ? day.knownPrs : day.knownCommits;
+          const label = `${metricText(value)}${metric !== "totalTokens" && day[metric] === null && known !== null ? ` · ${t("computer.usage.synced")}` : ""}`;
           const segments = metric === "totalTokens" ? [] : categoryOrder.map((category) => ({
             category, value: categoryValue(day, metric, category) ?? 0,
-            partial: metric === "prs" && day.categories[category].prs === null,
+            partial: day.categories[category][metric] === null,
           })).filter((segment) => segment.value > 0);
           const segmentTotal = segments.reduce((total, segment) => total + segment.value, 0);
           return <button key={day.day} type="button" data-usage-day={day.day}
@@ -159,13 +161,13 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
         className="pointer-events-none absolute bottom-2 right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2 py-1.5 text-[12px] text-ink shadow-lg">
         <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
           <time dateTime={active.day} className="font-medium">{active.day} · {weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}</time>
-          <span>{t(`computer.usage.metric.${metric}`)}: {metric === "prs" ? <PrCount prs={active.prs} knownPrs={active.knownPrs} /> : metricText(trendValue(active, metric))}</span>
+          <span>{t(`computer.usage.metric.${metric}`)}: {metric === "prs" ? <UsageCount value={active.prs} known={active.knownPrs} /> : metric === "commits" ? <UsageCount value={active.commits} known={active.knownCommits} /> : metricText(active.totalTokens)}</span>
         </div>
         {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
           {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category}>
             {t(`computer.usage.category.${category}`)}: {metric === "prs"
-              ? <PrCount prs={active.categories[category].prs} knownPrs={active.categories[category].knownPrs} />
-              : metricText(active.categories[category].commits)}
+              ? <UsageCount value={active.categories[category].prs} known={active.categories[category].knownPrs} />
+              : <UsageCount value={active.categories[category].commits} known={active.categories[category].knownCommits} />}
           </span>)}
         </div>}
       </div>}
@@ -174,19 +176,23 @@ function TrendChart({ days, metric }: { days: LocalUsageTrendDay[]; metric: Metr
 }
 
 export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | null }) {
-  const windows = snapshot?.windows;
-  const showUnclassified = snapshot?.trend.some((day) => (day.categories.unclassified.prs ?? day.categories.unclassified.knownPrs ?? 0) > 0
-    || (day.categories.unclassified.commits ?? 0) > 0) ?? false;
+  const view = snapshot && localUsageView(snapshot);
+  const windows = view?.windows;
+  const showUnclassified = view?.trend.some((day) => (day.categories.unclassified.prs ?? day.categories.unclassified.knownPrs ?? 0) > 0
+    || (day.categories.unclassified.commits ?? day.categories.unclassified.knownCommits ?? 0) > 0) ?? false;
   return (
     <div className="@container/usage min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="local-usage-panel">
       <header className="mb-3 pt-2">
         <h2 className="text-[18px] font-semibold text-ink">{t("computer.usage.heading")}</h2>
-        {snapshot?.asOf != null ? <p className="mt-1 text-[13px] text-ink-secondary"><time dateTime={new Date(snapshot.asOf).toISOString()}>{t("computer.usage.asOf", { time: asOfTime(snapshot.asOf) })}</time></p> : null}
+        {view?.asOf != null ? <p className="mt-1 text-[13px] text-ink-secondary" title={t("computer.usage.captureTimes", {
+          merged: snapshot?.merged?.asOf != null ? asOfTime(snapshot.merged.asOf) : t("computer.usage.unavailable"),
+          tokens: snapshot?.asOf != null ? asOfTime(snapshot.asOf) : t("computer.usage.unavailable"),
+        })}><time dateTime={new Date(view.asOf).toISOString()}>{t("computer.usage.asOf", { time: asOfTime(view.asOf) })}</time></p> : null}
       </header>
       {snapshot === null ? <p role="status" className="text-[14px] text-ink-secondary">{t("computer.usage.loading")}</p> : null}
-      {snapshot?.status === "stale" ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[14px] text-warning">{t("computer.usage.stale")}</p> : null}
-      {snapshot?.status === "partial" ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[14px] text-warning">{t("computer.usage.partial")}</p> : null}
-      {snapshot?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
+      {view?.status === "stale" ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[14px] text-warning">{t("computer.usage.stale")}</p> : null}
+      {view?.status === "partial" ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[14px] text-warning">{t("computer.usage.partial")}</p> : null}
+      {view?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
       {windows && <>
         <div className="grid grid-cols-1 gap-2 @min-[42rem]/usage:grid-cols-3">
           {(["1", "7", "30"] as const).map((key) => <WindowCard key={key} window={windows[key]} />)}
@@ -202,9 +208,9 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
             </span>)}
           </div>
           <div className="mt-2 grid grid-cols-1 gap-3">
-            {metrics.map((metric) => <TrendChart key={metric} days={snapshot.trend} metric={metric} />)}
+            {metrics.map((metric) => <TrendChart key={metric} days={view.trend} metric={metric} />)}
           </div>
-          <UsageDailyTable days={snapshot.trend} />
+          <UsageDailyTable days={view.trend} />
         </section>
         <UsageRepositoryTable windows={windows} />
       </>}
@@ -224,10 +230,10 @@ export function LocalUsagePanel() {
     const refresh = async () => {
       try {
         const next = await api<LocalUsageResponse>(ROUTE, { background: true, signal: controller.signal, timeoutMs: 5_000 });
-        if (active) setSnapshot((previous) => next.status === "unavailable" && previous?.asOf != null ? { ...previous, status: "stale" } : next);
+        if (active) setSnapshot((previous) => retainUsageSnapshot(previous, next));
       } catch (error) {
         if (active) setSnapshot((previous) => error instanceof ApiError && (error.status === 401 || error.status === 403) ? unavailable
-          : previous?.asOf != null ? { ...previous, status: "stale" } : unavailable);
+          : retainUsageSnapshot(previous, unavailable));
       } finally {
         if (active) timer = setTimeout(refresh, REFRESH_MS);
       }

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
 import { setLocale } from "@/lib/i18n";
+import { withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
 
 const calls = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => ({
@@ -69,9 +70,10 @@ const rolled = (offset: number): LocalUsageResponse => ({ ...sample, asOf: asOf 
 
 let host: HTMLDivElement;
 let root: Root;
-const render = async (snapshot: LocalUsageResponse | null, panel = false) => {
+const renderRaw = async (snapshot: LocalUsageResponse | null, panel = false) => {
   await act(async () => root.render(panel ? createElement(LocalUsagePanel) : createElement(LocalUsageView, { snapshot })));
 };
+const render = (snapshot: LocalUsageResponse | null, panel = false) => renderRaw(snapshot && withMergedUsageFixture(snapshot), panel);
 const text = () => host.textContent ?? "";
 
 beforeEach(() => {
@@ -104,7 +106,7 @@ describe("local Usage panel", () => {
     expect(visibleChanges.every((value) => !/DoD|WoW|MoM/.test(value ?? ""))).toBe(true);
     expect(firstCard.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-11-02 (China time): +10%.");
     expect(firstCard.querySelector('[data-usage-change] .sr-only')?.textContent).toContain("Compared with 2026-11-02");
-    expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("Based on synced devices; devices not yet synced are excluded.");
+    expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("Original non-merge commits in your remotely merged PRs");
     expect([...firstCard.querySelectorAll('[data-usage-change]')][2]?.getAttribute("title")).toContain("Based on synced devices; devices not yet synced are excluded.");
     expect(host.querySelector('section [data-usage-category-row="work"]')?.textContent).toContain("+20%");
     expect(host.querySelector('section [data-usage-category-row="personal"]')?.textContent).toContain("+10%");
@@ -306,7 +308,7 @@ describe("local Usage panel", () => {
 
   it("refreshes the local summary every five minutes and keeps the last good response on failure", async () => {
     vi.useFakeTimers();
-    calls.api.mockResolvedValueOnce(sample).mockRejectedValueOnce(new Error("offline"));
+    calls.api.mockResolvedValueOnce(withMergedUsageFixture(sample)).mockRejectedValueOnce(new Error("offline"));
     await render(null, true);
     expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/usage", expect.objectContaining({ background: true, signal: expect.any(AbortSignal) }));
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 - 1); });
@@ -351,10 +353,50 @@ describe("local Usage panel", () => {
 
   it.each([401, 403])("clears old activity data on HTTP %i", async (status) => {
     vi.useFakeTimers();
-    calls.api.mockResolvedValueOnce(sample).mockRejectedValueOnce(new ApiError("forbidden", status));
+    calls.api.mockResolvedValueOnce(withMergedUsageFixture(sample)).mockRejectedValueOnce(new ApiError("forbidden", status));
     await render(null, true);
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
     expect(text()).toContain("Activity summary unavailable");
     expect(text()).not.toContain("2026-10-05 – 2026-11-03");
+  });
+
+  it("renders partial remote commit counts consistently across cards, categories, trends and tables", async () => {
+    const snapshot = structuredClone(withMergedUsageFixture(sample));
+    for (const window of Object.values(snapshot.windows!)) { window.prs = 9_999; window.commits = 99_999; }
+    const merged = snapshot.merged!, current = merged.windows!["1"];
+    current.commits = null; current.knownCommits = 5; current.comparison.commits = null;
+    current.categories.work = { prs: 1, knownPrs: 1, commits: null, knownCommits: 5 };
+    current.repositories.rows[0]!.commits = null; current.repositories.rows[0]!.knownCommits = 5;
+    const last = merged.trend.at(-1)!;
+    last.commits = null; last.knownCommits = 5; last.categories.work = current.categories.work;
+    await renderRaw(snapshot);
+    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("5Synced");
+    expect(host.querySelector('[data-usage-category-row="work"]')?.textContent).toContain("5Synced");
+    expect(host.querySelector('[data-usage-daily] tbody tr:first-child td:nth-child(3)')?.textContent).toBe("5Synced");
+    expect(host.querySelector('[data-usage-repositories] tbody tr:first-child td:last-child')?.textContent).toContain("5Synced");
+    const point = host.querySelector<HTMLButtonElement>('[data-usage-trend="commits"] [data-usage-day="2026-11-03"]')!;
+    expect(point.getAttribute("aria-label")).toContain("5 · Synced");
+    expect(point.querySelector('[data-usage-category="work"]')?.className).toContain("bg-accent/35");
+    await act(async () => point.focus());
+    expect(host.querySelector('[data-usage-trend="commits"] [role="tooltip"]')?.textContent).toContain("Commits: 5Synced");
+    expect(text()).not.toContain("9,999");
+    expect(text()).not.toContain("99,999");
+  });
+
+  it("keeps remote-only activity through refresh failure and clears it when access is revoked", async () => {
+    vi.useFakeTimers();
+    const remoteOnly: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
+      prSourceCoverage: null, prCoverage: null, windows: null, trend: [], merged: withMergedUsageFixture(sample).merged };
+    calls.api.mockResolvedValueOnce(remoteOnly).mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new ApiError("forbidden", 403));
+    await renderRaw(null, true);
+    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("2");
+    expect(text()).not.toContain("Activity summary unavailable");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
+    expect(text()).toContain("Showing the last captured snapshot");
+    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("2");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
+    expect(text()).toContain("Activity summary unavailable");
+    expect(host.querySelectorAll("section dd")).toHaveLength(0);
   });
 });

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { withMergedUsageFixture } from "./testing/merged-usage-fixture.ts";
 import type { AddressInfo } from "node:net";
 import type { LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../shared/local-dashboard.ts";
 import type { Bot } from "../src/state/store.tsx";
@@ -139,7 +140,10 @@ try {
       { path: "/api/local-dashboard/usage", handler: (req, res) => {
         const scenario = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams.get("scenario");
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify(snapshot(scenario)));
+        const value = withMergedUsageFixture(snapshot(scenario));
+        if (scenario === "remote-only") res.end(JSON.stringify({ ...snapshot("unavailable"), merged: value.merged }));
+        else if (scenario === "legacy-only") res.end(JSON.stringify(snapshot("ready")));
+        else res.end(JSON.stringify(value));
       } },
     ],
   });
