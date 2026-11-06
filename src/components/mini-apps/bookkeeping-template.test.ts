@@ -37,6 +37,10 @@ function fixture(fixtureOptions: { manyRows?: boolean } = {}) {
   let noDomesticCurrency = false;
   let manyRows = fixtureOptions.manyRows ?? false;
   let failSecondPage = false;
+  let latestDate = "2026-11-06";
+  let failNovemberDetails = false;
+  let deferDays = false;
+  const pendingDays = new Map<string, Array<{ resolve(value: ReturnType<typeof page>): void; reject(error: Error): void }>>();
   const query = vi.fn(async (id: string, params: Record<string, unknown>, options?: { cursor?: string; expectedDataRevision?: number }) => {
     const declaration = declarations[id];
     if (!declaration) throw new Error(`Undeclared query ${id}`);
@@ -49,7 +53,7 @@ function fixture(fixtureOptions: { manyRows?: boolean } = {}) {
       { currency: "", count: "6", datedCount: "4", amountCount: "6", firstDate: "2025-03-01", lastDate: "2026-10-01" },
       { currency: "美元", count: "1", datedCount: "0", amountCount: "1", firstDate: null, lastDate: null },
     ] : [
-      { currency: "人民币", count: "1135", datedCount: "1135", amountCount: "1135", firstDate: "2024-11-07", lastDate: "2026-11-06" },
+      { currency: "人民币", count: "1135", datedCount: "1135", amountCount: "1135", firstDate: "2024-11-07", lastDate: latestDate },
       { currency: "", count: "6", datedCount: "4", amountCount: "6", firstDate: "2025-03-01", lastDate: "2026-10-01" },
       { currency: "美元", count: "1", datedCount: "0", amountCount: "1", firstDate: null, lastDate: null },
     ]);
@@ -80,11 +84,18 @@ function fixture(fixtureOptions: { manyRows?: boolean } = {}) {
     }
     if (id === "largest_expenses") return page([current[0]!, current[2]!]);
     if (id === "details") {
+      if (deferDays && from === to) return new Promise<ReturnType<typeof page>>((resolve, reject) => {
+        const pending = pendingDays.get(from) ?? [];
+        pending.push({ resolve, reject });
+        pendingDays.set(from, pending);
+      });
+      if (failNovemberDetails && from.startsWith("2026-11")) throw new Error("November read failed");
       if (failOctober && from.startsWith("2026-10")) throw new Error("October read failed");
       if (manyRows && from.startsWith("2026-11")) {
         if (options?.cursor === "next" && failSecondPage) throw new Error("Second page failed");
         const rows = Array.from({ length: 30 }, (_, index) => record(options?.cursor ? "2026-11-05" : "2026-11-06",
           `-${index + 1}.00`, "Food", `Synthetic page ${options?.cursor ? "two" : "one"} ${index + 1}`));
+        if (latestDate === "2026-11-07" && !options?.cursor) rows[0] = record("2026-11-07", "-4.00", "Food", "Synthetic new day");
         return page(rows, options?.cursor ? undefined : "next");
       }
       if (options?.cursor) return page([record("2026-11-04", "-2.00", "Food", "Synthetic extra")]);
@@ -104,6 +115,19 @@ function fixture(fixtureOptions: { manyRows?: boolean } = {}) {
     noDomesticCurrency: () => { noDomesticCurrency = true; },
     manyRows: () => { manyRows = true; },
     failSecondPage: (value: boolean) => { failSecondPage = value; },
+    advanceLatest: (date: string) => { latestDate = date; },
+    failNovemberDetails: (value: boolean) => { failNovemberDetails = value; },
+    deferDays: () => { deferDays = true; },
+    resolveDay: (date: string, rows: Row[]) => {
+      const request = pendingDays.get(date)?.shift();
+      if (!request) throw new Error(`No deferred read for ${date}`);
+      request.resolve(page(rows));
+    },
+    rejectDay: (date: string) => {
+      const request = pendingDays.get(date)?.shift();
+      if (!request) throw new Error(`No deferred read for ${date}`);
+      request.reject(new Error("Synthetic day read failed"));
+    },
     text: (id: string) => view.document.getElementById(id)?.textContent ?? "",
     click: (id: string) => (view.document.getElementById(id) as unknown as HTMLButtonElement).click(),
     choose: (id: string, value: string) => {
@@ -252,6 +276,30 @@ describe("Bookkeeping Manager local ledger views", () => {
     expect(app.text("notice")).not.toContain("Showing the last results");
   });
 
+  it("keeps the committed Records cutoff after another view advances, and hides obsolete expense detail", async () => {
+    const app = fixture(); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    const committedRange = app.text("records-range");
+    const committedMoney = app.text("records-totals");
+    app.click("tab-statistics");
+    await app.view.happyDOM.whenAsyncComplete();
+    (app.view.document.querySelector("#largest .expense-open") as unknown as HTMLButtonElement).click();
+    expect(app.view.document.getElementById("expense-detail")?.hasAttribute("hidden")).toBe(false);
+    app.choose("stats-date", "2026-10-12");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.getElementById("expense-detail")?.hasAttribute("hidden")).toBe(true);
+    app.advanceLatest("2026-11-07"); app.changed();
+    await app.view.happyDOM.whenAsyncComplete();
+    app.failNovemberDetails(true);
+    app.click("tab-records");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.text("records-range")).toBe(committedRange);
+    expect(app.text("records-range")).toContain("2026-11-06");
+    expect(app.text("records-totals")).toBe(committedMoney);
+    expect(app.text("details")).toContain("Synthetic groceries");
+    expect(app.text("notice")).toContain("Showing the last results");
+  });
+
   it("clears every related view after a successful no-domestic-currency refresh", async () => {
     const app = fixture(); opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
@@ -279,16 +327,44 @@ describe("Bookkeeping Manager local ledger views", () => {
     const scroller = app.view.document.scrollingElement;
     if (scroller) scroller.scrollTop = 72;
     const before = app.query.mock.calls.length;
+    app.advanceLatest("2026-11-07");
     app.changed();
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.query.mock.calls.slice(before).filter(([id]) => id === "details")).toHaveLength(2);
     expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
+    expect(app.text("records-range")).toContain("2026-11-07");
     expect(app.text("details")).toContain("Synthetic page two 30");
     if (scroller) expect(scroller.scrollTop).toBe(72);
     app.failSecondPage(true); app.changed();
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
     expect(app.text("notice")).toContain("Showing the last results");
+  });
+
+  it("commits only the latest deferred calendar day intent on success and failure", async () => {
+    const app = fixture(); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    app.click("tab-calendar");
+    await app.view.happyDOM.whenAsyncComplete();
+    app.deferDays();
+    const clickDay = (date: string) => (app.view.document.querySelector(`[data-calendar-day="${date}"]`) as unknown as HTMLButtonElement).click();
+    clickDay("2026-11-05");
+    clickDay("2026-11-06");
+    app.resolveDay("2026-11-05", [current[2]!]);
+    await Promise.resolve();
+    app.resolveDay("2026-11-06", [current[0]!, current[1]!]);
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelector('[data-calendar-day="2026-11-06"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(app.text("day-details")).toContain("Synthetic groceries");
+    expect(app.text("day-details")).not.toContain("Synthetic supplies");
+    clickDay("2026-11-05");
+    clickDay("2026-11-06");
+    app.rejectDay("2026-11-06");
+    app.resolveDay("2026-11-05", [current[2]!]);
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelector('[data-calendar-day="2026-11-06"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(app.text("day-details")).toContain("Synthetic groceries");
+    expect(app.text("notice")).toContain("Records unavailable");
   });
 
   it("keeps tab and calendar context on automatic updates and retains readable stale results", async () => {
