@@ -58,7 +58,7 @@ it("keeps a legacy phone's direct route while retiring its hosted bearer and str
     expect(ended).toBe(true);
     expect((await fetch(`http://127.0.0.1:${hostedPort}/api/health`, { headers })).status).toBe(403);
     expect((await fetch(`http://127.0.0.1:${directPort}/api/health`, { headers })).status).toBe(200);
-    const endpoints = await (await fetch(`http://127.0.0.1:${directPort}/api/companion/endpoints`, { headers })).json();
+    const endpoints = await (await fetch(`http://127.0.0.1:${directPort}/api/companion/endpoints`, { headers })).json() as { endpoints: unknown };
     expect(endpoints.endpoints).toEqual([{ kind: "hosted", priority: 0, url: "https://retained.example.test" }]);
 
     const upgrade = await new Promise<number>((resolve, reject) => {
