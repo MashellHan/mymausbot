@@ -19,11 +19,19 @@ bounded, redacted latest instruction are available only through those routes.
 - Enterprise and personal classifications reuse the collector's configured
   categories. Commits retain its author filter and global commit-hash deduplication.
 - WoW compares each metric with the date seven China-calendar days earlier.
-  Both dates must be covered for that metric. Zero to zero is 0%; zero to a
-  positive count is **New**. Missing or partial inputs yield no percentage. The
-  current date is incomplete in time, so it is compared with a full prior date
-  with that limitation stated beside the table. The oldest six trend dates may
-  lack baselines in a 31-day snapshot.
+  Both dates must be covered for that metric. Commit and Token changes use the same
+  successfully collected machines in one snapshot when at least one is ready
+  and every other configured machine has never supplied a sample. These are
+  changes within the synced scope; a partial or stale machine suppresses them.
+  The collector marks observed Token dates partial when any machine is missing;
+  those dates remain comparable within the sampled scope. Missing or unavailable
+  Token dates still suppress a change, as do partial dates without an unsampled
+  missing machine. Token changes include cache reads. Complete PR changes are
+  independent of machine status. Zero to zero is 0%;
+  zero to a positive count is **New** only for a covered metric. The current
+  date is incomplete in time, so it is compared with a full prior date with
+  that limitation stated beside the table. The oldest six trend dates may lack
+  baselines in a 31-day snapshot.
 - Repository rows deduplicate a commit within each repository across clones and
   devices. A commit shared by different repositories appears in each row but
   once in the summary. Extra appearances are disclosed separately. Events with
@@ -103,8 +111,9 @@ the selected member list.
 `GET /api/local-dashboard/agents/{paneId}/activity` is a separate local-owner
 route. It accepts a Herdr pane ID such as `w6:p1` and no query parameters. Each
 read rechecks that pane's current Codex session, matches its exact session file
-ID, then returns at most 60 visible user, assistant, tool-call and tool-result
-events from a 512 KiB tail. Each excerpt is limited to 600 characters;
+ID, then returns at most 60 user-input and assistant-reply messages from a
+512 KiB tail. Tool calls and results do not count toward the message limit.
+Each excerpt is limited to 600 characters;
 path-like values and recognized credential shapes are masked. System/developer
 messages and reasoning records are skipped. The two-second team metadata
 response carries no history.
@@ -147,12 +156,14 @@ to the rest; `scenario=one` checks singular counts. Reset the synthetic snapshot
 with `POST /__agent-team-update?reset=1`. Check paused motion, reduced motion,
 stale counts, unknown metadata and loss of local authorization.
 
-For activity, select an office and open one member's Recent activity button.
+For activity, select an office and open one member's Recent messages button.
 Check the bounded independently scrollable list at `width=360` and `400`, both
-skins and both locales. The fixture shows user, assistant, tool call and result
-rows; `activity=unavailable`, `activity=unsupported` and `activity=stale` exercise
-source states. POST to `/__agent-activity-update` and wait for the open detail
-to refresh without moving the reader away from an older row. Closing the
+skins and both locales. The fixture includes more than 60 synthetic tool events
+between chat messages; only Input and Reply rows appear. `activity=tools` shows
+the message-empty state, while `activity=unavailable`, `activity=unsupported`
+and `activity=stale` exercise source states. Opening starts at the latest reply;
+POST to `/__agent-activity-update` and wait for the open detail to refresh
+without moving the reader away from an older row. Closing the
 disclosure, switching offices or hiding the page stops its detail requests.
 
 Stop each foreground fixture with Ctrl-C. The separate collector tests use

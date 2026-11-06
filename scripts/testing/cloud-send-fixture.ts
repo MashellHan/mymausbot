@@ -252,7 +252,13 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     const timestamp = String(Math.floor(Date.now() / 1000)), nonce = randomBytes(16).toString("base64url");
     const response = await fetch(`${cloudBase}/api/cloud/pairing`, { method: "POST", headers: { ...EDGE, "content-type": "application/json",
       "x-omb-cloud-timestamp": timestamp, "x-omb-cloud-nonce": nonce, "x-omb-cloud-signature": `v1=${cloudPairingSignature(secret, timestamp, nonce, body)}` }, body });
-    return ((await response.json()) as { code: string }).code;
+    const reply: unknown = await response.json().catch(() => null);
+    const code = reply && typeof reply === "object" && !Array.isArray(reply) ? (reply as { code?: unknown }).code : undefined;
+    if (!response.ok || typeof code !== "string" || !code) {
+      const shape = reply === null ? "null" : Array.isArray(reply) ? "array" : typeof reply;
+      throw new Error(`Cloud fixture pairing returned HTTP ${response.status} (body ${shape}, code ${typeof code === "string" ? (code ? "present" : "empty") : typeof code})`);
+    }
+    return code;
   };
   const pairOwner = async () => {
     const paired = await fetch(`${cloudBase}/api/auth/pair`, { method: "POST", headers: { ...EDGE, "content-type": "application/json" }, body: JSON.stringify({ code: await mintCode("OpenMausBot app (Cloud)") }) });

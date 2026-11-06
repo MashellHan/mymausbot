@@ -21,7 +21,9 @@ import {
   localVmMode,
   mergeOpenCodeProviderKeys,
   parseConfigPatch,
+  confirmSessionConfig,
   saveConfig,
+  sessionCredentialsEnabled,
   syncCredentialEnv,
   vpsSshAlias,
   type AppConfig,
@@ -518,7 +520,7 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
         if (patch.live) patch.live = liveSavePatch(cfg.live, patch.live);
         // Before the provider commit, so a failed write never leaves a foreign voice id to speak.
         if (changingVoiceProvider) store.clearVoiceSelections();
-        if (externalSecretStorage) {
+        if (externalSecretStorage && !sessionCredentialsEnabled()) {
           // Supplied credentials are already in the OS-encrypted store: tombstone them so no older plaintext survives the merge.
           const persisted = structuredClone(patch);
           if (persisted.xai?.key !== undefined) persisted.xai.key = "";
@@ -537,15 +539,19 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
           if (persisted.treg?.key !== undefined) persisted.treg.key = "";
           if (persisted.postiz?.key !== undefined) persisted.postiz.key = "";
           saveConfig(persisted);
+          await confirmSessionConfig();
           configWriteCommitted = true;
           syncCredentialEnv(patch);
-          Object.assign(cfg, loadConfig());
+          const updated = loadConfig();
+          Object.assign(cfg, updated);
         } else {
           saveConfig(patch);
+          await confirmSessionConfig();
           configWriteCommitted = true;
           // loadConfig prefers env over the file for credentials, so the env must follow the save.
           syncCredentialEnv(patch);
-          Object.assign(cfg, loadConfig());
+          const updated = loadConfig();
+          Object.assign(cfg, updated);
         }
       } catch (error) {
         if (configWriteCommitted) {

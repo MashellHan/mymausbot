@@ -58,6 +58,11 @@ let sidecar: Server;
 let home: string;
 let stderr = "";
 const connectedDevices = createConnectedDeviceTracker();
+const closeFixture = async () => {
+  if (sidecar?.listening) await new Promise<void>((resolve) => sidecar.close(() => resolve()));
+  await waitForExit(harness, { signal: "SIGTERM" });
+  if (home) await removeTempDir(home);
+};
 
 const device = async (
   method: string,
@@ -97,14 +102,10 @@ const withHost = (port: number, host: string, path = "/api/health", headers: Rec
     r.end();
   });
 
-beforeAll(async () => {
-  // One call for all three (harness, its webhook receiver one above, the
-  // sidecar): a second call could hand back the first call's released ports.
-  const base = await freePorts(3);
+beforeAll(async () => { try {
+  const base = await freePorts(2);
   HARNESS_PORT = base;
-  SIDECAR_PORT = base + 2;
   HARNESS = `http://127.0.0.1:${HARNESS_PORT}`;
-  SIDECAR = `http://127.0.0.1:${SIDECAR_PORT}`;
 
   home = mkdtempSync(join(tmpdir(), "companion-test-"));
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
@@ -139,6 +140,8 @@ beforeAll(async () => {
     await new Promise((r) => setTimeout(r, 150));
   }
 
+  SIDECAR_PORT = await freePorts();
+  SIDECAR = `http://127.0.0.1:${SIDECAR_PORT}`;
   sidecar = createServer(
     createProxyHandler({
       harnessPort: HARNESS_PORT,
@@ -156,13 +159,13 @@ beforeAll(async () => {
     sidecar.once("error", reject);
     sidecar.listen(SIDECAR_PORT, "127.0.0.1", () => resolve());
   });
+} catch (error) {
+  await closeFixture();
+  throw error;
+}
 }, 90_000);
 
-afterAll(async () => {
-  await new Promise<void>((r) => (sidecar ? sidecar.close(() => r()) : r()));
-  await waitForExit(harness, { signal: "SIGTERM" });
-  await removeTempDir(home);
-});
+afterAll(closeFixture);
 
 describe("the sidecar in front of an unmodified harness", () => {
   it("reaches the harness with a Host the harness itself would refuse", async () => {

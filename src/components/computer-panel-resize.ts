@@ -1,31 +1,12 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
-const PANEL_WIDTH_KEY = "omb-computer-panel-width";
 export const PANEL_MIN_WIDTH = 360;
 export const PANEL_MAX_WIDTH = 960;
-const PANEL_DEFAULT_WIDTH = 400;
 const PANEL_RESIZE_STEP = 40;
 
-function readPanelWidth(): number {
-  try {
-    const stored = Number(localStorage.getItem(PANEL_WIDTH_KEY));
-    if (Number.isFinite(stored) && stored >= PANEL_MIN_WIDTH && stored <= PANEL_MAX_WIDTH) return stored;
-  } catch {
-  }
-  return PANEL_DEFAULT_WIDTH;
-}
-
-/** The computer panel's drag edge: a pointer drag or the arrow keys resize the
- * panel, and the width is remembered across opens. */
 export function useComputerPanelResize() {
-  const [panelWidth, setPanelWidth] = useState(readPanelWidth);
+  const [panelWidth, setPanelWidth] = useState(PANEL_MAX_WIDTH);
   const resizeFrom = useRef<{ x: number; width: number } | null>(null);
-  const persistPanelWidth = (width: number) => {
-    try {
-      localStorage.setItem(PANEL_WIDTH_KEY, String(width));
-    } catch {
-    }
-  };
   const onResizeStart = (event: PointerEvent<HTMLDivElement>) => {
     resizeFrom.current = { x: event.clientX, width: panelWidth };
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -39,14 +20,9 @@ export function useComputerPanelResize() {
     if (!resizeFrom.current) return;
     resizeFrom.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
-    persistPanelWidth(panelWidth);
   };
   const onResizeBy = (delta: number) => {
-    setPanelWidth((current) => {
-      const next = Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, current + delta));
-      persistPanelWidth(next);
-      return next;
-    });
+    setPanelWidth((current) => Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, current + delta)));
   };
   const separatorRef = useRef<HTMLDivElement>(null);
   const [separatorWidth, setSeparatorWidth] = useState<number | null>(null);

@@ -2,6 +2,7 @@
 import { splitLaunchNote } from "./launch-note.ts";
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { parseCompleteJsonLines } from "./complete-json-lines.ts";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { waitForExit } from "./cleanup.ts";
@@ -140,7 +141,8 @@ export async function runRoomHandoffAgent(argv: string[], planPath: string, prom
   const botPlan = JSON.parse(readFileSync(planPath, "utf8"))[botId] ?? {};
   const basePlan = (botPlan.byPrompt as Array<{ promptIncludes: string; plan: any }> | undefined)
     ?.find(rule => turnContext.includes(rule.promptIncludes))?.plan ?? botPlan;
-  const previous = existsSync(`${planPath}.evidence.jsonl`) ? readFileSync(`${planPath}.evidence.jsonl`, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+  const previous = existsSync(`${planPath}.evidence.jsonl`)
+    ? parseCompleteJsonLines<{ botId: string; planKey?: string }>(readFileSync(`${planPath}.evidence.jsonl`, "utf8")) : [];
   const turnIndex = previous.filter(p => p.botId === botId).length;
   // `script`: an unscripted turn fails loudly, and one-shot entries win over `repeat` ones.
   const script = botPlan.script as ScriptEntry[] | undefined;

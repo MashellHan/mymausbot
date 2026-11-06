@@ -28,18 +28,19 @@ let liveSample = sample;
 let activityRevision = 0;
 
 function activityFor(agentId: string, scenario: string | null): LocalAgentActivityResponse {
-  const status = scenario === "unavailable" || scenario === "unsupported" || scenario === "stale" ? scenario
+  const status = scenario === "tools" ? "ready" : scenario === "unavailable" || scenario === "unsupported" || scenario === "stale" ? scenario
     : agentId === "a2" ? "unavailable" : agentId === "a3" ? "unsupported" : agentId === "b1" ? "stale" : "ready";
-  const events: LocalAgentActivityResponse["events"] = status === "unavailable" || status === "unsupported" ? [] : [
+  const tools: LocalAgentActivityResponse["events"] = Array.from({ length: 70 }, (_, index) => ({ id: `e${index + 3}`, at: Date.UTC(2026, 10, 5, 1, 2 + index),
+    kind: index % 2 === 0 ? "tool-call" as const : "tool-result" as const, tool: "functions.exec", text: `Synthetic tool step ${index + 1}; [path] hidden.` }));
+  const events: LocalAgentActivityResponse["events"] = status === "unavailable" || status === "unsupported" ? [] : scenario === "tools" ? tools : [
     { id: "e1", at: Date.UTC(2026, 10, 5, 1, 0), kind: "user", tool: null, text: "Review the synthetic release plan. " + "Long sample content. ".repeat(18) },
     { id: "e2", at: Date.UTC(2026, 10, 5, 1, 1), kind: "assistant", tool: null, text: "I am checking the sample now." },
-    ...Array.from({ length: 18 }, (_, index) => ({ id: `e${index + 3}`, at: Date.UTC(2026, 10, 5, 1, 2 + index),
-      kind: index % 2 === 0 ? "tool-call" as const : "tool-result" as const, tool: "functions.exec", text: `Synthetic tool step ${index + 1}; [path] hidden.` })),
-    { id: "e21", at: Date.UTC(2026, 10, 5, 1, 22), kind: "assistant", tool: null,
+    ...tools,
+    { id: "e73", at: Date.UTC(2026, 10, 5, 2, 12), kind: "assistant", tool: null,
       text: activityRevision ? "New synthetic assistant update after polling." : "Initial synthetic assistant update." },
   ];
   return { agentId, status, updatedAt: status === "unavailable" || status === "unsupported" ? null : sample.updatedAt! + activityRevision * 2000,
-    truncated: events.length > 0, events };
+    truncated: scenario !== "tools" && events.length > 0, events };
 }
 
 const bot = {

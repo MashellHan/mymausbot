@@ -1,5 +1,5 @@
 import type { LiveKeySource, LiveSettings } from "../shared/wire.ts";
-import { saveConfig, syncCredentialEnv, type AppConfig } from "./config.ts";
+import { confirmSessionConfig, saveConfig, syncCredentialEnv, type AppConfig } from "./config.ts";
 import { azureLiveEndpoint, LIVE_NEEDS_AZURE, LIVE_NEEDS_KEY, openAiLiveEndpoint, type LiveEndpoint } from "./live-call.ts";
 import { liveSavePatch, usableLiveKey, type LiveConfig as LiveConfigSection } from "./live-config.ts";
 
@@ -30,9 +30,10 @@ export function liveSetupProblem(cfg: LiveConfig): string | null {
 }
 
 /** The environment follows the save, as for PUT /api/config: loadConfig prefers it over the file. */
-export function saveLiveSettings(cfg: Pick<AppConfig, "live">, patch: LiveConfigSection): void {
+export async function saveLiveSettings(cfg: Pick<AppConfig, "live">, patch: LiveConfigSection): Promise<void> {
   const live = liveSavePatch(cfg.live, patch);
   saveConfig({ live });
+  await confirmSessionConfig();
   syncCredentialEnv({ live });
 }
 

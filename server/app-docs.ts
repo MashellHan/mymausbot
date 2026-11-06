@@ -1,12 +1,13 @@
 // Content-addressed app documents under DATA_DIR/app-docs/: html/<sha256>.html, data/<sha256>.json, file/<sha256>.bin
 // (a folder page's other files), and doc/<sha256>.json, the manifest an AppPayload.doc names. A file written in the last ten minutes is never
 // swept, so a document stored a moment before its row is appended cannot be lost to a sweep in between.
-import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, unlinkSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AppNetwork, AppSource, AppToolDefinition, AppToolResult } from "../shared/app.ts";
 import type { PageVideo } from "./pages/bundle.ts";
+import { writeFileAtomic } from "./atomic.ts";
 
 export const APP_DOCS_MAX_BYTES = 512 * 1024 * 1024;
 export const APP_DOCS_SWEEP_GRACE_MS = 10 * 60_000;
@@ -47,6 +48,10 @@ export interface StoredAppDoc {
 export type AppDocPut = { ok: true; doc: string; bytes: number } | { ok: false; reason: "too-large" };
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+const syncFile = (file: string) => {
+  const fd = openSync(file, "r");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+};
 
 export class AppDocs {
   private readonly dir: string;
@@ -82,17 +87,23 @@ export class AppDocs {
   /** An existing blob's time is refreshed, so the sweep's grace covers the row about to name it. */
   private write(kind: Kind, id: string, text: string | Buffer): void {
     const target = this.path(kind, id);
+    let replacedBytes = 0;
     try {
-      const now = new Date();
-      utimesSync(target, now, now);
-      return;
+      const current = readFileSync(target);
+      if (current.equals(Buffer.from(text))) {
+        const now = new Date();
+        utimesSync(target, now, now);
+        return;
+      }
+      replacedBytes = current.byteLength;
+      this.used = null;
     } catch { /* not there yet */ }
     const before = this.usage();
     mkdirSync(join(this.dir, kind), { recursive: true, mode: 0o700 });
-    const temp = `${target}.${randomBytes(6).toString("hex")}.tmp`;
-    writeFileSync(temp, text, { mode: 0o600 });
-    renameSync(temp, target);
-    this.used = before + (typeof text === "string" ? Buffer.byteLength(text) : text.byteLength);
+    writeFileAtomic(target, text, { mode: 0o600 });
+    // Windows does not support opening a directory for fsync through Node's file API.
+    if (process.platform !== "win32") { syncFile(join(this.dir, kind)); syncFile(this.dir); }
+    this.used = before - replacedBytes + (typeof text === "string" ? Buffer.byteLength(text) : text.byteLength);
   }
 
   /** A file beside a folder page's index.html, by its path in the folder; null when the document has none by that path. */
@@ -141,8 +152,12 @@ export class AppDocs {
       const manifest = JSON.parse(readFileSync(this.path("doc", doc), "utf8")) as Manifest;
       if (manifest.v !== 1 || !ID.test(manifest.html) || (manifest.data !== null && !ID.test(manifest.data))) return null;
       if (manifest.source !== "html" && manifest.source !== "mcp") return null;
+      if (sha256(JSON.stringify({ html: manifest.html, data: manifest.data })) !== doc) return null;
       const html = readFileSync(this.path("html", manifest.html), "utf8");
-      const data = manifest.data ? JSON.parse(readFileSync(this.path("data", manifest.data), "utf8")) as AppDocData : undefined;
+      if (sha256(html) !== manifest.html) return null;
+      const dataText = manifest.data ? readFileSync(this.path("data", manifest.data), "utf8") : null;
+      if (dataText !== null && sha256(dataText) !== manifest.data) return null;
+      const data = dataText ? JSON.parse(dataText) as AppDocData : undefined;
       return { doc, source: manifest.source, html, ...(data ? { data } : {}) };
     } catch {
       return null;
@@ -167,14 +182,18 @@ export class AppDocs {
     const keepHtml = new Set<string>();
     const keepData = new Set<string>();
     const keepFiles = new Set<string>();
-    for (const name of this.list("doc")) {
+    for (const id of wanted) this.keepBlobsOf(id, keepHtml, keepData, keepFiles);
+    const names = this.list("doc");
+    for (const name of names) {
+      const id = name.slice(0, -KINDS.doc.length);
+      if (ID.test(id) && !old("doc", name)) this.keepBlobsOf(id, keepHtml, keepData, keepFiles);
+    }
+    for (const name of names) {
       const id = name.slice(0, -KINDS.doc.length);
       if (name.endsWith(".tmp") || !ID.test(id) || !wanted.has(id)) {
         if (old("doc", name)) remove("doc", name);
-        else if (ID.test(id)) this.keepBlobsOf(id, keepHtml, keepData, keepFiles);
         continue;
       }
-      this.keepBlobsOf(id, keepHtml, keepData, keepFiles);
     }
     for (const [kind, keep] of [["html", keepHtml], ["data", keepData], ["file", keepFiles]] as const) {
       for (const name of this.list(kind)) {
@@ -186,14 +205,13 @@ export class AppDocs {
   }
 
   private keepBlobsOf(doc: string, html: Set<string>, data: Set<string>, files: Set<string>): void {
-    try {
-      const manifest = JSON.parse(readFileSync(this.path("doc", doc), "utf8")) as Manifest;
-      if (typeof manifest.html === "string") html.add(manifest.html);
-      if (typeof manifest.data === "string") {
-        data.add(manifest.data);
-        const named = (JSON.parse(readFileSync(this.path("data", manifest.data), "utf8")) as AppDocData).files ?? {};
-        for (const id of Object.values(named)) if (typeof id === "string") files.add(id);
-      }
-    } catch { /* an unreadable manifest keeps nothing */ }
+    if (!this.read(doc)) throw new Error("App document references are unreadable; collection stopped.");
+    const manifest = JSON.parse(readFileSync(this.path("doc", doc), "utf8")) as Manifest;
+    html.add(manifest.html);
+    if (manifest.data !== null) {
+      data.add(manifest.data);
+      const named = (JSON.parse(readFileSync(this.path("data", manifest.data), "utf8")) as AppDocData).files ?? {};
+      for (const id of Object.values(named)) if (typeof id === "string" && ID.test(id)) files.add(id);
+    }
   }
 }

@@ -2,7 +2,7 @@
 // The openmausbot headless verbs for verifying an isolated fixture. A verb that
 // changes something never runs on a server it merely found.
 import { spawn, type ChildProcess } from "node:child_process";
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -236,6 +236,13 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
     childEnv.OMB_TEST_DESKTOP_OWNER_TOKEN = parentEnv.OMB_TEST_DESKTOP_OWNER_TOKEN;
     childEnv.OMB_DESKTOP_PARENT = "1";
     if (parentEnv.OMB_TEST_DESKTOP_PAGES_ACCESS) childEnv.OMB_TEST_DESKTOP_PAGES_ACCESS = parentEnv.OMB_TEST_DESKTOP_PAGES_ACCESS;
+    if (parentEnv.OMB_TEST_SESSION_CREDENTIALS === "1") {
+      const capture = join(dataDir, "session-config-captured.json");
+      childEnv.OMB_CREDENTIAL_MODE = "session";
+      childEnv.OMB_TEST_SESSION_CONFIG_CAPTURE = capture;
+      if (parentEnv.OMB_TEST_SESSION_CONFIG_REPLY) childEnv.OMB_TEST_SESSION_CONFIG_REPLY = parentEnv.OMB_TEST_SESSION_CONFIG_REPLY;
+      if (existsSync(capture)) childEnv.OMB_SESSION_CONFIG_JSON = readFileSync(capture, "utf8");
+    }
   }
   // The driver record the app hands its own server: without it, no server may use this computer.
   if (parentEnv.OMB_TEST_DESKTOP_CUA_CONNECTION) childEnv.OMB_TEST_DESKTOP_CUA_CONNECTION = parentEnv.OMB_TEST_DESKTOP_CUA_CONNECTION;

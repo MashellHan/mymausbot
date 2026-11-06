@@ -136,7 +136,7 @@ const appVersion = (process.argv.find((arg) => arg.startsWith("--omb-app-version
 const bridge = {
   platform: process.platform,
   /** This app's version, and whether this page is this app's own (served by this computer, not a server from the Server menu). */
-  app: { version: appVersion, ownPage: isLocalPage },
+  app: { version: appVersion, ownPage: isLocalPage, blocksOpaqueFrameNavigation: process.argv.includes("--omb-opaque-frame-navigation=1") },
   // Safe on a cloud page: the person chooses in a native menu, or a circle of the rail main listed (only for this app's
   // page and a hosted Cloud's, never addresses), and only from their click; no saved-list reads, host files or secrets.
   workspaces: {
@@ -244,6 +244,7 @@ const bridge = {
     browserControl: (deviceId, allowed) => ipcRenderer.invoke("companion:browser-control", deviceId, allowed),
     revoke: (deviceId) => ipcRenderer.invoke("companion:revoke", deviceId),
   },
+  tailscaleFunnel: { status: () => ipcRenderer.invoke("tailscale-funnel:status") },
   routines: {
     wakeState: () => ipcRenderer.invoke("routines:wake-state"),
     keepAwake: (enabled) => ipcRenderer.invoke("routines:keep-awake", enabled),
@@ -391,6 +392,7 @@ const bridge = {
       ? ipcRenderer.invoke("open-at-login:set", on === true) : Promise.reject(new Error("Turn on the switch to open OpenMausBot at login.")),
   },
   setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
+  credentialMode: () => ipcRenderer.sendSync("credential-mode:read"),
 
   updater: {
     check: () => ipcRenderer.invoke("update:check"),

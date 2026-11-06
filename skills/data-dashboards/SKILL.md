@@ -16,10 +16,38 @@ that with `show_html` and the page's `app_id`; the same card refreshes.
 |---|---|
 | A quick answer or one chart | No page. Use the Data tools (`data_sql`, `data_show`) or a markdown table. |
 | A small summary to look at here | A chat page (`show_html`) with pre-aggregated rows embedded as CSV. |
+| A reusable local report or dashboard in Computer, backed by live Data | A Mini App. Call `mini_app_info` with `guide: true`, connect the bot's Data with `mini_app_connect`, then use `mini_app_publish`. First look for an existing app to update. |
 | To explore bigger data, or a link to share | Query with the Data tools, export the slice with `data_export` (`format: "parquet"`) into a folder beside `index.html`, show the folder in the chat with `show_html` `path`, and `publish_page` it when the person wants a link: the same card gains it. |
-| "Keep it up to date" | The shared page, plus a schedule (`trigger`, `action=create`, `when=schedule`) whose instructions re-run the export, set `CONFIG.updated`, and publish the same folder again. Publishing the same path keeps the same link. |
+| "Keep it up to date" locally | Update the Mini App's bound business tables with Data tools. The page observes the committed Data revision; HTML is republished only when its presentation or query definitions change. Existing authorized automations can update these same tables. |
+| Keep a public link up to date | The shared page, plus an explicitly requested schedule whose instructions re-run the export, set `CONFIG.updated`, and publish the same folder again. Publishing the same path keeps the same link. |
 
 Publish only when the person asks to share. A published page is public: never put secrets, personal details or rows they didn't ask to share in it.
+
+Mini Apps are local and have no network access. Use self-contained HTML and the `window.mausApp` named-query bridge described by `mini_app_info`; the CDN and DuckDB-WASM template below is for chat/public pages. Keep money as decimal strings, currencies separate, and invalid or missing values visible. Do not copy financial rows into HTML, infer missing categories/currencies, or create a schedule unless requested.
+
+### Daily X AI and GitHub reports
+
+For the two built-in report kinds, `x_ai_digest` and `github_activity`, first
+discover the stable installed app with `mini_app_info`. Call `mini_app_report`
+with `action: "prepare"` and `kind`; it prepares empty retained Data and returns
+the shipped template's complete publication draft. If the app is absent, install
+that draft through `mini_app_publish`, keeping its request key and payload on retry.
+Preparation does not create a first edition or prove that an Automation has run.
+
+Use `mini_app_report` with `action: "publish"`, `kind` and a complete `edition` to
+append business editions atomically. Keep the existing Automation and its other
+outputs. For an Automation turn, the logical China-date edition key comes from
+the actual scheduled run; retain it across retries. An interactive historical
+import requires an explicit date. Identical retries return the original receipt;
+different content under that identity is an error. Do not replace the managed
+report table, change a date to evade a conflict, or regenerate HTML for each issue.
+
+Preserve actual coverage limits, source URLs, attribution and unknown source dates. Optional
+edition summary, significance and verification notes stay absent when unrecorded. A report-level
+as-of marker does not establish per-item observation times. GitHub weekly star increase remains
+weekly, push time is activity rather than a release date, and a public-advisories response is
+not a safety audit. Without earlier comparable observations, period trends remain unavailable.
+Report source URLs are selectable text within the guarded local frame.
 
 ## Start from the template
 

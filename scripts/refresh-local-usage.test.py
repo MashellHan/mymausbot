@@ -227,6 +227,22 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1], 20)
 
+    def test_refresh_requests_private_history_only_from_a_capable_collector(self):
+        collector = self.root / "collector-history.py"
+        output = self.root / "history-result.json"
+        collector.write_text('''import json
+def run(args, timeout=35):
+    raise AssertionError("No CLI should run in this fixture")
+def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_days=30):
+    with open(config["result"], "w") as stream:
+        json.dump({"historyDays": history_days, "publish": upload,
+                   "skipApi": skip_api, "reuseSources": reuse_sources}, stream)
+''')
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER], "result": str(output)}
+        usage.refresh(collector, config, self.root, publish=False, skip_api=True, reuse_sources=True)
+        self.assertEqual(json.loads(output.read_text()), {"historyDays": 59,
+            "publish": False, "skipApi": True, "reuseSources": True})
+
 
 if __name__ == "__main__":
     unittest.main()

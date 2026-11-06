@@ -9,7 +9,6 @@ import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 
 const PANE_ID = /^w\d+:p\d+$/;
-const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/;
 const HEAD_BYTES = 64 * 1024;
 const TAIL_BYTES = 512 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
@@ -31,40 +30,31 @@ function safeText(value: unknown): { text: string | null; clipped: boolean } {
   return { text: chars.length ? chars.slice(0, MAX_TEXT).join("") : null, clipped: chars.length > MAX_TEXT };
 }
 
-function outputText(value: unknown): unknown {
-  if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return null;
-  return value.slice(0, 4).map((part) => record(part).text).filter((text): text is string => typeof text === "string").join(" ");
-}
-
-function visibleEvent(line: string, offset: number, tools: Map<string, string>): { event: LocalAgentActivityEvent | null; clipped: boolean } {
+function visibleEvent(line: string, offset: number): { event: LocalAgentActivityEvent | null; clipped: boolean; format?: "legacy" | "canonical"; raw?: string } {
   let row: Record<string, unknown>;
   try { row = record(JSON.parse(line)); } catch { return { event: null, clipped: true }; }
   const payload = record(row.payload);
-  let kind: LocalAgentActivityEvent["kind"] | null = null;
-  let tool: string | null = null;
-  let rawText: unknown = null;
+  let kind: "user" | "assistant", raw: string, format: "legacy" | "canonical";
   if (row.type === "event_msg" && (payload.type === "user_message" || payload.type === "agent_message")) {
     kind = payload.type === "user_message" ? "user" : "assistant";
-    rawText = payload.message;
-  } else if (row.type === "response_item" && (payload.type === "function_call" || payload.type === "custom_tool_call")) {
-    kind = "tool-call";
-    tool = typeof payload.name === "string" && TOOL_NAME.test(payload.name) ? payload.name : null;
-    rawText = payload.type === "function_call" ? payload.arguments : payload.input;
-    if (typeof payload.call_id === "string" && payload.call_id.length <= 128 && tool) {
-      tools.set(payload.call_id, tool);
-      if (tools.size > 200) tools.delete(tools.keys().next().value!);
-    }
-  } else if (row.type === "response_item" && (payload.type === "function_call_output" || payload.type === "custom_tool_call_output")) {
-    kind = "tool-result";
-    tool = typeof payload.call_id === "string" ? tools.get(payload.call_id) ?? null : null;
-    rawText = outputText(payload.output);
-  }
-  if (kind === null) return { event: null, clipped: false };
-  const { text, clipped } = safeText(rawText);
-  if (text === null && (kind === "user" || kind === "assistant")) return { event: null, clipped };
+    raw = typeof payload.message === "string" ? payload.message : "";
+    format = "legacy";
+  } else if (row.type === "response_item" && payload.type === "message") {
+    if (payload.channel === "analysis") return { event: null, clipped: false };
+    if (payload.role === "user" && payload.phase !== "analysis") kind = "user";
+    else if (payload.role === "assistant" && (payload.phase === "commentary" || payload.phase === "final_answer" || payload.phase === "final")) kind = "assistant";
+    else return { event: null, clipped: false };
+    const partType = kind === "user" ? "input_text" : "output_text";
+    raw = Array.isArray(payload.content) ? payload.content.flatMap((part) => {
+      const content = record(part);
+      return content.type === partType && typeof content.text === "string" ? [content.text] : [];
+    }).join(" ") : "";
+    format = "canonical";
+  } else return { event: null, clipped: false };
+  const { text, clipped } = safeText(raw);
+  if (text === null) return { event: null, clipped };
   const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
-  return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null, kind, tool, text }, clipped };
+  return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null, kind, tool: null, text }, clipped, format, raw };
 }
 
 async function readSession(file: string, sessionId: string): Promise<{ events: LocalAgentActivityEvent[]; truncated: boolean } | null> {
@@ -91,23 +81,29 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
     if (bytesRead !== bytes.length) throw new Error("Session changed during read");
     const first = start === 0 ? 0 : bytes.indexOf(10) + 1;
     let truncated = start > 0;
-    const events: LocalAgentActivityEvent[] = [];
-    const tools = new Map<string, string>();
+    const events: Array<{ event: LocalAgentActivityEvent; format: "legacy" | "canonical"; raw: string }> = [];
     for (let cursor = first; (start === 0 || first > 0) && cursor < bytesRead;) {
       const end = bytes.indexOf(10, cursor);
       if (end < 0) { truncated = true; break; }
       if (end - cursor > MAX_LINE_BYTES) truncated = true;
       else {
-        const found = visibleEvent(bytes.toString("utf8", cursor, end), start + cursor, tools);
+        const found = visibleEvent(bytes.toString("utf8", cursor, end), start + cursor);
         if (found.clipped) truncated = true;
         if (found.event) {
-          events.push(found.event);
-          if (events.length > MAX_EVENTS) { events.shift(); truncated = true; }
+          const event = found.event;
+          const duplicate = events.findIndex((prior) => event.at !== null && prior.format !== found.format && prior.event.kind === event.kind
+            && prior.event.at === event.at && prior.raw === found.raw);
+          if (duplicate >= 0) {
+            if (found.format === "canonical") events[duplicate] = { event, format: found.format, raw: found.raw! };
+          } else {
+            events.push({ event, format: found.format!, raw: found.raw! });
+            if (events.length > MAX_EVENTS) { events.shift(); truncated = true; }
+          }
         }
       }
       cursor = end + 1;
     }
-    return { events, truncated };
+    return { events: events.map(({ event }) => event), truncated };
   } finally { await handle.close(); }
 }
 
