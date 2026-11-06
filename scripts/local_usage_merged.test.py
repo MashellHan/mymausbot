@@ -184,6 +184,31 @@ class RemoteMergedTests(unittest.TestCase):
         self.assertEqual(len(complete["sources"][0]["items"]), 2)
         self.assertFalse(any("/pullrequests/7/commits?" in url for url in calls))
 
+    def test_ado_project_aliases_decode_once_and_schedule_one_source_per_canonical_project(self):
+        self.config = {"azureCli": "/fixture/az", "authorEmails": ["owner@example.test"],
+                       "mergedAdoProjects": ["https://dev.azure.com/Example/My%20Project",
+                                             "https://dev.azure.com/Example/Project", "https://dev.azure.com/example/project"],
+                       "adoRemotes": ["https://dev.azure.com/example/My%20Project/_git/One",
+                                      "https://dev.azure.com/EXAMPLE/My Project/_git/Two"]}
+        self.assertEqual(len(merged.ado_projects(self.config, self.monitor)), 2)
+        urls = []
+        def ado(url, timeout):
+            urls.append(url)
+            if "/connectionData" in url:
+                return json.dumps({"authenticatedUser": {"id": IDENTITY, "properties": {"Account": {"$value": "owner@example.test"}}}}), None
+            if "/_apis/git/pullrequests?" in url:
+                return json.dumps({"value": [], "count": 0}), None
+            raise AssertionError(url)
+        no_cli = lambda _args, timeout: (_ for _ in ()).throw(AssertionError("No CLI"))
+        result = merged.refresh(self.config, self.monitor, no_cli, ado_request=ado, file=self.file, at=AT)
+        self.assertEqual(len(result["sources"]), 2)
+        self.assertEqual(len({source["id"] for source in result["sources"]}), 2)
+        self.assertTrue(all(source["status"] == "ready" for source in result["sources"]))
+        project_urls = [url for url in urls if "/_apis/git/pullrequests?" in url]
+        self.assertEqual(len(project_urls), 2)
+        self.assertTrue(any("/Example/My%20Project/_apis/git/pullrequests?" in url for url in project_urls))
+        self.assertFalse(any("%2520" in url for url in project_urls))
+
     def test_ghe_uses_its_verified_profile_and_work_repository_category(self):
         self.config["githubProfiles"][0].update(host="microsoft.ghe.com", profile="enterprise")
         github = Github()

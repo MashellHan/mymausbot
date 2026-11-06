@@ -203,23 +203,33 @@ def github_source(config, profile, previous, start, at, run, monitor):
 
 
 def ado_projects(config, monitor):
-    projects = set()
+    projects = {}
+    def add(org, project):
+        def decode(value):
+            if not isinstance(value, str) or re.search(r"%(?![0-9a-f]{2})", value, re.I):
+                raise ValueError("Invalid configured ADO project")
+            decoded = urllib.parse.unquote(value, errors="strict")
+            if not decoded or decoded in (".", "..") or any(char in decoded for char in "/\\\r\n\x00"):
+                raise ValueError("Invalid configured ADO project")
+            return decoded
+        decoded = decode(org), decode(project)
+        projects.setdefault(tuple(value.casefold() for value in decoded), decoded)
     for value in config.get("mergedAdoProjects", []):
         parsed = urllib.parse.urlsplit(value)
         parts = parsed.path.strip("/").split("/")
         if (parsed.scheme != "https" or parsed.hostname != "dev.azure.com" or parsed.port not in (None, 443)
                 or parsed.username or parsed.password or parsed.query or parsed.fragment or len(parts) != 2
-                or not all(parts) or any(part in (".", "..") for part in parts)):
+                or not all(parts)):
             raise ValueError("Invalid configured ADO project")
-        projects.add(tuple(urllib.parse.unquote(part) for part in parts))
+        add(*parts)
     for remote in config.get("adoRemotes", []):
         coords = monitor.ado_coordinates(remote)
         if not coords:
             raise ValueError("Invalid configured ADO remote")
-        projects.add(coords[:2])
+        add(*coords[:2])
     if len(projects) > MAX_SOURCES:
         raise ValueError("Too many configured ADO projects")
-    return sorted(projects)
+    return [projects[key] for key in sorted(projects)]
 
 
 def ado_get(request, url):
