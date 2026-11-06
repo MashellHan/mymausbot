@@ -149,6 +149,34 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("Shaded columns: unavailable. Pale PR segments");
   });
 
+  it("marks China-calendar weekends through full, zero and unavailable bars with localized weekdays", async () => {
+    const marked = trend.map((day) => day.day === "2026-10-10" ? { ...day, commits: 1_000 }
+      : day.day === "2026-10-11" ? { ...day, commits: 0 }
+        : day.day === "2026-10-17" ? { ...trend[7]!, day: day.day } : day);
+    await render({ ...sample, trend: marked });
+    for (const metric of ["prs", "commits", "totalTokens"]) {
+      const chart = host.querySelector<HTMLElement>(`[data-usage-trend="${metric}"]`)!;
+      for (const day of ["2026-10-10", "2026-10-11", "2026-10-17"]) {
+        const bar = chart.querySelector(`[data-usage-day="${day}"]`)!;
+        expect(bar.hasAttribute("data-usage-weekend")).toBe(true);
+        expect(bar.querySelector("[data-usage-weekend-tick]")).not.toBeNull();
+      }
+      expect(chart.querySelector('[data-usage-day="2026-10-12"]')?.hasAttribute("data-usage-weekend")).toBe(false);
+    }
+    const chart = host.querySelector<HTMLElement>('[data-usage-trend="commits"]')!;
+    const saturday = chart.querySelector<HTMLButtonElement>('[data-usage-day="2026-10-10"]')!;
+    expect(saturday.querySelector<HTMLElement>("span[style]")?.style.height).toBe("100%");
+    expect(Number.parseFloat(chart.querySelector<HTMLElement>('[data-usage-day="2026-10-11"] span[style]')?.style.height ?? "NaN")).toBe(0);
+    expect(chart.querySelector('[data-usage-day="2026-10-17"] span[style]')).toBeNull();
+    expect(saturday.getAttribute("aria-label")).toContain("2026-10-10 Sat");
+    await act(async () => saturday.focus());
+    expect(chart.querySelector('[role="tooltip"]')?.textContent).toContain("2026-10-10 · Sat");
+
+    setLocale("zh");
+    await render({ ...sample, trend: marked });
+    expect(chart.querySelector('[data-usage-day="2026-10-11"]')?.getAttribute("aria-label")).toMatch(/2026-10-11 周[日天]/);
+  });
+
   it("keeps the focused date and tooltip aligned as the trend window rolls", async () => {
     await render(sample);
     const chart = () => host.querySelector<HTMLElement>('[data-usage-trend="commits"]')!;
