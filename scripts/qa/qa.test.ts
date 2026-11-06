@@ -851,6 +851,51 @@ describe("Lead queue and bounded recovery", () => {
     expect(calls).toEqual(["/actions/workflows/qa-report.yml/dispatches"]);
   });
 
+  it("persists the selected full-push reuse and the later recovery dispatch decision", async () => {
+    const current = { ...pushRun };
+    const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
+    let plan: ReturnType<typeof pushPlan> | ReturnType<typeof narrowPlan> = pushPlan();
+    let healthResult: { healthy: boolean; reason: string; report?: { runId: number; executionComplete: boolean } } =
+      { healthy: false, reason: "report missing" };
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [current] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [preflight] };
+      if (path.includes("/artifacts?")) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path.startsWith("/issues?") || path.startsWith("/pulls?")) return [];
+      throw new Error(path);
+    };
+    const state: Record<string, unknown> = { startedAt: new Date(now - 60_000).toISOString() };
+    const saved: Array<Record<string, unknown>> = [];
+    const tick = () => drainQueue(state, { api, now,
+      recover: (snapshot: Record<string, unknown>) => recoverQa(snapshot, { api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }),
+        health: async () => healthResult, now, repository }),
+      save: (snapshot: Record<string, unknown>) => { saved.push(structuredClone(snapshot)); },
+      send: () => ({ submittedAt: new Date(now).toISOString() }) });
+
+    await tick();
+    expect(saved[0]).toMatchObject({ lastRecoveryDecision: { action: "reuse", reason: "active_full",
+      candidate: { runId: current.id, sha: current.head_sha, attempt: 1, event: "push", status: "in_progress" } } });
+    expect(calls).toEqual([]);
+
+    current.status = "completed";
+    preflight.status = "completed";
+    healthResult = { healthy: true, reason: "", report: { runId: current.id, executionComplete: true } };
+    await tick();
+    expect(saved.at(-1)).toMatchObject({ lastRecoveryDecision: { action: "reuse", reason: "fresh_completed_full",
+      candidate: { runId: current.id, sha: current.head_sha, attempt: 1, event: "push", status: "completed" } } });
+    expect(calls).toEqual([]);
+
+    plan = narrowPlan();
+    healthResult = { healthy: false, reason: "report missing" };
+    await tick();
+    expect(saved.at(-1)).toMatchObject({ recoveryFor: "bootstrap", lastRecoveryDecision: {
+      action: "dispatch", reason: "no_completed_full", candidate: null } });
+    expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+  });
+
   it("waits only for an active push's pending plan, then recovers when coverage is absent or narrow", async () => {
     const current = { ...pushRun };
     const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress" };
