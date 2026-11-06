@@ -1,6 +1,6 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
@@ -66,6 +66,72 @@ async function historyFixture(asOf: number) {
 }
 
 describe("local Usage projection", () => {
+  it("keeps remotely merged PRs independent of local logs and deduplicates original commits across PRs", async () => {
+    const asOf = Date.parse("2026-11-06T08:00:00Z");
+    const { file } = await fixture(asOf);
+    const mergedFile = join(dirname(file), "merged-v1.json");
+    const id = (value: number) => value.toString(16).padStart(64, "0");
+    const personal = { id: id(21), name: "github.com/example/personal" };
+    const work = { id: id(22), name: "github.com/workorg/shared" };
+    const source = { id: id(1), provider: "github", category: "personal", status: "ready", capturedAt: new Date(asOf).toISOString(), items: [
+      { key: id(11), at: "2026-11-06T01:00:00Z", category: "personal", repository: personal,
+        commits: [id(101), id(102), id(103), id(104), id(105)] },
+      { key: id(12), at: "2026-11-05T01:00:00Z", category: "work", repository: work, commits: [id(101), id(106)] },
+      { key: id(13), at: "2026-10-01T01:00:00Z", category: "personal", repository: personal, commits: [id(107)] },
+    ] };
+    const snapshot = { version: 1, asOfAt: new Date(asOf).toISOString(), capturedAt: new Date(asOf).toISOString(),
+      windowStartDay: day(chinaDay(asOf), -59), sources: [source] };
+    await writeFile(mergedFile, JSON.stringify(snapshot));
+    const provider = createLocalUsageProvider({ file: join(dirname(file), "missing-local.json"), mergedFile, now: () => asOf });
+    const result = await provider.get();
+    expect(result.status).toBe("unavailable");
+    expect(result.merged).toMatchObject({ status: "ready", asOf, overlaps: { repeatedShas: 1, categoryConflicts: 1, dayConflicts: 1 },
+      windows: { "1": { prs: 1, commits: 4, knownCommits: 4 }, "7": { prs: 2, commits: 6 },
+        "30": { prs: 2, commits: 6, comparison: { prs: 100, commits: 500 }, repositories: { sharedCommits: 1,
+          rows: expect.arrayContaining([expect.objectContaining({ name: personal.name, knownCommits: 5 }),
+            expect.objectContaining({ name: work.name, knownCommits: 2 })]) } } },
+      trend: expect.arrayContaining([expect.objectContaining({ day: "2026-11-06", prs: 1, commits: 4,
+        wow: { prs: "new", commits: "new" } })]) });
+    expect(result.merged?.windows?.["30"].categories.unclassified.knownCommits).toBe(1);
+    expect(result.merged?.windows?.["30"].repositories.rows.find((row) => row.name === personal.name)?.comparison)
+      .toEqual({ prs: 0, commits: 400 });
+    expect(JSON.stringify(result.merged)).not.toContain(id(11));
+    expect(JSON.stringify(result.merged)).not.toContain(id(101));
+    source.status = "stale";
+    await writeFile(mergedFile, JSON.stringify(snapshot));
+    const stale = await provider.get();
+    expect(stale.merged).toMatchObject({ status: "stale", windows: { "30": { prs: null, knownPrs: 2,
+      commits: null, knownCommits: 6, comparison: { prs: null, commits: null } } } });
+    source.status = "partial";
+    await writeFile(mergedFile, JSON.stringify(snapshot));
+    const partial = await provider.get();
+    expect(partial.merged).toMatchObject({ status: "partial", windows: { "30": { prs: null, knownPrs: 2,
+      commits: null, knownCommits: 6, comparison: { prs: null, commits: null } } } });
+    await writeFile(mergedFile, "broken");
+    expect((await provider.get()).merged?.status).toBe("stale");
+    const fresh = createLocalUsageProvider({ file, mergedFile: join(dirname(file), "missing-remote.json"), now: () => asOf });
+    expect((await fresh.get()).merged).toBeUndefined();
+  });
+
+  it("assigns a repeated original SHA to its earliest merge day in the same repository row", async () => {
+    const asOf = Date.parse("2026-11-06T08:00:00Z");
+    const { file } = await fixture(asOf);
+    const mergedFile = join(dirname(file), "merged-v1.json");
+    const id = (value: number) => value.toString(16).padStart(64, "0");
+    const repository = { id: id(1), name: "github.com/example/shared" };
+    await writeFile(mergedFile, JSON.stringify({ version: 1, asOfAt: new Date(asOf).toISOString(),
+      capturedAt: new Date(asOf).toISOString(), windowStartDay: day(chinaDay(asOf), -59), sources: [{
+        id: id(2), provider: "github", category: "personal", status: "ready",
+        capturedAt: new Date(asOf).toISOString(), items: [
+          { key: id(3), at: "2026-11-05T01:00:00Z", category: "personal", repository, commits: [id(5)] },
+          { key: id(4), at: "2026-11-06T01:00:00Z", category: "personal", repository, commits: [id(5)] },
+        ],
+      }] }));
+    const result = await createLocalUsageProvider({ file: join(dirname(file), "missing.json"), mergedFile, now: () => asOf }).get();
+    expect(result.merged).toMatchObject({ overlaps: { repeatedShas: 1, dayConflicts: 1 },
+      windows: { "1": { prs: 1, commits: 0, repositories: { rows: [{ name: repository.name, knownPrs: 1, knownCommits: 0 }] } },
+        "7": { prs: 2, commits: 1, repositories: { rows: [{ name: repository.name, knownPrs: 2, knownCommits: 1 }] } } } });
+  });
   it("compares adjacent China-calendar periods and keeps total tokens separate from new tokens", async () => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file } = await historyFixture(asOf);

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadLocale, setLocale } from "@/lib/i18n";
 import type { LocalUsageResponse } from "../../../shared/local-dashboard";
+import { withMergedUsageFixture } from "../../../scripts/testing/merged-usage-fixture";
 import type { MiniAppDocument, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
 
 const fixture = vi.hoisted(() => ({
@@ -61,11 +62,11 @@ const usageFor = (value: number): LocalUsageResponse => {
     newTokens: value * days, cacheRead: 0, totalTokens: value * days, comparison,
     categories: { work: { prs: value * days, knownPrs: value * days, commits: value * days }, personal: blank, unclassified: blank },
     repositories: { sharedCommits: 0, coverage: "ready" as const, unattributedPrs: 0, unattributedCommits: 0, rows: [] } });
-  return { status: "ready", asOf: Date.UTC(2026, 10, 7, 8), timeZone: "Asia/Shanghai",
+  return withMergedUsageFixture({ status: "ready", asOf: Date.UTC(2026, 10, 7, 8), timeZone: "Asia/Shanghai",
     sourceCoverage: { total: 1, ready: 1, partial: 0, stale: 0, missing: 0 },
     prSourceCoverage: { total: 1, ready: 1, stale: 0, unavailable: 0, missing: 0 },
     prCoverage: { work: "ready", personal: "ready", unclassified: "ready" },
-    windows: { "1": window(1), "7": window(7), "30": window(30) }, trend: [] };
+    windows: { "1": window(1), "7": window(7), "30": window(30) }, trend: [] });
 };
 
 const app = (id: string, title: string): MiniAppSummary => ({
