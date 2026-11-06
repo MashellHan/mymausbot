@@ -14,7 +14,8 @@ const NAMES = {
 };
 
 export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true) {
-  const jobs = [{ id: "static", name: outputs.linux_lanes ? "typecheck + lint + Linux tests (Boat)" : "typecheck + lint", build: outputs.build, fast: Boolean(outputs.fast_pr), linux: Boolean(outputs.linux_lanes),
+  const jobs = [{ id: "static", name: outputs.linux_lanes ? "typecheck + lint + Linux tests (Boat)" : "typecheck + lint", build: outputs.build,
+    ...(outputs.fast_pr ? { fast: true } : {}), linux: Boolean(outputs.linux_lanes),
     ...(outputs.linux_lanes?.vitest.length || outputs.linux_lanes?.evals ? { artifact: "qa-results-boat" } : {}) }];
   for (const id of outputs.jobs) {
     if (!full && !MERGE_JOBS.includes(id)) continue;
