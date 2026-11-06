@@ -146,6 +146,62 @@ describe("usage summaries", () => {
     expect(summarizeUsage([], "day")).toEqual({ groups: [], total: expect.objectContaining({ turns: 0, costUsd: null }) });
   });
 
+  it("splits any group by model, largest bar first, only when a different dimension is asked for", () => {
+    const mixed: UsageRow[] = [
+      rows[0]!,
+      { ...rows[0]!, model: "gpt-6.1-sol", driverKind: "codex", instanceId: "codex", input: 100, output: 20, cachedInput: 0, costUsd: 0.001 },
+      rows[1]!,
+    ];
+    const [scout, clerk] = summarizeUsage(mixed, "bot", null, "model").groups;
+    expect(scout!.segments?.map((piece) => [piece.key, piece.input, piece.output])).toEqual([
+      ["model:claudeAgent/claude-sonnet-5", 1200, 300],
+      ["model:codex/gpt-6.1-sol", 100, 20],
+    ]);
+    expect(clerk!.segments?.map((piece) => piece.key)).toEqual(["model:codex/gpt-5"]);
+    expect(summarizeUsage(mixed, "bot").groups[0]!.segments).toBeUndefined();
+    expect(summarizeUsage(mixed, "model", null, "model").groups[0]!.segments).toBeUndefined();
+    expect(summarizeUsage(mixed, "day", null, "model").groups[0]!.segments?.map((piece) => piece.key)).toEqual([
+      "model:claudeAgent/claude-sonnet-5",
+      "model:codex/gpt-5",
+      "model:codex/gpt-6.1-sol",
+    ]);
+  });
+
+  it("keeps bar totals additive when one row has more cached than input tokens", () => {
+    const uneven: UsageRow[] = [
+      { ...rows[0]!, input: 100, output: 10, cachedInput: 150 },
+      { ...rows[0]!, model: "gpt-6.1-sol", driverKind: "codex", instanceId: "codex", input: 500, output: 50, cachedInput: 100 },
+    ];
+    const [scout] = summarizeUsage(uneven, "bot", null, "model").groups;
+    expect(scout!.barTokens).toBe(460);
+    expect(scout!.segments!.map((piece) => piece.barTokens)).toEqual([450, 10]);
+    expect(scout!.segments!.reduce((sum, piece) => sum + (piece.barTokens ?? 0), 0)).toBe(scout!.barTokens);
+    expect(scout!.input - Math.min(scout!.cachedInput, scout!.input) + scout!.output).toBe(410);
+  });
+
+  it("orders a group's segments by the fresh tokens its bar draws, not by cached input", () => {
+    const cached: UsageRow = {
+      ...rows[0]!,
+      model: "claude-sonnet-5",
+      input: 10_000,
+      cachedInput: 9_800,
+      output: 100,
+    };
+    const fresh: UsageRow = {
+      ...rows[0]!,
+      model: "gpt-6.1-sol",
+      driverKind: "codex",
+      instanceId: "codex",
+      input: 600,
+      output: 100,
+      cachedInput: 0,
+    };
+    expect(summarizeUsage([cached, fresh], "bot", null, "model").groups[0]!.segments?.map((piece) => piece.key)).toEqual([
+      "model:codex/gpt-6.1-sol",
+      "model:claudeAgent/claude-sonnet-5",
+    ]);
+  });
+
   it("groups by routine, with every non-routine turn in one manual bucket", () => {
     const summary = summarizeUsage(rows, "routine");
     expect(summary.groups.map((g) => [g.key, g.label, g.turns, g.costUsd])).toEqual([

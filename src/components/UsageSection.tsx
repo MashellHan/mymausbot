@@ -28,6 +28,8 @@ export interface UsageGroup {
   output: number;
   cachedInput: number;
   costUsd: number | null;
+  barTokens?: number;
+  segments?: UsageGroup[];
 }
 
 interface UsageSummary {
@@ -68,23 +70,50 @@ export function usageGroupLabel(groupBy: UsageGroupBy, group: Pick<UsageGroup, "
   return group.label;
 }
 
-function useUsageGroups(range: { from: string; to: string }, groupBy: UsageGroupBy, version: number): UsageSummary | null {
+function barTokens(group: UsageGroup): number {
+  return group.barTokens ?? headlineTokens(group);
+}
+
+function useUsageGroups(
+  range: { from: string; to: string }, groupBy: UsageGroupBy, version: number, splitBy?: "model",
+): UsageSummary | null {
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   useEffect(() => {
     let current = true;
-    void api(`/api/usage?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}&groupBy=${groupBy}`)
+    void api(`/api/usage?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}&groupBy=${groupBy}${splitBy ? `&splitBy=${splitBy}` : ""}`)
       .then((next: UsageSummary) => { if (current) setSummary(next); })
       .catch(() => { if (current) setSummary(null); });
     return () => { current = false; };
-  }, [range.from, range.to, groupBy, version]);
+  }, [range.from, range.to, groupBy, splitBy, version]);
   return summary;
+}
+
+function Bar({ group, width, color }: { group: UsageGroup; width: number; color?: string }) {
+  const { state } = useStore();
+  const settings = useContext(SettingsLook);
+  const segments = group.segments ?? [];
+  const stack = segments.reduce((sum, piece) => sum + barTokens(piece), 0);
+  if (segments.length && stack > 0) {
+    return (
+      <span className="flex h-full" style={{ width: `${width}%` }}>
+        {segments.map((piece) => {
+          const tokens = barTokens(piece);
+          const shade = modelColor(piece.key);
+          return <span key={piece.key} className="h-full" data-model-color={shade}
+            style={{ width: `${(tokens / stack) * 100}%`, backgroundColor: shade }}
+            title={`${modelName(piece.label, state.instances)} · ${formatTokens(tokens)} · ${Math.round((tokens / stack) * 100)}%`} />;
+        })}
+      </span>
+    );
+  }
+  return <span data-model-color={color} className={cn("block h-full rounded-full", !color && (settings ? "bg-ink" : "bg-accent/70"))} style={{ width: `${width}%`, backgroundColor: color }} />;
 }
 
 export function GroupBars({ groupBy, groups }: { groupBy: UsageGroupBy; groups: readonly UsageGroup[] }) {
   const { state } = useStore();
   const settings = useContext(SettingsLook);
-  const top = [...groups].sort((a, b) => headlineTokens(b) - headlineTokens(a)).slice(0, 6);
-  const max = Math.max(...top.map(headlineTokens), 0);
+  const top = [...groups].sort((a, b) => barTokens(b) - barTokens(a)).slice(0, 6);
+  const max = Math.max(...top.map(barTokens), 0);
   if (!top.length || max <= 0) return <p className="text-[13px] text-ink-secondary">{t("usage.page.whereEmpty")}</p>;
   return (
     <ul className="flex flex-col gap-2.5">
@@ -100,10 +129,10 @@ export function GroupBars({ groupBy, groups }: { groupBy: UsageGroupBy; groups: 
               <span className="truncate">{bot ? bot.name : groupBy === "model" ? modelName(group.label, state.instances) : usageGroupLabel(groupBy, group)}</span>
             </span>
             <span className={cn("h-2 overflow-hidden rounded-full", settings ? "bg-ink/[0.08]" : "bg-raised")}>
-              <span data-model-color={color} className={cn("block h-full rounded-full", !color && (settings ? "bg-ink" : "bg-accent/70"))} style={{ width: `${Math.max(2, (headlineTokens(group) / max) * 100)}%`, backgroundColor: color }} />
+              <Bar group={group} width={Math.max(2, (barTokens(group) / max) * 100)} color={color} />
             </span>
             <span className="min-w-[4.5rem] text-right tabular-nums text-ink-secondary">
-              {formatTokens(headlineTokens(group))}
+              {formatTokens(barTokens(group))}
               {hasFiniteCost(group.costUsd) && group.costUsd > 0 && ` · ${formatCost(group.costUsd)}`}
             </span>
           </li>
@@ -113,11 +142,30 @@ export function GroupBars({ groupBy, groups }: { groupBy: UsageGroupBy; groups: 
   );
 }
 
+function ModelLegend({ groups }: { groups: readonly UsageGroup[] }) {
+  const { state } = useStore();
+  const totals = new Map<string, { label: string; tokens: number }>();
+  for (const group of groups) {
+    for (const piece of group.segments ?? []) {
+      const seen = totals.get(piece.key);
+      totals.set(piece.key, { label: piece.label, tokens: (seen?.tokens ?? 0) + barTokens(piece) });
+    }
+  }
+  const items = [...totals.entries()].sort((a, b) => b[1].tokens - a[1].tokens);
+  if (items.length < 2) return null;
+  return <ul className="mt-3 flex flex-wrap gap-x-3 gap-y-1">
+    {items.map(([key, item]) => <li key={key} className="flex min-w-0 items-center gap-1.5 text-[11px] text-ink-secondary">
+      <span aria-hidden="true" data-model-color={modelColor(key)} className="size-2 shrink-0 rounded-full" style={{ backgroundColor: modelColor(key) }} />
+      <span className="max-w-[9rem] truncate">{modelName(item.label, state.instances)}</span>
+    </li>)}
+  </ul>;
+}
+
 function WhereItWent({ range, version, onBudget }: { range: { from: string; to: string }; version: number; onBudget: (budget: BudgetState | null) => void }) {
   const [other, setOther] = useState<UsageGroupBy>("model");
   const settings = useContext(SettingsLook);
-  const byBot = useUsageGroups(range, "bot", version);
-  const byOther = useUsageGroups(range, other, version);
+  const byBot = useUsageGroups(range, "bot", version, "model");
+  const byOther = useUsageGroups(range, other, version, other === "model" ? undefined : "model");
   useEffect(() => { onBudget(byBot?.budget ?? null); }, [byBot, onBudget]);
   if (settings) return null;
   return (
@@ -126,7 +174,7 @@ function WhereItWent({ range, version, onBudget }: { range: { from: string; to: 
       <div className="mt-4 grid gap-6 md:grid-cols-2">
         <div>
           <div className="mb-3 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-secondary">{t(GROUP_LABEL_KEYS.bot)}</div>
-          {byBot ? <GroupBars groupBy="bot" groups={byBot.groups} /> : <Loader2 size={14} className="animate-spin text-ink-secondary" />}
+          {byBot ? <><GroupBars groupBy="bot" groups={byBot.groups} /><ModelLegend groups={byBot.groups} /></> : <Loader2 size={14} className="animate-spin text-ink-secondary" />}
         </div>
         <div>
           <div role="tablist" aria-label={t("usage.history.groupBy")} className="-mt-1 mb-2 flex flex-wrap gap-1">
@@ -158,7 +206,7 @@ function SettingsWhereItWent({ range, version, onBudget }: { range: { from: stri
   const byBot = useUsageGroups(range, "bot", version);
   const groups = useUsageGroups(range, by, version);
   useEffect(() => { onBudget(byBot?.budget ?? null); }, [byBot, onBudget]);
-  const top = groups?.groupBy === by ? [...groups.groups].sort((a, b) => headlineTokens(b) - headlineTokens(a)).filter((group) => headlineTokens(group) > 0).slice(0, 8) : null;
+  const top = groups?.groupBy === by ? [...groups.groups].sort((a, b) => barTokens(b) - barTokens(a)).filter((group) => barTokens(group) > 0).slice(0, 8) : null;
   return (
     <SettingsGroup label={t("usage.page.where")} block="where"
       actions={<Select value={by} onChange={(event) => setBy(event.target.value as UsageGroupBy)} aria-label={t("usage.history.groupBy")}>
@@ -173,7 +221,7 @@ function SettingsWhereItWent({ range, version, onBudget }: { range: { from: stri
               subtitle={t("usage.page.turns", { count: String(group.turns) })}>
               <span className="inline-flex items-center gap-2 text-[13px] leading-5 tabular-nums text-ink-secondary">
                 {color && <span aria-hidden="true" data-model-color={color} className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />}
-                {formatTokens(headlineTokens(group))}{hasFiniteCost(group.costUsd) && group.costUsd > 0 ? ` · ${formatCost(group.costUsd)}` : ""}
+                {formatTokens(barTokens(group))}{hasFiniteCost(group.costUsd) && group.costUsd > 0 ? ` · ${formatCost(group.costUsd)}` : ""}
               </span>
             </SettingRow>;
           })}

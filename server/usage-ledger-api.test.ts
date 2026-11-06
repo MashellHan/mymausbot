@@ -62,6 +62,10 @@ describe("usage ledger through real turns", () => {
     expect(byUser.total.costUsd).toBeCloseTo(0.02, 6);
     const byBot = (await (await api("/api/usage?groupBy=bot")).json()) as any;
     expect(byBot.groups).toEqual([expect.objectContaining({ key: `bot:${botId}`, label: "Ledger probe", turns: 2 })]);
+    const split = (await (await api("/api/usage?groupBy=bot&splitBy=model")).json()) as any;
+    expect(split.splitBy).toBe("model");
+    expect(split.groups[0].segments).toEqual([expect.objectContaining({ key: expect.stringMatching(/^model:/), turns: 2 })]);
+    expect((await api("/api/usage?groupBy=bot&splitBy=engine")).status).toBe(400);
 
     const csv = await api("/api/usage.csv");
     expect(csv.headers.get("content-type")).toContain("text/csv");
