@@ -200,11 +200,11 @@ simulator suite). With 25 open PRs the macOS jobs waited a median of six and a
 half hours. Now:
 
 - An ordinary PR uses its bounded Ubuntu fast job. Explicit wider PR requests
-  may select Vitest shards; pushes to main and merge groups run Ubuntu and
-  Windows shards. The daily and release full lanes add four macOS shards,
-  which run the host e2e files only. Only a couple of blocks are macOS-only.
-- Main, merge-group and explicitly selected wider macOS checks share one job:
-  the packaged-server smoke and Electron smokes.
+  may select Vitest shards. Runtime main pushes and daily/release full lanes
+  include macOS Vitest shards and other selected macOS jobs. A merge group runs
+  its selected main or full scope. Only a couple of blocks are macOS-only.
+- Where selected, the packaged-server smoke and Electron smokes share one
+  macOS job; macOS Vitest shards and other macOS jobs remain separate.
 - `ci-stop-closed.yml` cancels a PR's CI run when the PR is merged or closed. PR runs share a group named by the PR number (`ci-pr-<n>`), never by `github.ref`: a merged PR's closed event reports the base branch as `github.ref`, which made every merge cancel main's CI (fixed Oct 3 2026).
 
 ## Windows
