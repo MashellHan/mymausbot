@@ -46,15 +46,24 @@ it("bootstraps only an existing local routine and grants the server-resolved pro
   const source = fixture.api.mock.calls.find(([path]) => path === "/api/mini-apps/report-source")!;
   expect(JSON.parse(String(source[1].body))).toEqual({ kind: "x_ai_digest", routineId: "eligible" });
   const published = fixture.api.mock.calls.find(([path, init]) => path === "/api/mini-apps" && init?.method === "POST")!;
-  expect(JSON.parse(String(published[1].body))).toEqual({ ...publication, publisherBotIds: ["resolved_bot"] });
+  expect(JSON.parse(String(published[1].body))).toEqual({ ...publication, publisherBotIds: ["resolved_bot"], shippedTemplateKind: "x_ai_digest" });
   expect(fixture.installed).toHaveBeenCalledWith("installed_app");
 });
 
 it("opens an already installed stable slug without bootstrapping Data or publishing again", async () => {
-  fixture.api.mockResolvedValue({ apps: [{ id: "existing_app", slug: "x-ai-digest", status: "active" }] });
+  fixture.api.mockResolvedValue({ apps: [{ id: "existing_app", slug: "x-ai-digest", status: "active", shippedTemplateKind: "x_ai_digest" }] });
   await render();
   await act(async () => { button("Install report").click(); });
   expect(fixture.installed).toHaveBeenCalledWith("existing_app");
+  expect(fixture.api).toHaveBeenCalledTimes(1);
+});
+
+it("does not adopt a custom app using the shipped report slug", async () => {
+  fixture.api.mockResolvedValue({ apps: [{ id: "custom_app", slug: "x-ai-digest", status: "active", shippedTemplateKind: null }] });
+  await render();
+  await act(async () => { button("Install report").click(); });
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain("Another app uses this name");
+  expect(fixture.installed).not.toHaveBeenCalled();
   expect(fixture.api).toHaveBeenCalledTimes(1);
 });
 

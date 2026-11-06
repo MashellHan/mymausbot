@@ -16,7 +16,8 @@ export function ReportInstall({ kind, onCancel, onInstalled }: {
   const [routineId, setRoutineId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const routines = state.routines.filter((routine) => routine.enabled && routine.target === "bot" && routine.runOn === "maus");
+  const routines = state.routines.filter((routine) => routine.enabled && routine.target === "bot" && routine.runOn === "maus"
+    && state.bots.some((bot) => bot.id === routine.botId));
   const routine = routines.find((entry) => entry.id === routineId) ?? routines[0];
   const producer = state.bots.find((bot) => bot.id === routine?.botId);
   const app = REPORT_APPS[kind];
@@ -30,14 +31,17 @@ export function ReportInstall({ kind, onCancel, onInstalled }: {
       const inventory = await api<Inventory>("/api/mini-apps", { timeoutMs: 10_000 });
       const existing = inventory.apps.find((entry) => entry.slug === app.slug);
       if (existing?.status === "archived") throw new Error(t("computer.miniApps.report.archived"));
-      if (existing) { onInstalled(existing.id); return; }
+      if (existing) {
+        if (existing.shippedTemplateKind === kind) { onInstalled(existing.id); return; }
+        throw new Error(t("computer.miniApps.catalog.nameInUse"));
+      }
       const source = await api<ReportSourceResult>("/api/mini-apps/report-source", {
         method: "POST", body: JSON.stringify({ kind, routineId: routine.id }), timeoutMs: 20_000,
       });
       if (source.kind !== kind || source.slug !== app.slug || source.routineId !== routine.id || source.publication.slug !== app.slug
         || !source.producerBotId || source.publication.expectedRevision !== 0) throw new Error(t("computer.miniApps.report.invalidSource"));
       const result = await api<MiniAppMutationResult>("/api/mini-apps", {
-        method: "POST", body: JSON.stringify({ ...source.publication, publisherBotIds: [source.producerBotId] }), timeoutMs: 20_000,
+        method: "POST", body: JSON.stringify({ ...source.publication, publisherBotIds: [source.producerBotId], shippedTemplateKind: kind }), timeoutMs: 20_000,
       });
       onInstalled(result.app.id);
     } catch (cause) {
