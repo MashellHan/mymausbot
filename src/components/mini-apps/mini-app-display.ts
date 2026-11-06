@@ -5,6 +5,7 @@ import { REPORT_APPS } from "../../../shared/report-mini-app";
 const usageDefaultTitles = new Set(["Usage", "用量", "Work Tracker", "工作追踪"]);
 
 export function miniAppDisplayName(app: MiniAppSummary): string {
+  if (app.shippedTemplateKind === "github_activity" && ["GitHub activity", "GitHub activity & discovery"].includes(app.title)) return REPORT_APPS.github_activity.title;
   return app.dashboardIdentity === "usage" && usageDefaultTitles.has(app.title)
     ? t("computer.miniApps.dashboard.workTrackerTitle") : app.title;
 }

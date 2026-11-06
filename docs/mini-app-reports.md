@@ -1,6 +1,6 @@
 # Bot-published report Mini Apps
 
-Daily X AI digest and GitHub activity are local report templates in Computer →
+Daily X AI digest and Github Rending are local report templates in Computer →
 Mini Apps. They share the existing owner-scoped app registry and retained DuckDB
 Data with bookkeeping. Each report has its own ordered edition history. A bot can
 produce both reports from one retained store; it does not need another bot,
@@ -40,7 +40,7 @@ Bots use their normal turn capability and tool policy:
 | Kind | Stable slug | Edition series |
 | --- | --- | --- |
 | `x_ai_digest` | `x-ai-digest` | The existing daily X AI digest |
-| `github_activity` | `github-activity` | The existing GitHub activity/discovery digest |
+| `github_activity` | `github-activity` | The existing GitHub activity/discovery digest, displayed as Github Rending |
 
 The caller cannot select another bot or dataset for the report tool. Template
 editing access does not confer write access to another producer's Data. Removing

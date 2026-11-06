@@ -144,62 +144,103 @@
       .calendar-day { min-height: 57px; padding: 4px; }
       .calendar-day .day-flow { display: inline-block; width: 7px; height: 7px; margin: 4px 3px 0 0; border-radius: 50%; background: currentColor; font-size: 0; vertical-align: top; }
     }
+    .view-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; }
+    .time-nav { display: inline-flex; min-width: 0; align-items: center; gap: 9px; }
+    .time-nav h2 { min-width: 0; font-size: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .time-nav button, .quiet-action { min-height: 30px; border-radius: 8px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 5px 9px; }
+    .time-nav button:hover:not(:disabled), .quiet-action:hover:not(:disabled) { background: var(--color-background-tertiary, light-dark(#e9e9ee, #333338)); }
+    .context-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+    .context-actions input { max-width: 150px; min-height: 30px; border-radius: 8px; background: var(--color-background-primary, light-dark(#fff, #1c1c1f)); padding: 4px 7px; font-size: 12px; }
+    .stats-period { display: inline-flex; gap: 2px; margin-top: 17px; padding: 3px; border-radius: 9px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
+    .stats-period button { border: 0; border-radius: 7px; background: transparent; padding: 5px 13px; font-size: 12px; }
+    .stats-period button[aria-pressed="true"] { background: var(--color-background-primary, light-dark(#fff, #1c1c1f)); font-weight: 650; }
+    .drilldown { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; }
+    .drilldown[hidden] { display: none; }
+    .drilldown button { border-radius: 7px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 3px 8px; }
+    .records-totals { display: flex; flex-wrap: wrap; gap: 7px 16px; margin-top: 12px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .records-totals strong { margin-left: 5px; font-size: 13px; }
+    .date-group { margin-top: 17px; }
+    .date-group h3 { margin-bottom: 5px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .date-group .record-row:last-child { border-bottom-color: var(--color-border-secondary, light-dark(#e4e4e8, #333338)); }
+    .year-grid { display: grid; grid-template-columns: 50px repeat(3, minmax(0, 1fr)); gap: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .year-grid > * { min-width: 0; padding: 8px 5px; border-bottom: 1px solid var(--color-border-tertiary, light-dark(#eee, #303035)); overflow-wrap: anywhere; text-align: right; }
+    .year-grid > :nth-child(4n + 1) { text-align: left; }
+    .year-grid .year-head { color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-weight: 600; }
+    .year-grid button { border: 0; border-radius: 0; background: transparent; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+    .expense-open { width: 100%; border: 0; background: transparent; text-align: left; }
+    .expense-open:hover { background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
+    .expense-detail { margin-top: 12px; border: 1px solid var(--color-border-secondary, light-dark(#e4e4e8, #333338)); border-radius: 12px; padding: 12px; }
+    .expense-detail[hidden] { display: none; }
+    .expense-detail header { display: flex; justify-content: space-between; gap: 12px; }
+    .expense-detail button { border-radius: 7px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 4px 8px; }
+    .expense-detail dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; margin: 10px 0 0; }
+    .expense-detail dt { color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 11px; }
+    .expense-detail dd { margin: 3px 0 0; overflow-wrap: anywhere; font-size: 13px; }
+    .coverage[data-quality="partial"] { color: var(--color-text-warning, light-dark(#775012, #f8ce81)); }
+    @media (max-width: 600px) {
+      .view-head { align-items: flex-start; }
+      .time-nav h2 { font-size: 15px; }
+      .year-grid { font-size: 11px; }
+      .context-actions { width: 100%; }
+    }
   </style>
 </head>
 <body>
   <main class="portal">
-    <header class="heading">
-      <div>
-        <h1 data-i18n="Bookkeeping Manager">Bookkeeping Manager</h1>
-        <p id="coverage" class="coverage muted" data-i18n="Reading record coverage…">Reading record coverage…</p>
-      </div>
-      <div><span class="currency-mark">CNY · ¥</span> <button id="refresh" class="refresh" type="button" data-i18n="Refresh">Refresh</button></div>
-    </header>
+    <header class="heading"><div><h1 data-i18n="Bookkeeping Manager">Bookkeeping Manager</h1>
+      <p id="coverage" class="coverage muted" data-i18n="Reading record coverage…">Reading record coverage…</p></div></header>
     <details id="excluded-currencies" class="quality-details" hidden><summary></summary><p></p></details>
     <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
     <nav class="view-tabs" role="tablist" aria-label="Bookkeeping views" data-i18n-aria-label="Bookkeeping views">
-      <button type="button" id="tab-overview" role="tab" aria-selected="true" aria-controls="view-overview" tabindex="0" data-view="overview" data-i18n="Overview">Overview</button>
+      <button type="button" id="tab-records" role="tab" aria-selected="true" aria-controls="view-records" tabindex="0" data-view="records" data-i18n="Records">Records</button>
       <button type="button" id="tab-calendar" role="tab" aria-selected="false" aria-controls="view-calendar" tabindex="-1" data-view="calendar" data-i18n="Calendar">Calendar</button>
-      <button type="button" id="tab-records" role="tab" aria-selected="false" aria-controls="view-records" tabindex="-1" data-view="records" data-i18n="Records">Records</button>
+      <button type="button" id="tab-statistics" role="tab" aria-selected="false" aria-controls="view-statistics" tabindex="-1" data-view="statistics" data-i18n="Statistics">Statistics</button>
     </nav>
-    <section class="filters" aria-label="Filters" data-i18n-aria-label="Filters">
-      <label class="filter"><span data-i18n="Period">Period</span>
-        <select id="period">
-          <option value="week" data-i18n="Week">Week</option>
-          <option value="month" selected data-i18n="Month">Month</option>
-          <option value="year" data-i18n="Year">Year</option>
-          <option value="all" data-i18n="All recorded dates">All recorded dates</option>
-          <option value="custom" data-i18n="Custom range">Custom range</option>
-        </select>
-      </label>
-      <label class="filter"><span data-i18n="Category">Category</span><select id="category"><option value="" data-i18n="All categories">All categories</option></select></label>
-      <div id="custom-range" class="custom-range" hidden>
-        <label class="filter"><span data-i18n="From">From</span><input id="from" type="date"></label>
-        <label class="filter"><span data-i18n="Through">Through</span><input id="through" type="date"></label>
-      </div>
+    <section id="view-records" class="view" role="tabpanel" aria-labelledby="tab-records">
+      <header class="section view-head"><div class="time-nav"><button id="records-previous" type="button" aria-label="Previous month" data-i18n-aria-label="Previous month">‹</button>
+        <h2 id="records-title"></h2><button id="records-next" type="button" aria-label="Next month" data-i18n-aria-label="Next month">›</button></div>
+        <div class="context-actions"><input id="records-month" type="month" aria-label="Choose month" data-i18n-aria-label="Choose month"><button id="records-latest" type="button" class="quiet-action" data-i18n="Latest records">Latest records</button></div></header>
+      <p id="records-range" class="range-note"></p>
+      <div id="records-totals" class="records-totals"></div>
+      <div id="record-drilldown" class="drilldown" hidden><span id="record-drilldown-label"></span>
+        <button id="record-drilldown-clear" type="button" data-i18n="Clear category">Clear category</button></div>
+      <div id="details"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div>
+      <button id="more" class="more" type="button" data-i18n="Load more entries" hidden>Load more entries</button>
     </section>
-    <p id="range-label" class="range-note"></p>
-    <section id="view-overview" class="view" role="tabpanel" aria-labelledby="tab-overview">
+    <section id="view-calendar" class="view" role="tabpanel" aria-labelledby="tab-calendar" hidden>
+      <header class="section view-head"><div class="time-nav"><button id="calendar-previous" type="button" aria-label="Previous month" data-i18n-aria-label="Previous month">‹</button>
+        <h2 id="calendar-title"></h2><button id="calendar-next" type="button" aria-label="Next month" data-i18n-aria-label="Next month">›</button></div>
+        <div class="context-actions"><input id="calendar-month" type="month" aria-label="Choose month" data-i18n-aria-label="Choose month"><button id="calendar-latest" type="button" class="quiet-action" data-i18n="Latest records">Latest records</button></div></header>
+      <p class="calendar-legend"><span><span class="legend-dot flow-out" aria-hidden="true"></span><span data-i18n="Outflow">Outflow</span></span>
+        <span><span class="legend-dot flow-in" aria-hidden="true"></span><span data-i18n="Inflow">Inflow</span></span></p>
+      <div id="calendar" class="calendar-grid"></div>
+      <section class="section" aria-labelledby="day-title"><div class="section-head"><h2 id="day-title" data-i18n="Selected day">Selected day</h2></div>
+        <div id="day-details" class="empty" data-i18n="Choose a date to see its records.">Choose a date to see its records.</div></section>
+    </section>
+    <section id="view-statistics" class="view" role="tabpanel" aria-labelledby="tab-statistics" hidden>
+      <div class="stats-period" role="group" aria-label="Statistics period" data-i18n-aria-label="Statistics period">
+        <button type="button" data-stats-period="week" aria-pressed="false" data-i18n="Week">Week</button>
+        <button type="button" data-stats-period="month" aria-pressed="true" data-i18n="Month">Month</button>
+        <button type="button" data-stats-period="year" aria-pressed="false" data-i18n="Year">Year</button>
+      </div>
+      <header class="section view-head"><div class="time-nav"><button id="stats-previous" type="button" aria-label="Previous period" data-i18n-aria-label="Previous period">‹</button>
+        <h2 id="stats-title"></h2><button id="stats-next" type="button" aria-label="Next period" data-i18n-aria-label="Next period">›</button></div>
+        <div class="context-actions"><input id="stats-date" type="date" aria-label="Choose date" data-i18n-aria-label="Choose date"><button id="stats-latest" type="button" class="quiet-action" data-i18n="Latest period">Latest period</button></div></header>
+      <p id="stats-range" class="range-note"></p>
       <section class="section" aria-labelledby="summary-title"><div class="section-head"><h2 id="summary-title" data-i18n="Cash flow">Cash flow</h2></div>
         <div id="summary" aria-live="polite"><p class="empty" data-i18n="Reading totals…">Reading totals…</p></div></section>
       <div class="overview-columns">
-        <section class="section" aria-labelledby="trend-title"><div class="section-head"><h2 id="trend-title" data-i18n="Monthly trend">Monthly trend</h2><p class="section-note" data-i18n="Recorded inflow and outflow">Recorded inflow and outflow</p></div>
+        <section class="section" aria-labelledby="trend-title"><div class="section-head"><h2 id="trend-title" data-i18n="Monthly trend">Monthly trend</h2><p id="trend-note" class="section-note" data-i18n="Recorded inflow and outflow">Recorded inflow and outflow</p></div>
           <div id="trend"><p class="empty" data-i18n="Reading trend…">Reading trend…</p></div></section>
         <section class="section" aria-labelledby="categories-title"><div class="section-head"><h2 id="categories-title" data-i18n="Spending by category">Spending by category</h2></div>
           <div id="categories"><p class="empty" data-i18n="Reading categories…">Reading categories…</p></div></section>
       </div>
+      <section id="year-breakdown-section" class="section" aria-labelledby="year-breakdown-title" hidden><div class="section-head"><h2 id="year-breakdown-title" data-i18n="Monthly breakdown">Monthly breakdown</h2></div>
+        <div id="year-breakdown"></div></section>
       <section class="section" aria-labelledby="largest-title"><div class="section-head"><h2 id="largest-title" data-i18n="Largest recorded outflows">Largest recorded outflows</h2></div>
-        <div id="largest"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div></section>
-    </section>
-    <section id="view-calendar" class="view" role="tabpanel" aria-labelledby="tab-calendar" hidden>
-      <section class="section" aria-labelledby="calendar-title"><div class="calendar-head"><button id="calendar-previous" type="button" aria-label="Previous month" data-i18n-aria-label="Previous month">‹</button><h2 id="calendar-title"></h2><button id="calendar-next" type="button" aria-label="Next month" data-i18n-aria-label="Next month">›</button></div>
-        <p class="calendar-legend"><span><span class="legend-dot flow-out" aria-hidden="true"></span><span data-i18n="Outflow">Outflow</span></span><span><span class="legend-dot flow-in" aria-hidden="true"></span><span data-i18n="Inflow">Inflow</span></span></p>
-        <div id="calendar" class="calendar-grid"></div></section>
-      <section class="section" aria-labelledby="day-title"><div class="section-head"><h2 id="day-title" data-i18n="Selected day">Selected day</h2></div><div id="day-details" class="empty" data-i18n="Choose a date to see its records.">Choose a date to see its records.</div></section>
-    </section>
-    <section id="view-records" class="view" role="tabpanel" aria-labelledby="tab-records" hidden>
-      <section class="section" aria-labelledby="details-title"><div class="section-head"><h2 id="details-title" data-i18n="Records">Records</h2><p class="section-note" data-i18n="Up to 30 at a time">Up to 30 at a time</p></div>
-        <div id="details"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div><button id="more" class="more" type="button" data-i18n="Load more entries" hidden>Load more entries</button></section>
+        <div id="largest"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div>
+        <section id="expense-detail" class="expense-detail" aria-labelledby="expense-detail-title" hidden><header><h3 id="expense-detail-title" data-i18n="Record detail">Record detail</h3>
+          <button id="expense-detail-close" type="button" data-i18n="Close detail">Close detail</button></header><dl id="expense-detail-values"></dl></section></section>
     </section>
   </main>
   <script>
@@ -208,7 +249,11 @@
 
       const $ = (id) => document.getElementById(id);
       const sdk = window.mausApp;
-      const state = { coverage: [], coverageLoaded: false, loaded: false, dataRevision: null, cnyCurrencies: [], category: "", period: "month", view: "overview", calendarMonth: null, selectedDay: null, calendarOut: [], calendarIn: [], run: 0, details: [], nextCursor: null };
+      const state = { coverage: [], coverageLoaded: false, loaded: false, dataRevision: null, cnyCurrencies: [], view: "records",
+        recordsMonth: null, calendarMonth: null, selectedDay: null, statsPeriod: "month", statsAnchor: null,
+        recordCategory: null, recordRange: null, selectedExpense: null, expenseTriggerIndex: null,
+        calendarOut: [], calendarIn: [], committed: { records: null, calendar: null, statistics: null },
+        run: 0, dayIntent: 0, details: [], nextCursor: null };
       const maxAggregatePages = 48;
       let scheduledRefresh;
       let refreshing = false;
@@ -218,12 +263,50 @@
         "Bookkeeping Manager": "记账管家",
         "Bookkeeping views": "记账视图",
         "Overview": "概览",
+        "Statistics": "统计",
         "Calendar": "日历",
-        "Records": "记录",
+        "Records": "明细",
+        "Statistics period": "统计时段",
+        "Previous period": "上一时段",
+        "Next period": "下一时段",
+        "Choose month": "选择月份",
+        "Choose date": "选择日期",
+        "Latest records": "最新记录",
+        "Latest period": "最新时段",
+        "Clear category": "清除分类",
+        "Category: {category}": "分类：{category}",
+        "Category records": "分类记录",
+        "Monthly breakdown": "月度明细",
+        "Record detail": "记录详情",
+        "Close detail": "关闭详情",
+        "View record detail": "查看记录详情",
+        "Amount": "金额",
+        "Note": "备注",
+        "Account": "账户",
+        "Book": "账本",
+        "Date": "日期",
+        "Recorded range {from} to {through}": "记录范围 {from} 至 {through}",
+        "No domestic-currency records found.": "没有已记录的人民币条目。",
+        "{count} record missing a date": "{count} 条记录缺失日期",
+        "{count} records missing dates": "{count} 条记录缺失日期",
+        "Missing dates across all records: {count}": "全部记录中缺失日期：{count} 条",
+        "{count} other or unknown currency records outside the totals": "{count} 条其他币种或币种未知的记录未计入汇总",
+        "Outflow rose by {amount}": "流出增加 {amount}",
+        "Outflow fell by {amount}": "流出减少 {amount}",
+        "Inflow rose by {amount}": "流入增加 {amount}",
+        "Inflow fell by {amount}": "流入减少 {amount}",
+        "Net changed by {amount}": "净额变化 {amount}",
+        "No change from prior period": "与上期相同",
+        "No records in this month.": "这个月没有已记录条目。",
+        "No records in this range.": "这个时段没有已记录条目。",
+        "Daily totals incomplete. Choose another month.": "每日汇总未读全，请查看其他月份。",
+        "Some dates are missing; dated views include valid dates only.": "部分记录缺失日期；按日期查看时只计入有效日期。",
         "Week": "周",
         "Year": "年",
         "All recorded dates": "全部记录日期",
         "Monthly trend": "月度趋势",
+        "Weekly trend": "周度趋势",
+        "Daily trend": "每日趋势",
         "Recorded inflow and outflow": "已记录的流入与流出",
         "Largest recorded outflows": "最大流出记录",
         "Previous month": "上个月",
@@ -308,8 +391,8 @@
         "The source has no complete dates to summarize.": "来源中没有可汇总的完整日期。",
         "{from} to {through}": "{from} 至 {through}",
         "This view is incomplete because the source has more groups than can be read at once. Narrow the date range or choose a currency.": "分组过多，此视图未读全。请缩小日期范围或选择一种货币。",
-        "Records unavailable. Try Refresh.": "记录不可用，请刷新。",
-        "Records could not be refreshed. Try again.": "无法刷新记录，请重试。",
+        "Records unavailable. Check again later.": "记录暂不可用，请稍后再看。",
+        "Data could not be updated. Showing the last results.": "暂时无法更新，仍显示上次读取的结果。",
         "More entries could not be loaded. Try again.": "无法加载更多明细，请重试。",
       };
 
@@ -476,7 +559,7 @@
         if (value === null) return "—";
         const positive = value < 0n ? -value : value;
         const digits = (positive / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-        return `${value < 0n ? "−" : ""}¥${digits}.${(positive % 100n).toString().padStart(2, "0")}`;
+        return `${value < 0n ? "−" : ""}${digits}.${(positive % 100n).toString().padStart(2, "0")}`;
       }
 
       function sumCents(values) {
@@ -503,34 +586,98 @@
       }
 
       function priorRange(range) {
-        if (!range || !["week", "month", "year"].includes(state.period)) return null;
+        if (!range) return null;
+        const complete = range.through === range.fullEnd;
         const elapsed = Math.round((Date.parse(`${range.through}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) / 86_400_000) + 1;
         let from;
-        if (state.period === "week") from = dateBefore(range.from, 7);
-        else if (state.period === "month") from = dateBefore(range.from, 1).slice(0, 7) + "-01";
+        if (state.statsPeriod === "week") from = dateBefore(range.from, 7);
+        else if (state.statsPeriod === "month") from = dateBefore(range.from, 1).slice(0, 7) + "-01";
         else from = `${Number(range.from.slice(0, 4)) - 1}-01-01`;
-        if (state.period === "week") return { from, through: dateAfter(from, elapsed - 1) };
-        const month = state.period === "month" ? from.slice(0, 7) : `${from.slice(0, 4)}-${range.through.slice(5, 7)}`;
-        const through = `${month}-${String(Math.min(Number(range.through.slice(8)), Number(monthLast(`${month}-01`).slice(8)))).padStart(2, "0")}`;
+        if (state.statsPeriod === "week") return { from, through: dateAfter(from, elapsed - 1) };
+        const month = state.statsPeriod === "month" ? from.slice(0, 7) : `${from.slice(0, 4)}-${range.through.slice(5, 7)}`;
+        const through = complete ? fullPeriodEnd(from, state.statsPeriod)
+          : `${month}-${String(Math.min(Number(range.through.slice(8)), Number(monthLast(`${month}-01`).slice(8)))).padStart(2, "0")}`;
         return { from, through };
       }
 
+      function periodStart(anchor, period) {
+        if (period === "week") {
+          const day = new Date(`${anchor}T00:00:00Z`).getUTCDay();
+          return dateBefore(anchor, (day + 6) % 7);
+        }
+        return period === "year" ? `${anchor.slice(0, 4)}-01-01` : `${anchor.slice(0, 7)}-01`;
+      }
+
+      function fullPeriodEnd(from, period) {
+        return period === "week" ? dateAfter(from, 6) : period === "year" ? `${from.slice(0, 4)}-12-31` : monthLast(from);
+      }
+
       function periodRange() {
+        const last = latestCnyDate();
+        const anchor = state.statsAnchor ?? last;
+        if (!anchor || !last) return null;
+        const from = periodStart(anchor, state.statsPeriod);
+        const fullEnd = fullPeriodEnd(from, state.statsPeriod);
+        return { from, through: fullEnd < last ? fullEnd : last, fullEnd };
+      }
+
+      function recordsRange() {
+        if (state.recordRange) return state.recordRange;
+        const last = latestCnyDate();
+        const month = state.recordsMonth ?? last?.slice(0, 7);
+        if (!month || !last) return null;
+        const from = `${month}-01`;
+        const fullEnd = monthLast(from);
+        return { from, through: fullEnd < last ? fullEnd : last };
+      }
+
+      function queryRange(range, category = null) {
+        return { from: range.from, through: range.through, currencies: state.cnyCurrencies,
+          ...(category ? { category } : {}) };
+      }
+
+      function monthTitle(month) {
+        return new Intl.DateTimeFormat(locale() === "zh" ? "zh-CN" : "en-US", { year: "numeric", month: "long", timeZone: "UTC" })
+          .format(new Date(`${month}-01T00:00:00Z`));
+      }
+
+      function renderRecordsContext(range = recordsRange()) {
+        const month = state.recordsMonth;
         const first = earliestCnyDate();
         const last = latestCnyDate();
-        if (!first || !last) return null;
-        if (state.period === "custom") {
-          const from = $("from").value;
-          const through = $("through").value;
-          return validDate(from) && validDate(through) && from <= through ? { from, through } : null;
-        }
-        if (state.period === "all") return { from: first, through: last };
-        if (state.period === "week") {
-          const day = new Date(`${last}T00:00:00Z`).getUTCDay();
-          return { from: dateBefore(last, (day + 6) % 7), through: last };
-        }
-        if (state.period === "year") return { from: `${last.slice(0, 4)}-01-01`, through: last };
-        return { from: `${last.slice(0, 7)}-01`, through: last };
+        if (!month || !last) return;
+        $("records-title").textContent = state.recordCategory ? word("Category records") : state.recordRange ? word("Records") : monthTitle(month);
+        $("records-previous").disabled = !!first && month <= first.slice(0, 7);
+        $("records-next").disabled = month >= last.slice(0, 7);
+        const picker = $("records-month");
+        picker.value = month;
+        picker.min = first?.slice(0, 7) ?? month;
+        picker.max = last.slice(0, 7);
+        $("records-range").textContent = range ? word("Recorded range {from} to {through}", range) : "";
+        $("record-drilldown").hidden = !state.recordCategory;
+        $("record-drilldown-label").textContent = state.recordCategory ? word("Category: {category}", { category: state.recordCategory }) : "";
+      }
+
+      function renderStatsContext(range) {
+        const first = earliestCnyDate();
+        const last = latestCnyDate();
+        if (!range || !last) return;
+        const anchor = state.statsAnchor ?? last;
+        $("stats-title").textContent = state.statsPeriod === "week" ? `${range.from} – ${range.fullEnd}`
+          : state.statsPeriod === "year" ? range.from.slice(0, 4) : monthTitle(range.from.slice(0, 7));
+        $("stats-previous").disabled = !!first && periodStart(anchor, state.statsPeriod) <= periodStart(first, state.statsPeriod);
+        $("stats-next").disabled = periodStart(anchor, state.statsPeriod) >= periodStart(last, state.statsPeriod);
+        const picker = $("stats-date");
+        picker.value = anchor;
+        picker.min = first ?? anchor;
+        picker.max = last;
+        const prior = priorRange(range);
+        $("stats-range").textContent = [word("{from} to {through}", range),
+          ...(prior ? [word("Prior {from} to {through}", prior)] : []),
+          ...(range.through < range.fullEnd ? [word("Recorded through {date}", { date: range.through })] : [])].join(" · ");
+        for (const button of document.querySelectorAll("[data-stats-period]")) button.setAttribute("aria-pressed", String(button.dataset.statsPeriod === state.statsPeriod));
+        $("year-breakdown-section").hidden = state.statsPeriod !== "year";
+        $("trend-title").textContent = word(state.statsPeriod === "year" ? "Monthly trend" : state.statsPeriod === "month" ? "Weekly trend" : "Daily trend");
       }
 
       function notice(message, kind = "info") {
@@ -556,16 +703,23 @@
 
       function renderSummary(current, previous) {
         const target = $("summary");
-        if (!current) return empty(target, word("No CNY records in this period."));
+        if (!current) return empty(target, word("No recorded entries"));
         if (current.incomplete) return empty(target, word("Totals incomplete. Narrow the date range."));
         const cards = element("dl", "summary-grid");
         for (const [key, label] of [["outflow", word("Outflow")], ["inflow", word("Inflow")], ["net", word("Net")]]) {
           const card = element("div", "money-card");
           card.dataset.flow = key;
           card.append(element("dt", "", label), element("dd", "", centsText(current[key])));
-          const compare = element("p", "compare", previous && !previous.incomplete && previous[key] !== null && current[key] !== null
-            ? `${word("Prior {amount}", { amount: centsText(previous[key]) })} · ${word("Change {amount}", { amount: centsText(current[key] - previous[key]) })}`
-            : word("Previous period unavailable"));
+          let comparison = word("Previous period unavailable");
+          if (previous && !previous.incomplete && previous[key] !== null && current[key] !== null) {
+            const change = current[key] - previous[key];
+            const magnitude = change < 0n ? -change : change;
+            const changeLabel = change === 0n ? word("No change from prior period")
+              : key === "net" ? word("Net changed by {amount}", { amount: centsText(change) })
+              : word(`${key === "outflow" ? "Outflow" : "Inflow"} ${change >= 0n ? "rose" : "fell"} by {amount}`, { amount: centsText(magnitude) });
+            comparison = `${word("Prior {amount}", { amount: centsText(previous[key]) })} · ${changeLabel}`;
+          }
+          const compare = element("p", "compare", comparison);
           card.append(compare);
           cards.append(card);
         }
@@ -573,10 +727,26 @@
         target.replaceChildren(cards, count);
       }
 
+      function renderRecordsTotals(metrics) {
+        const target = $("records-totals");
+        if (!metrics || metrics.incomplete) { target.replaceChildren(); return; }
+        target.replaceChildren(...[["Outflow", metrics.outflow], ["Inflow", metrics.inflow], ["Net", metrics.net]].map(([label, amount]) => {
+          const item = element("span", "", word(label));
+          item.append(element("strong", "", centsText(amount)));
+          return item;
+        }));
+      }
+
       function renderCategories(rows, truncated) {
         const target = $("categories");
         if (rows.length === 0) return empty(target, word("No spending categories in this period."));
         const colors = ["#d9775e", "#e2a04b", "#5c9fc1", "#71a889", "#9785b0", "#96949b"];
+        const categoryColor = (value) => {
+          if (value === null || value === "") return colors.at(-1);
+          let hash = 0;
+          for (const character of String(value)) hash = (Math.imul(hash, 31) + character.codePointAt(0)) >>> 0;
+          return colors[hash % (colors.length - 1)];
+        };
         const merged = new Map();
         for (const row of rows) {
           const key = row.category === null ? "missing" : `value:${row.category}`;
@@ -601,17 +771,17 @@
           const outflow = magnitude(row);
           const amount = centsDecimal(outflow);
           const whole = centsDecimal(total);
-          const color = colors[index % colors.length];
+          const color = categoryColor(row.category);
           const entry = element("li", "category-row");
           const label = `${index + 1}. ${categoryText(row.category)}`;
           const name = row.category ? element("button", "category-name", label) : element("span", "category-name", label);
           if (row.category) {
             name.type = "button";
             name.addEventListener("click", () => {
-              state.category = String(row.category);
-              $("category").value = state.category;
-              showView("records");
-              scheduleRefresh();
+              state.recordCategory = String(row.category);
+              state.recordRange = periodRange();
+              state.recordsMonth = state.recordRange?.from.slice(0, 7) ?? state.recordsMonth;
+              showView("records", true);
             });
           }
           entry.append(name, element("span", "category-amount", centsText(outflow)));
@@ -634,33 +804,58 @@
         target.replaceChildren(...(total !== null ? [distribution] : []), list);
       }
 
-      function renderTrend(outRows, inRows) {
+      function renderTrend(outRows, inRows, range) {
         const target = $("trend");
-        const last = latestCnyDate();
-        if (!last) return empty(target, word("No recorded entries"));
-        const out = bucketCents(outRows);
-        const inflow = bucketCents(inRows);
-        const observed = [...out.keys(), ...inflow.keys()].filter((month) => /^\d{4}-\d{2}$/.test(month)).sort();
-        if (!observed.length) return empty(target, word("No recorded entries"));
-        const possible = Array.from({ length: 12 }, (_, index) => {
-          const date = new Date(`${last.slice(0, 7)}-01T00:00:00Z`);
-          date.setUTCMonth(date.getUTCMonth() - (11 - index));
-          return date.toISOString().slice(0, 7);
-        });
-        const months = possible.filter((month) => month >= observed[0]);
-        const values = months.flatMap((month) => [out.get(month), inflow.get(month)].filter((value) => value !== undefined && value !== null)
+        if (!range) return empty(target, word("No recorded entries"));
+        let out = bucketCents(outRows);
+        let inflow = bucketCents(inRows);
+        const labels = new Map();
+        const keys = [];
+        if (state.statsPeriod === "month") {
+          const toWeeks = (daily) => {
+            const weeks = new Map();
+            for (const [day, value] of daily) {
+              const week = periodStart(day, "week");
+              const prior = weeks.get(week);
+              weeks.set(week, prior === undefined ? value : prior === null || value === null ? null : prior + value);
+            }
+            return weeks;
+          };
+          out = toWeeks(out);
+          inflow = toWeeks(inflow);
+          for (let week = periodStart(range.from, "week"); week <= range.through; week = dateAfter(week, 7)) {
+            keys.push(week);
+            const start = week < range.from ? range.from : week;
+            const end = dateAfter(week, 6) > range.through ? range.through : dateAfter(week, 6);
+            labels.set(week, `${start.slice(5)} – ${end.slice(5)}`);
+          }
+        } else if (state.statsPeriod === "year") {
+          for (let month = range.from.slice(0, 7); month <= range.through.slice(0, 7); ) {
+            keys.push(month);
+            labels.set(month, month.slice(5));
+            const next = new Date(`${month}-01T00:00:00Z`);
+            next.setUTCMonth(next.getUTCMonth() + 1);
+            month = next.toISOString().slice(0, 7);
+          }
+        } else {
+          for (let day = range.from; day <= range.through; day = dateAfter(day, 1)) {
+            keys.push(day);
+            labels.set(day, day.slice(5));
+          }
+        }
+        if (!keys.some((key) => out.has(key) || inflow.has(key))) return empty(target, word("No recorded entries"));
+        const values = keys.flatMap((key) => [out.get(key), inflow.get(key)].filter((value) => value !== undefined && value !== null)
           .map((value) => value < 0n ? -value : value));
         const max = values.reduce((greatest, value) => value > greatest ? value : greatest, 0n);
         const list = element("ol", "trend-list");
-        for (const month of months) {
-          const outValue = out.has(month) ? out.get(month) : null;
-          const inValue = inflow.has(month) ? inflow.get(month) : null;
+        for (const key of keys) {
+          const outValue = out.has(key) ? out.get(key) : null;
+          const inValue = inflow.has(key) ? inflow.get(key) : null;
           const spent = outValue === null ? null : -outValue;
           const row = element("li", "monthly-row");
-          row.append(element("span", "", month.slice(5)));
-          if (spent === null && inValue === null) {
-            row.append(element("span", "muted", word("No recorded entries")));
-          } else {
+          row.append(element("span", "", labels.get(key)));
+          if (spent === null && inValue === null) row.append(element("span", "muted", word("No recorded entries")));
+          else {
             const bars = element("span", "monthly-bars");
             for (const [kind, value] of [["outflow-bar", spent], ["inflow-bar", inValue]]) {
               const bar = element("span", kind);
@@ -678,12 +873,42 @@
         target.replaceChildren(list);
       }
 
-      function recordItem(row, rank = null) {
+      function renderYearBreakdown(outRows, inRows, range) {
+        if (state.statsPeriod !== "year" || !range) return;
+        const out = bucketCents(outRows);
+        const inflow = bucketCents(inRows);
+        const grid = element("div", "year-grid");
+        for (const label of [word("Month"), word("Outflow"), word("Inflow"), word("Net")]) grid.append(element("span", "year-head", label));
+        for (let month = range.from.slice(0, 7); month <= range.through.slice(0, 7); ) {
+          const selectedMonth = month;
+          const outValue = out.has(month) ? out.get(month) : null;
+          const inValue = inflow.has(month) ? inflow.get(month) : null;
+          const recorded = outValue !== null || inValue !== null;
+          const button = element("button", "", month.slice(5));
+          button.type = "button";
+          button.setAttribute("aria-label", month);
+          button.addEventListener("click", () => {
+            state.recordsMonth = selectedMonth;
+            state.recordCategory = null;
+            state.recordRange = null;
+            showView("records", true);
+          });
+          grid.append(button, element("span", "", outValue === null ? "—" : centsText(-outValue)),
+            element("span", "", inValue === null ? "—" : centsText(inValue)),
+            element("span", "", recorded ? centsText((outValue ?? 0n) + (inValue ?? 0n)) : "—"));
+          const next = new Date(`${month}-01T00:00:00Z`);
+          next.setUTCMonth(next.getUTCMonth() + 1);
+          month = next.toISOString().slice(0, 7);
+        }
+        $("year-breakdown").replaceChildren(grid);
+      }
+
+      function recordItem(row, rank = null, includeDate = true) {
         const entry = element("li", "record-row");
         const value = signedCents(row.amount);
         entry.append(element("strong", "", `${rank === null ? "" : `${rank}. `}${categoryText(row.category)}`));
         entry.append(element("span", `amount ${value !== null && value < 0n ? "flow-out" : "flow-in"}`, value !== null && value > 0n ? `+${centsText(value)}` : centsText(value)));
-        const meta = [validDate(row.date) ? row.date : word("Date unavailable"), row.account, row.book, row.note]
+        const meta = [includeDate ? validDate(row.date) ? row.date : word("Date unavailable") : null, row.account, row.book, row.note]
           .filter((item) => item !== null && String(item).trim() !== "").map(String);
         entry.append(element("small", "", meta.join(" · ")));
         return entry;
@@ -692,10 +917,48 @@
       function renderLargest(rows) {
         const target = $("largest");
         const outflows = rows.filter((row) => (signedCents(row.amount) ?? 0n) < 0n);
-        if (!outflows.length) return empty(target, word("No recorded outflow"));
+        if (!outflows.length) { state.selectedExpense = null; renderExpenseDetail(); return empty(target, word("No recorded outflow")); }
         const list = element("ol", "largest-list");
-        for (const [index, row] of outflows.slice(0, 10).entries()) list.append(recordItem(row, index + 1));
+        for (const [index, row] of outflows.slice(0, 10).entries()) {
+          const item = element("li");
+          const button = element("button", "record-row expense-open");
+          button.type = "button";
+          button.dataset.expenseIndex = String(index);
+          button.setAttribute("aria-label", `${word("View record detail")} · ${categoryText(row.category)} · ${row.date}`);
+          const content = recordItem(row, index + 1);
+          while (content.firstChild) button.append(content.firstChild);
+          button.addEventListener("click", () => {
+            state.selectedExpense = row;
+            state.expenseTriggerIndex = index;
+            if (state.committed.statistics) state.committed.statistics.selectedExpense = row;
+            renderExpenseDetail();
+            $("expense-detail-close").focus();
+          });
+          item.append(button);
+          list.append(item);
+        }
         target.replaceChildren(list);
+        if (state.selectedExpense) {
+          state.selectedExpense = outflows.find((row) => ["date", "amount", "currency", "category", "account", "book", "note"]
+            .every((field) => row[field] === state.selectedExpense[field])) ?? null;
+        }
+        renderExpenseDetail();
+      }
+
+      function renderExpenseDetail() {
+        const panel = $("expense-detail");
+        const row = state.selectedExpense;
+        panel.hidden = !row;
+        if (!row) { $("expense-detail-values").replaceChildren(); return; }
+        const values = [["Date", validDate(row.date) ? row.date : word("Date unavailable")],
+          ["Category", categoryText(row.category)], ["Amount", centsText(signedCents(row.amount))],
+          ["Account", row.account], ["Book", row.book], ["Note", row.note]];
+        const fields = values.filter(([, value]) => value !== null && String(value).trim() !== "").map(([label, value]) => {
+          const item = element("div");
+          item.append(element("dt", "", word(label)), element("dd", "", value));
+          return item;
+        });
+        $("expense-detail-values").replaceChildren(...fields);
       }
 
       function renderDayDetails(rows, hasMore = false) {
@@ -703,21 +966,46 @@
         if (!rows.length) { target.className = ""; return empty(target, word("No recorded entries")); }
         target.className = "";
         const list = element("ol", "record-list");
-        for (const row of rows) list.append(recordItem(row));
+        for (const row of rows) list.append(recordItem(row, null, false));
         target.replaceChildren(list, ...(hasMore ? [element("p", "range-note", word("Showing first 30 records."))] : []));
       }
 
       function renderDetails() {
         const target = $("details");
         if (state.details.length === 0) {
-          empty(target, word("No entries match these filters."));
+          empty(target, word("No records in this range."));
           $("more").hidden = true;
           return;
         }
-        const list = element("ol", "record-list");
-        for (const row of state.details) list.append(recordItem(row));
-        target.replaceChildren(list);
+        const groups = new Map();
+        for (const row of state.details) {
+          const date = validDate(row.date) ? row.date : word("Date unavailable");
+          if (!groups.has(date)) groups.set(date, []);
+          groups.get(date).push(row);
+        }
+        const sections = [];
+        for (const [date, rows] of groups) {
+          const section = element("section", "date-group");
+          section.append(element("h3", "", date));
+          const list = element("ol", "record-list");
+          for (const row of rows) list.append(recordItem(row, null, false));
+          section.append(list);
+          sections.push(section);
+        }
+        target.replaceChildren(...sections);
         $("more").hidden = state.nextCursor === null;
+      }
+
+      function renderCalendarContext() {
+        const month = state.calendarMonth;
+        if (!month) return;
+        $("calendar-title").textContent = monthTitle(month);
+        $("calendar-previous").disabled = !!earliestCnyDate() && month <= earliestCnyDate().slice(0, 7);
+        $("calendar-next").disabled = !!latestCnyDate() && month >= latestCnyDate().slice(0, 7);
+        const picker = $("calendar-month");
+        picker.value = month;
+        picker.min = earliestCnyDate()?.slice(0, 7) ?? month;
+        picker.max = latestCnyDate()?.slice(0, 7) ?? month;
       }
 
       function renderCalendar() {
@@ -725,10 +1013,7 @@
         if (!month) return;
         const first = `${month}-01`;
         const last = monthLast(first);
-        const titleDate = new Date(`${first}T00:00:00Z`);
-        $("calendar-title").textContent = new Intl.DateTimeFormat(locale() === "zh" ? "zh-CN" : "en-US", { year: "numeric", month: "long", timeZone: "UTC" }).format(titleDate);
-        $("calendar-previous").disabled = !!earliestCnyDate() && month <= earliestCnyDate().slice(0, 7);
-        $("calendar-next").disabled = !!latestCnyDate() && month >= latestCnyDate().slice(0, 7);
+        renderCalendarContext();
         const out = bucketCents(state.calendarOut);
         const inflow = bucketCents(state.calendarIn);
         const grid = $("calendar");
@@ -749,12 +1034,7 @@
           button.append(element("span", "day-number", String(day)));
           if (spent !== null) button.append(element("span", "day-flow flow-out", centsText(-spent)));
           if (earned !== null) button.append(element("span", "day-flow flow-in", centsText(earned)));
-          button.addEventListener("click", () => {
-            state.selectedDay = date;
-            renderCalendar();
-            grid.querySelector(`[data-calendar-day="${date}"]`)?.focus();
-            void loadDay(date);
-          });
+          button.addEventListener("click", () => { void loadDay(date); });
           cells.push(button);
         }
         grid.replaceChildren(...cells);
@@ -762,15 +1042,19 @@
       }
 
       async function loadDay(day) {
-        if (!state.cnyCurrencies.length) return;
+        const snapshot = state.committed.calendar;
+        if (!snapshot || snapshot.incomplete || state.view !== "calendar") return;
         const run = state.run;
+        const intent = ++state.dayIntent;
         try {
-          const result = await query("details", { from: day, through: day, currencies: state.cnyCurrencies,
-            ...(state.category ? { category: state.category } : {}) }, { expectedDataRevision: state.dataRevision });
-          if (run !== state.run || state.selectedDay !== day) return;
-          renderDayDetails(result.rows, result.nextCursor !== null);
+          const result = await query("details", { from: day, through: day, currencies: state.cnyCurrencies }, { expectedDataRevision: state.dataRevision });
+          if (intent !== state.dayIntent || run !== state.run || state.committed.calendar !== snapshot || state.view !== "calendar") return;
+          const updated = { ...snapshot, selectedDay: day, dayRows: result.rows, dayHasMore: result.nextCursor !== null };
+          state.committed.calendar = updated;
+          renderCalendarSnapshot(updated);
         } catch {
-          if (run === state.run && state.selectedDay === day) empty($("day-details"), word("Records unavailable. Try Refresh."));
+          if (intent === state.dayIntent && run === state.run && state.committed.calendar === snapshot && state.view === "calendar")
+            notice(word("Records unavailable. Check again later."), "error");
         }
       }
 
@@ -790,16 +1074,16 @@
         const accepted = cny;
         const first = accepted.map((row) => row.firstDate).filter(validDate).sort()[0];
         const last = accepted.map((row) => row.lastDate).filter(validDate).sort().at(-1);
-        const missing = (field) => accepted.reduce((total, row) => {
+        const missing = (group, field) => group.reduce((total, row) => {
           const all = countValue(row.count);
           const known = countValue(row[field]);
           return total !== null && all !== null && known !== null && all >= known ? total + all - known : null;
         }, 0n);
-        const incomplete = missing("datedCount");
-        const invalid = missing("amountCount");
+        const incomplete = missing(rows, "datedCount");
+        const invalid = missing(accepted, "amountCount");
         const parts = [first && last ? word("Dated records {first} to {last}", { first, last })
-          : rows.length ? word("No explicit CNY currency found.") : word("No recorded entries")];
-        if (incomplete !== null && incomplete > 0n) parts.push(word(incomplete === 1n ? "{count} incomplete date excluded" : "{count} incomplete dates excluded", { count: countText(incomplete.toString()) }));
+          : rows.length ? word("No domestic-currency records found.") : word("No recorded entries")];
+        if (incomplete !== null && incomplete > 0n) parts.push(word("Missing dates across all records: {count}", { count: countText(incomplete) }));
         if (invalid !== null && invalid > 0n) parts.push(word(invalid === 1n ? "{count} invalid or unrepresentable amount excluded" : "{count} invalid or unrepresentable amounts excluded", { count: countText(invalid.toString()) }));
         if (accepted.length && (incomplete === null || invalid === null)) parts.push(word("Source quality counts unavailable"));
         const excluded = rows.filter((row) => !cny.includes(row));
@@ -809,13 +1093,15 @@
         }, 0n);
         const disclosure = $("excluded-currencies");
         disclosure.hidden = omitted === 0n;
-        disclosure.querySelector("summary").textContent = word("{count} other or unknown currency records excluded from CNY", { count: countText(omitted) });
+        disclosure.querySelector("summary").textContent = word("{count} other or unknown currency records outside the totals", { count: countText(omitted) });
         disclosure.querySelector("p").textContent = excluded.map((row) => `${currencyText(row.currency)} · ${countText(row.count)}`).join(" · ");
         $("coverage").removeAttribute("data-i18n");
         $("coverage").textContent = parts.join(" · ");
-        $("from").value ||= first ?? "";
-        $("through").value ||= last ?? "";
+        $("coverage").dataset.quality = incomplete !== null && incomplete > 0n || invalid !== null && invalid > 0n ? "partial" : "ready";
+        state.recordsMonth ??= last?.slice(0, 7) ?? null;
         state.calendarMonth ??= last?.slice(0, 7) ?? null;
+        state.statsAnchor ??= last ?? null;
+        state.selectedDay ??= last ?? null;
       }
 
       function moneyMetrics(summary, outflow, inflow) {
@@ -831,6 +1117,103 @@
         return { net, outflow: spent === null ? null : -spent, inflow: earned, count };
       }
 
+      function renderRecordsSnapshot(snapshot) {
+        state.recordsMonth = snapshot.month;
+        state.recordRange = snapshot.rangeOverride;
+        state.recordCategory = snapshot.category;
+        state.details = [...snapshot.rows];
+        state.nextCursor = snapshot.nextCursor;
+        renderRecordsContext(snapshot.range);
+        renderRecordsTotals(snapshot.metrics);
+        renderDetails();
+      }
+
+      function renderCalendarSnapshot(snapshot) {
+        state.calendarMonth = snapshot.month;
+        state.selectedDay = snapshot.selectedDay;
+        state.calendarOut = snapshot.outRows;
+        state.calendarIn = snapshot.inRows;
+        if (snapshot.incomplete) {
+          renderCalendarContext();
+          $("calendar").replaceChildren(element("p", "empty calendar-unavailable", word("Daily totals incomplete. Choose another month.")));
+          empty($("day-details"), word("Daily totals incomplete. Choose another month."));
+          return;
+        }
+        renderCalendar();
+        if (snapshot.selectedDay) renderDayDetails(snapshot.dayRows, snapshot.dayHasMore);
+        else empty($("day-details"), word("No recorded entries"));
+      }
+
+      function renderStatisticsSnapshot(snapshot) {
+        state.statsPeriod = snapshot.period;
+        state.statsAnchor = snapshot.anchor;
+        state.selectedExpense = snapshot.selectedExpense;
+        renderStatsContext(snapshot.range);
+        renderSummary(snapshot.current, snapshot.previous);
+        renderCategories(snapshot.categories, snapshot.categoriesTruncated);
+        if (snapshot.trendTruncated) {
+          empty($("trend"), word("Totals incomplete. Narrow the date range."));
+          if (snapshot.period === "year") empty($("year-breakdown"), word("Totals incomplete. Narrow the date range."));
+        } else {
+          renderTrend(snapshot.trendOut, snapshot.trendIn, snapshot.range);
+          renderYearBreakdown(snapshot.trendOut, snapshot.trendIn, snapshot.range);
+        }
+        renderLargest(snapshot.largest);
+        snapshot.selectedExpense = state.selectedExpense;
+      }
+
+      function restoreView() {
+        const snapshot = state.committed[state.view];
+        if (!snapshot) {
+          if (state.view === "records") { $("records-totals").replaceChildren(); empty($("details"), word("Records unavailable. Check again later.")); $("more").hidden = true; }
+          else if (state.view === "calendar") { empty($("calendar"), word("Records unavailable. Check again later.")); empty($("day-details"), word("Records unavailable. Check again later.")); }
+          else for (const id of ["summary", "categories", "trend", "largest", "year-breakdown"]) empty($(id), word("Records unavailable. Check again later."));
+          notice(word("Records unavailable. Check again later."), "error");
+          return;
+        }
+        if (state.view === "records") renderRecordsSnapshot(snapshot);
+        else if (state.view === "calendar") renderCalendarSnapshot(snapshot);
+        else renderStatisticsSnapshot(snapshot);
+        notice(word("Data could not be updated. Showing the last results."), "error");
+      }
+
+      function clearAllViews() {
+        state.committed = { records: null, calendar: null, statistics: null };
+        state.details = [];
+        state.nextCursor = null;
+        state.calendarOut = [];
+        state.calendarIn = [];
+        state.selectedDay = null;
+        state.selectedExpense = null;
+        state.recordCategory = null;
+        state.recordRange = null;
+        state.recordsMonth = null;
+        state.calendarMonth = null;
+        state.statsAnchor = null;
+        for (const id of ["details", "calendar", "day-details", "summary", "categories", "trend", "largest", "year-breakdown"]) empty($(id), word("No recorded entries"));
+        $("records-totals").replaceChildren();
+        $("expense-detail").hidden = true;
+        $("more").hidden = true;
+        $("record-drilldown").hidden = true;
+        for (const id of ["records-title", "calendar-title", "stats-title", "records-range", "stats-range"]) $(id).textContent = "";
+        for (const id of ["records-month", "calendar-month", "stats-date"]) $(id).value = "";
+        for (const id of ["records-previous", "records-next", "calendar-previous", "calendar-next", "stats-previous", "stats-next"]) $(id).disabled = true;
+      }
+
+      async function readDetailsDepth(params, pinned, targetCount, run) {
+        const rows = [];
+        let cursor = null;
+        for (let pageNumber = 0; pageNumber < 48; pageNumber++) {
+          const page = await query("details", params, { ...pinned, ...(cursor ? { cursor } : {}) });
+          if (run !== state.run) return null;
+          if (page.revision !== state.dataRevision) throw new Error("Data revision changed");
+          rows.push(...page.rows);
+          cursor = page.nextCursor;
+          if (!cursor || rows.length >= targetCount) return { rows, nextCursor: cursor };
+        }
+        throw new Error("Visible records could not be refreshed completely");
+      }
+
       async function refresh(keepVisible = false) {
         clearTimeout(scheduledRefresh);
         if (refreshing) {
@@ -841,103 +1224,126 @@
         }
         refreshing = true;
         const run = ++state.run;
-        $("refresh").disabled = true;
+        const scroll = keepVisible ? document.scrollingElement?.scrollTop ?? null : null;
+        const priorCoverage = { rows: state.coverage, currencies: state.cnyCurrencies, revision: state.dataRevision, loaded: state.coverageLoaded };
         $("more").disabled = true;
-        notice(word(keepVisible ? "Checking for updated records…" : "Loading records…"));
+        if (!state.loaded) notice(word("Loading records…"));
         try {
           if (!state.coverageLoaded || keepVisible) {
             const coverage = await queryAll("coverage", {}, {}, { remaining: maxAggregatePages }, run);
             if (run !== state.run) return;
-            if (coverage.truncated) throw new Error("Coverage could not be read completely.");
+            if (coverage.truncated) throw new Error("Coverage incomplete");
             updateCoverage(coverage.rows);
             state.dataRevision = coverage.revision;
             state.coverageLoaded = true;
           }
-          const range = periodRange();
-          if (!range) {
-            $("range-label").textContent = "";
-            for (const id of ["summary", "categories", "trend", "largest", "details"]) empty($(id), word("A valid dated range is unavailable."));
-            $("calendar").replaceChildren();
-            $("more").hidden = true;
-            notice(word(state.period === "custom" ? "Choose a valid From and Through date."
-              : !state.cnyCurrencies.length ? "No explicit CNY currency found." : "The source has no complete dates to summarize."));
+          if (!state.cnyCurrencies.length || !latestCnyDate()) {
+            clearAllViews();
             state.loaded = true;
+            notice("");
             return;
           }
-          const base = { from: range.from, through: range.through, currencies: state.cnyCurrencies };
-          const filtered = { ...base, ...(state.category ? { category: state.category } : {}) };
           const pinned = { expectedDataRevision: state.dataRevision };
           const budget = { remaining: maxAggregatePages };
-          const [summary, outflow, inflow, categories, categoryOptions, details] = await Promise.all([
-            queryAll("summary", filtered, pinned, budget, run),
-            queryAll("outflow", filtered, pinned, budget, run),
-            queryAll("inflow", filtered, pinned, budget, run),
-            queryAll("categories", filtered, pinned, budget, run),
-            queryAll("category_options", base, pinned, budget, run),
-            query("details", filtered, pinned),
-          ]);
-          if (run !== state.run) return;
-          const prior = priorRange(range);
-          const [priorSummary, priorOutflow, priorInflow] = prior ? await Promise.all([
-            queryAll("summary", { ...filtered, from: prior.from, through: prior.through }, pinned, budget, run),
-            queryAll("outflow", { ...filtered, from: prior.from, through: prior.through }, pinned, budget, run),
-            queryAll("inflow", { ...filtered, from: prior.from, through: prior.through }, pinned, budget, run),
-          ]) : [null, null, null];
-          if (run !== state.run) return;
-          const latest = latestCnyDate();
-          const monthStart = new Date(`${latest.slice(0, 7)}-01T00:00:00Z`);
-          monthStart.setUTCMonth(monthStart.getUTCMonth() - 11);
-          const trendBase = { ...filtered, from: monthStart.toISOString().slice(0, 10), through: latest };
-          const [trendOut, trendIn, largest] = await Promise.all([
-            queryAll("trend_month", trendBase, pinned, budget, run),
-            queryAll("trend_month_inflow", trendBase, pinned, budget, run),
-            query("largest_expenses", filtered, pinned),
-          ]);
-          if (run !== state.run) return;
-          let dayOut = null, dayIn = null;
-          if (state.view === "calendar" && state.calendarMonth) {
-            const calendarBase = { ...filtered, from: `${state.calendarMonth}-01`, through: monthLast(`${state.calendarMonth}-01`) };
-            [dayOut, dayIn] = await Promise.all([
-              queryAll("trend_day", calendarBase, pinned, budget, run),
-              queryAll("trend_day_inflow", calendarBase, pinned, budget, run),
+          let incomplete = false;
+          if (state.view === "records") {
+            const range = recordsRange();
+            const month = state.recordsMonth;
+            const category = state.recordCategory;
+            const rangeOverride = state.recordRange;
+            const params = queryRange(range, category);
+            const previous = state.committed.records;
+            const sameScope = previous && previous.month === month && previous.category === category
+              && previous.rangeOverride?.from === rangeOverride?.from && previous.rangeOverride?.through === rangeOverride?.through;
+            const depth = keepVisible && sameScope ? Math.max(30, previous.rows.length) : 30;
+            const [summary, outflow, inflow, details] = await Promise.all([
+              queryAll("summary", params, pinned, budget, run),
+              queryAll("outflow", params, pinned, budget, run),
+              queryAll("inflow", params, pinned, budget, run),
+              readDetailsDepth(params, pinned, depth, run),
+            ]);
+            if (run !== state.run || !details) return;
+            incomplete = [summary, outflow, inflow].some((answer) => answer.truncated);
+            const snapshot = { month, rangeOverride, category, range: { from: range.from, through: range.through },
+              metrics: moneyMetrics(summary, outflow, inflow), rows: details.rows, nextCursor: details.nextCursor };
+            state.committed.records = snapshot;
+            renderRecordsSnapshot(snapshot);
+          } else if (state.view === "calendar") {
+            const month = state.calendarMonth;
+            const params = queryRange({ from: `${month}-01`, through: monthLast(`${month}-01`) });
+            const [dayOut, dayIn] = await Promise.all([
+              queryAll("trend_day", params, pinned, budget, run),
+              queryAll("trend_day_inflow", params, pinned, budget, run),
             ]);
             if (run !== state.run) return;
-            if (dayOut.truncated || dayIn.truncated) {
-              state.calendarOut = [];
-              state.calendarIn = [];
-              $("calendar").replaceChildren(element("p", "empty calendar-unavailable", word("Daily totals incomplete. Narrow the date range and refresh.")));
-              empty($("day-details"), word("Daily totals incomplete. Narrow the date range and refresh."));
-            } else {
-              state.calendarOut = dayOut.rows;
-              state.calendarIn = dayIn.rows;
-              renderCalendar();
+            incomplete = dayOut.truncated || dayIn.truncated;
+            let selectedDay = state.selectedDay;
+            let dayRows = [], dayHasMore = false;
+            if (!incomplete) {
+              const observed = [...dayOut.rows, ...dayIn.rows].map((row) => row.bucket).filter(validDate).sort();
+              if (!selectedDay || selectedDay.slice(0, 7) !== month) selectedDay = observed.at(-1) ?? null;
+              if (selectedDay) {
+                const day = await query("details", queryRange({ from: selectedDay, through: selectedDay }), pinned);
+                if (run !== state.run) return;
+                dayRows = day.rows;
+                dayHasMore = day.nextCursor !== null;
+              }
             }
+            const snapshot = { month, selectedDay, outRows: incomplete ? [] : dayOut.rows, inRows: incomplete ? [] : dayIn.rows,
+              dayRows, dayHasMore, incomplete };
+            state.committed.calendar = snapshot;
+            renderCalendarSnapshot(snapshot);
+          } else {
+            const period = state.statsPeriod;
+            const anchor = state.statsAnchor;
+            const range = periodRange();
+            const params = queryRange(range);
+            const prior = priorRange(range);
+            const trendId = period === "year" ? "trend_month" : "trend_day";
+            const [summary, outflow, inflow, categories, largest] = await Promise.all([
+              queryAll("summary", params, pinned, budget, run),
+              queryAll("outflow", params, pinned, budget, run),
+              queryAll("inflow", params, pinned, budget, run),
+              queryAll("categories", params, pinned, budget, run),
+              query("largest_expenses", params, pinned),
+            ]);
+            if (run !== state.run) return;
+            const [priorSummary, priorOutflow, priorInflow] = await Promise.all([
+              queryAll("summary", queryRange(prior), pinned, budget, run),
+              queryAll("outflow", queryRange(prior), pinned, budget, run),
+              queryAll("inflow", queryRange(prior), pinned, budget, run),
+            ]);
+            if (run !== state.run) return;
+            const [trendOut, trendIn] = await Promise.all([
+              queryAll(trendId, params, pinned, budget, run),
+              queryAll(`${trendId}_inflow`, params, pinned, budget, run),
+            ]);
+            if (run !== state.run) return;
+            incomplete = [summary, outflow, inflow, categories, priorSummary, priorOutflow, priorInflow, trendOut, trendIn]
+              .some((answer) => answer.truncated);
+            const previous = state.committed.statistics;
+            const sameScope = previous && previous.period === period && previous.anchor === anchor;
+            const snapshot = { period, anchor, range, current: moneyMetrics(summary, outflow, inflow),
+              previous: moneyMetrics(priorSummary, priorOutflow, priorInflow), categories: categories.rows,
+              categoriesTruncated: categories.truncated, trendOut: trendOut.rows, trendIn: trendIn.rows,
+              trendTruncated: trendOut.truncated || trendIn.truncated, largest: largest.rows,
+              selectedExpense: sameScope ? previous.selectedExpense : null };
+            state.committed.statistics = snapshot;
+            renderStatisticsSnapshot(snapshot);
           }
-          const options = [...new Set(categoryOptions.rows.filter((row) => row.category !== null && String(row.category).trim() !== "").map((row) => String(row.category)))].sort();
-          if (state.category && !options.includes(state.category)) options.push(state.category);
-          state.category = setOptions($("category"), options.map((name) => [name, name]), state.category, word("All categories"));
-          const fullEnd = state.period === "week" ? dateAfter(range.from, 6)
-            : state.period === "month" ? monthLast(range.from)
-              : state.period === "year" ? `${range.from.slice(0, 4)}-12-31` : range.through;
-          $("range-label").textContent = [word("{from} to {through}", range),
-            ...(prior ? [word("Prior {from} to {through}", prior)] : []),
-            ...(range.through < fullEnd ? [word("Recorded through {date}", { date: range.through })] : [])].join(" · ");
-          renderSummary(moneyMetrics(summary, outflow, inflow), prior ? moneyMetrics(priorSummary, priorOutflow, priorInflow) : null);
-          renderCategories(categories.rows, categories.truncated);
-          renderTrend(trendOut.rows, trendIn.rows);
-          renderLargest(largest.rows);
-          state.details = details.rows;
-          state.nextCursor = details.nextCursor;
-          renderDetails();
           state.loaded = true;
-          notice([summary, outflow, inflow, categories, categoryOptions, priorSummary, priorOutflow, priorInflow, trendOut, trendIn, dayOut, dayIn]
-            .some((answer) => answer?.truncated)
-            ? word("This view is incomplete because the source has more groups than can be read at once. Narrow the date range.") : "");
-          if (state.view === "calendar" && state.selectedDay && !dayOut?.truncated && !dayIn?.truncated) void loadDay(state.selectedDay);
-        } catch (error) {
+          notice(incomplete ? word("This view is incomplete because the source has more groups than can be read at once. Narrow the date range.") : "");
+          if (scroll !== null && document.scrollingElement) document.scrollingElement.scrollTop = scroll;
+        } catch {
           if (run === state.run) {
-            if (!state.loaded) for (const id of ["summary", "categories", "trend", "largest", "details"]) empty($(id), word("Records unavailable. Try Refresh."));
-            notice(word("Records could not be refreshed. Try again."), "error");
+            state.coverage = priorCoverage.rows;
+            state.cnyCurrencies = priorCoverage.currencies;
+            state.dataRevision = priorCoverage.revision;
+            state.coverageLoaded = priorCoverage.loaded;
+            if (priorCoverage.loaded) updateCoverage(priorCoverage.rows);
+            else { $("coverage").textContent = word("Reading record coverage…"); $("excluded-currencies").hidden = true; }
+            restoreView();
+            if (scroll !== null && document.scrollingElement) document.scrollingElement.scrollTop = scroll;
           }
         } finally {
           refreshing = false;
@@ -946,32 +1352,26 @@
             pendingRefresh = false;
             pendingKeepVisible = false;
             void refresh(keep);
-          } else if (run === state.run) {
-            $("refresh").disabled = false;
-            $("more").disabled = false;
-          }
+          } else if (run === state.run) $("more").disabled = false;
         }
       }
 
       async function loadMore() {
-        if (refreshing || state.nextCursor === null) return;
+        if (refreshing || state.nextCursor === null || state.view !== "records") return;
+        const snapshot = state.committed.records;
+        if (!snapshot) return;
         const run = state.run;
-        const range = periodRange();
-        if (!range) return;
         $("more").disabled = true;
         try {
-          const cursor = state.nextCursor;
-          const parameters = { from: range.from, through: range.through, currencies: state.cnyCurrencies, ...(state.category ? { category: state.category } : {}) };
-          const result = await query("details", parameters, { cursor, expectedDataRevision: state.dataRevision });
-          if (run !== state.run) return;
-          state.details.push(...result.rows);
-          state.nextCursor = result.nextCursor;
-          renderDetails();
-        } catch (error) {
+          const result = await query("details", queryRange(snapshot.range, snapshot.category),
+            { cursor: snapshot.nextCursor, expectedDataRevision: state.dataRevision });
+          if (run !== state.run || state.committed.records !== snapshot) return;
+          const updated = { ...snapshot, rows: [...snapshot.rows, ...result.rows], nextCursor: result.nextCursor };
+          state.committed.records = updated;
+          renderRecordsSnapshot(updated);
+        } catch {
           if (run === state.run) notice(word("More entries could not be loaded. Try again."), "error");
-        } finally {
-          $("more").disabled = false;
-        }
+        } finally { $("more").disabled = false; }
       }
 
       function scheduleRefresh() {
@@ -982,6 +1382,7 @@
 
       const tabs = [...document.querySelectorAll('.view-tabs [role="tab"]')];
       function showView(view, focus = false) {
+        const changed = state.view !== view;
         state.view = view;
         for (const tab of tabs) {
           const selected = tab.dataset.view === view;
@@ -990,7 +1391,7 @@
           $(tab.getAttribute("aria-controls")).hidden = !selected;
           if (selected && focus) tab.focus();
         }
-        if (view === "calendar") void refresh();
+        if (changed) scheduleRefresh();
       }
       for (const [index, tab] of tabs.entries()) {
         tab.addEventListener("click", () => showView(tab.dataset.view));
@@ -1003,23 +1404,81 @@
           showView(tabs[next].dataset.view, true);
         });
       }
+      function shiftMonth(month, delta) {
+        const date = new Date(`${month}-01T00:00:00Z`);
+        date.setUTCMonth(date.getUTCMonth() + delta);
+        return date.toISOString().slice(0, 7);
+      }
+      for (const [id, delta] of [["records-previous", -1], ["records-next", 1]]) $(id).addEventListener("click", () => {
+        if (!state.recordsMonth) return;
+        state.recordsMonth = shiftMonth(state.recordsMonth, delta);
+        state.recordRange = null;
+        scheduleRefresh();
+      });
+      $("records-month").addEventListener("change", (event) => {
+        if (!/^\d{4}-\d{2}$/.test(event.target.value)) return;
+        state.recordsMonth = event.target.value;
+        state.recordRange = null;
+        scheduleRefresh();
+      });
+      $("records-latest").addEventListener("click", () => {
+        state.recordsMonth = latestCnyDate()?.slice(0, 7) ?? state.recordsMonth;
+        state.recordCategory = null;
+        state.recordRange = null;
+        scheduleRefresh();
+      });
+      $("record-drilldown-clear").addEventListener("click", () => {
+        state.recordCategory = null;
+        scheduleRefresh();
+      });
       for (const [id, delta] of [["calendar-previous", -1], ["calendar-next", 1]]) $(id).addEventListener("click", () => {
         if (!state.calendarMonth) return;
-        const month = new Date(`${state.calendarMonth}-01T00:00:00Z`);
-        month.setUTCMonth(month.getUTCMonth() + delta);
-        state.calendarMonth = month.toISOString().slice(0, 7);
+        state.calendarMonth = shiftMonth(state.calendarMonth, delta);
         state.selectedDay = null;
-        $("day-details").textContent = word("Choose a date to see its records.");
         scheduleRefresh();
       });
-      $("period").addEventListener("change", (event) => {
-        state.period = event.target.value;
-        $("custom-range").hidden = state.period !== "custom";
+      $("calendar-month").addEventListener("change", (event) => {
+        if (!/^\d{4}-\d{2}$/.test(event.target.value)) return;
+        state.calendarMonth = event.target.value;
+        state.selectedDay = null;
         scheduleRefresh();
       });
-      $("category").addEventListener("change", (event) => { state.category = event.target.value; scheduleRefresh(); });
-      for (const id of ["from", "through"]) $(id).addEventListener("change", () => { if (state.period === "custom") scheduleRefresh(); });
-      $("refresh").addEventListener("click", () => { void refresh(true); });
+      $("calendar-latest").addEventListener("click", () => {
+        const last = latestCnyDate();
+        state.calendarMonth = last?.slice(0, 7) ?? state.calendarMonth;
+        state.selectedDay = last;
+        scheduleRefresh();
+      });
+      for (const button of document.querySelectorAll("[data-stats-period]")) button.addEventListener("click", () => {
+        state.statsPeriod = button.dataset.statsPeriod;
+        scheduleRefresh();
+      });
+      for (const [id, delta] of [["stats-previous", -1], ["stats-next", 1]]) $(id).addEventListener("click", () => {
+        const anchor = state.statsAnchor ?? latestCnyDate();
+        if (!anchor) return;
+        const date = new Date(`${periodStart(anchor, state.statsPeriod)}T00:00:00Z`);
+        if (state.statsPeriod === "week") date.setUTCDate(date.getUTCDate() + 7 * delta);
+        else if (state.statsPeriod === "month") date.setUTCMonth(date.getUTCMonth() + delta);
+        else date.setUTCFullYear(date.getUTCFullYear() + delta);
+        state.statsAnchor = date.toISOString().slice(0, 10);
+        scheduleRefresh();
+      });
+      $("stats-date").addEventListener("change", (event) => {
+        if (!validDate(event.target.value)) return;
+        state.statsAnchor = event.target.value;
+        scheduleRefresh();
+      });
+      $("stats-latest").addEventListener("click", () => {
+        state.statsAnchor = latestCnyDate();
+        scheduleRefresh();
+      });
+      $("expense-detail-close").addEventListener("click", () => {
+        const index = state.expenseTriggerIndex;
+        state.selectedExpense = null;
+        if (state.committed.statistics) state.committed.statistics.selectedExpense = null;
+        renderExpenseDetail();
+        $("largest").querySelector(`[data-expense-index="${index}"]`)?.focus();
+      });
       $("more").addEventListener("click", () => { void loadMore(); });
       if (sdk && typeof sdk.onDataChanged === "function") sdk.onDataChanged(() => { void refresh(true); });
       void refresh();

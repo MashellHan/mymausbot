@@ -3,7 +3,7 @@ import type { MiniAppDataset, MiniAppPublish } from "./mini-apps.ts";
 
 export const REPORT_APPS = {
   x_ai_digest: { slug: "x-ai-digest", title: "Daily X AI digest", description: "Selected X AI updates with source and coverage notes." },
-  github_activity: { slug: "github-activity", title: "GitHub activity", description: "Selected open-source projects and observed activity signals." },
+  github_activity: { slug: "github-activity", title: "Github Rending", description: "Selected open-source projects and observed activity signals." },
 } as const;
 export type ReportKind = keyof typeof REPORT_APPS;
 export type ReportCoverageStatus = "complete" | "partial" | "unknown";
