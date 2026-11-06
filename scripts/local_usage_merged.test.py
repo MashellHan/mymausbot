@@ -82,6 +82,45 @@ class Github:
         return json.dumps({"data": {"viewer": {"login": OWNER}, "node": {"commits": result}}})
 
 
+class LargeGithub(Github):
+    def __init__(self):
+        super().__init__()
+        self.prs = [github_pr("large", "2026-11-06T03:00:00Z")]
+        self.commits = {"large": [(sha(i), 2 if i % 3 == 0 else 1) for i in range(1, 342)]}
+        self.comparison_pages = []
+        self.problem = None
+
+    def __call__(self, args, timeout):
+        if "/compare/" in args[-1]:
+            if self.fail_commits:
+                raise AssertionError("Complete large PR commits should be cached")
+            page = int(urllib.parse.parse_qs(urllib.parse.urlsplit(args[-1]).query)["page"][0])
+            self.comparison_pages.append(page)
+            rows = list(reversed(self.commits["large"]))[(page - 1) * 100:page * 100]
+            if self.problem == "missing" and page == 4:
+                rows = []
+            if self.problem == "different" and page == 4:
+                rows = [(sha(999) if oid == sha(1) else oid, parents) for oid, parents in rows]
+            if self.problem == "parents" and page == 4:
+                rows = [(oid, 2 if oid == sha(1) else parents) for oid, parents in rows]
+            return json.dumps({"total_commits": 340 if self.problem == "count" and page == 2 else 341,
+                "base_commit": {"sha": sha(888) if self.problem == "base" else sha(900)},
+                "commits": [{"sha": oid, "parents": [{"sha": sha(i)} for i in range(parents)]} for oid, parents in rows]})
+        fields = dict(arg.split("=", 1) for index, arg in enumerate(args) if index > 0 and args[index - 1] == "-f")
+        if "search(query:" in fields["query"]:
+            return super().__call__(args, timeout)
+        if self.fail_commits:
+            raise AssertionError("Complete large PR commits should be cached")
+        if fields.get("after"):
+            raise AssertionError("Do not page through GitHub's truncated PR connection")
+        self.calls.append(args)
+        rows = self.commits["large"][:100]
+        return json.dumps({"data": {"viewer": {"login": OWNER}, "node": {
+            "baseRefOid": sha(900), "headRefOid": sha(341), "repository": {"nameWithOwner": "personal/project"},
+            "commits": {"totalCount": 341, "nodes": [{"commit": {"oid": oid, "parents": {"totalCount": parents}}} for oid, parents in rows],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "next"}}}}})
+
+
 class RemoteMergedTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
@@ -100,8 +139,7 @@ class RemoteMergedTests(unittest.TestCase):
         items = first["sources"][0]["items"]
         self.assertEqual(len(items), 3)
         self.assertEqual([len(item["commits"]) for item in items], [5, 1, 1])
-        self.assertIn("merged:>=", " ".join(str(call) for call in github.calls))
-        self.assertIn("merged:<", " ".join(str(call) for call in github.calls))
+        self.assertIn("merged:2026-09-07T16:00:00Z..2026-11-06T07:59:59Z", " ".join(str(call) for call in github.calls))
         self.assertNotIn("created:", " ".join(str(call) for call in github.calls))
         self.assertTrue(all("pr-" not in json.dumps(item) and sha(1) not in json.dumps(item) for item in items))
         github.calls.clear()
@@ -113,6 +151,41 @@ class RemoteMergedTests(unittest.TestCase):
         self.assertEqual(stale["sources"][0]["status"], "stale")
         self.assertEqual(stale["sources"][0]["items"], items)
         self.assertEqual(merged.refresh(self.config, self.monitor, github, file=self.file, at=AT, skip_api=True)["sources"][0]["status"], "stale")
+
+    def test_large_pr_comparison_recovers_all_original_commits_and_is_cached(self):
+        github = LargeGithub()
+        result = merged.refresh(self.config, self.monitor, github, file=self.file, at=AT)
+        source = result["sources"][0]
+        self.assertEqual(source["status"], "ready")
+        self.assertEqual(set(source["items"][0]["commits"]), {
+            self.monitor.digest("original-pr-commit", sha(i)) for i in range(1, 342) if i % 3})
+        self.assertEqual(github.comparison_pages, [1, 2, 3, 4])
+        github.fail_commits = True
+        cached = merged.refresh(self.config, self.monitor, github, file=self.file, at=AT)
+        self.assertEqual(cached["sources"][0]["status"], "ready")
+        self.assertEqual(cached["sources"][0]["items"], source["items"])
+
+    def test_github_search_preserves_both_bounds_and_excludes_the_capture_instant(self):
+        for at, last_second in ((AT, "2026-11-06T07:59:59Z"),
+                                (AT + dt.timedelta(microseconds=1), "2026-11-06T08:00:00Z")):
+            with self.subTest(at=at):
+                def empty(args, timeout):
+                    fields = dict(arg.split("=", 1) for index, arg in enumerate(args) if index > 0 and args[index - 1] == "-f")
+                    self.assertEqual(fields["search"], "is:pr is:merged author:" + OWNER +
+                                     " merged:2026-09-07T16:00:00Z.." + last_second)
+                    return json.dumps({"data": {"viewer": {"login": OWNER}, "search": {"issueCount": 0,
+                        "nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}})
+                result = merged.refresh(self.config, self.monitor, empty, file=self.file, at=at)
+                self.assertEqual(result["sources"][0]["status"], "ready")
+                self.assertEqual(result["sources"][0]["items"], [])
+
+    def test_large_pr_comparison_rejects_mismatched_or_incomplete_pages(self):
+        for problem in ("missing", "different", "parents", "count", "base"):
+            with self.subTest(problem=problem):
+                github = LargeGithub()
+                github.problem = problem
+                with self.assertRaises(ValueError):
+                    merged.github_commits(self.config, self.config["githubProfiles"][0], "large", github, self.monitor)
 
     def test_project_wide_ado_merges_use_verified_creator_and_parent_details(self):
         self.config = {"azureCli": "/fixture/az", "authorEmails": ["owner@example.test"],
