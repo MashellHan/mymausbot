@@ -106,7 +106,23 @@ try {
     await geometry(window, vector.width, vector.name);
     assert.equal(await evaluate(window, 'document.body.innerText.includes("Current app version") || document.body.innerText.includes("0 installed")'), false);
     await capture(window, vector.name);
+    assert.equal(await evaluate(window, `(() => {
+      const header = document.querySelector('[data-testid=mini-apps-panel] > header');
+      const button = header.querySelector('[role=tablist] [data-info-hint]');
+      return !!button && !button.closest('[role=tab]') && !/App updated|应用更新于/.test(header.innerText);
+    })()`), true);
+    await click(window, '[data-testid=mini-apps-panel] [role=tablist] [data-info-hint]');
+    await until(() => evaluate(window, 'document.querySelector("[data-info-hint-content]")?.textContent'), Boolean, "app metadata disclosure");
+    const info = await evaluate(window, `(() => {
+      const hint = document.querySelector('[data-info-hint-content]'); const box = hint.getBoundingClientRect();
+      return { text: hint.innerText, left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: innerWidth, height: innerHeight };
+    })()`);
+    assert(info.text.length > 10 && info.left >= 0 && info.right <= info.width && info.top >= 0 && info.bottom <= info.height);
+    await capture(window, vector.name.replace('.png', '-info.png'), true);
+    await evaluate(window, 'window.dispatchEvent(new KeyboardEvent("keydown", { key:"Escape", cancelable:true }))');
+    await until(() => evaluate(window, 'document.querySelector("[data-info-hint-content]") === null'), Boolean, "metadata dismisses with Escape");
   }
+  result.checks.push("App metadata stays collapsed beside the selected name and opens within the viewport");
   const before = await inventory(window);
   assert.equal(before.length, 5);
   const team = before.find((entry) => entry.dashboardIdentity === "agent-team");
