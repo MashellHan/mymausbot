@@ -2,8 +2,52 @@
 
 Keep the official `/Applications/OpenMausBot.app`, the user's data and paired
 devices intact. Build products and private handoff evidence stay outside Git.
-The initial local arm64 bundle is `release/mac-arm64/OpenMausBot.app`, version
+Follow [the current validation policy](MAUSBOT-VALIDATION.md) and assign one
+package/update owner. The historical initial local arm64 bundle was
+`release/mac-arm64/OpenMausBot.app`, version
 0.1.139, with Electron 43.7.9 and CUA Driver 0.28.2.
+
+## Current delivery entry points
+
+Use the current private job and its existing guarded switch/rollback workflow.
+Before compilation, run `pnpm check:delivery request <job>/rebuild-request.json`.
+This read-only preflight requires the source checkout/commit/tree/ref, lockfile
+hash, App version, distinct package/normal/official App paths, Downloads purpose
+and environment identity. It checks clean source and the pinned ref/lock against
+the request. Fetch the source ref before binding it. Supply the actual current
+request; do not copy a previous acceptance receipt as a build request.
+
+Run one `pnpm build`; it includes `pnpm typecheck`. The compiler keeps separate
+UI/server incremental state in this worktree and revalidates changed inputs.
+Do not run raw `tsc -b` or a second full typecheck as an additional prerequisite.
+For a necessary development-only check, select `--project ui` or `--project
+server`; CI and `--fresh` always start without compiler state. Keep existing
+emitting server/companion builds and required native/package checks.
+
+Before a new Electron fixture run, execute `pnpm check:fixtures`. Reuse the
+existing async launcher and phase-specific bounds. A first-use UI change needs
+an empty-profile interaction, not only an already populated screenshot. Source
+rendering and actual packaged preload/startup evidence serve different checks;
+carry unchanged visual evidence instead of repeating its complete matrix.
+
+The guarded switch's read-only postflight uses these shared comparisons:
+
+```text
+pnpm check:delivery routines <before-routines.json> <after-routines.json>
+pnpm check:delivery inventory <before-inventory.json> <after-inventory.json>
+```
+
+Routine definitions stay exact; existing run identities, authority and history
+remain intact while status/output may progress and new runs may appear.
+Inventory comparison permits only missing/null `shippedTemplateKind`; changed
+IDs, revisions, grants or publishers fail. Use the same comparisons in the
+recovery workflow. Keep configuration, credentials, paired sessions, phone,
+signature and actual-package checks; these helpers neither perform nor approve
+an App mutation. Prepare rollback before an already authorized switch.
+
+Retain stage start/end, source and outcome in the existing job log. A stage
+failure resumes at the failed stage only if its inputs remain valid. Keep the
+original failure and the original request-to-delivery clock across corrections.
 
 ## Resume an existing package
 
@@ -87,7 +131,9 @@ locally runnable feature artifact are ready; it is not a merge authorization.
 
 ## Required push checks
 
-The repository hook runs `pnpm lint`, `pnpm typecheck` and `pnpm i18n:check`.
-If the shell cannot find pnpm, use the already cached pnpm 10.33.0 executable
-by adding its directory to that push process's PATH. Do not reinstall packages,
-change the lockfile/global configuration or skip the hook to repair PATH.
+The repository hook runs changed-file lint and applicable locale/source guards
+through `scripts/pre-push-check.mjs`, with a 30-second budget. The full typecheck
+is CI's responsibility. Retain the hook and do not duplicate it immediately
+before pushing. If pnpm is absent from PATH, use the existing verified toolchain
+for that process; do not reinstall dependencies, change the lockfile/global
+configuration or bypass checks to repair PATH.

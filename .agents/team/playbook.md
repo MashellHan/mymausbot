@@ -33,6 +33,14 @@ The lead owns scope, task sequencing, integration and acceptance. Specialists
 report to the lead; no parallel edits to the same file. Use isolated worktrees
 for code PRs, rooted beside this project under the user's workspace.
 
+Read the validation policy and role from that task checkout. An older dirty
+coordination root may lack new commands or policy files; read the fetched
+`origin/main` versions instead of reverting to historical instructions.
+Root routes nonblocking feedback through Lead. Lead batches actionable changes
+for the owning developer at a safe source boundary; do not repeat the same
+instruction from multiple coordinators. Interrupt only for a concrete blocker
+or data/security risk. Cleanup and unrelated QA retain separate owners.
+
 ## Authorized work, in order
 
 1. Complete the arm64 packaged app build and open the locally built App, keeping
@@ -104,6 +112,12 @@ findings and required checks pass. Creating and pushing reviewable PRs is
 authorized here.
 Never equate a green badge or an idle agent with completed work.
 
+Freeze a coherent candidate after focused contract checks. Send its immutable
+commit, available evidence and explicitly pending UI/package checks immediately;
+source review and CI can start while those checks finish. Do not wait for all
+screenshots or a package to begin source review. Pending acceptance still blocks
+the corresponding delivery. Batch corrections and review only their delta.
+
 ## Local candidate delivery
 
 Every App shown to the user for preview, use or acceptance testing defaults to
@@ -143,6 +157,16 @@ after acceptance. Assign each check one owner and reuse its result for unchanged
 inputs. For a local arm64 build, reuse verified dependency/resource caches and
 unchanged build outputs; rebuild only the outputs whose inputs changed. Record
 stage durations in the existing build log instead of adding a separate audit.
+
+Use the shared `check:delivery` preflight and preservation commands in the local
+runbook. Do not recreate the routine-state and Mini App inventory comparators
+inside each private job. Validate the build request before starting compilation.
+Use `pnpm typecheck` when a local static check is required; the compiler maintains
+separate UI/server incremental state within this worktree. `pnpm build` includes
+that check, so do not add another prerequisite invocation. CI starts it fresh.
+Reuse existing Electron fixture launchers and run `pnpm check:fixtures` before
+executing changes to them; a launcher failure calls for one bounded correction,
+not an unchanged retry or a larger global timeout.
 
 Classify remote CI failures with a run link, evidence and follow-up owner.
 Unrelated CI debt does not change the required source for user preview. Age
