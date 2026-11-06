@@ -46,6 +46,13 @@ describe("computer panel view persistence", () => {
     expect(readComputerPanelView("scout", storage)).toBe("agent-team");
   });
 
+  it("round-trips the Mini Apps tab", () => {
+    const values = new Map<string, string>();
+    const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+    writeComputerPanelView("scout", "mini-apps", storage);
+    expect(readComputerPanelView("scout", storage)).toBe("mini-apps");
+  });
+
   it("round-trips the Usage tab", () => {
     const values = new Map<string, string>();
     const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
@@ -67,7 +74,7 @@ describe("computer panel view availability", () => {
   });
 
   it("keeps a view whose trigger is on the row", () => {
-    for (const view of ["computer", "browser", "data", "files", "agent-team", "usage"] as const) {
+    for (const view of ["computer", "browser", "data", "files", "mini-apps", "agent-team", "usage"] as const) {
       expect(resolveComputerPanelView(view, { advanced: true, androidConnected: true })).toBe(view);
       expect(resolveComputerPanelView(view, { advanced: false, androidConnected: false })).toBe(view);
     }

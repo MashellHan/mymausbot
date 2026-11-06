@@ -16,6 +16,7 @@ import { INSTRUCTION_FILE, restorePaths, validRelative } from "./workspace-backu
 import { ephemeralWorkspaceTokenPath, excludedWorkspaceAuthPath, liveDataEnginePath, managedTaskSkillLink, portableWorkspaceConfig, redownloadedOrgLibraryPath, restoredWorkspaceConfig } from "./workspace-backup-policy.ts";
 import { omittedAsTeamPrivate, stripTeamPrivate, TEAM_PRIVATE_NOTE, teamPrivateAttachments, teamPrivateThreads, withoutTeamPrivate } from "./workspace-backup-team-private.ts";
 import type { WorkspaceBackupClientState, WorkspaceBackupPrivateMetadata, WorkspaceBackupSummary, WorkspaceLeftBehind } from "../shared/workspace-backup.ts";
+import { assertMiniAppExportPrivacy, verifyMiniAppSnapshot, verifyMiniAppDataFiles } from "./mini-apps/backup.ts";
 
 export type { WorkspaceBackupSummary, WorkspaceBackupPrivateMetadata } from "../shared/workspace-backup.ts";
 export const MAX_WORKSPACE_BACKUP_BYTES = 10 * 1024 ** 3;
@@ -328,6 +329,7 @@ export async function createWorkspaceBackupSnapshot(dataDir: string, options: Cr
       try { snapshotDb.exec("PRAGMA journal_mode = DELETE"); } finally { snapshotDb.close(); }
     }
     const teamPrivate = teamPrivateThreads({ starters: join(root, "thread-starters.json"), groups: join(root, "groups.json"), bots: join(root, "bots.json") });
+    assertMiniAppExportPrivacy(root, teamPrivate !== null);
     const privacy = teamPrivate && { ...teamPrivate, attachments: teamPrivateAttachments(root, join(snapshot, SNAPSHOT_DATABASES["messages.db"]!), teamPrivate) };
     if (privacy) {
       stripTeamPrivate({ messages: join(snapshot, SNAPSHOT_DATABASES["messages.db"]!), runtime: join(snapshot, SNAPSHOT_DATABASES["runtime.db"]!) }, privacy);
@@ -407,6 +409,8 @@ export async function createWorkspaceBackupSnapshot(dataDir: string, options: Cr
       }
     };
     walk(root);
+    verifyMiniAppSnapshot(join(snapshot, "data"));
+    await verifyMiniAppDataFiles(join(snapshot, "data"));
     if (skippedLinks) warnings.push(`${skippedLinks} managed skill discovery link(s) were omitted and are recreated by the app.`);
     if (skippedDependencies) warnings.push(`${skippedDependencies} installed dependency folder(s) (node_modules) were omitted; reinstall them in the project after restoring.`);
     if (copiedLinks) warnings.push(`${copiedLinks} symbolic link(s) inside a workspace were saved as copies of what they point to; restoring creates regular files and folders there.`);
@@ -576,6 +580,7 @@ function validateStaged(directory: string, expected?: Map<string, { type: string
     chmodSync(path, entry.mode);
   }
   const data = join(directory, "data");
+  verifyMiniAppSnapshot(data);
   if (countJsonArray(join(data, "bots.json")) !== manifest.summary.bots || countJsonArray(join(data, "groups.json")) !== manifest.summary.groups) throw new Error("The backup roster does not match its summary.");
   if (existsSync(join(data, "config.json"))) {
     const config = privateJson(join(data, "config.json"));
@@ -604,6 +609,7 @@ export async function stageWorkspaceBackup(dataDir: string, archivePath: string,
     const tar = await import("tar");
     await tar.x({ file: plaintext, cwd: staged, strict: true, preservePaths: false, umask: 0o077, noChmod: true, brotli: false, zstd: false });
     const manifest = validateStaged(staged, expected);
+    await verifyMiniAppDataFiles(join(staged, "data"));
     const versions = [manifest.summary.appVersion, options.currentAppVersion ?? ""].map((version) => /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version)?.slice(1).map(Number));
     if (versions[0] && versions[1]) {
       for (let i = 0; i < 3; i++) {
@@ -809,6 +815,9 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
           const json = JSON.stringify(message);
           if (json !== row.json) update.run(json, record(message) && typeof message.text === "string" ? message.text : null, row.thread_id, row.id);
         }
+      }
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mini_apps'").get()) {
+        db.exec("UPDATE mini_apps SET publishers = '[]'");
       }
       // Import is not a restart: the source may still be running, so never execute a copy of its pending work.
       if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_followups'").get()) {

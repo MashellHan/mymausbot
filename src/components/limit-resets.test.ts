@@ -265,7 +265,8 @@ describe("the chat", () => {
     } finally { actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment; }
     expect(fixture.api).toHaveBeenCalledWith("/api/limit-resets/continue", { method: "POST", body: JSON.stringify({ botId: "scout", threadId: "t-1" }) });
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "routinePatched", routine: created });
-    expect(container.textContent).not.toContain("Continue at");
+    // The button goes once React renders the update its answer set, which a busy runner can schedule after any one tick.
+    await vi.waitFor(() => expect(container.textContent).not.toContain("Continue at"));
   });
 
   it("offers Retry as before once the reset has passed, or when the engine named no reset", () => {
