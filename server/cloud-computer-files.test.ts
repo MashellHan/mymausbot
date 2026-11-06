@@ -315,18 +315,6 @@ describe("copy_to_computer", () => {
     expect(JSON.stringify(result)).not.toContain(minted.at(-1));
   });
 
-  it("reports unknown remote completion when an upload commits before its answer stalls", async () => {
-    writeFileSync(join(folder, "upload.txt"), "current edition");
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    afterUploadCommitted = () => held;
-    try {
-      const call = rpc("copy_to_computer", { from: "upload.txt", path: "/tmp/upload.txt" }, { budgetMs: 300 });
-      await vi.waitFor(() => expect(uploads.has("/tmp/upload.txt")).toBe(true));
-      expect(await call.done).toEqual({ isError: true, content: [{ type: "text", text: tools.CLOUD_COMPUTER_UPLOAD_LATE }] });
-    } finally { release(); }
-  });
-
   it("reads a big file from disk as it is sent, never holding it whole", async () => {
     const size = 64 * MiB, file = join(folder, "big.bin");
     closeSync(openSync(file, "w"));
@@ -398,6 +386,18 @@ describe("as cloud computer tools", () => {
     }) as Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
     return { done, gated: () => gated };
   };
+
+  it("reports unknown remote completion when an upload commits before its answer stalls", async () => {
+    writeFileSync(join(folder, "upload.txt"), "current edition");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    afterUploadCommitted = () => held;
+    try {
+      const call = rpc("copy_to_computer", { from: "upload.txt", path: "/tmp/upload.txt" }, { budgetMs: 300 });
+      await vi.waitFor(() => expect(uploads.has("/tmp/upload.txt")).toBe(true));
+      expect(await call.done).toEqual({ isError: true, content: [{ type: "text", text: tools.CLOUD_COMPUTER_UPLOAD_LATE }] });
+    } finally { release(); }
+  });
 
   it("lists both copies, and runs them after the control gate", async () => {
     const listed = await tools.cloudComputerRpc({ method: "tools/list" }, { cfg: own, boxId: () => BOX, signal: signal(), gate: async () => ({ held: false }), assertActive: () => {} });

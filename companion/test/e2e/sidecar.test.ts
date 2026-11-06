@@ -76,8 +76,9 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
   it("refuses a direct upgrade beyond the pending handshake cap without ending an established session", async () => {
     const paired = await pairViaRelay(rig);
     paired.session.shutdown();
+    await paired.session.closed;
     const established = await rig.direct(await state(), paired.token);
-    const pending: WebSocket[] = [];
+    const pending: Array<{ ws: WebSocket; closed: Promise<number> }> = [];
     const openPending = async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${rig.companionPort}/v1/e2e`, "omb-e2e.v1");
       const closed = new Promise<number>((resolve) => ws.once("close", resolve));
@@ -88,15 +89,17 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
       return { ws, closed };
     };
     try {
-      for (let index = 0; index < MAX_PENDING_HANDSHAKES; index += 1) pending.push((await openPending()).ws);
+      for (let index = 0; index < MAX_PENDING_HANDSHAKES; index += 1) pending.push(await openPending());
       const refused = await openPending();
-      pending.push(refused.ws);
+      pending.push(refused);
       expect(await Promise.race([refused.closed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("pending cap did not close")), 5_000))])).toBe(CLOSE.rejected);
       expect((await rig.control("GET", "/state")).e2e.enabled).toBe(true);
       expect((await http(established, "GET", "/api/health", { token: paired.token })).status).toBe(200);
     } finally {
-      for (const ws of pending) ws.terminate();
+      for (const { ws } of pending) ws.terminate();
+      await Promise.all(pending.map(({ closed }) => closed));
       established.shutdown();
+      await established.closed;
     }
   }, 20_000);
 

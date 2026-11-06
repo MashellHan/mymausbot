@@ -46,7 +46,7 @@ it("keeps a phone visible after a failed or unavailable revoke and announces onl
   const remove = () => [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Remove phone") as HTMLButtonElement;
 
   remove().click();
-  await vi.waitFor(() => expect(host.querySelector('[role="alert"]')?.textContent).toContain("save failed"));
+  await vi.waitFor(() => expect(host.querySelector('[role="alert"]')?.textContent).toContain("Remote access could not be updated"));
   expect(host.textContent).toContain("Ada");
   expect(host.textContent).not.toContain("Removed Ada");
 

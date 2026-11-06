@@ -60,7 +60,7 @@ it("renews through one stable controller timer while polling and rejects a forei
   };
   (globalThis as { ogb?: unknown }).ogb = bridge;
   flushSync(() => root.render(createElement(View)));
-  await vi.waitFor(() => expect(host.querySelector("button[data-phone-pairing-action]")).not.toBeNull());
+  await vi.waitFor(() => expect((host.querySelector("button[data-phone-pairing-action]") as HTMLButtonElement)?.disabled).toBe(false));
   flushSync(() => (host.querySelector("button[data-phone-pairing-action]") as HTMLButtonElement).click());
   await vi.waitFor(() => expect(host.querySelector('[aria-label="Device pairing QR code"]')).not.toBeNull());
   expect(host.querySelector("[data-pairing-link]")?.textContent).toContain(token("b"));
