@@ -3572,8 +3572,12 @@ describe("harness HTTP API", () => {
       expect(siblingMessages.some((message) => (message.tool?.name ?? "").startsWith("Waiting for its turn on this computer"))).toBe(true);
       const stoppedChip = siblingMessages.find((message) => (message.tool?.name ?? "").startsWith("Stopped waiting for the computer after "));
       expect(stoppedChip?.tool?.ok).toBe(true);
-      const siblingEvents = ((await api("GET", `/api/threads/${sibling.threadId}/events`)).body.entries as Array<{ kind: string; data: any }>)
-        .filter((entry) => entry.kind === "runtime").map((entry) => entry.data);
+      let siblingEvents: any[] = [];
+      await expect.poll(async () => {
+        siblingEvents = ((await api("GET", `/api/threads/${sibling.threadId}/events`)).body.entries as Array<{ kind: string; data: any }>)
+          .filter((entry) => entry.kind === "runtime").map((entry) => entry.data);
+        return siblingEvents.some((event) => event.type === "turn.wait_ended");
+      }, { timeout: 5_000, interval: 100 }).toBe(true);
       expect(siblingEvents.find((event) => event.type === "turn.wait_started")).toMatchObject({
         holder: { name: "Direct shared" },
         resource: expect.stringMatching(/^computer:/),
@@ -3608,8 +3612,12 @@ describe("harness HTTP API", () => {
         (group: { id: string }) => group.id === roomId,
       ).messages;
       expect(roomMessages.some((message) => (message.tool?.name ?? "").startsWith("Waiting for its turn on this computer"))).toBe(true);
-      const roomEvents = ((await api("GET", `/api/threads/${room.threadId}/events`)).body.entries as Array<{ kind: string; data: any }>)
-        .filter((entry) => entry.kind === "runtime").map((entry) => entry.data);
+      let roomEvents: any[] = [];
+      await expect.poll(async () => {
+        roomEvents = ((await api("GET", `/api/threads/${room.threadId}/events`)).body.entries as Array<{ kind: string; data: any }>)
+          .filter((entry) => entry.kind === "runtime").map((entry) => entry.data);
+        return roomEvents.some((event) => event.type === "turn.wait_ended");
+      }, { timeout: 5_000, interval: 100 }).toBe(true);
       expect(roomEvents.find((event) => event.type === "turn.wait_started")).toMatchObject({
         resource: expect.stringMatching(/^computer:/),
       });
