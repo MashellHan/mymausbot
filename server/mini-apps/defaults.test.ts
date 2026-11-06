@@ -12,6 +12,7 @@ import type { Routine } from "../routines.ts";
 import { DefaultMiniApps } from "./defaults.ts";
 import { MiniApps, type MiniAppActor } from "./registry.ts";
 import { ReportStore } from "./report-store.ts";
+import { reportAppsForBot } from "./report-apps.ts";
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
@@ -108,4 +109,25 @@ it("does not add apps for Bots or read-only actors", () => {
   expect(() => defaults.ensure({ ...owner, writeAllowed: false }, input)).toThrow("Only the local workspace owner");
   expect(() => defaults.ensure(owner, { ...input, restore: "unknown" })).toThrow("Pass the bundled");
   expect(apps.list(owner)).toEqual([]);
+});
+
+it("advertises only the producer's current exact report binding without relying on a fixed slug", async () => {
+  const { apps, data, bots } = fixture();
+  const deps = { apps, data, bots: () => bots, localEnabled: () => true };
+  expect(await reportAppsForBot(deps, "reports")).toEqual([]);
+  expect(await data.listBotSources("workspace-owner", ["reports"])).toEqual([]);
+  const source = await new ReportStore(data, createReportTemplate).prepare("reports", "x_ai_digest");
+  const { app } = await apps.publish(owner, { ...source.publication, slug: "x-ai-digest-included-1",
+    shippedTemplateKind: "x_ai_digest", publisherBotIds: ["reports"] });
+  expect(await reportAppsForBot(deps, "reports")).toEqual([{ slug: app.slug, status: "active",
+    shippedTemplateKind: "x_ai_digest", publisherBotIds: ["reports"], reportBoundToProducer: true }]);
+  expect(await reportAppsForBot({ ...deps, localEnabled: () => false }, "reports")).toEqual([]);
+  expect(await reportAppsForBot(deps, "ledger")).toEqual([]);
+  const changed = apps.document(owner, app.id);
+  changed.bindings[0]!.queries.current!.pageSize = 2;
+  await apps.publish(owner, publication(changed), app.id);
+  expect((await reportAppsForBot(deps, "reports"))[0]?.reportBoundToProducer).toBe(false);
+  const current = apps.document(owner, app.id);
+  await apps.publish(owner, { ...publication(current), requestKey: "revoke", publisherBotIds: [] }, app.id);
+  expect(await reportAppsForBot(deps, "reports")).toEqual([]);
 });

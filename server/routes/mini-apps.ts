@@ -15,6 +15,7 @@ import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
 import { ReportStore } from "../mini-apps/report-store.ts";
 import { DefaultMiniApps } from "../mini-apps/defaults.ts";
+import { reportAppsForBot } from "../mini-apps/report-apps.ts";
 import { parseReportTool, reportKindSchema } from "../mini-apps/report-schema.ts";
 import { localDashboardProviders, type LocalDashboardProviders } from "./local-dashboard.ts";
 import type { RoutineManager } from "../routines.ts";
@@ -51,7 +52,8 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   const deps = { ...shared, apps: new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
     dashboardProviders: dashboardProviders ?? localDashboardProviders }),
     reports: new ReportStore(shared.data, createReportTemplate) };
-  return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps) };
+  return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps),
+    reportAppsForBot: (botId: string) => reportAppsForBot(deps, botId) };
 }
 
 export function miniAppError(error: unknown): { status: number; error: string; code?: string } {
