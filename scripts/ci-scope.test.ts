@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
-  ALL_OS, AREA_CHECKS, ciOutputs, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, moveLinuxIntoStatic, QUEUED_SCOPE, SELECTABLE_JOBS,
-  selectCiScope,
+  ALL_OS, AREA_CHECKS, ciOutputs, FAST_AFFECTED_LIMIT, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, moveLinuxIntoStatic, QUEUED_SCOPE, readCheckPolicy, SELECTABLE_JOBS,
+  selectCheckPlan, selectCiScope,
   pullRequestControls, selectPushScope, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_LABEL, WINDOWS_OS, windowsReason,
 } from "./ci-scope.mjs";
 import { HOST_E2E } from "./testing/host-e2e.ts";
@@ -806,6 +806,30 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     expect(plan.outputs).toMatchObject({ fast_pr: true, full_required: false, reduced: false, required_jobs: [], fast_files: "server/core.test.ts" });
     expect(plan.outputs.expected_jobs).toEqual([expect.objectContaining({ id: "static", fast: true, name: "typecheck + lint" })]);
     expect(plan.plan).toMatchObject({ fast: true, candidate: false, admitted: false, scope: { checks: ["build"] } });
+  });
+
+  it("selects both Room contracts for either file or their shared fixture", () => {
+    const policy = readCheckPolicy();
+    const fixture = "server/testing/room-coordination-fixture.ts";
+    const rooms = ["server/room-coordination.e2e.test.ts", "server/room-coordination-followon.e2e.test.ts"];
+    expect(policy.core).toHaveLength(26);
+    expect(policy.areas.find((area) => area.id === "room-coordination"))
+      .toMatchObject({ sources: [fixture, ...rooms], tests: rooms, admitted: false });
+    for (const source of [fixture, ...rooms]) {
+      const plan = selectCheckPlan({ files: [source], policy, fastPr: true });
+      expect(plan.edit).toEqual(rooms);
+      expect(plan.fastFiles).toEqual([...new Set([...policy.core, ...rooms])].sort());
+      expect(plan.deferred).toEqual([]);
+    }
+    const combined = selectCheckPlan({
+      files: [".github/workflows/ci.yml", "scripts/ci-scope.test.ts", "scripts/ci-workflow.test.ts",
+        "scripts/testing/check-policy.json", fixture, ...rooms],
+      policy,
+      fastPr: true,
+    });
+    expect(combined.fastFiles).toEqual([...new Set([...policy.core, "scripts/ci-scope.test.ts", "scripts/ci-workflow.test.ts", ...rooms])].sort());
+    expect(combined.fastFiles).toHaveLength(policy.core.length + FAST_AFFECTED_LIMIT);
+    expect(combined.deferred).toEqual([]);
   });
 
   it("runs every platform for the sensitive desktop app", async () => {
