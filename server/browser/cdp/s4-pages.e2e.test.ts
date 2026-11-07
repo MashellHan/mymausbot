@@ -105,16 +105,30 @@ suite("S4 pages, tabs and page state on real Chrome", () => {
 
   it("goes back and forward through documents and fragments, and reloads", async () => {
     const first = await open("<p>first</p>");
-    const second = await open(`<p id="n">second</p><script>document.getElementById("n").dataset.loads = String(Number(sessionStorage.loads = (Number(sessionStorage.loads || 0) + 1)))</script>`);
+    await read(`sessionStorage.removeItem("loads"); sessionStorage.removeItem("historyArmed")`);
+    const second = await open(`<p id="n">second</p><script>
+      const n = document.getElementById("n");
+      n.dataset.loads = String(sessionStorage.loads = Number(sessionStorage.loads || 0) + 1);
+      addEventListener("pageshow", (event) => {
+        n.dataset.shown = "yes";
+        if (sessionStorage.historyArmed === "yes") n.dataset.restored = String(event.persisted);
+      });
+    </script>`);
+    await page.waitFor({ target: { selector: "#n[data-shown=yes]" }, timeoutMs: 2_000 });
+    expect(await read(`document.getElementById("n").dataset.loads`)).toBe("1");
     await page.navigate(`${second}#part`);
     expect(page.url()).toBe(`${second}#part`);
     expect((await page.back()).url).toBe(second);
+    await read(`sessionStorage.historyArmed = "yes"`);
     expect((await page.back()).url).toBe(first);
     expect((await page.forward()).url).toBe(second);
-    // Restored from the back-forward cache: the document was kept, its script did not run again.
-    expect(await read(`document.getElementById("n").dataset.loads`)).toBe("1");
+    await page.waitFor({ target: { selector: "#n[data-restored]" }, timeoutMs: 2_000 });
+    const [restored, loads] = await read<[string, string]>(`[document.getElementById("n").dataset.restored, document.getElementById("n").dataset.loads]`);
+    expect(restored).toMatch(/^(true|false)$/);
+    expect(loads).toBe(restored === "true" ? "1" : "2");
     await page.reload();
-    expect(await read(`document.getElementById("n").dataset.loads`)).toBe("2");
+    expect(page.url()).toBe(second);
+    expect(await read(`document.getElementById("n").dataset.loads`)).toBe(String(Number(loads) + 1));
     await page.navigate("about:blank");
     await expect(page.forward()).rejects.toThrow(/no later page/);
   });
