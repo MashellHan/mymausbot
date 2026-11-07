@@ -127,7 +127,7 @@ jobs:
         if: steps.scope.outputs.fast_pr == 'true'
         env:
           OMB_VITEST_E2E: all
-          OMB_VITEST_WORKERS: 4
+          OMB_VITEST_WORKERS: 2
           OMB_VITEST_SUBSET: ${{ steps.scope.outputs.fast_files }}
           OMB_FAST_TYPECHECK: ${{ steps.scope.outputs.build }}
         run: node scripts/testing/fast-static-overlap.mjs run
