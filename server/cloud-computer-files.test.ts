@@ -391,12 +391,18 @@ describe("as cloud computer tools", () => {
     writeFileSync(join(folder, "upload.txt"), "current edition");
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
-    afterUploadCommitted = () => held;
+    let committed!: () => void;
+    const uploadCommitted = new Promise<void>((resolve) => { committed = resolve; });
+    afterUploadCommitted = () => { committed(); return held; };
+    const late = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(late.signal);
     try {
       const call = rpc("copy_to_computer", { from: "upload.txt", path: "/tmp/upload.txt" }, { budgetMs: 300 });
-      await vi.waitFor(() => expect(uploads.has("/tmp/upload.txt")).toBe(true));
+      await uploadCommitted;
+      expect(uploads.get("/tmp/upload.txt")?.head.toString()).toBe("current edition");
+      late.abort();
       expect(await call.done).toEqual({ isError: true, content: [{ type: "text", text: tools.CLOUD_COMPUTER_UPLOAD_LATE }] });
-    } finally { release(); }
+    } finally { timeout.mockRestore(); release(); }
   });
 
   it("lists both copies, and runs them after the control gate", async () => {
