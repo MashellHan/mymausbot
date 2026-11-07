@@ -743,8 +743,8 @@
         const colors = ["#d9775e", "#e2a04b", "#5c9fc1", "#71a889", "#9785b0", "#96949b"];
         const categoryColor = (value) => {
           if (value === null || value === "") return colors.at(-1);
-          let hash = 0;
-          for (const character of String(value)) hash = (Math.imul(hash, 31) + character.codePointAt(0)) >>> 0;
+          let hash = 2166136261;
+          for (const character of String(value)) hash = Math.imul(hash ^ character.codePointAt(0), 16777619) >>> 0;
           return colors[hash % (colors.length - 1)];
         };
         const merged = new Map();
