@@ -78,7 +78,7 @@ it("preselects a connected source bot and localizes the published app metadata",
   expect(call).toBeTruthy();
   const publish = JSON.parse(String(call![1].body));
   expect(publish.publisherBotIds).toEqual(["bot_a"]);
-  expect(publish.title).toBe("记账");
+  expect(publish.title).toBe("记账管家");
   expect(publish.description).toContain("各货币单独呈现");
   expect(publish.shippedTemplateKind).toBe("bookkeeping");
 });

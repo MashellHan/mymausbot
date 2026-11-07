@@ -269,13 +269,19 @@ describe("CI concurrency", () => {
     expect(planUpload).toBeLessThan(steps.findIndex((step) => step.run === "pnpm install --frozen-lockfile"));
     const fast = steps.find((step) => step.name === "Security, data and dispatch core with bounded affected tests")!;
     expect(fast.if).toBe("steps.scope.outputs.fast_pr == 'true'");
-    expect(fast.run).toContain("vitest run ${{ steps.scope.outputs.fast_files }}");
+    expect(fast.run).toBe("node scripts/testing/fast-static-overlap.mjs run");
+    expect(fast.env).toMatchObject({ OMB_VITEST_E2E: "all", OMB_VITEST_WORKERS: 2,
+      OMB_VITEST_SUBSET: "${{ steps.scope.outputs.fast_files }}", OMB_FAST_TYPECHECK: "${{ steps.scope.outputs.build }}" });
+    expect(steps[steps.indexOf(fast) + 1]?.if).toBe("always() && steps.scope.outputs.fast_pr == 'true'");
     const built = (workflow.jobs.static.steps as { if?: string; run?: string }[]).filter((step) => step.if?.includes("outputs.build"));
     expect(built.map((step) => [step.if, step.run])).toEqual([
-      ["steps.scope.outputs.build == 'true'", "pnpm typecheck"],
+      ["always() && steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr == 'true'", "node scripts/testing/fast-static-overlap.mjs typecheck-result"],
+      ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm typecheck"],
       ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm check:electron"],
       ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm exec vite build"],
     ]);
+    expect(steps.find((step) => step.name === "pnpm typecheck (parallel result)")?.run)
+      .toBe("node scripts/testing/fast-static-overlap.mjs typecheck-result");
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
       step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/qa.test.ts",
     )).toBe(true);

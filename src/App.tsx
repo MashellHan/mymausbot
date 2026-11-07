@@ -11,6 +11,7 @@ import { FirstConversationTour } from "@/components/onboarding/FirstConversation
 import { GuidedTour } from "@/components/onboarding/GuidedTour";
 import { LiveCallHost } from "@/components/LiveCallHost";
 import { ThreadRefsProvider } from "@/components/ThreadRefs";
+import { MiniAppDefaultsBootstrap } from "@/components/mini-apps/MiniAppDefaultsBootstrap";
 import { initAnalytics } from "@/lib/analytics";
 import { parseComputerHelp } from "@/lib/computer-control";
 import { Sidebar } from "@/components/Sidebar";
@@ -460,6 +461,7 @@ function Application() {
   return (
     <DesktopCapabilitiesProvider>
       <StoreProvider>
+        <MiniAppDefaultsBootstrap />
         <ThreadRefsProvider>
           <Shell viewer={viewer} />
         </ThreadRefsProvider>

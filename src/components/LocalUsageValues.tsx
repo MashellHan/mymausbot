@@ -26,8 +26,6 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, cl
 }
 
 export function UsageCount({ value, known }: { value: number | null; known: number | null }) {
-  return <span className="inline-flex flex-wrap items-baseline justify-end gap-x-1.5">
-    <span>{countText(value, known)}</span>
-    {value === null && known !== null && <span className="text-[12px] font-normal text-warning" title={t("computer.usage.syncedCountHint")}>{t("computer.usage.synced")}</span>}
-  </span>;
+  const partial = value === null && known !== null;
+  return <span data-usage-provisional={partial || undefined} title={partial ? t("computer.usage.syncedCountHint") : undefined}>{countText(value, known)}</span>;
 }

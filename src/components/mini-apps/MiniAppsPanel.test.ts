@@ -193,7 +193,14 @@ describe("Mini Apps panel", () => {
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("7"));
     expect(host.querySelector('[data-testid="mini-app-freshness"]')).toBeNull();
     expect(host.textContent).not.toContain("Current app version");
-    expect(host.textContent).toContain("App updated");
+    expect(host.textContent).not.toContain("App updated");
+    expect(host.textContent).not.toContain("First report description");
+    const info = host.querySelector<HTMLButtonElement>('[role="tablist"] [data-info-hint]')!;
+    expect(selected()?.contains(info)).toBe(false);
+    await act(async () => info.click());
+    expect(document.querySelector('[data-info-hint-content]')?.textContent).toContain("First report description");
+    expect(document.querySelector('[data-info-hint-content]')?.textContent).toContain("App updated");
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     fixture.dataRevision = 8;
     await act(async () => { refresh().click(); });
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("8"));
@@ -387,11 +394,13 @@ describe("Mini Apps panel", () => {
     await act(async () => { root.render(createElement(MiniAppsPanel)); });
     expect(selected()?.textContent).toBe("工作追踪");
     expect(selected()?.dataset.appId).toBe("usage");
-    expect(host.textContent).toContain("查看你的工作、产出和 Agent 活动。");
+    expect(host.textContent).not.toContain("查看你的工作、产出和 Agent 活动。");
+    await act(async () => host.querySelector<HTMLButtonElement>('[role="tablist"] [data-info-hint]')!.click());
+    expect(document.querySelector('[data-info-hint-content]')?.textContent).toContain("查看你的工作、产出和 Agent 活动。");
     fixture.apps = [{ ...fixture.apps[0]!, description: "Owner-edited description" }];
     await vi.waitFor(() => expect(refresh().disabled).toBe(false));
     await act(async () => { refresh().click(); });
-    await vi.waitFor(() => expect(host.textContent).toContain("Owner-edited description"));
+    await vi.waitFor(() => expect(document.querySelector('[data-info-hint-content]')?.textContent).toContain("Owner-edited description"));
   });
 
   it("replaces a same-revision revoked dashboard with explicit same-id repair and no fallback frame", async () => {
