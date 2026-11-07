@@ -271,7 +271,7 @@ describe("CI concurrency", () => {
     const fast = steps.find((step) => step.name === "Security, data and dispatch core with bounded affected tests")!;
     expect(fast.if).toBe("steps.scope.outputs.fast_pr == 'true'");
     expect(fast.run).toBe("node scripts/testing/fast-static-overlap.mjs run");
-    expect(fast.env).toMatchObject({ OMB_VITEST_E2E: "all", OMB_VITEST_WORKERS: 4,
+    expect(fast.env).toMatchObject({ OMB_VITEST_E2E: "all", OMB_VITEST_WORKERS: 2,
       OMB_VITEST_SUBSET: "${{ steps.scope.outputs.fast_files }}", OMB_FAST_TYPECHECK: "${{ steps.scope.outputs.build }}" });
     expect(steps[steps.indexOf(fast) + 1]?.if).toBe("always() && steps.scope.outputs.fast_pr == 'true'");
     const built = (workflow.jobs.static.steps as { if?: string; run?: string }[]).filter((step) => step.if?.includes("outputs.build"));
