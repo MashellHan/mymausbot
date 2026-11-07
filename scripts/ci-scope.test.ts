@@ -817,7 +817,7 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
       .toMatchObject({ sources: [fixture, ...rooms], tests: rooms, admitted: false });
     for (const source of [fixture, ...rooms]) {
       const plan = selectCheckPlan({ files: [source], policy, fastPr: true });
-      expect(plan.edit).toEqual(rooms);
+      expect(plan.edit).toEqual([...rooms].sort());
       expect(plan.fastFiles).toEqual([...new Set([...policy.core, ...rooms])].sort());
       expect(plan.deferred).toEqual([]);
     }
