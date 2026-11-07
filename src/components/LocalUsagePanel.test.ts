@@ -75,6 +75,10 @@ const renderRaw = async (snapshot: LocalUsageResponse | null, panel = false) => 
 };
 const render = (snapshot: LocalUsageResponse | null, panel = false) => renderRaw(snapshot && withMergedUsageFixture(snapshot), panel);
 const text = () => host.textContent ?? "";
+const infoText = () => document.querySelector("[data-info-hint-content]")?.textContent ?? "";
+const showSummaryInfo = async () => {
+  await act(async () => host.querySelector<HTMLButtonElement>("header [data-info-hint]")!.click());
+};
 
 beforeEach(() => {
   host = document.createElement("div");
@@ -96,7 +100,8 @@ describe("local Usage panel", () => {
     expect(text()).toContain("2026-11-03 – 2026-11-03");
     expect(text()).toContain("2026-10-28 – 2026-11-03");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
-    expect(text()).toContain("9Synced");
+    expect(text()).not.toContain("Synced");
+    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9")).toBe(true);
     expect(text()).not.toContain("≥");
     expect(host.querySelector<HTMLDetailsElement>("[data-usage-daily]")?.open).toBe(false);
     expect(text()).toContain("4,000");
@@ -112,8 +117,14 @@ describe("local Usage panel", () => {
     expect(host.querySelector('section [data-usage-category-row="personal"]')?.textContent).toContain("+10%");
     expect(firstCard.querySelector('[data-usage-category-row="work"] [data-usage-change]')?.getAttribute("title")).toContain("Not enough comparable data.");
     expect(firstCard.querySelector('div[aria-hidden="true"]')?.textContent).toBe("PRsCommits");
-    expect(text()).toContain("Missing dates: 1");
-    expect(text()).toContain("Dates without token records: 2");
+    expect(text()).not.toContain("Partial coverage");
+    expect(text()).not.toContain("Some sources or dates are incomplete");
+    expect(text()).not.toContain("Missing dates:");
+    expect(text()).not.toContain("Dates without token records:");
+    await act(async () => host.querySelectorAll("section")[2]!.querySelector<HTMLButtonElement>("[data-info-hint]")!.click());
+    expect(infoText()).toContain("Missing dates: 1");
+    expect(infoText()).toContain("Dates without token records: 2");
+    await act(async () => globalThis.window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(text()).not.toContain("Across connected tools and repositories");
     expect(text()).not.toContain("Source coverage");
     expect(text()).not.toContain("Activity sources:");
@@ -124,7 +135,9 @@ describe("local Usage panel", () => {
     expect([...host.querySelectorAll('[data-usage-daily] tbody th[scope="row"]')].map((cell) => cell.textContent)).not.toContain("2026-10-04");
     expect(host.querySelectorAll('[data-usage-trend="prs"] [data-usage-day]')).toHaveLength(30);
     expect(host.querySelectorAll('.bg-warning\\/15').length).toBeGreaterThan(0);
-    expect(host.querySelector('time')?.getAttribute("datetime")).toBe("2026-11-03T08:30:00.000Z");
+    await showSummaryInfo();
+    expect(infoText()).toContain("Some sources or dates are incomplete");
+    expect(document.querySelector('[data-info-hint-content] time')?.getAttribute("datetime")).toBe("2026-11-03T08:30:00.000Z");
   });
 
   it("shows a visible PR tooltip on hover, focus and tap without treating synced zero as exact", async () => {
@@ -139,7 +152,7 @@ describe("local Usage panel", () => {
     expect(bars[1]!.querySelector('[data-usage-category="work"]')?.className).toContain("bg-accent/35");
     expect(bars[2]!.getAttribute("aria-label")).not.toContain("Synced");
     await act(async () => bars[1]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/2026-10-06.*PRs.*2.*Synced.*Enterprise/s);
+    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/2026-10-06.*PRs.*2.*Enterprise.*Confirmed remote count/s);
     await act(async () => bars[2]!.focus());
     expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toContain("2026-10-07");
     await act(async () => bars[0]!.click());
@@ -266,12 +279,13 @@ describe("local Usage panel", () => {
     };
     await render({ ...sample, status: "stale", asOf: previousAsOf, windows,
       trend: trend.map((day) => ({ ...day, day: new Date(Date.parse(day.day + "T00:00:00Z") - 86_400_000).toISOString().slice(0, 10) })) });
-    expect(text()).toContain("Showing the last captured snapshot");
+    await showSummaryInfo();
+    expect(infoText()).toContain("Showing the last captured snapshot");
     expect(text()).toContain("2026-11-02 – 2026-11-02");
     expect(text()).toContain("2026-10-04 – 2026-11-02");
-    expect(text()).toContain("23:50");
+    expect(infoText()).toContain("23:50");
     expect(text()).not.toContain("today");
-    expect(host.querySelector('time')?.getAttribute("datetime")).toBe("2026-11-02T15:50:00.000Z");
+    expect(document.querySelector('[data-info-hint-content] time')?.getAttribute("datetime")).toBe("2026-11-02T15:50:00.000Z");
   });
 
   it("renders a China-midnight year rollover without shifting dates or showing 24:05", async () => {
@@ -283,8 +297,9 @@ describe("local Usage panel", () => {
     }, trend: trend.map((day, index) => ({ ...day, day: new Date(Date.UTC(2025, 11, 3 + index)).toISOString().slice(0, 10) })) });
     expect(text()).toContain("2025-12-26 – 2026-01-01");
     expect(text()).toContain("2025-12-03 – 2026-01-01");
-    expect(text()).toContain("00:05");
-    expect(text()).not.toContain("24:05");
+    await showSummaryInfo();
+    expect(infoText()).toContain("00:05");
+    expect(infoText()).not.toContain("24:05");
     expect(host.querySelectorAll("[data-usage-daily] table tbody tr")).toHaveLength(30);
   });
 
@@ -315,7 +330,8 @@ describe("local Usage panel", () => {
     expect(calls.api).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(calls.api).toHaveBeenCalledTimes(2);
-    expect(text()).toContain("Showing the last captured snapshot");
+    await showSummaryInfo();
+    expect(infoText()).toContain("Showing the last captured snapshot");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
   });
 
@@ -334,14 +350,14 @@ describe("local Usage panel", () => {
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false"]);
     const values = () => [...host.querySelectorAll("[data-usage-repositories] tbody tr:first-child td")].map((cell) => cell.textContent);
     expect(values()[0]).toBe("Enterprise");
-    expect(values()[1]).toContain("1Synced");
+    expect(values()[1]).toMatch(/^1/);
     expect(values()[2]).toContain("2");
     const repositoryChanges = () => [...host.querySelectorAll('[data-usage-repositories] tbody tr:first-child [data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
     expect(repositoryChanges()).toEqual(["(—)", "(+10%)"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-11-02");
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(tabs[2]);
-    expect(values()[1]).toContain("30Synced");
+    expect(values()[1]).toMatch(/^30/);
     expect(values()[2]).toContain("60");
     expect(repositoryChanges()).toEqual(["(—)", "(+30%)"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-09-05–2026-10-04");
@@ -370,15 +386,16 @@ describe("local Usage panel", () => {
     const last = merged.trend.at(-1)!;
     last.commits = null; last.knownCommits = 5; last.categories.work = current.categories.work;
     await renderRaw(snapshot);
-    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("5Synced");
-    expect(host.querySelector('[data-usage-category-row="work"]')?.textContent).toContain("5Synced");
-    expect(host.querySelector('[data-usage-daily] tbody tr:first-child td:nth-child(3)')?.textContent).toBe("5Synced");
-    expect(host.querySelector('[data-usage-repositories] tbody tr:first-child td:last-child')?.textContent).toContain("5Synced");
+    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("5");
+    expect(host.querySelector('[data-usage-category-row="work"] [data-usage-provisional]')?.textContent).toBe("5");
+    expect(host.querySelector('[data-usage-daily] tbody tr:first-child td:nth-child(3)')?.textContent).toBe("5");
+    expect(host.querySelector('[data-usage-repositories] tbody tr:first-child td:last-child [data-usage-provisional]')?.textContent).toBe("5");
     const point = host.querySelector<HTMLButtonElement>('[data-usage-trend="commits"] [data-usage-day="2026-11-03"]')!;
     expect(point.getAttribute("aria-label")).toContain("5 · Synced");
     expect(point.querySelector('[data-usage-category="work"]')?.className).toContain("bg-accent/35");
     await act(async () => point.focus());
-    expect(host.querySelector('[data-usage-trend="commits"] [role="tooltip"]')?.textContent).toContain("Commits: 5Synced");
+    expect(host.querySelector('[data-usage-trend="commits"] [role="tooltip"]')?.textContent).toContain("Commits: 5");
+    expect(host.querySelector('[data-usage-trend="commits"] [role="tooltip"]')?.textContent).toContain("Confirmed remote count");
     expect(text()).not.toContain("9,999");
     expect(text()).not.toContain("99,999");
   });
@@ -393,7 +410,8 @@ describe("local Usage panel", () => {
     expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("2");
     expect(text()).not.toContain("Activity summary unavailable");
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
-    expect(text()).toContain("Showing the last captured snapshot");
+    await showSummaryInfo();
+    expect(infoText()).toContain("Showing the last captured snapshot");
     expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("2");
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
     expect(text()).toContain("Activity summary unavailable");
