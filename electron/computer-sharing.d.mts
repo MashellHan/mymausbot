@@ -64,6 +64,8 @@ export interface ComputerAsk {
 export interface LendingSummary {
   lending: string[];
   clouds: string[];
+  /** Lent Clouds that haven't accepted this computer yet (asleep ones excluded). */
+  waiting?: string[];
   using: string[];
   paused: boolean;
   terminal?: boolean;
@@ -123,8 +125,6 @@ export function createComputerSharing(options: {
   /** Computer control's state; its `lent` says whether apps and screen are lent: computer control works, or only macOS's
    * permissions are missing. */
   screen?: () => boolean | ScreenStatus | Promise<boolean | ScreenStatus>;
-  /** A Cloud's bot needs apps and screen while computer control isn't running: asks macOS for what it lacks. */
-  askForScreen?: (connection: unknown) => void;
   /** This app's own prompt for an ask: "turn-on", "not-now", or null when it didn't show or `signal` closed it. */
   prompt?: (env: Workspace, ask: ComputerAsk, signal: AbortSignal) => Promise<"turn-on" | "not-now" | null>;
   /** Starts computer control again; its state after. */

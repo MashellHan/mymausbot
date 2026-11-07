@@ -1285,6 +1285,7 @@ describe("around each bot call (browser-steps.ts)", () => {
     let release!: () => void;
     const reading = new Promise<void>((resolve) => { release = resolve; });
     let held = false;
+    let restoreNow: (() => void) | undefined;
     relay.onCommand = async (command) => {
       if (command.action === "console" && command.clear !== true && !held) { held = true; await reading; }
     };
@@ -1296,16 +1297,22 @@ describe("around each bot call (browser-steps.ts)", () => {
       await sleep(15);
       const click = value.agentRpc("s", engine, "tools/call", { name: "agent_browser_click", arguments: { selector: "@e1" } }, undefined, { ...ctx, record: false });
       await vi.waitFor(() => expect(held).toBe(true));
-      await sleep(15); // longer than the idle window, with only the page read running
+      let now = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      restoreNow = () => nowSpy.mockRestore();
+      await sleep(15);
+      now += 15;
       expect(await value.closeIfIdle("s", 10)).toBe(false);
       release();
       await expect(click).resolves.not.toMatchObject({ isError: true });
       expect(relay.actions()).toEqual(expect.arrayContaining(["console", "console:clear"]));
       expect(await value.closeIfIdle("s", 10)).toBe(false);
       await sleep(15);
+      now += 15;
       expect(await value.closeIfIdle("s", 10)).toBe(true);
       expect(closeBrowser).toHaveBeenCalledTimes(1);
     } finally {
+      restoreNow?.();
       relay.onCommand = undefined;
       release();
       await relay.close();

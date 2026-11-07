@@ -6,7 +6,7 @@ source guards run beside the fixed 26-file security/data/dispatch core and at
 most four portable affected test files. `qa-plan.json` and the log list
 affected files deferred beyond that bound, including E2E tests under
 `scripts/testing/` and `server/browser/` and Electron tests ending in
-`.electron.test.mjs`. The first attempt has five minutes from run creation,
+`.electron.test.mjs` as well as Relay's separate `node:test` files. The first attempt has five minutes from run creation,
 including queue time; a rerun uses its current attempt start and reports the
 original age separately. A real failure takes priority over a budget incident.
 QA holds and independent review still apply.
@@ -28,6 +28,8 @@ so a moved file selects its old path too) to affected contracts and areas.
 | Windows computer control | the `electron/` modules that start computer control and lend a PC's screen: `cua`, `cua-failure`, `cua-connection`, `capabilities`, `screen-status`, `shared-cua-connection`, `shared-computer-access`, `lent-screen-tools`, `lent-screen-failures`, `paced-typing` | the same as server, and Windows CUA |
 | desktop | the rest of `electron/`, `build/`, `electron-builder.yml`, `index.html` | the same as server |
 | control plane | `cloudflare/control-plane/` | the control-plane job |
+| relay | `relay/` | the relay's Ubuntu typecheck, tests, fuzz and production dependency audit |
+| shared E2E vectors | `companion/src/e2e/vectors/` | the server checks and the relay job |
 | everything | anything else: `.github/` workflows, `package.json`, the lockfile and workspace, tsconfig, vite and vitest config, `third_party/`, `scripts/` code, unknown paths | every job |
 
 The wider build includes typecheck, Electron syntax and a production UI build.
@@ -52,6 +54,8 @@ build work. Several areas run the union of their wider jobs:
   those Electron modules runs it, as do `scripts/` and dependency changes. The
   Linux ARM64 cloudflared installer tests only its own script and pinned
   download.
+- The relay has its own lockfile and Ubuntu job. Shared companion E2E vectors
+  select both the server checks and that relay job.
 
 ## Lanes: pull requests, main and the full lane
 
@@ -65,7 +69,7 @@ Every other event runs one of two fixed sets (`laneOf` in `scripts/ci-scope.mjs`
 | Runtime `push` to main | full | `FULL_SCOPE` on all platforms, including the long platform and specialist jobs, even when the commit passed a merge-group gate |
 | `merge_group` | main or full | validate the combined PR on current main; selected scope can widen for sensitive or broad changes |
 | Guarded docs-only or version-only `push` to main | scoped | use a smaller lane only when its prior-commit or exact merge-group evidence satisfies the existing guard |
-| `schedule` (21:00 UTC daily, 05:00 Asia/Shanghai next day), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
+| `schedule` (21:00 UTC daily, 05:00 Asia/Shanghai next day), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every selected job and full platform matrix: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package, Linux ARM64 installer and Ubuntu relay audit/tests |
 
 Runtime main pushes use the full lane. A merge group's main lane runs Linux,
 Windows and one macOS job; sensitive changes may widen it. An explicit

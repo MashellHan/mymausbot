@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
-import { holdsFor, inspectJobs } from "./contracts.mjs";
+import { holdsFor, inspectJobs, preflightJob } from "./contracts.mjs";
 import { qaHealth } from "./health.mjs";
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -93,7 +93,7 @@ export async function gateRun({ api = github, readArtifact = artifactFiles, runI
   }
   while (true) {
     const jobs = await runJobs(runId, attempt, api);
-    const preflight = jobs.find((job) => job.name.startsWith("typecheck + lint"));
+    const preflight = preflightJob(jobs);
     const failedStep = preflight?.status !== "completed" && preflight?.steps?.find((step) => step.conclusion === "failure");
     if (failedStep) throw new Error(`Preflight failed: ${failedStep.name}`);
     if (preflight?.status === "completed" && preflight.conclusion !== "success") throw new Error(`Preflight ${preflight.conclusion}`);

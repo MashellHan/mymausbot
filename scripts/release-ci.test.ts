@@ -107,7 +107,7 @@ describe("what a CI run proves", () => {
     // a job that failed in "Set up job" did get a runner
     expect(judgeRun([gate("failure"), vitest("macos-latest", "failure", [{ status: "completed", conclusion: "failure" }])])).toBe("red");
     // the gate alone failing (a static check) is red
-    expect(judgeRun([gate("failure"), { name: "typecheck + lint", conclusion: "failure", steps: started }])).toBe("red");
+    expect(judgeRun([gate("failure"), { name: "preflight", conclusion: "failure", steps: started }])).toBe("red");
     expect(judgeRun([gate("failure")])).toBe("red");
   });
 

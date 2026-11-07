@@ -10,14 +10,11 @@ import {
 } from "react";
 import { t } from "@/lib/i18n";
 import {
-  ArrowLeft,
   Check,
   Loader2,
-  Mail,
   QrCode,
   ShieldCheck,
   Smartphone,
-  Wifi,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { phonePairingLink } from "../../shared/pairing-link";
@@ -26,7 +23,6 @@ import {
   companionPairingRoute,
   companionPairingRoutePin,
   companionPairingRoutePinAvailable,
-  type CompanionEndpoint,
   type CompanionPairingRoutePin,
   type CompanionPairingRouteMode,
 } from "../lib/companion-pairing";
@@ -65,49 +61,12 @@ import {
   phonePairingManualCodeMode,
 } from "../lib/companion-state";
 import { ConnectionDetail } from "./ConnectionDetail";
+import { PhonePairingQr } from "./PhonePairingQr";
+import { PhoneSignInStep } from "./PhoneSignInStep";
 import { productName } from "../lib/brand";
 
-export interface PhoneDevice {
-  id: string;
-  name: string;
-  createdAt: number;
-  lastSeenAt: number;
-  cloudDesktopAccess: boolean;
-  /** Absent (older sidecars) means no browser access. */
-  browserControlAccess?: boolean;
-}
-
-export interface CompanionState {
-  enabled: boolean;
-  keepAwake: boolean;
-  port: number;
-  devices: PhoneDevice[];
-  connectedDeviceIds?: string[];
-  pairing: { code: string; token: string; expiresAt: number } | null;
-  addresses?: string[];
-  tailscale?: string;
-  tailnetName?: string;
-  lan?: string | null;
-  hosts?: string[];
-  endpoints?: CompanionEndpoint[];
-  secretPublicKey?: string;
-  discovery?: { advertising: boolean; name: string };
-  /** Windows has that network down as Public, where its firewall drops a phone's connection. */
-  publicNetwork?: string;
-  error?: string;
-}
-
-export type CompanionBridge = {
-  state: () => Promise<CompanionState>;
-  start: () => Promise<CompanionState>;
-  stop: () => Promise<CompanionState>;
-  keepAwake: (enabled: boolean) => Promise<CompanionState>;
-  refreshTailscale: () => Promise<CompanionState>;
-  pairing: (open: boolean, expectedToken?: string) => Promise<CompanionState>;
-  cloudDesktop: (deviceId: string, allowed: boolean) => Promise<CompanionState>;
-  browserControl: (deviceId: string, allowed: boolean) => Promise<CompanionState>;
-  revoke: (deviceId: string) => Promise<CompanionState>;
-};
+import type { CompanionBridge, CompanionState } from "../lib/companion-types";
+export type { CompanionBridge, CompanionState, PhoneDevice } from "../lib/companion-types";
 
 type AccountBridge = NonNullable<NonNullable<Window["ogb"]>["companionAccount"]>;
 type StateBridge<T> = { state: () => Promise<T> };
@@ -193,8 +152,9 @@ export interface PhoneSetupController {
   retryAccount: () => void;
   cancel: () => void;
   refreshCode: () => void;
+  renewPairing: () => Promise<void>;
   finish: () => void;
-  act: (call: (companion: CompanionBridge) => Promise<CompanionState>) => Promise<void>;
+  act: (call: (companion: CompanionBridge) => Promise<CompanionState>) => Promise<CompanionState | void>;
   accountAct: (call: (remote: AccountBridge) => Promise<CompanionAccountState>) => Promise<void>;
 }
 
@@ -223,6 +183,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     async () => {},
   );
   const pairingRoutePinRef = useRef<OwnedCompanionPairingRoutePin | null>(null);
+  const pairingRenewal = useRef<{ generation: number; token: string } | null>(null);
   const [pairingRoutePinState, setPairingRoutePinState] =
     useState<OwnedCompanionPairingRoutePin | null>(null);
   const setupGeneration = useRef(0);
@@ -252,6 +213,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
       if (
         next.companion
         && companionStateRefreshIsCurrent(companionMutationEpoch, refreshEpoch)
+        && !pairingRenewal.current
       ) {
         setState(next.companion);
       }
@@ -278,7 +240,10 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
 
   const act = useCallback(async (call: (companion: CompanionBridge) => Promise<CompanionState>) => {
     const companion = companionBridge();
-    if (!companion) return;
+    if (!companion) {
+      setError(t("phone.error.desktopOnly"));
+      return;
+    }
     setActionBusy(true);
     setError(null);
     try {
@@ -287,6 +252,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
         () => call(companion),
       );
       if (mounted.current) setState(next);
+      return next;
     } catch (cause) {
       if (mounted.current) setError(
         normalizePhoneSetupActionError(
@@ -498,6 +464,65 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     setPairingBusy(true);
     if (decision === "start") void runPairingAttemptRef.current(request);
   }, []);
+
+  const renewPairing = useCallback(async () => {
+    const pin = pairingRoutePinRef.current;
+    const companion = companionBridge();
+    const renew = companion?.renewPairing;
+    if (!pin || !companion || !renew || pairingRenewal.current || !mounted.current || setupGeneration.current !== pin.generation) return;
+    const renewal = { generation: pin.generation, token: pin.token };
+    pairingRenewal.current = renewal;
+    try {
+      const next = await mutateCompanionBridgeState(companionMutationEpoch, () => renew(renewal.token));
+      if (!mounted.current || setupGeneration.current !== renewal.generation || pairingRoutePinRef.current?.token !== renewal.token) {
+        await closePhonePairingIfOwned(next, () => companion.state(),
+          () => mutateCompanionBridgeState(companionMutationEpoch, () => companion.pairing(false, next.pairing?.token)),
+          () => !pairingRoutePinRef.current || pairingRoutePinRef.current.generation === renewal.generation);
+        return;
+      }
+      if (!next.pairing || !companionPairingRoutePinAvailable(next, pin)) {
+        const returnedToken = next.pairing?.token;
+        const closed = returnedToken
+          ? await mutateCompanionBridgeState(companionMutationEpoch, () => companion.pairing(false, returnedToken)).catch(() => next)
+          : next;
+        if (!mounted.current || setupGeneration.current !== renewal.generation || pairingRoutePinRef.current?.token !== renewal.token) return;
+        setupGeneration.current += 1;
+        invalidatePhonePairingAttempt(pairingAttemptQueue.current, renewal.generation);
+        releasePhonePairingAttempt(pairingUiOwner.current, renewal.generation);
+        setPairingBusy(false);
+        publishPairingRoutePin(null);
+        setState(closed);
+        setProvisioning(false);
+        setSetupTimedOut(false);
+        setError(returnedToken && closed.pairing?.token === returnedToken
+          ? t("phone.error.remoteUpdate")
+          : closed.pairing ? t("phone.error.codeChanged") : protectedPairingUnavailable());
+        dispatchFlow({ type: "reset" });
+        return;
+      }
+      if (next.pairing.token === renewal.token) {
+        setError(t("phone.error.remoteUpdate"));
+        return;
+      }
+      publishPairingRoutePin({ ...pin, token: next.pairing.token });
+      setState(next);
+      setError(null);
+    } catch (cause) {
+      if (mounted.current && setupGeneration.current === renewal.generation && pairingRoutePinRef.current?.token === renewal.token) {
+        const message = normalizePhoneSetupActionError(cause, t("phone.error.remoteUpdate"));
+        try {
+          const current = await companion.state();
+          if (!mounted.current || setupGeneration.current !== renewal.generation || pairingRoutePinRef.current?.token !== renewal.token) return;
+          if (current.pairing?.token !== renewal.token) setState(current);
+          else setError(message);
+        } catch {
+          if (mounted.current && setupGeneration.current === renewal.generation) setError(message);
+        }
+      }
+    } finally {
+      if (pairingRenewal.current === renewal) pairingRenewal.current = null;
+    }
+  }, [publishPairingRoutePin]);
 
   const start = useCallback(() => {
     const baseline = phoneSetupBaseline(state?.devices ?? null);
@@ -779,13 +804,9 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
   );
   const pairingLink = useMemo(() => {
     if (!state?.pairing || !pairingRoute) return null;
-    return phonePairingLink({
-      ...pairingRoute,
-      code: state.pairing.code,
-      token: state.pairing.token,
-      name: state.discovery?.name,
-      secretPublicKey: state.secretPublicKey,
-    });
+    // An encrypted-connection QR carries no six-digit code: phones pair by the QR or a pasted link only.
+    return phonePairingLink({ ...pairingRoute, code: state.e2e?.enabled ? undefined : state.pairing.code, token: state.pairing.token,
+      name: state.discovery?.name, secretPublicKey: state.secretPublicKey, e2e: state.e2e?.descriptor });
   }, [pairingRoute, state]);
 
   const cancel = useCallback(() => {
@@ -863,6 +884,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
       const generation = ++setupGeneration.current;
       void openPairing(pairingRouteMode, undefined, generation);
     },
+    renewPairing,
     finish: () => {
       const generation = setupGeneration.current;
       setupGeneration.current += 1;
@@ -902,6 +924,7 @@ export function PhoneSetupFlowView({ controller }: { controller: PhoneSetupContr
   const actionError = companionAccountActionError(c.account, c.accountError);
   const canSubmitEmail = /^\S+@\S+\.\S+$/.test(c.email.trim());
   const manualCodeMode = phonePairingManualCodeMode(Boolean(c.state?.pairing), c.pairingLink);
+  if (c.phase === "qr" && c.state?.e2e?.enabled && c.pairingLink) return <PhonePairingQr c={c} signedIn={Boolean(c.account?.email)} />;
 
   if (c.phase === "intro") {
     return (
@@ -927,117 +950,7 @@ export function PhoneSetupFlowView({ controller }: { controller: PhoneSetupContr
     );
   }
 
-  if (c.phase === "sign-in") {
-    const unavailable = !c.account?.available;
-    const failed = c.account?.status === "error" || c.setupTimedOut;
-    return (
-      <div className="mx-auto flex w-full max-w-[430px] flex-col">
-        <button onClick={c.cancel} className="mb-4 flex w-fit items-center gap-1.5 text-[12px] text-ink-secondary hover:text-ink">
-          <ArrowLeft size={13} /> {t("phone.back")}
-        </button>
-        <div className="flex size-11 items-center justify-center rounded-xl bg-accent/12 text-accent">
-          <Mail size={20} />
-        </div>
-        <h2 className="mt-3 text-[18px] font-semibold text-ink">
-          {unavailable || failed ? t("phone.signIn.attention") : t("phone.signIn.title")}
-        </h2>
-        <p
-          role={c.setupTimedOut ? "alert" : undefined}
-          className="mt-1 text-[13px] leading-relaxed text-ink-secondary"
-        >
-          {unavailable
-            ? t("phone.signIn.unavailable")
-            : c.setupTimedOut
-              ? t("phone.signIn.timedOut")
-            : failed
-              ? c.account?.message ?? t("phone.signIn.failed")
-              : t("phone.signIn.emailPrompt")}
-        </p>
-
-        {!unavailable && !failed && (
-          <div className="mt-5 flex flex-col gap-3">
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-ink-secondary">{t("phone.signIn.email")}</span>
-              <input
-                autoFocus
-                autoComplete="email"
-                inputMode="email"
-                value={c.email}
-                disabled={c.accountBusy || c.codeSent}
-                onChange={(event) => c.setEmail(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !c.codeSent && canSubmitEmail) c.requestCode();
-                }}
-                placeholder="you@example.com"
-                className="rounded-lg border border-hairline/50 bg-inset px-3 py-2.5 text-[14px] text-ink outline-none placeholder:text-ink-tertiary focus:border-accent disabled:opacity-50"
-              />
-            </label>
-            {c.codeSent && (
-              <label className="flex flex-col gap-1.5">
-                <span className="text-[12px] font-medium text-ink-secondary">{t("phone.signIn.code")}</span>
-                <input
-                  autoFocus
-                  autoComplete="one-time-code"
-                  inputMode="numeric"
-                  value={c.code}
-                  disabled={c.accountBusy}
-                  onChange={(event) => c.setCode(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && c.code.length === 8) c.verifyCode();
-                  }}
-                  placeholder="12345678"
-                  className="rounded-lg border border-hairline/50 bg-inset px-3 py-2.5 font-mono text-[16px] tracking-[0.18em] text-ink outline-none placeholder:tracking-normal placeholder:text-ink-tertiary focus:border-accent disabled:opacity-50"
-                />
-              </label>
-            )}
-            <button
-              disabled={c.accountBusy || (!c.codeSent && !canSubmitEmail) || (c.codeSent && c.code.length !== 8)}
-              onClick={c.codeSent ? c.verifyCode : c.requestCode}
-              className="rounded-lg bg-accent py-2.5 text-[14px] font-medium text-white hover:opacity-90 disabled:opacity-40"
-            >
-              {c.accountBusy ? t("phone.signIn.working") : c.codeSent ? t("phone.signIn.verify") : t("phone.signIn.sendCode")}
-            </button>
-            {c.codeSent && (
-              <button
-                disabled={c.accountBusy}
-                onClick={c.changeEmail}
-                className="text-[12px] text-ink-secondary hover:text-ink disabled:opacity-40"
-              >
-                {t("phone.signIn.otherEmail")}
-              </button>
-            )}
-            {c.codeSent && !actionError && (
-              <p className="text-[12px] text-ink-secondary">{t("phone.signIn.expires")}</p>
-            )}
-          </div>
-        )}
-
-        {(unavailable || failed) && (
-          <button
-            disabled={c.accountBusy}
-            onClick={c.retryAccount}
-            className="mt-5 rounded-lg bg-accent py-2.5 text-[14px] font-medium text-white disabled:opacity-40"
-          >
-            {c.accountBusy ? t("remote.account.retrying") : t("phone.signIn.retry")}
-          </button>
-        )}
-        {actionError && <p role="alert" className="mt-3 text-[13px] text-danger">{actionError}</p>}
-        <div className="my-4 flex items-center gap-3 text-[11px] text-ink-secondary">
-          <span className="h-px flex-1 bg-hairline/40" /> {t("phone.signIn.or")} <span className="h-px flex-1 bg-hairline/40" />
-        </div>
-        <button
-          disabled={c.busy || c.accountBusy}
-          onClick={c.useLocal}
-          className="flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
-        >
-          <Wifi size={15} /> {t("phone.signIn.wifiInstead")}
-        </button>
-        <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-secondary">
-          {t("phone.signIn.wifiNote")}
-        </p>
-      </div>
-    );
-  }
+  if (c.phase === "sign-in") return <PhoneSignInStep c={c} actionError={actionError} canSubmitEmail={canSubmitEmail} />;
 
   if (c.phase === "verifying") {
     return (

@@ -1,5 +1,34 @@
-import { t } from "./i18n";
+import { t } from "@/lib/i18n";
 import type { Bot, InstanceInfo } from "@/state/store";
+
+export interface VpsComputerStatus {
+  configured: boolean;
+  imageMatches: boolean;
+  managed: boolean;
+  container: "running" | "stopped" | "missing";
+  ready: boolean;
+  problem: string | null;
+}
+
+export interface LocalVmStatus {
+  resumable?: boolean;
+  stop_reason?: "idle" | null;
+  mode: "shared" | "per-bot" | "pool";
+  max_instances: number;
+  image: boolean;
+  create_supported: boolean;
+  container: "running" | "stopped" | "missing";
+  imageMatches: boolean;
+  managed: boolean;
+  network: "loopback" | "unsafe" | "unknown";
+  security: "hardened" | "unsafe" | "unknown";
+  persistence: "durable" | "unsafe" | "unknown";
+  desktopReady: boolean;
+  ready: boolean;
+  problem: string | null;
+  viewer_url: string;
+  target_key: string;
+}
 
 export function instanceSupportsLocalComputer(
   instances: InstanceInfo[],
@@ -11,6 +40,10 @@ export function instanceSupportsLocalComputer(
   return capabilities?.localComputerMcp === true || capabilities?.computerMcp === true;
 }
 
+export function pageOnRemoteServer(capabilities: DesktopCapabilities): boolean {
+  return capabilities.localComputer?.reasonCode === "remote-server";
+}
+
 export function localComputerSelectable({
   capabilities,
   providerSupportsLocal,
@@ -20,8 +53,7 @@ export function localComputerSelectable({
 }): boolean {
   if (!providerSupportsLocal) return false;
   if (capabilities.localComputer.available) return true;
-  // The desktop app's own computer can't serve bots running on another server; no permission fixes that.
-  if (capabilities.localComputer.reasonCode === "remote-server") return false;
+  if (pageOnRemoteServer(capabilities)) return false;
   return capabilities.host.platform === "darwin" || capabilities.host.platform === "win32";
 }
 
@@ -35,7 +67,7 @@ export function localComputerDisabledReason({
 }): string | null {
   if (!providerSupportsLocal) return t("computer.problem.localAiCannot");
   if (capabilities.localComputer.available) return null;
-  if (capabilities.localComputer.reasonCode === "remote-server") return t("computer.problem.localRemoteServer");
+  if (pageOnRemoteServer(capabilities)) return t("computer.problem.localRemoteServer");
   if (capabilities.host.platform === "linux") {
     if (capabilities.localComputer.reasonCode === "linux-wayland-seat-safety-blocked") return t("computer.problem.localWaylandBlocked");
     if (capabilities.localComputer.reasonCode === "wayland-compositor-unsupported") return t("computer.problem.localWaylandDesktop");
