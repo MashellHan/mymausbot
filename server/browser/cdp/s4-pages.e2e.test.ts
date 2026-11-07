@@ -260,15 +260,40 @@ suite("S4 pages, tabs and page state on real Chrome", () => {
     fx.route("/api/broken", { body: "{}", type: "application/json", status: 500 });
     const unreachable = `http://127.0.0.1:${await closedPort()}/unreachable`;
     page.takeHealth();
-    await open(`<script src="/missing.js"></script><script>
-      fetch("/api/broken");
-      fetch("${unreachable}").catch(() => {});
-      setTimeout(() => { throw new Error("uncaught in page"); }, 10);
-      Promise.reject(new Error("unhandled in page"));
-    </script>`);
-    await page.evaluate(`globalThis.__seen = []; addEventListener("error", (e) => __seen.push(e.message)); addEventListener("unhandledrejection", (e) => __seen.push("rejection"));`);
-    await inPageWorld(() => page.evaluate(`setTimeout(() => { throw new Error("thrown after the listener") }, 0)`, { world: "page" }));
-    await page.waitFor({ ms: 500 });
+    const timeoutMs = hostTimeout(5_000);
+    const responseAt = (url: string, status: number) => page.session.waitFor("Network.responseReceived", {
+      match: (params) => {
+        const response = params.response as { url?: string; status?: number } | undefined;
+        return response?.url === url && response.status === status;
+      }, timeoutMs,
+    });
+    let unreachableId: unknown;
+    const stopTracking = page.session.on("Network.requestWillBeSent", (params) => {
+      if ((params.request as { url?: string } | undefined)?.url === unreachable) unreachableId = params.requestId;
+    });
+    try {
+      await Promise.all([
+        responseAt(fx.url("/missing.js"), 404),
+        responseAt(fx.url("/api/broken"), 500),
+        page.session.waitFor("Network.loadingFailed", { match: (params) => unreachableId !== undefined
+          && params.requestId === unreachableId && params.errorText === "net::ERR_CONNECTION_REFUSED", timeoutMs }),
+        page.session.waitFor("Log.entryAdded", { match: (params) => {
+          const entry = params.entry as { level?: string; text?: string } | undefined;
+          return entry?.level === "error" && /404|500/.test(entry.text ?? "");
+        }, timeoutMs }),
+        (async () => {
+          await open(`<script src="/missing.js"></script><script>
+            fetch("/api/broken");
+            fetch("${unreachable}").catch(() => {});
+            setTimeout(() => { throw new Error("uncaught in page"); }, 10);
+            Promise.reject(new Error("unhandled in page"));
+          </script>`);
+          await page.evaluate(`globalThis.__seen = []; addEventListener("error", (e) => __seen.push(e.message)); addEventListener("unhandledrejection", (e) => __seen.push("rejection"));`);
+          await inPageWorld(() => page.evaluate(`setTimeout(() => { throw new Error("thrown after the listener") }, 0)`, { world: "page" }));
+          await page.waitFor({ ms: 500 });
+        })(),
+      ]);
+    } finally { stopTracking(); }
     const health = page.takeHealth();
     expect(health.failedRequests).toEqual(expect.arrayContaining([
       expect.objectContaining({ url: fx.url("/missing.js"), resourceType: "Script", status: 404, firstParty: true }),
