@@ -34,6 +34,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => { root.unmount(); });
   host.remove();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -80,4 +81,46 @@ it("shares a pending owner request without a second publication", async () => {
   expect(fixture.api).toHaveBeenCalledTimes(1);
   resolve({ apps: [], issues: [] });
   await first;
+});
+
+it("recovers a transient default failure without opening Mini Apps", async () => {
+  vi.useFakeTimers();
+  fixture.connected = true;
+  fixture.api.mockRejectedValueOnce(new Error("Temporary outage")).mockResolvedValue({ apps: [], issues: [] });
+  await act(async () => { root.render(createElement(MiniAppDefaultsBootstrap)); });
+  expect(fixture.api).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+  expect(fixture.api).toHaveBeenCalledTimes(2);
+  expect(host.querySelector('[data-testid="mini-apps-panel"]')).toBeNull();
+});
+
+it.each(["guard loss", "unmount"])("cancels a queued retry on %s", async (caseName) => {
+  vi.useFakeTimers();
+  fixture.connected = true;
+  fixture.api.mockRejectedValueOnce(new Error("Temporary outage")).mockResolvedValue({ apps: [], issues: [] });
+  await act(async () => { root.render(createElement(MiniAppDefaultsBootstrap)); });
+  expect(fixture.api).toHaveBeenCalledTimes(1);
+  if (caseName === "guard loss") {
+    fixture.visible = false;
+    await act(async () => { root.render(createElement(MiniAppDefaultsBootstrap)); });
+  } else await act(async () => { root.render(null); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+  expect(fixture.api).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the in-flight request across a reconnect that precedes its rejection", async () => {
+  vi.useFakeTimers();
+  fixture.connected = true;
+  let reject!: (error: Error) => void;
+  fixture.api.mockImplementationOnce(() => new Promise((_resolve, failed) => { reject = failed; }))
+    .mockResolvedValue({ apps: [], issues: [] });
+  await act(async () => { root.render(createElement(MiniAppDefaultsBootstrap)); });
+  fixture.connected = false;
+  await act(async () => { root.render(createElement(MiniAppDefaultsBootstrap)); });
+  fixture.connected = true;
+  await act(async () => { root.render(createElement(MiniAppDefaultsBootstrap)); });
+  expect(fixture.api).toHaveBeenCalledTimes(1);
+  await act(async () => { reject(new Error("Temporary outage")); await Promise.resolve(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+  expect(fixture.api).toHaveBeenCalledTimes(2);
 });

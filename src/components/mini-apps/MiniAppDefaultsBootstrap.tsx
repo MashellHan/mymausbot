@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePageVisible } from "@/lib/page-visible";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { api, useStore } from "@/state/store";
@@ -7,6 +7,7 @@ import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 
 let pending: Promise<MiniAppDefaultsResult> | null = null;
+const RETRY_DELAYS_MS = [2_000, 10_000] as const;
 
 export function ensureMiniAppDefaults(): Promise<MiniAppDefaultsResult> {
   if (pending) return pending;
@@ -25,12 +26,30 @@ export function MiniAppDefaultsBootstrap() {
   const nativeGuard = miniAppNativeFrameGuard();
   const localPage = typeof window !== "undefined" && window.ogb?.app?.ownPage === true;
   const started = useRef(false);
+  const [attempt, setAttempt] = useState(0);
+  const eligible = state.connected && visible && owner === true && nativeGuard && localPage;
 
   useEffect(() => {
-    if (!state.connected || !visible || owner !== true || !nativeGuard || !localPage || started.current) return;
+    if (!eligible || started.current) return;
     started.current = true;
-    void ensureMiniAppDefaults().catch(() => { started.current = false; });
-  }, [state.connected, visible, owner, nativeGuard, localPage]);
+    let active = true;
+    let settled = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    void ensureMiniAppDefaults().then(() => { settled = true; }, (cause: unknown) => {
+      settled = true;
+      if (!active) return;
+      started.current = false;
+      const status = cause && typeof cause === "object" && "status" in cause ? Number(cause.status) : null;
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || status !== null && Number.isInteger(status) && status >= 400 && status < 500) return;
+      retry = setTimeout(() => { retry = null; setAttempt(attempt + 1); }, delay);
+    });
+    return () => {
+      active = false;
+      if (retry) clearTimeout(retry);
+      if (!settled) started.current = false;
+    };
+  }, [eligible, attempt]);
 
   return null;
 }
