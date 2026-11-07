@@ -28,7 +28,7 @@ function page(rows: Row[], nextCursor?: string) {
     revision: 7, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-function fixture(fixtureOptions: { manyRows?: boolean } = {}) {
+function fixture(fixtureOptions: { manyRows?: boolean; colorRanks?: boolean } = {}) {
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   let changed: (() => void) | null = null;
   let failDaily = false;
@@ -60,6 +60,15 @@ function fixture(fixtureOptions: { manyRows?: boolean } = {}) {
     if (id === "summary") return page([{ currency: "人民币", net: prior ? "-80.00" : "-126.40", count: prior ? "2" : "3" }]);
     if (id === "outflow") return page([{ currency: "人民币", amount: prior ? "-80.00" : "-156.40", count: "2" }]);
     if (id === "inflow") return page(prior ? [] : [{ currency: "人民币", amount: "30.00", count: "1" }]);
+    if (fixtureOptions.colorRanks && id === "categories") return page(from.startsWith("2026-01") ? [
+      { currency: "人民币", category: "Travel", amount: "-500.00", count: "1" },
+      { currency: "人民币", category: "Home", amount: "-260.00", count: "1" },
+      { currency: "人民币", category: "Food", amount: "-220.00", count: "2" },
+      { currency: "人民币", category: null, amount: "-1.00", count: "1" },
+    ] : [
+      { currency: "人民币", category: "Home", amount: "-260.00", count: "1" },
+      { currency: "人民币", category: "Food", amount: "-120.00", count: "1" },
+    ]);
     if (id === "categories") return page([
       { currency: "人民币", category: "Food", amount: "-100.00", count: "1" },
       { currency: "人民币", category: "Household", amount: "-56.40", count: "1" },
@@ -227,6 +236,33 @@ describe("Bookkeeping Manager local ledger views", () => {
     app.click("record-drilldown-clear");
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.view.document.getElementById("record-drilldown")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("keeps category identity colors stable across changed rank and separates Travel from Food", async () => {
+    const app = fixture({ colorRanks: true }); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    app.click("tab-statistics");
+    await app.view.happyDOM.whenAsyncComplete();
+    const colors = () => Object.fromEntries([...app.view.document.querySelectorAll("#categories .category-row")].map((row) => {
+      const name = row.querySelector(".category-name")?.textContent?.replace(/^\d+\.\s*/, "") ?? "";
+      const fill = row.querySelector(".category-track span") as unknown as HTMLElement | null;
+      return [name, fill?.style.backgroundColor ?? ""];
+    }));
+    const month = colors();
+    expect(app.text("categories")).toContain("1. Home");
+    expect(month.Home).not.toBe(month.Food);
+    (app.view.document.querySelector('[data-stats-period="year"]') as unknown as HTMLButtonElement).click();
+    await app.view.happyDOM.whenAsyncComplete();
+    const year = colors();
+    expect(app.text("categories")).toContain("1. Travel");
+    expect(year.Home).toBe(month.Home);
+    expect(year.Food).toBe(month.Food);
+    expect(year.Travel).not.toBe(year.Food);
+    expect(year.Travel).not.toBe(year.Home);
+    expect(year["Category missing"]).not.toBe(year.Food);
+    const missing = [...app.view.document.querySelectorAll("#categories .category-row")]
+      .find((row) => row.textContent?.includes("Category missing"));
+    expect(missing?.querySelector("button")).toBeNull();
   });
 
   it("queries a closed month and complete prior month, and keeps category scope through clear and pagination", async () => {
