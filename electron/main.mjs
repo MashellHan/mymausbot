@@ -100,7 +100,7 @@ import { CHECKOUT_SOURCES, cloudMenuSublabel, cloudTarget, createCloudAccountCli
 import { installCloudPlanIpc } from "./cloud-plan-ipc.mjs";
 import { cloudLinkOpensSheet, colorDotIcons, createCloudLook, createCloudReadyNotice, installCloudBuy, lookFile } from "./cloud-buy.mjs";
 import { createTrialNotices } from "./cloud-trial-notice.mjs";
-import { createDesktopText, DESKTOP_PORTS, jsonFile, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
+import { createDesktopPrefs, createDesktopText, DESKTOP_PORTS, jsonFile, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
 import { createDesktopIncludedX } from "./included-x.mjs"; import { createDesktopIncludedPages } from "./included-pages.mjs";
 import { cloudPageSenderAllowed, cloudPlanDisk, cloudUnreachableText, createCloudPowerGate, isCloudHomeEntry, myCloudOrigin, rememberedCloudHome, savedCloudHomeOrigin, signInCloudSession, withCloudHome } from "./cloud-home.mjs";
 import { installCloudFiles } from "./cloud-sync-main.mjs";

@@ -67,6 +67,21 @@ test("credential mode is a nonsecret opt-in in the existing desktop preference r
   }
 });
 
+test("main binds desktop preferences before choosing its startup credential mode", () => {
+  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  const imported = main.match(/^import \{([^}]+)\} from "\.\/desktop-prefs\.mjs";$/m)?.[1];
+  const startup = main.match(/^const CREDENTIAL_MODE = .+;$/m)?.[0];
+  assert.ok(imported && startup);
+  const names = imported.split(",").map((name) => name.trim());
+  const bindings = Object.fromEntries(Object.entries({ createDesktopPrefs, jsonFile }).filter(([name]) => names.includes(name)));
+  const dir = mkdtempSync(path.join(tmpdir(), "desktop-prefs-startup-"));
+  try {
+    fs.writeFileSync(path.join(dir, "desktop-prefs.json"), JSON.stringify({ credentialMode: "session" }));
+    const app = { getPath: (name) => { assert.equal(name, "userData"); return dir; } };
+    assert.equal(vm.runInNewContext(`${startup}\nCREDENTIAL_MODE`, { ...bindings, app, path }), "session");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a write that fails leaves the last whole record on disk, analytics opt-out included", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "desktop-prefs-"));
   try {
