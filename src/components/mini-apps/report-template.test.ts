@@ -22,7 +22,8 @@ function page(rows: Row[], revision: number) {
 function fixture(kind: ReportKind, initial?: { current: Row; editions: Array<{ header: Row; items: Row[] }> }) {
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   const data = { current: null as Row | null, editions: new Map<string, { header: Row; items: Row[] }>(), revision: 3, fail: false,
-    historyCursor: false, deferredHistory: null as Promise<ReturnType<typeof page>> | null };
+    historyCursor: false, deferredHistory: null as Promise<ReturnType<typeof page>> | null,
+    deferredEdition: null as Promise<ReturnType<typeof page>> | null };
   if (initial) {
     data.current = initial.current;
     for (const edition of initial.editions) data.editions.set(String(edition.header.editionKey), edition);
@@ -37,7 +38,7 @@ function fixture(kind: ReportKind, initial?: { current: Row; editions: Array<{ h
       return { ...page([...data.editions.values()].map((entry) => entry.header).sort((a, b) => String(b.editionKey).localeCompare(String(a.editionKey))), data.revision),
         ...(data.historyCursor ? { nextCursor: "older" } : {}) };
     }
-    if (id === "edition") return page(data.editions.get(parameters.editionKey)?.header ? [data.editions.get(parameters.editionKey)!.header] : [], data.revision);
+    if (id === "edition") return data.deferredEdition ?? page(data.editions.get(parameters.editionKey)?.header ? [data.editions.get(parameters.editionKey)!.header] : [], data.revision);
     if (id === "items") return page(data.editions.get(parameters.editionKey)?.items ?? [], data.revision);
     throw new Error(`Unknown query ${id}`);
   });
@@ -111,6 +112,43 @@ it("keeps an earlier X edition selected across Data refresh and separates all da
   expect(select.value).toBe("2026-11-03");
   expect(app.text()).toContain("<img src=x>");
   expect(app.query).toHaveBeenCalledWith("edition", { editionKey: "2026-11-03" }, { expectedDataRevision: 4 });
+});
+
+it.each(["x_ai_digest", "github_activity"] as const)("keeps %s publication identity truthful while a historical read fails or disappears", async (kind) => {
+  const app = fixture(kind); opened.push(app.view);
+  const current = header("2026-11-05");
+  const older = header("2026-11-04");
+  app.data.current = current;
+  app.data.editions.set("2026-11-05", { header: current, items: [item({ title: "Current publication" })] });
+  app.data.editions.set("2026-11-04", { header: older, items: [item({ title: "Earlier publication" })] });
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+
+  let rejectEdition!: (error: Error) => void;
+  app.data.deferredEdition = new Promise((_, reject) => { rejectEdition = reject; });
+  const select = app.view.document.getElementById("edition") as unknown as HTMLSelectElement;
+  select.value = "2026-11-04";
+  select.dispatchEvent(new app.view.Event("change") as unknown as Event);
+  expect(app.text()).toContain("Loading report");
+  expect(app.text()).not.toContain("Current publication");
+  rejectEdition(new Error("Synthetic read failure"));
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(select.value).toBe("current");
+  expect(app.text()).toContain("Current publication");
+  expect(app.text()).toContain("Showing the last loaded edition");
+
+  app.data.deferredEdition = null;
+  app.data.editions.delete("2026-11-04");
+  select.value = "2026-11-04";
+  select.dispatchEvent(new app.view.Event("change") as unknown as Event);
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(select.value).toBe("2026-11-04");
+  expect(app.text()).toContain("This edition is unavailable");
+  expect(app.text()).not.toContain("No report published yet");
+  (app.view.document.getElementById("return-current") as unknown as HTMLButtonElement).click();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(select.value).toBe("current");
+  expect(app.text()).toContain("Current publication");
 });
 
 it("labels GitHub signals precisely, hides absent facts and retains a stale edition", async () => {

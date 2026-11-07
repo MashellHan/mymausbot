@@ -30,13 +30,14 @@ bounded, redacted latest instruction are available only through those routes.
   clones. `mergedAdoProjects` accepts HTTPS project URLs; known `adoRemotes` also
   identify projects. Preserve known project configuration when moving devices.
 - Complete remote results are exact totals. Incomplete results show confirmed
-  numeric counts with a **Synced** label; unobserved values are unavailable.
+  numeric counts; the circle alert beside the period reveals coverage and missing
+  dates on hover, focus or click. Unobserved values are unavailable.
   Only a successful complete empty result is a verified zero. Incomplete PR or
   commit periods do not produce percentage comparisons. Zero to zero is 0%;
   zero to a positive count is **New** only for a comparable metric.
 - Tokens remain local, including cache reads. Their existing synced-device
   comparison scope is preserved. Remote and token captures have independent
-  timestamps; hover the displayed timestamp to inspect both. If capture dates
+  timestamps; open the information icon beside Usage to inspect both. If capture dates
   differ, tokens are joined by calendar date to the displayed remote windows.
   Missing token dates stay unavailable, and an unavailable comparison stays null.
   Missing remote data never falls back to created PRs or local Git commits.
