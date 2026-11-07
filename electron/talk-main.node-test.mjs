@@ -86,8 +86,12 @@ test("every list of the app's windows leaves the talk box out", () => {
 });
 
 test("main hands the talk wiring its speech sinks, this computer's own server and window, and closes it first on quit", () => {
-  assert.match(main, /const talk = installTalk\(\{ ipcMain, localOnly, localOrHome, BrowserWindow, browserSession, appleSpeech: nativeActions\.appleSpeech,\s*speech: \{ start: startSpeech, stop: stopSpeech, finish: finishSpeech, busy: speechBusy \},/);
-  assert.match(main, /packaged: app\.isPackaged, devUrl: DEV_URL, nativeImage, iconPath: APP_ICON, openLink: queueChatLink, reveal: revealForLink, log: slog, t: nativeT \}\);/);
+  const wiring = main.match(/const talk = installTalk\(\{([^]*?)\}\);/)?.[1];
+  assert.ok(wiring);
+  assert.match(wiring, /^\s*ipcMain, localOnly, localOrHome, BrowserWindow, browserSession,/);
+  assert.match(wiring, /\bt: nativeT,/);
+  assert.match(wiring, /appleSpeech: nativeActions\.appleSpeech,\s*speech: \{ start: startSpeech, stop: stopSpeech, finish: finishSpeech, busy: speechBusy \},/);
+  assert.match(wiring, /packaged: app\.isPackaged, devUrl: DEV_URL, nativeImage, iconPath: APP_ICON, openLink: queueChatLink, reveal: revealForLink, log: slog\s*$/);
   assert.match(main, /talk\.start\(\{ globalShortcut, screen, prefs: desktopPrefs, remote: \(\) => Boolean\(desktopRemoteAccess\), away: \(\) => homeWindow\.current\(\)\.kind !== "computer", starting: \(\) => !serverReady, localRequest: localServerRequest, dataDir: \(\) => runningDataDir \}\);/);
   assert.match(main, /app\.on\("before-quit", \(e\) => \{\s*talk\.close\(\);/);
   assert.doesNotMatch(main, /ipcMain\.handle\("(?:speech|talk-shortcut|call):/);

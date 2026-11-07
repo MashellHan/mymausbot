@@ -204,7 +204,7 @@ const BROWSE_NOTE_MS = 10 * 60_000;
  * own prompt, `startScreen()` starts computer control again (its state after), and `confirmTerminal()` turns on
  * running commands once the person confirms it here. */
 export function createComputerSharing({ file, fetch: fetchImpl, environments, cuaConnection, hostControl, screenLocked = () => false, idleSeconds = () => null, protectedPaths = [], enabled = async () => false, home = os.homedir(), activityFile, cloud = () => null, onChange = () => {}, reconnect = null, now = Date.now, power = createCloudPowerGate(),
-  linkHeaders = () => ({}), WebSocket: linkSocket = globalThis.WebSocket, egress = {}, chrome = {}, myCloud = () => null, ownClouds = () => [], screen = () => false, askForScreen = () => {}, cloudPower = () => null,
+  linkHeaders = () => ({}), WebSocket: linkSocket = globalThis.WebSocket, egress = {}, chrome = {}, myCloud = () => null, ownClouds = () => [], screen = () => false, cloudPower = () => null,
   prompt = async () => null, startScreen = async () => null, confirmTerminal = async () => false, log = () => {}, t = nativeText.englishText.t }) {
   const protectedRoots = [path.dirname(file), ...protectedPaths.filter(entry => typeof entry === "string" && entry), ...personalSecretPaths(home)];
   const activity = createLendingActivity(activityFile ?? path.join(path.dirname(file), "lending-activity.jsonl"));
@@ -504,7 +504,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, cu
                   const connection = await cuaConnection();
                   jobSignal.throwIfAborted();
                   const mcp = sharedCuaConnection(connection);
-                  if (!mcp) { if (grant.cloud) try { askForScreen(connection); } catch {} throw new Error(cuaUnavailable(connection?.reason, process.platform, t)); }
+                  if (!mcp) throw new Error(cuaUnavailable(connection?.reason, process.platform, t));
                   live.cua = createSharedCua(mcp, { t });
                 }
                 return live.cua;
