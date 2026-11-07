@@ -99,15 +99,15 @@ describe("complete CI and trusted QA health", () => {
       const api = async (path: string) => path.startsWith("/issues?") ? [] : path.includes("/artifacts")
         ? { artifacts: [{ name: "qa-plan-attempt-1", workflow_run: { id: run.id } }] }
         : { jobs: [passedPreflight(name)] };
-      await expect(gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }), runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 })).resolves.toBeUndefined();
+      await expect(gateRun({ api, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }), runId: run.id, attempt: 1, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).resolves.toBeUndefined();
     }
     const api = async (path: string) => path.includes("/jobs")
       ? { jobs: [passedPreflight("preflight"), passedPreflight("typecheck + lint")] } : { artifacts: [] };
-    await expect(gateRun({ api, runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("Ambiguous workflow preflight");
+    await expect(gateRun({ api, runId: run.id, attempt: 1, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).rejects.toThrow("Ambiguous workflow preflight");
     for (const name of ["preflight", "preflight + Linux tests (Boat)"]) {
       const failedApi = async (path: string) => path.includes("/jobs")
         ? { jobs: [{ ...passedPreflight(name), conclusion: "failure" }] } : { artifacts: [] };
-      await expect(gateRun({ api: failedApi, runId: run.id, attempt: 1, sha: run.head_sha, deadlineMs: 0 })).rejects.toThrow("Preflight failure");
+      await expect(gateRun({ api: failedApi, runId: run.id, attempt: 1, sha: run.head_sha, event: "schedule", deadlineMs: 0 })).rejects.toThrow("Preflight failure");
     }
   });
 
