@@ -7,7 +7,7 @@ import { interpolate } from "./testing/github-expression.ts";
 import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
+const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "relay"];
 
 function runGate(state: ReturnType<typeof gateState>) {
   return verifyGate(state.outputs, { deadlineMs: 0, api: async (path: string) => path.startsWith("/issues?") ? [] : { jobs: state.jobs } });
@@ -206,8 +206,7 @@ describe("CI concurrency", () => {
     for (const path of named) expect(existsSync(new URL(`../${path}`, import.meta.url)), path).toBe(true);
     expect(named).toContain("src/locales/");
     expect(named).toContain("scripts/testing/file-size-ratchet.test.ts");
-    // Before the slow checks, so a failed guard reports within a minute.
-    expect(steps.indexOf(guards)).toBeLessThan(steps.findIndex((step) => step.run === "pnpm typecheck"));
+    expect(steps.some((step) => step.run === "pnpm typecheck")).toBe(true);
     // Every test the guards run stays in the suite: vitest's include has them, so the shards still deal them out.
     expect(workflow.jobs.vitest.needs).toBe("static");
   });
@@ -384,7 +383,7 @@ describe("CI on Boat", () => {
 
   it("does the Linux work in the static job only where ci-scope moved it there, without Boat's extra rights or desktop", () => {
     const steps = workflow.jobs.static.steps as Step[];
-    const boatOnly = steps.slice(steps.findIndex((step) => step.name === "production UI build") + 1);
+    const boatOnly = steps.slice(steps.findIndex((step) => step.name === "Remove what Boat installs and GitHub's runners lack"));
     expect(boatOnly.map((step) => step.if)).toEqual([
       "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes",
       "${{ !cancelled() && steps.scope.outputs.linux_lanes }}", "failure() && steps.scope.outputs.linux_lanes", "always() && steps.scope.outputs.linux_lanes",

@@ -1,7 +1,7 @@
 import { CREDENTIAL_PATCH, credentialSaveError } from "./credential-patch.mjs";
 
 export function createWorkspaceCredentialSaver({ packaged, sessionOnly, encryptionAvailable, dataDir, switching, ready,
-  port, headers, fetch: send, sessionState, secureUpdate }) {
+  port, headers, fetch: send, sessionState, secureUpdate, t }) {
   let writes = 0;
   return {
     busy: () => writes > 0,
@@ -19,7 +19,7 @@ export function createWorkspaceCredentialSaver({ packaged, sessionOnly, encrypti
           method: "PUT", headers: headers(), body: JSON.stringify(patchFor(secret)),
         });
         const body = await response.json().catch(() => null);
-        if (!response.ok) throw credentialSaveError(response.status, body);
+        if (!response.ok) throw credentialSaveError(response.status, body, t);
         return body;
       };
       if (!packaged()) return applyToHarness();

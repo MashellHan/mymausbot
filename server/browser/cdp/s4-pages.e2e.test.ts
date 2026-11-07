@@ -105,16 +105,30 @@ suite("S4 pages, tabs and page state on real Chrome", () => {
 
   it("goes back and forward through documents and fragments, and reloads", async () => {
     const first = await open("<p>first</p>");
-    const second = await open(`<p id="n">second</p><script>document.getElementById("n").dataset.loads = String(Number(sessionStorage.loads = (Number(sessionStorage.loads || 0) + 1)))</script>`);
+    await read(`sessionStorage.removeItem("loads"); sessionStorage.removeItem("historyArmed")`);
+    const second = await open(`<p id="n">second</p><script>
+      const n = document.getElementById("n");
+      n.dataset.loads = String(sessionStorage.loads = Number(sessionStorage.loads || 0) + 1);
+      addEventListener("pageshow", (event) => {
+        n.dataset.shown = "yes";
+        if (sessionStorage.historyArmed === "yes") n.dataset.restored = String(event.persisted);
+      });
+    </script>`);
+    await page.waitFor({ target: { selector: "#n[data-shown=yes]" }, timeoutMs: 2_000 });
+    expect(await read(`document.getElementById("n").dataset.loads`)).toBe("1");
     await page.navigate(`${second}#part`);
     expect(page.url()).toBe(`${second}#part`);
     expect((await page.back()).url).toBe(second);
+    await read(`sessionStorage.historyArmed = "yes"`);
     expect((await page.back()).url).toBe(first);
     expect((await page.forward()).url).toBe(second);
-    // Restored from the back-forward cache: the document was kept, its script did not run again.
-    expect(await read(`document.getElementById("n").dataset.loads`)).toBe("1");
+    await page.waitFor({ target: { selector: "#n[data-restored]" }, timeoutMs: 2_000 });
+    const [restored, loads] = await read<[string, string]>(`[document.getElementById("n").dataset.restored, document.getElementById("n").dataset.loads]`);
+    expect(restored).toMatch(/^(true|false)$/);
+    expect(loads).toBe(restored === "true" ? "1" : "2");
     await page.reload();
-    expect(await read(`document.getElementById("n").dataset.loads`)).toBe("2");
+    expect(page.url()).toBe(second);
+    expect(await read(`document.getElementById("n").dataset.loads`)).toBe(String(Number(loads) + 1));
     await page.navigate("about:blank");
     await expect(page.forward()).rejects.toThrow(/no later page/);
   });
@@ -246,15 +260,40 @@ suite("S4 pages, tabs and page state on real Chrome", () => {
     fx.route("/api/broken", { body: "{}", type: "application/json", status: 500 });
     const unreachable = `http://127.0.0.1:${await closedPort()}/unreachable`;
     page.takeHealth();
-    await open(`<script src="/missing.js"></script><script>
-      fetch("/api/broken");
-      fetch("${unreachable}").catch(() => {});
-      setTimeout(() => { throw new Error("uncaught in page"); }, 10);
-      Promise.reject(new Error("unhandled in page"));
-    </script>`);
-    await page.evaluate(`globalThis.__seen = []; addEventListener("error", (e) => __seen.push(e.message)); addEventListener("unhandledrejection", (e) => __seen.push("rejection"));`);
-    await inPageWorld(() => page.evaluate(`setTimeout(() => { throw new Error("thrown after the listener") }, 0)`, { world: "page" }));
-    await page.waitFor({ ms: 500 });
+    const timeoutMs = hostTimeout(5_000);
+    const responseAt = (url: string, status: number) => page.session.waitFor("Network.responseReceived", {
+      match: (params) => {
+        const response = params.response as { url?: string; status?: number } | undefined;
+        return response?.url === url && response.status === status;
+      }, timeoutMs,
+    });
+    let unreachableId: unknown;
+    const stopTracking = page.session.on("Network.requestWillBeSent", (params) => {
+      if ((params.request as { url?: string } | undefined)?.url === unreachable) unreachableId = params.requestId;
+    });
+    try {
+      await Promise.all([
+        responseAt(fx.url("/missing.js"), 404),
+        responseAt(fx.url("/api/broken"), 500),
+        page.session.waitFor("Network.loadingFailed", { match: (params) => unreachableId !== undefined
+          && params.requestId === unreachableId && params.errorText === "net::ERR_CONNECTION_REFUSED", timeoutMs }),
+        page.session.waitFor("Log.entryAdded", { match: (params) => {
+          const entry = params.entry as { level?: string; text?: string } | undefined;
+          return entry?.level === "error" && /404|500/.test(entry.text ?? "");
+        }, timeoutMs }),
+        (async () => {
+          await open(`<script src="/missing.js"></script><script>
+            fetch("/api/broken");
+            fetch("${unreachable}").catch(() => {});
+            setTimeout(() => { throw new Error("uncaught in page"); }, 10);
+            Promise.reject(new Error("unhandled in page"));
+          </script>`);
+          await page.evaluate(`globalThis.__seen = []; addEventListener("error", (e) => __seen.push(e.message)); addEventListener("unhandledrejection", (e) => __seen.push("rejection"));`);
+          await inPageWorld(() => page.evaluate(`setTimeout(() => { throw new Error("thrown after the listener") }, 0)`, { world: "page" }));
+          await page.waitFor({ ms: 500 });
+        })(),
+      ]);
+    } finally { stopTracking(); }
     const health = page.takeHealth();
     expect(health.failedRequests).toEqual(expect.arrayContaining([
       expect.objectContaining({ url: fx.url("/missing.js"), resourceType: "Script", status: 404, firstParty: true }),

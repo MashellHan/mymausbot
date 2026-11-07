@@ -49,3 +49,16 @@ All 987 installed package identities matched the lock; the other 201 entries
 were explicitly skipped by pnpm for platform/optional dependency selection.
 Keep the same task environment for checks and push hooks. This recovery does
 not change the global registry or the daily synchronization configuration.
+
+## v0.1.143 relay dependency recovery
+
+The relay has its own `relay/pnpm-lock.yaml` (SHA256
+`2e21f75b2ad92f23681ea10817cb26df579c0d1a51750636050e8f8adca9a61e`).
+An offline frozen install found that `@types/node@24.19.2` and
+`undici-types@7.24.6` were missing from the pnpm store. The official npm
+registry timed out during TLS setup. Original tarballs from the public Huawei
+npm mirror matched both lockfile SHA512 values and the package names and
+versions inside their archives. A command-scoped mirror registry and private
+metadata cache completed the normal frozen install without changing the lock;
+all five installed package identities matched it. This recovery is specific to
+the relay package and does not change the registry or the daily schedule.
