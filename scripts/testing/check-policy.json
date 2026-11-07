@@ -73,6 +73,19 @@
         "scripts/testing/local-dashboard-ui.e2e.test.ts"
       ],
       "admitted": false
+    },
+    {
+      "id": "room-coordination",
+      "sources": [
+        "server/testing/room-coordination-fixture.ts",
+        "server/room-coordination.e2e.test.ts",
+        "server/room-coordination-followon.e2e.test.ts"
+      ],
+      "tests": [
+        "server/room-coordination.e2e.test.ts",
+        "server/room-coordination-followon.e2e.test.ts"
+      ],
+      "admitted": false
     }
   ]
 }
