@@ -12,6 +12,7 @@ import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?
 import { revealSelectedTab, scrollTabsWithWheel } from "../computer-panel-tabs";
 import { InfoHint } from "../InfoHint";
 import { MiniAppDashboard } from "./MiniAppDashboard";
+import { ensureMiniAppDefaults } from "./MiniAppDefaultsBootstrap";
 import { MiniAppFrame } from "./MiniAppFrame";
 import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
 import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
@@ -128,21 +129,19 @@ export function MiniAppsPanel() {
     if (!visible || !nativeGuard || owner !== true || defaultsStarted.current) return;
     defaultsStarted.current = true;
     let settled = false;
-    const controller = new AbortController();
+    let active = true;
     setLoading(true);
-    void api<MiniAppDefaultsResult>("/api/mini-apps/defaults", {
-      method: "POST", body: JSON.stringify({ bookkeepingHtml }), signal: controller.signal, timeoutMs: 30_000,
-    }).then((result) => {
-      if (controller.signal.aborted) return;
+    void ensureMiniAppDefaults().then((result) => {
+      if (!active) return;
       setDefaultIssues(result.issues);
       setDefaultsError("");
       setDefaultsReady(true);
     }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return;
+      if (!active) return;
       setDefaultsError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
       setDefaultsReady(true);
-    }).finally(() => { settled = true; if (!controller.signal.aborted) setLoading(false); });
-    return () => { controller.abort(); if (!settled) defaultsStarted.current = false; };
+    }).finally(() => { settled = true; if (active) setLoading(false); });
+    return () => { active = false; if (!settled) defaultsStarted.current = false; };
   }, [visible, nativeGuard, owner]);
 
   useEffect(() => {
