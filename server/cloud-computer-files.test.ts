@@ -5,6 +5,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, r
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { clearTimeout as cancelTimeout, setTimeout as scheduleTimeout } from "node:timers";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "./config.ts";
 
@@ -378,10 +379,10 @@ describe("through the Cloud's included Boat", () => {
 });
 
 describe("as cloud computer tools", () => {
-  const rpc = (name: string, args: unknown, options: { folderOf?: () => string | null | undefined; budgetMs?: number } = {}) => {
+  const rpc = (name: string, args: unknown, options: { folderOf?: () => string | null | undefined; budgetMs?: number; signal?: AbortSignal } = {}) => {
     let gated = 0;
     const done = tools.cloudComputerRpc({ method: "tools/call", params: { name, arguments: args } }, {
-      cfg: own, boxId: () => BOX, folder: options.folderOf ?? (() => folder), signal: signal(), budgetMs: options.budgetMs,
+      cfg: own, boxId: () => BOX, folder: options.folderOf ?? (() => folder), signal: options.signal ?? signal(), budgetMs: options.budgetMs,
       gate: async () => { gated++; return { held: false }; }, assertActive: () => {},
     }) as Promise<{ isError?: boolean; content: Array<{ text: string }> }>;
     return { done, gated: () => gated };
@@ -395,14 +396,29 @@ describe("as cloud computer tools", () => {
     const uploadCommitted = new Promise<void>((resolve) => { committed = resolve; });
     afterUploadCommitted = () => { committed(); return held; };
     const late = new AbortController();
+    const active = new AbortController();
     const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(late.signal);
+    let commitTimer: ReturnType<typeof scheduleTimeout> | undefined;
+    let done: ReturnType<typeof rpc>["done"] | undefined;
     try {
-      const call = rpc("copy_to_computer", { from: "upload.txt", path: "/tmp/upload.txt" }, { budgetMs: 300 });
-      await uploadCommitted;
+      const call = rpc("copy_to_computer", { from: "upload.txt", path: "/tmp/upload.txt" }, { budgetMs: 300, signal: active.signal });
+      done = call.done;
+      const first = await Promise.race([
+        uploadCommitted.then(() => "committed" as const),
+        done.then(() => "settled" as const, () => "rejected" as const),
+        new Promise<"timed out">(resolve => { commitTimer = scheduleTimeout(() => resolve("timed out"), 3_000); }),
+      ]);
+      expect(first).toBe("committed");
       expect(uploads.get("/tmp/upload.txt")?.head.toString()).toBe("current edition");
       late.abort();
-      expect(await call.done).toEqual({ isError: true, content: [{ type: "text", text: tools.CLOUD_COMPUTER_UPLOAD_LATE }] });
-    } finally { timeout.mockRestore(); release(); }
+      expect(await done).toEqual({ isError: true, content: [{ type: "text", text: tools.CLOUD_COMPUTER_UPLOAD_LATE }] });
+    } finally {
+      if (commitTimer) cancelTimeout(commitTimer);
+      timeout.mockRestore();
+      release();
+      active.abort();
+      await done?.catch(() => {});
+    }
   });
 
   it("lists both copies, and runs them after the control gate", async () => {
