@@ -4,6 +4,7 @@ import { cn } from "@/lib/cn";
 import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
 import { metricText, countText, UsageCount, UsageChange, usageMetricHint, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable } from "./LocalUsageTables";
+import { InfoHint } from "./InfoHint";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
@@ -36,10 +37,17 @@ function WindowCard({ window }: { window: UsageWindow }) {
   ] as const;
   return (
     <section className="min-w-0 rounded-xl border border-hairline/60 bg-card p-3">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <h3 className="text-[16px] font-semibold text-ink">{window.days === 1 ? t("computer.usage.windowOne") : t("computer.usage.window", { days: window.days })}</h3>
-        <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay} – {window.endDay}</span>
-        <span className={cn("ml-auto text-[12px]", window.coverage === "ready" ? "text-ink-secondary" : "text-warning")}>{coverageText(window.coverage)}</span>
+      <div className="flex items-start gap-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <h3 className="text-[16px] font-semibold text-ink">{window.days === 1 ? t("computer.usage.windowOne") : t("computer.usage.window", { days: window.days })}</h3>
+          <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay} – {window.endDay}</span>
+        </div>
+        {window.coverage !== "ready" && <InfoHint label={coverageText(window.coverage)} warning>
+          <p>{coverageText(window.coverage)}</p>
+          <p>{t(window.coverage === "unavailable" ? "computer.usage.noData" : "computer.usage.partial")}</p>
+          {window.missingDays.length > 0 && <p>{t("computer.usage.missingDays", { count: window.missingDays.length })}</p>}
+          {window.unavailableTokenDays.length > 0 && <p>{t("computer.usage.unavailableTokenDays", { count: window.unavailableTokenDays.length })}</p>}
+        </InfoHint>}
       </div>
       <dl className="mt-2 grid grid-cols-3 gap-2">
         {rows.map(([metric, value, comparison]) => (
@@ -62,8 +70,6 @@ function WindowCard({ window }: { window: UsageWindow }) {
             <UsageChange value={window.comparison.categories[key].commits} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="commits" className="block text-[13px] text-ink-secondary" /></span>
         </div>)}
       </div>
-      {window.missingDays.length > 0 && <p className="mt-2 text-[13px] text-warning">{t("computer.usage.missingDays", { count: window.missingDays.length })}</p>}
-      {window.unavailableTokenDays.length > 0 && <p className="mt-1 text-[13px] text-warning">{t("computer.usage.unavailableTokenDays", { count: window.unavailableTokenDays.length })}</p>}
     </section>
   );
 }
@@ -170,6 +176,8 @@ function TrendChart({ days, metric }: { days: UsageTrendDay[]; metric: Metric })
               : <UsageCount value={active.categories[category].commits} known={active.categories[category].knownCommits} />}
           </span>)}
         </div>}
+        {metric !== "totalTokens" && active[metric] === null && trendValue(active, metric) !== null
+          && <p className="mt-1 text-ink-secondary">{t("computer.usage.syncedCountHint")}</p>}
       </div>}
     </div>
   );
@@ -182,16 +190,19 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
     || (day.categories.unclassified.commits ?? day.categories.unclassified.knownCommits ?? 0) > 0) ?? false;
   return (
     <div className="@container/usage min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="local-usage-panel">
-      <header className="mb-3 pt-2">
+      <header className="mb-3 flex items-center gap-1 pt-2">
         <h2 className="text-[18px] font-semibold text-ink">{t("computer.usage.heading")}</h2>
-        {view?.asOf != null ? <p className="mt-1 text-[13px] text-ink-secondary" title={t("computer.usage.captureTimes", {
-          merged: snapshot?.merged?.asOf != null ? asOfTime(snapshot.merged.asOf) : t("computer.usage.unavailable"),
-          tokens: snapshot?.asOf != null ? asOfTime(snapshot.asOf) : t("computer.usage.unavailable"),
-        })}><time dateTime={new Date(view.asOf).toISOString()}>{t("computer.usage.asOf", { time: asOfTime(view.asOf) })}</time></p> : null}
+        {view && view.status !== "unavailable" && <InfoHint label={t("app.info")} warning={view.status !== "ready"}>
+          {view.status === "partial" && <p>{t("computer.usage.partial")}</p>}
+          {view.status === "stale" && <p>{t("computer.usage.stale")}</p>}
+          {view.asOf != null && <p><time dateTime={new Date(view.asOf).toISOString()}>{t("computer.usage.asOf", { time: asOfTime(view.asOf) })}</time></p>}
+          <p>{t("computer.usage.captureTimes", {
+            merged: snapshot?.merged?.asOf != null ? asOfTime(snapshot.merged.asOf) : t("computer.usage.unavailable"),
+            tokens: snapshot?.asOf != null ? asOfTime(snapshot.asOf) : t("computer.usage.unavailable"),
+          })}</p>
+        </InfoHint>}
       </header>
       {snapshot === null ? <p role="status" className="text-[14px] text-ink-secondary">{t("computer.usage.loading")}</p> : null}
-      {view?.status === "stale" ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[14px] text-warning">{t("computer.usage.stale")}</p> : null}
-      {view?.status === "partial" ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[14px] text-warning">{t("computer.usage.partial")}</p> : null}
       {view?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
       {windows && <>
         <div className="grid grid-cols-1 gap-2 @min-[42rem]/usage:grid-cols-3">

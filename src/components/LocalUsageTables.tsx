@@ -4,6 +4,7 @@ import type { UsageTrendDay, UsageWindow } from "@/lib/local-usage-view";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { metricText, UsageCount, UsageChange, usageMetrics, usageMetricHint } from "./LocalUsageValues";
+import { InfoHint } from "./InfoHint";
 
 const tableRegion = "overflow-x-auto rounded-lg border border-hairline/60 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60";
 const previousWeekDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) - 7 * 86_400_000).toISOString().slice(0, 10);
@@ -53,6 +54,7 @@ export function UsageRepositoryTable({ windows }: { windows: Record<Period, Usag
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <h3 id={`${id}-heading`} className="text-[16px] font-semibold text-ink">{t("computer.usage.repositories")}</h3>
         <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay} – {window.endDay}</span>
+        {repositories.coverage === "partial" && <InfoHint label={t("computer.usage.coverage.partial")} warning>{t("computer.usage.repositoriesPartial")}</InfoHint>}
       </div>
       <div role="tablist" aria-label={t("computer.usage.repositoryPeriod")} className="flex rounded-lg bg-inset p-1">
         {periods.map((key, index) => <button key={key} type="button" role="tab" id={`${id}-tab-${key}`} aria-controls={`${id}-panel`}
@@ -71,7 +73,6 @@ export function UsageRepositoryTable({ windows }: { windows: Record<Period, Usag
     </div>
     <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-tab-${period}`} tabIndex={0} className="mt-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
       {repositories.coverage === "unavailable" ? <p className="text-[14px] text-ink-secondary">{t("computer.usage.repositoriesUnavailable")}</p> : <>
-        {repositories.coverage === "partial" && <p className="mb-3 text-[13px] leading-5 text-warning">{t("computer.usage.repositoriesPartial")}</p>}
         <div className={tableRegion} role="region" aria-label={t("computer.usage.repositories")} tabIndex={0}>
           <table className="w-full min-w-[560px] table-fixed text-[13px] tabular-nums" data-usage-repositories>
             <colgroup><col className="w-[43%]" /><col className="w-[17%]" /><col className="w-[22%]" /><col className="w-[18%]" /></colgroup>
