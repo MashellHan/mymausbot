@@ -166,6 +166,41 @@ describe("durable browser lifecycle cleanup", () => {
     expect(afterRestart.pending()).toEqual([]);
   });
 
+  it("keeps a failed cleanup durable across backoff until a later retry succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const file = journal();
+      let fault = true;
+      let sends = 0;
+      let coordinator!: BrowserCleanupCoordinator;
+      coordinator = new BrowserCleanupCoordinator({
+        file, timeoutMs: 100, retryMs: [1_000, 5_000, 30_000],
+        send(message) {
+          sends += 1;
+          queueMicrotask(() => coordinator.receive({
+            type: "openmausbot:browser-lifecycle-result", requestId: message.requestId, ok: !fault,
+          }));
+          return true;
+        },
+      });
+      const request = coordinator.commit(coordinator.prepare("profile", "repair"));
+      expect(await coordinator.ensure(request)).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(sends).toBe(3);
+      fault = false;
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(coordinator.pending()).toEqual([request]);
+      expect(JSON.parse(readFileSync(file, "utf8"))).toEqual([request]);
+      await vi.advanceTimersByTimeAsync(22_000);
+      expect(sends).toBe(4);
+      expect(coordinator.pending()).toEqual([]);
+      expect(JSON.parse(readFileSync(file, "utf8"))).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats malformed journal JSON as unknown state and blocks profile reuse", () => {
     const file = journal();
     writeFileSync(file, "{ definitely not json");
