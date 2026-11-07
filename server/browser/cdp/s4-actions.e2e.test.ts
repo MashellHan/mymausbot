@@ -320,14 +320,12 @@ suite("S4 snapshot, refs and actions on real Chrome", () => {
   it("scrolls the page and an inner element with the mouse wheel", async () => {
     await open(`<div id="inner" style="height:100px;width:300px;overflow:auto"><div style="height:1000px">inner</div></div><div style="height:3000px">tall</div>`);
     await page.scroll({ selector: "#inner" }, 0, 300);
-    await page.waitFor({ ms: 100 });
-    expect(await read(`document.getElementById("inner").scrollTop`)).toBeGreaterThan(0);
+    await expect.poll(() => read<number>(`document.getElementById("inner").scrollTop`), { timeout: 500 }).toBeGreaterThan(0);
     expect(await read(`scrollY`)).toBe(0);
     // Chrome keeps sending a quick second wheel to the element the first one scrolled, as it does for a person.
     await page.waitFor({ ms: 1_000 });
     await page.scroll(null, 0, 500);
-    await page.waitFor({ ms: 100 });
-    expect(await read(`scrollY`)).toBeGreaterThan(0);
+    await expect.poll(() => read<number>(`scrollY`), { timeout: 500 }).toBeGreaterThan(0);
   });
 
   it("uploads to a file input by ref and answers a picker the page opened", async () => {
