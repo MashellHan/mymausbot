@@ -10,6 +10,13 @@ historical. Never push to `upstream` or `legacy-fork`.
   purpose. Keep useful checkpoints; do not split changes just to inflate counts.
 - Use one focused feature branch and PR per reviewable outcome. Open drafts
   early for visibility, then mark ready with evidence when the slice works.
+- Lead owns progress on every open PR, including drafts. Move review, fixes, CI
+  resolution or merge forward before 12 hours pass without substantive progress;
+  status-only comments, empty commits and draft toggles do not reset that clock.
+- Merge or close each PR within 24 hours of creation. Required review and CI
+  still gate merges. If a PR cannot merge, close it without deleting its branch
+  or commits and record the blocker, owner, concrete next action and condition
+  to resume. Do not close and reopen a PR to reset either clock.
 - Preserve meaningful commits when integrating. No routine squash, force-push,
   history rewriting or unreviewed direct changes to the default branch.
 - Run required hooks and checks. Test the changed contract meaningfully, then

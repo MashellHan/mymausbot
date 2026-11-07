@@ -112,6 +112,16 @@ findings and required checks pass. Creating and pushing reviewable PRs is
 authorized here.
 Never equate a green badge or an idle agent with completed work.
 
+Lead owns disposition of every open PR, including drafts. Review the open queue
+at existing handoffs and queue touchpoints; act before 12 hours pass since its
+creation or last substantive progress. A review, fix, CI diagnosis or resolution,
+or merge counts as progress. Status-only comments, labels, empty commits and
+draft toggles do not. Merge or close each PR within 24 hours of its creation.
+Keep required review and current-head CI gates for merges; if they cannot finish
+in time, close the PR with its branch and commits intact and record the blocker,
+owner, concrete next action and condition to resume. Do not close and reopen to
+reset a clock or add a scheduler for this policy.
+
 Freeze a coherent candidate after focused contract checks. Send its immutable
 commit, available evidence and explicitly pending UI/package checks immediately;
 source review and CI can start while those checks finish. Do not wait for all
