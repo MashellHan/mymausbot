@@ -64,12 +64,12 @@ const HTML = String.raw`<!DOCTYPE html>
       const kind = "__REPORT_KIND__";
       const $ = (id) => document.getElementById(id);
       const sdk = window.mausApp;
-      const state = { selected: "current", current: null, edition: null, history: [], items: [], nextCursor: null, revision: null, loaded: false, busy: false, pending: false, run: 0 };
+      const state = { selected: "current", committedSelection: "current", current: null, edition: null, history: [], items: [], nextCursor: null, revision: null, loaded: false, busy: false, pending: false, run: 0 };
       const labels = {
         en: {
           xTitle: "Daily X AI digest", xPurpose: "Selected X AI updates with source and coverage notes.", githubTitle: "Github Rending", githubPurpose: "Selected open-source projects and observed activity signals.",
           refresh: "Refresh", current: "Current", earlier: "Earlier editions", returnCurrent: "Return to current", more: "More editions", loading: "Loading report…", checking: "Checking for new editions…",
-          noEdition: "No report published yet. The first edition will appear after this Automation publishes one.", noItems: "No noteworthy items in this verified edition.", noVerifiedItems: "No verified items in this partial edition.", noVerifiedUnknown: "No verified items are available for this edition.",
+          noEdition: "No report published yet. The first edition will appear after this Automation publishes one.", selectedUnavailable: "This edition is unavailable. Return to current or choose another edition.", noItems: "No noteworthy items in this verified edition.", noVerifiedItems: "No verified items in this partial edition.", noVerifiedUnknown: "No verified items are available for this edition.",
           unavailable: "Report unavailable. Try Refresh.", stale: "Showing the last loaded edition. Data could not be refreshed; try Refresh.", changed: "Data changed while this report was being read. Try Refresh.",
           issue: "Issue", issueDate: "Issue date · China time", coverage: "Coverage", coverageUnavailable: "Coverage window unavailable", sourcesAsOf: "Sources as of · report level", published: "Report published at", dateUnavailable: "Date unavailable",
           complete: "Coverage complete", partial: "Coverage incomplete", unknown: "Coverage unknown", selected: "Selected updates", projects: "Selected projects", source: "Source", sourcePublished: "Source published", sourceDateUnavailable: "Source date unavailable",
@@ -79,7 +79,7 @@ const HTML = String.raw`<!DOCTYPE html>
         zh: {
           xTitle: "每日 X AI 摘要", xPurpose: "精选 X AI 动态，并标明来源与覆盖限制。", githubTitle: "Github Rending", githubPurpose: "精选开源项目及已记录的活跃信号。",
           refresh: "刷新", current: "当前版本", earlier: "过往版本", returnCurrent: "返回当前版本", more: "更多版本", loading: "正在读取报告…", checking: "正在检查新版本…",
-          noEdition: "尚无已发布的报告。该自动化首次发布后，版本才会出现在这里。", noItems: "此已核实版本没有值得报告的条目。", noVerifiedItems: "此部分覆盖版本没有已核实的条目。", noVerifiedUnknown: "此版本暂无可确认的条目。",
+          noEdition: "尚无已发布的报告。该自动化首次发布后，版本才会出现在这里。", selectedUnavailable: "此版本暂不可用。请返回当前版本或选择其他版本。", noItems: "此已核实版本没有值得报告的条目。", noVerifiedItems: "此部分覆盖版本没有已核实的条目。", noVerifiedUnknown: "此版本暂无可确认的条目。",
           unavailable: "报告暂不可用，请重试刷新。", stale: "正在显示上次读取的版本；数据刷新失败，请重试。", changed: "读取时 Data 已变化，请重试刷新。",
           issue: "期次", issueDate: "期次日期 · 中国时间", coverage: "覆盖范围", coverageUnavailable: "覆盖时间范围未知", sourcesAsOf: "来源截至 · 报告级", published: "报告发布时间", dateUnavailable: "日期未知",
           complete: "覆盖完整", partial: "覆盖不完整", unknown: "覆盖情况未知", selected: "精选动态", projects: "精选项目", source: "来源", sourcePublished: "来源发布时间", sourceDateUnavailable: "来源日期未知",
@@ -172,8 +172,9 @@ const HTML = String.raw`<!DOCTYPE html>
         menu.value = state.selected;
         const area = $("report");
         const scroll = document.scrollingElement?.scrollTop ?? 0;
-        if (!selected) {
-          area.replaceChildren(node("p", "empty", state.loaded ? word("noEdition") : word("loading")));
+        if (state.selected !== state.committedSelection || !selected) {
+          const message = state.selected !== state.committedSelection || !state.loaded ? "loading" : state.selected === "current" ? "noEdition" : "selectedUnavailable";
+          area.replaceChildren(node("p", "empty", word(message)));
           return;
         }
         const issue = node("section", "issue");
@@ -209,7 +210,7 @@ const HTML = String.raw`<!DOCTYPE html>
         state.busy = true;
         const run = ++state.run;
         $("refresh").disabled = true;
-        if (state.loaded) { $("notice").hidden = false; $("notice").textContent = word("checking"); $("notice").dataset.kind = ""; }
+        if (state.loaded) { $("notice").hidden = state.selected !== state.committedSelection; $("notice").textContent = word("checking"); $("notice").dataset.kind = ""; }
         try {
           let result;
           for (let attempt = 0; attempt < 2; attempt++) {
@@ -217,11 +218,12 @@ const HTML = String.raw`<!DOCTYPE html>
             catch (error) { if (attempt || !String(error).includes("Data changed")) throw error; }
           }
           if (run !== state.run || !result) return;
-          Object.assign(state, result, { loaded: true });
+          Object.assign(state, result, { loaded: true, committedSelection: state.selected });
           render();
           $("notice").hidden = true;
         } catch {
           if (run === state.run) {
+            if (state.selected !== state.committedSelection) { state.selected = state.committedSelection; render(); }
             $("notice").hidden = false;
             $("notice").dataset.kind = "error";
             $("notice").textContent = word(state.loaded ? "stale" : "unavailable");
@@ -233,8 +235,8 @@ const HTML = String.raw`<!DOCTYPE html>
           if (state.pending) { state.pending = false; void refresh(); }
         }
       }
-      $("edition").addEventListener("change", (event) => { state.selected = event.target.value; if (document.scrollingElement) document.scrollingElement.scrollTop = 0; void refresh(); });
-      $("return-current").addEventListener("click", () => { state.selected = "current"; if (document.scrollingElement) document.scrollingElement.scrollTop = 0; void refresh(); });
+      $("edition").addEventListener("change", (event) => { state.selected = event.target.value; if (document.scrollingElement) document.scrollingElement.scrollTop = 0; render(); void refresh(); });
+      $("return-current").addEventListener("click", () => { state.selected = "current"; if (document.scrollingElement) document.scrollingElement.scrollTop = 0; render(); void refresh(); });
       $("refresh").addEventListener("click", () => { void refresh(); });
       $("more").addEventListener("click", async () => {
         if (!state.nextCursor || state.busy || state.revision === null) return;
