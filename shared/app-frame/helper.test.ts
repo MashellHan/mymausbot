@@ -206,6 +206,7 @@ describe("the height a bot page reports", () => {
     expect(await settled(page)).toEqual([520]);
     content = 610;
     page.reflow();
+    await expect.poll(() => page.seen.heights).toEqual([520, 610]);
     expect(await settled(page)).toEqual([520, 610]);
   });
 
