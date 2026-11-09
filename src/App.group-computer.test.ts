@@ -37,6 +37,7 @@ const bot: Bot = {
 };
 const group: Group = {
   id: "room", threadId: "room-thread", name: "Launch room", memberIds: [bot.id], description: "",
+  defaultResponder: { kind: "member", botId: bot.id },
   bulletin: "", unread: false, createdAt: 1, setupCompletedAt: 1,
   messages: [{ id: "group-message", role: "user", kind: "text", text: "Keep the group conversation visible", at: 1 }],
 };
