@@ -119,6 +119,9 @@ The [local Usage and Agent Team fixtures](local-dashboard.md) check dashboard
 data, owner access, responsive tables and live session updates using synthetic
 snapshots, without reading or mutating the person's live app data.
 
+The [bounded GitHub contribution repair recipe](local-usage-github-repair.md)
+covers the seven-day dry-run, apply and recovery gates.
+
 The [switchable local environments recipe](local-environments.md) verifies
 creating, switching between and recovering named local environments by hand on
 a packaged desktop install; the control surface cannot drive it, so it is not
