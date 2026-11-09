@@ -26,6 +26,8 @@ export function electronInstallEnvironment(recovery, inherited = process.env) {
   const env = { ...inherited };
   const controlled = new Set([
     "electron_use_remote_checksums", "npm_config_electron_use_remote_checksums",
+    "electron_custom_version", "npm_config_electron_customversion", "npm_config_electron_custom_version",
+    "npm_package_config_electron_customversion", "npm_package_config_electron_custom_version",
     "electron_install_platform", "electron_install_arch", "npm_config_platform", "npm_config_arch",
     "electron_mirror", "electron_custom_dir", "npm_config_electron_mirror", "npm_config_electron_customdir",
   ]);
