@@ -1,6 +1,6 @@
 import { UserRound } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { LocalAgentMember, LocalAgentTeamsResponse } from "../../shared/local-dashboard";
+import type { LocalAgentMember, LocalAgentTeamsResponse, LocalAgentTokenUsageWindow } from "../../shared/local-dashboard";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
@@ -27,6 +27,23 @@ const stateDot = {
   done: "bg-accent",
   unknown: "bg-ink-secondary/30",
 } as const;
+
+function tokenLabel(period: "24h" | "7d", usage: LocalAgentTokenUsageWindow | undefined, stale: boolean) {
+  const known = typeof usage?.knownTokens === "number" && Number.isSafeInteger(usage.knownTokens) && usage.knownTokens >= 0
+    ? usage.knownTokens : null;
+  const count = known === null ? null : new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(known);
+  const full = known === null ? null : known.toLocaleString(activeLocale());
+  const label = period === "24h"
+    ? known === null ? t(usage?.coverage === "partial" ? "computer.agentTeam.tokens24hPartialUnknown" : "computer.agentTeam.tokens24hUnavailable")
+      : usage?.coverage === "ready" ? t("computer.agentTeam.tokens24h", { count: count! }) : t("computer.agentTeam.tokens24hPartial", { count: count! })
+    : known === null ? t(usage?.coverage === "partial" ? "computer.agentTeam.tokens7dPartialUnknown" : "computer.agentTeam.tokens7dUnavailable")
+      : usage?.coverage === "ready" ? t("computer.agentTeam.tokens7d", { count: count! }) : t("computer.agentTeam.tokens7dPartial", { count: count! });
+  const exact = full === null ? label : period === "24h"
+    ? t(usage?.coverage === "ready" ? "computer.agentTeam.tokens24h" : "computer.agentTeam.tokens24hPartial", { count: full })
+    : t(usage?.coverage === "ready" ? "computer.agentTeam.tokens7d" : "computer.agentTeam.tokens7dPartial", { count: full });
+  return { shown: stale ? t("computer.agentTeam.lastObserved", { state: label }) : label,
+    accessible: t("computer.agentTeam.tokens24hScope", { value: stale ? t("computer.agentTeam.lastObserved", { state: exact }) : exact }) };
+}
 
 function memberRow(member: LocalAgentMember, stale: boolean, active: boolean, readActivity?: AgentActivityReader) {
   const number = (value: number | null) => value === null ? "—" : value.toLocaleString(activeLocale());
@@ -78,6 +95,8 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
     ? null : new Date(snapshot.updatedAt).toLocaleString(activeLocale());
   const stale = snapshot?.status === "stale";
+  const teamTokens = { "24h": tokenLabel("24h", selectedTeam?.tokenUsage24h, stale),
+    "7d": tokenLabel("7d", selectedTeam?.tokenUsage7d, stale) };
 
   useEffect(() => {
     if (initialized.current || !active || !snapshot?.teams.length || snapshot.status === "unavailable") return;
@@ -123,9 +142,12 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
         onSelect={(id) => setSelectedTeamId((current) => current === id ? null : id)} />}
       {selectedTeam && <section key={selectedTeam.id} ref={membersRef} id={`${baseId}-members`} aria-labelledby={`${baseId}-team-name`} data-testid="selected-agent-team" className="min-w-0 rounded-xl border border-hairline/60 bg-card">
         <header className="flex min-w-0 items-start justify-between gap-3 border-b border-hairline/40 px-3 py-3">
-          <div className="min-w-0">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
             <h3 id={`${baseId}-team-name`} dir="auto" className="text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{selectedTeam.name}</h3>
-            <span className="mt-0.5 inline-flex items-center gap-1.5 text-[12px] text-ink-secondary"><span className={cn("size-1.5 rounded-full", stale ? "bg-ink-secondary/30" : stateDot[teamActivity(selectedTeam)])} aria-hidden="true" />{stale ? t("computer.agentTeam.lastObserved", { state: t(stateLabel[teamActivity(selectedTeam)]) }) : t(stateLabel[teamActivity(selectedTeam)])}</span>
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-secondary"><span className={cn("size-1.5 rounded-full", stale ? "bg-ink-secondary/30" : stateDot[teamActivity(selectedTeam)])} aria-hidden="true" />{stale ? t("computer.agentTeam.lastObserved", { state: t(stateLabel[teamActivity(selectedTeam)]) }) : t(stateLabel[teamActivity(selectedTeam)])}</span>
+            {(["24h", "7d"] as const).map((period) => <span key={period} data-testid={`team-token-${period}`}
+              aria-label={teamTokens[period].accessible} title={teamTokens[period].accessible}
+              className="text-[11px] tabular-nums text-ink-secondary">{teamTokens[period].shown}</span>)}
           </div>
           <div className="shrink-0 text-right text-[12px] tabular-nums text-ink-secondary">
             <span className="block">{selectedTeam.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: selectedTeam.agentCount })}</span>

@@ -80,6 +80,45 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
         team.agentCount = team.agents.length;
         team.activeAgentCount = team.agents.filter((member) => member.state === "working").length;
       }
+      const sessionTeams = new Map<string, Set<string>>();
+      for (const agent of agents) {
+        const session = codexSessionId(agent);
+        if (!session) continue;
+        const owners = sessionTeams.get(session) ?? new Set<string>();
+        owners.add(String(agent.workspace_id));
+        sessionTeams.set(session, owners);
+      }
+      for (const team of teams.values()) {
+        const totals = { tokenUsage24h: { known: 0, covered: 0, missing: false, partial: false },
+          tokenUsage7d: { known: 0, covered: 0, missing: false, partial: false } };
+        const counted = new Set<string>();
+        for (const agent of agents.filter((row) => row.workspace_id === team.id)) {
+          const session = codexSessionId(agent);
+          if (!session || sessionTeams.get(session)?.size !== 1) {
+            totals.tokenUsage24h.missing = true;
+            totals.tokenUsage7d.missing = true;
+            continue;
+          }
+          if (counted.has(session)) continue;
+          counted.add(session);
+          for (const key of ["tokenUsage24h", "tokenUsage7d"] as const) {
+            const usage = observations.get(session)?.[key];
+            const total = totals[key];
+            if (!usage || usage.coverage !== "ready") total.missing = true;
+            if (usage?.coverage === "partial") total.partial = true;
+            if (usage?.knownTokens === null || usage?.knownTokens === undefined) continue;
+            if (!Number.isSafeInteger(total.known + usage.knownTokens)) { total.missing = true; continue; }
+            total.known += usage.knownTokens;
+            total.covered++;
+          }
+        }
+        for (const key of ["tokenUsage24h", "tokenUsage7d"] as const) {
+          const { known, covered, missing, partial } = totals[key];
+          team[key] = !team.agentCount || (!covered && !partial) ? { coverage: "unavailable", knownTokens: null }
+            : missing ? { coverage: "partial", knownTokens: known > 0 ? known : null }
+              : { coverage: "ready", knownTokens: known };
+        }
+      }
       lastGood = { status: "ready", updatedAt: now(), teamCount: teams.size, teams: [...teams.values()] };
       return lastGood;
     } catch {
