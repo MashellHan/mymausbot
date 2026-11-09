@@ -577,6 +577,10 @@ it("selects sixty-day repository detail with the trend and preserves source iden
   const source = host.querySelector<HTMLSelectElement>('select[aria-label="Activity source"]')!;
   await act(async () => { source.value = "merged"; source.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("Commits are those attached to these PRs");
+  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("dated by merge/completion in China time");
+  expect(host.querySelector('section dt')!.getAttribute("title")).toBe("Your PRs merged remotely, counted on their merge date in China time.");
+  expect(host.querySelectorAll('section dt')[1]!.getAttribute("title")).toContain("Original non-merge commits in your remotely merged PRs, counted on the PR merge date.");
+  expect(host.querySelector('section [data-usage-change] .sr-only')!.textContent).toContain("counted on their merge date in China time.");
   expect(host.querySelector('[data-usage-repositories]')!.textContent).toContain("fixture/remote-pr-records");
   expect(host.querySelector('[data-usage-repositories]')!.textContent).not.toContain("fixture/retained-personal");
   await act(async () => { source.value = "profile"; source.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -584,5 +588,9 @@ it("selects sixty-day repository detail with the trend and preserves source iden
   setLocale("zh");
   await act(async () => { source.value = "merged"; source.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("PR 的关联提交");
+  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("按北京时间的合并／完成日期计数");
+  expect(host.querySelector('section dt')!.getAttribute("title")).toBe("你创建且已在远端合并的 PR，按北京时间的合并日期计数。");
+  expect(host.querySelectorAll('section dt')[1]!.getAttribute("title")).toContain("你已合并 PR 中的原始非 merge 提交，归到 PR 合并当天。");
+  expect(host.querySelector('section [data-usage-change] .sr-only')!.textContent).toContain("按北京时间的合并日期计数。");
   expect(range.value).toBe("60");
 });

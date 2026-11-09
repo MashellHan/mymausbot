@@ -8028,9 +8028,7 @@
   "computer.usage.activitySource": "活动来源",
   "computer.usage.repositoryActivity": "仓库活动",
   "computer.usage.mergedActivity": "远端 PR 记录",
-  "computer.usage.mergedDateBasis": "已配置 GitHub、企业及 ADO 的 PR 记录，按创建时间转为中国日期；提交数是这些 PR 的关联提交，按此来源口径去重，既非仓库全部 Git 提交，也非 GitHub Profile 贡献。缺失来源或日期仍标为不完整。",
-  "computer.usage.mergedPrHint": "已配置远端来源中观测到的新建 PR，按中国日期统计；与本地仓库观测和 Profile 合格参考数分开。",
-  "computer.usage.mergedCommitHint": "已配置远端 PR 记录中的关联提交，按此来源去重；不是本地各分支 Git 提交或 GitHub Profile commit contributions。",
+  "computer.usage.mergedDateBasis": "已配置 GitHub、企业及 ADO 中由你创建且已合并／完成的 PR 记录，按北京时间的合并／完成日期计数；提交数是这些 PR 的关联提交，按此来源口径去重，既非仓库全部 Git 提交，也非 GitHub Profile 贡献。缺失来源或日期仍标为不完整。",
   "computer.usage.profileCutoff": "请求截止北京时间 {time}；日桶并非精确瞬时截断",
   "computer.usage.sourceTimes": "GitHub 请求截止：{github}；仓库及 Token 观测：{local}。"
 }
