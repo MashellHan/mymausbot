@@ -18,8 +18,8 @@ that with `show_html` and the page's `app_id`; the same card refreshes.
 | A small summary to look at here | A chat page (`show_html`) with pre-aggregated rows embedded as CSV. |
 | A reusable local report or dashboard in Computer, backed by live Data | A Mini App. Call `mini_app_info` with `guide: true`, connect the bot's Data with `mini_app_connect`, then use `mini_app_publish`. First look for an existing app to update. |
 | To explore bigger data, or a link to share | Query with the Data tools, export the slice with `data_export` (`format: "parquet"`) into a folder beside `index.html`, show the folder in the chat with `show_html` `path`, and `publish_page` it when the person wants a link: the same card gains it. |
-| "Keep it up to date" locally | Update the Mini App's bound business tables with Data tools. The page observes the committed Data revision; HTML is republished only when its presentation or query definitions change. Existing authorized automations can update these same tables. |
-| Keep a public link up to date | The shared page, plus an explicitly requested schedule whose instructions re-run the export, set `CONFIG.updated`, and publish the same folder again. Publishing the same path keeps the same link. |
+| Keep a local Mini App up to date | Update its bound business tables with Data tools. The page observes the committed Data revision; republish HTML when its presentation or query definitions change. Existing authorized automations can update these same tables. |
+| Keep a folder page live | Use `live: true` on `show_html` and, for a requested public link, on `publish_page`. An explicitly requested schedule (`trigger`, `action=create`, `when=schedule`) re-runs the export into the same folder and sets `CONFIG.updated`. A live chat card reloads after the folder changes; a live link republishes at most once a minute and open copies reload. Without `live`, the schedule must publish the same folder again; the same path keeps the link. |
 
 Publish only when the person asks to share. A published page is public: never put secrets, personal details or rows they didn't ask to share in it.
 

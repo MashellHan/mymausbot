@@ -42,6 +42,7 @@ import { needsYouVersion, useTeamPeopleLoader } from "@/state/team-people";
 import { inboxVersion, useInboxLoader, useInboxPanel, useInboxReady } from "@/state/inbox";
 import { InboxPanel } from "@/components/inbox/InboxPanel";
 import { PlacesRail } from "@/components/PlacesRail";
+import { NewLocalFromMenu } from "@/components/PlaceAddSheet";
 import { CloudHowTo } from "@/components/CloudHowTo";
 import { DesktopCapabilitiesProvider, useCaptionChrome, useDesktopCapabilities, WindowDragStrip, windowFramed } from "@/components/DesktopCapabilities";
 import { WindowCaptionButtons } from "@/components/WindowCaptionButtons";
@@ -186,9 +187,14 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       if (!mod) return;
       const bots = shortcutBots(state.bots.filter((b) => !b.hidden), shownBotIds(document.querySelector("[data-sidebar-root]")));
       const step = e.shiftKey ? botCycleStep(e) : null;
-      if (e.key === "n" && !e.shiftKey) {
+      if (e.key.toLowerCase() === "n" && !e.altKey) {
         e.preventDefault();
-        dispatch({ type: "newBot" });
+        if (e.shiftKey) {
+          const selected = state.bots.find((bot) => bot.id === state.selectedId && !bot.hidden);
+          if (!e.repeat && selected && selected.yourAccess !== "view") dispatch({ type: "newTask", botId: selected.id });
+        } else {
+          dispatch({ type: "newBot" });
+        }
       } else if (/^[1-9]$/.test(e.key)) {
         const target = bots[Number(e.key) - 1];
         if (target) {
@@ -344,6 +350,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         />
       )}
       {!calendarFocus && <PlacesRail />}
+      <NewLocalFromMenu />
       {/* A framed window shows the app, its sidebar and the chat or page, as one square pane under the top bar and beside
           the window's rail, running to the window's right and bottom edges. */}
       <div data-window-card={framed ? "" : undefined}

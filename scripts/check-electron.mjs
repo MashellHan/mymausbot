@@ -1,12 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureElectronRuntime } from "./ensure-electron.mjs";
 
 const electronDirectory = fileURLToPath(new URL("../electron/", import.meta.url));
-const require = createRequire(import.meta.url);
-const electronExecutable = require("electron");
+const electronExecutable = ensureElectronRuntime();
 const modules = readdirSync(electronDirectory, { withFileTypes: true })
   .filter((entry) => entry.isFile() && /\.(?:cjs|mjs)$/.test(entry.name))
   .map((entry) => path.join(electronDirectory, entry.name))

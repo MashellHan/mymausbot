@@ -144,7 +144,7 @@ describe("scopes", () => {
       ["POST", "/api/bots/x/sign-in-cards/m/done"], ["POST", "/api/bots/x/sign-in-cards/m/cancel"], ["POST", "/api/bots/x/sign-in-cards/m/save-login"],
       ["GET", "/api/bots/x/sign-in-cards/m/save-login"],
       ["GET", "/api/bots/x/browser/live"], ["POST", "/api/bots/x/browser/action"],
-      ["GET", "/api/threads/t/messages/m/app"], ["POST", "/api/bots/x/apps/m/rpc"], ["POST", "/api/bots/x/apps/m/context"],
+      ["GET", "/api/threads/t/messages/m/app"], ["GET", "/api/threads/t/messages/m/app/download"], ["POST", "/api/bots/x/apps/m/rpc"], ["POST", "/api/bots/x/apps/m/context"],
       ["POST", "/api/bots/x/queue/q/steer"], ["POST", "/api/groups/g/queue/q/steer"],
     ] as const) expect(requiredScope(method, path), `${method} ${path}`).toBe("client");
     for (const [method, path] of [
@@ -166,6 +166,7 @@ describe("scopes", () => {
       ["POST", "/api/bots/x/sign-in-cards/m/provide"], ["POST", "/api/browser-engine/install"],
       ["GET", "/api/logins"], ["POST", "/api/logins"], ["PATCH", "/api/logins/l1"], ["DELETE", "/api/logins/l1"],
       ["POST", "/api/logins/1password"], ["POST", "/api/logins/1password/refresh"], ["DELETE", "/api/logins/1password"],
+      ["GET", "/api/vault"], ["POST", "/api/vault/secrets"], ["PATCH", "/api/vault/secrets/s1"], ["DELETE", "/api/vault/secrets/s1"],
       ["POST", "/api/threads/t/messages/m/app"], ["GET", "/api/bots/x/apps/m/rpc"], ["POST", "/api/bots/x/apps/m/delete"],
       ["POST", "/api/bots/x/apps/m/rpc/extra"], ["DELETE", "/api/bots/x/apps/m/context"],
       ["PATCH", "/api/logins/1password/vaults/v1"], ["GET", "/api/bots/x/sign-in-cards/m/done"],
@@ -412,6 +413,10 @@ describe("resolveRequestAuth", () => {
   it("never grants loopback trust to a request that came through a proxy, whatever Host it carries", () => {
     expect(isProxied(request({ host: "localhost", "x-forwarded-for": "203.0.113.9" }))).toBe(true);
     expect(isProxied(request({ host: "localhost", "x-forwarded-proto": "https" }))).toBe(true);
+    for (const name of ["x-real-ip", "cf-connecting-ip", "true-client-ip", "x-client-ip"]) {
+      expect(isProxied(request({ host: "localhost", [name]: "203.0.113.9" }))).toBe(true);
+      expect(resolve({ host: "localhost", [name]: "203.0.113.9" }).auth).toBeNull();
+    }
     expect(isProxied(request({ host: "localhost" }))).toBe(false);
     const viaProxy = resolve({ host: "localhost", "x-forwarded-for": "203.0.113.9" });
     expect(viaProxy.auth).toBeNull();
@@ -539,6 +544,28 @@ describe("resolveRequestAuth", () => {
     expect(remote.status).toBe(401);
     expect(remote.error).toMatch(/expired or was revoked; pair this device again/);
     expect(resolve({ host: "127.0.0.1:8799", cookie: `${cookieName}=${token}` })).toMatchObject({ auth: null, status: 401 });
+  });
+});
+
+describe("a listener on the local network (openmausbot serve --lan)", () => {
+  // SAFETY: only headers, method and the socket peer are read
+  const fromPeer = (remoteAddress: string, headers: Record<string, string>) => ({ headers, method: "GET", socket: { remoteAddress } }) as unknown as IncomingMessage;
+  const gate = (dir: string) => ({ sessions: new SessionRegistry({ file: join(dir, "sessions.json") }), cookieName: "omb_session_test", streamPath: "/api/events", url: new URL("/api/bots", "http://x") });
+
+  it("never makes another machine the owner, whatever Host it writes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "omb-auth-lan-"));
+    try {
+      for (const peer of ["192.168.1.50", "::ffff:192.168.1.50", "100.101.102.103", "fd12::5"]) {
+        const spoofed = resolveRequestAuth(fromPeer(peer, { host: "127.0.0.1:8799" }), gate(dir));
+        expect([peer, spoofed.auth]).toEqual([peer, null]);
+        expect(isProxied(fromPeer(peer, { host: "localhost" }))).toBe(true);
+      }
+      for (const peer of ["127.0.0.1", "::1", "::ffff:127.0.0.1"]) {
+        expect(resolveRequestAuth(fromPeer(peer, { host: "127.0.0.1:8799" }), gate(dir)).auth?.kind, peer).toBe("loopback");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
