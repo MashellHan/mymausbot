@@ -147,15 +147,15 @@ function totals(row: DailyRow) {
 }
 
 const emptyCountComparison = (): LocalUsageCountComparison => ({ prs: null, commits: null });
-function emptyComparison(days: 1 | 7 | 30, startDay: string): LocalUsageComparison {
+function emptyComparison(days: 1 | 7 | 30 | 60, startDay: string): LocalUsageComparison {
   return { startDay: offsetDay(startDay, -days), endDay: offsetDay(startDay, -1),
     missingDays: [], unavailableTokenDays: [], prs: null, commits: null, totalTokens: null,
     categories: { work: emptyCountComparison(), personal: emptyCountComparison(), unclassified: emptyCountComparison() } };
 }
 
-function buildWindow(days: 1 | 7 | 30, endDay: string, asOf: number, daily: Map<string, DailyRow>,
+function buildWindow<Days extends 1 | 7 | 30 | 60>(days: Days, endDay: string, asOf: number, daily: Map<string, DailyRow>,
   sources: LocalUsageSourceCoverage, prs: LocalUsagePrSourceCoverage, prComplete: boolean,
-  prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>): LocalUsageWindow {
+  prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>): LocalUsageWindow<Days> {
   const startDay = offsetDay(endDay, 1 - days);
   const dates = Array.from({ length: days }, (_, index) => offsetDay(startDay, index));
   const present = dates.map((day) => daily.get(day)).filter((row): row is DailyRow => !!row);
@@ -208,7 +208,8 @@ function tokenComparisonReady(window: LocalUsageWindow, sources: LocalUsageSourc
 
 function trend(window: LocalUsageWindow, daily: Map<string, DailyRow>, sources: LocalUsageSourceCoverage,
   activityScopeReady: boolean, tokenScopeReady: boolean, prs: LocalUsagePrSourceCoverage, prComplete: boolean,
-  prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>, span = 30): LocalUsageTrendDay[] {
+  prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>, span = 30,
+  repositories: RepositorySnapshot | null = null): LocalUsageTrendDay[] {
   return Array.from({ length: span }, (_, index) => {
     const day = offsetDay(window.startDay, index);
     const current = buildWindow(1, day, window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories);
@@ -220,7 +221,9 @@ function trend(window: LocalUsageWindow, daily: Map<string, DailyRow>, sources: 
       newTokens: tokenReady ? weekChange(current.newTokens, previous.newTokens) : null,
       totalTokens: tokenReady ? weekChange(current.totalTokens, previous.totalTokens) : null,
     };
-    return { day, coverage: current.coverage, tokenStatus: current.tokenCoverage,
+    current.repositories = repositoryWindow(repositories, current);
+    if (sources.total === 0 || sources.ready !== sources.total || !datesCovered(current, repositories)) current.repositories.coverage = current.repositories.coverage === "unavailable" ? "unavailable" : "partial";
+    return { day, coverage: current.coverage, repositories: current.repositories, tokenStatus: current.tokenCoverage,
       prs: current.prs, knownPrs: current.knownPrs, commits: current.commits,
       newTokens: current.newTokens, cacheRead: current.cacheRead, totalTokens: current.totalTokens,
       categories: current.categories, wow };
@@ -322,7 +325,7 @@ function localHistory(raw: unknown, endDay: string, current: Map<string, DailyRo
   } catch { return null; }
 }
 
-function repositoryWindow(repositories: RepositorySnapshot | null, window: LocalUsageWindow): LocalUsageRepositories {
+function repositoryWindow(repositories: RepositorySnapshot | null, window: LocalUsageWindow<1 | 7 | 30 | 60>): LocalUsageRepositories {
   if (repositories === null) return window.repositories;
   const rows = repositories.rows.map((row) => {
     const days = row.daily.filter((day) => day.day >= window.startDay && day.day <= window.endDay);
@@ -343,7 +346,7 @@ function repositoryWindow(repositories: RepositorySnapshot | null, window: Local
   return { coverage, rows, unattributedPrs, unattributedCommits, sharedCommits };
 }
 
-function datesCovered(window: LocalUsageWindow, repositories: RepositorySnapshot | null): boolean {
+function datesCovered(window: LocalUsageWindow<1 | 7 | 30 | 60>, repositories: RepositorySnapshot | null): boolean {
   if (!repositories || window.missingDays.length) return false;
   if (!repositories.coveredDays) return true;
   return Array.from({ length: window.days }, (_, index) => offsetDay(window.startDay, index))
@@ -437,12 +440,15 @@ function project(raw: unknown, now: number): LocalUsageResponse {
   }
   const stale = chinaDay(now) !== endDay || now - asOf > STALE_AFTER_MS;
   const status = stale ? "stale" : snapshot.status === "ready" && windows["30"].coverage === "ready" ? "ready" : "partial";
-  const recentTrend = trend(windows["30"], daily, sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories);
+  const recentTrend = trend(windows["30"], daily, sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories, 30, repositories);
   const baseline = trend({ ...windows["30"], startDay: offsetDay(endDay, -59) }, comparisonDaily,
-    sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories, 60);
+    sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories, 60, comparisonRepositories);
   const history = tokenHistory(snapshot.trendHistory, endDay, recentTrend, baseline);
+  const sixty = buildWindow(60, endDay, asOf, comparisonDaily, sources, prs, prComplete, prCoverage, observedCategories);
+  sixty.repositories = repositoryWindow(comparisonRepositories, sixty);
+  if (sources.total === 0 || sources.ready !== sources.total || !datesCovered(sixty, comparisonRepositories)) sixty.repositories.coverage = sixty.repositories.coverage === "unavailable" ? "unavailable" : "partial";
   return { status, asOf, timeZone: "Asia/Shanghai", sourceCoverage: sources, prSourceCoverage: prs,
-    prCoverage, windows, trend: recentTrend, history };
+    prCoverage, windows, trend: recentTrend, history, sixtyDayRepositories: { startDay: sixty.startDay, endDay: sixty.endDay, repositories: sixty.repositories } };
 }
 
 function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[], baseline: LocalUsageTrendDay[]): LocalUsageTrendDay[] {

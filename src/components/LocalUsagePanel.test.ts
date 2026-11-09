@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
 import { UsageChange } from "./LocalUsageValues";
 import { setLocale } from "@/lib/i18n";
-import { withGithubUsageFixture } from "../../scripts/testing/merged-usage-fixture";
+import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
 
 const calls = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => ({
@@ -454,13 +454,14 @@ describe("local Usage panel", () => {
     expect(daily.open).toBe(false);
     daily.open = true;
     expect(daily.querySelector("summary")?.textContent).not.toContain("WoW");
-    expect(daily.querySelector("thead th:last-child")?.textContent).toBe("Change");
+    expect([...daily.querySelectorAll('thead th[scope="col"]')].map((header) => header.textContent))
+      .toEqual(["Date", "PRs", "Commits", "Tokens", "Change", "Repository activity"]);
     expect(daily.querySelector('[data-usage-change] > [aria-hidden="true"]')?.textContent).toMatch(/^(?:\+20%|New|—)$/);
     expect(daily.querySelector('p')?.textContent).not.toMatch(/DoD|WoW|MoM/);
     expect(daily.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-10-27 (China time)");
     expect(daily.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Same calendar day last week.");
     const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
-    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false"]);
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false"]);
     const values = () => [...host.querySelectorAll("[data-usage-repositories] tbody tr:first-child td")].map((cell) => cell.textContent);
     expect(values()[0]).toBe("Enterprise");
     expect(values()[1]).toMatch(/^1/);
@@ -469,6 +470,10 @@ describe("local Usage panel", () => {
     expect(repositoryChanges()).toEqual(["—", "+10%"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-11-02");
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+    expect(document.activeElement).toBe(tabs[3]);
+    expect(tabs[3]!.getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector('[role="tabpanel"]')?.textContent).toContain("Repository details are not available in this snapshot.");
+    await act(async () => tabs[3]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
     expect(document.activeElement).toBe(tabs[2]);
     expect(values()[1]).toMatch(/^30/);
     expect(values()[2]).toContain("60");
@@ -541,4 +546,56 @@ describe("local Usage panel", () => {
     expect(text()).toContain("Activity summary unavailable");
     expect(host.querySelectorAll("section dd")).toHaveLength(0);
   });
+});
+
+
+it("selects sixty-day repository detail with the trend and preserves source identities, unknown days and keyboard tabs", async () => {
+  const snapshot = structuredClone(sample);
+  const early = { ...trend[0]!, day: "2026-09-11", repositories: { ...snapshot.windows!["1"].repositories,
+    rows: [{ ...snapshot.windows!["1"].repositories.rows[0]!, id: "old-personal", name: "fixture/retained-personal", category: "personal" as const, knownPrs: 3, commits: 11 }] } };
+  snapshot.history = Array.from({ length: 60 }, (_, index) => ({ ...early, day: shiftDay("2026-11-09", index - 59) }));
+  snapshot.windows = { "1": rolledWindow(snapshot.windows!["1"], 6), "7": rolledWindow(snapshot.windows!["7"], 6), "30": rolledWindow(snapshot.windows!["30"], 6) };
+  snapshot.trend = snapshot.history.slice(-30);
+  snapshot.sixtyDayRepositories = { startDay: "2026-09-11", endDay: "2026-11-09", repositories: early.repositories };
+  const sources = withMergedUsageFixture(withGithubUsageFixture(snapshot));
+  sources.github!.history = sources.github!.history!.slice(-7);
+  sources.github!.trend = sources.github!.history!;
+  for (const day of sources.merged!.history!) {
+    day.repositories!.rows[0]!.name = "fixture/remote-pr-records";
+    day.repositories!.rows[0]!.category = "work";
+  }
+  sources.merged!.sixtyDayRepositories!.repositories.rows[0]!.name = "fixture/remote-pr-records";
+  sources.merged!.sixtyDayRepositories!.repositories.rows[0]!.category = "work";
+  await renderRaw(sources);
+  const range = host.querySelector<HTMLSelectElement>('select[aria-label="Trend range"]')!;
+  await act(async () => { range.value = "60"; range.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.querySelector('[data-usage-trend-range]')!.textContent).toBe("2026-09-11 – 2026-11-09");
+  const tab = [...host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(value => value.textContent === "60d")!;
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector('[data-usage-repositories]')!.textContent).toContain("fixture/retained-personal");
+  expect(host.querySelectorAll('[data-usage-daily] tbody tr')).toHaveLength(60);
+  const oldest = host.querySelector('[data-usage-daily] tbody tr:last-child [data-usage-day-repositories]')!;
+  expect(oldest.textContent).toContain("fixture/retained-personal");
+  expect(oldest.textContent).toContain("Personal");
+  await act(async () => tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(host.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe("1d");
+  const source = host.querySelector<HTMLSelectElement>('select[aria-label="Activity source"]')!;
+  await act(async () => { source.value = "merged"; source.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("Commits are those attached to these PRs");
+  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("dated by merge/completion in China time");
+  expect(host.querySelector('section dt')!.getAttribute("title")).toBe("Your PRs merged remotely, counted on their merge date in China time.");
+  expect(host.querySelectorAll('section dt')[1]!.getAttribute("title")).toContain("Original non-merge commits in your remotely merged PRs, counted on the PR merge date.");
+  expect(host.querySelector('section [data-usage-change] .sr-only')!.textContent).toContain("counted on their merge date in China time.");
+  expect(host.querySelector('[data-usage-repositories]')!.textContent).toContain("fixture/remote-pr-records");
+  expect(host.querySelector('[data-usage-repositories]')!.textContent).not.toContain("fixture/retained-personal");
+  await act(async () => { source.value = "profile"; source.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.querySelector('[data-usage-daily] tbody tr:last-child')!.textContent).toContain("Repository details are not available in this snapshot.");
+  setLocale("zh");
+  await act(async () => { source.value = "merged"; source.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("PR 的关联提交");
+  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("按北京时间的合并／完成日期计数");
+  expect(host.querySelector('section dt')!.getAttribute("title")).toBe("你创建且已在远端合并的 PR，按北京时间的合并日期计数。");
+  expect(host.querySelectorAll('section dt')[1]!.getAttribute("title")).toContain("你已合并 PR 中的原始非 merge 提交，归到 PR 合并当天。");
+  expect(host.querySelector('section [data-usage-change] .sr-only')!.textContent).toContain("按北京时间的合并日期计数。");
+  expect(range.value).toBe("60");
 });

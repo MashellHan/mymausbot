@@ -32,6 +32,13 @@ immediate refusal.
 
 ## Prepare and review
 
+The default remains seven inclusive China dates. Only an independently admitted
+60-day restoration uses `prepare --days 60`; no other span is accepted. This flag
+does not enable the source or change a scheduler. Existing seven-day plans keep
+the same format and validation. The selected span is bound by the exact start/end
+dates in the immutable capture and plan; apply cannot change it.
+
+
 After admission, choose a new operation directory outside the live target tree,
 under a private parent. Substitute the actual admitted configuration/collector
 paths and independently verified collector hash:
@@ -54,10 +61,11 @@ Never commit or publish these private files, raw records or configuration.
 
 Review the printed plan SHA256, source/runtime identity, before/after hashes,
 capture cutoff, active stable account scopes and exact inclusive operation dates.
-The capture day plus preceding six China calendar dates are recomputed from the
-current execution time, with today partial. For example, an execution on November
-9 covers November 3–9; a later execution requires a new capture/plan. The UTC guard
-date is never an eighth replacement date. Unknown or invalid sources refuse the
+The capture day plus preceding six (default) or 59 (`--days 60`) China calendar
+dates are recomputed from execution time, with today partial. For example, an
+execution on November 9 covers November 3–9 by default, or September 11–November 9
+with the explicit 60-day span. A later execution requires a new capture/plan.
+The UTC guard date is never an additional replacement date. Unknown or invalid sources refuse the
 repair, rather than producing zero. Existing stable account changes also refuse.
 
 The definition remains `github-profile-v1`: PRs are the visible current-nonfork
@@ -81,7 +89,7 @@ even if a previous attempt was interrupted after rename. It preserves earlier
 history and inactive source partitions through the existing bounded replacer; it never
 turns old-definition history into comparable new-definition observations.
 
-After an admitted real application, independently read all seven persisted days
+After an admitted real application, independently read every admitted persisted day (7 or 60)
 through the provider from a clean, exact reviewed main checkout, with its source
 commit and actual sidecar path recorded. Reconcile typed references and their
 date/coverage limits, verify earlier-history hashes and unrelated Token,

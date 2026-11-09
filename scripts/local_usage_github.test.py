@@ -59,11 +59,51 @@ class Api:
         return json.dumps(response)
 
 
-def collect(api=None, at=AT, config=CONFIG):
-    return github.collect(config, api or Api(), lambda remote, config: 'personal', at=at)
+def collect(api=None, at=AT, config=CONFIG, days=7):
+    return github.collect(config, api or Api(), lambda remote, config: 'personal', at=at, days=days)
 
 
 class ProfileTests(unittest.TestCase):
+    def test_explicit_sixty_day_capture_and_replacement_keep_seven_day_defaults(self):
+        api = Api()
+        api.commit_nodes.insert(0, {'occurredAt': '2026-09-11T00:00:00Z', 'commitCount': 3})
+        current = collect(api, days=60)
+        self.assertEqual(current['operationWindow']['startDay'], '2026-09-11')
+        source = current['sources'][0]
+        self.assertEqual(source['status'], 'ready')
+        self.assertEqual(len(source['days']), 60)
+        self.assertEqual(source['days'][0]['profileCommits'], 3)
+        self.assertTrue(all(row['status'] == 'partial' and row['chinaCommits'] is None for row in source['days']))
+        self.assertEqual(sum(row['inProgress'] for row in source['days']), 1)
+        self.assertIn('from=2026-09-10T00:00:00Z', api.calls[0])
+        previous = copy.deepcopy(current)
+        earlier = {**copy.deepcopy(source['days'][0]), 'day': '2026-08-01'}
+        previous['sources'][0]['days'].insert(0, earlier)
+        replaced = github.replace_days(previous, current)
+        self.assertEqual(replaced['sources'][0]['days'][0], earlier)
+        self.assertEqual(github.replace_days(replaced, current), replaced)
+        default = collect()
+        self.assertEqual(len(default['sources'][0]['days']), 7)
+        retained = github.replace_days(replaced, default)
+        self.assertEqual(len(retained['sources'][0]['days']), 61)
+        self.assertEqual(retained['sources'][0]['days'][1]['profileCommits'], 3)
+        changed = copy.deepcopy(current)
+        changed['sources'][0]['account'] = 'f' * 64
+        with self.assertRaisesRegex(ValueError, 'account identity'):
+            github.replace_days(replaced, changed)
+        missing = copy.deepcopy(current)
+        missing['sources'][0]['days'].pop(0)
+        with self.assertRaisesRegex(ValueError, 'Incomplete'):
+            github.replace_days(replaced, missing)
+
+    def test_sixty_day_bounds_roll_in_china_and_refuse_unbounded_spans(self):
+        for at, first, last in [('2024-03-01T00:00:00+08:00', '2024-01-02', '2024-03-01'),
+                                ('2026-01-01T16:00:00+00:00', '2025-11-04', '2026-01-02')]:
+            self.assertEqual(tuple(map(str, github.capture_window(dt.datetime.fromisoformat(at), 60))), (first, last))
+        for days in [True, 0, 30, 59, 61, 190, '60']:
+            with self.assertRaises(ValueError):
+                collect(days=days)
+
     def test_multiple_commits_per_day_and_paginated_prs_have_distinct_date_bases(self):
         api = Api()
         result = collect(api)

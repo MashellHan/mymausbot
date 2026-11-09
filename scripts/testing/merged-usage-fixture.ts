@@ -15,10 +15,14 @@ export function withMergedUsageFixture(snapshot: LocalUsageResponse): LocalUsage
     "7": mergedWindow(snapshot.windows["7"]), "30": mergedWindow(snapshot.windows["30"]) };
   const mergedTrend = (daily: LocalUsageResponse["trend"]) => daily.map((day) => ({
       day: day.day, coverage: day.coverage, ...counts(day), categories: categories(day.categories),
+      ...(day.repositories ? { repositories: { ...day.repositories, rows: day.repositories.rows.map(row => ({ ...row, ...counts(row) })) } } : {}),
       wow: { prs: day.wow.prs, commits: day.wow.commits },
     }));
   return { ...snapshot, merged: { status: snapshot.status, asOf: snapshot.asOf, timeZone: "Asia/Shanghai",
     sourceCoverage: null, overlaps: null, windows, trend: mergedTrend(snapshot.trend),
+    ...(snapshot.sixtyDayRepositories ? { sixtyDayRepositories: { ...snapshot.sixtyDayRepositories,
+      repositories: { ...snapshot.sixtyDayRepositories.repositories,
+        rows: snapshot.sixtyDayRepositories.repositories.rows.map(row => ({ ...row, ...counts(row) })) } } } : {}),
     ...(snapshot.history ? { history: mergedTrend(snapshot.history) } : {}) } };
 }
 
@@ -33,6 +37,6 @@ export function withGithubUsageFixture(snapshot: LocalUsageResponse): LocalUsage
   };
   clearExactContributions(merged);
   return { ...snapshot, github: { status: merged.status === "ready" ? "partial" : merged.status, asOf: merged.asOf, timeZone: merged.timeZone,
-    sourceCoverage: merged.sourceCoverage, windows: merged.windows, trend: merged.trend, history: merged.history,
+    sourceCoverage: merged.sourceCoverage, windows: merged.windows, trend: merged.trend, history: merged.history, sixtyDayRepositories: merged.sixtyDayRepositories,
     metricDefinition: "github-profile-v1", dateBasis: { prs: "created-at/Asia-Shanghai", commits: "github-profile-day" }, chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture" } };
 }
