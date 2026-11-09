@@ -14,9 +14,9 @@ const WEEK_MS = 7 * DAY_MS;
 const empty = () => ({ model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, taskHint: null, lastActivityAt: null });
 type Observation = Pick<LocalAgentMember, "model" | "reasoningEffort" | "contextUsed" | "contextWindow" | "taskHint"> & { lastActivityAt: number | null };
 type SessionObservation = Observation & { tokenUsage24h: LocalAgentTokenUsageWindow; tokenUsage7d: LocalAgentTokenUsageWindow };
-type TokenSample = { at: number | null; tokens: number | null; total: number | null };
+type TokenSample = { at: number | null; tokens: number | null; total: number | null; gap: boolean };
 type Cached = { signature: string; identity: string; size: number; offset: number; observation: Observation; pendingLine: boolean;
-  scanStart: number; firstAt: number | null; tokenSamples: TokenSample[] };
+  scanStart: number; firstAt: number | null; highestTotal: number | null; tokenSamples: TokenSample[] };
 
 export function dashboardText(value: unknown, limit: number): string | null {
   if (typeof value !== "string") return null;
@@ -41,12 +41,12 @@ export function codexSessionId(agent: Record<string, unknown>): string | null {
     ? session.value.toLowerCase() : null;
 }
 
-function apply(observation: Observation, line: string, previousTotal: number | null): TokenSample | null {
+function apply(observation: Observation, line: string, highestTotal: number | null): TokenSample | null {
   if (!line.includes('"turn_context"') && !line.includes('"event_msg"')) return null;
   let event: Record<string, unknown>;
-  try { event = record(JSON.parse(line)); } catch { return line.includes('"token_count"') ? { at: null, tokens: null, total: null } : null; }
+  try { event = record(JSON.parse(line)); } catch { return line.includes('"token_count"') ? { at: null, tokens: null, total: null, gap: true } : null; }
   if (event.type !== "turn_context" && event.type !== "event_msg")
-    return line.includes('"token_count"') ? { at: null, tokens: null, total: null } : null;
+    return line.includes('"token_count"') ? { at: null, tokens: null, total: null, gap: true } : null;
   const at = timestamp(event.timestamp);
   if (at !== null && at > 0) observation.lastActivityAt = Math.max(observation.lastActivityAt ?? 0, at);
   const payload = record(event.payload);
@@ -75,9 +75,9 @@ function apply(observation: Observation, line: string, previousTotal: number | n
       const input = count(last.input_tokens), output = count(last.output_tokens);
       if (input !== null && output !== null) observation.contextUsed = count(input + output);
       const total = tokens(info.total_token_usage), delta = tokens(info.last_token_usage);
-      const valid = at !== null && at > 0 && total !== null && delta !== null && total >= delta
-        && (previousTotal === null || total - previousTotal === delta);
-      return { at, tokens: valid ? delta : null, total: valid ? total : null };
+      const increase = total === null ? null : total - (highestTotal ?? 0);
+      const valid = at !== null && at > 0 && increase !== null && delta !== null && delta <= increase;
+      return { at, tokens: valid ? delta : null, total, gap: !valid || delta !== increase };
     }
   }
   return null;
@@ -91,6 +91,7 @@ function tokenUsage(cached: Cached, now: number, durationMs: number): LocalAgent
   for (const sample of cached.tokenSamples) {
     if (sample.at === null || sample.at > now) { invalid = true; continue; }
     if (sample.at <= cutoff) continue;
+    if (sample.gap) invalid = true;
     if (sample.tokens === null || !Number.isSafeInteger(known + sample.tokens)) { invalid = true; continue; }
     known += sample.tokens;
   }
@@ -155,16 +156,19 @@ async function readObservation(file: string, id: string, cached: Cached | undefi
         try { firstAt = timestamp(record(JSON.parse(lines[0]!)).timestamp); } catch { firstAt = null; }
       }
       const tokenSamples = incremental ? [...cached.tokenSamples] : [];
-      let previousTotal = tokenSamples.at(-1)?.total ?? null;
+      let highestTotal = incremental ? cached.highestTotal : null;
       for (const line of lines) {
-        const sample = apply(observation, line, previousTotal);
-        if (sample) { tokenSamples.push(sample); previousTotal = sample.total; }
+        const sample = apply(observation, line, highestTotal);
+        if (sample) {
+          tokenSamples.push(sample);
+          if (sample.total !== null) highestTotal = Math.max(highestTotal ?? 0, sample.total);
+        }
       }
       const cutoff = now - WEEK_MS;
       const baseline = tokenSamples.filter((sample) => sample.at !== null && sample.at <= cutoff).at(-1);
       const recent = tokenSamples.filter((sample) => sample.at === null || sample.at > cutoff);
       return { identity, signature, size: info.size, offset: end >= 0 ? start + end + 1 : start, observation,
-        scanStart: incremental ? cached.scanStart : start, firstAt, pendingLine: end < bytesRead - 1,
+        scanStart: incremental ? cached.scanStart : start, firstAt, highestTotal, pendingLine: end < bytesRead - 1,
         tokenSamples: baseline ? [baseline, ...recent] : recent };
     } finally { await handle.close(); }
   } catch { return null; }

@@ -91,6 +91,38 @@ describe("local Agent Team provider", () => {
     expect((await provider.get()).teams[0]?.tokenUsage7d).toEqual({ coverage: "ready", knownTokens: 340 });
   });
 
+  it("does not recount unchanged cumulative snapshots within a read or after an incremental read", async () => {
+    const codexHome = await usageLog(SESSION, [0, 1, 2].map((minute) => ({
+      at: `2026-11-09T11:0${minute}:00Z`, total: 100, last: 100,
+    })));
+    const file = join(codexHome, "sessions", "2026", "11", "08", `rollout-2026-11-08-${SESSION}.jsonl`);
+    let time = Date.UTC(2026, 10, 9, 12);
+    const provider = createLocalAgentTeamsProvider({ codexHome, now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : agents() });
+    const usage = async () => (await provider.get()).teams[0]?.tokenUsage24h;
+    expect(await usage()).toEqual({ coverage: "partial", knownTokens: 100 });
+    await appendFile(file, `${JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T11:03:00Z", payload: {
+      type: "token_count", info: { total_token_usage: { total_tokens: 100 }, last_token_usage: { total_tokens: 100 } },
+    } })}\n`);
+    time += 2_000;
+    expect(await usage()).toEqual({ coverage: "partial", knownTokens: 100 });
+    await appendFile(file, `${JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T11:04:00Z", payload: {
+      type: "token_count", info: { total_token_usage: { total_tokens: 150 }, last_token_usage: { total_tokens: 50 } },
+    } })}\n`);
+    time += 2_000;
+    expect(await usage()).toEqual({ coverage: "partial", knownTokens: 150 });
+    expect((await provider.get()).teams[0]?.tokenUsage7d).toEqual({ coverage: "partial", knownTokens: 150 });
+  });
+
+  it("keeps an unexplained first cumulative balance partial when the session starts inside the window", async () => {
+    const codexHome = await usageLog(SESSION, [{ at: "2026-11-08T11:00:00Z", total: 100, last: 40 }]);
+    const provider = createLocalAgentTeamsProvider({ codexHome, now: () => Date.UTC(2026, 10, 8, 12),
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : agents() });
+    const team = (await provider.get()).teams[0]!;
+    expect(team.tokenUsage24h).toEqual({ coverage: "partial", knownTokens: 40 });
+    expect(team.tokenUsage7d).toEqual({ coverage: "partial", knownTokens: 40 });
+  });
+
   it("keeps incomplete session counts partial and refuses cross-team session attribution", async () => {
     const codexHome = await usageLog(SESSION, [
       { at: "2026-11-09T09:00:00Z", total: 50, last: 50 },

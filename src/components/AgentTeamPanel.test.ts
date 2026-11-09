@@ -92,6 +92,18 @@ describe("Agent Team panel", () => {
     expect(week.textContent).toBe("近 7 天 Token 不可用");
   });
 
+  it("shows exact partial lower bounds across compact unit boundaries", async () => {
+    for (const knownTokens of [999, 1_000, 123_456, 999_999, 1_000_000]) {
+      const partial = { ...ready, teams: ready.teams.map((team) => team.id === "w1"
+        ? { ...team, tokenUsage24h: { coverage: "partial" as const, knownTokens },
+          tokenUsage7d: { coverage: "partial" as const, knownTokens } } : team) };
+      await render("content", partial);
+      const exact = knownTokens.toLocaleString("en");
+      expect(members()!.querySelector('[data-testid="team-token-24h"]')?.textContent).toBe(`24h tokens ≥${exact} · partial`);
+      expect(members()!.querySelector('[data-testid="team-token-7d"]')?.textContent).toBe(`7d tokens ≥${exact} · partial`);
+    }
+  });
+
   it("waits for a snapshot, selects the most recently active team and retains a manual collapse", async () => {
     await render("content", { status: "unavailable", updatedAt: null, teamCount: null, teams: [] });
     const recent = { ...ready, teams: ready.teams.map((team, index) => ({ ...team, activeAgentCount: 0,

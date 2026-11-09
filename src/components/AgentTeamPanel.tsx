@@ -31,8 +31,9 @@ const stateDot = {
 function tokenLabel(period: "24h" | "7d", usage: LocalAgentTokenUsageWindow | undefined, stale: boolean) {
   const known = typeof usage?.knownTokens === "number" && Number.isSafeInteger(usage.knownTokens) && usage.knownTokens >= 0
     ? usage.knownTokens : null;
-  const count = known === null ? null : new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(known);
   const full = known === null ? null : known.toLocaleString(activeLocale());
+  const count = known === null ? null : usage?.coverage === "partial" ? full
+    : new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(known);
   const label = period === "24h"
     ? known === null ? t(usage?.coverage === "partial" ? "computer.agentTeam.tokens24hPartialUnknown" : "computer.agentTeam.tokens24hUnavailable")
       : usage?.coverage === "ready" ? t("computer.agentTeam.tokens24h", { count: count! }) : t("computer.agentTeam.tokens24hPartial", { count: count! })
