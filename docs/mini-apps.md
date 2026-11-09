@@ -2,7 +2,7 @@
 
 Mini Apps are persistent applications in **Computer → Mini Apps**. An app has a
 stable identity, immutable template versions and explicit read permissions. Most
-apps use editable HTML and declared Data queries; Agent Team and Work Tracker use
+apps use editable HTML and declared Data queries; Agent Team and Activities use
 registered built-in views. Each app belongs to the local workspace owner,
 independently of the chat or bot that created it. Opening, filtering and
 refreshing an app does not start an AI turn.
@@ -14,16 +14,20 @@ editions published by an existing bot or Automation.
 
 ## Find and open apps
 
-Opening the desktop library adds five included apps to the existing registry:
-Bookkeeping, Daily X AI digest, GitHub activity, Agent Team and Work Tracker.
-There is no installation wizard. The local-owner `POST /api/mini-apps/defaults`
+The guarded local-owner desktop initializes five included apps in the existing
+registry: Bookkeeping, Daily X AI digest, Github Rending (GitHub activity), Agent
+Team and Activities. Computer opens on Mini Apps by default; explicit Data,
+Browser and Screen requests and manual tab choices remain available. There is
+no installation wizard. The local-owner `POST /api/mini-apps/defaults`
 operation receives the bundled bookkeeping HTML, creates missing entries and
 returns the real persisted inventory. It does not create or start an Automation.
 
 Apps appear in one row with a large icon and a small label below it. **All apps**
-opens an icon grid anchored to its button. Remove hides an app while preserving
-its history and Data. Removed apps stay removed across restart and updates;
-**Add** restores the same identity. Unknown custom apps have a default icon.
+opens an icon grid anchored to its button. Publisher chat, version history and
+rollback are available there when applicable, without a persistent action row.
+Remove hides an app while preserving its history and Data. Removed apps stay
+removed across restart and updates. **Add** restores the same identity. Unknown
+custom apps have a default icon.
 
 Bookkeeping automatically finds an existing physical ledger with the seven known
 columns, preferring a unique `main.ledger_master`. It retains the Bot's existing
@@ -41,23 +45,30 @@ suffixed slug. Older unmarked records are not silently adopted. Native dashboard
 identity and current read grants remain separate; initialization does not restore
 a revoked grant.
 
-## Agent Team and Work Tracker
+## Agent Team and Activities
 
-Open either app directly from **Computer → Mini Apps**. The original Computer
-tabs remain available. Both surfaces use the same providers and shared views;
+Open either app directly from **Computer → Mini Apps**. They are no longer
+separate Computer tabs; an older saved Agent Team or Usage tab selection opens
+Mini Apps. Both surfaces use the same providers and shared views;
 the included apps do not start a collector, copy snapshots into another store
-or change a schedule. Work Tracker keeps the internal `usage` identity and routes.
+or change a schedule. Activities keeps the internal `usage` identity and routes.
 
 Agent Team reads local Herdr member status, models and bounded task hints. An
 expanded activity disclosure reads recent redacted user and assistant messages;
-it starts folded, and no office is selected initially. The app cannot control
-agents. Team observations refresh every two seconds while visible, and activity
-reads stop when the disclosure closes or the app is hidden.
+it starts folded. On opening, the app selects an observed working team, then a
+blocked or verified recently active team when available; otherwise no office is
+selected. The person's selection or collapse remains in their control. The app
+cannot control agents. Its header shows rolling 24-hour and 7-day Tokens only
+from attributable team sessions, keeping partial and unavailable observations
+distinct. Team observations refresh every two seconds while visible, and
+activity reads stop when the disclosure closes or the app is hidden.
 
-Work Tracker reads the existing five-minute aggregate, including its coverage and
+Activities reads the existing five-minute aggregate, including its coverage and
 capture time. Manual refresh rereads the current provider snapshot immediately
-without changing the automatic cadence or selected office. Its 1/7/30-day windows include the current partial China-calendar
-day. Commit totals use the existing local non-merge, commit-hash deduplication,
+without changing the automatic cadence. Its 1/7/30-day windows include the
+current partial China-calendar day. Complete observed Token periods can show
+day-over-day and week-over-week comparisons; missing prior history stays
+unavailable. Commit totals use the existing local non-merge, commit-hash deduplication,
 including local and unmerged branches; they are not GitHub contribution-calendar
 totals. PR counts, total tokens and cache-read tokens retain the existing
 [metric definitions](verification/local-dashboard.md#usage-definitions).
@@ -85,19 +96,31 @@ Daily X AI digest and GitHub activity are included automatically. The server
 resolves an eligible existing local producer, prepares its retained report table
 and grants that Bot as editor. An empty table shows that no edition has been
 published; it does not display invented sample content. Existing schedules and
-other outputs remain in place. See the [report publication contract](mini-app-reports.md).
+other outputs remain in place. The reports present current and historical
+editions with an indexed detail and recorded source dates. A validated HTTP(S)
+source can open after a user action through the guarded desktop capability;
+otherwise its URL remains selectable text. This does not give the frame network
+access. See the [report publication contract](mini-app-reports.md) for edition
+and Data rules; the guarded source-opening behavior here reflects the current
+host.
+The [personal source agreement](mini-app-source-contract.md) separates current
+host APIs from the proposed package manifest and install provenance.
 
 ## Bookkeeping
 
-Open Bookkeeping to read the existing ledger directly. The portal has overview,
-calendar and record views, week/month/year periods, corresponding elapsed-period
-comparisons, monthly trends, category shares and largest outflows. Filters apply
-to the same recorded dates without shifting them through a browser time zone.
-There is no source picker, column-mapping wizard or currency selector in normal use.
+Open Bookkeeping to read the existing ledger directly. **Recent** and
+**Statistics** are the top views; Recent has a compact Trend/Calendar switch and
+selected-day details. Statistics keeps week/month/year periods, corresponding
+prior-period comparisons, spending trends with a visible peak, category shares
+and largest outflows. Recent records can be sorted across the retained ledger.
+Time controls use the same recorded dates without shifting them through a
+browser time zone. There is no source picker, column-mapping wizard or currency
+selector in normal use.
 
 The main view presents explicitly recognized CNY records. Foreign, blank and
-unknown currency values are not relabeled or combined with CNY. Missing dates
-and invalid or unrepresentable amounts remain visible as coverage limitations.
+unknown currency values stay outside CNY totals and are not relabeled. Missing
+dates and invalid or unrepresentable amounts remain visible in the coverage
+disclosure; currency-exclusion notices are not shown.
 
 Negative amounts are outflow and positive amounts are inflow. They are not
 automatically classified as expenses, income, refunds or transfers. Currency
@@ -217,12 +240,14 @@ Consult turns cannot mutate apps. A late response is discarded after revocation,
 an app change or a Data revision change.
 
 Built-in dashboard reads are bound to an installed app ID and current revision.
-The fixed Agent Team grant permits only teams and per-pane activity; Work Tracker
+The fixed Agent Team grant permits only teams and per-pane activity; Activities
 permits only the existing aggregate. The server checks owner access, active
 status, revision and resource before and after each provider read. The host
 aborts pending reads on hide/unmount and clears observations on revocation.
 These resources are not added to the iframe SDK, and app HTML gains no host URL,
-file, command or general fetch capability. Dashboard replies are capped at 1 MiB
+file, command or general fetch capability. The guarded report source opener is
+limited to validated links after user action; it is not general navigation or
+frame network access. Dashboard replies are capped at 1 MiB
 and share the existing per-app read limits.
 
 Bindings name exact physical base tables, typed columns and declarative query

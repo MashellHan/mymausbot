@@ -121,7 +121,7 @@ describe("SecretRequestCard ask card", () => {
     vi.stubGlobal("window", { ogb: { credentialMode: () => "session" } });
     const pending = view({});
     expect(pending).toContain("Use for this run");
-    expect(pending).toContain("Kept in memory by MausBot until you quit");
+    expect(pending).toContain("Kept in memory by mymausbot until you quit");
     expect(pending).not.toContain("Save securely");
     const provided = view({ provided: true, resumed: true });
     expect(provided).toContain("available for this run");
@@ -417,6 +417,6 @@ describe("SecretRequestCard custom secrets", () => {
     expect(file).toContain("Saved to a private file your bot&#x27;s commands can read for 24 hours, then deleted.");
     expect(file).not.toContain("Where to get this key");
     const ref = view({ target: "customSecret", label: "Notion key", reason: "For Notion.", helpUrl: "", delivery: "ref" });
-    expect(ref).toContain("MausBot keeps it for one use by its own tools. Your bot never sees it");
+    expect(ref).toContain("mymausbot keeps it for one use by its own tools. Your bot never sees it");
   });
 });
