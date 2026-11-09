@@ -42,7 +42,7 @@ describe("Phone & devices", () => {
     expect(html).toContain(">Pair a device<");
     expect(html).toContain("Nothing paired yet.");
     expect(html).toMatch(/data-route-row="wifi"[\s\S]*?Same Wi-Fi[\s\S]*?Off · Devices on this network[\s\S]*?>Turn on</);
-    expect(html).toMatch(/data-route-row="relay"[\s\S]*?Anywhere, through MausBot[\s\S]*?Off · End-to-end encrypted\. MausBot can't read it\./);
+    expect(html).toMatch(/data-route-row="relay"[\s\S]*?Anywhere, through mymausbot[\s\S]*?Off · End-to-end encrypted\. mymausbot can't read it\./);
     expect(html).toMatch(/<details class="[^"]*">\s*<summary[^>]*>More ways in</);
     expect(html).not.toContain("data-tailscale-status");
   });
@@ -59,11 +59,11 @@ describe("Phone & devices", () => {
   });
 
   it("in Simple mode offers to set up a phone, or names the phone and how it reaches this computer", () => {
-    expect(page(true)).toMatch(/Use MausBot on your phone[\s\S]*?>Set up</);
+    expect(page(true)).toMatch(/Use mymausbot on your phone[\s\S]*?>Set up</);
     f.state = state({ enabled: true, routes: routes({ wifi: true, relay: true }), devices: [phone] });
     const html = page(true);
     expect(html).toContain("Your phone");
-    expect(html).toContain("Reaches this computer on Same Wi-Fi and anywhere through MausBot.");
+    expect(html).toContain("Reaches this computer on Same Wi-Fi and anywhere through mymausbot.");
     expect(html).toContain(">Change<");
     expect(html).toContain(">Pair another device<");
     expect(html).not.toContain('data-route-row="wifi"');
@@ -77,7 +77,7 @@ describe("Pair a device", () => {
   it("says what it will turn on before anything listens", () => {
     const html = dialog();
     expect(html).toContain('data-pair-dialog="consent"');
-    expect(html).toContain("To reach this computer, MausBot will turn on:");
+    expect(html).toContain("To reach this computer, mymausbot will turn on:");
     expect(html.match(/type="checkbox"/g)).toHaveLength(2);
     expect(html).toContain("You can turn these off any time in Phone &amp; devices.");
     expect(html).not.toContain("PAIRING_CODE_VIEW");
@@ -96,7 +96,7 @@ describe("route words", () => {
     expect(routeStateText(off, 0)).toBe("Off");
     expect(routeStateText({ on: true, since: NOV_7 }, 0)).toBe("On · waiting for a paired device");
     expect(reachLine({ routes: routes() })).toBe("No way in is on yet.");
-    expect(reachLine({ routes: routes({ tailscale: true, relay: true }) })).toBe("Reaches this computer on your tailnet and anywhere through MausBot.");
+    expect(reachLine({ routes: routes({ tailscale: true, relay: true }) })).toBe("Reaches this computer on your tailnet and anywhere through mymausbot.");
   });
 });
 
