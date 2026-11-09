@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalAgentTeamsResponse } from "../../shared/local-dashboard";
 import { setLocale } from "@/lib/i18n";
 
-const calls = vi.hoisted(() => ({ api: vi.fn() }));
+const calls = vi.hoisted(() => ({ api: vi.fn(), rules: vi.fn() }));
 vi.mock("@/state/store", () => ({
-  api: calls.api,
+  api: (path: string, options?: unknown) => path.startsWith("/api/local-dashboard/teams/")
+    ? calls.rules(path, options) : calls.api(path, options),
   ApiError: class ApiError extends Error {
     constructor(message: string, readonly status: number) { super(message); }
   },
@@ -50,6 +51,8 @@ beforeEach(() => {
   root = createRoot(host);
   setLocale("en");
   calls.api.mockReset();
+  calls.rules.mockReset();
+  calls.rules.mockImplementation(async (path: string) => ({ teamId: path.split("/")[4], status: "missing", markdown: null }));
 });
 afterEach(async () => {
   await act(async () => root.unmount());

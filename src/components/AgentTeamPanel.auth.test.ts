@@ -15,8 +15,8 @@ const { sessionCheck, sessionEnded } = await import("@/lib/session-ended");
 
 const ready: LocalAgentTeamsResponse = {
   status: "ready", updatedAt: Date.UTC(2026, 10, 3, 8), teamCount: 1,
-  teams: [{ id: "sample-team", name: "Atlas Studio", agentCount: 1, activeAgentCount: 1, agents: [
-    { id: "sample-pane", name: "Mira", kind: "codex", role: "Lead", model: "sample-model", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft sample plan" },
+  teams: [{ id: "w1", name: "Atlas Studio", agentCount: 1, activeAgentCount: 1, agents: [
+    { id: "w1:p1", name: "Mira", kind: "codex", role: "Lead", model: "sample-model", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft sample plan" },
   ] }],
 };
 
@@ -28,6 +28,8 @@ it("clears the owner snapshot on a real API 401 even when session recheck is unr
   let agentReads = 0;
   const fetch = vi.fn(async (input: string) => {
     if (input === "/api/auth/session") throw new Error("offline");
+    if (input === "/api/local-dashboard/teams/w1/rules") return new Response(JSON.stringify({ teamId: "w1", status: "missing", markdown: null }),
+      { status: 200, headers: { "content-type": "application/json" } });
     if (input !== "/api/local-dashboard/agents") throw new Error(`Unexpected request: ${input}`);
     agentReads++;
     return agentReads === 1

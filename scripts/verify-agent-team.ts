@@ -7,14 +7,14 @@ import { mountPreview, parkUntilSignal, type MountedPreview } from "./testing/pr
 const sample: LocalAgentTeamsResponse = {
   status: "ready", updatedAt: Date.UTC(2026, 10, 3, 8, 30), teamCount: 2,
   teams: [
-    { id: "sample-a", name: "Atlas Studio", agentCount: 3, activeAgentCount: 1, agents: [
-      { id: "a1", name: "An intentionally long synthetic agent name for narrow layout checks", kind: "codex", role: "Lead", model: "a-very-long-synthetic-model-identifier-for-wrapping", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft a sample release plan with enough words to fill two lines in a narrow panel. This text is invented for visual checks." },
-      { id: "a2", name: "Mira", kind: "codex", role: null, model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, state: "blocked", taskHint: null },
-      { id: "a3", name: "Pine", kind: "codex", role: "Reviewer", model: "sample-model-b", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "idle", taskHint: "Review sample cards" },
+    { id: "w6", name: "Atlas Studio", agentCount: 3, activeAgentCount: 1, agents: [
+      { id: "w6:p1", name: "An intentionally long synthetic agent name for narrow layout checks", kind: "codex", role: "Lead", model: "a-very-long-synthetic-model-identifier-for-wrapping", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft a sample release plan with enough words to fill two lines in a narrow panel. This text is invented for visual checks." },
+      { id: "w6:p2", name: "Mira", kind: "codex", role: null, model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, state: "blocked", taskHint: null },
+      { id: "w6:p3", name: "Pine", kind: "codex", role: "Reviewer", model: "sample-model-b", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "idle", taskHint: "Review sample cards" },
     ] },
-    { id: "sample-b", name: "Maple Ops", agentCount: 2, activeAgentCount: 0, agents: [
-      { id: "b1", name: "Lark", kind: "codex", role: "Developer", model: "sample-model-c", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "done", taskHint: "Prepare synthetic data" },
-      { id: "b2", name: "Sage", kind: "codex", role: "Designer", model: "sample-model-d", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "unknown", taskHint: null },
+    { id: "w8", name: "Maple Ops", agentCount: 2, activeAgentCount: 0, agents: [
+      { id: "w8:p1", name: "Lark", kind: "codex", role: "Developer", model: "sample-model-c", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "done", taskHint: "Prepare synthetic data" },
+      { id: "w8:p2", name: "Sage", kind: "codex", role: "Designer", model: "sample-model-d", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "unknown", taskHint: null },
     ] },
   ],
 };
@@ -29,7 +29,7 @@ let activityRevision = 0;
 
 function activityFor(agentId: string, scenario: string | null): LocalAgentActivityResponse {
   const status = scenario === "tools" ? "ready" : scenario === "unavailable" || scenario === "unsupported" || scenario === "stale" ? scenario
-    : agentId === "a2" ? "unavailable" : agentId === "a3" ? "unsupported" : agentId === "b1" ? "stale" : "ready";
+    : agentId === "w6:p2" ? "unavailable" : agentId === "w6:p3" ? "unsupported" : agentId === "w8:p1" ? "stale" : "ready";
   const tools: LocalAgentActivityResponse["events"] = Array.from({ length: 70 }, (_, index) => ({ id: `e${index + 3}`, at: Date.UTC(2026, 10, 5, 1, 2 + index),
     kind: index % 2 === 0 ? "tool-call" as const : "tool-result" as const, tool: "functions.exec", text: `Synthetic tool step ${index + 1}; [path] hidden.` }));
   const events: LocalAgentActivityResponse["events"] = status === "unavailable" || status === "unsupported" ? [] : scenario === "tools" ? tools : [
@@ -65,8 +65,8 @@ try {
         if (req.url?.includes("reset=1")) liveSample = sample;
         else if (req.url?.includes("remove=1")) liveSample = { ...sample, updatedAt: sample.updatedAt! + 2000, teamCount: 1, teams: [sample.teams[0]!] };
         else liveSample = { ...sample, updatedAt: sample.updatedAt! + 2000,
-          teams: sample.teams.map((team) => team.id === "sample-a" ? { ...team, activeAgentCount: 0,
-            agents: team.agents.map((agent) => agent.id === "a1" ? { ...agent, state: "done", reasoningEffort: "max", contextUsed: 64_000,
+          teams: sample.teams.map((team) => team.id === "w6" ? { ...team, activeAgentCount: 0,
+            agents: team.agents.map((agent) => agent.id === "w6:p1" ? { ...agent, state: "done", reasoningEffort: "max", contextUsed: 64_000,
               taskHint: "Only the newest synthetic instruction remains visible." } : agent) } : team) };
         res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ updated: true }));
       } },
@@ -87,6 +87,28 @@ try {
               : scenario === "many" ? many : sample;
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify(data));
+      } },
+      { path: /^\/api\/local-dashboard\/teams\/(w\d+)\/rules$/, handler: (_req, res, match) => {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(match![1] === "w6" ? { teamId: "w6", status: "ready", markdown: "# Synthetic playbook.md\nTeam guidance for this isolated fixture." }
+          : { teamId: match![1], status: "missing", markdown: null }));
+      } },
+      { path: /^\/api\/local-dashboard\/agents\/(w\d+(?::|%3A)p[0-9a-z]+)\/configuration$/i, handler: (_req, res, match) => {
+        const agentId = decodeURIComponent(match![1]!);
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ agentId, teamId: agentId.split(":")[0], occupantId: "o1111111111111111",
+          agent: { status: "ready", markdown: "# Synthetic Agent instructions\nThis text is fixture-only.\n[local file](file:///private/fixture)" },
+          skillReferences: "verified", skills: [
+            { id: "s1111111111111111", name: "herdr", association: "team", loadedState: "unknown" },
+            { id: "s2222222222222222", name: "impeccable", association: "agent", loadedState: "unknown" },
+          ] }));
+      } },
+      { path: /^\/api\/local-dashboard\/agents\/(w\d+(?::|%3A)p[0-9a-z]+)\/skills\/(s[0-9a-f]{16})$/i, handler: (_req, res, match) => {
+        const agentId = decodeURIComponent(match![1]!);
+        const skillId = match![2]!;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ agentId, teamId: agentId.split(":")[0], occupantId: "o1111111111111111", skillId,
+          status: "ready", markdown: `# Synthetic ${skillId === "s1111111111111111" ? "Herdr" : "Impeccable"} SKILL.md\nFixture-only skill content.` }));
       } },
       { path: /^\/api\/local-dashboard\/agents\/([^/]+)\/activity$/, handler: (req, res, match) => {
         const scenario = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams.get("activity");

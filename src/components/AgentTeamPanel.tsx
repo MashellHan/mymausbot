@@ -1,12 +1,13 @@
 import { UserRound } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { LocalAgentMember, LocalAgentTeamsResponse, LocalAgentTokenUsageWindow } from "../../shared/local-dashboard";
+import type { LocalAgentMember, LocalAgentTeamRulesResponse, LocalAgentTeamsResponse, LocalAgentTokenUsageWindow } from "../../shared/local-dashboard";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { AgentTown, teamActivity } from "./AgentTown";
 import { AgentActivityDetails, type AgentActivityReader } from "./AgentActivityDetails";
+import { AgentConfigurationViewer, type AgentConfigurationTarget } from "./AgentConfigurationViewer";
 
 const ROUTE = "/api/local-dashboard/agents";
 const REFRESH_MS = 2_000;
@@ -46,17 +47,24 @@ function tokenLabel(period: "24h" | "7d", usage: LocalAgentTokenUsageWindow | un
     accessible: t("computer.agentTeam.tokens24hScope", { value: stale ? t("computer.agentTeam.lastObserved", { state: exact }) : exact }) };
 }
 
-function memberRow(member: LocalAgentMember, stale: boolean, active: boolean, readActivity?: AgentActivityReader) {
+function memberRow(member: LocalAgentMember, stale: boolean, active: boolean, onConfiguration: (member: LocalAgentMember) => void,
+  readActivity?: AgentActivityReader) {
   const number = (value: number | null) => value === null ? "—" : value.toLocaleString(activeLocale());
   const context = member.contextUsed !== null && member.contextWindow !== null && member.contextWindow > 0
     ? Math.round(member.contextUsed / member.contextWindow * 100) : null;
   return (
-    <li key={member.id} className="flex min-w-0 gap-2.5 border-t border-hairline/40 py-3 first:border-t-0">
+    <li key={member.id} data-agent-id={member.id} className="flex min-w-0 gap-2.5 border-t border-hairline/40 py-3 first:border-t-0">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-inset text-ink-secondary" aria-hidden="true"><UserRound size={16} /></span>
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
-          <span dir="auto" className="min-w-0 text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{member.name}</span>
-          <span className="text-[11px] text-ink-tertiary">{member.role ?? t("computer.agentTeam.roleUnavailable")}</span>
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1.5">
+            <span dir="auto" className="min-w-0 text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{member.name}</span>
+            <span className="text-[11px] text-ink-tertiary">{member.role ?? t("computer.agentTeam.roleUnavailable")}</span>
+          </div>
+          <button type="button" aria-haspopup="dialog" onClick={() => onConfiguration(member)}
+            className="shrink-0 rounded-md px-1.5 py-1 text-[11px] font-medium text-ink-secondary hover:bg-raised-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">
+            {t("computer.agentTeam.config.title")}
+          </button>
         </div>
         <div className="mt-1 text-[11px] text-ink-secondary">
           <span className="inline-flex items-center gap-1.5"><span className={cn("size-1.5 shrink-0 rounded-full", stale ? "bg-ink-secondary/30" : stateDot[member.state])} aria-hidden="true" />{stale ? t("computer.agentTeam.lastObserved", { state: t(stateLabel[member.state]) }) : t(stateLabel[member.state])}</span>
@@ -91,7 +99,12 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
   const membersRef = useRef<HTMLElement>(null);
   const restoreFocus = useRef(false);
   const focusedElement = useRef<Element | null>(null);
+  const [teamRules, setTeamRules] = useState<LocalAgentTeamRulesResponse | null>(null);
+  const [viewer, setViewer] = useState<AgentConfigurationTarget | null>(null);
   const selectedTeam = snapshot?.teams.find((team) => team.id === selectedTeamId);
+  const viewerTeam = viewer && snapshot?.teams.find((team) => team.id === viewer.teamId);
+  const activeViewer = active && viewerTeam && selectedTeamId === viewer?.teamId && (viewer?.kind === "team"
+    || viewerTeam.agents.some((member) => member.id === viewer?.agentId && member.name === viewer.name)) ? viewer : null;
   const count = snapshot?.teamCount ?? t("computer.agentTeam.unknownCount");
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
     ? null : new Date(snapshot.updatedAt).toLocaleString(activeLocale());
@@ -107,6 +120,20 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
     candidates.sort((a, b) => priority(b) - priority(a) || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
     setSelectedTeamId(candidates[0]?.id ?? null);
   }, [active, snapshot]);
+
+  useEffect(() => {
+    if (!active || !selectedTeamId) { setTeamRules(null); return; }
+    const controller = new AbortController();
+    let current = true;
+    setTeamRules(null);
+    void api<LocalAgentTeamRulesResponse>(`/api/local-dashboard/teams/${encodeURIComponent(selectedTeamId)}/rules`,
+      { background: true, signal: controller.signal, timeoutMs: 10_000 })
+      .then((result) => { if (current && result.teamId === selectedTeamId) setTeamRules(result); })
+      .catch(() => { if (current && !controller.signal.aborted) setTeamRules(null); });
+    return () => { current = false; controller.abort(); };
+  }, [active, selectedTeamId]);
+
+  useEffect(() => { if (viewer && !activeViewer) setViewer(null); }, [viewer, activeViewer]);
 
   useEffect(() => {
     const rememberFocus = (event: FocusEvent) => { focusedElement.current = event.target as Element; };
@@ -140,7 +167,7 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
       {snapshot?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.unavailable")}</p> : null}
       {snapshot?.teamCount === 0 && snapshot.teams.length === 0 ? <p className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.empty")}</p> : null}
       {!!snapshot?.teams.length && <AgentTown teams={snapshot.teams} stale={stale} selectedId={selectedTeamId} detailsId={`${baseId}-members`} selectorRef={selectorRef}
-        onSelect={(id) => setSelectedTeamId((current) => current === id ? null : id)} />}
+        onSelect={(id) => { setViewer(null); setSelectedTeamId((current) => current === id ? null : id); }} />}
       {selectedTeam && <section key={selectedTeam.id} ref={membersRef} id={`${baseId}-members`} aria-labelledby={`${baseId}-team-name`} data-testid="selected-agent-team" className="min-w-0 rounded-xl border border-hairline/60 bg-card">
         <header className="flex min-w-0 items-start justify-between gap-3 border-b border-hairline/40 px-3 py-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
@@ -150,16 +177,27 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
               aria-label={teamTokens[period].accessible} title={teamTokens[period].accessible}
               className="text-[11px] tabular-nums text-ink-secondary">{teamTokens[period].shown}</span>)}
           </div>
-          <div className="shrink-0 text-right text-[12px] tabular-nums text-ink-secondary">
-            <span className="block">{selectedTeam.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: selectedTeam.agentCount })}</span>
-            <span className={cn("mt-0.5 block", !stale && selectedTeam.activeAgentCount > 0 && "text-success")}>{t(stale ? "computer.agentTeam.lastActive" : "computer.agentTeam.activeCount", { count: selectedTeam.activeAgentCount })}</span>
+          <div className="flex shrink-0 items-start gap-2">
+            {teamRules?.teamId === selectedTeam.id && (teamRules.status === "ready" || teamRules.status === "error") &&
+              <button type="button" aria-haspopup="dialog" onClick={() => setViewer({ kind: "team", teamId: selectedTeam.id, name: selectedTeam.name })}
+                className="shrink-0 rounded-md px-1.5 py-1 text-[11px] font-medium text-ink-secondary hover:bg-raised-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">
+                {t("computer.agentTeam.config.teamRules")}
+              </button>}
+            <div className="text-right text-[12px] tabular-nums text-ink-secondary">
+              <span className="block">{selectedTeam.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: selectedTeam.agentCount })}</span>
+              <span className={cn("mt-0.5 block", !stale && selectedTeam.activeAgentCount > 0 && "text-success")}>{t(stale ? "computer.agentTeam.lastActive" : "computer.agentTeam.activeCount", { count: selectedTeam.activeAgentCount })}</span>
+            </div>
           </div>
         </header>
         <div className="px-3 pb-1">
-          {selectedTeam.agents.length ? <ul>{selectedTeam.agents.map((member) => memberRow(member, stale, active, readActivity))}</ul>
+          {selectedTeam.agents.length ? <ul>{selectedTeam.agents.map((member) => memberRow(member, stale, active,
+            (selected) => setViewer({ kind: "member", teamId: selectedTeam.id, agentId: selected.id, name: selected.name }), readActivity))}</ul>
             : <p className="py-3 text-[12px] text-ink-tertiary">{t("computer.agentTeam.noAgents")}</p>}
         </div>
       </section>}
+      {activeViewer && <AgentConfigurationViewer key={`${activeViewer.kind}:${activeViewer.teamId}:${activeViewer.kind === "member" ? activeViewer.agentId : ""}:${activeViewer.name}`}
+        target={activeViewer} onClose={() => setViewer(null)} fallbackFocus={panelRef}
+        onRulesRead={(result) => setTeamRules((current) => current?.teamId === result.teamId ? result : current)} />}
     </div>
   );
 }
