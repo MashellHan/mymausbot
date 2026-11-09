@@ -288,7 +288,7 @@ it("shows Codex availability separately from team declarations and never calls u
   await act(async () => viewer()!.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
   expect(viewer()?.textContent).toContain("Team or role skill declarations could not be verified");
   expect(viewer()?.textContent).toContain("agent-desktop");
-  expect(viewer()?.textContent).toContain("Enabled and discoverable in Codex for this workspace");
+  expect(viewer()?.textContent).toContain("Enabled and discoverable in Codex for this working directory");
   expect(viewer()?.textContent).toContain("Loaded in this session: unknown");
   expect(viewer()?.textContent).not.toContain("No declared or enabled Codex skills were found");
 });
@@ -301,7 +301,7 @@ it("reports failed Codex discovery without presenting an unverified empty set as
   await act(async () => trigger("w6:p2").click());
   await vi.waitFor(() => expect(viewer()?.querySelectorAll('[role="tab"]')).toHaveLength(2));
   await act(async () => viewer()!.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
-  expect(viewer()?.textContent).toContain("Codex skill discovery could not be read for this workspace");
+  expect(viewer()?.textContent).toContain("Codex skill discovery could not be read for this working directory");
   expect(viewer()?.textContent).not.toContain("No declared or enabled Codex skills were found");
 });
 
@@ -315,7 +315,7 @@ it("keeps declared skills visible when Codex discovery times out inside the conf
   expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/agents/w6%3Ap2/configuration",
     expect.objectContaining({ timeoutMs: 12_000, signal: expect.any(AbortSignal) }));
   await act(async () => viewer()!.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
-  expect(viewer()?.textContent).toContain("Codex skill discovery timed out for this workspace");
+  expect(viewer()?.textContent).toContain("Codex skill discovery timed out for this working directory");
   expect(viewer()?.textContent).toContain("impeccable");
   expect(viewer()?.textContent).toContain("herdr");
 });

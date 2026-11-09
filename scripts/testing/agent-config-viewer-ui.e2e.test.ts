@@ -98,7 +98,7 @@ const enabled = process.env.OMB_AGENT_CONFIG_UI === "1";
         await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.textContent?.includes('herdr')");
         await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.textContent?.includes('agent-desktop')");
         const skillCopy = await page.evaluate("document.querySelector('[data-testid=agent-config-viewer]')?.textContent ?? ''");
-        expect(skillCopy).toContain(locale === "en" ? "Enabled and discoverable in Codex for this workspace" : "Codex 在此工作区已启用并可发现");
+        expect(skillCopy).toContain(locale === "en" ? "Enabled and discoverable in Codex for this working directory" : "Codex 在此工作区已启用并可发现");
         expect(skillCopy).not.toContain(locale === "en" ? "No declared or enabled Codex skills were found" : "未发现已声明或 Codex 已启用的技能");
         const skillsOverflow = await page.evaluate("(() => { const panel = document.querySelector('[role=tabpanel]'); return panel.scrollWidth - panel.clientWidth; })()");
         expect(skillsOverflow).toBeLessThanOrEqual(1);
