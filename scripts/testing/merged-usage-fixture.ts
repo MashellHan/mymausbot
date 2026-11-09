@@ -19,3 +19,18 @@ export function withMergedUsageFixture(snapshot: LocalUsageResponse): LocalUsage
       wow: { prs: day.wow.prs, commits: day.wow.commits },
     })) } };
 }
+
+export function withGithubUsageFixture(snapshot: LocalUsageResponse): LocalUsageResponse {
+  const merged = structuredClone(withMergedUsageFixture(snapshot).merged!);
+  const clearChinaCommits = (value: object) => {
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "coverage" && item === "ready") (value as Record<string, unknown>)[key] = "partial";
+      else if (key === "commits") (value as Record<string, unknown>)[key] = null;
+      else if (item && typeof item === "object") clearChinaCommits(item);
+    }
+  };
+  clearChinaCommits(merged);
+  return { ...snapshot, github: { status: merged.status === "ready" ? "partial" : merged.status, asOf: merged.asOf, timeZone: merged.timeZone,
+    sourceCoverage: merged.sourceCoverage, windows: merged.windows, trend: merged.trend,
+    metricDefinition: "github-profile-v1", dateBasis: { prs: "created-at/Asia-Shanghai", commits: "github-profile-day" }, chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture" } };
+}

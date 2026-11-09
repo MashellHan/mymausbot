@@ -5352,10 +5352,10 @@
   "computer.usage.tokenPeriodUnavailable": "当前周期没有可用的 Token 记录。",
   "computer.usage.tokenHistoryMissing": "对比周期缺少 {count} 天的 Token 历史记录。",
   "computer.usage.tokenCollectionIncomplete": "Token 采集不完整或已过期，暂无法比较。",
-  "computer.usage.captureTimes": "合并活动采集于 {merged}；Token 采集于 {tokens}。",
+  "computer.usage.captureTimes": "GitHub 贡献采集于 {merged}；Token 采集于 {tokens}。",
   "computer.usage.mergedPrHint": "你创建且已在远端合并的 PR，按北京时间的合并日期计数。",
   "computer.usage.mergedCommitHint": "你已合并 PR 中的原始非 merge 提交，归到 PR 合并当天。Squash 前有 5 个仍计 5 个；不计直接 push 和未合并 PR。",
-  "computer.usage.syncedCountHint": "远端已确认的数量；部分来源尚不完整。",
+  "computer.usage.syncedCountHint": "当前可见的 GitHub 参考数；部分日期或权限可能不完整。提交参考数使用 Profile 日桶，并非精确中国日数。",
   "computer.usage.activityScopeHint": "基于已同步设备；尚未同步的设备不计入。",
   "computer.usage.dailyComparisonHint": "对比上周同一自然日。",
   "computer.usage.changeUnavailableHint": "可比数据不足。",
@@ -7654,7 +7654,7 @@
   "computer.agentTeam.activity.timeUnavailable": "时间不可用",
   "computer.agentTeam.activity.textUnavailable": "消息不可用",
   "computer.agentTeam.activity.list": "最近消息",
-  "computer.usage.synced": "已同步",
+  "computer.usage.synced": "参考数",
   "computer.usage.syncedHint": "已确认的 PR 数；其他来源尚未同步完整。",
   "computer.usage.category.work": "企业",
   "computer.usage.category.personal": "个人",
@@ -7773,5 +7773,8 @@
   "file.tooLarge": "文档超过预览大小上限（1 MB）。请下载后查看。",
   "file.invalid": "无法将此文件读取为 Markdown。请下载后打开。",
   "file.loadFailed": "无法加载文件。请重试或下载副本。",
-  "file.empty": "此文档为空。"
+  "file.empty": "此文档为空。",
+  "computer.usage.githubPrHint": "当前非 fork GitHub 仓库中可见的新建 PR，按 createdAt 投影到北京时间。参考子集不能证明创建时的仓库状态或隐藏活动；合并日期不决定计数。",
+  "computer.usage.githubCommitHint": "当前可见的 GitHub Profile 提交贡献，保留来源日桶。精确中国日提交数未知，参考数不与旧口径比较。",
+  "computer.usage.githubDateBasis": "PR 参考数排除当前 fork 仓库，按北京时间的创建日期计数；提交参考数保留 GitHub Profile 日期，精确中国日数未知。私有或受限活动可能缺失，不与旧口径比较。"
 }

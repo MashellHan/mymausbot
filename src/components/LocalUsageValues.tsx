@@ -5,8 +5,8 @@ export const usageMetrics = ["prs", "commits", "totalTokens"] as const;
 export type UsageMetric = typeof usageMetrics[number];
 export const metricText = (value: number | null) => value === null ? t("computer.usage.unavailable") : value.toLocaleString(activeLocale());
 export const countText = (value: number | null, known: number | null) => metricText(value ?? known);
-export const usageMetricHint = (metric: UsageMetric) => t(metric === "prs" ? "computer.usage.mergedPrHint"
-  : metric === "commits" ? "computer.usage.mergedCommitHint" : "computer.usage.activityScopeHint");
+export const usageMetricHint = (metric: UsageMetric) => t(metric === "prs" ? "computer.usage.githubPrHint"
+  : metric === "commits" ? "computer.usage.githubCommitHint" : "computer.usage.activityScopeHint");
 export const changeText = (value: LocalUsageWeekChange) => value === null ? "—" : value === "new" ? t("computer.usage.newActivity")
   : new Intl.NumberFormat(activeLocale(), { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 1 }).format(value / 100);
 
@@ -29,5 +29,6 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
 
 export function UsageCount({ value, known }: { value: number | null; known: number | null }) {
   const partial = value === null && known !== null;
-  return <span data-usage-provisional={partial || undefined} title={partial ? t("computer.usage.syncedCountHint") : undefined}>{countText(value, known)}</span>;
+  const description = partial ? t("computer.usage.syncedCountHint") : undefined;
+  return <span data-usage-provisional={partial || undefined} title={description} aria-description={description}>{countText(value, known)}</span>;
 }

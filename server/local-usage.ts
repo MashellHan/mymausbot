@@ -9,6 +9,7 @@ import type {
 } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
 import { createLocalUsageMergedReader } from "./local-usage-merged.ts";
+import { createLocalUsageGithubReader } from "./local-usage-github.ts";
 
 const CATEGORIES: LocalUsageCategory[] = ["work", "personal", "unclassified"];
 const WINDOWS = [1, 7, 30] as const;
@@ -443,11 +444,13 @@ const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, tim
   sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
 
 export function createLocalUsageProvider({ file = join(homedir(), ".local", "share", "agent-town", "activity", "latest.json"),
-  mergedFile = join(homedir(), ".local", "share", "mymausbot", "usage", "merged-v1.json"), now = Date.now }: {
-  file?: string; mergedFile?: string; now?: () => number;
+  mergedFile = join(homedir(), ".local", "share", "mymausbot", "usage", "merged-v1.json"),
+  githubFile = join(homedir(), ".local", "share", "mymausbot", "usage", "github-profile-v1.json"), now = Date.now }: {
+  file?: string; mergedFile?: string; githubFile?: string; now?: () => number;
 } = {}) {
   let lastGood: LocalUsageResponse | null = null;
   const readMerged = createLocalUsageMergedReader(mergedFile, now);
+  const readGithub = createLocalUsageGithubReader(githubFile, now);
   return {
     async get(): Promise<LocalUsageResponse> {
       let local: LocalUsageResponse;
@@ -462,7 +465,8 @@ export function createLocalUsageProvider({ file = join(homedir(), ".local", "sha
         local = lastGood ? { ...lastGood, status: "stale" } : unavailable;
       }
       const merged = await readMerged();
-      return merged ? { ...local, merged } : local;
+      const github = await readGithub();
+      return { ...local, ...(merged ? { merged } : {}), ...(github ? { github } : {}) };
     },
   };
 }

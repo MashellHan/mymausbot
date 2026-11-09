@@ -1,7 +1,7 @@
 import type {
   LocalUsageCategory, LocalUsageCounts, LocalUsageMergedCounts, LocalUsageResponse,
   LocalUsageTrendDay, LocalUsageWindow,
-} from "../../shared/local-dashboard";
+} from "../../shared/local-dashboard.ts";
 
 type UsageCounts = LocalUsageCounts & { knownCommits: number | null };
 type Categories = Record<LocalUsageCategory, UsageCounts>;
@@ -43,10 +43,10 @@ function tokenChange(snapshot: LocalUsageResponse, window: Pick<LocalUsageWindow
 }
 
 export function localUsageView(snapshot: LocalUsageResponse) {
-  const merged = snapshot.merged;
-  const basis = merged?.windows ?? snapshot.windows;
+  const github = snapshot.github?.metricDefinition === "github-profile-v1" ? snapshot.github : undefined;
+  const basis = github?.windows ?? snapshot.windows;
   const windows = basis && Object.fromEntries(periods.map((key) => {
-    const window = basis[key], remote = merged?.windows?.[key];
+    const window = basis[key], remote = github?.windows?.[key];
     const observed = remote?.coverage !== "unavailable" ? remote : undefined;
     const previousStart = shiftDay(window.startDay, -window.days), previousEnd = shiftDay(window.startDay, -1);
     const tokens = tokensIn(snapshot, window.startDay, window.endDay);
@@ -66,7 +66,7 @@ export function localUsageView(snapshot: LocalUsageResponse) {
         totalTokens: tokenChange(snapshot, window), categories: observed?.comparison.categories ?? emptyComparisons() },
     } satisfies UsageWindow];
   })) as Record<typeof periods[number], UsageWindow> | null;
-  const remoteDays = new Map(merged?.trend.map((day) => [day.day, day]));
+  const remoteDays = new Map(github?.trend.map((day) => [day.day, day]));
   const tokenDays = new Map(snapshot.trend.map((day) => [day.day, day]));
   const trend: UsageTrendDay[] = basis ? Array.from({ length: 30 }, (_, index) => {
     const day = shiftDay(basis["30"].startDay, index), raw = remoteDays.get(day);
@@ -78,14 +78,15 @@ export function localUsageView(snapshot: LocalUsageResponse) {
         newTokens: token?.wow.newTokens ?? null, totalTokens: token?.wow.totalTokens ?? null } };
   }) : [];
   const tokenStatus = !snapshot.windows ? "unavailable" : snapshot.status === "stale" ? "stale" : snapshot.windows["30"].tokenCoverage;
-  const statuses = [merged?.status ?? "unavailable", tokenStatus];
+  const statuses = [github?.status ?? "unavailable", tokenStatus];
   const status = statuses.every((status) => status === "unavailable") ? "unavailable"
     : statuses.includes("stale") ? "stale" : statuses.every((status) => status === "ready") ? "ready" : "partial";
-  return { windows, trend, status, asOf: merged?.asOf ?? snapshot.asOf };
+  return { windows, trend, status, asOf: github?.asOf ?? snapshot.asOf };
 }
 
 export function retainUsageSnapshot(previous: LocalUsageResponse | null, next: LocalUsageResponse): LocalUsageResponse {
   const local = !next.windows && previous?.windows ? { ...previous, status: "stale" as const } : next;
   const merged = !next.merged?.windows && previous?.merged?.windows ? { ...previous.merged, status: "stale" as const } : next.merged;
-  return { ...local, merged };
+  const github = !next.github?.windows && previous?.github?.windows ? { ...previous.github, status: "stale" as const } : next.github;
+  return { ...local, merged, github };
 }

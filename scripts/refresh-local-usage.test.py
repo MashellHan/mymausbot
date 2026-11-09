@@ -361,6 +361,18 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
         self.assertEqual(result["retainedCapturedAt"], old["capturedAt"])
         self.assertEqual(result["errors"], [{"source": "repositories", "rootIndex": 2, "code": "TimeoutExpired"}])
 
+    def test_profile_opt_in_routes_independently_and_preserves_skip_api(self):
+        collector = types.SimpleNamespace(run=lambda args, timeout: "{}",
+            remote_category=lambda remote, config: "personal", refresh=lambda config, **options: None)
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER]}
+        with patch.object(usage, "load_collector", return_value=collector), patch.object(usage.local_usage_github, "refresh") as profile:
+            usage.refresh(self.root / "collector.py", config, self.root)
+            profile.assert_not_called()
+            config["githubContributionSource"] = "github-profile-v1"
+            usage.refresh(self.root / "collector.py", config, self.root, skip_api=True)
+            self.assertTrue(profile.call_args.kwargs["skip_api"])
+            self.assertIs(profile.call_args.args[0], config)
+
     def test_local_worker_timeout_kills_and_reaps_its_process_group(self):
         class Worker:
             pid = 123
