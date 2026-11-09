@@ -5,6 +5,7 @@ import { useAdvancedMode } from "@/lib/interface-mode";
 import { useShowThreads } from "@/lib/thread-preferences";
 import { requestChatFind, useChatFindOpen } from "@/lib/chat-find";
 import { usageSummary } from "@/lib/chat-usage-summary";
+import { writeComputerPanelView } from "@/lib/computer-panel-view";
 import {
   copyTranscriptToClipboard,
   downloadMarkdownTranscript,
@@ -64,7 +65,10 @@ export function useChatMoreItems(profile: Bot, phoneHeader = false): { items: Si
       label: t("chat.computer"),
       icon: <Monitor size={16} />,
       active: state.computerOpen,
-      onSelect: () => dispatch({ type: "toggleComputer" }),
+      onSelect: () => {
+        if (!state.computerOpen) writeComputerPanelView(bot.id, "mini-apps");
+        dispatch({ type: "toggleComputer" });
+      },
     },
   ] : [];
   const items: SidebarMenuItem[] = [

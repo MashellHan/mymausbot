@@ -96,6 +96,7 @@ const spinning = () => document.querySelector(".animate-spin") !== null;
 const button = (label: string) => [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === label);
 
 beforeAll(() => {
+  vi.stubGlobal("localStorage", { getItem: (key: string) => key.startsWith("omb-computer-panel-view:") ? "computer" : null, setItem: () => {} });
   vi.stubGlobal("ogb", undefined);
 });
 afterEach(() => {

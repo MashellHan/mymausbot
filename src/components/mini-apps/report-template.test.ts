@@ -19,7 +19,7 @@ const item = (extras: Partial<Row> = {}): Row => ({
 function page(rows: Row[], revision: number) {
   return { columns: Object.keys(rows[0] ?? {}).map((name) => ({ name, type: "text" })), rows: rows.map(Object.values), revision };
 }
-function fixture(kind: ReportKind, initial?: { current: Row; editions: Array<{ header: Row; items: Row[] }> }) {
+function fixture(kind: ReportKind, initial?: { current: Row; editions: Array<{ header: Row; items: Row[] }> }, openSource?: (url: string) => Promise<void>) {
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   const data = { current: null as Row | null, editions: new Map<string, { header: Row; items: Row[] }>(), revision: 3, fail: false,
     historyCursor: false, deferredHistory: null as Promise<ReturnType<typeof page>> | null,
@@ -42,7 +42,8 @@ function fixture(kind: ReportKind, initial?: { current: Row; editions: Array<{ h
     if (id === "items") return page(data.editions.get(parameters.editionKey)?.items ?? [], data.revision);
     throw new Error(`Unknown query ${id}`);
   });
-  (view as unknown as { mausApp: unknown }).mausApp = { query, onDataChanged: (listener: () => void) => { changed = listener; return () => { changed = undefined; }; } };
+  (view as unknown as { mausApp: unknown }).mausApp = { query, onDataChanged: (listener: () => void) => { changed = listener; return () => { changed = undefined; }; },
+    ...(openSource ? { openSource } : {}) };
   view.document.write(createReportTemplate(kind));
   return { view, data, query, changed: () => changed?.(), text: () => view.document.querySelector("main")?.textContent ?? "" };
 }
@@ -88,19 +89,22 @@ it("keeps an earlier X edition selected across Data refresh and separates all da
   const older = header("2026-11-03", { reportSummary: null });
   const latest = header("2026-11-04", { sourceAsOfAt: "2026-11-05T00:00:00Z", reportSummary: "Only selected items." });
   app.data.current = latest;
-  app.data.editions.set("2026-11-03", { header: older, items: [item({ title: "<img src=x>", sourceUrl: "https://example.org/older" })] });
-  app.data.editions.set("2026-11-04", { header: latest, items: [item()] });
+  app.data.editions.set("2026-11-03", { header: older, items: [item({ title: "<img src=x>", sourceUrl: "https://example.org/older", selectionBasis: "Earlier X selection basis" })] });
+  app.data.editions.set("2026-11-04", { header: latest, items: [item({ selectionBasis: "Latest X selection basis" })] });
   app.changed();
   await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("Latest X selection basis");
   const select = app.view.document.getElementById("edition") as unknown as HTMLSelectElement;
   select.value = "2026-11-03";
   select.dispatchEvent(new app.view.Event("change") as unknown as Event);
   await app.view.happyDOM.whenAsyncComplete();
   expect(app.text()).toContain("<img src=x>");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("Earlier X selection basis");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).not.toContain("Latest X selection basis");
   expect(app.view.document.querySelector("#report img")).toBeNull();
   expect(app.text()).toContain("Source date unavailable");
-  expect(app.text()).toContain("Issue date · China time");
-  expect(app.text()).toContain("Report published at");
+  expect(app.text()).toContain("Issue date");
+  expect(app.text()).toContain("Report published");
   expect(app.text()).not.toContain("Only selected items.");
   expect(app.view.document.querySelectorAll("#report a")).toHaveLength(0);
   expect(app.view.document.querySelector(".source-url")?.textContent).toBe("https://example.org/older");
@@ -112,6 +116,102 @@ it("keeps an earlier X edition selected across Data refresh and separates all da
   expect(select.value).toBe("2026-11-03");
   expect(app.text()).toContain("<img src=x>");
   expect(app.query).toHaveBeenCalledWith("edition", { editionKey: "2026-11-03" }, { expectedDataRevision: 4 });
+});
+
+it("keeps keyboard focus on the same report control after refresh and moves it to a valid fallback when removed", async () => {
+  const current = header("2026-11-05");
+  const first = item({ itemIndex: 1, title: "First story" });
+  const second = item({ itemIndex: 2, title: "Second story" });
+  const app = fixture("x_ai_digest", { current, editions: [{ header: current, items: [first, second] }] }, async () => {}); opened.push(app.view);
+  await app.view.happyDOM.whenAsyncComplete();
+  const originalIndex = app.view.document.querySelector('[data-report-index="2"]') as unknown as HTMLButtonElement;
+  originalIndex.click();
+  originalIndex.focus();
+  expect(app.view.document.activeElement).toBe(originalIndex);
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  const retainedIndex = app.view.document.querySelector('[data-report-index="2"]');
+  expect(retainedIndex).not.toBe(originalIndex);
+  expect(app.view.document.activeElement).toBe(retainedIndex);
+
+  const originalAction = app.view.document.querySelector('[data-report-action="original"]') as unknown as HTMLButtonElement;
+  originalAction.focus();
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.activeElement).not.toBe(originalAction);
+  expect(app.view.document.activeElement?.getAttribute("data-report-action")).toBe("original");
+
+  app.data.editions.set("2026-11-05", { header: current, items: [first] });
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.activeElement?.getAttribute("data-report-index")).toBe("1");
+  app.data.current = null;
+  app.data.editions.clear();
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.activeElement?.id).toBe("report");
+});
+
+it("keeps a recorded overview separate from the indexed selected story and its exact source date", async () => {
+  const latest = header("2026-11-05", { reportSummary: "Two selected synthetic updates." });
+  const app = fixture("x_ai_digest", { current: latest, editions: [{ header: latest, items: [
+    item({ itemIndex: 1, title: "First update", summary: "First recorded summary", sourcePublishedAt: "2026-11-02",
+      whyItMatters: "Recorded reason" }),
+    item({ itemIndex: 2, title: "Second update", summary: "Second recorded summary", sourceUrl: "https://example.org/second",
+      verificationNote: "Recorded verification" }),
+  ] }] }); opened.push(app.view);
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.querySelector(".overview-summary")?.textContent).toBe("Two selected synthetic updates.");
+  const index = [...app.view.document.querySelectorAll("[data-report-index]")] as unknown as HTMLButtonElement[];
+  expect(index).toHaveLength(2);
+  expect(index[0]?.getAttribute("aria-pressed")).toBe("true");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("First recorded summary");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("Why it matters");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("2026-11-02");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).not.toContain("08:00");
+  index[1]!.click();
+  expect(index[1]?.getAttribute("aria-pressed")).toBe("true");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("Second recorded summary");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).not.toContain("First recorded summary");
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.querySelector('[data-report-index="2"]')?.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("offers a real source action only with the guarded host method and never navigates an invalid URL", async () => {
+  const latest = header("2026-11-05");
+  const edition = { current: latest, editions: [{ header: latest, items: [item({ sourceUrl: "https://example.org/source" })] }] };
+  const fallback = fixture("x_ai_digest", edition); opened.push(fallback.view);
+  await fallback.view.happyDOM.whenAsyncComplete();
+  expect(fallback.view.document.querySelector(".source-url")?.textContent).toBe("https://example.org/source");
+  expect(fallback.view.document.querySelector(".source-action")).toBeNull();
+  expect(fallback.view.document.querySelector("#report a")).toBeNull();
+
+  const openSource = vi.fn(async (_url: string) => {});
+  const active = fixture("x_ai_digest", edition, openSource); opened.push(active.view);
+  await active.view.happyDOM.whenAsyncComplete();
+  const action = active.view.document.querySelector(".source-action") as unknown as HTMLButtonElement | null;
+  expect(action?.textContent).toBe("Open original source");
+  action!.click();
+  await active.view.happyDOM.whenAsyncComplete();
+  expect(openSource).toHaveBeenCalledExactlyOnceWith("https://example.org/source");
+  openSource.mockRejectedValueOnce(new Error("Synthetic host refusal"));
+  action!.click();
+  await active.view.happyDOM.whenAsyncComplete();
+  expect(active.view.document.getElementById("notice")?.textContent).toContain("Source could not be opened");
+  expect(active.view.document.querySelector(".source-url")?.textContent).toBe("https://example.org/source");
+
+  active.data.editions.set("2026-11-05", { header: latest, items: [item({ sourceUrl: "javascript:alert(1)" })] });
+  active.data.revision++;
+  active.changed();
+  await active.view.happyDOM.whenAsyncComplete();
+  expect(active.view.document.querySelector(".source-action, .source-url")).toBeNull();
+  expect(openSource).toHaveBeenCalledTimes(2);
 });
 
 it.each(["x_ai_digest", "github_activity"] as const)("keeps %s publication identity truthful while a historical read fails or disappears", async (kind) => {
