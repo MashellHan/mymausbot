@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-import { electronRecovery } from "./ensure-electron.mjs";
+import { electronInstallEnvironment, electronRecovery } from "./ensure-electron.mjs";
 
 const require = createRequire(import.meta.url);
 const packageDir = dirname(realpathSync(require.resolve("electron")));
@@ -18,9 +18,43 @@ describe("original Electron runtime recovery", () => {
   ])("uses the published %s-%s bytes and the locked package checksum", (platform, arch, digest) => {
     const recovery = electronRecovery("43.7.9", platform, arch, checksums);
     expect(recovery).toEqual({
-      archive: `electron-v43.7.9-${platform}-${arch}.zip`, digest,
+      archive: `electron-v43.7.9-${platform}-${arch}.zip`, digest, platform, arch,
       mirror: "https://npmmirror.com/mirrors/electron/", directory: "{{ version }}",
     });
+  });
+
+  it("pins the fallback child to the verified target and local checksums", () => {
+    const recovery = electronRecovery("43.7.9", "linux", "x64", checksums);
+    const inherited = {
+      PATH: "/fixture/bin",
+      electron_use_remote_checksums: "1",
+      NPM_CONFIG_ELECTRON_USE_REMOTE_CHECKSUMS: "1",
+      ELECTRON_INSTALL_PLATFORM: "darwin",
+      ELECTRON_INSTALL_ARCH: "arm64",
+      Electron_Install_Arch: "arm64",
+      npm_config_platform: "darwin",
+      npm_config_arch: "arm64",
+      ELECTRON_MIRROR: "https://untrusted.invalid/",
+      NPM_CONFIG_ELECTRON_MIRROR: "https://untrusted.invalid/",
+    };
+    const env = electronInstallEnvironment(recovery, inherited);
+    expect(env).toMatchObject({
+      PATH: "/fixture/bin",
+      ELECTRON_INSTALL_PLATFORM: "linux",
+      ELECTRON_INSTALL_ARCH: "x64",
+      ELECTRON_MIRROR: recovery.mirror,
+      ELECTRON_CUSTOM_DIR: recovery.directory,
+      npm_config_electron_mirror: recovery.mirror,
+      npm_config_electron_customdir: recovery.directory,
+    });
+    const names = Object.keys(env).map((name) => name.toLowerCase());
+    for (const name of ["electron_use_remote_checksums", "npm_config_electron_use_remote_checksums", "npm_config_platform", "npm_config_arch"]) {
+      expect(names).not.toContain(name);
+    }
+    for (const name of ["electron_install_platform", "electron_install_arch", "electron_mirror"]) {
+      expect(names.filter((candidate) => candidate === name)).toHaveLength(1);
+    }
+    expect(inherited.ELECTRON_INSTALL_ARCH).toBe("arm64");
   });
 
   it("refuses an unreviewed version or a changed checksum", () => {
