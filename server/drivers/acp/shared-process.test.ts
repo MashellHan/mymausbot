@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderInstance, RuntimeEvent, SendTurnInput } from "../../contracts.ts";
 import { TurnNotStartedError } from "../../contracts.ts";
 import { botBox } from "../../bot-box/box.ts";
+import { planBox, visibleInBox } from "../../bot-box/plan.ts";
 import { engineHomes } from "../../engine-homes/engine-homes.ts";
+import { audienceHome } from "../../engine-homes/layout.ts";
 import * as procs from "../../procs.ts";
 import { removeTempDir } from "../../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
@@ -143,16 +145,30 @@ describe("ACP threads sharing one agent process", () => {
     expect(boxes.every((box) => typeof box === "object" && box.botThreads === true)).toBe(true);
   });
 
-  it("on a Team Cloud never shares a process between two audiences, whose engines have homes of their own", async () => {
+  it("on a Team Cloud keeps a full-access box within its conversation, including task files and uploads", async () => {
+    vi.spyOn(botBox, "enabled").mockReturnValue(true);
     const f = await fixture();
     const dataDir = mkdtempSync(join(tmpdir(), "omb-acp-homes-"));
     scratches.push(dataDir);
+    const folder = (thread: string) => join(dataDir, "task-workspaces", "bot-a", thread);
+    for (const thread of ["thread-a", "thread-b", "thread-c"]) mkdirSync(folder(thread), { recursive: true });
     engineHomes.start({ dataDir, serverHome: dataDir, audienceOf: (threadId) => (threadId === "thread-c" ? "member:p_cleo" : "member:p_ada"), threads: () => [], log: () => {} });
     try {
-      await Promise.all(["thread-a", "thread-b"].map((threadId) => engineHomes.within(threadId, () => f.run(threadId))));
-      expect(f.spawned).toHaveLength(1);
-      expect((await engineHomes.within("thread-c", () => f.run("thread-c"))).done).toMatchObject({ ok: true });
+      await Promise.all(["thread-a", "thread-b"].map((threadId) => engineHomes.within(threadId, () => f.run(threadId, { cwd: folder(threadId) }))));
       expect(f.spawned).toHaveLength(2);
+      expect((await engineHomes.within("thread-c", () => f.run("thread-c", { cwd: folder("thread-c") }))).done).toMatchObject({ ok: true });
+      expect(f.spawned).toHaveLength(3);
+      const boxes = vi.mocked(procs.spawnCli).mock.calls.filter((call) => call[3] === "bot").map((call) => call[2].box);
+      expect(boxes.every((box) => typeof box === "object" && box.botThreads === false)).toBe(true);
+      const plan = planBox({ dataDir, home: dataDir, codeRoots: [], engineRoots: [], bridges: [] }, {
+        command: "opencode", args: [], cwd: folder("thread-a"), env: {}, home: audienceHome(dataDir, "member:p_ada"), botThreads: false,
+      });
+      expect(visibleInBox(plan, join(folder("thread-a"), "task.md"))).toBe("rw");
+      expect(visibleInBox(plan, join(dataDir, "box-uploads", "bot-a", "thread-a", "photo.png"))).toBe("ro");
+      for (const thread of ["thread-b", "thread-c"]) {
+        expect(visibleInBox(plan, join(folder(thread), "secret.md"))).toBe("none");
+        expect(visibleInBox(plan, join(dataDir, "box-uploads", "bot-a", thread, "secret.png"))).toBe("none");
+      }
     } finally {
       engineHomes.stop();
     }

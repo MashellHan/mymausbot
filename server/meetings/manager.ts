@@ -283,6 +283,12 @@ export function createMeetings(deps: MeetingDeps) {
     readers.set(record.id, reading);
   }
 
+  async function stopStarted(record: MeetingRecord): Promise<void> {
+    if (!record.boxId) return;
+    try { await deps.engine.leave(deps.computer(record.boxId), record.id); }
+    catch (error) { deps.log(`meeting ${record.id}: leave failed: ${String(error)}`); }
+  }
+
   async function begin(record: MeetingRecord, person: string | undefined): Promise<void> {
     try {
       const speech = deps.speech(record);
@@ -294,7 +300,9 @@ export function createMeetings(deps: MeetingDeps) {
         const said = error instanceof Error ? error.message : String(error);
         return end(record, "speech_unavailable", speech.kind === "relay" ? `${said} ${LOCAL_OFFER}` : said);
       }
+      if (isEnded(record)) return;
       const computer = await deps.computerFor(record);
+      if (isEnded(record)) return;
       if ("error" in computer) return end(record, "join_failed", computer.error);
       record.boxId = computer.boxId;
       save();
@@ -302,18 +310,20 @@ export function createMeetings(deps: MeetingDeps) {
         id: record.id, url: record.url, platform: record.platform, name: meetingDisplayName(record.botName), consent: consentLine(record.botName, person),
         speech: grant, maxMs: MEETING_MAX_MS, lobbyMs: MEETING_LOBBY_MS, aloneMs: MEETING_ALONE_MS,
       });
+      if (isEnded(record)) { await stopStarted(record); return; }
       record.phase = "joining";
       save();
       deps.card.update(record);
       follow(record);
     } catch (error) {
-      end(record, "join_failed", error instanceof Error ? error.message : String(error));
+      await stopStarted(record);
+      if (!isEnded(record)) end(record, "join_failed", error instanceof Error ? error.message : String(error));
     }
   }
 
-  function owned(id: string, botId: string): MeetingRecord {
+  function owned(id: string, botId: string, threadId: string): MeetingRecord {
     const record = records.get(id);
-    if (!record || record.botId !== botId) throw new MeetingError("There is no meeting with that meeting_id for you. Use the id join_meeting gave.");
+    if (!record || record.botId !== botId || record.threadId !== threadId) throw new MeetingError("There is no meeting with that meeting_id for you. Use the id join_meeting gave.");
     return record;
   }
 
@@ -323,7 +333,10 @@ export function createMeetings(deps: MeetingDeps) {
       const link = parseMeetingLink(input.link);
       if (!link.ok) throw new MeetingError(link.error);
       const running = [...records.values()].find((record) => record.botId === input.botId && record.phase !== "ended" && record.url === link.url);
-      if (running) return { record: running, already: true };
+      if (running) {
+        if (running.threadId !== input.threadId) throw new MeetingError("This bot is already in that meeting from another conversation.");
+        return { record: running, already: true };
+      }
       const record: MeetingRecord = {
         id: `m-${randomUUID()}`, botId: input.botId, botName: input.botName, threadId: input.threadId, owner: input.owner,
         platform: link.platform, url: link.url, ...(input.note?.trim() ? { note: input.note.trim().slice(0, 200) } : {}),
@@ -336,16 +349,16 @@ export function createMeetings(deps: MeetingDeps) {
       return { record, already: false };
     },
 
-    status(id: string, botId: string, page = 1, perPage = 200) {
-      const record = owned(id, botId);
+    status(id: string, botId: string, threadId: string, page = 1, perPage = 200) {
+      const record = owned(id, botId, threadId);
       const all = lines(id);
       const pages = Math.max(1, Math.ceil(all.length / perPage));
       const at = Math.min(Math.max(1, Math.floor(page)), pages);
       return { record, minutes: minutes(record), lines: all.slice((at - 1) * perPage, at * perPage), page: at, pages, total: all.length };
     },
 
-    async chat(id: string, botId: string, text: string): Promise<{ ok: boolean; error?: string }> {
-      const record = owned(id, botId);
+    async chat(id: string, botId: string, threadId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+      const record = owned(id, botId, threadId);
       if (record.phase !== "in_meeting" || !record.boxId) return { ok: false, error: record.phase === "ended" ? "The meeting has ended." : "I'm not in the meeting yet." };
       const sendId = randomUUID().slice(0, 8);
       const result = new Promise<{ ok: boolean; error?: string }>((resolve) => {
@@ -356,19 +369,21 @@ export function createMeetings(deps: MeetingDeps) {
       return result;
     },
 
-    async leave(id: string, botId: string): Promise<MeetingRecord> {
-      const record = owned(id, botId);
+    async leave(id: string, botId: string, threadId: string): Promise<MeetingRecord> {
+      const record = owned(id, botId, threadId);
       if (record.phase === "ended") return record;
-      if (!record.boxId) {
+      if (record.phase === "starting") {
         end(record, "left");
+        if (record.boxId) void stopStarted(record);
         return record;
       }
+      if (!record.boxId) { end(record, "left"); return record; }
       await deps.engine.leave(deps.computer(record.boxId), id);
       return record;
     },
 
-    notesPosted(id: string, botId: string, messageId: string): MeetingRecord {
-      const record = owned(id, botId);
+    notesPosted(id: string, botId: string, threadId: string, messageId: string): MeetingRecord {
+      const record = owned(id, botId, threadId);
       record.notes = "posted";
       record.notesMessageId = messageId;
       save();

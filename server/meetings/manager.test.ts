@@ -45,6 +45,11 @@ function setup(engine: MeetingEngine, overrides: Partial<MeetingDeps> = {}) {
 
 const at = (seq: number) => ({ seq, at: 1_000 + seq });
 const until = async (check: () => boolean) => { for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5)); };
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+};
 
 describe("meetings", () => {
   it("follows a meeting: questions become fenced turns, tokens are supplied, and the end asks for notes", async () => {
@@ -88,6 +93,59 @@ describe("meetings", () => {
     await until(() => first.record.phase === "ended");
     expect(first.record.endReason).toBe("crashed");
     expect(meetings.keepsAwake("b1")).toBe(false);
+  });
+
+  it("keeps one bot's meeting in its originating conversation", async () => {
+    const engine = scriptedEngine([[], [], []]);
+    const { meetings } = setup(engine);
+    const input = { botId: "b1", botName: "Ada", threadId: "t1", owner: "b1", link: MEET };
+    const { record } = meetings.join(input);
+    expect(meetings.join(input)).toMatchObject({ record, already: true });
+    expect(() => meetings.join({ ...input, threadId: "t2" })).toThrow(/another conversation/);
+    expect(() => meetings.status(record.id, "b1", "t2")).toThrow(/no meeting/);
+    await expect(meetings.chat(record.id, "b1", "t2", "hello")).rejects.toThrow(/no meeting/);
+    await expect(meetings.leave(record.id, "b1", "t2")).rejects.toThrow(/no meeting/);
+    expect(() => meetings.notesPosted(record.id, "b1", "t2", "n1")).toThrow(/no meeting/);
+    expect(meetings.status(record.id, "b1", "t1").record).toBe(record);
+    expect(engine.chatSend).not.toHaveBeenCalled();
+    expect(engine.leave).not.toHaveBeenCalled();
+  });
+
+  it("keeps Leave effective while speech or computer startup is pending", async () => {
+    for (const phase of ["speech", "computer"] as const) {
+      const speech = deferred<{ kind: "eleven"; token: string }>();
+      const computer = deferred<{ boxId: string }>();
+      const computerFor = vi.fn(() => computer.promise);
+      const engine = scriptedEngine([]);
+      const { meetings, dataDir } = setup(engine, { speech: () => ({ kind: "eleven", grant: () => speech.promise }), computerFor });
+      const { record } = meetings.join({ botId: "b1", botName: "Ada", threadId: "t1", owner: "b1", link: MEET });
+      if (phase === "computer") {
+        speech.resolve({ kind: "eleven", token: "sutkn_fresh" });
+        await until(() => computerFor.mock.calls.length === 1);
+      }
+      await meetings.leave(record.id, "b1", "t1");
+      speech.resolve({ kind: "eleven", token: "sutkn_fresh" });
+      computer.resolve({ boxId: "bx_test" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(record).toMatchObject({ phase: "ended", endReason: "left" });
+      expect(JSON.parse(readFileSync(join(dataDir, "meetings", "meetings.json"), "utf8")).meetings[0].phase).toBe("ended");
+      expect(engine.join).not.toHaveBeenCalled();
+    }
+  });
+
+  it("cleans a launched startup after Leave and never revives its card", async () => {
+    const joining = deferred<void>();
+    const engine = scriptedEngine([]);
+    vi.mocked(engine.join).mockImplementation(() => joining.promise);
+    const { meetings, cards } = setup(engine);
+    const { record } = meetings.join({ botId: "b1", botName: "Ada", threadId: "t1", owner: "b1", link: MEET });
+    await until(() => vi.mocked(engine.join).mock.calls.length === 1);
+    await meetings.leave(record.id, "b1", "t1");
+    joining.resolve();
+    await until(() => vi.mocked(engine.leave).mock.calls.length >= 2);
+    expect(record).toMatchObject({ phase: "ended", endReason: "left" });
+    expect(cards.at(-1)).toBe("ended");
+    expect(cards).not.toContain("joining");
   });
 
   it("refuses a Zoom link before it touches any computer", () => {

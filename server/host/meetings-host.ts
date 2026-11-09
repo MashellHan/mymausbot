@@ -155,8 +155,8 @@ export function createMeetingsHost(deps: MeetingsHostDeps, routeDeps: () => Meet
       const meetingId = (action.payload as { meetingId?: unknown }).meetingId;
       const record = typeof meetingId === "string" ? meetings.record(meetingId) : undefined;
       const row = store.messagesFor(threadId).find((message) => message.id === messageId);
-      if (!record || record.botId !== bot.id || record.cardMessageId !== messageId || row?.serverCard !== true) return null;
-      void meetings.leave(record.id, bot.id).catch((error: unknown) => deps.log(`meeting ${record.id}: leave failed: ${String(error)}`));
+      if (!record || record.botId !== bot.id || record.threadId !== threadId || record.cardMessageId !== messageId || row?.serverCard !== true) return null;
+      void meetings.leave(record.id, bot.id, threadId).catch((error: unknown) => deps.log(`meeting ${record.id}: leave failed: ${String(error)}`));
       return "handled";
     },
     close: () => meetings.close(),

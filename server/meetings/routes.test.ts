@@ -56,7 +56,7 @@ describe("meeting routes", () => {
     expect(await allowed.call("chat", { meeting_id: "m-1", text: "We launch on the 20th." })).toEqual({ status: 200, body: { text: "Posted in the meeting chat." } });
     expect(allowed.hold).toHaveBeenCalledWith(expect.objectContaining({ tool: "post_in_meeting_chat", threadId: "t1", calls: [{ slug: "post_in_meeting_chat", arguments: { text: "We launch on the 20th." } }] }));
     expect(allowed.beforeDispatch).toHaveBeenCalled();
-    expect(allowed.meetings.chat).toHaveBeenCalledWith("m-1", "b1", "We launch on the 20th.");
+    expect(allowed.meetings.chat).toHaveBeenCalledWith("m-1", "b1", "t1", "We launch on the 20th.");
 
     const refused = setup(record());
     refused.hold.mockResolvedValueOnce({ ok: false, text: "The person said no." } as never);
@@ -83,7 +83,7 @@ describe("meeting routes", () => {
     expect(card.title).toBe("Sync");
     expect(card.children.map((node) => node.value)).toEqual(expect.arrayContaining(["We agreed.", "• Launch on the 20th.", "• Bob: Fix the bugs (by Wednesday)", "Alice, Bob"]));
     expect(name).toMatch(/Sync transcript\.md$/);
-    expect(ended.meetings.notesPosted).toHaveBeenCalledWith("m-1", "b1", "notes-1");
+    expect(ended.meetings.notesPosted).toHaveBeenCalledWith("m-1", "b1", "t1", "notes-1");
   });
 
   it("joins, or sets up the calendar routine, and leaves other paths alone", async () => {

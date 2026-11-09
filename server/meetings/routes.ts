@@ -80,8 +80,8 @@ export function createMeetingRoutes(deps: MeetingRouteDeps) {
       }
       case "status": {
         const input = parsed.data as z.infer<typeof schemas.status>;
-        const first = meetings.status(input.meeting_id, botId, 1);
-        const status = input.page ? meetings.status(input.meeting_id, botId, input.page) : meetings.status(input.meeting_id, botId, first.pages);
+        const first = meetings.status(input.meeting_id, botId, ctx.threadId, 1);
+        const status = input.page ? meetings.status(input.meeting_id, botId, ctx.threadId, input.page) : meetings.status(input.meeting_id, botId, ctx.threadId, first.pages);
         const { record } = status;
         const state = record.phase === "ended"
           ? `ended after ${status.minutes} min: ${END_REASON_TEXT[record.endReason ?? "meeting_ended"]}`
@@ -95,7 +95,7 @@ export function createMeetingRoutes(deps: MeetingRouteDeps) {
       }
       case "chat": {
         const input = parsed.data as z.infer<typeof schemas.chat>;
-        meetings.status(input.meeting_id, botId);
+        meetings.status(input.meeting_id, botId, ctx.threadId);
         const tool = "post_in_meeting_chat";
         const fullAccess = deps.sendsFreely(botId, ctx.threadId);
         const held = await deps.outbound().hold({ bot: ctx.bot, threadId: ctx.threadId, tool, calls: [{ slug: tool, arguments: { text: input.text } }], opaque: false, fullAccess, active: ctx.active });
@@ -105,16 +105,16 @@ export function createMeetingRoutes(deps: MeetingRouteDeps) {
         } catch (error) {
           return { status: 403, error: error instanceof Error ? error.message : String(error) };
         }
-        const sent = await meetings.chat(input.meeting_id, botId, input.text);
+        const sent = await meetings.chat(input.meeting_id, botId, ctx.threadId, input.text);
         return sent.ok ? { status: 200, text: "Posted in the meeting chat." } : { status: 409, error: sent.error ?? "The message was not posted." };
       }
       case "leave": {
-        const record = await meetings.leave((parsed.data as z.infer<typeof schemas.leave>).meeting_id, botId);
+        const record = await meetings.leave((parsed.data as z.infer<typeof schemas.leave>).meeting_id, botId, ctx.threadId);
         return { status: 200, text: record.phase === "ended" ? "That meeting has already ended." : "Leaving the meeting now. You will be asked to write the notes once it is closed." };
       }
       case "notes": {
         const input = parsed.data as z.infer<typeof schemas.notes>;
-        const { record, minutes } = meetings.status(input.meeting_id, botId);
+        const { record, minutes } = meetings.status(input.meeting_id, botId, ctx.threadId);
         if (record.phase !== "ended") return { status: 409, error: "The meeting is still running. Post the notes once it has ended." };
         if (record.notes === "posted") return { status: 409, error: "The notes for this meeting are already posted." };
         const folder = deps.folder(botId, ctx.threadId);
@@ -129,7 +129,7 @@ export function createMeetingRoutes(deps: MeetingRouteDeps) {
         const notes: MeetingNotes = { title: input.title, summary: input.summary, decisions: input.decisions ?? [], actions: input.action_items ?? [], questions: input.open_questions ?? [] };
         const messageId = await deps.postNotes(ctx.threadId, ctx.bot, notesCard(record, notes, minutes, deps.dateLine(record.joinedAt ?? record.createdAt)), path, name);
         if (!messageId) return { status: 409, error: "The notes card could not be posted in this conversation." };
-        meetings.notesPosted(record.id, botId, messageId);
+        meetings.notesPosted(record.id, botId, ctx.threadId, messageId);
         return { status: 200, text: "The Meeting notes card is posted, with the transcript attached." };
       }
     }
