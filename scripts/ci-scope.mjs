@@ -464,12 +464,12 @@ const SHA = /^[a-f\d]{40}(?:[a-f\d]{24})?$/i;
 
 const git = (args) => execFileSync("git", args, { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
 
-export function executedPullRequest(base, head, parents = () => git(["rev-list", "--parents", "-n", "1", "HEAD"])) {
+export function executedPullRequest(head, parents = () => git(["rev-list", "--parents", "-n", "1", "HEAD"])) {
   const commits = parents().trim().split(/\s+/);
-  if (commits.length !== 3 || !commits.every((sha) => SHA.test(sha)) || commits[1] !== base || commits[2] !== head) {
-    throw new Error("PR checkout is not the event head merged onto its recorded base");
+  if (commits.length !== 3 || !commits.every((sha) => SHA.test(sha)) || commits[2] !== head) {
+    throw new Error("PR checkout is not the event head merged onto a base commit");
   }
-  return { merge: commits[0], base, head };
+  return { merge: commits[0], base: commits[1], head };
 }
 
 export function changedFiles(range) {
@@ -549,7 +549,10 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
       if (![base, head].every((sha) => typeof sha === "string" && SHA.test(sha))) {
         throw new Error("Missing or invalid pull request commit SHAs");
       }
-      if (process.env.OMB_CI_EXECUTION_BINDING === "1") execution = executedPullRequest(base, head);
+      if (process.env.OMB_CI_EXECUTION_BINDING === "1") {
+        execution = executedPullRequest(head);
+        base = execution.base;
+      }
       range = `${base}...${head}`;
       files = changedFiles(range);
       ({ labels, repairIds } = await readPullRequest(pr));

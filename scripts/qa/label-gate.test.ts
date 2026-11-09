@@ -7,29 +7,35 @@ const repository = "MashellHan/mymausbot";
 const head = "a".repeat(40);
 const base = "b".repeat(40);
 const merge = "c".repeat(40);
+const tree = "e".repeat(40);
 const event = (label = "qa:triaged", action = "labeled", eventBase = base) => ({ action, number: 134,
   repository: { full_name: repository }, label: { name: label }, pull_request: { number: 134,
-    head: { sha: head }, base: { sha: eventBase, repo: { full_name: repository } } } });
+    head: { sha: head }, base: { sha: eventBase, ref: "main", repo: { full_name: repository } } } });
 const pr = (labels: string[] = [], prBase = base) => ({ number: 134, state: "open", head: { sha: head },
-  base: { sha: prBase, repo: { full_name: repository } }, labels: labels.map((name) => ({ name })), body: "" });
+  base: { sha: prBase, ref: "main", repo: { full_name: repository } }, labels: labels.map((name) => ({ name })), body: "" });
 const source = { id: 50, event: "pull_request", path: ".github/workflows/ci.yml", head_sha: head,
   run_attempt: 1, status: "completed", conclusion: "success", created_at: "2026-11-09T06:00:00Z",
   pull_requests: [{ number: 134, head: { sha: head }, base: { sha: base } }] };
 const jobs = [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" },
   { name: "CI", run_attempt: 1, status: "completed", conclusion: "success" }];
 const plan = { execution: { merge, base, head }, outputs: { pr_number: 134, pr_head: head } };
-const commit = { sha: merge, parents: [{ sha: base }, { sha: head }] };
+const commit = { sha: merge, parents: [{ sha: base }, { sha: head }], commit: { tree: { sha: tree } } };
 
 function fixture({ request = event(), sourceRun = source, current = pr(), sourcePlan = plan, mergeCommit = commit,
-  final = current }: { request?: ReturnType<typeof event>;
+  final = current, liveBase = base, liveMergeSha = merge }: { request?: ReturnType<typeof event>;
   sourceRun?: Omit<typeof source, "status" | "conclusion"> & { status: string; conclusion: string | null }; current?: ReturnType<typeof pr>;
-  sourcePlan?: typeof plan | null; mergeCommit?: typeof commit; final?: ReturnType<typeof pr> } = {}) {
+  sourcePlan?: typeof plan | null; mergeCommit?: typeof commit; final?: ReturnType<typeof pr>;
+  liveBase?: string; liveMergeSha?: string } = {}) {
   let prReads = 0;
   const api = vi.fn(async (path: string) => {
     if (path === "/pulls/134") return ++prReads === 1 ? current : final;
+    if (path === "/branches/main") return { commit: { sha: liveBase } };
+    if (path === "/git/ref/pull/134/merge") return { object: { sha: liveMergeSha } };
     if (path.startsWith("/actions/workflows/ci.yml/runs?")) return { workflow_runs: [sourceRun] };
     if (path === "/actions/runs/50/artifacts?per_page=100&page=1") return { artifacts: [] };
     if (path === `/commits/${merge}`) return mergeCommit;
+    if (path === `/commits/${liveMergeSha}`) return { sha: liveMergeSha,
+      parents: [{ sha: liveBase }, { sha: head }], commit: { tree: { sha: tree } } };
     if (path === "/actions/runs/50") return sourceRun;
     throw new Error(`Unexpected API request: ${path}`);
   });
@@ -57,9 +63,9 @@ describe("required CI decision for label events", () => {
   });
 
   it("records the checked-out merge parents and reattests only a matching successful source attempt", async () => {
-    expect(executedPullRequest(base, head, () => `${merge} ${base} ${head}\n`)).toEqual({ merge, base, head });
-    expect(() => executedPullRequest(base, head, () => `${merge} ${head} ${base}\n`)).toThrow("PR checkout");
-    expect(executionMatches(plan, commit, { base, head })).toBe(true);
+    expect(executedPullRequest(head, () => `${merge} ${base} ${head}\n`)).toEqual({ merge, base, head });
+    expect(() => executedPullRequest(head, () => `${merge} ${head} ${base}\n`)).toThrow("PR checkout");
+    expect(executionMatches(plan, commit, { base, head }, { merge: commit })).toBe(true);
     const found = fixture();
     expect(await reattestMetadata({ event: found.request, repository, currentRunId: 100, api: found.api,
       loadJobs: found.loadJobs, loadPlan: found.loadPlan, verify: found.verify })).toEqual({ sourceRunId: 50, attempt: 1, head, base });
@@ -70,7 +76,7 @@ describe("required CI decision for label events", () => {
 
   it("rejects a base-only advance even when the run's mutable PR association has advanced", async () => {
     const nextBase = "d".repeat(40);
-    const changed = fixture({ request: event("qa:triaged", "labeled", nextBase), current: pr([], nextBase), final: pr([], nextBase),
+    const changed = fixture({ liveBase: nextBase, liveMergeSha: "f".repeat(40),
       sourceRun: { ...source, pull_requests: [{ number: 134, head: { sha: head }, base: { sha: nextBase } }] } });
     await expect(reattestMetadata({ event: changed.request, repository, currentRunId: 100, api: changed.api,
       loadJobs: changed.loadJobs, loadPlan: changed.loadPlan, verify: changed.verify })).rejects.toThrow("did not execute this PR base and head");
@@ -90,6 +96,19 @@ describe("required CI decision for label events", () => {
     expect(loadJobs).toHaveBeenCalledWith(75, 1, api);
     expect(loadJobs).toHaveBeenCalledWith(50, 1, api);
     expect(loadJobs).not.toHaveBeenCalledWith(125, 1, api);
+  });
+
+  it("reads a non-main target's live branch ref without an actions-write router", async () => {
+    const request = event();
+    request.pull_request.base.ref = "release/test";
+    const current = pr();
+    current.base.ref = "release/test";
+    const found = fixture({ request, current });
+    const api = vi.fn(async (path: string) => path === "/branches/release%2Ftest"
+      ? { commit: { sha: base } } : found.api(path));
+    expect(await reattestMetadata({ event: request, repository, currentRunId: 100, api,
+      loadJobs: found.loadJobs, loadPlan: found.loadPlan, verify: found.verify })).toMatchObject({ base, head });
+    expect(api).toHaveBeenCalledWith("/branches/release%2Ftest");
   });
 
   it("keeps the required metadata check unsatisfied on a missing plan or changed late control", async () => {

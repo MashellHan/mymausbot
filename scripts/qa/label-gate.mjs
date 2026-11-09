@@ -6,6 +6,7 @@ import { gateRun, verifyGate } from "./gate.mjs";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 
 const SHA = /^[a-f\d]{40}$/i;
+const BRANCH = /^[a-z\d][a-z\d._/-]{0,199}$/i;
 const CONTROLS = new Set(["ci:full", "qa:repair", "windows", "upstream-sync"]);
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -19,19 +20,33 @@ export function ordinaryMetadata(event) {
 
 function exactPr(pr, request, repository) {
   return pr?.number === request.number && pr.state === "open" && pr.head?.sha === request.head
-    && pr.base?.sha === request.base && pr.base?.repo?.full_name === repository
+    && pr.base?.ref === request.baseRef && pr.base?.repo?.full_name === repository
     && Array.isArray(pr.labels) && pr.labels.every((label) => typeof label.name === "string");
+}
+
+async function currentMerge(request, api) {
+  const branch = await api(`/branches/${encodeURIComponent(request.baseRef)}`);
+  const base = branch?.commit?.sha;
+  if (!SHA.test(base ?? "")) throw new Error("Current PR base ref is unavailable");
+  const ref = await api(`/git/ref/pull/${request.number}/merge`);
+  if (!SHA.test(ref?.object?.sha ?? "")) throw new Error("Current PR merge ref is unavailable");
+  const merge = await api(`/commits/${ref.object.sha}`);
+  if (merge?.sha !== ref.object.sha || merge.parents?.length !== 2
+    || merge.parents[0]?.sha !== base || merge.parents[1]?.sha !== request.head
+    || !SHA.test(merge.commit?.tree?.sha ?? "")) throw new Error("Current PR merge does not match its live base and head");
+  return { base, merge };
 }
 
 const controls = (pr) => JSON.stringify({ labels: pr.labels.map((label) => label.name.toLowerCase())
   .filter((name) => CONTROLS.has(name)).sort(), repairs: pr.labels.some((label) => label.name.toLowerCase() === "qa:repair")
     ? [...String(pr.body ?? "").matchAll(/^QA-Repair:\s*#\d+\s*$/gm)].map((hit) => hit[0]).sort() : [] });
 
-export function executionMatches(plan, commit, request) {
+export function executionMatches(plan, commit, request, current) {
   const execution = plan?.execution;
   return execution && SHA.test(execution.merge ?? "") && execution.base === request.base && execution.head === request.head
     && commit?.sha === execution.merge && Array.isArray(commit.parents) && commit.parents.length === 2
-    && commit.parents[0]?.sha === request.base && commit.parents[1]?.sha === request.head;
+    && commit.parents[0]?.sha === request.base && commit.parents[1]?.sha === request.head
+    && SHA.test(commit.commit?.tree?.sha ?? "") && commit.commit.tree.sha === current.merge.commit.tree.sha;
 }
 
 async function sourceRun(request, currentRunId, api, loadJobs) {
@@ -63,10 +78,13 @@ export async function reattestMetadata({ event, repository = process.env.GITHUB_
   now = Date.now, wait = pause, maxWaitMs = 175 * 60_000 } = {}) {
   if (!ordinaryMetadata(event) || !/^[\w.-]+\/[\w.-]+$/.test(repository ?? "") || event.repository?.full_name !== repository
     || event.pull_request.base.repo?.full_name !== repository || event.number !== event.pull_request.number
+    || !BRANCH.test(event.pull_request.base.ref ?? "") || event.pull_request.base.ref.includes("..")
     || !Number.isSafeInteger(currentRunId) || currentRunId < 1) throw new Error("Invalid metadata run identity");
-  const request = { number: event.pull_request.number, base: event.pull_request.base.sha, head: event.pull_request.head.sha };
-  const firstPr = await api(`/pulls/${request.number}`);
-  if (!exactPr(firstPr, request, repository)) throw new Error("Current PR identity differs from metadata event");
+  const member = { number: event.pull_request.number, baseRef: event.pull_request.base.ref, head: event.pull_request.head.sha };
+  const firstPr = await api(`/pulls/${member.number}`);
+  if (!exactPr(firstPr, member, repository)) throw new Error("Current PR identity differs from metadata event");
+  const current = await currentMerge(member, api);
+  const request = { ...member, base: current.base };
   const chosen = await sourceRun(request, currentRunId, api, loadJobs);
   let { run, jobs } = chosen;
   const attempt = run.run_attempt;
@@ -91,12 +109,16 @@ export async function reattestMetadata({ event, repository = process.env.GITHUB_
   }
   if (!SHA.test(plan.execution?.merge ?? "")) throw new Error("Missing immutable source CI merge identity");
   const commit = await api(`/commits/${plan.execution?.merge}`);
-  if (!executionMatches(plan, commit, request)) throw new Error("Source CI did not execute this PR base and head");
+  if (!executionMatches(plan, commit, request, current)) throw new Error("Source CI did not execute this PR base and head");
   const createdAt = Date.parse(attempt === 1 ? run.created_at : run.run_started_at);
   if (!Number.isFinite(createdAt)) throw new Error("Invalid source CI attempt time");
   await verify(plan.outputs, { api, runId: run.id, attempt, createdAt, deadlineMs: 0 });
   const finalPr = await api(`/pulls/${request.number}`);
   if (!exactPr(finalPr, request, repository) || controls(finalPr) !== controls(firstPr)) throw new Error("Current PR identity or controls changed during metadata proof");
+  const finalMerge = await currentMerge(request, api);
+  if (finalMerge.base !== request.base || finalMerge.merge.commit.tree.sha !== current.merge.commit.tree.sha) {
+    throw new Error("Current PR merge changed during metadata proof");
+  }
   const finalRun = await api(`/actions/runs/${run.id}`);
   if (finalRun.head_sha !== request.head || finalRun.run_attempt !== attempt || finalRun.status !== "completed" || finalRun.conclusion !== "success") {
     throw new Error("Source CI attempt changed during metadata proof");

@@ -895,6 +895,26 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
 
   const serverJobs = (oses: string[]) => ({ jobs: SERVER_JOBS, build: true, vitest_os: oses, packaged_server_os: oses, vitest_matrix: vitestMatrix(oses) });
 
+  it("records the executed merge base when the PR event still names an older base", async () => {
+    const { directory, git, base: eventBase } = fixture("server/paths.ts");
+    git("switch", "-c", "feature");
+    writeFileSync(join(directory, "server/paths.ts"), "changed source\n");
+    git("commit", "--quiet", "-am", "source");
+    const head = git("rev-parse", "HEAD");
+    git("switch", "-c", "current-base", eventBase);
+    writeFileSync(join(directory, "docs/guide.md"), "new base guidance\n");
+    git("add", "--", "docs/guide.md");
+    git("commit", "--quiet", "-m", "base advanced");
+    const currentBase = git("rev-parse", "HEAD");
+    git("merge", "--quiet", "--no-ff", "--no-edit", "feature");
+    const merge = git("rev-parse", "HEAD");
+    const payload = { pull_request: { number: 7, base: { sha: eventBase }, head: { sha: head } } };
+    const { output, plan, stderr } = await runPullRequest(directory, payload, { OMB_CI_EXECUTION_BINDING: "1" });
+    expect(stderr).toBe("");
+    expect(output).toEqual(serverJobs(LINUX));
+    expect(plan.execution).toEqual({ merge, base: currentBase, head });
+  });
+
   it("runs the Windows jobs for a changed line that names Windows, and says why", async () => {
     const { directory, payload } = serverChange('if (process.platform === "win32") quote();\n');
     const { output, stdout, stderr } = await runPullRequest(directory, payload);
