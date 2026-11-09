@@ -23,7 +23,7 @@ const vitest = (os: string, conclusion: string | null, steps: Step[] = started, 
   ({ name: `vitest (${os}, ${os === "macos-latest" ? "all " : ""}shard ${shard}/${VITEST_SHARDS[os as keyof typeof VITEST_SHARDS]})`, conclusion, steps });
 const shards = (os: string): Job[] =>
   Array.from({ length: VITEST_SHARDS[os as keyof typeof VITEST_SHARDS] }, (_, i) => vitest(os, "success", started, i + 1));
-const gate = (conclusion: string | null): Job => ({ name: "CI", conclusion, steps: started });
+const gate = (conclusion: string | null): Job => ({ name: "CI", status: "completed", conclusion, run_attempt: 1, steps: started });
 const fullSelection = ciOutputs(FULL_SCOPE, ALL_OS);
 const fullExpected = expectedJobs(fullSelection);
 const planFor = (run: Run, full = true) => {
@@ -483,6 +483,55 @@ describe("a runner that never came", () => {
 });
 
 describe("GitHub calls", () => {
+  it("recovers a release lane from a failed-only rerun with a copied preflight and its original plan", async () => {
+    const first = { created_at: "2026-11-05T12:18:00Z", started_at: "2026-11-05T12:18:19Z", completed_at: "2026-11-05T12:22:32Z" };
+    const next = { created_at: "2026-11-05T12:47:31Z", started_at: "2026-11-05T12:47:32Z", completed_at: "2026-11-05T12:47:34Z" };
+    const staticJob = green().find((job) => job.name === "typecheck + lint")!;
+    const relayJob = green().find((job) => job.name === "relay typecheck + tests + fuzz + audit")!;
+    const original = { ...staticJob, ...first, id: 10 };
+    const copied = { ...original, id: 11, run_attempt: 2, created_at: next.created_at };
+    const failedRelay = { ...relayJob, ...first, id: 20, conclusion: "failure", steps: [] };
+    const recoveredRelay = { ...relayJob, ...next, id: 21, run_attempt: 2 };
+    const failedGate = { ...gate("failure"), ...first, id: 30 };
+    const recoveredGate = { ...gate("success"), ...next, id: 31, run_attempt: 2 };
+    const others = green().filter((job) => !["CI", original.name, relayJob.name].includes(job.name));
+    let rows = [...others, failedGate, recoveredGate, original, copied, failedRelay, recoveredRelay];
+    const attempt = (number: number) => run(7, "workflow_dispatch", "completed", "release-ci/v0.1.94", 0, { run_attempt: number });
+    const plan = planFor(attempt(1));
+    const requests: string[] = [];
+    const readNames: string[] = [];
+    let phase = 0;
+    const fetchImpl = async (url: string, init: { method: string }) => {
+      const path = url.replace("https://api.github.com/repos/o/r", "");
+      requests.push(`${init.method} ${path}`);
+      if (path.startsWith("/commits/")) return Response.json({ commit: { tree: { sha: TREE } }, parents: [{ sha: PARENT }], files: [{ filename: "server/index.ts" }] });
+      if (path.includes("/runs?head_sha=")) return Response.json({ workflow_runs: phase ? [attempt(phase)] : [] });
+      if (path.includes("/runs?status=completed")) return Response.json({ workflow_runs: [] });
+      if (path.includes("/jobs?filter=all")) return Response.json({ jobs: phase === 1 ? [failedGate, original, failedRelay] : rows });
+      if (path.includes("/artifacts?")) return Response.json({ artifacts: [{ id: 9, name: "qa-plan-attempt-1", workflow_run: { id: 7, head_sha: SHA } }] });
+      if (path.endsWith("/dispatches")) { phase = 1; return new Response(null, { status: 204 }); }
+      if (path.endsWith("/rerun-failed-jobs")) { phase = 2; return new Response(null, { status: 201 }); }
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      if (init.method === "POST") return Response.json({}, { status: 201 });
+      throw new Error(path);
+    };
+    const api = githubApi({ token: "t", repository: "o/r", fetchImpl: fetchImpl as typeof fetch,
+      artifactReader: async (artifact: { name: string }) => { readNames.push(artifact.name); return { "qa-plan.json": JSON.stringify(plan) }; } });
+    let clock = 0;
+    expect(await waitForReleaseCi({ api, sha: SHA, version: "0.1.94", now: () => clock, sleep: async (ms: number) => { clock += ms; }, log: () => {}, maxWaitMs: 10 * 60_000 }))
+      .toEqual({ ok: true, runId: 7, via: "commit" });
+    expect(requests).toContain("POST /actions/runs/7/rerun-failed-jobs");
+    expect(requests).toContain("GET /actions/runs/7/jobs?filter=all&per_page=100&page=1");
+    expect(readNames).toEqual(["qa-plan-attempt-1"]);
+    const normalized = await api.runJobs(7, 2);
+    expect(normalized.find((job) => job.name === original.name)).toMatchObject({ id: 10, run_attempt: 1 });
+    expect(normalized.find((job) => job.name === relayJob.name)).toMatchObject({ id: 21, run_attempt: 2, priorFailures: [{ attempt: 1, conclusion: "failure" }] });
+    rows = rows.filter((job) => job !== original);
+    await expect(api.runJobs(7, 2)).rejects.toThrow("Ambiguous workflow job execution");
+    rows = [...rows, original, { ...original, id: 12 }];
+    await expect(api.runJobs(7, 2)).rejects.toThrow("Ambiguous workflow job execution");
+  });
+
   it("loads the plan from the producing run and rejects a different source SHA", async () => {
     const source = run(7, "workflow_dispatch", "completed");
     const requests: string[] = [];
@@ -496,11 +545,11 @@ describe("GitHub calls", () => {
     };
     const api = githubApi({ token: "t", repository: "o/r", fetchImpl: fetchImpl as typeof fetch,
       artifactReader: async () => ({ "qa-plan.json": JSON.stringify(plan) }) });
-    const jobs = await api.runJobs(7);
+    const jobs = await api.runJobs(7, 1);
     expect(await api.runPlan(source, jobs)).toEqual(plan);
     plan = { ...plan, sha: OTHER };
     await expect(api.runPlan(source, jobs)).rejects.toThrow("Missing current-run validation plan");
-    expect(requests).toEqual(["/actions/runs/7/jobs?per_page=100",
+    expect(requests).toEqual(["/actions/runs/7/jobs?filter=all&per_page=100&page=1",
       "/actions/runs/7/artifacts?per_page=100&page=1", "/actions/runs/7/artifacts?per_page=100&page=1"]);
   });
 
@@ -514,12 +563,12 @@ describe("GitHub calls", () => {
     };
     const api = githubApi({ token: "t", repository: "o/r", fetchImpl: fetchImpl as typeof fetch });
     await api.pointBranch("release-ci/v1.2.3", SHA);
-    expect(await api.runJobs(7)).toEqual(green());
+    expect(await api.runJobs(7, 1)).toEqual(green().map((job) => ({ ...job, priorFailures: [] })));
     await api.dispatchCi("release-ci/v1.2.3");
     expect(requests).toEqual([
       `POST /git/refs {"ref":"refs/heads/release-ci/v1.2.3","sha":"${SHA}"}`,
       `PATCH /git/refs/heads/release-ci/v1.2.3 {"sha":"${SHA}","force":true}`,
-      "GET /actions/runs/7/jobs?per_page=100",
+      "GET /actions/runs/7/jobs?filter=all&per_page=100&page=1",
       'POST /actions/workflows/ci.yml/dispatches {"ref":"release-ci/v1.2.3"}',
     ]);
   });

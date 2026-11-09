@@ -9,7 +9,7 @@
 import { pathToFileURL } from "node:url";
 import { ALL_OS, FULL_LANE_EVENTS, vitestMatrix, versionOnlyPackageJson } from "./ci-scope.mjs";
 import { fullPushPlan, fullRunPlan } from "./qa/contracts.mjs";
-import { artifactFiles, pages, runPlan as trustedRunPlan } from "./qa/github.mjs";
+import { artifactFiles, pages, runJobs as producingRunJobs, runPlan as trustedRunPlan } from "./qa/github.mjs";
 
 const RELEASE_EVENTS = new Set(["push", "merge_group", ...FULL_LANE_EVENTS]);
 const FULL_MATRIX = vitestMatrix(ALL_OS).include.map((entry) => `vitest (${entry.os}, ${entry.part})`);
@@ -62,7 +62,7 @@ export function judgeRun(jobs, plan, run) {
  *   api: {
  *     runsForCommit(sha: string): Promise<Run[]>,
  *     recentRuns(): Promise<Run[]>,
- *     runJobs(runId: number): Promise<Job[]>,
+ *     runJobs(runId: number, attempt: number): Promise<Job[]>,
  *     commit(sha: string): Promise<{ tree: string, parents: string[], files: string[] }>,
  *     fileAt(path: string, sha: string): Promise<string | null>,
  *     rerunFailedJobs(runId: number): Promise<void>,
@@ -86,7 +86,7 @@ export async function waitForReleaseCi({ api, sha, version, sleep = (ms) => new 
   const verdict = async (run) => {
     const key = `${run.id}/${run.run_attempt ?? 1}`;
     if (!verdicts.has(key)) {
-      const jobs = await api.runJobs(run.id);
+      const jobs = await api.runJobs(run.id, run.run_attempt);
       const mayBeFull = jobs.some((job) => job.name === "CI" && job.conclusion === "success")
         && FULL_MATRIX.every((name) => jobs.some((job) => job.name === name && job.conclusion === "success"));
       const plan = mayBeFull ? await api.runPlan(run, jobs) : null;
@@ -245,9 +245,8 @@ export function githubApi({ token, repository, apiUrl = "https://api.github.com"
         call("GET", `/actions/workflows/ci.yml/runs?status=completed&event=${event}&per_page=100`)));
       return pages.flatMap((page) => page.workflow_runs);
     },
-    async runJobs(runId) {
-      // The jobs list is the latest attempt, so a re-run of failed jobs counts.
-      return (await call("GET", `/actions/runs/${runId}/jobs?per_page=100`)).jobs;
+    async runJobs(runId, attempt) {
+      return producingRunJobs(runId, attempt, (path) => call("GET", path));
     },
     async runPlan(run, jobs) {
       const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", (path) => call("GET", path));
