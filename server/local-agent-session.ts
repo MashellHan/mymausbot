@@ -75,7 +75,7 @@ function apply(observation: Observation, line: string, highestTotal: number | nu
       const input = count(last.input_tokens), output = count(last.output_tokens);
       if (input !== null && output !== null) observation.contextUsed = count(input + output);
       const total = tokens(info.total_token_usage), delta = tokens(info.last_token_usage);
-      const increase = total === null ? null : total - (highestTotal ?? 0);
+      const increase = total === null || highestTotal === null ? null : total - highestTotal;
       const valid = at !== null && at > 0 && increase !== null && delta !== null && delta <= increase;
       return { at, tokens: valid ? delta : null, total, gap: !valid || delta !== increase };
     }
@@ -156,7 +156,7 @@ async function readObservation(file: string, id: string, cached: Cached | undefi
         try { firstAt = timestamp(record(JSON.parse(lines[0]!)).timestamp); } catch { firstAt = null; }
       }
       const tokenSamples = incremental ? [...cached.tokenSamples] : [];
-      let highestTotal = incremental ? cached.highestTotal : null;
+      let highestTotal = incremental ? cached.highestTotal : start === 0 ? 0 : null;
       for (const line of lines) {
         const sample = apply(observation, line, highestTotal);
         if (sample) {

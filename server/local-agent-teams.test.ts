@@ -172,7 +172,33 @@ describe("local Agent Team provider", () => {
       run: async (args) => args.at(-2) === "workspace" ? workspaces : agents() });
     const team = (await provider.get()).teams[0]!;
     expect(team.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 50 });
-    expect(team.tokenUsage7d).toEqual({ coverage: "partial", knownTokens: 150 });
+    expect(team.tokenUsage7d).toEqual({ coverage: "partial", knownTokens: 50 });
+  });
+
+  it("does not count a replayed first counter from an unobserved truncated prefix", async () => {
+    const codexHome = await usageLog(SESSION, []);
+    const file = join(codexHome, "sessions", "2026", "11", "08", `rollout-2026-11-08-${SESSION}.jsonl`);
+    await writeFile(file, [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-08T09:00:00Z", payload: { id: SESSION } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-08T10:00:00Z", payload: { type: "token_count", info: {
+        total_token_usage: { total_tokens: 100 }, last_token_usage: { total_tokens: 100 } } } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-08T10:30:00Z", payload: { type: "agent_message", message: "x".repeat(8 * 1024 * 1024) } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-08T11:00:00Z", payload: { model: "gpt-6-sol" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T11:00:00Z", payload: { type: "token_count", info: {
+        total_token_usage: { total_tokens: 100 }, last_token_usage: { total_tokens: 100 } } } }),
+    ].join("\n") + "\n");
+    let time = Date.UTC(2026, 10, 9, 12);
+    const provider = createLocalAgentTeamsProvider({ codexHome, now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : agents() });
+    const usage = async () => (await provider.get()).teams[0]!;
+    expect((await usage()).tokenUsage24h).toEqual({ coverage: "partial", knownTokens: null });
+    await appendFile(file, `${JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T11:10:00Z", payload: {
+      type: "token_count", info: { total_token_usage: { total_tokens: 150 }, last_token_usage: { total_tokens: 50 } },
+    } })}\n`);
+    time += 2_000;
+    const after = await usage();
+    expect(after.tokenUsage24h).toEqual({ coverage: "partial", knownTokens: 50 });
+    expect(after.tokenUsage7d).toEqual({ coverage: "partial", knownTokens: 50 });
   });
 
   it("refreshes the latest instruction and per-turn context without retaining transcript history", async () => {
