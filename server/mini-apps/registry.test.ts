@@ -23,7 +23,7 @@ const publication = (extra: Partial<MiniAppPublish> = {}): MiniAppPublish => ({ 
 const teamsSnapshot: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1000, teamCount: 0, teams: [] };
 const activitySnapshot: LocalAgentActivityResponse = { agentId: "w6:p1", status: "ready", updatedAt: 1000, truncated: false, events: [] };
 const configurationSnapshot: LocalAgentConfigurationResponse = { agentId: "w6:p1", teamId: "w6", occupantId: null,
-  agent: { status: "unverified", markdown: null }, skillReferences: "unverified", skills: [] };
+  agent: { status: "unverified", markdown: null }, skillReferences: "unverified", skillDiscovery: "unavailable", skills: [] };
 const skillSnapshot: LocalAgentSkillDocumentResponse = { agentId: "w6:p1", teamId: "w6", occupantId: null,
   skillId: "s1234567890abcdef", status: "unavailable", markdown: null };
 const teamRulesSnapshot: LocalAgentTeamRulesResponse = { teamId: "w6", status: "unverified", markdown: null };

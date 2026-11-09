@@ -7,7 +7,7 @@ import { createLocalDashboardRoutes } from "./local-dashboard.ts";
 
 const snapshot: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1000, teamCount: 0, teams: [] };
 const activitySnapshot: LocalAgentActivityResponse = { agentId: "w6:p1", status: "ready", updatedAt: 1000, truncated: false, events: [] };
-const configurationSnapshot: LocalAgentConfigurationResponse = { agentId: "w6:p1", teamId: "w6", occupantId: "o1", agent: { status: "ready", markdown: "# Agent" }, skillReferences: "verified", skills: [] };
+const configurationSnapshot: LocalAgentConfigurationResponse = { agentId: "w6:p1", teamId: "w6", occupantId: "o1", agent: { status: "ready", markdown: "# Agent" }, skillReferences: "verified", skillDiscovery: "ready", skills: [] };
 const skillSnapshot: LocalAgentSkillDocumentResponse = { agentId: "w6:p1", teamId: "w6", occupantId: "o1", skillId: "s1234567890abcdef", status: "ready", markdown: "# Skill" };
 const teamRulesSnapshot: LocalAgentTeamRulesResponse = { teamId: "w6", status: "ready", markdown: "# Rules" };
 const usageSnapshot: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
