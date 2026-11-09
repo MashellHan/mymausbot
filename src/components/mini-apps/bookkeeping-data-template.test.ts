@@ -33,6 +33,7 @@ it("renders canonical DuckDB month buckets and sorts the complete ledger across 
     view.document.write(readFileSync(new URL("../../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8"));
     await vi.waitFor(() => expect(text("daily-trend")).toContain("Peak 100.00"), { timeout: 15_000 });
     expect(text("records-totals")).toContain("156.40");
+    expect(text("records-totals")).toContain("Spending entries: 2");
     expect(text("records-totals")).toContain("+95.5% vs previous month");
     expect(text("recent-categories")).toContain("63.9% of outflow");
     expect(view.document.querySelector('#daily-trend .trend-point[data-date="2026-11-07"]')).toBeNull();

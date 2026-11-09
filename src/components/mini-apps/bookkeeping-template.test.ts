@@ -169,6 +169,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     expect(app.view.document.querySelector("#daily-trend .trend-line")?.getAttribute("d")).toContain("L");
     expect(app.text("daily-trend")).toContain("Peak 100.00 · 11-06");
     expect(app.text("records-totals")).not.toMatch(/Inflow|Net/);
+    expect(app.text("records-totals")).toContain("Spending entries: 2");
     expect(app.view.document.querySelector("#recent-categories .category-donut")).not.toBeNull();
     expect(app.text("recent-categories")).toContain("63.9% of outflow");
     expect(app.view.document.querySelectorAll('#daily-trend .trend-point[data-amount="0.00"]')).toHaveLength(4);

@@ -346,7 +346,7 @@
         "Prior {from} to {through}": "上期 {from} 至 {through}",
         "Prior {amount}": "上期 {amount}",
         "Change {amount}": "变化 {amount}",
-        "Recorded entries: {count}": "记录条数：{count}",
+        "Spending entries: {count}": "支出笔数：{count}",
         "Recorded through {date}": "记录截至 {date}",
         "Totals incomplete. Narrow the date range.": "汇总未读全，请缩小日期范围。",
         "No recorded entries": "没有已记录条目",
@@ -711,7 +711,7 @@
         const total = element("dl", "spending-total");
         total.append(element("dt", "", word("Spending")), element("dd", "", centsText(current.outflow)));
         const amount = element("div");
-        amount.append(total, element("p", "spending-count", word("Recorded entries: {count}", { count: countText(current.count) })));
+        amount.append(total, element("p", "spending-count", word("Spending entries: {count}", { count: countText(current.count) })));
         const compare = element("div", "compare muted");
         if (previous && !previous.incomplete && previous.outflow !== null && current.outflow !== null) {
           const change = current.outflow - previous.outflow;
@@ -1087,7 +1087,7 @@
         const net = sumCents(summary.rows.map((row) => row.net));
         const spent = sumCents(outflow.rows.map((row) => row.amount));
         const earned = sumCents(inflow.rows.map((row) => row.amount));
-        const count = summary.rows.reduce((total, row) => {
+        const count = outflow.rows.reduce((total, row) => {
           const value = countValue(row.count);
           return total === null || value === null ? null : total + value;
         }, 0n);
