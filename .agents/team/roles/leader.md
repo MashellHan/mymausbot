@@ -19,6 +19,14 @@ Reviewer has no unresolved findings and required checks pass. Resolve routine
 integration choices and escalate uncertain product choices through the user's
 assistant. Daily upstream sync does not automatically replace the live App.
 
+Track development, verification and integration separately using the playbook.
+Keep the source owner progressing while local Accessibility, Screen Recording
+or CUA readiness prevents native checks. Assign each unrun check to an existing
+role or QA with a next action; retain the batch and evidence for resumption.
+Missing local screen readiness alone must not hold an otherwise eligible merge.
+Report completed or merged source as pending native verification when applicable;
+do not claim unrun checks passed or affected screen behavior is accepted.
+
 Own the QA issue/PR queue in docs/MAUSBOT-VALIDATION.md. Acknowledge actionable
 handoffs and triage within thirty minutes. Keep a named existing role, priority,
 classification, scope, next action and due date on each finding; assign work and
