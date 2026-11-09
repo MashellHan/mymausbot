@@ -397,6 +397,7 @@ itHost("T7 queues a root on the computer seat at the wait ceiling and continues 
   const ui = join(home, "static");
   const stateFile = join(home, "vm.json");
   const dumpFile = join(home, "dump.json");
+  const promptsFile = join(home, "prompts.ndjson");
   const finishFile = join(home, "finish");
   let output = "";
   let child: ChildProcess | null = null;
@@ -441,7 +442,7 @@ itHost("T7 queues a root on the computer seat at the wait ceiling and continues 
     }), { mode: 0o600 });
     writeFileSync(join(data, "config.json"), JSON.stringify({ instances: { claude: {
       driver: "claudeAgent", config: { cli: join(ROOT, "server/testing/fake-claude-cli.ts") },
-      environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_DUMP: dumpFile, FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile },
+      environment: { FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_DUMP: dumpFile, FAKE_CLAUDE_PROMPTS: promptsFile, FAKE_CLAUDE_SLOW_FINISH_GATE: finishFile },
     } } }));
     const proc = spawn(process.execPath, ["--import", pathToFileURL(join(ROOT, "server/testing/group-local-vm-hooks.mjs")).href,
       "--import", pathToFileURL(join(ROOT, "server/testing/desktop-parent.mjs")).href, join(ROOT, "server/index.ts")], {
@@ -504,8 +505,7 @@ itHost("T7 queues a root on the computer seat at the wait ceiling and continues 
       && events.slice(0, index).some((prior) => prior.assignmentId === id && prior.kind === "started"));
     expect(secondStart(root.id)).toBeGreaterThan(-1);
     expect(secondStart(root.id)).toBeLessThan(secondStart(root2.id));
-    const resumed = await dumpFor(second.id);
-    expect(JSON.stringify(resumed.prompt)).toContain(SEAT_FREE);
+    expect(jsonl(promptsFile).filter((prompt) => JSON.stringify(prompt).includes(SEAT_FREE))).toHaveLength(2);
     const after = (await api("GET", `/api/threads/${wait.threadId}/messages?limit=100`)).body.messages as any[];
     expect(after.filter((message) => chipText(message).includes("Parked — it continues automatically")).length).toBe(1);
     await until(() => taskOf(waiter.id, wait.threadId), (task) => task?.busy === false && task.activity === "idle");
