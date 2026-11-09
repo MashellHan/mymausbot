@@ -163,6 +163,7 @@ export function holdsFor(issues, areas, repairIds = []) {
   return issues.filter((issue) => {
     if (repairIds.includes(issue.number)) return false;
     const labels = issueLabels(issue);
+    if (labels.includes("qa:process")) return false;
     return labels.includes("qa:p0") || labels.includes("qa:p1") && issueAreas(issue).some((area) => area === "global" || areas.includes("global") || areas.includes(area));
   });
 }

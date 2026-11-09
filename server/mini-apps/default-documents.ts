@@ -7,7 +7,7 @@ export const DEFAULT_APPS = {
   bookkeeping: { slug: "bookkeeping", title: "记账管家", description: "Records, calendar, cash flow and trends from your existing ledger." },
   ...REPORT_APPS,
   "agent-team": { slug: "agent-team", title: "Agent Team", description: "Your local teams and their current activity." },
-  usage: { slug: "usage", title: "Work Tracker", description: "Your work, contributions and agent activity." },
+  usage: { slug: "usage", title: "Activities", description: "Your work, contributions and agent activity." },
 } as const;
 
 export const NATIVE_DEFAULT_HTML = '<!doctype html><html lang="en"><meta charset="utf-8"><title>Built-in dashboard</title><body>Open this app in the OpenMausBot desktop app.</body></html>';

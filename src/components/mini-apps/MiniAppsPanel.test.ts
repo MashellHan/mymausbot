@@ -214,10 +214,15 @@ describe("Mini Apps panel", () => {
     expect(frame()?.dataset.dataRevision).toBe("8");
   });
 
-  it("shows version history and sends a generic rollback with the installed revision", async () => {
+  it("keeps management actions in All apps and rolls back with the installed revision", async () => {
     await render();
     await vi.waitFor(() => expect(frame()).not.toBeNull());
-    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.startsWith("Version 1"))!.click(); });
+    expect(host.textContent).not.toContain("Version history");
+    expect(host.textContent).not.toContain("Open publisher chat");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click());
+    const menu = host.querySelector<HTMLElement>('[data-mini-app-popover]')!;
+    await act(async () => menu.querySelector("summary")!.click());
+    await act(async () => { [...menu.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.startsWith("Version 1"))!.click(); });
     const call = fixture.api.mock.calls.find(([path]) => path === "/api/mini-apps/app_a/rollback");
     expect(call).toBeTruthy();
     expect(JSON.parse(call![1].body)).toMatchObject({ expectedRevision: 3, templateVersion: 1 });
@@ -232,7 +237,7 @@ describe("Mini Apps panel", () => {
     expect(fixture.defaultCalls[0]?.restore).toBeUndefined();
     expect(fixture.defaultCalls[0]?.bookkeepingHtml.length).toBeGreaterThan(100);
     expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [data-mini-app-icon]')).toHaveLength(5);
-    expect(host.textContent).toContain("Work Tracker");
+    expect(host.textContent).toContain("Activities");
     expect(host.textContent).not.toContain("Explore included apps");
     expect(host.textContent).not.toContain("0 installed");
     expect(host.textContent).not.toContain("The original Agent Team and Usage Computer tabs remain available.");
@@ -383,16 +388,16 @@ describe("Mini Apps panel", () => {
     expect(fixture.defaultCalls[0]?.restore).toBeUndefined();
   });
 
-  it("labels the native Usage Mini App Work Tracker in English and Chinese while keeping its id", async () => {
-    fixture.apps = [{ ...app("usage", "Usage"), slug: "usage", description: "Your work, contributions and agent activity.",
+  it.each(["Usage", "用量", "Work Tracker", "工作追踪", "Activities"])("labels the default %s Mini App Activities in both locales while keeping its id", async (title) => {
+    fixture.apps = [{ ...app("usage", title), slug: "usage", description: "Your work, contributions and agent activity.",
       dashboardIdentity: "usage", dashboard: usageDashboard }];
     await render();
     await vi.waitFor(() => expect(selected()?.dataset.appId).toBe("usage"));
-    expect(selected()?.textContent).toBe("Work Tracker");
+    expect(selected()?.textContent).toBe("Activities");
     await loadLocale("zh");
     setLocale("zh");
     await act(async () => { root.render(createElement(MiniAppsPanel)); });
-    expect(selected()?.textContent).toBe("工作追踪");
+    expect(selected()?.textContent).toBe("Activities");
     expect(selected()?.dataset.appId).toBe("usage");
     expect(host.textContent).not.toContain("查看你的工作、产出和 Agent 活动。");
     await act(async () => host.querySelector<HTMLButtonElement>('[role="tablist"] [data-info-hint]')!.click());

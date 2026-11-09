@@ -32,9 +32,11 @@ function fixture(fixtureOptions: { manyRows?: boolean; colorRanks?: boolean } = 
   const view = new Window({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
   let changed: (() => void) | null = null;
   let failDaily = false;
+  let emptyDaily = false;
   let exhaustDaily = false;
   let failOctober = false;
   let noDomesticCurrency = false;
+  let unknownDates = false;
   let manyRows = fixtureOptions.manyRows ?? false;
   let failSecondPage = false;
   let latestDate = "2026-11-06";
@@ -49,11 +51,12 @@ function fixture(fixtureOptions: { manyRows?: boolean; colorRanks?: boolean } = 
     const to = String(params.through ?? "");
     const prior = from.startsWith("2026-10") || from.startsWith("2025-");
     if (failDaily && id === "trend_day") throw new Error("private query detail");
+    if (emptyDaily && id === "trend_day") return page([]);
     if (id === "coverage") return page(noDomesticCurrency ? [
       { currency: "", count: "6", datedCount: "4", amountCount: "6", firstDate: "2025-03-01", lastDate: "2026-10-01" },
       { currency: "美元", count: "1", datedCount: "0", amountCount: "1", firstDate: null, lastDate: null },
     ] : [
-      { currency: "人民币", count: "1135", datedCount: "1135", amountCount: "1135", firstDate: "2024-11-07", lastDate: latestDate },
+      { currency: "人民币", count: "1135", datedCount: unknownDates ? null : "1135", amountCount: "1135", firstDate: "2024-11-07", lastDate: latestDate },
       { currency: "", count: "6", datedCount: "4", amountCount: "6", firstDate: "2025-03-01", lastDate: "2026-10-01" },
       { currency: "美元", count: "1", datedCount: "0", amountCount: "1", firstDate: null, lastDate: null },
     ]);
@@ -119,9 +122,11 @@ function fixture(fixtureOptions: { manyRows?: boolean; colorRanks?: boolean } = 
   view.document.write(html);
   return {
     view, query, changed: () => changed?.(), failDaily: (value: boolean) => { failDaily = value; },
+    emptyDaily: () => { emptyDaily = true; },
     exhaustDaily: () => { exhaustDaily = true; },
     failOctober: (value: boolean) => { failOctober = value; },
     noDomesticCurrency: () => { noDomesticCurrency = true; },
+    unknownDates: () => { unknownDates = true; },
     manyRows: () => { manyRows = true; },
     failSecondPage: (value: boolean) => { failSecondPage = value; },
     advanceLatest: (date: string) => { latestDate = date; },
@@ -151,43 +156,81 @@ const opened: Window[] = [];
 afterEach(async () => { for (const view of opened.splice(0)) await view.happyDOM.abort(); });
 
 describe("Bookkeeping Manager local ledger views", () => {
-  it("opens dated Details at the latest actual record and keeps currency/date defects separate", async () => {
+  it("opens compact Recent with a complete daily trend and discloses date coverage on demand", async () => {
     const app = fixture(); opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.view.document.querySelector("h1")?.textContent).toBe("Bookkeeping Manager");
     expect(app.view.document.getElementById("tab-records")?.getAttribute("aria-selected")).toBe("true");
-    expect(app.text("records-title")).toContain("November 2026");
+    expect(app.view.document.getElementById("tab-records")?.textContent).toBe("Recent");
+    expect(app.view.document.getElementById("tab-calendar")).toBeNull();
+    expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2026-11");
+    expect(app.text("daily-period-note")).toContain("November 2026 · Recorded through 2026-11-06");
+    expect(app.view.document.querySelectorAll("#daily-trend .daily-column")).toHaveLength(30);
+    expect(app.view.document.querySelectorAll("#daily-trend .daily-column span")).toHaveLength(2);
+    expect(app.view.document.querySelectorAll('#daily-trend .daily-column[data-future="true"]')).toHaveLength(24);
+    expect(app.view.document.querySelector("#daily-trend [role=img]")?.getAttribute("aria-label")).toContain("156.40");
+    expect(app.view.document.getElementById("coverage")?.hasAttribute("hidden")).toBe(true);
+    app.click("coverage-info");
     expect(app.text("coverage")).toContain("2024-11-07 to 2026-11-06");
     expect(app.text("coverage")).toContain("Missing dates across all records: 3");
-    expect(app.text("excluded-currencies")).toContain("7 other or unknown currency records outside the totals");
-    expect(app.text("excluded-currencies")).toContain("Currency blank · 6");
-    expect(app.text("excluded-currencies")).toContain("美元 · 1");
+    expect(app.view.document.getElementById("excluded-currencies")).toBeNull();
+    expect(app.view.document.body.textContent).not.toContain("other or unknown currency");
     expect(app.view.document.querySelectorAll("#details .date-group")).toHaveLength(3);
     expect(app.text("details")).toContain("−100.00");
     expect(app.text("details")).toContain("+30.00");
     expect(app.text("details")).not.toContain("¥");
     for (const id of ["refresh", "period", "category", "currency"]) expect(app.view.document.getElementById(id)).toBeNull();
     expect(app.query).toHaveBeenCalledWith("details", { from: "2026-11-01", through: "2026-11-06", currencies: ["人民币"] }, { expectedDataRevision: 7 });
+    expect(app.query).toHaveBeenCalledWith("trend_day", { from: "2026-11-01", through: "2026-11-06", currencies: ["人民币"] }, { expectedDataRevision: 7 });
   });
 
-  it("navigates two years directly and selects a calendar day with keyboard tabs", async () => {
+  it("previews coverage with focus, dismisses it, and never turns unknown dates into zero", async () => {
     const app = fixture(); opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
-    const records = app.view.document.getElementById("tab-records") as unknown as HTMLButtonElement;
-    records.dispatchEvent(new app.view.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }) as unknown as Event);
+    const trigger = app.view.document.getElementById("coverage-info") as unknown as HTMLButtonElement;
+    const popover = app.view.document.getElementById("coverage")!;
+    trigger.focus();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(popover.hasAttribute("hidden")).toBe(false);
+    trigger.dispatchEvent(new app.view.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event);
+    expect(popover.hasAttribute("hidden")).toBe(true);
+    trigger.blur();
+    app.click("coverage-info");
+    expect(popover.hasAttribute("hidden")).toBe(false);
+    app.view.document.body.dispatchEvent(new app.view.Event("pointerdown", { bubbles: true }));
+    expect(popover.hasAttribute("hidden")).toBe(true);
+    app.unknownDates(); app.changed();
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.view.document.getElementById("tab-calendar")?.getAttribute("aria-selected")).toBe("true");
+    expect(app.text("coverage")).toContain("Source quality counts unavailable");
+    expect(app.text("coverage")).not.toContain("Missing dates across all records: 0");
+  });
+
+  it("navigates two years in the compact calendar and keeps day controls accessible", async () => {
+    const app = fixture(); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    const trend = app.view.document.getElementById("recent-mode-trend") as unknown as HTMLButtonElement;
+    trend.dispatchEvent(new app.view.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }) as unknown as Event);
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.getElementById("recent-mode-calendar")?.getAttribute("aria-pressed")).toBe("true");
+    expect(app.view.document.activeElement?.id).toBe("recent-mode-calendar");
     expect(app.view.document.querySelector('[data-calendar-day="2026-11-06"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(app.text("day-details")).toContain("Synthetic groceries");
-    app.choose("calendar-month", "2024-11");
+    app.choose("records-month", "2024-11");
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.text("calendar-title")).toContain("November 2024");
+    expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2024-11");
     expect(app.query).toHaveBeenCalledWith("trend_day", { from: "2024-11-01", through: "2024-11-30", currencies: ["人民币"] }, { expectedDataRevision: 7 });
     const day = app.view.document.querySelector('[data-calendar-day="2024-11-07"]') as unknown as HTMLButtonElement | null;
     day?.click();
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.text("day-details")).toContain("Synthetic early entry");
+    expect(day?.textContent).toBe("7");
+    expect(day?.getAttribute("aria-label")).toContain("Outflow 8.00");
     expect(app.query).toHaveBeenCalledWith("details", { from: "2024-11-07", through: "2024-11-07", currencies: ["人民币"] }, { expectedDataRevision: 7 });
+    app.click("recent-mode-trend");
+    await app.view.happyDOM.whenAsyncComplete();
+    app.click("recent-mode-calendar");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelector('[data-calendar-day="2024-11-07"]')?.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("compares a partial month, changes trend granularity and drills from category/year into Details", async () => {
@@ -217,7 +260,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     const octoberButton = [...app.view.document.querySelectorAll("#year-breakdown button")].find((button) => button.textContent === "10") as unknown as HTMLButtonElement | undefined;
     expect(octoberButton).toBeDefined();
     octoberButton?.click();
-    await vi.waitFor(() => expect(app.text("records-title")).toContain("October 2026"));
+    await vi.waitFor(() => expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2026-10"));
     expect(app.view.document.getElementById("tab-records")?.getAttribute("aria-selected")).toBe("true");
     app.click("tab-statistics");
     await app.view.happyDOM.whenAsyncComplete();
@@ -235,7 +278,8 @@ describe("Bookkeeping Manager local ledger views", () => {
     expect(app.query).toHaveBeenCalledWith("details", expect.objectContaining({ category: "Food", currencies: ["人民币"] }), { expectedDataRevision: 7 });
     app.click("record-drilldown-clear");
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.view.document.getElementById("record-drilldown")?.hasAttribute("hidden")).toBe(true);
+    expect(app.text("record-drilldown-label")).toContain("Recorded range");
+    expect(app.view.document.getElementById("record-drilldown-clear")?.hasAttribute("hidden")).toBe(true);
   });
 
   it("keeps category identity colors stable across changed rank and separates Travel from Food", async () => {
@@ -281,7 +325,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     const food = [...app.view.document.querySelectorAll("#categories button")].find((button) => button.textContent?.includes("Food")) as unknown as HTMLButtonElement | undefined;
     food?.click();
     await app.view.happyDOM.whenAsyncComplete();
-    const scope = app.text("records-range");
+    const scope = app.text("record-drilldown-label");
     expect(scope).toContain("2026-11-01 to 2026-11-06");
     expect(app.query).toHaveBeenCalledWith("details", { from: "2026-11-01", through: "2026-11-06", currencies: ["人民币"], category: "Food" }, { expectedDataRevision: 7 });
     app.click("more");
@@ -289,8 +333,8 @@ describe("Bookkeeping Manager local ledger views", () => {
     expect(app.query).toHaveBeenCalledWith("details", { from: "2026-11-01", through: "2026-11-06", currencies: ["人民币"], category: "Food" }, { cursor: "next", expectedDataRevision: 7 });
     app.click("record-drilldown-clear");
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.text("records-range")).toBe(scope);
-    expect(app.view.document.getElementById("record-drilldown")?.hasAttribute("hidden")).toBe(true);
+    expect(app.text("record-drilldown-label")).toBe(scope.replace("Category: Food · ", ""));
+    expect(app.view.document.getElementById("record-drilldown-clear")?.hasAttribute("hidden")).toBe(true);
   });
 
   it("restores committed scope and data on failed navigation, and marks a never-loaded view unavailable", async () => {
@@ -300,13 +344,13 @@ describe("Bookkeeping Manager local ledger views", () => {
     app.failOctober(true);
     app.choose("records-month", "2026-10");
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.text("records-title")).toContain("November 2026");
+    expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2026-11");
     expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2026-11");
     expect(app.text("records-totals")).toBe(beforeMoney);
     expect(app.text("details")).toContain("Synthetic groceries");
     expect(app.text("notice")).toContain("Showing the last results");
     app.failDaily(true);
-    app.click("tab-calendar");
+    app.click("recent-mode-calendar");
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.text("calendar")).toContain("Records unavailable");
     expect(app.text("notice")).not.toContain("Showing the last results");
@@ -315,7 +359,7 @@ describe("Bookkeeping Manager local ledger views", () => {
   it("keeps the committed Records cutoff after another view advances, and hides obsolete expense detail", async () => {
     const app = fixture(); opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
-    const committedRange = app.text("records-range");
+    const committedRange = app.text("daily-period-note");
     const committedMoney = app.text("records-totals");
     app.click("tab-statistics");
     await app.view.happyDOM.whenAsyncComplete();
@@ -329,8 +373,8 @@ describe("Bookkeeping Manager local ledger views", () => {
     app.failNovemberDetails(true);
     app.click("tab-records");
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.text("records-range")).toBe(committedRange);
-    expect(app.text("records-range")).toContain("2026-11-06");
+    expect(app.text("daily-period-note")).toBe(committedRange);
+    expect(app.text("daily-period-note")).toContain("2026-11-06");
     expect(app.text("records-totals")).toBe(committedMoney);
     expect(app.text("details")).toContain("Synthetic groceries");
     expect(app.text("notice")).toContain("Showing the last results");
@@ -368,7 +412,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.query.mock.calls.slice(before).filter(([id]) => id === "details")).toHaveLength(2);
     expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
-    expect(app.text("records-range")).toContain("2026-11-07");
+    expect(app.text("daily-period-note")).toContain("2026-11-07");
     expect(app.text("details")).toContain("Synthetic page two 30");
     if (scroller) expect(scroller.scrollTop).toBe(72);
     app.failSecondPage(true); app.changed();
@@ -380,7 +424,7 @@ describe("Bookkeeping Manager local ledger views", () => {
   it("commits only the latest deferred calendar day intent on success and failure", async () => {
     const app = fixture(); opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
-    app.click("tab-calendar");
+    app.click("recent-mode-calendar");
     await app.view.happyDOM.whenAsyncComplete();
     app.deferDays();
     const clickDay = (date: string) => (app.view.document.querySelector(`[data-calendar-day="${date}"]`) as unknown as HTMLButtonElement).click();
@@ -406,15 +450,15 @@ describe("Bookkeeping Manager local ledger views", () => {
   it("keeps tab and calendar context on automatic updates and retains readable stale results", async () => {
     const app = fixture(); opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
-    app.click("tab-calendar");
+    app.click("recent-mode-calendar");
     await app.view.happyDOM.whenAsyncComplete();
-    app.choose("calendar-month", "2026-10");
+    app.choose("records-month", "2026-10");
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.text("calendar-title")).toContain("October 2026");
+    expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2026-10");
     app.changed();
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.view.document.getElementById("tab-calendar")?.getAttribute("aria-selected")).toBe("true");
-    expect(app.text("calendar-title")).toContain("October 2026");
+    expect(app.view.document.getElementById("recent-mode-calendar")?.getAttribute("aria-pressed")).toBe("true");
+    expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2026-10");
     app.failDaily(true); app.changed();
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.text("calendar")).toContain("12");
@@ -426,11 +470,43 @@ describe("Bookkeeping Manager local ledger views", () => {
     const app = fixture(); opened.push(app.view);
     await app.view.happyDOM.whenAsyncComplete();
     app.exhaustDaily();
-    app.click("tab-calendar");
+    app.changed();
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelectorAll("#daily-trend .daily-column")).toHaveLength(0);
+    expect(app.text("daily-trend")).toContain("Daily trend unavailable");
+    app.click("recent-mode-calendar");
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.view.document.querySelectorAll("#calendar .calendar-day")).toHaveLength(0);
     expect(app.text("calendar")).toContain("Daily totals incomplete");
     expect(app.text("notice")).toContain("This view is incomplete");
     expect(app.text("calendar")).not.toContain("No recorded outflow");
+  });
+
+  it("shows no recorded outflow only after a complete empty daily aggregate", async () => {
+    const app = fixture(); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    app.emptyDaily(); app.changed();
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.text("daily-trend")).toContain("No recorded outflow");
+    expect(app.view.document.querySelectorAll("#daily-trend .daily-column")).toHaveLength(0);
+    expect(app.text("notice")).toBe("");
+  });
+
+  it("keeps loaded records while a failed daily trend reports an error without drawing zero bars", async () => {
+    const app = fixture({ manyRows: true }); opened.push(app.view);
+    await app.view.happyDOM.whenAsyncComplete();
+    app.click("more");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
+    app.click("recent-mode-calendar");
+    await app.view.happyDOM.whenAsyncComplete();
+    app.failDaily(true);
+    app.click("recent-mode-trend");
+    await app.view.happyDOM.whenAsyncComplete();
+    expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
+    expect(app.text("daily-trend")).toContain("Daily trend unavailable");
+    expect(app.view.document.querySelectorAll("#daily-trend .daily-column")).toHaveLength(0);
+    expect(app.text("notice")).toContain("Daily trend unavailable");
+    expect(app.text("notice")).not.toContain("private query detail");
   });
 });

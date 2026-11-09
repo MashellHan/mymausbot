@@ -9,7 +9,7 @@ import { miniAppNativeFrameGuard } from "./native-frame-guard";
 export const DASHBOARD_APPS = {
   "agent-team": { slug: "agent-team", title: "computer.tab.agentTeam", description: "computer.miniApps.dashboard.teamDescription",
     reads: "computer.miniApps.dashboard.teamReads" },
-  usage: { slug: "usage", title: "computer.miniApps.dashboard.workTrackerTitle", description: "computer.miniApps.dashboard.usageDescription",
+  usage: { slug: "usage", title: "computer.miniApps.dashboard.activitiesTitle", description: "computer.miniApps.dashboard.usageDescription",
     reads: "computer.miniApps.dashboard.usageReads" },
 } as const satisfies Record<MiniAppDashboardKind, { slug: string; title: string; description: string; reads: string }>;
 
