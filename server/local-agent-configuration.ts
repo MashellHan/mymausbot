@@ -7,13 +7,14 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import type { LocalAgentConfigurationDocument, LocalAgentConfigurationResponse, LocalAgentConfigurationSkill,
   LocalAgentSkillDocumentResponse, LocalAgentTeamRulesResponse } from "../shared/local-dashboard.ts";
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
+import { localAgentOccupantId } from "./local-agent-occupant.ts";
+import { discoverCodexSkills, type CodexSkillDiscovery } from "./local-agent-skill-discovery.ts";
 
 const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
 const TEAM_ID = /^w\d+$/;
 const SKILL_ID = /^s[0-9a-f]{16}$/;
 const MAX_DOCUMENT_BYTES = 128 * 1024;
 const empty = (status: LocalAgentConfigurationDocument["status"]): LocalAgentConfigurationDocument => ({ status, markdown: null });
-const row = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const inside = (root: string, file: string) => {
   const part = relative(root, file);
   return part === "" || (part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part));
@@ -49,8 +50,8 @@ async function readDocument(root: string, file: string): Promise<LocalAgentConfi
 }
 
 type LiveRows = { workspaces: Record<string, unknown>[]; agents: Record<string, unknown>[] };
-type TeamSource = { root: string; playbook: string; roles: string };
-type SkillReference = { path: string; association: "agent" | "team" };
+type TeamSource = { root: string; playbook: string; roles: string; roleFiles?: Map<string, string> };
+type SkillReference = { path: string; association: "agent" | "team" | "codex"; name?: string; codexAvailable?: boolean };
 
 async function liveRows(run: HerdrRunner): Promise<LiveRows | null> {
   try {
@@ -62,21 +63,61 @@ async function liveRows(run: HerdrRunner): Promise<LiveRows | null> {
   } catch { return null; }
 }
 
-function verifiedOccupant(agent: Record<string, unknown>, agentId: string): string | null {
-  const session = row(agent.agent_session);
-  if (typeof session.source !== "string" || typeof session.value !== "string" || !session.source || !session.value ||
-      typeof agent.name !== "string" || !agent.name) return null;
-  return `o${digest(`${agentId}\0${agent.name}\0${session.source}\0${session.value}`)}`;
+async function savedTeamSource(agents: Record<string, unknown>[], teamId: string, home: string): Promise<{ source: TeamSource | null; error: boolean }> {
+  const teamsRoot = join(home, "workspace/.agents/teams");
+  try {
+    if (!inside(await realpath(home), await realpath(teamsRoot))) return { source: null, error: true };
+  } catch (error) { return { source: null, error: (error as NodeJS.ErrnoException).code !== "ENOENT" }; }
+  let directories;
+  try { directories = await readdir(teamsRoot, { withFileTypes: true }); }
+  catch (error) { return { source: null, error: (error as NodeJS.ErrnoException).code !== "ENOENT" }; }
+  if (directories.length > 64) return { source: null, error: true };
+  const candidates: TeamSource[] = [];
+  let error = false;
+  for (const directory of directories) {
+    if (!directory.isDirectory() || !/^[a-z][a-z0-9-]{0,63}$/.test(directory.name)) continue;
+    const root = join(teamsRoot, directory.name);
+    const document = await readDocument(teamsRoot, join(root, "session.json"));
+    if (document.status === "missing") continue;
+    if (document.status !== "ready") { error = true; continue; }
+    let metadata: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(document.markdown!);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid team metadata");
+      metadata = parsed as Record<string, unknown>;
+    }
+    catch { error = true; continue; }
+    if (metadata.workspace_id !== teamId || metadata.herdr_session !== "default" ||
+        typeof metadata.project_root !== "string" || !isAbsolute(metadata.project_root) ||
+        !Array.isArray(metadata.members) || metadata.members.length > 40) continue;
+    const roleFiles = new Map<string, string>();
+    for (const agent of agents) {
+      if (agent.workspace_id !== teamId || agent.cwd !== metadata.project_root ||
+          typeof agent.pane_id !== "string" || !PANE_ID.test(agent.pane_id) ||
+          !localAgentOccupantId(agent, agent.pane_id)) continue;
+      const session = agent.agent_session as Record<string, unknown> | null;
+      const matched = metadata.members.filter((value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+        const member = value as Record<string, unknown>;
+        return member.pane_id === agent.pane_id && member.agent_name === agent.name &&
+          member.agent_session_id === session?.value && typeof member.role === "string" &&
+          /^[a-z][a-z0-9-]{0,39}$/.test(member.role);
+      }) as Record<string, unknown>[];
+      if (matched.length === 1) roleFiles.set(agent.pane_id, `roles/${matched[0]!.role}.md`);
+    }
+    if (roleFiles.size) candidates.push({ root, playbook: join(root, "playbook.md"), roles: join(root, "roles"), roleFiles });
+  }
+  return { source: candidates.length === 1 ? candidates[0]! : null, error: error || candidates.length > 1 };
 }
 
-async function teamSource(agents: Record<string, unknown>[], teamId: string): Promise<{ source: TeamSource | null; error: boolean }> {
+async function teamSource(agents: Record<string, unknown>[], teamId: string, home: string): Promise<{ source: TeamSource | null; error: boolean }> {
   const counts = new Map<string, number>();
   for (const agent of agents) {
     const cwd = agent.cwd;
     const pane = agent.pane_id;
     if (agent.workspace_id === teamId && typeof pane === "string" && PANE_ID.test(pane) && pane.startsWith(`${teamId}:`) &&
         typeof cwd === "string" && isAbsolute(cwd) && cwd.length < 4096 && !cwd.includes("\0") &&
-        verifiedOccupant(agent, pane)) counts.set(cwd, (counts.get(cwd) ?? 0) + 1);
+        localAgentOccupantId(agent, pane)) counts.set(cwd, (counts.get(cwd) ?? 0) + 1);
   }
   if (counts.size > 20) return { source: null, error: true };
   const candidates: Array<TeamSource & { count: number }> = [];
@@ -92,7 +133,10 @@ async function teamSource(agents: Record<string, unknown>[], teamId: string): Pr
     candidates.push({ root, playbook, roles: join(dirname(playbook), "roles"), count });
   }
   candidates.sort((a, b) => b.count - a.count);
-  return { source: candidates[0] && candidates[0].count > (candidates[1]?.count ?? 0) ? candidates[0] : null, error };
+  const source = candidates[0] && candidates[0].count > (candidates[1]?.count ?? 0) ? candidates[0] : null;
+  if (source) return { source, error };
+  const saved = await savedTeamSource(agents, teamId, home);
+  return { source: saved.source, error: error || saved.error };
 }
 
 const cells = (line: string) => line.startsWith("|") && line.endsWith("|") ? line.slice(1, -1).split("|").map((part) => part.trim()) : [];
@@ -159,24 +203,31 @@ function skillReferences(role: { label: string; file: string | null } | null, ag
 
 function skillHandle(occupantId: string, path: string): string { return `s${digest(`${occupantId}\0${path}`)}`; }
 
-async function readSkill(home: string, path: string): Promise<LocalAgentConfigurationDocument> {
-  const roots = [join(home, ".agents/skills"), join(home, ".codex/skills")];
-  const root = roots.find((candidate) => inside(resolve(candidate), resolve(path)));
-  if (!root || basename(path) !== "SKILL.md") return empty("error");
-  try {
-    const canonicalHome = await realpath(home);
-    if (await realpath(root) !== join(canonicalHome, relative(home, root))) return empty("error");
-  } catch (error) { return empty((error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "error"); }
-  return readDocument(root, path);
+function skillRoot(home: string, cwd: string, path: string): { root: string; base: string } | undefined {
+  return [{ root: join(home, ".agents/skills"), base: home }, { root: join(home, ".codex/skills"), base: home },
+    { root: join(cwd, ".agents/skills"), base: cwd }, { root: join(cwd, ".codex/skills"), base: cwd }]
+    .find(({ root }) => inside(resolve(root), resolve(path)));
 }
 
-export function createLocalAgentConfigurationProvider({ run = runHerdr, home = homedir() }: { run?: HerdrRunner; home?: string } = {}) {
+async function readSkill(home: string, cwd: string, path: string): Promise<LocalAgentConfigurationDocument> {
+  const allowed = skillRoot(home, cwd, path);
+  if (!allowed || basename(path) !== "SKILL.md") return empty("error");
+  try {
+    const canonicalBase = await realpath(allowed.base);
+    if (!inside(canonicalBase, await realpath(allowed.root))) return empty("error");
+  } catch (error) { return empty((error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "error"); }
+  return readDocument(allowed.root, path);
+}
+
+export function createLocalAgentConfigurationProvider({ run = runHerdr, home = homedir(), discoverSkills = discoverCodexSkills }: {
+  run?: HerdrRunner; home?: string; discoverSkills?: (cwd: string) => Promise<CodexSkillDiscovery>;
+} = {}) {
   async function context(teamId: string, agentId?: string) {
     const live = await liveRows(run);
     if (!live || live.workspaces.filter((workspace) => workspace.workspace_id === teamId).length !== 1) return null;
     const member = agentId ? live.agents.filter((agent) => agent.pane_id === agentId && agent.workspace_id === teamId) : [];
     if (agentId && member.length !== 1) return null;
-    const selected = await teamSource(live.agents, teamId);
+    const selected = await teamSource(live.agents, teamId, home);
     const playbook = selected.source ? await readDocument(selected.source.root, selected.source.playbook)
       : empty(selected.error ? "error" : "unverified");
     return { source: selected.source, playbook, member: member[0] ?? null };
@@ -185,24 +236,47 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
   async function memberConfiguration(agentId: string) {
     const teamId = agentId.split(":")[0]!;
     const unavailable: LocalAgentConfigurationResponse = { agentId, teamId, occupantId: null,
-      agent: empty("unavailable"), skillReferences: "unverified", skills: [] };
-    if (!PANE_ID.test(agentId)) return { response: unavailable, references: [] as SkillReference[] };
+      agent: empty("unavailable"), skillReferences: "unverified", skillDiscovery: "unavailable", skills: [] };
+    if (!PANE_ID.test(agentId)) return { response: unavailable, references: [] as SkillReference[], cwd: null };
     const found = await context(teamId, agentId);
-    if (!found?.member) return { response: unavailable, references: [] as SkillReference[] };
-    const occupantId = verifiedOccupant(found.member, agentId);
-    if (!occupantId) return { response: { ...unavailable, agent: empty("unverified") }, references: [] as SkillReference[] };
-    if (!found.source) return { response: { ...unavailable, occupantId, agent: empty(found.playbook.status) }, references: [] as SkillReference[] };
-    const readme = dirname(found.source.playbook) === found.source.root
+    if (!found?.member) return { response: unavailable, references: [] as SkillReference[], cwd: null };
+    const occupantId = localAgentOccupantId(found.member, agentId);
+    if (!occupantId) return { response: { ...unavailable, agent: empty("unverified") }, references: [] as SkillReference[], cwd: null };
+    const cwd = typeof found.member.cwd === "string" && isAbsolute(found.member.cwd) &&
+      found.member.cwd.length < 4096 && !found.member.cwd.includes("\0") ? found.member.cwd : null;
+    const discovered = found.member.agent === "codex" && cwd
+      ? await discoverSkills(cwd).catch((): CodexSkillDiscovery => ({ status: "error", skills: [] }))
+      : { status: "unavailable", skills: [] } as CodexSkillDiscovery;
+    const readme = found.source && dirname(found.source.playbook) === found.source.root
       ? await readDocument(found.source.root, join(found.source.root, "README.md")) : empty("unverified");
-    const role = declaredRole(String(found.member.name), found.playbook, readme);
-    const agent = await agentDocument(found.source, role);
-    const references = skillReferences(role, agent, found.playbook, home);
-    const skills: LocalAgentConfigurationSkill[] = references.map(({ path, association }) => ({
-      id: skillHandle(occupantId, path), name: basename(dirname(path)), association, loadedState: "unknown",
+    const declared = found.source ? declaredRole(String(found.member.name), found.playbook, readme) : null;
+    const roleFile = found.source?.roleFiles?.get(agentId);
+    const role = found.source?.roleFiles
+      ? roleFile && (!declared?.file || declared.file === roleFile)
+        ? { label: declared?.label ?? basename(roleFile, ".md"), file: roleFile } : null
+      : declared;
+    const agent = found.source ? await agentDocument(found.source, role) : empty(found.playbook.status);
+    const references = found.source && (!found.source.roleFiles || roleFile)
+      ? skillReferences(role, agent, found.playbook, home) : [];
+    const combined = new Map(references.map((reference) => [reference.path, reference]));
+    let skillDiscovery = discovered.status;
+    for (const skill of discovered.skills) {
+      if (!cwd || !isAbsolute(skill.path) || !skillRoot(home, cwd, skill.path)) { skillDiscovery = "partial"; continue; }
+      const current = combined.get(skill.path);
+      combined.set(skill.path, current ? { ...current, codexAvailable: true }
+        : { path: skill.path, name: skill.name, association: "codex", codexAvailable: true });
+    }
+    const verifiedReferences = [...combined.values()].sort((a, b) =>
+      (a.name ?? basename(dirname(a.path))).localeCompare(b.name ?? basename(dirname(b.path))));
+    const skills: LocalAgentConfigurationSkill[] = verifiedReferences.map(({ path, name, association, codexAvailable }) => ({
+      id: skillHandle(occupantId, path), name: name ?? basename(dirname(path)), association,
+      ...(codexAvailable ? { codexAvailable: true } : {}), loadedState: "unknown",
     }));
     const response: LocalAgentConfigurationResponse = { agentId, teamId, occupantId, agent,
-      skillReferences: found.playbook.status === "ready" || agent.status === "ready" ? "verified" : "unverified", skills };
-    return { response, references };
+      skillReferences: found.source && (!found.source.roleFiles || roleFile) &&
+        (found.playbook.status === "ready" || agent.status === "ready") ? "verified" : "unverified",
+      skillDiscovery, skills };
+    return { response, references: verifiedReferences, cwd };
   }
 
   return {
@@ -210,11 +284,11 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
       return (await memberConfiguration(agentId)).response;
     },
     async getSkill(agentId: string, skillId: string): Promise<LocalAgentSkillDocumentResponse> {
-      const { response, references } = await memberConfiguration(agentId);
+      const { response, references, cwd } = await memberConfiguration(agentId);
       const base = { agentId: response.agentId, teamId: response.teamId, occupantId: response.occupantId, skillId };
       const reference = SKILL_ID.test(skillId) && response.occupantId
         ? references.find(({ path }) => skillHandle(response.occupantId!, path) === skillId) : null;
-      return { ...base, ...(reference ? await readSkill(home, reference.path) : empty("unavailable")) };
+      return { ...base, ...(reference && cwd ? await readSkill(home, cwd, reference.path) : empty("unavailable")) };
     },
     async getTeamRules(teamId: string): Promise<LocalAgentTeamRulesResponse> {
       if (!TEAM_ID.test(teamId)) return { teamId, ...empty("unavailable") };

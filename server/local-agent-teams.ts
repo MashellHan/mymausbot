@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { augmentedPath } from "./env-path.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText } from "./local-agent-session.ts";
+import { localAgentOccupantId } from "./local-agent-occupant.ts";
 
 const execute = promisify(execFile);
 const STATES = new Set<LocalAgentState>(["idle", "working", "blocked", "done", "unknown"]);
@@ -68,8 +69,10 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
         const observation = sessionId ? observations.get(sessionId) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
         const tokens = agent.tokens as Record<string, unknown> | null;
+        const occupantId = localAgentOccupantId(agent, id);
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
+          ...(occupantId ? { occupantId } : {}),
           role: dashboardText(tokens?.role, 40), model: observation?.model ?? null,
           reasoningEffort: observation?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
           contextWindow: observation?.contextWindow ?? null, state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,

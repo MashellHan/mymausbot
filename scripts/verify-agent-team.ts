@@ -8,7 +8,7 @@ const sample: LocalAgentTeamsResponse = {
   status: "ready", updatedAt: Date.UTC(2026, 10, 3, 8, 30), teamCount: 2,
   teams: [
     { id: "w6", name: "Atlas Studio", agentCount: 3, activeAgentCount: 1, agents: [
-      { id: "w6:p1", name: "An intentionally long synthetic agent name for narrow layout checks", kind: "codex", role: "Lead", model: "a-very-long-synthetic-model-identifier-for-wrapping", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft a sample release plan with enough words to fill two lines in a narrow panel. This text is invented for visual checks." },
+      { id: "w6:p1", name: "An intentionally long synthetic agent name for narrow layout checks", occupantId: "o1111111111111111", kind: "codex", role: "Lead", model: "a-very-long-synthetic-model-identifier-for-wrapping", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft a sample release plan with enough words to fill two lines in a narrow panel. This text is invented for visual checks." },
       { id: "w6:p2", name: "Mira", kind: "codex", role: null, model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, state: "blocked", taskHint: null },
       { id: "w6:p3", name: "Pine", kind: "codex", role: "Reviewer", model: "sample-model-b", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "idle", taskHint: "Review sample cards" },
     ] },
@@ -98,9 +98,10 @@ try {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ agentId, teamId: agentId.split(":")[0], occupantId: "o1111111111111111",
           agent: { status: "ready", markdown: "# Synthetic Agent instructions\nThis text is fixture-only.\n[local file](file:///private/fixture)" },
-          skillReferences: "verified", skills: [
+          skillReferences: "verified", skillDiscovery: "ready", skills: [
             { id: "s1111111111111111", name: "herdr", association: "team", loadedState: "unknown" },
             { id: "s2222222222222222", name: "impeccable", association: "agent", loadedState: "unknown" },
+            { id: "s3333333333333333", name: "agent-desktop", association: "codex", codexAvailable: true, loadedState: "unknown" },
           ] }));
       } },
       { path: /^\/api\/local-dashboard\/agents\/(w\d+(?::|%3A)p[0-9a-z]+)\/skills\/(s[0-9a-f]{16})$/i, handler: (_req, res, match) => {
@@ -108,7 +109,7 @@ try {
         const skillId = match![2]!;
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ agentId, teamId: agentId.split(":")[0], occupantId: "o1111111111111111", skillId,
-          status: "ready", markdown: `# Synthetic ${skillId === "s1111111111111111" ? "Herdr" : "Impeccable"} SKILL.md\nFixture-only skill content.` }));
+          status: "ready", markdown: `# Synthetic ${skillId === "s1111111111111111" ? "Herdr" : skillId === "s2222222222222222" ? "Impeccable" : "Agent Desktop"} SKILL.md\nFixture-only skill content.` }));
       } },
       { path: /^\/api\/local-dashboard\/agents\/([^/]+)\/activity$/, handler: (req, res, match) => {
         const scenario = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams.get("activity");

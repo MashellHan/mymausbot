@@ -28,6 +28,11 @@ const enabled = process.env.OMB_AGENT_CONFIG_UI === "1";
     const { openHeadlessChrome } = await import("./headless-chrome.ts");
     const page = await openHeadlessChrome(join(directory, "profile"));
     try {
+      const key = async (name: string, modifiers = 0) => {
+        const code = name === "Tab" ? 9 : name === "Escape" ? 27 : 39;
+        await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: name, code: name, windowsVirtualKeyCode: code, modifiers });
+        await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: name, code: name, windowsVirtualKeyCode: code, modifiers });
+      };
       for (const [width, viewport, locale] of [[960, 1400, "en"], [360, 360, "zh"]] as const) {
         await page.send("Emulation.setDeviceMetricsOverride", { width: viewport, height: 900, deviceScaleFactor: 1, mobile: false });
         const url = `${previewUrl.split("?")[0]}?mode=simple&width=${width}&locale=${locale}&scenario=ready&skin=${locale === "en" ? "atelier" : "midnight"}`;
@@ -43,6 +48,17 @@ const enabled = process.env.OMB_AGENT_CONFIG_UI === "1";
         }
         await page.evaluate("document.querySelector('[data-agent-id=\"w6:p1\"] button[aria-haspopup=dialog]').focus(); document.querySelector('[data-agent-id=\"w6:p1\"] button[aria-haspopup=dialog]').click()");
         await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.textContent?.includes('Synthetic Agent instructions')");
+        await page.until("document.activeElement?.getAttribute('data-testid') === 'agent-config-viewer'");
+        await key("Tab", 8);
+        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tab");
+        await key("Tab");
+        expect(await page.evaluate("document.activeElement?.getAttribute('aria-label')")).toBe(locale === "en" ? "Close" : "关闭");
+        await key("Tab");
+        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tab");
+        await key("Tab", 8);
+        expect(await page.evaluate("document.activeElement?.getAttribute('aria-label')")).toBe(locale === "en" ? "Close" : "关闭");
+        await key("Tab", 8);
+        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tab");
         await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.getBoundingClientRect().right <= innerWidth + 1", 3_000);
         const geometry = await page.evaluate(`(() => {
           const drawer = document.querySelector('[data-testid=agent-config-viewer]');
@@ -66,9 +82,13 @@ const enabled = process.env.OMB_AGENT_CONFIG_UI === "1";
           writeFileSync(join(process.env.OMB_AGENT_CONFIG_CAPTURE_DIR, `${width}-${locale}-geometry.json`), JSON.stringify(geometry, null, 2) + "\n");
           writeFileSync(join(process.env.OMB_AGENT_CONFIG_CAPTURE_DIR, `${width}-${locale}-agent.png`), await page.capture({ x: 0, y: 0, width: viewport, height: 900 }));
         }
-        await page.evaluate("document.querySelector('[role=tablist] [role=tab]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))");
+        await key("ArrowRight");
         await page.until("document.querySelector('[role=tab][aria-selected=true]')?.textContent?.includes('Skills') || document.querySelector('[role=tab][aria-selected=true]')?.textContent?.includes('技能')");
         await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.textContent?.includes('herdr')");
+        await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.textContent?.includes('agent-desktop')");
+        const skillCopy = await page.evaluate("document.querySelector('[data-testid=agent-config-viewer]')?.textContent ?? ''");
+        expect(skillCopy).toContain(locale === "en" ? "Enabled and discoverable in Codex for this workspace" : "Codex 在此工作区已启用并可发现");
+        expect(skillCopy).not.toContain(locale === "en" ? "No declared or enabled Codex skills were found" : "未发现已声明或 Codex 已启用的技能");
         const skillsOverflow = await page.evaluate("(() => { const panel = document.querySelector('[role=tabpanel]'); return panel.scrollWidth - panel.clientWidth; })()");
         expect(skillsOverflow).toBeLessThanOrEqual(1);
         if (process.env.OMB_AGENT_CONFIG_CAPTURE_DIR) writeFileSync(join(process.env.OMB_AGENT_CONFIG_CAPTURE_DIR, `${width}-${locale}-skills.png`),

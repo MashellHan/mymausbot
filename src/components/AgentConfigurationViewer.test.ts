@@ -20,17 +20,17 @@ const member = { kind: "codex", role: "Designer", model: "sample-model", reasoni
   contextUsed: 1_000, contextWindow: 2_000, state: "working" as const, taskHint: "Synthetic work" };
 const snapshot: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1_000, teamCount: 2, teams: [
   { id: "w6", name: "mymausbot", agentCount: 2, activeAgentCount: 1, agents: [
-    { ...member, id: "w6:p2", name: "Designer" },
-    { ...member, id: "w6:p3", name: "Frontend", state: "idle" },
+    { ...member, id: "w6:p2", name: "Designer", occupantId: "o1111111111111111" },
+    { ...member, id: "w6:p3", name: "Frontend", occupantId: "o3333333333333333", state: "idle" },
   ] },
   { id: "w8", name: "Mini Apps", agentCount: 1, activeAgentCount: 0, agents: [
-    { ...member, id: "w8:p1", name: "Lead", state: "idle" },
+    { ...member, id: "w8:p1", name: "Lead", occupantId: "o4444444444444444", state: "idle" },
   ] },
 ] };
 const configuration: LocalAgentConfigurationResponse = {
   agentId: "w6:p2", teamId: "w6", occupantId: "o1111111111111111",
   agent: { status: "ready", markdown: "# Verified Agent\n<script>bad()</script>\n[local](file:///private/secret) [web](https://example.test/)" },
-  skillReferences: "verified", skills: [
+  skillReferences: "verified", skillDiscovery: "ready", skills: [
     { id: "s1111111111111111", name: "impeccable", association: "agent", loadedState: "unknown" },
     { id: "s2222222222222222", name: "herdr", association: "team", loadedState: "unknown" },
   ],
@@ -155,7 +155,7 @@ it("rechecks the exact playbook on open and hides its entry if the file disappea
 
 it.each([
   ["missing", "The referenced file is missing.", false],
-  ["unverified", "This source could not be verified.", false],
+  ["unverified", "No team role file could be verified for this live member.", false],
   ["error", "The referenced file could not be read.", true],
 ] as const)("shows an Agent document %s without inventing content", async (status, message, retryable) => {
   let reads = 0;
@@ -275,4 +275,99 @@ it("ignores a prior team's delayed rules after selecting a different office", as
   await act(async () => first.resolve({ teamId: "w6", status: "ready", markdown: "# Previous team rules" }));
   expect(teamRulesButton()).toBeUndefined();
   expect(document.body.textContent).not.toContain("Previous team rules");
+});
+
+it("shows Codex availability separately from team declarations and never calls unverified empty associations none", async () => {
+  calls.api.mockImplementation(async (path: string) => path.endsWith("/rules") ? missingRules("w6") : {
+    ...configuration, agent: { status: "unverified", markdown: null }, skillReferences: "unverified", skillDiscovery: "ready",
+    skills: [{ id: "s3333333333333333", name: "agent-desktop", association: "codex", codexAvailable: true, loadedState: "unknown" }],
+  });
+  await render();
+  await act(async () => trigger("w6:p2").click());
+  await vi.waitFor(() => expect(viewer()?.textContent).toContain("No team role file could be verified"));
+  await act(async () => viewer()!.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
+  expect(viewer()?.textContent).toContain("Team or role skill declarations could not be verified");
+  expect(viewer()?.textContent).toContain("agent-desktop");
+  expect(viewer()?.textContent).toContain("Enabled and discoverable in Codex for this workspace");
+  expect(viewer()?.textContent).toContain("Loaded in this session: unknown");
+  expect(viewer()?.textContent).not.toContain("No declared or enabled Codex skills were found");
+});
+
+it("reports failed Codex discovery without presenting an unverified empty set as no skills", async () => {
+  calls.api.mockImplementation(async (path: string) => path.endsWith("/rules") ? missingRules("w6") : {
+    ...configuration, skillReferences: "unverified", skillDiscovery: "error", skills: [],
+  });
+  await render();
+  await act(async () => trigger("w6:p2").click());
+  await vi.waitFor(() => expect(viewer()?.querySelectorAll('[role="tab"]')).toHaveLength(2));
+  await act(async () => viewer()!.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
+  expect(viewer()?.textContent).toContain("Codex skill discovery could not be read for this workspace");
+  expect(viewer()?.textContent).not.toContain("No declared or enabled Codex skills were found");
+});
+
+it("closes a pending same-pane same-name viewer when the opaque occupant changes", async () => {
+  const first = deferred<LocalAgentConfigurationResponse>();
+  let requests = 0;
+  calls.api.mockImplementation(async (path: string) => {
+    if (path.endsWith("/rules")) return missingRules("w6");
+    if (path.endsWith("/configuration")) return ++requests === 1 ? first.promise : {
+      ...configuration, occupantId: "o2222222222222222", agent: { status: "ready", markdown: "# Replacement occupant" },
+    };
+    throw new Error(`Unexpected ${path}`);
+  });
+  await render();
+  await act(async () => trigger("w6:p2").click());
+  expect(viewer()?.textContent).toContain("Reading verified configuration");
+  const next = { ...snapshot, teams: snapshot.teams.map((team) => team.id === "w6"
+    ? { ...team, agents: team.agents.map((agent) => agent.id === "w6:p2"
+      ? { ...agent, occupantId: "o2222222222222222" } : agent) } : team) };
+  await render(next);
+  expect(viewer()).toBeNull();
+  await act(async () => trigger("w6:p2").click());
+  await vi.waitFor(() => expect(viewer()?.textContent).toContain("Replacement occupant"));
+  await act(async () => first.resolve({ ...configuration, agent: { status: "ready", markdown: "# Previous occupant" } }));
+  expect(viewer()?.textContent).not.toContain("Previous occupant");
+});
+
+it("rejects an initial response for a different occupant, including a changed-name session", async () => {
+  calls.api.mockImplementation(async (path: string) => path.endsWith("/rules") ? missingRules("w6") : {
+    ...configuration, occupantId: "o9999999999999999", agent: { status: "ready", markdown: "# Other member" },
+  });
+  await render();
+  await act(async () => trigger("w6:p2").click());
+  await vi.waitFor(() => expect(viewer()?.textContent).toContain("This configuration is unavailable"));
+  expect(viewer()?.textContent).not.toContain("Other member");
+});
+
+it("traps initial root Tab and Shift+Tab at actual tabbable boundaries", async () => {
+  calls.api.mockImplementation(async (path: string) => path.endsWith("/rules") ? missingRules("w6") : configuration);
+  await render();
+  await act(async () => trigger("w6:p2").click());
+  await vi.waitFor(() => expect(viewer()?.textContent).toContain("Verified Agent"));
+  const dialog = viewer()!;
+  const close = dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!;
+  const [agentTab, skillsTab] = [...dialog.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+  const tab = async (shiftKey = false) => act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true }));
+  });
+  expect(skillsTab!.tabIndex).toBe(-1);
+  dialog.focus();
+  await tab(true);
+  expect(document.activeElement).toBe(agentTab);
+  await tab();
+  expect(document.activeElement).toBe(close);
+  await tab(true);
+  expect(document.activeElement).toBe(agentTab);
+  dialog.focus();
+  await tab();
+  expect(document.activeElement).toBe(close);
+  await act(async () => agentTab!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+  expect(agentTab!.tabIndex).toBe(-1);
+  expect(skillsTab!.tabIndex).toBe(0);
+  const lastSkill = [...dialog.querySelectorAll<HTMLButtonElement>("li button")].at(-1)!;
+  lastSkill.focus();
+  await tab();
+  expect(document.activeElement).toBe(close);
+  await tab(true);
+  expect(document.activeElement).toBe(lastSkill);
 });
