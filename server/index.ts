@@ -34,7 +34,7 @@ import { CLOUD_COMPUTER_BUSY_ERROR } from "../shared/computer-contention.ts";
 import { failedTurnTool } from "../shared/failed-turn.ts";
 import { assistantTranscript, errorTranscript } from "../shared/client-cancel.ts"; import { PersonStops, stoppedTurnRow } from "./person-stops.ts"; import { LiveTurns } from "./live-turns.ts";
 import { phonePairingLink } from "../shared/pairing-link.ts"; import { personTagNames, withoutPersonTags } from "../shared/person-mention.ts";
-import { canWorkOnCloud, type CloudEngine } from "../shared/cloud-computer.ts";
+import { canWorkOnCloud, cloudEngine } from "../shared/cloud-computer.ts";
 import {
   approvalModeFor,
   modelSwitchNeedsAsk,
@@ -109,7 +109,7 @@ import { isLongPollPath } from "./routes/phones.ts";
 import { createDataRoutes } from "./data/routes.ts";
 import { DataSheetRegistry } from "./data/sheet.ts";
 import { DataFailure } from "./data/types.ts";
-import { TeamComputers, teamComputerOwner, type TeamComputerRecord } from "./team-computers.ts";
+import { TeamComputers, teamComputerOwner, teamComputerPrompt, type TeamComputerRecord } from "./team-computers.ts";
 import { isEffortLevel, type CardAnswerer, type ResolvedSender, type SignInRequestCardData, type WireBot, type WireGroup, type WireTask } from "../shared/wire.ts";
 import { isPersistentQuestionCard, shouldSettleRequestCard } from "../shared/ask-question.ts";
 import { parseToolScope } from "../shared/tool-scope.ts";
@@ -424,7 +424,7 @@ import {
 import { shellTimeoutHookResult } from "./shell-timeout-hint.ts";
 import { spillToolResult } from "./tool-result-spill.ts";
 import { gatedLocalComputer } from "./local-computer.ts";
-import { desktopComputer, thisComputerNotReadyError } from "./desktop-computer.ts";
+import { desktopComputer, hostComputerUnavailableNote, thisComputerNotReadyError } from "./desktop-computer.ts";
 import { askToUseYourComputer, cancelYourComputerAsks, claimWithYourComputerConsent, dismissStaleYourComputerCards, yourComputerCallFrom, yourComputerWaiting } from "./your-computer-consent.ts";
 import { createComputerAsksHost } from "./host/computer-asks-host.ts";
 import { discoverExistingPerBotLocalVms, localVmInventoryEntry } from "./local-vm-inventory.ts";
@@ -5688,10 +5688,6 @@ function inheritedTeamComputer(bot: Pick<BotRecord, "section" | "computer" | "cl
   return teamComputers.forBot(bot);
 }
 
-function teamComputerPrompt(computer: TeamComputerRecord | undefined): string {
-  return computer ? `Your team shares the cloud computer ${JSON.stringify(computer.name)}. Its desktop files and desktop browser logins are shared with other Auto bots in your team; only one turn may drive it at a time. The separate built-in Browser is not this desktop and does not automatically share its logins.` : "";
-}
-
 function botComputerControlKey(bot: BotRecord): string {
   const computer = inheritedTeamComputer(bot);
   return computer ? teamComputerOwner(computer.id) : bot.id;
@@ -5831,13 +5827,6 @@ function mountTeamBoat(computer: TeamComputerRecord, botId: string, owner: TurnO
   return cloudComputerTools(botId, owner, null);
 }
 
-function cloudEngine(instance: ReturnType<typeof registry.get>, model?: string): CloudEngine & { name: string } {
-  return {
-    computerMcp: instance?.adapter.capabilities.computerMcp,
-    name: model?.trim() || instance?.displayName || instance?.driverKind || "This model",
-  };
-}
-
 /** The agent process holds only a turn-scoped capability naming this Boat, never a Boat credential. */
 function cloudComputerTools(botId: string, owner: TurnOwner, boxId: string | null): NonNullable<SendTurnInput["integrations"]>["localComputer"] {
   const control = controlIntegration(botId, owner.threadId, owner.generation, { boxId });
@@ -5865,10 +5854,6 @@ async function mountHostComputer(owner: TurnOwner, botId: string, providerSuppor
     claim: (call) => claimWithYourComputerConsent(askNow, () => askToUseYourComputer(approvalBus, store.bot(botId) ?? undefined, owner, call), () => bindTurnComputer(owner, "computer:host", true)),
   });
   return gatedLocalComputer(cua, controlIntegration(botId, owner.threadId, owner.generation, "this computer"), journal);
-}
-
-function hostComputerUnavailableNote(): string {
-  return ` This computer's screen is unavailable this turn (${redactSecretsInText(thisComputerNotReadyError().message)}). No computer tools are mounted. Continue non-screen work with the available shell, files and teammates. If the task needs this screen, report it as unavailable; do not claim screen actions or switch to another computer.`;
 }
 
 /** Checked and started at dispatch, unlike the Boat: the VPS bridge execs into the container as soon as the engine launches and dies if it is not up. */
