@@ -94,9 +94,8 @@ describe("installed native Mini App dashboards", () => {
     });
     await render("agent-team");
     await vi.waitFor(() => expect(host.querySelectorAll("[data-team-house]")).toHaveLength(1));
-    expect(host.querySelector('[data-testid="selected-agent-team"]')).toBeNull();
+    expect(host.querySelector('[data-testid="selected-agent-team"]')).not.toBeNull();
     expect(calls.api.mock.calls.map(([, options]) => JSON.parse(options.body).resource)).toEqual(["teams"]);
-    await act(async () => host.querySelector<HTMLButtonElement>("[data-team-house]")!.click());
     expect(host.textContent).not.toContain("Synthetic recent input");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agent-activity-w1:p1"] button')!.click());
     await vi.waitFor(() => expect(host.textContent).toContain("Synthetic recent input"));

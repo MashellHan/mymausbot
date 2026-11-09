@@ -25,7 +25,7 @@ async function codexLog(id: string, recordedId = id) {
   await writeFile(join(directory, `rollout-2026-11-03-${id}.jsonl`), [
     JSON.stringify({ type: "session_meta", payload: { id: recordedId } }),
     JSON.stringify({ type: "turn_context", payload: { model: "gpt-6-sol", effort: "xhigh" } }),
-    JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "latest synthetic instruction" } }),
+    JSON.stringify({ type: "event_msg", timestamp: "2026-11-03T08:00:00Z", payload: { type: "user_message", message: "latest synthetic instruction" } }),
     JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "private conversation" } }),
     JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { last_token_usage: { input_tokens: 120, output_tokens: 30 }, total_token_usage: { input_tokens: 900000 }, model_context_window: 256000 } } }),
   ].join("\n") + "\n");
@@ -49,7 +49,7 @@ describe("local Agent Team provider", () => {
     } });
     const snapshot = await provider.get();
     expect(commands.sort()).toEqual(["--session default agent list", "--session default workspace list"]);
-    expect(snapshot).toEqual({ status: "ready", updatedAt: 1000, teamCount: 1, teams: [{ id: "w6", name: "MausBot", agentCount: 1, activeAgentCount: 0, agents: [{
+    expect(snapshot).toEqual({ status: "ready", updatedAt: 1000, teamCount: 1, teams: [{ id: "w6", name: "MausBot", agentCount: 1, activeAgentCount: 0, lastActivityAt: Date.UTC(2026, 10, 3, 8), agents: [{
       id: "w6:p1", name: "mausbot-front", kind: "codex", role: null, model: "gpt-6-sol", reasoningEffort: "xhigh", contextUsed: 150, contextWindow: 256000, state: "done", taskHint: "latest synthetic instruction",
     }] }] });
     expect(JSON.stringify(snapshot)).not.toMatch(/private conversation|private\/workspace|session_meta|terminal_title|900000/);
@@ -60,6 +60,7 @@ describe("local Agent Team provider", () => {
     const provider = createLocalAgentTeamsProvider({ codexHome, run: async (args) => args.at(-2) === "workspace" ? workspaces : agents() });
     expect((await provider.get()).teams[0]?.agents[0]?.model).toBeNull();
     expect((await provider.get()).teams[0]?.agents[0]?.taskHint).toBeNull();
+    expect((await provider.get()).teams[0]?.lastActivityAt).toBeNull();
   });
 
   it("refreshes the latest instruction and per-turn context without retaining transcript history", async () => {
@@ -74,11 +75,13 @@ describe("local Agent Team provider", () => {
     expect(first.teams[0]?.agents[0]).toMatchObject({ contextUsed: 150, reasoningEffort: "xhigh" });
     const secret = "ghp_" + "a".repeat(36);
     await appendFile(file, [
-      JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: `Latest request ${secret} ` + "x".repeat(500) } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-03T09:00:00Z", payload: { type: "user_message", message: `Latest request ${secret} ` + "x".repeat(500) } }),
+      JSON.stringify({ type: "event_msg", timestamp: "invalid", payload: { type: "token_count" } }),
       JSON.stringify({ type: "turn_context", payload: { model: "new-model", collaboration_mode: { settings: { reasoning_effort: "max" } } } }),
     ].join("\n") + "\n");
     time += 2000;
     const next = await provider.get();
+    expect(next.teams[0]?.lastActivityAt).toBe(Date.UTC(2026, 10, 3, 9));
     const member = next.teams[0]!.agents[0]!;
     expect(member).toMatchObject({ model: "new-model", reasoningEffort: "max", contextUsed: null, contextWindow: null });
     expect(member.taskHint).toMatch(/^Latest request/);
