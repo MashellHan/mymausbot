@@ -32,7 +32,7 @@ it("opens five persisted defaults on existing Bot Data, preserves removals and f
     expect(records(await query("outflow"))).toEqual([{ currency: "CNY", count: "4", amount: "-87.54" }]);
 
     const native = fixture.defaults!.apps.find((app) => app.dashboardIdentity === "usage")!;
-    expect(native).toMatchObject({ title: "Work Tracker", dashboard: { kind: "usage" } });
+    expect(native).toMatchObject({ title: "Activities", dashboard: { kind: "usage" } });
     for (const app of [installed.app, native]) {
       await api("POST", `/api/mini-apps/${app.id}/archive`, { requestKey: `remove-${app.id}`, expectedRevision: app.revision });
     }

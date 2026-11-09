@@ -71,8 +71,6 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
         }
         await open(`${agents.split("?")[0]}?${options}&scenario=live`);
         await expect.poll(() => read<number>("document.querySelectorAll('[data-team-house]').length"), { timeout: 30_000 }).toBe(2);
-        expect(await read<number>("document.querySelectorAll('[data-testid=selected-agent-team]').length")).toBe(0);
-        await read("document.querySelector('[data-team-house]').click()");
         await expect.poll(() => read<number>("document.querySelectorAll('[data-testid=selected-agent-team]').length")).toBe(1);
         expect(Math.abs(await read<number>("document.querySelector('[data-testid=agent-team-panel]').getBoundingClientRect().width") - width)).toBeLessThanOrEqual(1);
         expect(await read<number>("(() => { const p = document.querySelector('[data-testid=agent-team-panel]'); return p.scrollWidth - p.clientWidth; })()")).toBeLessThanOrEqual(1);
@@ -80,7 +78,6 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
     }
     await open(`${agents.split("?")[0]}?width=360&locale=en&scenario=live`);
     await expect.poll(() => read<number>("document.querySelectorAll('[data-team-house]').length")).toBe(2);
-    await read("document.querySelector('[data-team-house]').click()");
     await expect.poll(() => read<number>("document.querySelectorAll('[data-testid=selected-agent-team]').length")).toBe(1);
     const before = await read<{ top: number; selected: string }>(`(() => {
       const panel = document.querySelector('[data-testid=agent-team-panel]');

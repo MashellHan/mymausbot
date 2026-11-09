@@ -5367,7 +5367,7 @@
   "computer.miniApps.chooseTemplate": "Choose a report, a local view, or a view of records already in Data.",
   "computer.miniApps.dashboard.tabsRemain": "The original Agent Team and Usage Computer tabs remain available.",
   "computer.miniApps.dashboard.teamDescription": "Local team status and recent activity.",
-  "computer.miniApps.dashboard.workTrackerTitle": "Work Tracker",
+  "computer.miniApps.dashboard.activitiesTitle": "Activities",
   "computer.miniApps.dashboard.workTrackerDescription": "Your work, contributions and agent activity.",
   "computer.miniApps.dashboard.teamReads": "Reads local Herdr team and member names, models, states and task hints. Recent input and reply excerpts load only when you expand a member. This app cannot control agents.",
   "computer.miniApps.dashboard.usageDescription": "Local PR, commit and token activity.",

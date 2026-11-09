@@ -2,12 +2,12 @@ import { t } from "@/lib/i18n";
 import type { MiniAppSummary } from "../../../shared/mini-apps";
 import { REPORT_APPS } from "../../../shared/report-mini-app";
 
-const usageDefaultTitles = new Set(["Usage", "用量", "Work Tracker", "工作追踪"]);
+const usageDefaultTitles = new Set(["Usage", "用量", "Work Tracker", "工作追踪", "Activities"]);
 
 export function miniAppDisplayName(app: MiniAppSummary): string {
   if (app.shippedTemplateKind === "github_activity" && ["GitHub activity", "GitHub activity & discovery"].includes(app.title)) return REPORT_APPS.github_activity.title;
   return app.dashboardIdentity === "usage" && usageDefaultTitles.has(app.title)
-    ? t("computer.miniApps.dashboard.workTrackerTitle") : app.title;
+    ? t("computer.miniApps.dashboard.activitiesTitle") : app.title;
 }
 
 const defaultDescriptions = {

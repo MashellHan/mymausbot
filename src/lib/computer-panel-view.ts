@@ -1,11 +1,11 @@
-export type ComputerPanelView = "computer" | "android" | "browser" | "routines" | "files" | "data" | "mini-apps" | "agent-team" | "usage";
+export type ComputerPanelView = "computer" | "android" | "browser" | "routines" | "files" | "data" | "mini-apps";
 
 type PanelTabsContext = { advanced: boolean; androidConnected: boolean };
 
 export function computerPanelTabs({ advanced, androidConnected }: PanelTabsContext): ComputerPanelView[] {
   return advanced
-    ? ["computer", "routines", ...(androidConnected ? (["android"] as const) : []), "browser", "data", "files", "mini-apps", "agent-team", "usage"]
-    : ["computer", "browser", "data", "files", "mini-apps", "agent-team", "usage"];
+    ? ["computer", "routines", ...(androidConnected ? (["android"] as const) : []), "browser", "data", "files", "mini-apps"]
+    : ["computer", "browser", "data", "files", "mini-apps"];
 }
 
 export function resolveComputerPanelView(view: ComputerPanelView, context: PanelTabsContext): ComputerPanelView {
@@ -24,7 +24,8 @@ export function readComputerPanelView(
 ): ComputerPanelView {
   try {
     const value = storage.getItem(storageKey(botId));
-    if (value === "android" || value === "browser" || value === "routines" || value === "files" || value === "data" || value === "mini-apps" || value === "agent-team" || value === "usage") return value;
+    if (value === "agent-team" || value === "usage") return "mini-apps";
+    if (value === "android" || value === "browser" || value === "routines" || value === "files" || value === "data" || value === "mini-apps") return value;
   } catch {
   }
   return "computer";

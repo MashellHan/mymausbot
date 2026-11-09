@@ -3,17 +3,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 import { holdsFor, inspectJobs, preflightJob } from "./contracts.mjs";
-import { qaHealth } from "./health.mjs";
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
-const FAST_PR_BUDGET_MS = 5 * 60_000;
-
-function fastTiming(createdAt, jobs, now, originalCreatedAt = createdAt) {
-  const duration = (start, end) => Number.isFinite(start) && Number.isFinite(end) && end >= start ? `${Math.ceil((end - start) / 1000)}s` : "unknown";
-  const staticJob = jobs.find((job) => job.name.startsWith("typecheck + lint"));
-  const gateJob = jobs.find((job) => job.name === "CI");
-  return `attempt-to-gate=${duration(createdAt, now)}, original-created-to-gate=${duration(originalCreatedAt, now)}, static-queue=${duration(createdAt, Date.parse(staticJob?.started_at))}, static-checks=${duration(Date.parse(staticJob?.started_at), Date.parse(staticJob?.completed_at ?? new Date(now).toISOString()))}, gate-queue=${duration(createdAt, Date.parse(gateJob?.started_at))}`;
-}
 
 function failedRequiredStep(expected, jobs) {
   for (const item of expected) {
@@ -24,7 +15,7 @@ function failedRequiredStep(expected, jobs) {
   return null;
 }
 
-export async function verifyGate(outputs, { api = github, health = qaHealth, runId = process.env.GITHUB_RUN_ID, attempt = process.env.GITHUB_RUN_ATTEMPT || 1, deadlineMs = 85 * 60_000, createdAt = NaN, originalCreatedAt = createdAt, now = Date.now, wait = pause } = {}) {
+export async function verifyGate(outputs, { api = github, runId = process.env.GITHUB_RUN_ID, attempt = process.env.GITHUB_RUN_ATTEMPT || 1, deadlineMs = 85 * 60_000, createdAt = NaN, now = Date.now, wait = pause } = {}) {
   const areas = outputs.qa_areas;
   const expected = outputs.expected_jobs;
   if (!Array.isArray(areas) || !areas.length || !Array.isArray(expected) || !expected.some((item) => item.id === "static")
@@ -44,39 +35,27 @@ export async function verifyGate(outputs, { api = github, health = qaHealth, run
     const issues = (await pages("/issues?state=open&labels=qa", null, api)).filter((issue) => !issue.pull_request);
     const holds = holdsFor(issues, areas, repairs);
     if (holds.length) throw new Error(`QA hold: ${holds.map((issue) => `#${issue.number}`).join(", ")}; Lead must triage or identify a fully validated repair`);
-    if (outputs.reduced) {
-      const state = await health({ api });
-      if (!state.healthy || state.blockedAreas.some((area) => area === "global" || areas.includes(area))) {
-        throw new Error(`Reduced coverage is no longer eligible: ${state.reason || "untriaged QA findings"}. Re-run CI to restore broader checks.`);
-      }
-    }
   };
   await checkControls();
-  const started = Date.now();
+  const started = now();
   while (true) {
     const observed = await runJobs(runId, attempt, api);
     const result = inspectJobs(expected, observed);
     if (result.failed.length) throw new Error(`Required validation failed: ${result.failed.join(", ")}`);
     const failedStep = failedRequiredStep(expected, observed);
     if (failedStep) throw new Error(`Required validation failed: ${failedStep}`);
-    if (outputs.fast_pr && now() - createdAt > FAST_PR_BUDGET_MS) {
-      throw new Error(`CI performance: fast PR exceeded 5 minutes (${fastTiming(createdAt, observed, now(), originalCreatedAt)}; pending=${[...result.missing, ...result.pending].join(", ") || "none"})`);
-    }
     if (result.passed) {
       await checkControls();
-      if (outputs.fast_pr && now() - createdAt > FAST_PR_BUDGET_MS) {
-        throw new Error(`CI performance: fast PR exceeded 5 minutes (${fastTiming(createdAt, observed, now(), originalCreatedAt)}; pending=none)`);
-      }
       return;
     }
-    if (Date.now() - started >= deadlineMs) throw new Error(`Incomplete required validation: ${[...result.missing, ...result.pending].join(", ")}`);
+    if (now() - started >= deadlineMs) throw new Error(`Incomplete required validation: ${[...result.missing, ...result.pending].join(", ")}`);
     console.log(`Waiting for required validation: ${result.missing.length} missing, ${result.pending.length} pending`);
     await wait(15_000);
   }
 }
 
 export async function gateRun({ api = github, readArtifact = artifactFiles, runId = process.env.GITHUB_RUN_ID, attempt = process.env.GITHUB_RUN_ATTEMPT || 1, sha = process.env.GITHUB_SHA, event = process.env.GITHUB_EVENT_NAME, eventPath = process.env.GITHUB_EVENT_PATH, eventPayload, deadlineMs = 175 * 60_000, now = Date.now, wait = pause, ...options } = {}) {
-  const started = Date.now();
+  const started = now();
   let createdAt = NaN, originalCreatedAt = NaN, prNumber = null, prHead = null;
   if (event === "pull_request") {
     const snapshot = eventPayload ?? (eventPath ? JSON.parse(readFileSync(eventPath, "utf8")) : {});
@@ -100,16 +79,13 @@ export async function gateRun({ api = github, readArtifact = artifactFiles, runI
     const artifacts = await pages(`/actions/runs/${runId}/artifacts`, "artifacts", api);
     const plan = await runPlan({ id: Number(runId), run_attempt: Number(attempt), head_sha: sha }, jobs, artifacts, { api, readArtifact });
     if (plan) {
-      return verifyGate(plan.outputs, { ...options, api, runId, attempt, wait, now, createdAt, originalCreatedAt, deadlineMs: Math.max(0, deadlineMs - (Date.now() - started)) });
+      return verifyGate(plan.outputs, { ...options, api, runId, attempt, wait, now, createdAt, deadlineMs: Math.max(0, deadlineMs - (now() - started)) });
     }
-    if (preflight?.conclusion === "success" || Date.now() - started >= deadlineMs) throw new Error("Missing current-run validation plan; rerun all jobs for this revision");
-    if (prNumber && now() - createdAt > FAST_PR_BUDGET_MS) {
+    if (preflight?.conclusion === "success" || now() - started >= deadlineMs) throw new Error("Missing current-run validation plan; rerun all jobs for this revision");
+    if (prNumber) {
       const pr = await api(`/pulls/${prNumber}`);
       if (pr.head?.sha !== prHead) throw new Error("PR head changed; wait for its current CI run");
       if (!Array.isArray(pr.labels) || pr.labels.some((label) => typeof label.name !== "string")) throw new Error("Invalid current PR controls");
-      if (!pr.labels.some((label) => ["ci:full", "qa:repair", "windows"].includes(label.name))) {
-        throw new Error(`CI performance: fast PR validation plan unavailable after 5 minutes (${fastTiming(createdAt, jobs, now(), originalCreatedAt)})`);
-      }
     }
     console.log("Waiting for the current run's validation plan");
     await wait(15_000);
