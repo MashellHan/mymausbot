@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { Window } from "happy-dom";
 import { expect, it, vi } from "vitest";
-import { launchMiniAppsFixture } from "../../../server/testing/mini-apps-fixture.ts";
-import type { MiniAppQueryOptions, MiniAppQueryResult } from "../../../shared/mini-apps.ts";
+import { launchMiniAppsFixture } from "../testing/mini-apps-fixture.ts";
+import type { MiniAppQueryOptions, MiniAppQueryResult } from "../../shared/mini-apps.ts";
 
 it("renders canonical DuckDB month buckets and sorts the complete ledger across pages", async () => {
   const fixture = await launchMiniAppsFixture();
@@ -20,7 +20,7 @@ it("renders canonical DuckDB month buckets and sorts the complete ledger across 
   const click = (selector: string) => {
     const node = view.document.querySelector(selector);
     expect(node).not.toBeNull();
-    (node as unknown as HTMLButtonElement).click();
+    (node as unknown as { click(): void }).click();
   };
   try {
     await fixture.dataCall("data_sql", { sql: `CREATE OR REPLACE TABLE ledger_master AS SELECT * FROM ledger_master UNION ALL SELECT * FROM (VALUES
@@ -30,7 +30,7 @@ it("renders canonical DuckDB month buckets and sorts the complete ledger across 
       ('Food', '2026-11-06', '-100.00', 'Card', 'Daily', 'CNY', 'Synthetic groceries'),
       ('Transfer', '2026-11-06', '30.00', 'Card', 'Daily', 'CNY', 'Synthetic income')) AS added(category, date, amount, account, book, currency, note)` });
     (view as unknown as { mausApp: unknown }).mausApp = { query, onDataChanged: (listener: () => void) => { changed = listener; } };
-    view.document.write(readFileSync(new URL("../../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8"));
+    view.document.write(readFileSync(new URL("../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8"));
     await vi.waitFor(() => expect(text("daily-trend")).toContain("Peak 100.00"), { timeout: 15_000 });
     expect(text("records-totals")).toContain("156.40");
     expect(text("records-totals")).toContain("Spending entries: 2");
@@ -55,7 +55,7 @@ it("renders canonical DuckDB month buckets and sorts the complete ledger across 
     await vi.waitFor(() => expect(view.document.querySelectorAll("#details .record-row")).toHaveLength(30));
     expect(text("details")).not.toContain("Synthetic largest outside first date page");
     const sort = view.document.getElementById("records-sort")!;
-    (sort as unknown as HTMLSelectElement).value = "spending";
+    (sort as unknown as { value: string }).value = "spending";
     sort.dispatchEvent(new view.Event("change"));
     click("#more");
     await vi.waitFor(() => expect(view.document.querySelector("#details .record-row")?.textContent).toContain("Synthetic largest outside first date page"));
