@@ -30,6 +30,7 @@ vi.mock("./AndroidDevicePanel", () => ({ AndroidDevicePanel: () => null, useAndr
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: () => null }));
 vi.mock("./CloudBackendPicker", () => ({ CloudBackendPicker: () => null }));
 vi.mock("./bot-settings/RoutinesSection", () => ({ RoutinesSection: () => null }));
+vi.mock("./mini-apps/MiniAppsPanel", () => ({ MiniAppsPanel: () => createElement("div", { "data-testid": "mini-apps-panel" }) }));
 vi.mock("./data/DataPanel", () => ({ DataPanel: () => createElement("div", { "data-testid": "data-panel" }) }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
@@ -136,7 +137,7 @@ describe("computer panel entry focus", () => {
 
     runFrames();
     expect(document.activeElement).toBe(activeTab());
-    expect(document.activeElement?.textContent?.trim()).toBe(t("computer.tab.computer"));
+    expect(document.activeElement?.textContent?.trim()).toBe(t("computer.tab.miniApps"));
   });
 
   it("leaves a pointer open's focus alone", async () => {
@@ -198,7 +199,7 @@ describe("computer panel entry focus", () => {
     rememberComputerPanelOpen({ botId: "scout", opener: chatButton(), tabs: true });
     await open(makeBot());
     runFrames();
-    const content = document.querySelector<HTMLElement>('[role="tabpanel"]')!;
+    const content = panelClose()!;
     flushSync(() => content.focus());
 
     flushSync(() => tabByLabel("Data").click());

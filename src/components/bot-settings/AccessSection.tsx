@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 import { mcpServersForBot, mcpServersOfBot, mcpSwitch, useMcpServers } from "@/lib/mcp-servers";
-import { placeFacts, placeViewFor, usePlaceSeat } from "@/lib/place-view";
+import { openPlaceAction, placeFacts, placeViewFor, usePlaceSeat } from "@/lib/place-view";
 import { shortPath } from "@/lib/short-path";
 import { isOwnThreadFolder } from "../../../shared/thread-folder";
 import { useDesktopCapabilities } from "../DesktopCapabilities";
@@ -682,7 +682,7 @@ export function AccessSection({
           type="button"
           onClick={() => {
             dispatch({ type: "toggleSettings", open: false });
-            dispatch({ type: "toggleComputer", open: true });
+            openPlaceAction("open-computer-panel", { botId: bot.id }, dispatch);
           }}
           className="mt-3 rounded-lg bg-control px-3 py-1.5 text-[13px] text-ink hover:bg-raised-hover"
         >

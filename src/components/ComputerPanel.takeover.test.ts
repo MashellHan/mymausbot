@@ -140,7 +140,7 @@ const releases = () => fixture.beacons.filter((beacon) => beacon.url === "/api/b
 
 beforeEach(() => {
   // The panel remembers each conversation's tab (computer-panel-view.ts), so one test's tab must not open the next test on it.
-  const saved = new Map<string, string>();
+  const saved = new Map<string, string>([["omb-computer-panel-view:scout", "computer"]]);
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => saved.get(key) ?? null,
     setItem: (key: string, value: string) => void saved.set(key, value),

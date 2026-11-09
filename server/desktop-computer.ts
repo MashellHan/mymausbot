@@ -1,4 +1,5 @@
 import { userErrorThrown } from "./user-errors.ts";
+import { redactSecretsInText } from "./redact.ts";
 // "This computer" is the desktop app's own computer, and only the server the app launched may drive it. The app proves
 // that by handing the driver connection to that one child over Electron's private utility-process port, which only the
 // app's main process can write to and which plain Node never has. No file, environment variable or HTTP route supplies
@@ -67,4 +68,8 @@ export function thisComputerNotReadyError(desktop: DesktopComputer = desktopComp
   if (!reason) return userErrorThrown("serverError.computer.permissionsThenRestart");
   const permission = platform === "darwin" && /(?:Screen Recording|Accessibility).*required/i.test(reason);
   return userErrorThrown(permission ? "serverError.computer.notReadyMacPermission" : "serverError.computer.notReadyDetail", { reason });
+}
+
+export function hostComputerUnavailableNote(): string {
+  return ` This computer's screen is unavailable this turn (${redactSecretsInText(thisComputerNotReadyError().message)}). No computer tools are mounted. Continue non-screen work with the available shell, files and teammates. If the task needs this screen, report it as unavailable; do not claim screen actions or switch to another computer.`;
 }
