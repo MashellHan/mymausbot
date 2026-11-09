@@ -86,8 +86,15 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi
 
 describe("installed native Mini App dashboards", () => {
   it("reads team metadata and folded member activity only through the app-scoped revision", async () => {
-    calls.api.mockImplementation(async (_path: string, options: { body: string }) => {
-      const body = JSON.parse(options.body);
+    const dashboardPath = `/api/mini-apps/${appId}/dashboard`;
+    const rulesPath = "/api/local-dashboard/teams/w1/rules";
+    calls.api.mockImplementation(async (path: string, options: { body?: string }) => {
+      if (path === rulesPath) {
+        expect(options.body).toBeUndefined();
+        return { teamId: "w1", status: "missing", markdown: null };
+      }
+      expect(path).toBe(dashboardPath);
+      const body = JSON.parse(options.body!);
       return { appId, revision: 3, resource: body.resource, snapshot: body.resource === "teams" ? teams
         : { agentId: "w1:p1", status: "ready", updatedAt: 1_000, truncated: false,
           events: [{ id: "e1", kind: "user", at: null, tool: null, text: "Synthetic recent input" }] } };
@@ -95,14 +102,18 @@ describe("installed native Mini App dashboards", () => {
     await render("agent-team");
     await vi.waitFor(() => expect(host.querySelectorAll("[data-team-house]")).toHaveLength(1));
     expect(host.querySelector('[data-testid="selected-agent-team"]')).not.toBeNull();
-    expect(calls.api.mock.calls.map(([, options]) => JSON.parse(options.body).resource)).toEqual(["teams"]);
+    expect(calls.api.mock.calls).toEqual([
+      [dashboardPath, expect.objectContaining({ method: "POST", body: JSON.stringify({ resource: "teams", expectedRevision: 3 }) })],
+      [rulesPath, { background: true, signal: expect.any(AbortSignal), timeoutMs: 10_000 }],
+    ]);
     expect(host.textContent).not.toContain("Synthetic recent input");
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agent-activity-w1:p1"] button')!.click());
     await vi.waitFor(() => expect(host.textContent).toContain("Synthetic recent input"));
     expect(calls.api.mock.calls.map(([path]) => path)).toEqual([
-      `/api/mini-apps/${appId}/dashboard`, `/api/mini-apps/${appId}/dashboard`,
+      dashboardPath, rulesPath, dashboardPath,
     ]);
-    expect(JSON.parse(calls.api.mock.calls[1]![1].body)).toEqual({ resource: "activity", expectedRevision: 3, agentId: "w1:p1" });
+    expect(calls.api.mock.calls[2]![1].method).toBe("POST");
+    expect(JSON.parse(calls.api.mock.calls[2]![1].body)).toEqual({ resource: "activity", expectedRevision: 3, agentId: "w1:p1" });
   });
 
   it("renders GitHub contribution references and weekly separators from an app-scoped snapshot", async () => {
