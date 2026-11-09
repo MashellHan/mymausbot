@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels, preflightJob } from "./contracts.mjs";
+import { qaGroups, refreshQaGroups } from "./groups.mjs";
 
 export function sanitize(value) {
   return stripVTControlCharacters(String(value ?? ""))
@@ -168,21 +169,28 @@ function findingBody(finding, report, state, previous = "") {
 
 export async function deliverReport(report, { api = github, policy = JSON.parse(readFileSync("scripts/testing/check-policy.json", "utf8")) } = {}) {
   const issues = (await pages("/issues?state=all&labels=qa", null, api)).filter((issue) => !issue.pull_request);
+  const { groups, byKey } = qaGroups(issues), changedKeys = new Set();
+  const update = async (issue, patch) => {
+    await api(`/issues/${issue.number}`, { method: "PATCH", body: patch });
+    Object.assign(issue, patch);
+    changedKeys.add(stateOf(issue).key);
+  };
   for (const finding of report.findings) {
     const issue = issues.find((entry) => entry.body?.includes(marker(finding.key)));
+    const grouped = byKey.has(finding.key);
     const previous = issue ? stateOf(issue) : null;
     const runKey = `${report.runId}:${report.attempt}`;
     if (!newerThan(report, previous)) continue;
     const area = policy.areas.find((entry) => entry.tests.includes(finding.file))?.id ?? "global";
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
-      triageEpoch: !issue || issue.state === "closed" ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
+      triageEpoch: !issue || issue.state === "closed" && !grouped ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
       lastExecution: runKey, lastExecutionAt: report.finishedAt,
       ...(finding.jobs?.length ? { verificationJobs: [...new Set([...(previous?.verificationJobs ?? []), ...finding.jobs])] } : {}) };
     const body = findingBody(finding, report, state, issue?.body);
     const defaults = ["qa", "qa:untriaged", `qa:kind:${finding.kind}`, `qa:scope:${area}`, "owner:lead"];
     if (issue) {
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified");
-      await api(`/issues/${issue.number}`, { method: "PATCH", body: { body, state: "open", labels: issue.state === "closed" ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels } });
+      await update(issue, { body, state: grouped ? issue.state : "open", labels: issue.state === "closed" && !grouped ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
     } else {
       const created = await api("/issues", { method: "POST", body: { title: `[QA] ${sanitize(finding.contract).slice(0, 150)} (${sanitize(finding.platform).slice(0, 35)})`, body, labels: defaults } });
       issues.push(created);
@@ -196,13 +204,19 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       if (!state || !newerThan(report, state) || !contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
       const verified = { ...state, lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
       const alreadyVerified = issueLabels(issue).includes("qa:verified");
-      await api(`/issues/${issue.number}`, { method: "PATCH", body: {
+      await update(issue, {
         body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)
           + (alreadyVerified ? "" : `\n\nQA verified this contract without retries on \`${report.sha}\`: ${report.url}. Lead: check the integrated fix and Reviewer evidence before closing.`),
         ...(!alreadyVerified ? { labels: [...issueLabels(issue), "qa:verified"] } : {}),
-      } });
+      });
     }
   }
+  for (const { keys, members } of groups) {
+    for (let i = 0; i < keys.length; i++) {
+      if (stateOf(members[i])?.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(keys[i]);
+    }
+  }
+  await refreshQaGroups(groups, changedKeys, report, api);
   report.deliveryComplete = true;
   return report;
 }

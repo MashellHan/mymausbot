@@ -197,6 +197,30 @@ Execution order and attempts govern updates; a slow old run cannot overwrite
 newer evidence merely by finishing later. A pass after the existing two allowed CI retries remains a
 flake. No additional full-suite retry budget is added.
 
+Track a confirmed shared root cause in one QA issue. Keep its individual
+contract/platform keys and original evidence; matching text or a shared file
+alone does not establish a common cause. Lead may consolidate existing case
+issues under that parent with one reviewed membership list. The parent must
+retain the strongest member priority and every affected scope. Closing member
+records as consolidated is a tracking change, not a repair or verification.
+
+The parent body declares existing member keys in one machine-readable line:
+
+```text
+<!-- mausbot-qa-group ["0123456789abcdef01234567","89abcdef0123456789abcdef"] -->
+```
+
+The reporter keeps updating original member evidence without reopening
+consolidated records, and updates one parent summary. A new member failure
+reopens a closed or verified parent for triage. The parent is only marked
+`qa:verified` after every member has positive evidence under the existing
+complete-execution and retry rules; Lead still owns closure. Old reports
+cannot overwrite newer member evidence. Unknown or unrelated findings retain
+their own triage until a shared cause and membership are confirmed. Deploy
+this reporter support before closing members, and preserve the original links,
+case keys, platforms, assertions, tested revisions, runs and pending work in
+the consolidation handoff.
+
 The local thirty-minute queue uses the existing `mausbot-lead` Herdr agent. It
 submits new QA work, ready PR heads, verification and overdue conditions. Normal
 recurrence updates the issue without another wake-up. A durable submission
