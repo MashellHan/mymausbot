@@ -89,15 +89,18 @@ it("keeps an earlier X edition selected across Data refresh and separates all da
   const older = header("2026-11-03", { reportSummary: null });
   const latest = header("2026-11-04", { sourceAsOfAt: "2026-11-05T00:00:00Z", reportSummary: "Only selected items." });
   app.data.current = latest;
-  app.data.editions.set("2026-11-03", { header: older, items: [item({ title: "<img src=x>", sourceUrl: "https://example.org/older" })] });
-  app.data.editions.set("2026-11-04", { header: latest, items: [item()] });
+  app.data.editions.set("2026-11-03", { header: older, items: [item({ title: "<img src=x>", sourceUrl: "https://example.org/older", selectionBasis: "Earlier X selection basis" })] });
+  app.data.editions.set("2026-11-04", { header: latest, items: [item({ selectionBasis: "Latest X selection basis" })] });
   app.changed();
   await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("Latest X selection basis");
   const select = app.view.document.getElementById("edition") as unknown as HTMLSelectElement;
   select.value = "2026-11-03";
   select.dispatchEvent(new app.view.Event("change") as unknown as Event);
   await app.view.happyDOM.whenAsyncComplete();
   expect(app.text()).toContain("<img src=x>");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).toContain("Earlier X selection basis");
+  expect(app.view.document.getElementById("selected-detail")?.textContent).not.toContain("Latest X selection basis");
   expect(app.view.document.querySelector("#report img")).toBeNull();
   expect(app.text()).toContain("Source date unavailable");
   expect(app.text()).toContain("Issue date");
@@ -113,6 +116,44 @@ it("keeps an earlier X edition selected across Data refresh and separates all da
   expect(select.value).toBe("2026-11-03");
   expect(app.text()).toContain("<img src=x>");
   expect(app.query).toHaveBeenCalledWith("edition", { editionKey: "2026-11-03" }, { expectedDataRevision: 4 });
+});
+
+it("keeps keyboard focus on the same report control after refresh and moves it to a valid fallback when removed", async () => {
+  const current = header("2026-11-05");
+  const first = item({ itemIndex: 1, title: "First story" });
+  const second = item({ itemIndex: 2, title: "Second story" });
+  const app = fixture("x_ai_digest", { current, editions: [{ header: current, items: [first, second] }] }, async () => {}); opened.push(app.view);
+  await app.view.happyDOM.whenAsyncComplete();
+  const originalIndex = app.view.document.querySelector('[data-report-index="2"]') as unknown as HTMLButtonElement;
+  originalIndex.click();
+  originalIndex.focus();
+  expect(app.view.document.activeElement).toBe(originalIndex);
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  const retainedIndex = app.view.document.querySelector('[data-report-index="2"]');
+  expect(retainedIndex).not.toBe(originalIndex);
+  expect(app.view.document.activeElement).toBe(retainedIndex);
+
+  const originalAction = app.view.document.querySelector('[data-report-action="original"]') as unknown as HTMLButtonElement;
+  originalAction.focus();
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.activeElement).not.toBe(originalAction);
+  expect(app.view.document.activeElement?.getAttribute("data-report-action")).toBe("original");
+
+  app.data.editions.set("2026-11-05", { header: current, items: [first] });
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.activeElement?.getAttribute("data-report-index")).toBe("1");
+  app.data.current = null;
+  app.data.editions.clear();
+  app.data.revision++;
+  app.changed();
+  await app.view.happyDOM.whenAsyncComplete();
+  expect(app.view.document.activeElement?.id).toBe("report");
 });
 
 it("keeps a recorded overview separate from the indexed selected story and its exact source date", async () => {

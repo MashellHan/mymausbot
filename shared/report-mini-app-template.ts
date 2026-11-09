@@ -36,6 +36,7 @@ const HTML = String.raw`<!DOCTYPE html>
     button { cursor: pointer; }
     button:disabled { cursor: default; color: var(--report-muted); background: var(--report-surface); border-color: var(--report-line); }
     button:focus-visible, select:focus-visible { outline: 2px solid var(--report-ring); outline-offset: 2px; }
+    #report:focus-visible { outline: 2px solid var(--report-ring); outline-offset: 2px; }
     ::selection { background: var(--report-blue-soft); color: var(--report-ink); }
     main { max-width: 980px; min-height: 100%; margin: 0 auto; padding: 20px 24px 40px; }
     h1, h2, h3, p { margin: 0; }
@@ -131,7 +132,7 @@ const HTML = String.raw`<!DOCTYPE html>
       </div>
       <p id="notice" class="notice" role="status" hidden></p>
     </header>
-    <section id="report" aria-live="polite"></section>
+    <section id="report" aria-live="polite" tabindex="-1"></section>
   </main>
   <script>
     (() => {
@@ -198,7 +199,7 @@ const HTML = String.raw`<!DOCTYPE html>
           return (parsed.protocol === "https:" || parsed.protocol === "http:") && !parsed.username && !parsed.password && parsed.hostname && parsed.href.length <= 2048 ? parsed.href : null;
         } catch { return null; }
       }
-      function sourceLink(value, actionLabel) {
+      function sourceLink(value, actionLabel, actionKey, itemIndex) {
         const url = safeUrl(value);
         if (!url) return null;
         const wrap = node("div");
@@ -206,6 +207,8 @@ const HTML = String.raw`<!DOCTYPE html>
         if (typeof sdk?.openSource === "function") {
           const action = node("button", "source-action", actionLabel);
           action.type = "button";
+          action.dataset.reportAction = actionKey;
+          action.dataset.reportItemIndex = String(itemIndex);
           action.addEventListener("click", async () => {
             action.disabled = true;
             try { await sdk.openSource(url); }
@@ -249,14 +252,14 @@ const HTML = String.raw`<!DOCTYPE html>
             if (item.publicAdvisoryAsOfAt) fact(facts, word("advisoryAsOf"), date(item.publicAdvisoryAsOfAt));
           }
           if (facts.children.length) content.append(facts);
-          if (item.selectionBasis) content.append(detailSection(word("selection"), item.selectionBasis));
         }
+        if (item.selectionBasis) content.append(detailSection(word("selection"), item.selectionBasis));
         const source = node("section", "source-section");
         source.append(node("h3", "", word("originalSource")));
-        const original = sourceLink(item.sourceUrl, word("openSource"));
+        const original = sourceLink(item.sourceUrl, word("openSource"), "original", item.itemIndex);
         if (original) source.append(original);
         if (kind === "github_activity" && item.signalSourceUrl) {
-          const signal = sourceLink(item.signalSourceUrl, word("openSignal"));
+          const signal = sourceLink(item.signalSourceUrl, word("openSignal"), "signal", item.itemIndex);
           if (signal) { source.append(node("h3", "", word("signal")), signal); }
         }
         if (source.children.length > 1) content.append(source);
@@ -269,6 +272,15 @@ const HTML = String.raw`<!DOCTYPE html>
         for (const button of $("report").querySelectorAll("[data-report-index]"))
           button.setAttribute("aria-pressed", String(button.dataset.reportIndex === state.selectedItemIndex));
         $("selected-detail").replaceChildren(renderItemDetail(item));
+      }
+      function restoreReportFocus(focused, area) {
+        if (!focused) return;
+        const index = [...area.querySelectorAll("[data-report-index]")];
+        const sameItem = index.find((button) => button.dataset.reportIndex === focused.itemIndex);
+        const action = focused.action && state.selectedItemIndex === focused.itemIndex
+          ? [...area.querySelectorAll("[data-report-action]")].find((button) => button.dataset.reportAction === focused.action) : null;
+        (action || sameItem || index.find((button) => button.getAttribute("aria-pressed") === "true")
+          || (!$("selector").hidden ? $("edition") : area))?.focus({ preventScroll: true });
       }
       function render() {
         $("title").textContent = word(kind === "x_ai_digest" ? "xTitle" : "githubTitle");
@@ -293,11 +305,15 @@ const HTML = String.raw`<!DOCTYPE html>
         menu.replaceChildren(...options);
         menu.value = state.selected;
         const area = $("report");
+        const active = document.activeElement;
+        const focused = area.contains(active) ? { itemIndex: active.dataset?.reportItemIndex || active.dataset?.reportIndex || state.selectedItemIndex,
+          action: active.dataset?.reportAction || null } : null;
         const scroll = document.scrollingElement?.scrollTop ?? 0;
         if (state.selected !== state.committedSelection || !selected) {
           $("issue-day").textContent = "";
           const message = state.selected !== state.committedSelection || !state.loaded ? "loading" : state.selected === "current" ? "noEdition" : "selectedUnavailable";
           area.replaceChildren(node("p", "empty", word(message)));
+          restoreReportFocus(focused, area);
           return;
         }
         $("issue-day").textContent = word("issueDate") + ": " + issueDate(selected.editionDay || selected.editionKey);
@@ -355,6 +371,7 @@ const HTML = String.raw`<!DOCTYPE html>
           area.replaceChildren(overview, layout);
           updateSelectedItem();
         }
+        restoreReportFocus(focused, area);
         if (document.scrollingElement) document.scrollingElement.scrollTop = scroll;
       }
       async function readGroup() {
