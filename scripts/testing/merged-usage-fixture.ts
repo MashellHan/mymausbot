@@ -1,4 +1,4 @@
-import type { LocalUsageCounts, LocalUsageMergedWindow, LocalUsageResponse, LocalUsageWindow } from "../../shared/local-dashboard";
+import type { LocalUsageCounts, LocalUsageMergedWindow, LocalUsageResponse, LocalUsageWindow } from "../../shared/local-dashboard.ts";
 
 export function withMergedUsageFixture(snapshot: LocalUsageResponse): LocalUsageResponse {
   const counts = (value: LocalUsageCounts) => ({ prs: value.prs, knownPrs: value.knownPrs ?? 0,

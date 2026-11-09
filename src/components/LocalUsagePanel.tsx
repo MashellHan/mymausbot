@@ -1,10 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { LocalUsageCategory, LocalUsageResponse } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
-import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
+import { localUsageView, profileUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
 import { weeklyUsageTrend, type UsageTrendBucket } from "@/lib/local-usage-trends";
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
-import { metricText, countText, UsageCount, UsageChange, usageMetricHint, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
+import { metricText, countText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable } from "./LocalUsageTables";
 import { InfoHint } from "./InfoHint";
 import { Select } from "./Select";
@@ -41,6 +41,7 @@ function tokenComparisonUnavailableHint(window: UsageWindow) {
 }
 
 function WindowCard({ window }: { window: UsageWindow }) {
+  const usageMetricHint = useUsageMetricHint();
   const rows = [
     ["prs", countText(window.prs, window.knownPrs), window.comparison.prs],
     ["commits", countText(window.commits, window.knownCommits), window.comparison.commits],
@@ -106,6 +107,8 @@ function categoryValue(day: UsageTrendDay, metric: "prs" | "commits", category: 
 }
 
 function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric: Metric; weekly: boolean }) {
+  const usageMetricHint = useUsageMetricHint();
+  const source = useContext(UsageSourceContext);
   const [activeDay, setActiveDay] = useState<string | null>(null);
   const [focusDay, setFocusDay] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -145,7 +148,7 @@ function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric
           const value = values[index];
           const known = metric === "prs" ? day.knownPrs : day.knownCommits;
           const label = `${metricText(value)}${metric !== "totalTokens" && day[metric] === null && known !== null ? ` · ${t("computer.usage.synced")}` : ""}`
-            + `${metric === "totalTokens" && day.tokenStatus === "partial" ? ` · ${t("computer.usage.coverage.partial")}` : ""}`;
+            + `${(metric === "totalTokens" ? day.tokenStatus : day.coverage) === "partial" ? ` · ${t("computer.usage.coverage.partial")}` : ""}`;
           const segments = metric === "totalTokens" ? [] : categoryOrder.map((category) => ({
             category, value: categoryValue(day, metric, category) ?? 0,
             partial: day.categories[category][metric] === null,
@@ -192,36 +195,78 @@ function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric
           </span>)}
         </div>}
         {metric !== "totalTokens" && active[metric] === null && trendValue(active, metric) !== null
-          && <p className="mt-1 text-ink-secondary">{t("computer.usage.syncedCountHint")}</p>}
-        {metric === "totalTokens" && active.tokenStatus === "partial"
+          && <p className="mt-1 text-ink-secondary">{t(source === "profile" ? "computer.usage.syncedCountHint" : "computer.usage.observedCountHint")}</p>}
+        {(metric === "totalTokens" ? active.tokenStatus : active.coverage) === "partial"
           && <p className="mt-1 text-ink-secondary">{t("computer.usage.partial")}</p>}
       </div>}
     </div>
   );
 }
 
+function ProfileReferences({ snapshot }: { snapshot: LocalUsageResponse }) {
+  const github = snapshot.github;
+  const references = profileUsageView(snapshot);
+  return <section data-usage-profile-reference className="mt-4 min-w-0 rounded-xl border border-hairline/60 bg-card p-3">
+    <h3 className="text-[16px] font-semibold text-ink">{t("computer.usage.profileReferences")}</h3>
+    <p className="mt-1 text-[13px] text-ink-secondary">{t("computer.usage.githubDateBasis")}</p>
+    {!github?.windows ? <p role="status" className="mt-2 text-[14px] text-ink-secondary">{t("computer.usage.profileUnavailable")}</p> : <>
+      <p className="mt-1 text-[13px] text-ink-secondary">{t("computer.usage.profileCutoff", { time: github.asOf === null ? t("computer.usage.unavailable") : asOfTime(github.asOf) })} · {coverageText(github.status === "ready" ? "partial" : github.status === "stale" ? "partial" : github.status)}</p>
+      {github.status === "stale" && <p className="text-[13px] text-ink-secondary">{t("computer.usage.stale")}</p>}
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full text-left text-[13px] tabular-nums">
+          <thead className="text-ink-secondary"><tr><th scope="col">{t("computer.usage.profileDates")}</th><th scope="col">{t("computer.usage.profilePrReferences")}</th><th scope="col">{t("computer.usage.profileCommitReferences")}</th></tr></thead>
+          <tbody>{(["1", "7", "30"] as const).map(key => {
+            const window = references.windows![key];
+            return <tr key={key}><th scope="row" className="py-1 font-normal">{window.startDay} – {window.endDay}</th>
+              <td>{metricText(window.knownPrs)}</td><td>{metricText(window.knownCommits)}</td></tr>;
+          })}</tbody>
+        </table>
+      </div>
+      <details className="mt-2 text-[13px] text-ink-secondary">
+        <summary className="cursor-pointer">{t("computer.usage.profileAccountQueries")}</summary>
+        <p className="mt-1">{t("computer.usage.profileQueryHint")}</p>
+        {!github.accounts?.length ? <p>{t("computer.usage.unavailable")}</p> : <ul className="mt-2 space-y-2">
+          {github.accounts.map(account => <li key={account.id} className="[overflow-wrap:anywhere]">
+            <span>{account.host} · {account.id.slice(0, 8)} · {t(`computer.usage.profileApi.${account.apiStatus}`)}</span>
+            <p>{account.startAt === null || account.endAt === null ? t("computer.usage.unavailable") : `${new Date(account.startAt).toISOString()} – ${new Date(account.endAt).toISOString()}`}</p>
+            <p>{t("computer.usage.profileQueryCounts", { contributions: metricText(account.contributions), commits: metricText(account.commits), prs: metricText(account.rawPrs), restricted: metricText(account.restricted), outside: metricText(account.outsideWindowPrs) })}</p>
+          </li>)}
+        </ul>}
+      </details>
+    </>}
+  </section>;
+}
+
 export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | null }) {
   const [range, setRange] = useState<UsageTrendRange>("30");
-  const view = snapshot && localUsageView(snapshot, range);
+  const [source, setSource] = useState<"repositories" | "profile">("repositories");
+  const view = snapshot && (source === "profile" ? profileUsageView : localUsageView)(snapshot, range);
   const chartDays = view ? range === "6m" ? weeklyUsageTrend(view.trend) : view.trend : [];
   const windows = view?.windows;
   const showUnclassified = view?.trend.some((day) => (day.categories.unclassified.prs ?? day.categories.unclassified.knownPrs ?? 0) > 0
     || (day.categories.unclassified.commits ?? day.categories.unclassified.knownCommits ?? 0) > 0) ?? false;
   return (
+    <UsageSourceContext.Provider value={source}>
     <div className="@container/usage min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="local-usage-panel">
-      <header className="mb-3 flex items-center gap-1 pt-2">
+      <header className="mb-3 flex flex-wrap items-center gap-1 pt-2">
         <h2 className="text-[18px] font-semibold text-ink">{t("computer.usage.heading")}</h2>
         {view && view.status !== "unavailable" && <InfoHint label={t("app.info")} warning={view.status !== "ready"}>
           {view.status === "partial" && <p>{t("computer.usage.partial")}</p>}
           {view.status === "stale" && <p>{t("computer.usage.stale")}</p>}
-          <p>{t("computer.usage.githubDateBasis")}</p>
-          {view.asOf != null && <p><time dateTime={new Date(view.asOf).toISOString()}>{t("computer.usage.asOf", { time: asOfTime(view.asOf) })}</time></p>}
-          <p>{t("computer.usage.captureTimes", {
-            merged: snapshot?.github?.asOf != null ? asOfTime(snapshot.github.asOf) : t("computer.usage.unavailable"),
-            tokens: snapshot?.asOf != null ? asOfTime(snapshot.asOf) : t("computer.usage.unavailable"),
+          <p>{t(source === "profile" ? "computer.usage.githubDateBasis" : "computer.usage.repositoryDateBasis")}</p>
+          {view.asOf != null && <p><time dateTime={new Date(view.asOf).toISOString()}>{t(source === "profile" ? "computer.usage.profileCutoff" : "computer.usage.asOf", { time: asOfTime(view.asOf) })}</time></p>}
+          <p>{t("computer.usage.sourceTimes", {
+            github: snapshot?.github?.asOf != null ? asOfTime(snapshot.github.asOf) : t("computer.usage.unavailable"),
+            local: snapshot?.asOf != null ? asOfTime(snapshot.asOf) : t("computer.usage.unavailable"),
           })}</p>
         </InfoHint>}
+        <Select size="lg" aria-label={t("computer.usage.activitySource")} value={source}
+          onChange={event => setSource(event.target.value as "repositories" | "profile")} className="ml-auto max-w-full">
+          <option value="repositories">{t("computer.usage.repositoryActivity")}</option>
+          <option value="profile">{t("computer.usage.profileReferences")}</option>
+        </Select>
       </header>
+      <p data-usage-metric-definition className="mb-3 text-[13px] text-ink-secondary">{t(source === "profile" ? "computer.usage.githubDateBasis" : "computer.usage.repositoryScope")}</p>
       {snapshot === null ? <p role="status" className="text-[14px] text-ink-secondary">{t("computer.usage.loading")}</p> : null}
       {view?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
       {windows && <>
@@ -250,7 +295,9 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
         </section>
         <UsageRepositoryTable windows={windows} />
       </>}
+      {snapshot && <ProfileReferences snapshot={snapshot} />}
     </div>
+    </UsageSourceContext.Provider>
   );
 }
 

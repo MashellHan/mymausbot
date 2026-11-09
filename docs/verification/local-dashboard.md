@@ -13,6 +13,17 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
   timestamp in Asia/Shanghai. The trend uses the same 30 dates. Window changes
   compare the previous non-overlapping period; daily changes compare the same
   China-calendar date one week earlier. The capture day is still in progress.
+- The source selector defaults to **Repository activity** (`repository-observations-v1`)
+  and preserves all configured work, enterprise, ADO and personal repository
+  observations, categories and same-definition comparisons. Created PR observations
+  come from the configured GitHub/ADO collectors; repository commits are non-merge
+  local Git observations across branches matched to configured author emails.
+  Neither is relabeled as Profile-qualified activity. Missing devices, unreadable
+  repositories and insufficient history remain incomplete; verified previous zero
+  yields New (or zero when both periods are zero), never a fabricated percentage.
+- Selecting **GitHub Profile references** uses only `github-profile-v1`. Both
+  sources retain the 30/60/90-day and six-calendar-month controls, dated joins and
+  daily details. Changing source never adds or substitutes one metric into another.
 - PR references come from the authenticated account's typed GitHub contribution
   connection, with both excludeFirst and excludePopular false. They count creations
   by PR createdAt in Asia/Shanghai, not merges. Repositories currently marked isFork
@@ -47,8 +58,14 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
   they cannot be allocated to PRs or commits. Even restricted=0 does not certify
   private/internal coverage. Independent email association remains unknown; local
   authorEmails and failed email endpoints are not proof. Restricted activity and
-  private omissions remain partial. Calendar totalContributions is never used for either
-  metric. Complete empty visible observations remain distinct from missing data;
+  private omissions remain partial. Calendar totalContributions is shown separately
+  from typed PR/commit counts, with requested bounds and per-account API state.
+  Query totals include the UTC guard date; API day buckets may include activity
+  after the requested cutoff, so these are observations, not exact historical-instant
+  totals. PR nodes are fully paginated then filtered by their actual createdAt;
+  out-of-window nodes are diagnostic, not a whole-source failure. Commit buckets
+  cannot be sliced to a historical instant. Older snapshots lacking query totals
+  keep those fields unknown. Complete empty visible observations remain distinct from missing data;
   missing source dates are not filled with zero. Classification uses existing rules.
 - GitHub and Azure DevOps are separate sources. ADO alignment remains follow-up;
   legacy merged ADO counts are not added as evidence of GitHub Profile parity.
@@ -57,7 +74,9 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
   timestamps; open the information icon beside Usage to inspect both. If capture dates
   differ, tokens are joined by calendar date to the displayed remote windows.
   Missing token dates stay unavailable, and an unavailable comparison stays null.
-  Missing remote data never falls back to legacy PR or local Git counts.
+  Missing Profile data never falls back to repository observations within the
+  Profile view. Repository activity remains independently available when Profile
+  data is absent or partial.
 - The refresh wrapper records independent per-machine Token completeness. A
   partial machine whose only failures are Git fetches can compare complete
   observed Token periods; Git coverage stays partial. Unknown, log-read,
@@ -85,9 +104,10 @@ account history remain unchanged; failures retain prior observations as stale.
 Stable account identity changes for the same host/login reject the capture
 without replacing the cache or blending earlier account history.
 Profile dates and PR China dates are recorded separately. Old definitions are
-not reinterpreted, compared or backfilled. The new response field is `github`;
-Activities never falls back to `merged`, local commits or old created-PR counts.
-The 1/7/30 windows remain; older unknown dates stay missing. Tokens retain their
+not reinterpreted, compared or backfilled. The response field `github` remains a
+separate typed reference source. Repository activity is independently projected
+from `windows`/`trend`/`history`; it is not evidence of Profile parity. The 1/7/30
+windows remain; older unknown dates stay missing. Tokens retain their
 original aggregate, comparison scope and actual-date join.
 The 60/90-day and six-calendar-month views use up to 191 dated observations from
 this same Profile source, including prior comparison dates. They never substitute
@@ -239,9 +259,11 @@ Use their printed URLs, never a live app URL. Check `width=360`, `400` and `960`
 `skin=midnight` and `atelier`, and `locale=en` and `zh`. Verify three stacked
 trends, initially collapsed daily details, all three WoW values, and keyboard
 navigation of repository period tabs. Check unavailable, stale and zero states.
-Use `scenario=remote-only` to verify merged counts without local logs and
-`scenario=legacy-only` to verify that old PR/commit/repository values are not
-relabeled as merged. Faint full-height Monday separators mark each week.
+Use `scenario=remote-only` to verify Profile references without local logs and
+`scenario=legacy-only` to verify repository activity remains available without
+being relabeled as Profile contributions. Switch sources at 60/90 days and six
+calendar months; check missing/partial/true-zero states and same-source comparisons.
+Check the separate account query totals and their requested-span/cutoff limits. Faint full-height Monday separators mark each week.
 In both locales at 360px, expand the daily table and scroll fully right. Each
 WoW metric name and value must remain visible beside the fixed date column.
 
