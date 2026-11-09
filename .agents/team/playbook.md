@@ -128,6 +128,37 @@ source review and CI can start while those checks finish. Do not wait for all
 screenshots or a package to begin source review. Pending acceptance still blocks
 the corresponding delivery. Batch corrections and review only their delta.
 
+## Development and verification
+
+Local Accessibility, Screen Recording and CUA driver readiness are prerequisites
+for the screen operations that need them. They are not prerequisites for source
+development, Git operations, upstream integration, PR preparation, independent
+source review or an otherwise eligible merge. Keep CLI, API and isolated
+headless checks moving when native screen verification is unavailable. Actual
+screen calls still require their existing permission, consent and access checks;
+do not silently switch computers or grant access to continue a task.
+
+Report these dimensions separately in the existing PR and handoff records:
+
+| Dimension | Report |
+| --- | --- |
+| Development | In progress or complete, bound to the exact commit |
+| Verification | Passed and failed checks; checks not run, their environmental blocker, owner and next action |
+| Integration | Unpublished, open PR or merged, with the PR and merge commit |
+
+For example, source can be complete and merged while native UI verification is
+not run because screen permissions are unavailable. Keep that work explicitly
+pending verification; neither a completed implementation nor a merge proves
+the unrun checks passed. Do not label an environmental precondition as a tested
+product failure or abandon development because it is unavailable.
+
+Lead keeps the original source owner on unfinished development and assigns
+pending verification to an existing responsible role or QA. Preserve the same
+batch, branch and evidence when verification resumes. An unavailable local
+screen check alone does not impose a merge hold; unresolved source findings,
+required failed CI and applicable QA holds retain their existing merge rules.
+Acceptance of the affected screen behavior remains pending until verified.
+
 ## Local candidate delivery
 
 Every App shown to the user for preview, use or acceptance testing defaults to
