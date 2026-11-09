@@ -77,11 +77,11 @@ function fixture(fixtureOptions: { manyRows?: boolean; colorRanks?: boolean } = 
       { currency: "人民币", category: "Household", amount: "-56.40", count: "1" },
     ]);
     if (id === "trend_month") return page([
-      { currency: "人民币", bucket: "2026-01", amount: "-10.00", count: "1" },
-      { currency: "人民币", bucket: "2026-10", amount: "-80.00", count: "1" },
-      { currency: "人民币", bucket: "2026-11", amount: "-156.40", count: "2" },
+      { currency: "人民币", bucket: "2026-01-01", amount: "-10.00", count: "1" },
+      { currency: "人民币", bucket: "2026-10-01", amount: "-80.00", count: "1" },
+      { currency: "人民币", bucket: "2026-11-01", amount: "-156.40", count: "2" },
     ]);
-    if (id === "trend_month_inflow") return page([{ currency: "人民币", bucket: "2026-11", amount: "30.00", count: "1" }]);
+    if (id === "trend_month_inflow") return page([{ currency: "人民币", bucket: "2026-11-01", amount: "30.00", count: "1" }]);
     if (id === "trend_day" || id === "trend_day_inflow") {
       if (exhaustDaily && id === "trend_day") {
         const index = options?.cursor ? Number(options.cursor.split("-").at(-1)) : 1;
@@ -165,9 +165,15 @@ describe("Bookkeeping Manager local ledger views", () => {
     expect(app.view.document.getElementById("tab-calendar")).toBeNull();
     expect((app.view.document.getElementById("records-month") as unknown as HTMLInputElement).value).toBe("2026-11");
     expect(app.text("daily-period-note")).toContain("November 2026 · Recorded through 2026-11-06");
-    expect(app.view.document.querySelectorAll("#daily-trend .daily-column")).toHaveLength(30);
-    expect(app.view.document.querySelectorAll("#daily-trend .daily-column span")).toHaveLength(2);
-    expect(app.view.document.querySelectorAll('#daily-trend .daily-column[data-future="true"]')).toHaveLength(24);
+    expect(app.view.document.querySelectorAll("#daily-trend .trend-point")).toHaveLength(6);
+    expect(app.view.document.querySelector("#daily-trend .trend-line")?.getAttribute("d")).toContain("L");
+    expect(app.text("daily-trend")).toContain("Peak 100.00 · 11-06");
+    expect(app.text("records-totals")).not.toMatch(/Inflow|Net/);
+    expect(app.view.document.querySelector("#recent-categories .category-donut")).not.toBeNull();
+    expect(app.text("recent-categories")).toContain("63.9% of outflow");
+    expect(app.view.document.querySelectorAll('#daily-trend .trend-point[data-amount="0.00"]')).toHaveLength(4);
+    expect(app.view.document.querySelector('#daily-trend .trend-point[data-date="2026-11-07"]')).toBeNull();
+    expect(app.view.document.querySelector('#daily-trend [data-future="true"]')).not.toBeNull();
     expect(app.view.document.querySelector("#daily-trend [role=img]")?.getAttribute("aria-label")).toContain("156.40");
     expect(app.view.document.getElementById("coverage")?.hasAttribute("hidden")).toBe(true);
     app.click("coverage-info");
@@ -242,6 +248,11 @@ describe("Bookkeeping Manager local ledger views", () => {
     expect(app.text("stats-range")).toContain("Prior 2026-10-01 to 2026-10-06");
     expect(app.query).toHaveBeenCalledWith("trend_day", expect.objectContaining({ from: "2026-11-01", through: "2026-11-06" }), { expectedDataRevision: 7 });
     expect(app.text("summary")).toContain("Outflow rose by 76.40");
+    expect(app.text("summary")).toContain("+95.5% vs previous month");
+    expect(app.text("summary")).not.toMatch(/Inflow|Net/);
+    expect(app.text("trend-title")).toBe("Daily trend");
+    expect(app.view.document.querySelectorAll("#trend .trend-point")).toHaveLength(6);
+    expect(app.text("trend")).toContain("Peak 100.00");
     expect(app.text("summary")).not.toContain("¥");
     const expense = app.view.document.querySelector("#largest .expense-open") as unknown as HTMLButtonElement | null;
     expense?.click();
@@ -257,6 +268,8 @@ describe("Bookkeeping Manager local ledger views", () => {
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.query).toHaveBeenCalledWith("trend_month", expect.objectContaining({ from: "2026-01-01", through: "2026-11-06" }), { expectedDataRevision: 7 });
     expect(app.text("year-breakdown")).toContain("156.40");
+    expect(app.view.document.querySelector('#trend .trend-point[data-date="2026-11"]')?.getAttribute("data-amount")).toBe("156.40");
+    expect(app.text("trend")).toContain("Peak 156.40");
     const octoberButton = [...app.view.document.querySelectorAll("#year-breakdown button")].find((button) => button.textContent === "10") as unknown as HTMLButtonElement | undefined;
     expect(octoberButton).toBeDefined();
     octoberButton?.click();
@@ -289,7 +302,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     await app.view.happyDOM.whenAsyncComplete();
     const colors = () => Object.fromEntries([...app.view.document.querySelectorAll("#categories .category-row")].map((row) => {
       const name = row.querySelector(".category-name")?.textContent?.replace(/^\d+\.\s*/, "") ?? "";
-      const fill = row.querySelector(".category-track span") as unknown as HTMLElement | null;
+      const fill = row.querySelector(".category-swatch") as unknown as HTMLElement | null;
       return [name, fill?.style.backgroundColor ?? ""];
     }));
     const month = colors();
@@ -472,7 +485,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     app.exhaustDaily();
     app.changed();
     await app.view.happyDOM.whenAsyncComplete();
-    expect(app.view.document.querySelectorAll("#daily-trend .daily-column")).toHaveLength(0);
+    expect(app.view.document.querySelectorAll("#daily-trend .trend-point")).toHaveLength(0);
     expect(app.text("daily-trend")).toContain("Daily trend unavailable");
     app.click("recent-mode-calendar");
     await app.view.happyDOM.whenAsyncComplete();
@@ -488,7 +501,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     app.emptyDaily(); app.changed();
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.text("daily-trend")).toContain("No recorded outflow");
-    expect(app.view.document.querySelectorAll("#daily-trend .daily-column")).toHaveLength(0);
+    expect(app.view.document.querySelectorAll("#daily-trend .trend-point")).toHaveLength(0);
     expect(app.text("notice")).toBe("");
   });
 
@@ -505,7 +518,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     await app.view.happyDOM.whenAsyncComplete();
     expect(app.view.document.querySelectorAll("#details .record-row")).toHaveLength(60);
     expect(app.text("daily-trend")).toContain("Daily trend unavailable");
-    expect(app.view.document.querySelectorAll("#daily-trend .daily-column")).toHaveLength(0);
+    expect(app.view.document.querySelectorAll("#daily-trend .trend-point")).toHaveLength(0);
     expect(app.text("notice")).toContain("Daily trend unavailable");
     expect(app.text("notice")).not.toContain("private query detail");
   });

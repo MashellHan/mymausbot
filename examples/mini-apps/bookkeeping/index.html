@@ -20,7 +20,7 @@
       outline-offset: 2px;
     }
     button { cursor: pointer; }
-    button:disabled { cursor: default; opacity: .5; }
+    button:disabled { cursor: default; color: var(--color-text-tertiary, light-dark(#72727a, #9c9ca5)); background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
     ::selection { background: var(--color-background-info, #dceeff); color: var(--color-text-primary, #1d1d1f); }
     .portal { max-width: 860px; min-height: 100%; margin: 0 auto; padding: 18px 20px 28px; }
     .heading { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: 8px 16px; }
@@ -96,28 +96,28 @@
     .notice { margin-top: 12px; }
     .section { margin-top: 24px; }
     .section-head { margin-bottom: 9px; }
-    .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-    .money-card { min-width: 0; border: 1px solid var(--color-border-secondary, light-dark(#e4e4e8, #333338)); border-radius: 13px; background: var(--color-background-secondary, light-dark(#f8f7f5, #26262a)); padding: 12px; }
-    .money-card[data-flow="outflow"] { background: var(--color-background-danger, light-dark(#fff3ef, #342723)); }
-    .money-card[data-flow="inflow"] { background: var(--color-background-success, light-dark(#eef8f3, #213329)); }
-    .money-card dt { color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; }
-    .money-card dd { margin: 4px 0 0; color: var(--color-text-primary, light-dark(#1d1d1f, #ececee)); font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-    .money-card .compare { margin-top: 7px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; line-height: 1.4; }
-    .overview-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 22px; }
-    .distribution { display: flex; height: 9px; overflow: hidden; border-radius: 999px; background: var(--color-background-tertiary, light-dark(#e9e9ee, #333338)); }
-    .distribution span { height: 100%; }
-    .category-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 9px; }
+    .spending-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; padding: 12px 0; border-bottom: 1px solid var(--color-border-secondary, light-dark(#e4e4e8, #333338)); }
+    .spending-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; }
+    .spending-total dt { font-size: 13px; font-weight: 600; }
+    .spending-total dd { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .spending-count { color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; }
+    .compare { display: grid; gap: 2px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .compare strong { font-weight: 650; color: var(--color-text-primary, light-dark(#1d1d1f, #ececee)); }
+    .compare[data-direction="up"] strong { color: var(--color-text-danger, light-dark(#b8503b, #eda18d)); }
+    .compare[data-direction="down"] strong { color: var(--color-text-success, light-dark(#267c59, #83cfa8)); }
+    .category-layout { display: grid; grid-template-columns: 168px minmax(0, 1fr); align-items: center; gap: 24px; }
+    .category-donut { position: relative; width: 168px; height: 168px; justify-self: center; }
+    .category-donut svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+    .donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; font-size: 12px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); }
+    .donut-center strong { font-size: 24px; line-height: 1.25; color: var(--color-text-primary, light-dark(#1d1d1f, #ececee)); }
+    .category-row { grid-template-columns: 8px minmax(0, 1fr) auto; align-items: center; gap: 0 8px; padding: 8px 0; }
+    .category-swatch { width: 8px; height: 8px; border-radius: 50%; }
     .category-row button { min-width: 0; border: 0; background: transparent; padding: 0; text-align: left; text-decoration: underline; text-decoration-color: var(--color-border-primary, light-dark(#d8d8de, #3a3a40)); text-underline-offset: 3px; }
+    .category-row button:hover { color: var(--color-text-info, light-dark(#1464aa, #83c4ff)); }
     .category-amount { min-width: 0; overflow-wrap: anywhere; text-align: right; }
-    .category-track { height: 5px; }
-    .category-share { grid-column: 1 / -1; }
-    .monthly-row { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--color-border-tertiary, light-dark(#eee, #303035)); font-size: 12px; font-variant-numeric: tabular-nums; }
-    .monthly-bars { display: grid; gap: 3px; }
-    .monthly-bars span { display: block; min-height: 5px; border-radius: 4px; }
-    .monthly-bars .outflow-bar { background: #d9775e; }
-    .monthly-bars .inflow-bar { background: #59a886; }
-    .monthly-values { min-width: 0; text-align: right; overflow-wrap: anywhere; }
-    .monthly-values span { display: block; }
+    .category-share { grid-column: 2 / -1; }
+    .records-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+    .records-head select { max-width: 100%; min-height: 32px; border-radius: 8px; padding: 4px 8px; background: var(--color-background-primary, light-dark(#fff, #1c1c1f)); font-size: 12px; }
     .calendar-legend { display: flex; gap: 14px; margin-top: 9px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 11px; }
     .legend-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; }
     .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; margin-top: 12px; }
@@ -138,9 +138,6 @@
       .portal { padding: 15px 14px 26px; }
       .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .filters > .filter:first-child { grid-column: 1 / -1; }
-      .overview-columns { grid-template-columns: 1fr; gap: 0; }
-      .summary-grid { grid-template-columns: 1fr; gap: 6px; }
-      .money-card dd { font-size: 19px; }
       .calendar-day { min-height: 57px; padding: 4px; }
       .calendar-day .day-flow { display: inline-block; width: 7px; height: 7px; margin: 4px 3px 0 0; border-radius: 50%; background: currentColor; font-size: 0; vertical-align: top; }
     }
@@ -150,20 +147,21 @@
     .recent-toggle button { border: 0; border-radius: 7px; background: transparent; padding: 5px 13px; font-size: 12px; }
     .recent-toggle button[aria-pressed="true"] { background: var(--color-background-primary, light-dark(#fff, #1c1c1f)); font-weight: 650; }
     .recent-panel .section { margin-top: 14px; }
-    .daily-chart { display: grid; grid-template-columns: repeat(var(--days), minmax(0, 1fr)); align-items: end; gap: 2px; height: 92px; border-bottom: 1px solid var(--color-border-secondary, light-dark(#e4e4e8, #333338)); }
-    .daily-column { display: flex; align-items: end; height: 100%; }
-    .daily-column span { display: block; width: 100%; min-height: 2px; border-radius: 2px 2px 0 0; background: #d9775e; }
-    .daily-column[data-future="true"] { background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); opacity: .35; }
+    .spending-chart { min-width: 0; }
+    .spending-chart svg { display: block; width: 100%; height: 104px; overflow: visible; }
+    .trend-line { fill: none; stroke: light-dark(#bc563c, #f0a08a); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+    .trend-point { fill: light-dark(#bc563c, #f0a08a); }
+    .trend-guide { stroke: var(--color-border-secondary, light-dark(#e4e4e8, #333338)); stroke-width: 1; vector-effect: non-scaling-stroke; }
+    .trend-future { fill: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); }
+    .trend-peak { display: block; margin-bottom: 4px; text-align: right; overflow-wrap: anywhere; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--color-text-primary, light-dark(#1d1d1f, #ececee)); }
     .daily-labels { display: flex; justify-content: space-between; margin-top: 4px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 11px; font-variant-numeric: tabular-nums; }
-    .daily-trend-note { margin-top: 4px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; }
     .calendar-grid { max-width: 400px; gap: 4px; }
     .calendar-day { min-height: 50px; padding: 5px; }
     .calendar-day .day-flow { display: inline-block; width: 7px; height: 7px; margin: 4px 3px 0 0; border-radius: 50%; background: currentColor; font-size: 0; vertical-align: top; }
     .drilldown { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; }
     .drilldown[hidden] { display: none; }
     .drilldown button { border-radius: 7px; background: var(--color-background-secondary, light-dark(#f4f4f6, #26262a)); padding: 3px 8px; }
-    .records-totals { display: flex; flex-wrap: wrap; gap: 7px 16px; margin-top: 12px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; font-variant-numeric: tabular-nums; }
-    .records-totals strong { margin-left: 5px; font-size: 13px; }
+    .records-totals { margin-top: 4px; }
     .date-group { margin-top: 17px; }
     .date-group h3 { margin-bottom: 5px; color: var(--color-text-secondary, light-dark(#5f5f66, #a9a9b2)); font-size: 12px; font-variant-numeric: tabular-nums; }
     .date-group .record-row:last-child { border-bottom-color: var(--color-border-secondary, light-dark(#e4e4e8, #333338)); }
@@ -188,6 +186,8 @@
       .period-controls input { flex: 1 1 120px; max-width: 185px; }
       .calendar-day { min-height: 44px; padding: 4px; line-height: 1; }
       .year-grid { font-size: 11px; }
+      .category-layout { grid-template-columns: 1fr; gap: 12px; }
+      .spending-summary { gap: 8px 16px; }
     }
   </style>
 </head>
@@ -210,17 +210,21 @@
       <button type="button" id="tab-statistics" role="tab" aria-selected="false" aria-controls="view-statistics" tabindex="-1" data-view="statistics" data-i18n="Statistics">Statistics</button>
     </nav>
     <section id="view-records" class="view" role="tabpanel" aria-labelledby="tab-records">
+      <div id="records-totals" class="records-totals" aria-live="polite"></div>
       <div class="recent-toggle" role="group" aria-label="Recent display" data-i18n-aria-label="Recent display">
         <button id="recent-mode-trend" type="button" data-recent-mode="trend" aria-pressed="true" data-i18n="Trend">Trend</button>
         <button id="recent-mode-calendar" type="button" data-recent-mode="calendar" aria-pressed="false" data-i18n="Calendar">Calendar</button></div>
       <div id="recent-trend" class="recent-panel">
         <section class="section" aria-labelledby="daily-trend-title"><div class="section-head"><h2 id="daily-trend-title" data-i18n="Daily outflow">Daily outflow</h2><p id="daily-period-note" class="section-note"></p></div>
           <div id="daily-trend"><p class="empty" data-i18n="Reading trend…">Reading trend…</p></div></section>
-        <div id="records-totals" class="records-totals"></div>
+        <section class="section" aria-labelledby="recent-categories-title"><div class="section-head"><h2 id="recent-categories-title" data-i18n="Spending by category">Spending by category</h2></div>
+          <div id="recent-categories"><p class="empty" data-i18n="Reading categories…">Reading categories…</p></div></section>
+        <section class="section" aria-labelledby="records-title"><div class="section-head records-head"><h2 id="records-title" data-i18n="Entries">Entries</h2>
+          <select id="records-sort" aria-label="Sort records" data-i18n-aria-label="Sort records"><option value="date" data-i18n="Newest first">Newest first</option><option value="spending" data-i18n="Largest spending first">Largest spending first</option></select></div>
         <div id="record-drilldown" class="drilldown" hidden><span id="record-drilldown-label"></span>
           <button id="record-drilldown-clear" type="button" data-i18n="Clear category" hidden>Clear category</button></div>
         <div id="details"><p class="empty" data-i18n="Reading entries…">Reading entries…</p></div>
-        <button id="more" class="more" type="button" data-i18n="Load more entries" hidden>Load more entries</button>
+        <button id="more" class="more" type="button" data-i18n="Load more entries" hidden>Load more entries</button></section>
       </div>
       <div id="recent-calendar" class="recent-panel" hidden>
         <p class="calendar-legend"><span><span class="legend-dot flow-out" aria-hidden="true"></span><span data-i18n="Outflow">Outflow</span></span>
@@ -237,14 +241,11 @@
         <button type="button" data-stats-period="year" aria-pressed="false" data-i18n="Year">Year</button>
       </div>
       <p id="stats-range" class="range-note"></p>
-      <section class="section" aria-labelledby="summary-title"><div class="section-head"><h2 id="summary-title" data-i18n="Cash flow">Cash flow</h2></div>
-        <div id="summary" aria-live="polite"><p class="empty" data-i18n="Reading totals…">Reading totals…</p></div></section>
-      <div class="overview-columns">
-        <section class="section" aria-labelledby="trend-title"><div class="section-head"><h2 id="trend-title" data-i18n="Monthly trend">Monthly trend</h2><p id="trend-note" class="section-note" data-i18n="Recorded inflow and outflow">Recorded inflow and outflow</p></div>
-          <div id="trend"><p class="empty" data-i18n="Reading trend…">Reading trend…</p></div></section>
-        <section class="section" aria-labelledby="categories-title"><div class="section-head"><h2 id="categories-title" data-i18n="Spending by category">Spending by category</h2></div>
-          <div id="categories"><p class="empty" data-i18n="Reading categories…">Reading categories…</p></div></section>
-      </div>
+      <div id="summary" aria-live="polite"><p class="empty" data-i18n="Reading totals…">Reading totals…</p></div>
+      <section class="section" aria-labelledby="trend-title"><div class="section-head"><h2 id="trend-title" data-i18n="Daily trend">Daily trend</h2></div>
+        <div id="trend"><p class="empty" data-i18n="Reading trend…">Reading trend…</p></div></section>
+      <section class="section" aria-labelledby="categories-title"><div class="section-head"><h2 id="categories-title" data-i18n="Spending by category">Spending by category</h2></div>
+        <div id="categories"><p class="empty" data-i18n="Reading categories…">Reading categories…</p></div></section>
       <section id="year-breakdown-section" class="section" aria-labelledby="year-breakdown-title" hidden><div class="section-head"><h2 id="year-breakdown-title" data-i18n="Monthly breakdown">Monthly breakdown</h2></div>
         <div id="year-breakdown"></div></section>
       <section class="section" aria-labelledby="largest-title"><div class="section-head"><h2 id="largest-title" data-i18n="Largest recorded outflows">Largest recorded outflows</h2></div>
@@ -261,7 +262,7 @@
       const sdk = window.mausApp;
       const state = { coverage: [], coverageLoaded: false, loaded: false, dataRevision: null, cnyCurrencies: [], view: "records", recentMode: "trend",
         recordsMonth: null, selectedDay: null, statsPeriod: "month", statsAnchor: null,
-        recordCategory: null, recordRange: null, selectedExpense: null, expenseTriggerIndex: null,
+        recordCategory: null, recordRange: null, recordPeriod: "month", recordsSort: "date", selectedExpense: null, expenseTriggerIndex: null,
         calendarOut: [], calendarIn: [], committed: { records: null, calendar: null, statistics: null },
         run: 0, dayIntent: 0, details: [], nextCursor: null };
       const maxAggregatePages = 48;
@@ -273,6 +274,17 @@
         "Bookkeeping Manager": "记账管家",
         "Bookkeeping views": "记账视图",
         "Recent": "最近",
+        "Spending": "支出",
+        "Categories": "分类",
+        "Sort records": "明细排序",
+        "Newest first": "时间由近到远",
+        "Largest spending first": "支出金额由高到低",
+        "vs previous week": "对比上周同期",
+        "vs previous month": "对比上月同期",
+        "vs previous year": "对比去年同期",
+        "Peak {amount} · {date}": "最高 {amount} · {date}",
+        "Spending from {from} through {through}: {amount}. Peak {peak} on {date}": "{from} 至 {through} 支出 {amount}。最高 {peak}，日期 {date}",
+        "Spending category shares": "支出分类占比",
         "Recent display": "最近记录显示方式",
         "Trend": "趋势",
         "Statistics": "统计",
@@ -575,27 +587,28 @@
         return `${value < 0n ? "-" : ""}${positive / 100n}.${(positive % 100n).toString().padStart(2, "0")}`;
       }
 
-      function bucketCents(rows) {
+      function bucketCents(rows, unit = "day") {
         const amounts = new Map();
         for (const row of rows) {
-          const previous = amounts.get(row.bucket);
+          const key = unit === "month" && typeof row.bucket === "string" && validDate(row.bucket) ? row.bucket.slice(0, 7) : row.bucket;
+          const previous = amounts.get(key);
           const next = signedCents(row.amount);
-          amounts.set(row.bucket, previous === undefined ? next : previous === null || next === null ? null : previous + next);
+          amounts.set(key, previous === undefined ? next : previous === null || next === null ? null : previous + next);
         }
         return amounts;
       }
 
-      function priorRange(range) {
+      function priorRange(range, period = state.statsPeriod) {
         if (!range) return null;
         const complete = range.through === range.fullEnd;
         const elapsed = Math.round((Date.parse(`${range.through}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) / 86_400_000) + 1;
         let from;
-        if (state.statsPeriod === "week") from = dateBefore(range.from, 7);
-        else if (state.statsPeriod === "month") from = dateBefore(range.from, 1).slice(0, 7) + "-01";
+        if (period === "week") from = dateBefore(range.from, 7);
+        else if (period === "month") from = dateBefore(range.from, 1).slice(0, 7) + "-01";
         else from = `${Number(range.from.slice(0, 4)) - 1}-01-01`;
-        if (state.statsPeriod === "week") return { from, through: dateAfter(from, elapsed - 1) };
-        const month = state.statsPeriod === "month" ? from.slice(0, 7) : `${from.slice(0, 4)}-${range.through.slice(5, 7)}`;
-        const through = complete ? fullPeriodEnd(from, state.statsPeriod)
+        if (period === "week") return { from, through: dateAfter(from, elapsed - 1) };
+        const month = period === "month" ? from.slice(0, 7) : `${from.slice(0, 4)}-${range.through.slice(5, 7)}`;
+        const through = complete ? fullPeriodEnd(from, period)
           : `${month}-${String(Math.min(Number(range.through.slice(8)), Number(monthLast(`${month}-01`).slice(8)))).padStart(2, "0")}`;
         return { from, through };
       }
@@ -678,7 +691,7 @@
           ...(range.through < range.fullEnd ? [word("Recorded through {date}", { date: range.through })] : [])].join(" · ");
         for (const button of document.querySelectorAll("[data-stats-period]")) button.setAttribute("aria-pressed", String(button.dataset.statsPeriod === state.statsPeriod));
         $("year-breakdown-section").hidden = state.statsPeriod !== "year";
-        $("trend-title").textContent = word(state.statsPeriod === "year" ? "Monthly trend" : state.statsPeriod === "month" ? "Weekly trend" : "Daily trend");
+        $("trend-title").textContent = word(state.statsPeriod === "year" ? "Monthly trend" : "Daily trend");
       }
 
       function notice(message, kind = "info") {
@@ -690,84 +703,88 @@
       }
 
       function empty(container, message) { container.replaceChildren(element("p", "empty", message)); }
-      function renderSummary(current, previous) {
-        const target = $("summary");
+      function renderSummary(current, previous, targetId = "summary", period = state.statsPeriod) {
+        const target = $(targetId);
         if (!current) return empty(target, word("No recorded entries"));
         if (current.incomplete) return empty(target, word("Totals incomplete. Narrow the date range."));
-        const cards = element("dl", "summary-grid");
-        for (const [key, label] of [["outflow", word("Outflow")], ["inflow", word("Inflow")], ["net", word("Net")]]) {
-          const card = element("div", "money-card");
-          card.dataset.flow = key;
-          card.append(element("dt", "", label), element("dd", "", centsText(current[key])));
-          let comparison = word("Previous period unavailable");
-          if (previous && !previous.incomplete && previous[key] !== null && current[key] !== null) {
-            const change = current[key] - previous[key];
-            const magnitude = change < 0n ? -change : change;
-            const changeLabel = change === 0n ? word("No change from prior period")
-              : key === "net" ? word("Net changed by {amount}", { amount: centsText(change) })
-              : word(`${key === "outflow" ? "Outflow" : "Inflow"} ${change >= 0n ? "rose" : "fell"} by {amount}`, { amount: centsText(magnitude) });
-            comparison = `${word("Prior {amount}", { amount: centsText(previous[key]) })} · ${changeLabel}`;
-          }
-          const compare = element("p", "compare", comparison);
-          card.append(compare);
-          cards.append(card);
-        }
-        const count = element("p", "range-note", word("Recorded entries: {count}", { count: countText(current.count) }));
-        target.replaceChildren(cards, count);
+        const summary = element("div", "spending-summary");
+        const total = element("dl", "spending-total");
+        total.append(element("dt", "", word("Spending")), element("dd", "", centsText(current.outflow)));
+        const amount = element("div");
+        amount.append(total, element("p", "spending-count", word("Recorded entries: {count}", { count: countText(current.count) })));
+        const compare = element("div", "compare muted");
+        if (previous && !previous.incomplete && previous.outflow !== null && current.outflow !== null) {
+          const change = current.outflow - previous.outflow;
+          const magnitude = change < 0n ? -change : change;
+          const percent = previous.outflow > 0n ? `${change > 0n ? "+" : change < 0n ? "−" : ""}${decimalPercent(centsDecimal(magnitude), centsDecimal(previous.outflow))}` : "—";
+          compare.dataset.direction = change > 0n ? "up" : change < 0n ? "down" : "same";
+          const headline = element("p");
+          headline.append(element("strong", "", percent), document.createTextNode(` ${word(`vs previous ${period}`)}`));
+          const label = change === 0n ? word("No change from prior period")
+            : word(`Outflow ${change > 0n ? "rose" : "fell"} by {amount}`, { amount: centsText(magnitude) });
+          compare.append(headline, element("p", "", `${word("Prior {amount}", { amount: centsText(previous.outflow) })} · ${label}`));
+        } else compare.append(element("p", "", word("Previous period unavailable")));
+        summary.append(amount, compare);
+        target.replaceChildren(summary);
       }
 
-      function renderRecordsTotals(metrics) {
-        const target = $("records-totals");
-        if (!metrics || metrics.incomplete) { target.replaceChildren(); return; }
-        target.replaceChildren(...[["Outflow", metrics.outflow], ["Inflow", metrics.inflow], ["Net", metrics.net]].map(([label, amount]) => {
-          const item = element("span", "", word(label));
-          item.append(element("strong", "", centsText(amount)));
-          return item;
-        }));
+      function svgElement(tag, attributes = {}) {
+        const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+        for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, String(value));
+        return node;
       }
 
-      function renderDailyTrend(rows, range, complete) {
-        const target = $("daily-trend");
-        const note = $("daily-period-note");
-        note.textContent = range ? [monthTitle(range.from.slice(0, 7)),
-          ...(range.through < range.fullEnd ? [word("Recorded through {date}", { date: range.through })] : [])].join(" · ") : "";
-        if (!complete || !range) return empty(target, word("Daily trend unavailable"));
-        const values = bucketCents(rows);
-        if ([...values].some(([day, value]) => !validDate(day) || day < range.from || day > range.through || value === null || value > 0n))
+      function renderSpendingLine(target, rows, range, unit = "day") {
+        if (!range) return empty(target, word("No recorded entries"));
+        const values = bucketCents(rows, unit);
+        const monthly = unit === "month";
+        const from = monthly ? range.from.slice(0, 7) : range.from;
+        const through = monthly ? range.through.slice(0, 7) : range.through;
+        const end = monthly ? range.fullEnd.slice(0, 7) : range.fullEnd;
+        if ([...values].some(([key, value]) => !(monthly ? /^\d{4}-\d{2}$/.test(key) : validDate(key)) || key < from || key > through || value === null || value > 0n))
           return empty(target, word("Daily trend unavailable"));
-        const spent = [...values.values()].map((value) => -value);
-        const max = spent.reduce((highest, value) => value > highest ? value : highest, 0n);
+        const keys = [];
+        for (let key = from; key <= end; key = monthly ? shiftMonth(key, 1) : dateAfter(key, 1)) keys.push(key);
+        const observed = keys.filter((key) => key <= through);
+        const amounts = observed.map((key) => -(values.get(key) ?? 0n));
+        const max = amounts.reduce((highest, value) => value > highest ? value : highest, 0n);
         if (max === 0n) return empty(target, word("No recorded outflow"));
-        const days = Number(range.fullEnd.slice(8));
-        const chart = element("div", "daily-chart");
-        chart.style.setProperty("--days", String(days));
-        chart.setAttribute("role", "img");
-        chart.setAttribute("aria-label", word("Daily outflow in {month} through {through}: {days} days, {amount}", {
-          month: monthTitle(range.from.slice(0, 7)), through: range.through,
-          days: spent.filter((value) => value > 0n).length,
-          amount: centsText(spent.reduce((sum, value) => sum + value, 0n)),
-        }));
-        for (let day = 1; day <= days; day++) {
-          const date = `${range.from.slice(0, 7)}-${String(day).padStart(2, "0")}`;
-          const column = element("span", "daily-column");
-          if (date > range.through) column.dataset.future = "true";
-          else {
-            const amount = -(values.get(date) ?? 0n);
-            if (amount > 0n) {
-              const bar = element("span");
-              bar.style.height = `${Math.max(2, Number(amount * 100n / max))}%`;
-              column.append(bar);
-            }
-          }
-          chart.append(column);
+        const peakIndex = amounts.findIndex((value) => value === max);
+        const chart = element("div", "spending-chart");
+        const svg = svgElement("svg", { viewBox: "0 0 640 104", preserveAspectRatio: "none", role: "img", "aria-label": word("Spending from {from} through {through}: {amount}. Peak {peak} on {date}", {
+          from: range.from, through: range.through, amount: centsText(amounts.reduce((sum, value) => sum + value, 0n)), peak: centsText(max), date: observed[peakIndex],
+        }) });
+        const x = (index) => 4 + index * 632 / Math.max(1, keys.length - 1);
+        const y = (value) => 96 - Number(value * 10000n / max) * 0.0088;
+        if (observed.length < keys.length) svg.append(svgElement("rect", { class: "trend-future", x: x(observed.length), y: 0, width: 640 - x(observed.length), height: 96, "data-future": true }));
+        for (const height of [8, 52, 96]) svg.append(svgElement("line", { class: "trend-guide", x1: 4, x2: 636, y1: height, y2: height }));
+        const path = amounts.map((value, index) => `${index ? "L" : "M"}${x(index).toFixed(2)},${y(value).toFixed(2)}`).join(" ");
+        svg.append(svgElement("path", { class: "trend-line", d: path }));
+        for (const [index, value] of amounts.entries()) {
+          const point = svgElement("circle", { class: "trend-point", cx: x(index), cy: y(value), r: index === peakIndex ? 4 : 2, "data-date": observed[index], "data-amount": centsDecimal(value) });
+          const title = svgElement("title");
+          title.textContent = `${observed[index]} · ${centsText(value)}`;
+          point.append(title);
+          svg.append(point);
         }
+        const peak = element("span", "trend-peak", word("Peak {amount} · {date}", { amount: centsText(max), date: observed[peakIndex].slice(5) }));
+        chart.append(peak, svg);
         const labels = element("div", "daily-labels");
-        for (const label of ["1", String(Math.ceil(days / 2)), String(days)]) labels.append(element("span", "", label));
+        for (const key of [keys[0], keys[Math.floor((keys.length - 1) / 2)], keys.at(-1)]) labels.append(element("span", "", key.slice(5)));
         target.replaceChildren(chart, labels);
       }
 
-      function renderCategories(rows, truncated) {
-        const target = $("categories");
+      function renderDailyTrend(rows, range, complete, period) {
+        $("daily-trend-title").removeAttribute("data-i18n");
+        $("daily-trend-title").textContent = word(period === "year" ? "Monthly trend" : "Daily trend");
+        $("daily-period-note").textContent = range ? [period === "year" ? range.from.slice(0, 4) : monthTitle(range.from.slice(0, 7)),
+          ...(range.through < range.fullEnd ? [word("Recorded through {date}", { date: range.through })] : [])].join(" · ") : "";
+        if (!complete) return empty($("daily-trend"), word("Daily trend unavailable"));
+        renderSpendingLine($("daily-trend"), rows, range, period === "year" ? "month" : "day");
+      }
+
+      function renderCategories(rows, truncated, targetId = "categories", range = periodRange()) {
+        const target = $(targetId);
         if (rows.length === 0) return empty(target, word("No spending categories in this period."));
         const colors = ["#d9775e", "#e2a04b", "#5c9fc1", "#71a889", "#9785b0", "#96949b"];
         const categoryColor = (value) => {
@@ -794,8 +811,12 @@
           return sum === null || value === null ? null : sum + value;
         }, 0n);
         const list = element("ol", "category-list");
-        const distribution = element("div", "distribution");
-        distribution.setAttribute("aria-hidden", "true");
+        const donut = element("div", "category-donut");
+        const svg = svgElement("svg", { viewBox: "0 0 128 128", role: "img", "aria-label": word("Spending category shares") });
+        let offset = 0;
+        const center = element("div", "donut-center");
+        center.setAttribute("aria-hidden", "true");
+        center.append(element("strong", "", sorted.length), element("span", "", word("Categories")));
         for (const [index, row] of sorted.entries()) {
           const outflow = magnitude(row);
           const amount = centsDecimal(outflow);
@@ -808,105 +829,46 @@
             name.type = "button";
             name.addEventListener("click", () => {
               state.recordCategory = String(row.category);
-              state.recordRange = periodRange();
+              state.recordPeriod = state.view === "statistics" ? state.statsPeriod : state.recordPeriod;
+              state.recordRange = range;
               state.recordsMonth = state.recordRange?.from.slice(0, 7) ?? state.recordsMonth;
               showRecentMode("trend");
+              if (state.view === "records") scheduleRefresh();
               showView("records", true);
             });
           }
-          entry.append(name, element("span", "category-amount", centsText(outflow)));
-          const track = element("div", "category-track");
-          track.setAttribute("aria-hidden", "true");
-          const fill = element("span");
-          fill.style.width = barWidth(amount, whole);
-          fill.style.backgroundColor = color;
-          track.append(fill);
-          entry.append(track, element("span", "category-share", truncated || total === null
-            ? word("Share unavailable: categories are incomplete") : word("{share} of outflow", { share: decimalPercent(amount, whole) })));
+          const swatch = element("span", "category-swatch");
+          swatch.style.backgroundColor = color;
+          swatch.setAttribute("aria-hidden", "true");
+          const share = total === null ? word("Share unavailable: categories are incomplete") : word("{share} of outflow", { share: decimalPercent(amount, whole) });
+          entry.append(swatch, name, element("span", "category-amount", centsText(outflow)), element("span", "category-share", share));
           list.append(entry);
-          if (total !== null) {
-            const segment = element("span");
-            segment.style.width = barWidth(amount, whole);
-            segment.style.backgroundColor = color;
-            distribution.append(segment);
+          if (total !== null && total > 0n && outflow !== null) {
+            const length = Number(outflow * 100000n / total) / 100;
+            const segment = svgElement("circle", { cx: 64, cy: 64, r: 48, fill: "none", stroke: color, "stroke-width": 18, pathLength: 1000, "stroke-dasharray": `${length} ${1000 - length}`, "stroke-dashoffset": -offset });
+            const title = svgElement("title");
+            title.textContent = `${categoryText(row.category)} · ${centsText(outflow)} · ${share}`;
+            segment.append(title);
+            svg.append(segment);
+            offset += length;
           }
         }
-        target.replaceChildren(...(total !== null ? [distribution] : []), list);
+        if (total !== null && total > 0n) {
+          donut.append(svg, center);
+          const layout = element("div", "category-layout");
+          layout.append(donut, list);
+          target.replaceChildren(layout);
+        } else target.replaceChildren(list);
       }
 
-      function renderTrend(outRows, inRows, range) {
-        const target = $("trend");
-        if (!range) return empty(target, word("No recorded entries"));
-        let out = bucketCents(outRows);
-        let inflow = bucketCents(inRows);
-        const labels = new Map();
-        const keys = [];
-        if (state.statsPeriod === "month") {
-          const toWeeks = (daily) => {
-            const weeks = new Map();
-            for (const [day, value] of daily) {
-              const week = periodStart(day, "week");
-              const prior = weeks.get(week);
-              weeks.set(week, prior === undefined ? value : prior === null || value === null ? null : prior + value);
-            }
-            return weeks;
-          };
-          out = toWeeks(out);
-          inflow = toWeeks(inflow);
-          for (let week = periodStart(range.from, "week"); week <= range.through; week = dateAfter(week, 7)) {
-            keys.push(week);
-            const start = week < range.from ? range.from : week;
-            const end = dateAfter(week, 6) > range.through ? range.through : dateAfter(week, 6);
-            labels.set(week, `${start.slice(5)} – ${end.slice(5)}`);
-          }
-        } else if (state.statsPeriod === "year") {
-          for (let month = range.from.slice(0, 7); month <= range.through.slice(0, 7); ) {
-            keys.push(month);
-            labels.set(month, month.slice(5));
-            const next = new Date(`${month}-01T00:00:00Z`);
-            next.setUTCMonth(next.getUTCMonth() + 1);
-            month = next.toISOString().slice(0, 7);
-          }
-        } else {
-          for (let day = range.from; day <= range.through; day = dateAfter(day, 1)) {
-            keys.push(day);
-            labels.set(day, day.slice(5));
-          }
-        }
-        if (!keys.some((key) => out.has(key) || inflow.has(key))) return empty(target, word("No recorded entries"));
-        const values = keys.flatMap((key) => [out.get(key), inflow.get(key)].filter((value) => value !== undefined && value !== null)
-          .map((value) => value < 0n ? -value : value));
-        const max = values.reduce((greatest, value) => value > greatest ? value : greatest, 0n);
-        const list = element("ol", "trend-list");
-        for (const key of keys) {
-          const outValue = out.has(key) ? out.get(key) : null;
-          const inValue = inflow.has(key) ? inflow.get(key) : null;
-          const spent = outValue === null ? null : -outValue;
-          const row = element("li", "monthly-row");
-          row.append(element("span", "", labels.get(key)));
-          if (spent === null && inValue === null) row.append(element("span", "muted", word("No recorded entries")));
-          else {
-            const bars = element("span", "monthly-bars");
-            for (const [kind, value] of [["outflow-bar", spent], ["inflow-bar", inValue]]) {
-              const bar = element("span", kind);
-              bar.style.width = value === null || max === 0n ? "0%" : `${Number(value * 100n / max)}%`;
-              bars.append(bar);
-            }
-            row.append(bars);
-          }
-          const amounts = element("span", "monthly-values");
-          if (spent !== null) amounts.append(element("span", "flow-out", centsText(spent)));
-          if (inValue !== null) amounts.append(element("span", "flow-in", centsText(inValue)));
-          row.append(amounts);
-          list.append(row);
-        }
-        target.replaceChildren(list);
+      function renderTrend(outRows, range) {
+        renderSpendingLine($("trend"), outRows, range, state.statsPeriod === "year" ? "month" : "day");
       }
 
       function renderYearBreakdown(outRows, inRows, range) {
         if (state.statsPeriod !== "year" || !range) return;
-        const out = bucketCents(outRows);
-        const inflow = bucketCents(inRows);
+        const out = bucketCents(outRows, "month");
+        const inflow = bucketCents(inRows, "month");
         const grid = element("div", "year-grid");
         for (const label of [word("Month"), word("Outflow"), word("Inflow"), word("Net")]) grid.append(element("span", "year-head", label));
         for (let month = range.from.slice(0, 7); month <= range.through.slice(0, 7); ) {
@@ -1006,6 +968,13 @@
         if (state.details.length === 0) {
           empty(target, word("No records in this range."));
           $("more").hidden = true;
+          return;
+        }
+        if (state.recordsSort === "spending") {
+          const list = element("ol", "record-list");
+          for (const [index, row] of state.details.entries()) list.append(recordItem(row, index + 1));
+          target.replaceChildren(list);
+          $("more").hidden = state.nextCursor === null;
           return;
         }
         const groups = new Map();
@@ -1129,11 +1098,15 @@
         state.recordsMonth = snapshot.month;
         state.recordRange = snapshot.rangeOverride;
         state.recordCategory = snapshot.category;
+        state.recordPeriod = snapshot.period;
+        state.recordsSort = snapshot.sort;
+        $("records-sort").value = snapshot.sort;
         state.details = [...snapshot.rows];
         state.nextCursor = snapshot.nextCursor;
         renderRecordsContext();
-        renderDailyTrend(snapshot.dailyRows, snapshot.dailyRange, snapshot.dailyComplete);
-        renderRecordsTotals(snapshot.metrics);
+        renderDailyTrend(snapshot.dailyRows, snapshot.dailyRange, snapshot.dailyComplete, snapshot.period);
+        renderSummary(snapshot.metrics, snapshot.previous, "records-totals", snapshot.period);
+        renderCategories(snapshot.categories, snapshot.categoriesTruncated, "recent-categories", snapshot.range);
         renderDetails();
       }
 
@@ -1142,6 +1115,7 @@
         state.selectedDay = snapshot.selectedDay;
         state.calendarOut = snapshot.outRows;
         state.calendarIn = snapshot.inRows;
+        renderSummary(snapshot.metrics, snapshot.previous, "records-totals", "month");
         if (snapshot.incomplete) {
           renderRecordsContext();
           $("calendar").replaceChildren(element("p", "empty calendar-unavailable", word("Daily totals incomplete. Choose another month.")));
@@ -1164,7 +1138,7 @@
           empty($("trend"), word("Totals incomplete. Narrow the date range."));
           if (snapshot.period === "year") empty($("year-breakdown"), word("Totals incomplete. Narrow the date range."));
         } else {
-          renderTrend(snapshot.trendOut, snapshot.trendIn, snapshot.range);
+          renderTrend(snapshot.trendOut, snapshot.range);
           renderYearBreakdown(snapshot.trendOut, snapshot.trendIn, snapshot.range);
         }
         renderLargest(snapshot.largest);
@@ -1175,7 +1149,7 @@
         const key = state.view === "statistics" ? "statistics" : state.recentMode === "calendar" ? "calendar" : "records";
         const snapshot = state.committed[key];
         if (!snapshot) {
-          if (state.view === "records" && state.recentMode === "trend") { $("records-totals").replaceChildren(); empty($("daily-trend"), word("Daily trend unavailable")); empty($("details"), word("Records unavailable. Check again later.")); $("more").hidden = true; }
+          if (state.view === "records" && state.recentMode === "trend") { $("records-totals").replaceChildren(); empty($("recent-categories"), word("Records unavailable. Check again later.")); empty($("daily-trend"), word("Daily trend unavailable")); empty($("details"), word("Records unavailable. Check again later.")); $("more").hidden = true; }
           else if (state.view === "records") { empty($("calendar"), word("Records unavailable. Check again later.")); empty($("day-details"), word("Records unavailable. Check again later.")); }
           else for (const id of ["summary", "categories", "trend", "largest", "year-breakdown"]) empty($(id), word("Records unavailable. Check again later."));
           notice(word("Records unavailable. Check again later."), "error");
@@ -1199,7 +1173,7 @@
         state.recordRange = null;
         state.recordsMonth = null;
         state.statsAnchor = null;
-        for (const id of ["details", "calendar", "day-details", "summary", "categories", "trend", "largest", "year-breakdown"]) empty($(id), word("No recorded entries"));
+        for (const id of ["details", "calendar", "day-details", "summary", "categories", "recent-categories", "trend", "largest", "year-breakdown"]) empty($(id), word("No recorded entries"));
         empty($("daily-trend"), word("No recorded outflow"));
         $("records-totals").replaceChildren();
         $("expense-detail").hidden = true;
@@ -1211,11 +1185,11 @@
         for (const id of ["records-previous", "records-next", "stats-previous", "stats-next"]) $(id).disabled = true;
       }
 
-      async function readDetailsDepth(params, pinned, targetCount, run) {
+      async function readDetailsDepth(queryId, params, pinned, targetCount, run) {
         const rows = [];
         let cursor = null;
         for (let pageNumber = 0; pageNumber < 48; pageNumber++) {
-          const page = await query("details", params, { ...pinned, ...(cursor ? { cursor } : {}) });
+          const page = await query(queryId, params, { ...pinned, ...(cursor ? { cursor } : {}) });
           if (run !== state.run) return null;
           if (page.revision !== state.dataRevision) throw new Error("Data revision changed");
           rows.push(...page.rows);
@@ -1260,36 +1234,49 @@
           let dailyError = false;
           if (state.view === "records" && state.recentMode === "trend") {
             const range = recordsRange();
-            const dailyRange = selectedMonthRange();
+            const dailyRange = range;
+            const period = state.recordRange ? state.recordPeriod : "month";
             const month = state.recordsMonth;
             const category = state.recordCategory;
+            const sort = state.recordsSort;
+            const queryId = sort === "spending" ? "largest_expenses" : "details";
             const rangeOverride = state.recordRange;
             const params = queryRange(range, category);
             const previous = state.committed.records;
-            const sameScope = previous && previous.month === month && previous.category === category
+            const sameScope = previous && previous.month === month && previous.category === category && previous.sort === sort && previous.period === period
               && previous.rangeOverride?.from === rangeOverride?.from && previous.rangeOverride?.through === rangeOverride?.through;
             const depth = sameScope ? Math.max(30, previous.rows.length) : 30;
-            const [summary, outflow, inflow, details, daily] = await Promise.all([
+            const prior = priorRange(range, period);
+            const [summary, outflow, inflow, details, daily, categories, priorSummary, priorOutflow] = await Promise.all([
               queryAll("summary", params, pinned, budget, run),
               queryAll("outflow", params, pinned, budget, run),
               queryAll("inflow", params, pinned, budget, run),
-              readDetailsDepth(params, pinned, depth, run),
-              queryAll("trend_day", queryRange(dailyRange, category), pinned, { remaining: maxAggregatePages }, run)
+              readDetailsDepth(queryId, params, pinned, depth, run),
+              queryAll(period === "year" ? "trend_month" : "trend_day", queryRange(dailyRange, category), pinned, { remaining: maxAggregatePages }, run)
                 .catch(() => { dailyError = true; return { rows: [], truncated: true }; }),
+              queryAll("categories", params, pinned, budget, run),
+              queryAll("summary", queryRange(prior, category), pinned, budget, run),
+              queryAll("outflow", queryRange(prior, category), pinned, budget, run),
             ]);
             if (run !== state.run || !details) return;
-            incomplete = [summary, outflow, inflow, daily].some((answer) => answer.truncated);
-            const snapshot = { month, rangeOverride, category, range: { from: range.from, through: range.through },
-              metrics: moneyMetrics(summary, outflow, inflow), rows: details.rows, nextCursor: details.nextCursor,
+            incomplete = [summary, outflow, inflow, daily, categories, priorSummary, priorOutflow].some((answer) => answer.truncated);
+            const snapshot = { month, rangeOverride, category, sort, queryId, period, range: { ...range },
+              metrics: moneyMetrics(summary, outflow, inflow), previous: moneyMetrics(priorSummary, priorOutflow, { rows: [], truncated: false }),
+              categories: categories.rows, categoriesTruncated: categories.truncated, rows: details.rows, nextCursor: details.nextCursor,
               dailyRows: daily.rows, dailyRange, dailyComplete: !daily.truncated };
             state.committed.records = snapshot;
             renderRecordsSnapshot(snapshot);
           } else if (state.view === "records") {
             const month = state.recordsMonth;
-            const params = queryRange({ from: `${month}-01`, through: monthLast(`${month}-01`) });
-            const [dayOut, dayIn] = await Promise.all([
+            const range = selectedMonthRange();
+            const params = queryRange(range);
+            const prior = priorRange(range, "month");
+            const [dayOut, dayIn, summary, priorSummary, priorOutflow] = await Promise.all([
               queryAll("trend_day", params, pinned, budget, run),
               queryAll("trend_day_inflow", params, pinned, budget, run),
+              queryAll("summary", params, pinned, budget, run),
+              queryAll("summary", queryRange(prior), pinned, budget, run),
+              queryAll("outflow", queryRange(prior), pinned, budget, run),
             ]);
             if (run !== state.run) return;
             incomplete = dayOut.truncated || dayIn.truncated;
@@ -1305,7 +1292,8 @@
                 dayHasMore = day.nextCursor !== null;
               }
             }
-            const snapshot = { month, selectedDay, outRows: incomplete ? [] : dayOut.rows, inRows: incomplete ? [] : dayIn.rows,
+            const snapshot = { month, selectedDay, metrics: moneyMetrics(summary, dayOut, dayIn),
+              previous: moneyMetrics(priorSummary, priorOutflow, { rows: [], truncated: false }), outRows: incomplete ? [] : dayOut.rows, inRows: incomplete ? [] : dayIn.rows,
               dayRows, dayHasMore, incomplete };
             state.committed.calendar = snapshot;
             renderCalendarSnapshot(snapshot);
@@ -1374,13 +1362,13 @@
       }
 
       async function loadMore() {
-        if (refreshing || state.nextCursor === null || state.view !== "records" || state.recentMode !== "trend") return;
+        if (refreshing || $("more").disabled || state.nextCursor === null || state.view !== "records" || state.recentMode !== "trend") return;
         const snapshot = state.committed.records;
         if (!snapshot) return;
         const run = state.run;
         $("more").disabled = true;
         try {
-          const result = await query("details", queryRange(snapshot.range, snapshot.category),
+          const result = await query(snapshot.queryId, queryRange(snapshot.range, snapshot.category),
             { cursor: snapshot.nextCursor, expectedDataRevision: state.dataRevision });
           if (run !== state.run || state.committed.records !== snapshot) return;
           const updated = { ...snapshot, rows: [...snapshot.rows, ...result.rows], nextCursor: result.nextCursor };
@@ -1388,11 +1376,12 @@
           renderRecordsSnapshot(updated);
         } catch {
           if (run === state.run) notice(word("More entries could not be loaded. Try again."), "error");
-        } finally { $("more").disabled = false; }
+        } finally { if (run === state.run && !refreshing) $("more").disabled = false; }
       }
 
       function scheduleRefresh() {
         state.run += 1;
+        $("more").disabled = true;
         clearTimeout(scheduledRefresh);
         scheduledRefresh = setTimeout(() => { void refresh(); }, 150);
       }
@@ -1499,6 +1488,7 @@
         if (!state.recordsMonth) return;
         state.recordsMonth = shiftMonth(state.recordsMonth, delta);
         state.recordRange = null;
+        state.recordPeriod = "month";
         state.selectedDay = null;
         scheduleRefresh();
       });
@@ -1506,6 +1496,7 @@
         if (!/^\d{4}-\d{2}$/.test(event.target.value)) return;
         state.recordsMonth = event.target.value;
         state.recordRange = null;
+        state.recordPeriod = "month";
         state.selectedDay = null;
         scheduleRefresh();
       });
@@ -1549,6 +1540,11 @@
         if (state.committed.statistics) state.committed.statistics.selectedExpense = null;
         renderExpenseDetail();
         $("largest").querySelector(`[data-expense-index="${index}"]`)?.focus();
+      });
+      $("records-sort").addEventListener("change", (event) => {
+        if (!["date", "spending"].includes(event.target.value)) return;
+        state.recordsSort = event.target.value;
+        scheduleRefresh();
       });
       $("more").addEventListener("click", () => { void loadMore(); });
       if (sdk && typeof sdk.onDataChanged === "function") sdk.onDataChanged(() => { void refresh(true); });
