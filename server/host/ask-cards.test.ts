@@ -11,6 +11,7 @@ const QUESTION = "What wording should the new footer text use?";
 
 function world(options: { inboxThread?: string; live?: string[] } = {}) {
   const threads = new Map<string, Message[]>();
+  const roomUnread: string[] = [];
   let ids = 0;
   const bots = [
     { id: "scout", name: "Scout", color: "orange", tasks: [{ threadId: "inbox", title: "Inbox" }] },
@@ -37,6 +38,7 @@ function world(options: { inboxThread?: string; live?: string[] } = {}) {
     group: () => undefined,
     groupTaskByThread: () => undefined,
     patchGroup: () => null,
+    markGroupThreadUnread: (_groupId: string, threadId: string) => { roomUnread.push(threadId); return null; },
     groupByThread: (threadId: string) => (threadId === "room" ? { id: "room" } : undefined),
   };
   const nodes = new Map<string, HandoffView>();
@@ -76,7 +78,7 @@ function world(options: { inboxThread?: string; live?: string[] } = {}) {
   };
   nodes.set("root", { id: "root", rootId: "root", threadId: "inbox", botId: "scout" } as HandoffView);
   const say = (threadId: string, text: string) => store.appendMessage(threadId, { role: "bot", kind: "text", text });
-  return { cards, store, rows, notified, answers, answered, node, say, deps, refuse: (value: typeof refuse) => { refuse = value; } };
+  return { cards, store, rows, notified, answers, answered, roomUnread, node, say, deps, refuse: (value: typeof refuse) => { refuse = value; } };
 }
 
 describe("a teammate's NEEDS INPUT question", () => {
@@ -151,6 +153,7 @@ describe("a teammate's NEEDS INPUT question", () => {
     room.store.appendMessage("work", { role: "bot", kind: "text", text: `Checked.\nNEEDS INPUT: ${QUESTION}`, from: { botId: "ledger", name: "Ledger", color: "teal" } });
     const member = room.node({ groupId: "room", question: QUESTION });
     room.cards.park(member, QUESTION);
+    expect(room.roomUnread).toEqual(["work"]);
     const [other, line, card] = room.rows("work");
     expect(other!.text).toBe("My part is done.");
     expect(line).toMatchObject({ text: "Checked.", from: { botId: "ledger" } });

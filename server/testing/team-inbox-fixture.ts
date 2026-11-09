@@ -79,6 +79,7 @@ export function teamInbox(options: { team?: boolean; representative?: TeamMessag
       return null;
     },
     patchGroup: (id: string) => { unread.push(id); return null; },
+    markGroupThreadUnread: (_id: string, threadId: string) => { unread.push(threadId); return null; },
     messagesFor: (threadId: string) => threads.get(threadId) ?? [],
     activePath: (threadId: string) => threads.get(threadId) ?? [],
     onChange: (listener: (change: StoreChange) => void) => { listeners.add(listener); return () => listeners.delete(listener); },

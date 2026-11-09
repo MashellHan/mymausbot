@@ -61,7 +61,7 @@ export function placeInboxViewer(auth: RequestAuth, cloud: { personal: boolean; 
 
 export interface PlaceInboxDeps {
   dataDir: string;
-  store: Pick<Store, "bot" | "botByThread" | "taskByThread" | "groupByThread" | "appendMessage" | "patchTask" | "patchGroup" | "messagesFor" | "onChange">;
+  store: Pick<Store, "bot" | "botByThread" | "taskByThread" | "groupByThread" | "appendMessage" | "patchTask" | "markGroupThreadUnread" | "messagesFor" | "onChange">;
   openCards(): OpenCardRow[];
   viewer(auth: RequestAuth): InboxViewer;
   sees(auth: RequestAuth, threadId: string): boolean;
@@ -208,7 +208,7 @@ export function createPlaceInbox(deps: PlaceInboxDeps) {
     const posted = store.appendMessage(threadId, { role: "bot", kind: "text", text, inbox: wire, ...(group ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {}) });
     addLine({ id: posted.id, botId: bot.id, threadId, ...(group ? { groupId: group.id } : {}), kind: "message", from: bot.name.slice(0, 200), ...(handed ? { workingFor: handed } : {}),
       ...(guest ? { guest } : {}), ...(group ? { untilReply: true } : {}), text: clip(text, NOTICE_TEXT_MAX), at: now() });
-    if (group) store.patchGroup(group.id, { unread: true });
+    if (group) store.markGroupThreadUnread(group.id, threadId, true);
     else store.patchTask(bot.id, threadId, { unread: true });
     if (!guest && bot.notifications !== false) {
       deps.send({ kind: "mention", botId: bot.id, botName: bot.name, threadId, title: handed ? serverLine(conversationLanguage(threadId), "server.notify.workingFor", { who: bot.name, other: handed.name }) : serverLine(conversationLanguage(threadId), "server.notify.message", { who: bot.name }), body: oneLine(text, 200),

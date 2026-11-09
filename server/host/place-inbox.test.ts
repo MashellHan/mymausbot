@@ -26,13 +26,17 @@ function setup(over: Partial<PlaceInboxDeps> = {}, dataDir = mkdtempSync(join(tm
   const said = new Map<string, Said[]>();
   const cards: OpenCardRow[] = [];
   const sent: Notification[] = [];
+  const markedRooms: string[] = [];
   const handed = new Map<string, string>();
   const guests = new Map<string, string>();
   const bots: Record<string, { id: string; name: string; threadId: string; color: string; notifications?: boolean }> = {
     eli: { id: "eli", name: "Eli", threadId: "eli-main", color: "blue" }, mira: { id: "mira", name: "Mira", threadId: "mira-main", color: "red" },
   };
   const titles: Record<string, string> = { "eli-main": "Eli", "eli-pricing": "Pricing work", "eli-launch": "Launch work", "guest-chat": "Guest chat" };
-  const rooms: Record<string, { id: string; name: string; memberIds: string[] }> = { "room-main": { id: "room", name: "Team room", memberIds: ["eli", "mira"] } };
+  const rooms: Record<string, { id: string; name: string; memberIds: string[] }> = {
+    "room-main": { id: "room", name: "Team room", memberIds: ["eli", "mira"] },
+    "room-fork": { id: "room", name: "Team room", memberIds: ["eli", "mira"] },
+  };
   const listeners: Array<(change: { type: string; threadId: string }) => void> = [];
   const store = {
     bot: (id: string) => bots[id],
@@ -45,6 +49,7 @@ function setup(over: Partial<PlaceInboxDeps> = {}, dataDir = mkdtempSync(join(tm
       return posted;
     },
     patchTask: () => undefined, patchGroup: () => undefined,
+    markGroupThreadUnread: (id: string, threadId: string) => { markedRooms.push(`${id}:${threadId}`); return null; },
     messagesFor: (threadId: string) => said.get(threadId) ?? [],
     onChange: (listener: (change: { type: string; threadId: string }) => void) => { listeners.push(listener); return () => undefined; },
   };
@@ -62,7 +67,7 @@ function setup(over: Partial<PlaceInboxDeps> = {}, dataDir = mkdtempSync(join(tm
     cards.push(row);
     return row;
   };
-  return { inbox, store, said, cards, sent, handed, guests, bots, listeners, ask, dataDir, tick: (ms: number) => { clock += ms; } };
+  return { inbox, store, said, cards, sent, markedRooms, handed, guests, bots, listeners, ask, dataDir, tick: (ms: number) => { clock += ms; } };
 }
 
 describe("finished work reaches the inbox once", () => {
@@ -246,6 +251,12 @@ describe("the inbox of a place that is no team's", () => {
     f.store.appendMessage("eli-pricing", { role: "user", text: "Thanks" });
     expect(f.inbox.view(OWNER).rows[0]!.tab).toBe("done");
     expect(f.inbox.count(OWNER)).toBe(0);
+  });
+
+  it("marks a background room fork unread when its message reaches the person", () => {
+    const f = setup();
+    expect(f.inbox.message("eli", "room-fork", "The fork report is ready.").status).toBe(200);
+    expect(f.markedRooms).toEqual(["room:room-fork"]);
   });
 
   it("keeps a bot's message from a room open until the person replies to that line or taps Done, since the room's other talk isn't their answer", () => {

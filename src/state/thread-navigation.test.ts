@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setTeamChats } from "./team-chats";
-import { markedThread, openBotRow, openRoomThread } from "./thread-navigation";
+import { markedThread, openBotRow, openRoomThread, visibleNotificationThread } from "./thread-navigation";
 
 type Task = { threadId: string; activity?: string; unread?: boolean; busy?: boolean; routineRunId?: string; archivedAt?: number; createdAt?: number; updatedAt?: number };
 const chief = (tasks: Task[], threadId = "main", mainThreadId = "main") => ({ id: "cos", threadId, mainThreadId, tasks: [{ threadId: "main", createdAt: 1 }, ...tasks] });
@@ -11,6 +11,15 @@ const opened = (bot: ReturnType<typeof chief>, threadsShown: boolean, onScreen =
 };
 
 afterEach(() => setTeamChats(null));
+
+it("treats a visible fork as read without hiding notifications for another thread", () => {
+  const state = { activeView: "chat" as const, selectedId: "bot", bots: [{ id: "bot", threadId: "main" }], groups: [],
+    forkPanel: { kind: "bot" as const, ownerId: "bot", threadId: "fork", messages: [], activeLeafId: null,
+      loading: false, loadId: "load", loadFailed: false } };
+  expect(visibleNotificationThread(state, "fork")).toBe("fork");
+  expect(visibleNotificationThread(state, "other")).toBe("main");
+  expect(visibleNotificationThread({ ...state, forkPanel: { ...state.forkPanel, ownerId: "other" } }, "fork")).toBe("main");
+});
 
 describe("what a bot's row or tile is marked for", () => {
   it("is what waits on the person first, then an unread reply, then work under way", () => {

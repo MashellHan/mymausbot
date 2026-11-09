@@ -51,21 +51,31 @@ export function createRoomReads(dataDir: string, alsoForget?: (person: string) =
       console.warn(`room reads: could not save ${file}: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
+  const key = (groupId: string, threadId?: string) => threadId ? `${groupId}/${threadId}` : groupId;
   return {
-    readUpTo: (groupId: string, person: string): string | undefined => reads[groupId]?.[person],
-    read(groupId: string, person: string, messageId: string): void {
-      if (reads[groupId]?.[person] === messageId) return;
-      (reads[groupId] ??= {})[person] = messageId;
+    readUpTo: (groupId: string, person: string, threadId?: string): string | undefined => reads[key(groupId, threadId)]?.[person],
+    read(groupId: string, person: string, messageId: string, threadId?: string): void {
+      const bucket = key(groupId, threadId);
+      if (reads[bucket]?.[person] === messageId) return;
+      (reads[bucket] ??= {})[person] = messageId;
       save();
     },
-    forget(groupId: string, person: string): void {
-      if (reads[groupId]?.[person] === undefined) return;
-      delete reads[groupId]![person];
+    forget(groupId: string, person: string, threadId?: string): void {
+      const bucket = key(groupId, threadId);
+      if (reads[bucket]?.[person] === undefined) return;
+      delete reads[bucket]![person];
       save();
     },
     forgetRoom(groupId: string): void {
-      if (!reads[groupId]) return;
-      delete reads[groupId];
+      const buckets = Object.keys(reads).filter((bucket) => bucket === groupId || bucket.startsWith(`${groupId}/`));
+      if (!buckets.length) return;
+      for (const bucket of buckets) delete reads[bucket];
+      save();
+    },
+    forgetThread(threadId: string): void {
+      const buckets = Object.keys(reads).filter((bucket) => bucket === threadReadKey(threadId) || bucket.endsWith(`/${threadId}`));
+      if (!buckets.length) return;
+      for (const bucket of buckets) delete reads[bucket];
       save();
     },
     forgetPerson(person: string): void {
@@ -108,11 +118,19 @@ export function createPersonRooms(deps: PersonRoomsDeps) {
   /** A room's unread mark and read line as this person has read it, on a Team Cloud; the room as it is anywhere else. */
   function groupForPerson(group: WireGroup, person: string | null): WireGroup {
     if (!reads || !person) return group;
-    const readUpTo = reads.readUpTo(group.id, person);
-    const unread = roomUnreadFor(deps.store().activePath(group.threadId), readUpTo, group.unread, atOf(group.threadId));
-    if (unread === group.unread && readUpTo === group.lastReadMessageId) return group;
+    const currentPath = deps.store().activePath(group.threadId);
+    const legacyRead = reads.readUpTo(group.id, person);
+    const currentRead = reads.readUpTo(group.id, person, group.threadId)
+      ?? (legacyRead && currentPath.some((message) => message.id === legacyRead) ? legacyRead : undefined);
+    const tasks = group.tasks?.map((task) => {
+      const readUpTo = task.threadId === group.threadId ? currentRead : reads.readUpTo(group.id, person, task.threadId);
+      const unread = roomUnreadFor(deps.store().activePath(task.threadId), readUpTo, task.unread ?? false, atOf(task.threadId));
+      const { lastReadMessageId: _shared, ...rest } = task;
+      return { ...rest, unread, ...(readUpTo ? { lastReadMessageId: readUpTo } : {}) };
+    });
+    const unread = tasks ? tasks.some((task) => task.unread) : roomUnreadFor(currentPath, currentRead, group.unread, atOf(group.threadId));
     const { lastReadMessageId: _shared, ...rest } = group;
-    return { ...rest, unread, ...(readUpTo ? { lastReadMessageId: readUpTo } : {}) };
+    return { ...rest, tasks, unread, ...(currentRead ? { lastReadMessageId: currentRead } : {}) };
   }
   /** A bot's shared conversation's unread mark and read line as this person read it, on a Team Cloud; the task as it is
    * anywhere else and for a private chat. Nobody's read line but their own goes out. */
@@ -131,7 +149,7 @@ export function createPersonRooms(deps: PersonRoomsDeps) {
     /** A deleted room's or conversation's read lines go with it. */
     forgetDeleted(change: { type: string; groupId?: string; threadId?: string }): void {
       if (change.type === "group.deleted" && change.groupId) reads?.forgetRoom(change.groupId);
-      else if (change.type === "thread.deleted" && change.threadId) reads?.forgetRoom(threadReadKey(change.threadId));
+      else if (change.type === "thread.deleted" && change.threadId) reads?.forgetThread(change.threadId);
     },
     groupForAuth: (auth: RequestAuth, group: WireGroup): WireGroup => groupForPerson(group, auth.kind === "session" ? personKey(auth.session) : null),
     /** A `group` frame as `person`'s own room (`frameOf` writes the stream's frame for a payload), kept in `ownGroups` for
@@ -148,12 +166,14 @@ export function createPersonRooms(deps: PersonRoomsDeps) {
     },
     /** Marks a room read or unread for the person signed in (server/routes/channels.ts `personMarkRoom`), told to their
      * streams alone; absent anywhere but a Team Cloud. */
-    ...(reads ? { personMarkRoom: (auth: RequestAuth, room: GroupRecord, unread: boolean): WireGroup | null => {
+    ...(reads ? { personMarkRoom: (auth: RequestAuth, room: GroupRecord, unread: boolean, threadId = room.threadId): WireGroup | null => {
       if (auth.kind !== "session") return null;
       const person = personKey(auth.session);
-      const newest = deps.newestMessageId(room.threadId);
-      if (unread) reads.forget(room.id, person);
-      else if (newest) reads.read(room.id, person, newest);
+      const newest = deps.newestMessageId(threadId);
+      if (unread) {
+        reads.forget(room.id, person, threadId);
+        if (threadId === room.threadId) reads.forget(room.id, person);
+      } else if (newest) reads.read(room.id, person, newest, threadId);
       const group = deps.publicGroupState(room);
       deps.broadcast({ kind: "group", group }, { person });
       return groupForPerson(group, person);
