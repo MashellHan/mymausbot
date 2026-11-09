@@ -1802,7 +1802,7 @@ async function addServerFromClipboard() {
   }
 }
 
-const serverConnect = createServerConnect({ fetch: (...args) => session.defaultSession.fetch(...args), t: nativeT,
+const serverConnect = createServerConnect({ fetch: (...args) => browserSession().fetch(...args), t: nativeT,
   ownEnvironmentId: async () => (await (await localServerRequest("/.well-known/openmausbot/environment")).json())?.environmentId ?? null,
   ask: async (found) => (await dialog.showMessageBox({ type: "question", buttons: [nativeT("native.dialog.connect.button"), nativeT("native.common.cancel")], defaultId: 0, cancelId: 1,
     message: nativeT("native.dialog.connect.title", { host: found.label }), detail: nativeT(found.code || found.credential ? "native.dialog.connect.withCode" : "native.dialog.connect.noCode") })).response === 0,
@@ -2630,7 +2630,7 @@ const homeWindow = createHomeWindow({ clean: cleanWorkspace, journal: oneHome.jo
   remembered: homePlaces.remembered, remember: homePlaces.remember, left: homePlaces.left, drop: homePlaces.drop,
   publish: view => { if (mainWindow && !mainWindow.isDestroyed() && senderIsLocal({ sender: mainWindow.webContents })) mainWindow.webContents.send("home:state-changed", view); },
   go: (url, origin, place) => { if (place?.kind === "team" || place?.kind === "own") { activatePlace(place); if (place.kind === "team") teamProfileSeeds.opened(place.origin); } else if (origin) activateCloud(origin); else if (activeEnvironment(environmentsState)) persistEnvironments(withActive(environmentsState, LOCAL_ID)); return navigateMainWindow(url, true); },
-  reopen: (place, still) => reopenSavedServer(place, { still, saved: () => environmentsState.environments.filter(handSaved), fetch: (...args) => session.defaultSession.fetch(...args), opened: async (entry) => { homePlaces.remember(null); persistEnvironments(withActive(environmentsState, entry.id)); return navigateMainWindow(activeOrigin(), true); } }),
+  reopen: (place, still) => reopenSavedServer(place, { still, saved: () => environmentsState.environments.filter(handSaved), fetch: (...args) => browserSession().fetch(...args), opened: async (entry) => { homePlaces.remember(null); persistEnvironments(withActive(environmentsState, entry.id)); return navigateMainWindow(activeOrigin(), true); } }),
   showLocal: leaving => { if (!mainWindow || mainWindow.isDestroyed()) return createWindow(); if (!leaving) return; persistEnvironments(withActive(environmentsState, LOCAL_ID)); return navigateMainWindow(rendererOrigin()); } });
 installHomeWindowIpc({ ipcMain, homeWindow, cloudPage: cloudPageAsking });
 /** Every path that shows the window: My Cloud once it is the person's home, else as before. */
@@ -2709,7 +2709,7 @@ ipcMain.handle("environments:add-from-link", localWorkspaceOnly("environments:ad
   return connectHostedWorkspace(link, typeof name === "string" ? name : undefined);
 }));
 ipcMain.handle("environments:forget", localWorkspaceOnly("environments:forget", (_event, id, purge) => forgetEnvironment(typeof id === "string" ? id : "", purge === true)));
-const savedServerStatus = createServerStatus({ entries: () => environmentsState.environments.filter((e) => e.kind === "remote" && !e.home && !e.team && !e.cloud), check: (origin) => checkServer(origin, (...args) => session.defaultSession.fetch(...args)),
+const savedServerStatus = createServerStatus({ entries: () => environmentsState.environments.filter((e) => e.kind === "remote" && !e.home && !e.team && !e.cloud), check: (origin) => checkServer(origin, (...args) => browserSession().fetch(...args)),
   appVersion: app.getVersion(), onChange: () => { if (mainWindow && !mainWindow.isDestroyed() && senderIsLocal({ sender: mainWindow.webContents })) mainWindow.webContents.send("environments:status-changed"); } });
 installServerStatus({ ipcMain, guard: localWorkspaceOnly, status: savedServerStatus, app, powerMonitor, online: () => net.isOnline() });
 
