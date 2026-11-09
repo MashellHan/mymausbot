@@ -800,12 +800,13 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: openmausbot-ubuntu-smoke-diagnostics
+          name: mymausbot-ubuntu-smoke-diagnostics
           path: |
-            /tmp/omb-linux-smoke-*
-            /tmp/omb-linux-smoke-runtime-*
+            /tmp/omb-linux-smoke-*/cua-invocations.ndjson
+            /tmp/omb-linux-smoke-*/cua-serve-count
+            /tmp/omb-linux-smoke-*/config/*/cua-connection.json
+            /tmp/omb-linux-smoke-*/config/*/cua-local-control.json
           if-no-files-found: warn
-          include-hidden-files: true
           retention-days: 7
 
   browser-driver:
