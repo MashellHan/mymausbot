@@ -9,30 +9,28 @@ import { fileURLToPath } from "node:url";
 // vitest job's parts: "linux-tests", "host-tests" (Windows, and macOS where the
 // event runs it), and the subsets in VITEST_SUBSETS.
 export const SELECTABLE_JOBS = [
-  "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "cloudflared-linux-arm64",
-  "foss", "control-plane", "ui-smoke", "browser-identity", "package-linux", "browser-driver", "relay",
+  "vitest", "behavior-evals", "electron-smokes", "foss", "control-plane", "ui-smoke", "browser-identity", "browser-driver", "relay",
 ];
 
 // The server imports Electron and renderer modules, and the macOS smokes run
 // the packaged server inside Electron, so a server change and a desktop change
 // can affect the same checks.
 const SERVER_CHECKS = [
-  "build", "linux-tests", "host-tests", "behavior-evals", "packaged-server", "foss", "electron-smokes",
-  "ui-smoke", "browser-identity", "browser-driver", "package-linux",
+  "build", "host-tests", "behavior-evals", "foss", "electron-smokes", "ui-smoke", "browser-identity", "browser-driver",
 ];
-const EVERY_CHECK = [...SERVER_CHECKS, "windows-cua", "cloudflared-linux-arm64", "control-plane", "relay"];
+const EVERY_CHECK = [...SERVER_CHECKS, "control-plane", "relay"];
 
 /** What a pull request's change in each area can affect. */
 export const AREA_CHECKS = {
   docs: ["docs-tests"],
   locales: ["build", "locale-tests"],
-  web: ["build", "linux-tests", "ui-smoke"],
-  "script-tests": ["linux-tests", "host-tests", "ui-smoke", "browser-identity"],
+  web: ["build", "host-tests", "ui-smoke"],
+  "script-tests": ["host-tests", "ui-smoke", "browser-identity"],
   server: SERVER_CHECKS,
   desktop: SERVER_CHECKS,
-  // The Windows CUA job starts these the way the installed app does, then lends the PC's screen through them.
-  "windows-computer-control": [...SERVER_CHECKS, "windows-cua"],
+  "windows-computer-control": SERVER_CHECKS,
   "control-plane": ["control-plane"],
+  broker: ["build", "control-plane"],
   // The relay is its own package with its own lockfile; nothing outside relay/ reaches it except the shared vectors,
   // which it keeps a pinned copy of.
   relay: ["relay"],
@@ -191,7 +189,8 @@ const AREAS = [
   [/^src\/locales\/(?:(?!en\.json$)[^/]+\.json|[^/]+\.test\.ts)$/, "locales"],
   [/^(?:src|public)\/|^[^/]+-preview\.html$/, "web"],
   [/^companion\/src\/e2e\/vectors\//, "e2e-vectors"],
-  [/^(?:server|shared|enterprise|companion|evals|skills|deploy|cloudflare\/composio-broker)\/|^(?:Dockerfile|\.dockerignore|compose\.yaml)$/, "server"],
+  [/^cloudflare\/composio-broker\//, "broker"],
+  [/^(?:server|shared|enterprise|companion|evals|skills|deploy)\/|^(?:Dockerfile|\.dockerignore|compose\.yaml)$/, "server"],
   [/^electron\/(?:cua|cua-failure|cua-connection|capabilities|screen-status|shared-cua-connection|shared-computer-access|lent-screen-tools|lent-screen-failures|paced-typing)\.[cm]js$/, "windows-computer-control"],
   [/^(?:electron|build)\/|^(?:electron-builder\.yml|index\.html|rail\.html)$/, "desktop"],
   [/^cloudflare\/control-plane\//, "control-plane"],
@@ -208,14 +207,11 @@ export function areaOf(file) {
 
 export const FULL_SCOPE = { areas: ["everything"], checks: [...EVERY_CHECK].sort() };
 
-/** A push to main and a merge group: the build, every test file on Linux and the Windows shards, the macOS smokes and
- * the Linux checks no longer than a shard. The macOS shards, the Windows CUA smoke, the Linux package, the browser driver
- * and the ARM installer run in the full lane only: nightly, manual runs and the release lane. */
+/** Main and merge-group checks include the full macOS Vitest file set. */
 export const MAIN_SCOPE = {
   areas: ["main"],
   checks: [
-    "behavior-evals", "browser-identity", "build", "control-plane", "electron-smokes", "foss", "host-tests", "linux-tests", "packaged-server",
-    "ui-smoke",
+    "behavior-evals", "browser-identity", "build", "control-plane", "electron-smokes", "foss", "host-tests", "ui-smoke",
   ],
 };
 
@@ -267,7 +263,7 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   const vitestAffected = affected.filter((file) => !RELAY_NATIVE_TEST.test(file));
   const reasons = [];
   if (forceFull) reasons.push("full main validation after integration");
-  if (labels.includes("ci:full") || labels.includes("qa:repair")) reasons.push("explicit full validation request");
+  if (["ci:full", "qa:repair", "windows"].some((label) => labels.includes(label))) reasons.push("explicit full validation request");
   if (!changed.length || baseline.areas.includes("everything")) reasons.push("unknown or empty change scope");
   if (changed.some((file) => POLICY_CHANGE.test(file))) reasons.push("CI, policy, dependency or toolchain change");
   if (changed.some((file) => SENSITIVE_PATH.test(file)) || lines.some((line) => /^[+-](?![+-]{2})/.test(line) && SENSITIVE_LINE.test(line))) {
@@ -373,27 +369,21 @@ export function selectPushScope(files, show) {
   return { runtime: true };
 }
 
-// macOS runners are the scarce ones (five at a time for the whole account),
-// and only a couple of test blocks are macOS-only, so a PR runs the suite on
-// Linux, and on Windows only when its change can break Windows (windowsReason);
-// a push to main and a merge group run Linux and Windows. The full lane adds
-// macOS. A PR that can affect the macOS smokes still runs them.
-export const ALL_OS = ["macos-latest", "ubuntu-latest", "windows-latest"];
+export const ALL_OS = ["macos-latest"];
 export const LINUX_OS = ["ubuntu-latest"];
 export const WINDOWS_OS = ["ubuntu-latest", "windows-latest"];
+export const PLATFORM_POLICY = { version: 2, fullTestPlatforms: ["macos-latest"], retiredTestPlatforms: ["linux", "win32"] };
 
-/** Events whose runs test every platform: the nightly run, manual runs and the release lane (a manual run). */
+/** Events whose runs use the full macOS test selection. */
 export const FULL_LANE_EVENTS = ["schedule", "workflow_dispatch"];
 
-/** Which lane an event's run is: a pull request's own areas, main's, or every check on every platform. */
+/** Which lane an event's run is: a pull request's own areas, main's, or full validation. */
 export function laneOf(event) {
   if (event === "pull_request") return "pr";
   if (event === "push" || event === "merge_group") return "main";
   return "full";
 }
 
-// The slowest shard sets the run's length. Windows and macOS run only the e2e files that depend on their OS, so their
-// shards stay as short as Linux's, and macOS keeps four: the account runs five macOS jobs at a time.
 export const VITEST_SHARDS = { "macos-latest": 4, "ubuntu-latest": 8, "windows-latest": 8 };
 
 // Test files at once on each platform's runner (OMB_VITEST_WORKERS, vite.config.ts). A Linux shard mostly waits on real
@@ -404,8 +394,9 @@ export const VITEST_WORKERS = { "macos-latest": 1, "ubuntu-latest": 4, "windows-
 export function vitestMatrix(oses) {
   return {
     include: oses.flatMap((os) => Array.from({ length: VITEST_SHARDS[os] }, (_, i) => ({
-      os, part: `shard ${i + 1}/${VITEST_SHARDS[os]}`, shard: i + 1, shards: VITEST_SHARDS[os], files: "",
-      e2e: os === "ubuntu-latest" ? "all" : "host", node_tests: i === 0, workers: VITEST_WORKERS[os],
+      os, part: `${os === "macos-latest" ? "all " : ""}shard ${i + 1}/${VITEST_SHARDS[os]}`, shard: i + 1,
+      shards: VITEST_SHARDS[os], files: "",
+      e2e: os === "windows-latest" ? "host" : "all", node_tests: i === 0, workers: VITEST_WORKERS[os],
     }))),
   };
 }
@@ -413,14 +404,17 @@ export function vitestMatrix(oses) {
 /** What ci.yml runs for a scope on an event whose suite covers `oses`: the
  * selected job ids and the vitest matrix. */
 export function ciOutputs({ checks, files }, oses) {
+  if (!Array.isArray(oses) || oses.includes("windows-latest")
+    || oses.includes("ubuntu-latest") && checks.includes("host-tests")) throw new Error("Retired full test platform");
   const platforms = oses.filter((os) => checks.includes(os === "ubuntu-latest" ? "linux-tests" : "host-tests"));
+  const fullMac = oses.length === 1 && oses[0] === "macos-latest" && checks.includes("host-tests");
   const { include } = vitestMatrix(platforms);
   if (checks.includes("core-tests") && !platforms.includes("ubuntu-latest")) {
     if (!Array.isArray(files) || !files.length || files.some((file) => !SAFE_TEST_PATH.test(file))) throw new Error("Invalid core test selection");
     include.push({ os: "ubuntu-latest", part: "core + affected", shard: 1, shards: 1, files: files.join(" "), e2e: "all", node_tests: false, workers: 4 });
   }
   for (const [check, { part, files, shards, nodeTests }] of Object.entries(VITEST_SUBSETS)) {
-    if (platforms.includes("ubuntu-latest") || !checks.includes(check)) continue;
+    if (platforms.includes("ubuntu-latest") || fullMac || !checks.includes(check)) continue;
     for (let shard = 1; shard <= shards; shard++) {
       include.push({
         os: "ubuntu-latest", part: shards > 1 ? `${part} ${shard}/${shards}` : part, shard, shards,
@@ -428,16 +422,15 @@ export function ciOutputs({ checks, files }, oses) {
       });
     }
   }
-  const jobs = SELECTABLE_JOBS.filter((job) => (job === "vitest" ? include.length > 0
-    : job === "windows-cua" ? checks.includes(job) && oses.includes("windows-latest") : checks.includes(job)));
+  const jobs = SELECTABLE_JOBS.filter((job) => job === "vitest" ? include.length > 0 : checks.includes(job));
   return {
     jobs,
     build: checks.includes("build"),
     vitest_os: oses,
-    // macOS's packaged server smoke runs in the macOS smokes job.
-    packaged_server_os: oses.filter((os) => os !== "macos-latest"),
+    packaged_server_os: [],
     // GitHub refuses an empty matrix, so a vitest job its `if` skips keeps the full one.
     vitest_matrix: include.length > 0 ? { include } : vitestMatrix(oses),
+    ...(fullMac ? { platform_policy: PLATFORM_POLICY } : {}),
   };
 }
 
@@ -446,6 +439,8 @@ export function ciOutputs({ checks, files }, oses) {
  * (scripts/ci-linux-lanes.mjs), and the jobs left with nothing to run drop out of the selection. */
 export function moveLinuxIntoStatic(outputs) {
   const vitest = outputs.jobs.includes("vitest") ? outputs.vitest_matrix.include : [];
+  if (outputs.platform_policy || !vitest.some((entry) => entry.os === "ubuntu-latest")
+    && !outputs.jobs.includes("behavior-evals") && !outputs.jobs.includes("packaged-server")) return { ...outputs, boat_static: true };
   const others = vitest.filter((entry) => entry.os !== "ubuntu-latest");
   const packagedOs = outputs.packaged_server_os.filter((os) => os !== "ubuntu-latest");
   const packaged = outputs.jobs.includes("packaged-server");
@@ -540,7 +535,7 @@ async function passedMergeQueue(sha) {
 export async function runCiScope({ readPullRequest = pullRequestControls, fastPrEnabled = true } = {}) {
   const lane = laneOf(process.env.GITHUB_EVENT_NAME);
   let scope = lane === "main" ? MAIN_SCOPE : FULL_SCOPE;
-  let vitestOs = lane === "main" ? WINDOWS_OS : ALL_OS;
+  let vitestOs = ALL_OS;
   const mode = ["legacy", "shadow", "tiered"].includes(process.env.MAUSBOT_CI_MODE) ? process.env.MAUSBOT_CI_MODE : "legacy";
   let plan, labels = [], repairIds = [], base, files, range, prNumber = null, prHead = null, onlyVersion = false, execution = null;
   if (lane === "pr") {
@@ -562,17 +557,6 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
       ({ labels, repairIds } = await readPullRequest(pr));
       scope = selectCiScope(files);
       vitestOs = LINUX_OS;
-      if (scope.checks.includes("host-tests")) {
-        const why = windowsReason({
-          files,
-          labels,
-          hostE2e: Object.keys((await import("./testing/host-e2e.ts")).HOST_E2E),
-          lines: () => changedCodeLines(`${base}...${head}`),
-        });
-        if (why) vitestOs = WINDOWS_OS;
-        console.log(why ? `CI scope: Windows runs for ${why}`
-          : `CI scope: nothing here can break Windows first, so its jobs wait for main (label the PR "${WINDOWS_LABEL}" and re-run to run them)`);
-      }
     } catch (error) {
       if (process.env.OMB_CI_EXECUTION_BINDING === "1" && !execution) throw error;
       console.warn(`CI scope: using all checks because the pull request diff is unavailable: ${error.message}`);
@@ -628,9 +612,12 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
       plan = selectCheckPlan({ ...input, qa: await qaHealth() });
     }
     if (plan.full) { scope = FULL_SCOPE; vitestOs = ALL_OS; }
-    else if (lane === "pr") scope = plan.scope;
+    else if (lane === "pr") {
+      scope = plan.scope;
+      if (scope.checks.includes("host-tests")) vitestOs = ALL_OS;
+    }
     else if (plan.reduced) {
-      scope = { ...plan.scope, checks: [...plan.scope.checks, "packaged-server"] };
+      scope = plan.scope;
       vitestOs = LINUX_OS;
     }
   }
@@ -653,7 +640,7 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
   writeFileSync("qa-plan.json", JSON.stringify(receipt, null, 2) + "\n");
   console.log(`CI scope: ${scope.areas.join(", ")} -> ${outputs.jobs.join(", ") || "static checks only"}`);
   if (outputs.deferred_files.length) console.log(`CI scope: deferred affected tests to full main validation: ${outputs.deferred_files.join(", ")}`);
-  if (linuxInStatic) {
+  if (outputs.linux_lanes) {
     const { vitest, evals, packaged_server: packaged } = outputs.linux_lanes;
     console.log(`CI scope: this job runs ${vitest.length} Linux vitest lane(s)${evals ? ", behavior evals" : ""}${packaged ? ", the packaged server smoke" : ""}`);
   }

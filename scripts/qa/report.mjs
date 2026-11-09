@@ -307,6 +307,7 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
     }
   }
   const report = makeReport({ run, jobs, results, expected, infrastructure, supersededBy });
+  if (plan?.outputs?.platform_policy) report.platformPolicy = plan.outputs.platform_policy;
   const recent = await api("/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=100");
   report.lastGreenSha = recent.workflow_runs.find((item) => eligibleRun(item, repository) && item.id < run.id)?.head_sha ?? null;
   await deliverReport(report, { api });
