@@ -23,6 +23,7 @@ describe("product name mismatch evidence", () => {
       [error("choose to contain mymausbot", "MausBot")],
       [error('{\n "name": "mymausbot",\n "hidden": [Object]\n}', '{\n "name": "MausBot",\n "hidden": [Object]\n}', "expected { …(2) } to deeply equal { …(2) }")],
       [{ message: "MausBot crashed" }],
+      [{ message: 200 }],
       [error("mymausbot", "MausBot"), error("403", "200")],
     ]) expect(productNameMismatch(failures)).toBeNull();
   });

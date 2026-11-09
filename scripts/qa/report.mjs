@@ -202,20 +202,33 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       issues.push(created);
     }
   }
-  if (report.executionComplete) {
-    for (const issue of issues) {
-      const state = stateOf(issue);
-      const contractPassed = state && (state.caseKeys?.length ? state.caseKeys.every((key) => report.passed.includes(key) && !report.findings.some((finding) => finding.key === key)) : state.verificationJobs?.length
-        ? state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))) : report.passed.includes(state.key));
-      if (!state || !newerThan(report, state) || !contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
-      const verified = { ...state, ...(state.caseKeys ? { verified: true } : {}), lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
-      const alreadyVerified = issueLabels(issue).includes("qa:verified");
+  for (const issue of issues) {
+    const state = stateOf(issue);
+    if (!state || !newerThan(report, state)) continue;
+    const failedCase = state.caseKeys?.some((key) => report.findings.some((finding) => finding.key === key));
+    if (failedCase) {
+      const recurrence = issue.state === "closed" || issueLabels(issue).includes("qa:verified");
+      const failed = { ...state, verified: false, lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt,
+        ...(recurrence ? { triageEpoch: report.finishedAt } : {}) };
+      const labels = issueLabels(issue).filter((label) => label !== "qa:verified" && (!recurrence || label !== "qa:triaged"));
       await update(issue, {
-        body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)
-          + (alreadyVerified ? "" : `\n\nQA verified this contract without retries on \`${report.sha}\`: ${report.url}. Lead: check the integrated fix and Reviewer evidence before closing.`),
-        ...(!alreadyVerified ? { labels: [...issueLabels(issue), "qa:verified"] } : {}),
+        body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(failed)} -->`)
+          + (recurrence ? `\n\nA tracked case failed or retried in ${report.url}. Aggregate verification is withdrawn; each failure retains its own current classification and evidence.` : ""),
+        state: "open", labels: recurrence ? [...new Set([...labels, "qa:untriaged"])] : labels,
       });
+      continue;
     }
+    if (!report.executionComplete) continue;
+    const contractPassed = state.caseKeys?.length ? state.caseKeys.every((key) => report.passed.includes(key)) : state.verificationJobs?.length
+      ? state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))) : report.passed.includes(state.key);
+    if (!contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
+    const verified = { ...state, ...(state.caseKeys ? { verified: true } : {}), lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
+    const alreadyVerified = issueLabels(issue).includes("qa:verified");
+    await update(issue, {
+      body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)
+        + (alreadyVerified ? "" : `\n\nQA verified this contract without retries on \`${report.sha}\`: ${report.url}. Lead: check the integrated fix and Reviewer evidence before closing.`),
+      ...(!alreadyVerified ? { labels: [...issueLabels(issue), "qa:verified"] } : {}),
+    });
   }
   for (const { parent, keys, members } of groups) {
     const direct = stateOf(parent);

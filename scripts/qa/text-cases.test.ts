@@ -91,11 +91,20 @@ describe("one issue per product naming problem", () => {
     for (const kind of ["product", "flake"]) {
       const env = fixture(), original = finding();
       await deliverReport(report(1, [original]), env);
+      await deliverReport(report(2, [], [original.key]), env);
+      expect(env.issues[0].labels).toContain("qa:verified");
+      if (kind === "product") env.issues[0].state = "closed";
       const unrelated = { ...original, textChange: undefined, kind, assertion: "Expected 403, received 200", retries: kind === "flake" ? 1 : 0 };
-      await deliverReport(report(2, [unrelated]), env);
-      await deliverReport(report(3, [unrelated]), env);
+      const current = report(3, [unrelated], kind === "flake" ? [original.key] : [], kind === "flake");
+      await deliverReport(current, env);
+      await deliverReport(current, env);
+      await deliverReport(report(4, [unrelated]), env);
       expect(env.issues).toHaveLength(2);
       expect(stateOf(env.issues[0]).key).toBe(rootKey);
+      expect(stateOf(env.issues[0]).verified).toBe(false);
+      expect(env.issues[0].labels).not.toContain("qa:verified");
+      expect(env.issues[0].labels).toContain("qa:untriaged");
+      expect(env.issues[0].state).toBe("open");
       expect(env.issues[0].body).not.toContain("Expected 403");
       expect(stateOf(env.issues[1]).key).toBe(original.key);
       expect(env.issues[1].body).toContain("Expected 403");
@@ -148,5 +157,11 @@ describe("one issue per product naming problem", () => {
     expect(issues[2].body).toContain('"runId":5');
     expect(issues[2].body.match(/"triageEpoch":"([^"]+)"/)[1]).not.toBe(epoch);
     expect(queueItems([issues[2]], [], Date.parse(report(5).finishedAt))[0].key).not.toBe(before);
+    await deliverReport(report(6, [], [...keys, added.key]), env);
+    expect(issues[2].labels).toContain("qa:verified");
+    await deliverReport(report(7, [{ ...added, textChange: undefined, assertion: "Expected 403, received 200" }], [], false), env);
+    expect(issues).toHaveLength(4);
+    expect(issues[2].labels).not.toContain("qa:verified");
+    expect(issues[2].body).toContain('"runId":7');
   });
 });
