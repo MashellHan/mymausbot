@@ -169,8 +169,8 @@ export function RoomHeader({
         "flex size-8 shrink-0 items-center justify-center rounded-full", ELEVATED_FLOAT, ELEVATED_HOVER,
         state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
       )}
-      title={t("chat.computer")}
-      aria-label={t("chat.computer")}
+      title={t("botPanel.tab.computer")}
+      aria-label={t("botPanel.tab.computer")}
       aria-pressed={state.computerOpen}
     >
       <Monitor size={16} aria-hidden="true" />

@@ -68,10 +68,12 @@ it.each([false, true])("opens Mini Apps from a group and returns focus on close 
   draw();
   const button = opener();
   expect(button).not.toBeNull();
+  expect(button.getAttribute("aria-label")).toBe("Computer");
   button.focus();
   click(button);
   await vi.waitFor(() => expect(panel()?.querySelector('[data-testid="mini-apps-panel"]')).toBeTruthy());
   expect(panel()?.textContent).toContain("Shared installed Mini Apps");
+  expect(panel()?.getAttribute("aria-label")).toBe("Computer");
   expect(current.selectedId).toBe(group.id);
   expect(current.groups[0]?.threadId).toBe(group.threadId);
   expect(host.textContent).toContain("Keep the group conversation visible");

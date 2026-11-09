@@ -18,7 +18,7 @@ export function GroupComputerPanel({ groupId }: { groupId: string }) {
     <aside
       ref={panelRef}
       data-computer-panel
-      aria-label={t("chat.computer")}
+      aria-label={t("botPanel.tab.computer")}
       className={cn(
         "animate-panel-in relative flex h-full shrink-0 flex-col border-l border-hairline/40 bg-panel",
         "max-2xl:absolute max-2xl:inset-y-0 max-2xl:right-0 max-2xl:z-40 max-2xl:w-full! max-2xl:max-w-[960px]",
@@ -43,7 +43,7 @@ export function GroupComputerPanel({ groupId }: { groupId: string }) {
       />
       <div {...dragProps} className="ml-1.5 py-3 pl-2.5 pr-4">
         <div className="relative flex min-h-7 items-center justify-center">
-          <div role="tablist" aria-label={t("computer.tabsAria")} className="mx-9 rounded-full bg-inset p-1" style={noDragStyle}>
+          <div role="tablist" aria-label={t("botPanel.tab.computer")} className="mx-9 rounded-full bg-inset p-1" style={noDragStyle}>
             <button type="button" {...panelTabProps("mini-apps", true)} className="flex items-center gap-1.5 rounded-full bg-card px-3 py-1 text-[12px] font-medium text-ink shadow-sm">
               <AppWindow size={13} aria-hidden="true" /> {t("computer.tab.miniApps")}
             </button>
@@ -57,8 +57,8 @@ export function GroupComputerPanel({ groupId }: { groupId: string }) {
             }}
             style={noDragStyle}
             className="absolute right-0 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
-            aria-label={t("computer.close")}
-            title={t("computer.close")}
+            aria-label={t("common.close")}
+            title={t("common.close")}
           >
             <X size={18} aria-hidden="true" />
           </button>
