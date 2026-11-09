@@ -1,4 +1,8 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { holdsFor } from "./contracts.mjs";
@@ -101,6 +105,21 @@ describe("advisory process scan", () => {
     expect(result.sent).toBe(true);
     expect(send).toHaveBeenCalledTimes(1);
     expect(state).toHaveProperty("lastProcessScan.outcome", "incomplete");
+  });
+
+  it("retains a scan failure receipt without contacting GitHub for an invalid source", () => {
+    const directory = mkdtempSync(join(tmpdir(), "mausbot-process-scan-"));
+    try {
+      const result = spawnSync(process.execPath, [fileURLToPath(new URL("./scan.mjs", import.meta.url))], {
+        cwd: directory, env: { ...process.env, QA_RUN_ID: "not-a-run" }, encoding: "utf8", timeout: 10_000,
+      });
+      expect(result.status).toBe(1);
+      expect(JSON.parse(readFileSync(join(directory, "process-scan.json"), "utf8"))).toMatchObject({
+        outcome: "incomplete", errors: [{ message: "A numeric CI run ID is required" }],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("keeps scan failure outside required checks and uses trusted main code", () => {

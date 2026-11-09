@@ -94,7 +94,12 @@ export async function scanProcesses(state = {}, { api = github, readArtifact = a
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const result = await scanProcesses({}, { runId: process.env.QA_RUN_ID });
+  let result;
+  try {
+    result = await scanProcesses({}, { runId: process.env.QA_RUN_ID });
+  } catch (error) {
+    result = { at: new Date().toISOString(), outcome: "incomplete", findings: [], errors: [{ message: sanitize(error.message) }] };
+  }
   writeFileSync("process-scan.json", JSON.stringify(result, null, 2) + "\n");
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Process scan: ${result.outcome}; ${result.findings.length} advisory cases, ${result.errors.length} unavailable run observations. Quality gates are independent.\n`);
   process.exitCode = result.outcome === "passed" ? 0 : 1;
