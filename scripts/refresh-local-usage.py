@@ -57,8 +57,12 @@ def retain_token_history(snapshot, previous):
                     cache = sum(value["cacheRead"] for value in categories)
                 if status != "unavailable" and any(type(value) is not int or not 0 <= value <= 2**53 - 1 for value in (new, cache, new + cache)):
                     continue
-                records[row["day"]] = {"day": row["day"], "tokenStatus": status,
-                    "newTokens": new, "cacheRead": cache, "totalTokens": None if new is None else new + cache}
+                known = records.get(row["day"])
+                if status == "unavailable" and known and known["tokenStatus"] != "unavailable":
+                    records[row["day"]] = {**known, "tokenStatus": "partial"}
+                else:
+                    records[row["day"]] = {"day": row["day"], "tokenStatus": status,
+                        "newTokens": new, "cacheRead": cache, "totalTokens": None if new is None else new + cache}
             except (KeyError, TypeError, ValueError, OverflowError):
                 continue
 

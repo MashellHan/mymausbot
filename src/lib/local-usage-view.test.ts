@@ -29,6 +29,27 @@ function fixture(endDay = "2026-11-06"): LocalUsageResponse {
 }
 
 describe("merged Usage view", () => {
+  it.each(["ready", "partial"] as const)("retains %s tokens only in long ranges when a recent row becomes unavailable", (tokenStatus) => {
+    const snapshot = fixture("2026-11-09"), date = "2026-11-01", missing = "2026-11-02";
+    const known = { ...snapshot.trend.find((row) => row.day === date)!, tokenStatus, newTokens: 100, cacheRead: 20, totalTokens: 120 };
+    snapshot.trend = snapshot.trend.map((row) => [date, missing].includes(row.day)
+      ? { ...row, tokenStatus: "unavailable", newTokens: null, cacheRead: null, totalTokens: null,
+        wow: { ...row.wow, newTokens: null, totalTokens: null } } : row);
+    const baseline = localUsageView(snapshot);
+    snapshot.history = [known, { ...known, day: "2026-11-08", totalTokens: 999 }];
+    for (const range of ["60", "90", "6m"] as const) {
+      const view = localUsageView(snapshot, range);
+      expect(view.trend.find((row) => row.day === date)).toMatchObject({ tokenStatus: "partial", newTokens: 100,
+        cacheRead: 20, totalTokens: 120, wow: { newTokens: null, totalTokens: null } });
+      expect(view.trend.find((row) => row.day === missing)).toMatchObject({ tokenStatus: "unavailable", totalTokens: null });
+      expect(view.trend.find((row) => row.day === "2026-11-08")).toMatchObject({ tokenStatus: "ready", totalTokens: 100 });
+      expect(view.windows).toEqual(baseline.windows);
+    }
+    expect(localUsageView(snapshot)).toEqual(baseline);
+    expect(snapshot.history[0]).toEqual(known);
+    expect(snapshot.history[0]?.tokenStatus).toBe(tokenStatus);
+  });
+
   it("uses dated history for 60/90 days and calendar months without changing cards or inventing old zeroes", () => {
     const snapshot = fixture("2026-11-09");
     snapshot.history = snapshot.trend.map((row) => ({ ...row, day: shift(row.day, -60), totalTokens: 42 }));

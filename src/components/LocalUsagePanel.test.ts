@@ -100,12 +100,15 @@ describe("local Usage panel", () => {
     Object.assign(snapshot.history.find((day) => day.day === "2026-09-20")!, { tokenStatus: "partial", newTokens: 0, cacheRead: 0, totalTokens: 0 });
     Object.assign(snapshot.history.find((day) => day.day === "2026-09-21")!, { tokenStatus: "unavailable", newTokens: null, cacheRead: null, totalTokens: null });
     Object.assign(snapshot.history.find((day) => day.day === "2026-09-22")!, { tokenStatus: "ready", newTokens: 0, cacheRead: 0, totalTokens: 0 });
+    Object.assign(snapshot.history.find((day) => day.day === "2026-10-15")!, { tokenStatus: "ready", newTokens: 100, cacheRead: 20, totalTokens: 120 });
     snapshot.merged!.history = snapshot.history.map((day) => ({ ...day, knownPrs: day.knownPrs ?? 0, knownCommits: day.commits ?? 0,
       categories: Object.fromEntries(Object.entries(day.categories).map(([key, counts]) => [key, { ...counts,
         knownPrs: counts.knownPrs ?? 0, knownCommits: counts.commits ?? 0 }])) as NonNullable<LocalUsageResponse["merged"]>["trend"][number]["categories"] }));
     await renderRaw(snapshot);
     const select = host.querySelector<HTMLSelectElement>("select[aria-label='Trend range']")!;
     expect([...select.options].map((option) => option.value)).toEqual(["30", "60", "90", "6m"]);
+    expect(select.value).toBe("30");
+    expect(select.parentElement?.classList.contains("max-w-full")).toBe(true);
     const cards = [...host.querySelectorAll("section")].slice(0, 3).map((card) => card.textContent);
     const changeRange = async (value: string) => {
       await act(async () => { select.focus(); select.value = value; select.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -126,6 +129,9 @@ describe("local Usage panel", () => {
       const zero = host.querySelector('[data-usage-trend="totalTokens"] [data-usage-day="2026-09-22"]')!;
       expect(zero.getAttribute("aria-label")).toContain("Tokens 0");
       expect(zero.getAttribute("aria-label")).not.toContain("Partial coverage");
+      const retained = host.querySelector('[data-usage-trend="totalTokens"] [data-usage-day="2026-10-15"]')!;
+      expect(retained.getAttribute("aria-label")).toContain("Tokens 120");
+      expect(retained.getAttribute("aria-label")).toContain("Partial coverage");
     }
     await changeRange("6m");
     expect(host.querySelector("[data-usage-trend-range]")?.textContent).toBe("2026-05-04 – 2026-11-03");
@@ -145,6 +151,7 @@ describe("local Usage panel", () => {
     await changeRange("30");
     expect(host.querySelectorAll('[data-usage-trend="prs"] [data-usage-day]')).toHaveLength(30);
     expect(host.querySelector('[data-usage-trend="prs"]')?.getAttribute("data-usage-granularity")).toBe("day");
+    expect(host.querySelector('[data-usage-trend="totalTokens"] [data-usage-day="2026-10-15"]')?.getAttribute("aria-label")).toContain("Unavailable");
     expect([...host.querySelectorAll("section")].slice(0, 3).map((card) => card.textContent)).toEqual(cards);
     setLocale("zh");
     await renderRaw(snapshot);

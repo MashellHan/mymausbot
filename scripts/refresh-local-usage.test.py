@@ -72,6 +72,32 @@ class TokenHistoryTests(unittest.TestCase):
         previous["trendHistory"] = None
         usage.retain_token_history(self.snapshot("2026-11-09"), previous)
 
+    def test_unavailable_refresh_preserves_known_tokens_as_partial_beyond_the_60_day_cutoff(self):
+        for status in ("ready", "partial"):
+            with self.subTest(status=status):
+                previous = self.snapshot("2026-11-08")
+                known = [{"day": date, "tokenStatus": status, "newTokens": 100, "cacheRead": 20, "totalTokens": 120}
+                         for date in ("2026-10-01", "2026-11-01")]
+                previous["trendHistory"] = {"version": 1, "daily": known}
+                current = self.snapshot("2026-11-09")
+                unknown = [self.snapshot(date, 0, "unavailable")["daily"][0]
+                           for date in ("2026-10-01", "2026-10-02", "2026-11-01", "2026-11-02")]
+                current["localHistory"] = {"version": 1, "daily": unknown}
+                current["daily"].extend(unknown[2:])
+                result = usage.retain_token_history(current, previous)
+                rows = {row["day"]: row for row in result["trendHistory"]["daily"]}
+                for row in known:
+                    self.assertEqual(rows[row["day"]], {**row, "tokenStatus": "partial"})
+                for date in ("2026-10-02", "2026-11-02"):
+                    self.assertEqual(rows[date], {"day": date, "tokenStatus": "unavailable",
+                                                "newTokens": None, "cacheRead": None, "totalTokens": None})
+                self.assertEqual(current["localHistory"]["daily"], unknown)
+                self.assertEqual(previous["trendHistory"]["daily"], known)
+                later = usage.retain_token_history(self.snapshot("2027-01-15"), result)
+                retained = {row["day"]: row for row in later["trendHistory"]["daily"]}
+                for row in known:
+                    self.assertEqual(retained[row["day"]], {**row, "tokenStatus": "partial"})
+
 
 class MemoryAuthTests(unittest.TestCase):
     def setUp(self):

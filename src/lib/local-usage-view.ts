@@ -71,7 +71,12 @@ export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRa
     : merged?.history ?? merged?.trend ?? [];
   const remoteDays = new Map(remoteTrend.map((day) => [day.day, day]));
   const tokenTrend = range === "30" ? snapshot.trend : [...(snapshot.history ?? []), ...snapshot.trend];
-  const tokenDays = new Map(tokenTrend.map((day) => [day.day, day]));
+  const tokenDays = new Map<string, LocalUsageTrendDay>();
+  for (const row of tokenTrend) {
+    const known = tokenDays.get(row.day);
+    tokenDays.set(row.day, range !== "30" && row.tokenStatus === "unavailable" && known && known.tokenStatus !== "unavailable"
+      ? { ...known, tokenStatus: "partial", wow: { ...known.wow, newTokens: null, totalTokens: null } } : row);
+  }
   const period = basis && usageTrendRange(basis["30"].endDay, range);
   const trend: UsageTrendDay[] = period ? Array.from({ length: period.days }, (_, index) => {
     const day = shiftDay(period.startDay, index), raw = remoteDays.get(day);

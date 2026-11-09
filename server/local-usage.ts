@@ -468,8 +468,12 @@ function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[]
       }
     }
   } catch { result.clear(); }
-  for (const row of baseline) if (row.tokenStatus !== "unavailable" || !result.has(row.day)) result.set(row.day, row);
-  for (const row of recent) result.set(row.day, row);
+  for (const row of [...baseline, ...recent]) {
+    const known = result.get(row.day);
+    result.set(row.day, row.tokenStatus === "unavailable" && known && known.tokenStatus !== "unavailable"
+      ? { ...row, tokenStatus: "partial", newTokens: known.newTokens, cacheRead: known.cacheRead, totalTokens: known.totalTokens,
+        wow: { ...row.wow, newTokens: null, totalTokens: null } } : row);
+  }
   for (const row of result.values()) {
     if (recent.some((recent) => recent.day === row.day)) continue;
     const previous = result.get(offsetDay(row.day, -7));

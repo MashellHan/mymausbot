@@ -68,6 +68,40 @@ async function historyFixture(asOf: number) {
 }
 
 describe("local Usage projection", () => {
+  it.each(["ready", "partial"] as const)("retains %s token history through unavailable baseline and recent rows without changing short windows", async (tokenStatus) => {
+    const asOf = Date.parse("2026-11-09T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    const dates = ["2026-10-01", "2026-11-01"], missing = ["2026-10-02", "2026-11-02"];
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) if ([...dates, ...missing].includes(row.day)) row.tokenStatus = "unavailable";
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const baseline = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const history = { version: 1, daily: dates.map((day) => ({ day, tokenStatus, newTokens: 100, cacheRead: 20, totalTokens: 120 })) };
+    await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: history }));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows).toEqual(baseline.windows);
+    expect(response.trend).toEqual(baseline.trend);
+    expect(localUsageView(response)).toEqual(localUsageView(baseline));
+    for (const date of dates) expect(response.history?.find((row) => row.day === date)).toMatchObject({
+      tokenStatus: "partial", newTokens: 100, cacheRead: 20, totalTokens: 120, wow: { newTokens: null, totalTokens: null },
+    });
+    for (const range of ["60", "90", "6m"] as const) {
+      const view = localUsageView(response, range);
+      expect(view.windows).toEqual(localUsageView(baseline).windows);
+      for (const date of dates) expect(view.trend.find((row) => row.day === date)).toMatchObject({ tokenStatus: "partial", totalTokens: 120 });
+      for (const date of missing) expect(view.trend.find((row) => row.day === date)).toMatchObject({ tokenStatus: "unavailable", totalTokens: null });
+    }
+    const laterAsOf = Date.parse("2027-01-15T08:00:00Z"), later = await historyFixture(laterAsOf);
+    expect(later.snapshot.localHistory.daily.some((row) => dates.includes(row.day))).toBe(false);
+    await writeFile(later.file, JSON.stringify({ ...later.snapshot,
+      trendHistory: { version: 1, daily: history.daily.map((row) => ({ ...row, tokenStatus: "partial" })) } }));
+    const retained = localUsageView(await createLocalUsageProvider({ file: later.file, now: () => laterAsOf }).get(), "6m");
+    for (const date of dates) expect(retained.trend.find((row) => row.day === date)).toMatchObject({
+      tokenStatus: "partial", newTokens: 100, cacheRead: 20, totalTokens: 120,
+    });
+  });
+
   it("reads bounded token history while retaining legacy windows and rejecting invalid extensions", async () => {
     const asOf = Date.parse("2026-11-09T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);

@@ -7,6 +7,7 @@ import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage
 import { metricText, countText, UsageCount, UsageChange, usageMetricHint, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable } from "./LocalUsageTables";
 import { InfoHint } from "./InfoHint";
+import { Select } from "./Select";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
@@ -230,11 +231,11 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <h3 className="text-[16px] font-semibold text-ink">{t("computer.usage.trend")}</h3>
             <span data-usage-trend-range className="text-[13px] tabular-nums text-ink-secondary">{view.period?.startDay} – {view.period?.endDay}</span>
-            <select aria-label={t("computer.usage.trendRange")} value={range} onChange={(event) => setRange(event.target.value as UsageTrendRange)}
-              className="ml-auto min-h-11 max-w-full rounded-lg border border-hairline bg-card px-2 text-[13px] text-ink outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+            <Select size="lg" aria-label={t("computer.usage.trendRange")} value={range} onChange={(event) => setRange(event.target.value as UsageTrendRange)}
+              className="ml-auto max-w-full">
               {usageTrendRanges.map((value) => <option key={value} value={value}>{value === "6m"
                 ? t("computer.usage.sixMonths") : t("computer.usage.periodDays", { days: value })}</option>)}
-            </select>
+            </Select>
           </div>
           <div data-usage-category-legend className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
             {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category} className="inline-flex items-center gap-1">
