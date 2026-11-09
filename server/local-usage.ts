@@ -95,13 +95,19 @@ function rows(raw: unknown, captureDay: string, span = 31, historical = false): 
   return daily;
 }
 
-function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; activityScopeReady: boolean } {
+function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; activityScopeReady: boolean; tokenScopeReady: boolean } {
   if (!Array.isArray(raw) || raw.length > 100) throw new Error("Invalid activity sources");
   const coverage = { total: raw.length, ready: 0, partial: 0, stale: 0, missing: 0 };
   let missingSourcesUnsampled = true;
+  let tokenReady = 0, tokenIncomplete = false;
   for (const value of raw) {
     const source = object(value);
     const status = source.status;
+    if (source.tokenStatus !== undefined && source.tokenStatus !== "ready" && source.tokenStatus !== "partial" &&
+        source.tokenStatus !== "unavailable") throw new Error("Invalid token source status");
+    if (status === "ok" && (source.tokenStatus === undefined || source.tokenStatus === "ready") ||
+        status === "partial" && source.tokenStatus === "ready") tokenReady++;
+    else if (status !== "missing") tokenIncomplete = true;
     if (status === "ok") coverage.ready++;
     else if (status === "missing") {
       coverage.missing++;
@@ -110,7 +116,8 @@ function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; act
     } else if (status === "partial" || status === "stale") coverage[status]++;
     else throw new Error("Invalid activity source status");
   }
-  return { coverage, activityScopeReady: coverage.ready > 0 && coverage.partial === 0 && coverage.stale === 0 && missingSourcesUnsampled };
+  return { coverage, activityScopeReady: coverage.ready > 0 && coverage.partial === 0 && coverage.stale === 0 && missingSourcesUnsampled,
+    tokenScopeReady: tokenReady > 0 && !tokenIncomplete && missingSourcesUnsampled };
 }
 
 function prSourceCoverage(raw: unknown): LocalUsagePrSourceCoverage {
@@ -192,18 +199,19 @@ function weekChange(current: number | null, previous: number | null): LocalUsage
 }
 
 function tokenComparisonReady(window: LocalUsageWindow, sources: LocalUsageSourceCoverage,
-  activityScopeReady: boolean): boolean {
-  return window.tokenCoverage === "ready" || activityScopeReady && sources.missing > 0 && window.unavailableTokenDays.length === 0;
+  tokenScopeReady: boolean): boolean {
+  return tokenScopeReady && (window.tokenCoverage === "ready" ||
+    sources.missing + sources.partial > 0 && window.unavailableTokenDays.length === 0);
 }
 
 function trend(window: LocalUsageWindow, daily: Map<string, DailyRow>, sources: LocalUsageSourceCoverage,
-  activityScopeReady: boolean, prs: LocalUsagePrSourceCoverage, prComplete: boolean,
+  activityScopeReady: boolean, tokenScopeReady: boolean, prs: LocalUsagePrSourceCoverage, prComplete: boolean,
   prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>): LocalUsageTrendDay[] {
   return Array.from({ length: 30 }, (_, index) => {
     const day = offsetDay(window.startDay, index);
     const current = buildWindow(1, day, window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories);
     const previous = buildWindow(1, offsetDay(day, -7), window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories);
-    const tokenReady = tokenComparisonReady(current, sources, activityScopeReady) && tokenComparisonReady(previous, sources, activityScopeReady);
+    const tokenReady = tokenComparisonReady(current, sources, tokenScopeReady) && tokenComparisonReady(previous, sources, tokenScopeReady);
     const wow = {
       prs: weekChange(current.prs, previous.prs),
       commits: activityScopeReady ? weekChange(current.commits, previous.commits) : null,
@@ -355,9 +363,9 @@ function repositoryCommitsCovered(window: LocalUsageWindow, repositories: Reposi
 
 function compareWindows(current: LocalUsageWindow, previous: LocalUsageWindow,
   currentRepositories: RepositorySnapshot | null, previousRepositories: RepositorySnapshot | null,
-  sources: LocalUsageSourceCoverage, activityScopeReady: boolean): void {
+  sources: LocalUsageSourceCoverage, activityScopeReady: boolean, tokenScopeReady: boolean): void {
   const complete = current.missingDays.length === 0 && previous.missingDays.length === 0;
-  const tokenReady = tokenComparisonReady(current, sources, activityScopeReady) && tokenComparisonReady(previous, sources, activityScopeReady);
+  const tokenReady = tokenComparisonReady(current, sources, tokenScopeReady) && tokenComparisonReady(previous, sources, tokenScopeReady);
   const categories = {} as LocalUsageComparison["categories"];
   for (const key of CATEGORIES) {
     categories[key] = {
@@ -392,7 +400,7 @@ function project(raw: unknown, now: number): LocalUsageResponse {
       (snapshot.status !== "ready" && snapshot.status !== "partial")) throw new Error("Invalid activity snapshot");
   const endDay = chinaDay(asOf);
   const daily = rows(snapshot.daily, endDay);
-  const { coverage: sources, activityScopeReady } = sourceCoverage(snapshot.sources);
+  const { coverage: sources, activityScopeReady, tokenScopeReady } = sourceCoverage(snapshot.sources);
   const prs = prSourceCoverage(snapshot.prSources);
   const rawPrCoverage = object(snapshot.prCoverage);
   const prCoverage = {} as Record<LocalUsageCategory, "ready" | "partial">;
@@ -422,13 +430,13 @@ function project(raw: unknown, now: number): LocalUsageResponse {
     const previous = buildWindow(days, offsetDay(window.startDay, -1), asOf, comparisonDaily,
       sources, prs, prComplete, prCoverage, observedCategories);
     previous.repositories = repositoryWindow(comparisonRepositories, previous);
-    compareWindows(window, previous, historical?.repositories ?? repositories, comparisonRepositories, sources, activityScopeReady);
+    compareWindows(window, previous, historical?.repositories ?? repositories, comparisonRepositories, sources, activityScopeReady, tokenScopeReady);
     windows[String(days) as "1" | "7" | "30"] = window;
   }
   const stale = chinaDay(now) !== endDay || now - asOf > STALE_AFTER_MS;
   const status = stale ? "stale" : snapshot.status === "ready" && windows["30"].coverage === "ready" ? "ready" : "partial";
   return { status, asOf, timeZone: "Asia/Shanghai", sourceCoverage: sources, prSourceCoverage: prs,
-    prCoverage, windows, trend: trend(windows["30"], daily, sources, activityScopeReady, prs, prComplete, prCoverage, observedCategories) };
+    prCoverage, windows, trend: trend(windows["30"], daily, sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories) };
 }
 
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",

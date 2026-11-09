@@ -240,8 +240,11 @@ describe("local Usage projection", () => {
 
   it.each([
     { name: "partial machine", source: { status: "partial" } },
+    { name: "incomplete token source", source: { status: "partial", tokenStatus: "partial" } },
     { name: "stale machine", source: { status: "stale" } },
+    { name: "stale machine with ready tokens", source: { status: "stale", tokenStatus: "ready" } },
     { name: "missing machine with prior capture", source: { status: "missing", capturedAt: "2026-11-02T00:00:00Z" } },
+    { name: "missing sampled machine with ready tokens", source: { status: "missing", tokenStatus: "ready", capturedAt: "2026-11-02T00:00:00Z" } },
     { name: "missing machine with sample metadata", source: { status: "missing", repositoryCount: 0 } },
   ])("keeps observed amounts but suppresses changes for $name", async ({ source }) => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
@@ -257,6 +260,30 @@ describe("local Usage projection", () => {
     expect(response.windows?.["30"].comparison).toMatchObject({ prs: 30, commits: null, totalTokens: null });
     expect(response.trend.at(-1)).toMatchObject({ commits: 8, newTokens: 56, totalTokens: 256,
       wow: { prs: 300, commits: null, newTokens: null, totalTokens: null } });
+  });
+
+  it.each([false, true])("compares complete token logs independently of partial Git coverage, unsampled machine: %s", async (unsampled) => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    Object.assign(snapshot.sources[0]!, { status: "partial", tokenStatus: "ready" });
+    if (unsampled) snapshot.sources.push({ status: "missing" });
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) for (const row of rows) row.tokenStatus = "partial";
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.sourceCoverage).toMatchObject({ ready: 0, partial: 1, missing: Number(unsampled) });
+    expect(response.windows?.["1"]).toMatchObject({ tokenCoverage: "partial", totalTokens: 256,
+      comparison: { commits: null, totalTokens: 100 } });
+    expect(response.windows?.["7"].comparison).toMatchObject({ commits: null, totalTokens: (16 - 7) / 7 * 100 });
+    expect(response.windows?.["30"].comparison).toMatchObject({ commits: null, totalTokens: 30 });
+    expect(response.trend.at(-1)?.wow).toMatchObject({ commits: null, totalTokens: 300 });
+
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) rows.at(-8)!.tokenStatus = "unavailable";
+    await writeFile(file, JSON.stringify(snapshot));
+    const gap = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(gap.windows?.["1"].comparison.totalTokens).toBe(100);
+    expect(gap.windows?.["7"].comparison.totalTokens).toBeNull();
+    expect(gap.windows?.["30"].comparison.totalTokens).toBeNull();
+    expect(gap.trend.at(-1)?.wow.totalTokens).toBeNull();
   });
 
   it("uses a verified zero within the collected scope for commit and token New", async () => {

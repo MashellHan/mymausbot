@@ -28,6 +28,15 @@ function coverageText(coverage: UsageWindow["coverage"]) {
     : coverage === "partial" ? "computer.usage.coverage.partial" : "computer.usage.coverage.unavailable");
 }
 
+function tokenComparisonUnavailableHint(window: UsageWindow) {
+  if (window.totalTokens === null) return t("computer.usage.tokenPeriodUnavailable");
+  if (window.comparison.unavailableTokenDays.length) return t("computer.usage.tokenHistoryMissing", {
+    count: window.comparison.unavailableTokenDays.length,
+  });
+  if (window.unavailableTokenDays.length) return t("computer.usage.unavailableTokenDays", { count: window.unavailableTokenDays.length });
+  return t("computer.usage.tokenCollectionIncomplete");
+}
+
 function WindowCard({ window }: { window: UsageWindow }) {
   const rows = [
     ["prs", countText(window.prs, window.knownPrs), window.comparison.prs],
@@ -55,7 +64,9 @@ function WindowCard({ window }: { window: UsageWindow }) {
             <dt title={usageMetricHint(metric)} className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
             <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
               <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
-              <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric} />
+              <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric}
+                periodDays={metric === "totalTokens" ? window.days : undefined}
+                unavailableHint={metric === "totalTokens" && comparison === null ? tokenComparisonUnavailableHint(window) : undefined} />
             </dd>
           </div>
         ))}

@@ -59,6 +59,16 @@ describe("merged Usage view", () => {
     expect(view.trend[0]).toMatchObject({ prs: null, commits: null, totalTokens: 100, wow: { prs: null, commits: null } });
   });
 
+  it("preserves private comparison-history coverage beyond the visible 30-day trend", () => {
+    const snapshot = fixture();
+    expect(localUsageView(snapshot).windows!["30"].comparison.unavailableTokenDays).toEqual([]);
+    snapshot.windows!["30"].comparison = { ...snapshot.windows!["30"].comparison,
+      totalTokens: null, unavailableTokenDays: ["2026-09-20"] };
+    expect(localUsageView(snapshot).windows!["30"].comparison).toMatchObject({
+      totalTokens: null, unavailableTokenDays: ["2026-09-20"],
+    });
+  });
+
   it("shows remote merged activity without any local snapshot or token history", () => {
     const snapshot = { ...unavailable, merged: fixture().merged };
     const view = localUsageView(snapshot);
