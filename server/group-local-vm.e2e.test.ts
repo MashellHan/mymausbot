@@ -780,13 +780,17 @@ describe("Group Local VM ownership on the real isolated server", () => {
     }
   });
 
-  it("says why This computer cannot mount in a channel instead of dispatching without the promised tools", async () => {
+  it("keeps a channel speaker working without screen tools when the app has no driver", async () => {
     const { bots, group } = await room();
     await api("PATCH", `/api/bots/${bots[0].id}`, { computer: "local" });
     await send(group.id);
-    await until(() => api("GET", "/api/bots?messages=30"), state => JSON.stringify(state).includes(THIS_COMPUTER_NOT_READY));
+    const sent = await dump() as { systemPrompt: string; mcpConfig: { mcpServers: Record<string, unknown> } };
+    expect(sent.mcpConfig.mcpServers.computer).toBeUndefined();
+    expect(sent.systemPrompt).toContain(THIS_COMPUTER_NOT_READY);
+    expect(sent.systemPrompt).toContain("No computer tools are mounted");
+    expect(sent.systemPrompt).not.toContain("You can act on the user's computer through the computer tools");
+    writeFileSync(finishFile, "finish");
     await idle(bots[0].id);
-    expect(existsSync(dumpFile)).toBe(false);
   });
 
   it.skipIf(process.platform === "linux")("keeps a channel speaker's non-screen work available when macOS screen permission is missing", async () => {

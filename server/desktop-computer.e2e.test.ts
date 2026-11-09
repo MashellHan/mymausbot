@@ -348,7 +348,10 @@ describe("this computer belongs to the desktop app's own server", () => {
       const sent = await dump();
       expect(sent.mcpConfig?.mcpServers?.computer).toBeUndefined();
       expect(sent.mcpConfig?.mcpServers?.agents).toBeTruthy();
-      expect(sent.systemPrompt).toContain(reason);
+      if (process.platform === "linux") {
+        expect(sent.systemPrompt).not.toContain(reason);
+        expect(sent.systemPrompt).toContain("make sure OpenMausBot has the permissions it asks for");
+      } else expect(sent.systemPrompt).toContain(reason);
       expect(sent.systemPrompt).toContain("No computer tools are mounted");
       expect(sent.systemPrompt).toContain("If the task needs this screen, report it as unavailable");
       expect(JSON.stringify(sent)).not.toContain("/fixture/cua-driver");
