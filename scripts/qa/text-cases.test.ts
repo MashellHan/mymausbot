@@ -127,6 +127,25 @@ describe("one issue per product naming problem", () => {
     expect(stateOf(env.issues[1]).key).toBe(unrelated.key);
   });
 
+  it("retains a late report's new cases without replacing newer execution evidence", async () => {
+    const env = fixture(), first = finding(), late = finding("src/late.test.ts", "win32");
+    await deliverReport(report(1, [first]), env);
+    await deliverReport(report(3, [], [first.key]), env);
+    expect(env.issues[0].labels).toContain("qa:verified");
+    await deliverReport(report(2, [late]), env);
+    await deliverReport(report(2, [late]), env);
+    expect(env.issues).toHaveLength(1);
+    expect(stateOf(env.issues[0])).toMatchObject({ lastExecution: "3:1", caseKeys: [first.key, late.key], verified: false });
+    expect(env.issues[0].body).toContain(late.contract);
+    expect(env.issues[0].body).toContain("QA verified this contract");
+    expect(env.issues[0].body).toContain("actions/runs/3");
+    expect(env.issues[0].labels).not.toContain("qa:verified");
+    await deliverReport(report(4, [], [first.key]), env);
+    expect(env.issues[0].labels).not.toContain("qa:verified");
+    await deliverReport(report(5, [], [first.key, late.key]), env);
+    expect(env.issues[0].labels).toContain("qa:verified");
+  });
+
   it("keeps existing consolidated cases and new cases on one parent without clearing pending members", async () => {
     const old = [finding("src/old-a.test.ts"), finding("src/old-b.test.ts", "win32")];
     const keys = old.map((entry) => entry.key);
@@ -163,5 +182,16 @@ describe("one issue per product naming problem", () => {
     expect(issues).toHaveLength(4);
     expect(issues[2].labels).not.toContain("qa:verified");
     expect(issues[2].body).toContain('"runId":7');
+    await deliverReport(report(9, [], [...keys, added.key]), env);
+    const late = finding("src/late.test.ts", "win32");
+    writes = 0;
+    await expect(deliverReport(report(8, [late]), { ...env, api: interrupted })).rejects.toThrow("summary unavailable");
+    await deliverReport(report(8, [late]), env);
+    expect(issues).toHaveLength(4);
+    expect(stateOf(issues[2])).toMatchObject({ lastExecution: "9:1", lastMembershipRun: "8:1", verified: false });
+    expect(issues[2].labels).not.toContain("qa:verified");
+    expect(issues[2].body).toContain(late.contract);
+    expect(issues[2].body).toContain('"runId":9');
+    expect(issues.slice(0, 2).every((entry) => entry.state === "closed")).toBe(true);
   });
 });

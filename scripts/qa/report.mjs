@@ -184,7 +184,23 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     const previous = issue ? stateOf(issue) : null;
     const recurrence = issue && !grouped && (issue.state === "closed" || issueLabels(issue).includes("qa:verified"));
     const runKey = `${report.runId}:${report.attempt}`;
-    if (!newerThan(report, previous)) continue;
+    if (!newerThan(report, previous)) {
+      const added = finding.cases?.filter((entry) => !previous.caseKeys?.includes(entry.key)) ?? [];
+      if (!added.length) continue;
+      const evidence = /Affected cases [^\n]*\n<!-- mausbot-qa-cases:start -->[\s\S]*?<!-- mausbot-qa-cases:end -->/;
+      if (!evidence.test(issue.body)) throw new Error(`Missing QA text case evidence #${issue.number}`);
+      const state = { ...previous, verified: false, lastMembershipRun: runKey,
+        caseKeys: [...new Set([...(previous.caseKeys ?? []), ...finding.cases.map((entry) => entry.key)])],
+        ...(recurrence ? { triageEpoch: new Date().toISOString() } : {}) };
+      const labels = issueLabels(issue).filter((label) => label !== "qa:verified" && (!recurrence || label !== "qa:triaged"));
+      await update(issue, {
+        body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(state)} -->`)
+          .replace(evidence, textCaseEvidence(finding, report, issue.body, sanitize))
+          + `\n\nLate report ${report.url} added ${added.length} previously untracked cases. Newer execution evidence is retained; the added cases still need positive verification.`,
+        state: "open", labels: recurrence ? [...new Set([...labels, "qa:untriaged"])] : labels,
+      });
+      continue;
+    }
     const area = finding.cases ? "global" : policy.areas.find((entry) => entry.tests.includes(finding.file))?.id ?? "global";
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
       triageEpoch: !issue || recurrence ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
@@ -232,7 +248,7 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
   }
   for (const { parent, keys, members } of groups) {
     const direct = stateOf(parent);
-    if (direct?.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(direct.key);
+    if (direct?.lastExecution === `${report.runId}:${report.attempt}` || direct?.lastMembershipRun === `${report.runId}:${report.attempt}`) changedKeys.add(direct.key);
     for (let i = 0; i < keys.length; i++) {
       if (stateOf(members[i])?.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(keys[i]);
     }
