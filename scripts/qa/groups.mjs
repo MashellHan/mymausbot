@@ -35,9 +35,10 @@ export function qaGroups(issues) {
 
 export async function refreshQaGroups(groups, changedKeys, report, api) {
   for (const { parent, keys, members } of groups) {
-    if (!keys.some((key) => changedKeys.has(key))) continue;
+    const direct = JSON.parse(parent.body.match(/<!-- mausbot-qa-state (.+) -->/)?.[1] ?? "null");
+    if (!keys.some((key) => changedKeys.has(key)) && !changedKeys.has(direct?.key)) continue;
     const verified = members.filter((issue) => issueLabels(issue).includes("qa:verified"));
-    const complete = verified.length === members.length;
+    const complete = verified.length === members.length && (!direct?.caseKeys || direct.verified === true);
     const previousLabels = issueLabels(parent);
     const recurrence = !complete && (parent.state === "closed" || previousLabels.includes("qa:verified"));
     let labels = previousLabels.filter((label) => label !== "qa:verified");

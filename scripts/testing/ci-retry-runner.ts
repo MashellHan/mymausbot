@@ -6,6 +6,7 @@ import { appendFileSync } from "node:fs";
 import type { RunnerTask, RunnerTestCase } from "vitest";
 import { VitestTestRunner } from "vitest/runners";
 import { CI_RETRIES, findRetryEntry, loadRetryList, retriesInCi, testIdentity } from "./ci-retry-list.mjs";
+import { productNameMismatch } from "./product-name-mismatch.mjs";
 
 // Fails open: the list is a CI convenience, and a list that cannot be read
 // must never fail a run whose tests all passed.
@@ -37,6 +38,8 @@ export default class CiRetryRunner extends VitestTestRunner {
 
   override onAfterRunTask(test: RunnerTask) {
     super.onAfterRunTask(test);
+    const textChange = productNameMismatch(test.result?.errors);
+    if (textChange) test.meta.qaTextChange = textChange;
     const retries = test.result?.retryCount ?? 0;
     if (retries > 0 && test.result?.state === "fail") this.exhausted.add(test.file.filepath);
     const log = process.env.OMB_VITEST_RETRY_LOG;

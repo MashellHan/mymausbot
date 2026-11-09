@@ -6,6 +6,7 @@ import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels, preflightJob } from "./contracts.mjs";
 import { qaGroups, refreshQaGroups } from "./groups.mjs";
+import { combineTextFindings, textCaseEvidence } from "./text-cases.mjs";
 
 export function sanitize(value) {
   return stripVTControlCharacters(String(value ?? ""))
@@ -39,7 +40,8 @@ export function testFindings(files, platform) {
         const contract = `${file} > ${[...(test.ancestorTitles ?? []), test.title].filter(Boolean).join(" > ") || test.fullName}`;
         const key = signature(contract, platform);
         if (test.status === "passed") passed.add(key);
-        if (test.status === "failed") findings.push({ key, contract, file, platform, kind: "product", assertion: sanitize((test.failureMessages ?? []).join("\n")), retries: 0 });
+        if (test.status === "failed") findings.push({ key, contract, file, platform, kind: "product", assertion: sanitize((test.failureMessages ?? []).join("\n")), retries: 0,
+          ...(test.meta?.qaTextChange?.from === "MausBot" && test.meta.qaTextChange.to === "mymausbot" ? { textChange: { from: "MausBot", to: "mymausbot" } } : {}) });
       }
       if (suite.status === "failed" && !(suite.assertionResults ?? []).some((test) => test.status === "failed")) {
         const contract = `${file} > suite setup`;
@@ -162,9 +164,9 @@ function findingBody(finding, report, state, previous = "") {
     `Retries: ${finding.retries}; retry passes remain findings.`,
     finding.jobs ? `Affected jobs: ${finding.jobs.map(sanitize).join(", ")}` : "",
     finding.file && finding.file !== "unknown test file" ? `Reproduce on an isolated fixture: checkout the tested revision, install the locked dependencies, then run \`pnpm exec vitest run ${finding.file}\` on ${sanitize(finding.platform)}. Match the job's OMB_VITEST_E2E and opt-in flags; never use live app data.` : "Reproducer and environment: use the linked job's exact command on the tested revision.",
-    `\nAssertion:\n\`\`\`text\n${finding.assertion}\n\`\`\``, "<!-- mausbot-qa:end -->"].filter(Boolean).join("\n\n");
+    `\nAssertion:\n\`\`\`text\n${finding.assertion}\n\`\`\``, textCaseEvidence(finding, report, previous, sanitize), "<!-- mausbot-qa:end -->"].filter(Boolean).join("\n\n");
   if (previous.includes("<!-- mausbot-qa:start -->")) return previous.replace(/<!-- mausbot-qa:[a-f\d]+ -->\s*<!-- mausbot-qa:start -->[\s\S]*?<!-- mausbot-qa:end -->/, text);
-  return `${text}\n\nLead triage due within 30 minutes: priority (P0/P1/P2), classification, scope, owner role, next action, due date. Use role labels, not invented GitHub assignees. Close only after Reviewer and post-integration verification evidence.\n`;
+  return `${previous ? `${previous.replace(marker(finding.key), "")}\n\n` : ""}${text}\n\nLead triage due within 30 minutes: priority (P0/P1/P2), classification, scope, owner role, next action, due date. Use role labels, not invented GitHub assignees. Close only after Reviewer and post-integration verification evidence.\n`;
 }
 
 export async function deliverReport(report, { api = github, policy = JSON.parse(readFileSync("scripts/testing/check-policy.json", "utf8")) } = {}) {
@@ -175,16 +177,19 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     Object.assign(issue, patch);
     changedKeys.add(stateOf(issue).key);
   };
-  for (const finding of report.findings) {
+  const findings = combineTextFindings(report.findings, issues, byKey, signature, stateOf);
+  for (const finding of findings) {
     const issue = issues.find((entry) => entry.body?.includes(marker(finding.key)));
     const grouped = byKey.has(finding.key);
     const previous = issue ? stateOf(issue) : null;
     const runKey = `${report.runId}:${report.attempt}`;
     if (!newerThan(report, previous)) continue;
-    const area = policy.areas.find((entry) => entry.tests.includes(finding.file))?.id ?? "global";
+    const area = finding.cases ? "global" : policy.areas.find((entry) => entry.tests.includes(finding.file))?.id ?? "global";
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
       triageEpoch: !issue || issue.state === "closed" && !grouped ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
       lastExecution: runKey, lastExecutionAt: report.finishedAt,
+      ...(finding.cases ? { textChange: finding.textChange, verified: false,
+        caseKeys: [...new Set([...(previous?.caseKeys ?? []), ...(groups.find((group) => group.parent === issue)?.keys ?? []), ...finding.cases.map((entry) => entry.key)])] } : {}),
       ...(finding.jobs?.length ? { verificationJobs: [...new Set([...(previous?.verificationJobs ?? []), ...finding.jobs])] } : {}) };
     const body = findingBody(finding, report, state, issue?.body);
     const defaults = ["qa", "qa:untriaged", `qa:kind:${finding.kind}`, `qa:scope:${area}`, "owner:lead"];
@@ -199,10 +204,10 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
   if (report.executionComplete) {
     for (const issue of issues) {
       const state = stateOf(issue);
-      const contractPassed = state && (state.verificationJobs?.length
+      const contractPassed = state && (state.caseKeys?.length ? state.caseKeys.every((key) => report.passed.includes(key) && !report.findings.some((finding) => finding.key === key)) : state.verificationJobs?.length
         ? state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))) : report.passed.includes(state.key));
       if (!state || !newerThan(report, state) || !contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
-      const verified = { ...state, lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
+      const verified = { ...state, ...(state.caseKeys ? { verified: true } : {}), lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
       const alreadyVerified = issueLabels(issue).includes("qa:verified");
       await update(issue, {
         body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)
@@ -211,7 +216,9 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       });
     }
   }
-  for (const { keys, members } of groups) {
+  for (const { parent, keys, members } of groups) {
+    const direct = stateOf(parent);
+    if (direct?.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(direct.key);
     for (let i = 0; i < keys.length; i++) {
       if (stateOf(members[i])?.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(keys[i]);
     }

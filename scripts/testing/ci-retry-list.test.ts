@@ -173,4 +173,22 @@ describe("the runner", () => {
     expect(results(output)).toEqual({ "fails once": "failed", "fails always": "failed" });
     expect(existsSync(join(directory, "retries.jsonl"))).toBe(false);
   }, 60_000);
+
+  it("retains naming mismatch evidence in JSON when Vitest truncates its error message", async () => {
+    const directory = project();
+    writeFileSync(join(directory, "flaky.test.mjs"), [
+      'it("equality", () => expect("Restart mymausbot").toBe("Restart MausBot"));',
+      'it("contains", () => expect("<section>" + "x".repeat(100) + "Fully quit mymausbot</section>").toContain("Fully quit MausBot"));',
+      'it("object", () => expect({name: "mymausbot", version: 2}).toEqual({name: "MausBot", version: 2}));',
+      'it("auth", () => expect(200).toBe(403));',
+    ].join("\n"));
+    const { output, code } = await vitest(directory, { CI: undefined });
+    expect(code).toBe(1);
+    const data = JSON.parse(output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1));
+    const cases = data.testResults[0].assertionResults;
+    expect(cases.map((entry: any) => entry.meta.qaTextChange)).toEqual([
+      { from: "MausBot", to: "mymausbot" }, { from: "MausBot", to: "mymausbot" }, { from: "MausBot", to: "mymausbot" }, undefined,
+    ]);
+    expect(cases.every((entry: any) => entry.status === "failed")).toBe(true);
+  }, 60_000);
 });
