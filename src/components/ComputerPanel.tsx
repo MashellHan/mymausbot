@@ -1187,7 +1187,7 @@ export function ComputerPanel({
     <aside
       className={cn(
         "animate-panel-in relative flex h-full shrink-0 flex-col border-l border-hairline/40 bg-panel",
-        "max-md:absolute max-md:inset-0 max-md:z-40 max-md:w-full!",
+        "max-2xl:absolute max-2xl:inset-y-0 max-2xl:right-0 max-2xl:z-40 max-2xl:w-full! max-2xl:max-w-[960px]",
       )}
       ref={panelRef}
       data-computer-panel
@@ -1207,7 +1207,7 @@ export function ComputerPanel({
         onPointerMove={onResizeMove}
         onPointerUp={onResizeEnd}
         onPointerCancel={onResizeEnd}
-        className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-accent/40 focus-visible:bg-accent/60 max-md:hidden"
+        className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize hover:bg-accent/40 focus-visible:bg-accent/60 max-2xl:hidden"
       />
       {/* ml-1.5 keeps the drag region clear of the resize handle: a later drag region in the DOM wins. */}
       <div {...dragProps} className="@container/paneltabs ml-1.5 py-3 pl-2.5 pr-4">
