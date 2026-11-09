@@ -16,7 +16,6 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
 }) {
   const shown = changeText(value);
   const period = periodDays ? t(`computer.usage.changePeriod.${periodDays}`) : null;
-  const label = period ? t("computer.usage.periodChange", { period, change: shown }) : shown;
   const previous = startDay === endDay ? startDay : `${startDay}–${endDay}`;
   const description = `${t("computer.usage.changeDescription", { change: shown, previous })}`
     + `${daily ? ` ${t("computer.usage.dailyComparisonHint")}` : ""}`
@@ -24,7 +23,7 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
     + ` ${usageMetricHint(metric)}`
     + `${value === null ? ` ${unavailableHint ?? t("computer.usage.changeUnavailableHint")}` : ""}`;
   return <span data-usage-change className={className} title={description}>
-    <span aria-hidden="true">({label})</span><span className="sr-only">{description}</span>
+    <span aria-hidden="true">{shown}</span><span className="sr-only">{description}</span>
   </span>;
 }
 
