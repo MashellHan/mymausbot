@@ -107,8 +107,10 @@ describe("local Usage panel", () => {
     expect(text()).toContain("4,000");
     const firstCard = host.querySelector<HTMLElement>("section")!;
     const visibleChanges = [...firstCard.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
-    expect(visibleChanges.slice(0, 3)).toEqual(["(+10%)", "(+50%)", "(+10%)"]);
-    expect(visibleChanges.every((value) => !/DoD|WoW|MoM/.test(value ?? ""))).toBe(true);
+    expect(visibleChanges.slice(0, 3)).toEqual(["(+10%)", "(+50%)", "(DoD +10%)"]);
+    const tokenChanges = [...host.querySelectorAll("section")].slice(0, 3)
+      .map((card) => card.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')[2]?.textContent);
+    expect(tokenChanges).toEqual(["(DoD +10%)", "(WoW New)", "(30d —)"]);
     expect(firstCard.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-11-02 (China time): +10%.");
     expect(firstCard.querySelector('[data-usage-change] .sr-only')?.textContent).toContain("Compared with 2026-11-02");
     expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("Original non-merge commits in your remotely merged PRs");
@@ -120,7 +122,9 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("Partial coverage");
     expect(text()).not.toContain("Some sources or dates are incomplete");
     expect(text()).not.toContain("Missing dates:");
-    expect(text()).not.toContain("Dates without token records:");
+    const visibleSummary = host.cloneNode(true) as HTMLElement;
+    visibleSummary.querySelectorAll(".sr-only").forEach((element) => element.remove());
+    expect(visibleSummary.textContent).not.toContain("Dates without token records:");
     await act(async () => host.querySelectorAll("section")[2]!.querySelector<HTMLButtonElement>("[data-info-hint]")!.click());
     expect(infoText()).toContain("Missing dates: 1");
     expect(infoText()).toContain("Dates without token records: 2");
@@ -138,6 +142,23 @@ describe("local Usage panel", () => {
     await showSummaryInfo();
     expect(infoText()).toContain("Some sources or dates are incomplete");
     expect(document.querySelector('[data-info-hint-content] time')?.getAttribute("datetime")).toBe("2026-11-03T08:30:00.000Z");
+  });
+
+  it("explains missing token history and localizes the comparison periods", async () => {
+    const snapshot = structuredClone(sample);
+    snapshot.windows!["30"].comparison.unavailableTokenDays = ["2026-09-11", "2026-09-12"];
+    await render(snapshot);
+    const tokenChange = () => host.querySelectorAll("section")[2]!.querySelectorAll('[data-usage-change]')[2]!;
+    expect(tokenChange().getAttribute("title")).toContain("Token history is missing for 2 dates in the comparison period.");
+    expect(tokenChange().querySelector(".sr-only")?.textContent).toContain("preceding 30-day period");
+    setLocale("zh");
+    await render(snapshot);
+    const visibleLabels = [...host.querySelectorAll("section")].slice(0, 3)
+      .map((card) => card.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')[2]?.textContent);
+    expect(visibleLabels[0]).toContain("日环比");
+    expect(visibleLabels[1]).toContain("周环比");
+    expect(visibleLabels[2]).toContain("30 日环比");
+    expect(tokenChange().getAttribute("title")).toContain("对比周期缺少 2 天的 Token 历史记录");
   });
 
   it("shows a visible PR tooltip on hover, focus and tap without treating synced zero as exact", async () => {
