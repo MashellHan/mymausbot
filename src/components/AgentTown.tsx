@@ -1,5 +1,5 @@
 import { Pause, Play } from "lucide-react";
-import { useState, type Ref } from "react";
+import { useState, type ReactNode, type Ref } from "react";
 import type { LocalAgentTeam } from "../../shared/local-dashboard";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
@@ -11,20 +11,24 @@ export function teamActivity(team: LocalAgentTeam) {
     : team.agents.some((agent) => agent.state === "unknown") ? "unknown" : "idle";
 }
 
-export function AgentTown({ teams, stale, selectedId, detailsId, selectorRef, onSelect }: {
+export function AgentTown({ teams, stale, selectedId, detailsId, selectorRef, countLabel, readLabel, onSelect, children }: {
   teams: LocalAgentTeam[]; stale: boolean; selectedId: string | null; detailsId: string;
-  selectorRef: Ref<HTMLDivElement>; onSelect: (id: string) => void;
+  selectorRef: Ref<HTMLDivElement>; countLabel: string; readLabel: string; onSelect: (id: string) => void; children?: ReactNode;
 }) {
   const [paused, setPaused] = useState(false);
-  return <section className="agent-town mb-5" data-paused={paused || stale} aria-label={t("computer.agentTeam.town")}>
-    <div className="mb-1 flex items-center justify-between gap-2">
-      <h3 className="text-[13px] font-medium text-ink-secondary">{t("computer.agentTeam.town")}</h3>
-      <button type="button" aria-pressed={paused} aria-label={t(paused ? "computer.agentTeam.playTown" : "computer.agentTeam.pauseTown")}
-        onClick={() => setPaused(!paused)} className="flex size-8 items-center justify-center rounded-md text-ink-secondary hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">
+  return <section className={cn("agent-town pt-2", teams.length ? "mb-5" : "mb-3")} data-paused={paused || stale} aria-label={t("computer.agentTeam.town")}>
+    <div data-testid="agent-offices-header" className="mb-2 flex min-w-0 items-center gap-2">
+      <h2 className="shrink-0 text-[18px] font-semibold leading-6 text-ink">{t("computer.agentTeam.town")}</h2>
+      <p data-testid="agent-town-summary" className="ml-auto min-w-0 text-right text-[11px] font-normal leading-4 text-ink-secondary [overflow-wrap:anywhere]">
+        {countLabel}<span aria-hidden="true"> · </span>{readLabel}
+      </p>
+      {teams.length > 0 && <button type="button" aria-pressed={paused} aria-label={t(paused ? "computer.agentTeam.playTown" : "computer.agentTeam.pauseTown")}
+        onClick={() => setPaused(!paused)} className="flex size-8 shrink-0 items-center justify-center rounded-md text-ink-secondary hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">
         {paused ? <Play size={14} /> : <Pause size={14} />}
-      </button>
+      </button>}
     </div>
-    <div ref={selectorRef} className="agent-town-offices rounded-lg border border-hairline/60 bg-inset/40 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60" role="region" aria-label={t("computer.agentTeam.town")} tabIndex={0}>
+    {children}
+    {teams.length > 0 && <div ref={selectorRef} className="agent-town-offices rounded-lg border border-hairline/60 bg-inset/40 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60" role="region" aria-label={t("computer.agentTeam.town")} tabIndex={0}>
       {teams.map((team, index) => <button key={team.id} type="button" data-team-house={team.id} data-activity={teamActivity(team)}
         aria-pressed={selectedId === team.id} aria-controls={selectedId === team.id ? detailsId : undefined}
         onClick={() => onSelect(team.id)}
@@ -34,6 +38,6 @@ export function AgentTown({ teams, stale, selectedId, detailsId, selectorRef, on
         <span className="block text-[11px] leading-4 tabular-nums text-ink-secondary">{team.agentCount === 1 ? t("computer.agentTeam.agentCountOne") : t("computer.agentTeam.agentCount", { count: team.agentCount })}</span>
         <span className="block text-[11px] leading-4 tabular-nums text-ink-secondary">{stale ? t("computer.agentTeam.lastActive", { count: team.activeAgentCount }) : t("computer.agentTeam.activeCount", { count: team.activeAgentCount })}</span>
       </button>)}
-    </div>
+    </div>}
   </section>;
 }
