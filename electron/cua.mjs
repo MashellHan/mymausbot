@@ -153,7 +153,7 @@ export function resolveEmbeddedDriverBinary(binary) {
   if (process.platform !== "win32" || !app.isPackaged || process.env.CUA_DRIVER_PATH ||
       binary !== path.join(process.resourcesPath, "cua-driver.exe")) return binary;
   const background = path.join(process.resourcesPath, "cua-driver-background.exe");
-  if (!fs.existsSync(background)) throw new Error("Packaged background CUA driver is missing; reinstall OpenMausBot");
+  if (!fs.existsSync(background)) throw new Error("Packaged background CUA driver is missing; reinstall mymausbot");
   return background;
 }
 
@@ -246,7 +246,7 @@ async function startEmbedded(binary, signal, requestPermissions) {
         !permissionStatus.accessibility && "Accessibility",
         !permissionStatus.screenRecording && "Screen Recording",
       ].filter(Boolean).join(" and ");
-      throw new Error(`${missing || "macOS permissions"} required; grant access in System Settings and restart OpenMausBot`);
+      throw new Error(`${missing || "macOS permissions"} required; grant access in System Settings and restart mymausbot`);
     }
   }
   // The native SDK owns the child lifecycle but exposes no windowsHide option.

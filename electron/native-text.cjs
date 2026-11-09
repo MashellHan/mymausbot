@@ -73,7 +73,8 @@ function createNativeText({ dir = LOCALES_DIR, saved = null, system = () => "", 
     language,
     t(key, params) {
       const own = pack(language())[key];
-      return fill(own ?? pack(ENGLISH)[key] ?? key, params);
+      const template = (own ?? pack(ENGLISH)[key] ?? key).replaceAll("OpenMausBot", "mymausbot");
+      return fill(template, params);
     },
     set(code) {
       const before = language();

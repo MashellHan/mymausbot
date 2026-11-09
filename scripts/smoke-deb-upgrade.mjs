@@ -70,9 +70,9 @@ try {
     stdio: "inherit",
   });
   for (const directory of [
-    "/opt/OpenMausBot",
-    "/opt/OpenMausBot/resources",
-    "/opt/OpenMausBot/resources/cua-linux-x64",
+    "/opt/mymausbot",
+    "/opt/mymausbot/resources",
+    "/opt/mymausbot/resources/cua-linux-x64",
   ]) {
     const details = fs.lstatSync(directory);
     if (!details.isDirectory() || details.isSymbolicLink()) fail(`unsafe upgraded directory: ${directory}`);
@@ -81,14 +81,14 @@ try {
     }
   }
   for (const executable of ["cua-driver", "cua-cursor-theme"]) {
-    const file = path.join("/opt/OpenMausBot/resources/cua-linux-x64", executable);
+    const file = path.join("/opt/mymausbot/resources/cua-linux-x64", executable);
     const details = fs.lstatSync(file);
     if (!details.isFile() || details.isSymbolicLink()) fail(`unsafe upgraded executable: ${file}`);
     if (details.uid !== 0 || details.gid !== 0 || (details.mode & 0o777) !== 0o755) {
       fail(`upgraded executable is not root:root 0755: ${file}`);
     }
   }
-  const chromiumSandbox = "/opt/OpenMausBot/chrome-sandbox";
+  const chromiumSandbox = "/opt/mymausbot/chrome-sandbox";
   const sandboxDetails = fs.lstatSync(chromiumSandbox);
   if (!sandboxDetails.isFile() || sandboxDetails.isSymbolicLink()) {
     fail(`unsafe upgraded Chromium sandbox: ${chromiumSandbox}`);

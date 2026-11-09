@@ -6,6 +6,11 @@ This standalone repository (`fork=false`) preserves upstream licensing and histo
 `MashellHan/openmausbot` repository, whose PR, issue, review and CI links are
 historical. Never push to `upstream` or `legacy-fork`.
 
+The product name is exactly lowercase `mymausbot`, including desktop bundles,
+window titles and phone installation metadata. Updates come from
+`MashellHan/mymausbot`. Keep existing application IDs, data paths, pairing and
+protocol identifiers compatible, and preserve upstream attribution during sync.
+
 - Commit each coherent, working slice with a message describing behavior and
   purpose. Keep useful checkpoints; do not split changes just to inflate counts.
 - Use one focused feature branch and PR per reviewable outcome. Open drafts
