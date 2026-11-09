@@ -349,15 +349,18 @@ describe("complete CI and trusted QA health", () => {
         : path.includes("/artifacts?") ? { artifacts }
           : path.includes("ci.yml/runs") ? { workflow_runs: [] }
             : issuesApi(path, options);
+    const historicalResult = (title: string) => ({ "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: 0, numPendingTests: 0,
+      testResults: [{ name: testFile, status: "passed", assertionResults: [{ ancestorTitles: ["auth"], title, status: "passed" }] }] }) });
     const readArtifact = async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
       ? { "qa-plan.json": JSON.stringify(plan) }
-      : { "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: 0, numPendingTests: 0,
-        testResults: [{ name: testFile, status: "passed", assertionResults: [{ ancestorTitles: ["auth"], title: "saved contract", status: "passed" }] }] }) };
+      : historicalResult(artifact.name.startsWith("qa-results-foss-") ? "legacy FOSS contract" : "saved contract");
     for (event of ["schedule", "workflow_dispatch"]) {
       const report = await reportRun(run.id, { api, readArtifact, repository });
       expect(report).toMatchObject({ executionComplete: true, testsPassed: true, missing: [], deliveryComplete: true });
       expect(report.jobs).toHaveLength(38);
       expect(report.platformPolicy).toBeUndefined();
+      expect(report.passed).toContain(testFindings(historicalResult("legacy FOSS contract"), "linux").passed[0]);
+      expect(report.passed).not.toContain(testFindings(historicalResult("legacy FOSS contract"), "darwin").passed[0]);
     }
     plan = { ...plan, outputs: { ...selected, full_required: true, reduced: false, qa_areas: ["global"],
       required_jobs: selected.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selected) } };
@@ -368,6 +371,39 @@ describe("complete CI and trusted QA health", () => {
     await expect(reportRun(run.id, { api, readArtifact, repository })).rejects.toThrow("Trusted validation plan unavailable");
     artifacts = [{ name: "qa-plan-attempt-1", workflow_run: { id: 999, head_sha: run.head_sha } }, ...artifacts];
     await expect(reportRun(run.id, { api, readArtifact, repository })).rejects.toThrow("Missing current-run validation plan");
+  });
+
+  it("attributes current specialist artifacts to Darwin without verifying a legacy Linux case", async () => {
+    const { api: issuesApi, issues } = issueApi();
+    const oldFinding = testFindings(result("failed"), "linux").findings[0];
+    await deliverReport(makeReport({ run: { ...run, id: 99 }, expected: [], jobs: [],
+      results: [{ name: "qa-results-foss", ...testFindings(result("failed"), "linux") }] }), { api: issuesApi });
+    expect(issues).toHaveLength(1);
+    expect(issues[0].body).toContain(`<!-- mausbot-qa:${oldFinding.key} -->`);
+
+    const selected = ciOutputs(FULL_SCOPE, ALL_OS);
+    const plan = pushPlan(selected, run);
+    const expected = expectedJobs(selected);
+    const specialistArtifacts = expected.filter((item) => ["behavior-evals", "foss", "ui-smoke"].includes(item.id)).map((item) => item.artifact);
+    expect(specialistArtifacts).toEqual(["qa-results-evals-macos-latest", "qa-results-foss-macos-latest", "qa-results-ui-macos-latest"]);
+    const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+    const jobs = expected.map((item, index) => ({ id: index + 1, name: item.name, run_attempt: 1, status: "completed", conclusion: "success",
+      steps: workflow.jobs[item.id].steps.map((step: { name?: string; run?: string }) => ({ name: step.name ?? `Run ${step.run}`, conclusion: "success" })) }));
+    const artifacts = ["qa-plan", ...expected.flatMap((item) => item.artifact ? [item.artifact] : [])]
+      .map((name) => ({ name: `${name}-attempt-1`, workflow_run: { id: run.id, head_sha: run.head_sha } }));
+    const api = async (path: string, options?: object) => path === `/actions/runs/${run.id}` ? run
+      : path.includes("/jobs?") ? { jobs }
+        : path.includes("/artifacts?") ? { artifacts }
+          : path.includes("ci.yml/runs") ? { workflow_runs: [] }
+            : issuesApi(path, options);
+    const readArtifact = async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(plan) } : result("passed");
+    const reported = await reportRun(run.id, { api, readArtifact, repository });
+    const darwinKey = testFindings(result("passed"), "darwin").passed[0];
+    expect(reported).toMatchObject({ executionComplete: true, testsPassed: true, deliveryComplete: true, findings: [] });
+    expect(reported.passed).toContain(darwinKey);
+    expect(reported.passed).not.toContain(oldFinding.key);
+    expect(issues[0].labels.map((label: { name: string }) => label.name)).not.toContain("qa:verified");
   });
 
   it("binds a push plan to its trusted run, SHA and producing attempt without treating absent evidence as full", async () => {

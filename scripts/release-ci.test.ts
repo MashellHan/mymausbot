@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ALL_OS, VITEST_SHARDS } from "./ci-scope.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, VITEST_SHARDS } from "./ci-scope.mjs";
+import { expectedJobs, MERGE_JOBS } from "./qa/contracts.mjs";
 import { githubApi, judgeRun, waitForReleaseCi } from "./release-ci.mjs";
 
 const SHA = "a".repeat(40);
@@ -10,7 +11,7 @@ const TREE = "1".repeat(40);
 const PARENT_TREE = "2".repeat(40);
 
 type Step = { status?: string; conclusion?: string | null };
-type Job = { name: string; conclusion: string | null; steps?: Step[] };
+type Job = { name: string; conclusion: string | null; status?: string; run_attempt?: number; steps?: Step[] };
 type Run = {
   id: number; event: string; status: string; head_branch: string; head_sha: string; created_at: string;
   run_attempt?: number; head_commit?: { tree_id: string };
@@ -23,7 +24,16 @@ const vitest = (os: string, conclusion: string | null, steps: Step[] = started, 
 const shards = (os: string): Job[] =>
   Array.from({ length: VITEST_SHARDS[os as keyof typeof VITEST_SHARDS] }, (_, i) => vitest(os, "success", started, i + 1));
 const gate = (conclusion: string | null): Job => ({ name: "CI", conclusion, steps: started });
-const green = (): Job[] => [gate("success"), ...ALL_OS.flatMap(shards)];
+const fullSelection = ciOutputs(FULL_SCOPE, ALL_OS);
+const fullExpected = expectedJobs(fullSelection);
+const planFor = (run: Run, full = true) => {
+  const selection = full ? fullSelection : ciOutputs(MAIN_SCOPE, ALL_OS);
+  return { version: 1, runId: run.id, attempt: run.run_attempt ?? 1, sha: run.head_sha,
+    ...(run.event === "push" || run.event === "merge_group" ? { plan: { full, candidate: false, admitted: false, reduced: false, scope: full ? FULL_SCOPE : MAIN_SCOPE } } : {}),
+    outputs: { ...selection, full_required: full, reduced: false, qa_areas: ["global"],
+      required_jobs: selection.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selection, full) } };
+};
+const green = (): Job[] => [gate("success"), ...fullExpected.map((item) => ({ name: item.name, conclusion: "success", status: "completed", run_attempt: 1, steps: started }))];
 const mainLane = (): Job[] => [gate("success"), ...shards("ubuntu-latest")];
 /** A docs- or version-only run: the gate passes with vitest skipped. */
 const scoped = (): Job[] => [gate("success"), { name: "vitest (${{ matrix.os }}, shard ${{ matrix.shard }}/4)", conclusion: "skipped", steps: [] }];
@@ -37,7 +47,7 @@ const pkg = (version: string, extra: Record<string, unknown> = {}) =>
   `${JSON.stringify({ name: "openmausbot", private: true, version, scripts: { test: "vitest run" }, ...extra }, null, 2)}\n`;
 
 /** A scripted GitHub. Each poll (one sleep) moves to the next state. */
-function fakeGitHub(polls: Array<{ runs: Run[]; jobs?: Record<number, Job[]> }>, setup: {
+function fakeGitHub(polls: Array<{ runs: Run[]; jobs?: Record<number, Job[]>; plans?: Record<number, "main" | null> }>, setup: {
   commits?: Record<string, Commit>; files?: Record<string, string>;
 } = {}) {
   const calls: string[] = [];
@@ -52,6 +62,7 @@ function fakeGitHub(polls: Array<{ runs: Run[]; jobs?: Record<number, Job[]> }>,
     async runsForCommit(sha: string) { return state().runs.filter((run) => run.head_sha === sha); },
     async recentRuns() { return state().runs.filter((run) => run.status === "completed"); },
     async runJobs(runId: number) { return state().jobs?.[runId] ?? []; },
+    async runPlan(source: Run) { return state().plans?.[source.id] === null ? null : planFor(source, state().plans?.[source.id] !== "main"); },
     async commit(sha: string) {
       const commit = commits[sha];
       if (!commit) throw new Error(`GET /commits/${sha}: HTTP 404`);
@@ -85,10 +96,11 @@ const versionBump = {
 
 describe("what a CI run proves", () => {
   it("is green only when the gate and every macOS all-E2E shard passed", () => {
-    expect(judgeRun(green())).toBe("green");
+    const source = run(1, "push", "completed");
+    expect(judgeRun(green(), planFor(source), source)).toBe("green");
     expect(judgeRun([gate("success"), ...Array.from({ length: 4 }, (_, i) => ({
       name: `vitest (macos-latest, shard ${i + 1}/4)`, conclusion: "success", steps: started,
-    }))])).toBe("partial");
+    }))], planFor(source), source)).toBe("partial");
     expect(judgeRun(scoped())).toBe("scoped");
     expect(judgeRun([gate("success")])).toBe("scoped");
     expect(judgeRun([gate("success"), vitest("ubuntu-latest", "success"), vitest("windows-latest", "skipped")])).toBe("scoped");
@@ -96,8 +108,29 @@ describe("what a CI run proves", () => {
 
   it("is partial for retired Linux shards or an incomplete macOS full set", () => {
     expect(judgeRun(mainLane())).toBe("partial");
-    expect(judgeRun(green().filter((job) => job.name !== "vitest (macos-latest, all shard 4/4)"))).toBe("partial");
+    const source = run(1, "push", "completed");
+    expect(judgeRun(green().filter((job) => job.name !== "vitest (macos-latest, all shard 4/4)"), planFor(source), source)).toBe("partial");
     expect(judgeRun([...mainLane(), ...shards("windows-latest")])).toBe("partial");
+  });
+
+  it("rejects a MAIN_SCOPE plan even when four all-E2E shard names and the gate pass", () => {
+    const source = run(1, "push", "completed");
+    expect(judgeRun(green(), planFor(source, false), source)).toBe("partial");
+    expect(judgeRun(green(), null, source)).toBe("partial");
+  });
+
+  it("requires source identity and every full specialist job to pass", () => {
+    const source = run(1, "workflow_dispatch", "completed");
+    const plan = planFor(source);
+    expect(judgeRun(green(), plan, source)).toBe("green");
+    for (const patch of [{ runId: 2 }, { sha: OTHER }, { attempt: 2 }]) {
+      expect(judgeRun(green(), { ...plan, ...patch }, source)).toBe("partial");
+    }
+    for (const id of ["relay", "browser-driver", "foss", "ui-smoke", "browser-identity"]) {
+      const specialist = fullExpected.find((item) => item.id === id)!;
+      expect(judgeRun(green().filter((job) => job.name !== specialist.name), plan, source)).toBe("partial");
+      expect(judgeRun(green().map((job) => job.name === specialist.name ? { ...job, conclusion: "failure" } : job), plan, source)).toBe("partial");
+    }
   });
 
   it("tells a runner that never came from a test that failed", () => {
@@ -123,6 +156,17 @@ describe("release CI gate", () => {
     const { calls, options } = fakeGitHub([{ runs: [run(1, "push", "completed")], jobs: { 1: green() } }]);
     expect(await waitForReleaseCi(options)).toEqual({ ok: true, runId: 1, via: "commit" });
     expect(calls).toEqual([]);
+  });
+
+  it("starts its own lane when the current commit has only a non-full main plan", async () => {
+    const source = run(1, "push", "completed");
+    const lane = run(2, "workflow_dispatch", "completed", "release-ci/v0.1.94", 5);
+    const { calls, options } = fakeGitHub([
+      { runs: [source], jobs: { 1: green() }, plans: { 1: "main" } },
+      { runs: [source, lane], jobs: { 1: green(), 2: green() }, plans: { 1: "main" } },
+    ]);
+    expect(await waitForReleaseCi(options)).toEqual({ ok: true, runId: 2, via: "commit" });
+    expect(calls).toEqual(LANE);
   });
 
   it.each(["workflow_dispatch", "schedule"])("waits for a %s run that is still going, then passes", async (event) => {
@@ -439,6 +483,27 @@ describe("a runner that never came", () => {
 });
 
 describe("GitHub calls", () => {
+  it("loads the plan from the producing run and rejects a different source SHA", async () => {
+    const source = run(7, "workflow_dispatch", "completed");
+    const requests: string[] = [];
+    let plan = planFor(source);
+    const fetchImpl = async (url: string) => {
+      const path = url.replace("https://api.github.com/repos/o/r", "");
+      requests.push(path);
+      if (path.includes("/jobs?")) return Response.json({ jobs: green() });
+      if (path.includes("/artifacts?")) return Response.json({ artifacts: [{ id: 9, name: "qa-plan-attempt-1", expired: false, workflow_run: { id: 7 } }] });
+      throw new Error(path);
+    };
+    const api = githubApi({ token: "t", repository: "o/r", fetchImpl: fetchImpl as typeof fetch,
+      artifactReader: async () => ({ "qa-plan.json": JSON.stringify(plan) }) });
+    const jobs = await api.runJobs(7);
+    expect(await api.runPlan(source, jobs)).toEqual(plan);
+    plan = { ...plan, sha: OTHER };
+    await expect(api.runPlan(source, jobs)).rejects.toThrow("Missing current-run validation plan");
+    expect(requests).toEqual(["/actions/runs/7/jobs?per_page=100",
+      "/actions/runs/7/artifacts?per_page=100&page=1", "/actions/runs/7/artifacts?per_page=100&page=1"]);
+  });
+
   it("moves an existing lane branch instead of failing, and reads jobs from the latest attempt", async () => {
     const requests: string[] = [];
     const fetchImpl = async (url: string, init: { method: string; body?: string }) => {
@@ -449,7 +514,7 @@ describe("GitHub calls", () => {
     };
     const api = githubApi({ token: "t", repository: "o/r", fetchImpl: fetchImpl as typeof fetch });
     await api.pointBranch("release-ci/v1.2.3", SHA);
-    expect(judgeRun(await api.runJobs(7))).toBe("green");
+    expect(await api.runJobs(7)).toEqual(green());
     await api.dispatchCi("release-ci/v1.2.3");
     expect(requests).toEqual([
       `POST /git/refs {"ref":"refs/heads/release-ci/v1.2.3","sha":"${SHA}"}`,

@@ -334,7 +334,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-evals-attempt-${{ github.run_attempt }}
+          name: qa-results-evals-macos-latest-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7
@@ -466,7 +466,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-foss-attempt-${{ github.run_attempt }}
+          name: qa-results-foss-macos-latest-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7
@@ -615,7 +615,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: qa-results-ui-attempt-${{ github.run_attempt }}
+          name: qa-results-ui-macos-latest-attempt-${{ github.run_attempt }}
           path: qa-results/
           if-no-files-found: warn
           retention-days: 7

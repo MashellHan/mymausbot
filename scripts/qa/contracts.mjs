@@ -49,7 +49,7 @@ export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = tru
       const artifact = { "behavior-evals": "evals", foss: "foss", "ui-smoke": "ui" }[id];
       jobs.push({ id, name: id === "ui-smoke" && outputs.platform_policy ? "renderer smoke (control-omb ui, macOS)" : NAMES[id],
         ...(id === "control-plane" && outputs.platform_policy ? { broker: true } : {}),
-        ...(artifact ? { artifact: `qa-results-${artifact}` } : {}) });
+        ...(artifact ? { artifact: `qa-results-${artifact}${outputs.platform_policy ? "-macos-latest" : ""}` } : {}) });
     }
     else throw new Error(`No validation contract for selected job: ${id}`);
   }
@@ -115,16 +115,21 @@ const fullSelections = [fullSelection, moveLinuxIntoStatic(fullSelection)];
 const sameSelection = (outputs, selection) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes", "boat_static", "platform_policy"]
   .every((key) => isDeepStrictEqual(outputs[key], selection[key]));
 
-/** A push's selected jobs must prove the same full scope as the nightly run, including relocated Linux lanes. */
-export function fullPushPlan(plan) {
+/** A trusted run's selected jobs must match the complete current full selection. */
+export function fullRunPlan(plan) {
   const outputs = plan?.outputs;
-  if (plan?.version !== 1 || plan.plan?.full !== true || plan.plan?.candidate !== false
-    || plan.plan?.admitted !== false || plan.plan?.reduced !== false
-    || !isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE) || outputs?.full_required !== true || outputs.reduced !== false
+  if (plan?.version !== 1 || outputs?.full_required !== true || outputs.reduced !== false
     || !isDeepStrictEqual(outputs.qa_areas, ["global"])) return false;
   return fullSelections.some((selection) => sameSelection(outputs, selection)
     && isDeepStrictEqual(outputs.expected_jobs, expectedJobs(selection))
     && isDeepStrictEqual(outputs.required_jobs, selection.jobs.filter((id) => MERGE_JOBS.includes(id))));
+}
+
+/** A push's full selection also binds its changed-source scope. */
+export function fullPushPlan(plan) {
+  return fullRunPlan(plan) && plan.plan?.full === true && plan.plan?.candidate === false
+    && plan.plan?.admitted === false && plan.plan?.reduced === false
+    && isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE);
 }
 
 /** A bound, internally consistent narrow plan can be skipped when finding the latest full execution. */

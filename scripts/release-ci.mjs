@@ -8,13 +8,15 @@
 // the newest merge's waiting run.
 import { pathToFileURL } from "node:url";
 import { ALL_OS, FULL_LANE_EVENTS, vitestMatrix, versionOnlyPackageJson } from "./ci-scope.mjs";
+import { fullPushPlan, fullRunPlan } from "./qa/contracts.mjs";
+import { artifactFiles, pages, runPlan as trustedRunPlan } from "./qa/github.mjs";
 
 const RELEASE_EVENTS = new Set(["push", "merge_group", ...FULL_LANE_EVENTS]);
 const FULL_MATRIX = vitestMatrix(ALL_OS).include.map((entry) => `vitest (${entry.os}, ${entry.part})`);
 export const POLL_MS = 60_000;
 export const MAX_WAIT_MS = 170 * 60_000;
 
-/** @typedef {{ name: string, status?: string, conclusion: string | null, steps?: Array<{ status?: string, conclusion?: string | null }> }} Job */
+/** @typedef {{ name: string, status?: string, conclusion: string | null, run_attempt?: number, steps?: Array<{ status?: string, conclusion?: string | null }> }} Job */
 /** @typedef {{ id: number, event: string, status: string, head_branch: string, head_sha?: string, created_at: string, run_attempt?: number, head_commit?: { tree_id?: string } | null }} Run */
 
 const isVitestJob = (job) => job.name === "vitest" || job.name.startsWith("vitest (");
@@ -23,21 +25,30 @@ const neverStarted = (job) => !(job.steps ?? []).some((step) => step.conclusion 
 
 /**
  * What one finished CI run proves.
- * - "green": the gate passed and every full macOS Vitest shard ran and passed.
- * - "partial": the gate passed and every Vitest job that ran passed, but the full macOS set did not run.
+ * - "green": the gate and every job in the source-bound full selection passed.
+ * - "partial": the gate passed, but complete full-selection proof is absent.
  * - "scoped": the gate passed but vitest did not run (docs- or version-only).
  * - "runner-lost": the gate failed, and every other failed job never started.
  * - "red": the gate failed for any other reason.
  * - anything else: the gate's own conclusion, or "no gate job".
  * @param {Job[]} jobs
  */
-export function judgeRun(jobs) {
+export function judgeRun(jobs, plan, run) {
   const gate = jobs.find((job) => job.name === "CI");
   if (!gate) return "no gate job";
   if (gate.conclusion === "success") {
     const vitest = jobs.filter(isVitestJob);
     if (vitest.length === 0 || !vitest.every((job) => job.conclusion === "success")) return "scoped";
-    return FULL_MATRIX.every((name) => vitest.some((job) => job.name === name)) ? "green" : "partial";
+    if (!FULL_MATRIX.every((name) => vitest.some((job) => job.name === name))
+      || !run || !plan || !RELEASE_EVENTS.has(run.event) || !Number.isSafeInteger(run.run_attempt)
+      || plan.runId !== run.id || plan.sha !== run.head_sha || !Number.isSafeInteger(plan.attempt)
+      || plan.attempt < 1 || plan.attempt > run.run_attempt
+      || !(run.event === "push" || run.event === "merge_group" ? fullPushPlan(plan) : fullRunPlan(plan))) return "partial";
+    return plan.outputs.expected_jobs.every((item) => {
+      const matched = jobs.filter((job) => job.name === item.name);
+      return matched.length === 1 && matched[0].status === "completed" && matched[0].conclusion === "success"
+        && Number.isSafeInteger(matched[0].run_attempt) && matched[0].run_attempt >= 1 && matched[0].run_attempt <= run.run_attempt;
+    }) ? "green" : "partial";
   }
   if (gate.conclusion === "failure") {
     const failed = jobs.filter((job) => job !== gate && !["success", "skipped", "neutral"].includes(job.conclusion ?? ""));
@@ -74,7 +85,13 @@ export async function waitForReleaseCi({ api, sha, version, sleep = (ms) => new 
   const verdicts = new Map();
   const verdict = async (run) => {
     const key = `${run.id}/${run.run_attempt ?? 1}`;
-    if (!verdicts.has(key)) verdicts.set(key, judgeRun(await api.runJobs(run.id)));
+    if (!verdicts.has(key)) {
+      const jobs = await api.runJobs(run.id);
+      const mayBeFull = jobs.some((job) => job.name === "CI" && job.conclusion === "success")
+        && FULL_MATRIX.every((name) => jobs.some((job) => job.name === name && job.conclusion === "success"));
+      const plan = mayBeFull ? await api.runPlan(run, jobs) : null;
+      verdicts.set(key, judgeRun(jobs, plan, run));
+    }
     return verdicts.get(key);
   };
   const releaseRuns = (runs) => runs.filter((run) => RELEASE_EVENTS.has(run.event))
@@ -192,8 +209,8 @@ export async function waitForReleaseCi({ api, sha, version, sleep = (ms) => new 
 /** GitHub REST calls for the release job's GITHUB_TOKEN. A 5xx or a dropped
  * connection is retried after each of `retryDelaysMs`. */
 export function githubApi({ token, repository, apiUrl = "https://api.github.com", fetchImpl = fetch,
-  retryDelaysMs = [5_000, 15_000, 45_000], sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
-  const call = async (method, path, body) => {
+  retryDelaysMs = [5_000, 15_000, 45_000], sleep = (ms) => new Promise((r) => setTimeout(r, ms)), artifactReader = artifactFiles }) {
+  const call = async (method, path, body, raw = false) => {
     for (let attempt = 0; ; attempt++) {
       let response;
       try {
@@ -213,6 +230,7 @@ export function githubApi({ token, repository, apiUrl = "https://api.github.com"
         throw error;
       }
       // 204s, and the 201 a re-run answers with, carry no body.
+      if (raw) return Buffer.from(await response.arrayBuffer());
       const text = await response.text();
       return text ? JSON.parse(text) : null;
     }
@@ -230,6 +248,11 @@ export function githubApi({ token, repository, apiUrl = "https://api.github.com"
     async runJobs(runId) {
       // The jobs list is the latest attempt, so a re-run of failed jobs counts.
       return (await call("GET", `/actions/runs/${runId}/jobs?per_page=100`)).jobs;
+    },
+    async runPlan(run, jobs) {
+      const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", (path) => call("GET", path));
+      return trustedRunPlan(run, jobs, artifacts, { readArtifact: (artifact) => artifactReader(artifact,
+        (path, options = {}) => call("GET", path, undefined, options.raw)) });
     },
     async commit(sha) {
       const commit = await call("GET", `/commits/${sha}`);
