@@ -195,7 +195,16 @@ it("preserves custom pages and query edits, and only updates a removed app when 
 });
 
 it("upgrades bundled report pages without changing their retained editions or publisher grants", async () => {
+  const hashes = {
+    x_ai_digest: { previous: "01072481dd6d85afb991ca835c153f401f1a59a5844eb502dd4bd9ee69194523",
+      current: "c13dd3fa12979df58d3b6679f6a6496628c643a30a02b7119d376804324e5651" },
+    github_activity: { previous: "8d80cef615e76ccb5a8a65861c5f966a69ff430a1ad5718924aa03d1712f8cc7",
+      current: "963f24b2e95a62e725e605365ca081cb4b19a8dad6a126d137d2871cdc53d0f7" },
+  };
   for (const kind of ["x_ai_digest", "github_activity"] as const) {
+    expect(SHIPPED_TEMPLATE_SHA256[kind]).toContain(hashes[kind].previous);
+    expect(createHash("sha256").update(createReportTemplate(kind)).digest("hex")).toBe(hashes[kind].current);
+    expect(SHIPPED_TEMPLATE_SHA256[kind]).toContain(hashes[kind].current);
     const { defaults, apps, data } = fixture();
     const reports = new ReportStore(data, () => "<h1>Bundled report</h1>");
     const source = await reports.prepare("reports", kind);
@@ -214,6 +223,7 @@ it("upgrades bundled report pages without changing their retained editions or pu
     const updated = apps.document(owner, published.app.id);
     expect(updated.html).toBe(createReportTemplate(kind));
     expect(updated.bindings).toEqual(before.bindings);
+    expect(new Set(updated.versions.map((version) => version.version))).toEqual(new Set([1, 2]));
     expect((await apps.state(owner, published.app.id)).data).toEqual(dataBefore);
     const edition = await apps.query(owner, published.app.id, { queryId: "current", parameters: {}, expectedRevision: 2 });
     expect(edition.rows).toHaveLength(1);
