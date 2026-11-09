@@ -164,18 +164,19 @@ function toDevice(res: ServerResponse, data: string | Buffer, source: Readable):
   if (held) source.pause();
 }
 
-/** A JSON reply past the whole-body ceiling, scrubbed as it streams. Bytes that were never JSON go on verbatim, as a
- * small body's do; a body that stops being JSON after its start is out can only be cut off. */
+/** A JSON reply past the whole-body ceiling, scrubbed as it streams. Bytes that never began a JSON structure go on
+ * verbatim, as a small body's do; a body that stops being JSON after its start is out can only be cut off. */
 function streamScrubbedJson(harness: IncomingMessage, res: ServerResponse, held: Buffer[]): void {
   const status = harness.statusCode ?? 200;
   const scrubber = createJsonScrubber();
   const decoder = new StringDecoder("utf8");
   const head = Buffer.concat(held);
+  const prefix = decoder.write(head);
   let first: string;
   try {
-    first = scrubber.write(decoder.write(head));
+    first = scrubber.write(prefix);
   } catch (error) {
-    if (error instanceof JsonScrubLimitError) {
+    if (error instanceof JsonScrubLimitError || /^[\t\n\r ]*[{[]/.test(prefix)) {
       harness.destroy();
       sendJson(res, 502, { error: "the response from OpenMausBot exceeded the JSON scrubber limit" });
       return;

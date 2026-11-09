@@ -189,6 +189,15 @@ describe("a JSON reply past the whole-body ceiling", () => {
     expect(raw.toString("utf8")).not.toContain("private-alias");
   });
 
+  it("does not raw-forward a structured JSON reply that becomes invalid before streaming", async () => {
+    const body = Buffer.from(`{"resumeCursors":{"agent":"private-cursor"},"broken":?${"x".repeat(LOW_CEILING)}`);
+    respond = (res) => send(res, body);
+    const { status, raw, complete } = await device(ports.lan);
+    expect(status).toBe(502);
+    expect(complete).toBe(true);
+    expect(raw.toString("utf8")).not.toContain("private-cursor");
+  });
+
   it("is cut off, never finished unscrubbed, when it stops being JSON after its start went out", async () => {
     const tail = Buffer.from(' {"resumeCursors":{"agent":"late-cursor"}}');
     respond = (res) => send(res, Buffer.concat([BODY, tail]));
