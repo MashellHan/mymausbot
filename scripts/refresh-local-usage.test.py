@@ -270,6 +270,44 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         self.assertEqual(json.loads(output.read_text()), {"historyDays": 59,
             "publish": False, "skipApi": True, "reuseSources": True})
 
+    def test_token_coverage_is_independent_only_for_known_git_fetch_failures(self):
+        collector = self.root / "collector-token-coverage.py"
+        output = self.root / "token-coverage.json"
+        collector.write_text('''import json
+def run(args, timeout=35):
+    raise AssertionError("No CLI should run in this fixture")
+def aggregate(machines, prs, at, history_days=30):
+    return {"status": "partial", "sources": [{"device": m["device"], "status": m["status"]} for m in machines],
+            "daily": [{"tokenStatus": "partial", "totalTokens": 123}], "historyDays": history_days}
+def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_days=30):
+    result = aggregate(config["machines"], {}, None, history_days=history_days)
+    with open(config["result"], "w") as stream:
+        json.dump(result, stream)
+''')
+        cases = [
+            ("ok", [], "ready"),
+            ("partial", [{"source": "git-fetch", "code": "CalledProcessError"},
+                         {"source": "git-fetch", "code": "TimeoutExpired"}], "ready"),
+            ("partial", [{"source": "git-fetch"}, {"source": "codex"}], "partial"),
+            ("partial", [{"source": "tokens", "code": "NoRetainedLogs"}], "partial"),
+            ("partial", [{"source": "repositories"}], "partial"),
+            ("partial", [{"source": "unknown"}], "partial"),
+            ("partial", [], "partial"),
+            ("partial", ["git-fetch"], "partial"),
+            ("stale", [{"source": "git-fetch"}], "partial"),
+            ("missing", [], "unavailable"),
+        ]
+        machines = [{"device": str(i), "status": status, "errors": errors}
+                    for i, (status, errors, _) in enumerate(cases)]
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER], "result": str(output), "machines": machines}
+        usage.refresh(collector, config, self.root, skip_api=True, reuse_sources=True)
+        result = json.loads(output.read_text())
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["historyDays"], 59)
+        self.assertEqual(result["daily"], [{"tokenStatus": "partial", "totalTokens": 123}])
+        self.assertEqual(result["sources"], [{"device": str(i), "status": status, "tokenStatus": token_status}
+                         for i, (status, _, token_status) in enumerate(cases)])
+
     def test_remote_refresh_stays_independent_when_local_logs_fail(self):
         collector = self.root / "collector-fails.py"
         collector.write_text('''def run(args, timeout=35):
