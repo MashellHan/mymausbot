@@ -62,10 +62,10 @@ test("shared native controls reuse the renderer's catalog in the current languag
 });
 
 test("native product wording keeps user supplied names and paths intact", t => {
-  const dir = packs(t, { "en.json": { "native.title": "OpenMausBot — {server} ({folder})" } });
+  const dir = packs(t, { "en.json": { "native.title": "OpenMausBot / OpenMaus Bot — {server} ({folder})" } });
   const text = createNativeText({ dir, saved: "en" });
-  assert.equal(text.t("native.title", { server: "OpenMausBot", folder: "/data/OpenMausBot" }),
-    "mymausbot — OpenMausBot (/data/OpenMausBot)");
+  assert.equal(text.t("native.title", { server: "OpenMaus Bot", folder: "/data/OpenMausBot" }),
+    "mymausbot / mymausbot — OpenMaus Bot (/data/OpenMausBot)");
 });
 
 test("the saved language wins over the system's, \"\" follows the system again, and set says when the words change", (t) => {
@@ -123,9 +123,9 @@ test("the shipped catalog: English reads every native key, and pt-br has them al
   const pt = JSON.parse(readFileSync(path.join(LOCALES_DIR, "pt-br.json"), "utf8"));
   const keys = Object.keys(en).filter((key) => key.startsWith("native."));
   assert.ok(keys.length > 100);
-  for (const key of keys) assert.equal(englishText.t(key), en[key].replaceAll("OpenMausBot", "mymausbot"), key);
+  for (const key of keys) assert.equal(englishText.t(key), en[key].replaceAll("OpenMausBot", "mymausbot").replaceAll("OpenMaus Bot", "mymausbot"), key);
   const text = createNativeText({ saved: "pt-BR" });
-  for (const key of keys) assert.equal(text.t(key), pt[key].replaceAll("OpenMausBot", "mymausbot"), key);
+  for (const key of keys) assert.equal(text.t(key), pt[key].replaceAll("OpenMausBot", "mymausbot").replaceAll("OpenMaus Bot", "mymausbot"), key);
   assert.equal(text.t("place.local"), pt["place.local"]);
 });
 

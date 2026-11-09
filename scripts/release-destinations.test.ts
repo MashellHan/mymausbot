@@ -6,8 +6,19 @@ import { parse } from "yaml";
 import { interpolate } from "./testing/github-expression.ts";
 
 const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
+const preparation = parse(readFileSync(new URL("../.github/workflows/prepare-release.yml", import.meta.url), "utf8"));
 
 describe("desktop release destinations", () => {
+  it("keeps personal release and branch collision checks while limiting the legacy mirror check to upstream", () => {
+    const run = preparation.jobs.prepare.steps.find((step: { name?: string }) => step.name === "Refuse an existing release or release branch").run;
+    const personal = run.indexOf('gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY"');
+    const mirror = run.indexOf('if [ "$GITHUB_REPOSITORY" = milind-soni/OpenMausBot ] && gh release view "v$VERSION" --repo milind-soni/openmausbot-releases');
+    const branch = run.indexOf('git ls-remote --exit-code --heads origin "release/v$VERSION"');
+    expect(personal).toBeGreaterThanOrEqual(0);
+    expect(mirror).toBeGreaterThan(personal);
+    expect(branch).toBeGreaterThan(mirror);
+  });
+
   it.each(["MashellHan/mymausbot", "milind-soni/OpenMausBot"])("keeps legacy mirroring scoped to its owner in %s", repository => {
     const expected = repository === "milind-soni/OpenMausBot";
     const context = { github: { repository }, steps: { pin: { outputs: { should_release: "true" } } } };
