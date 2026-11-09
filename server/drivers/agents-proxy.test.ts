@@ -776,7 +776,7 @@ describe("agents-proxy MCP surface", () => {
       "session_search", "trigger_info", "list_waits", "skills_list",
     ];
     expect(list.result.tools.filter((tool: any) => tool.annotations?.readOnlyHint)
-      .map((tool: any) => tool.name)).toEqual(readNames);
+      .map((tool: any) => tool.name).sort()).toEqual([...readNames].sort());
     for (const tool of list.result.tools) {
       if (readNames.includes(tool.name)) {
         expect(tool.annotations).toEqual({
