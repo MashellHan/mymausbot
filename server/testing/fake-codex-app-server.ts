@@ -33,6 +33,7 @@
 //   FAKE_CODEX_RESUME_ERROR  JSON-RPC error rejecting thread/resume
 //   FAKE_CODEX_ARCHIVED  "1": thread/resume says the session is archived until thread/unarchive; "unarchive-fails": unarchive is refused too
 //   FAKE_CODEX_STARTUP_DELAY_MS  hold the initialize reply this long, like a loaded host
+//   FAKE_CODEX_INITIALIZE_GATE  hold the initialize reply until this fixture file exists
 //   FAKE_CODEX_STARTUP_LOG  append {pid, at, event: "initialize" | "turn/start"} per launch
 //   FAKE_CODEX_START_ERROR  JSON-RPC error rejecting thread/start
 //   FAKE_CODEX_MCP_FAILED  MCP server whose startup fails (`mcpServer/startupStatus/updated`) as thread/start begins
@@ -472,7 +473,8 @@ process.stdin.on("data", (chunk) => {
         experimentalApi = msg.params?.capabilities?.experimentalApi === true;
         logStartup("initialize");
         const reply = () => out({ jsonrpc: "2.0", id: msg.id, result: { ok: true, userAgent: process.env.FAKE_CODEX_USER_AGENT ?? "codex_cli_rs/0.166.0" } });
-        if (process.env.FAKE_CODEX_STARTUP_DELAY_MS) setTimeout(reply, Number(process.env.FAKE_CODEX_STARTUP_DELAY_MS));
+        if (process.env.FAKE_CODEX_INITIALIZE_GATE) void waitForGate(process.env.FAKE_CODEX_INITIALIZE_GATE, 30_000).then(reply);
+        else if (process.env.FAKE_CODEX_STARTUP_DELAY_MS) setTimeout(reply, Number(process.env.FAKE_CODEX_STARTUP_DELAY_MS));
         else reply();
         break;
       }

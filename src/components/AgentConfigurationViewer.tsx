@@ -10,12 +10,12 @@ import { t } from "@/lib/i18n";
 import { api, ApiError } from "@/state/store";
 
 export type AgentConfigurationTarget =
-  | { kind: "member"; teamId: string; agentId: string; name: string }
+  | { kind: "member"; teamId: string; agentId: string; occupantId: string | null; name: string }
   | { kind: "team"; teamId: string; name: string };
 
 const empty = (status: LocalAgentConfigurationDocument["status"]): LocalAgentConfigurationDocument => ({ status, markdown: null });
 const failure = (error: unknown) => empty(error instanceof ApiError && (error.status === 401 || error.status === 403) ? "unavailable" : "error");
-const read = <T,>(path: string, signal: AbortSignal) => api<T>(path, { background: true, signal, timeoutMs: 10_000 });
+const read = <T,>(path: string, signal: AbortSignal, timeoutMs = 10_000) => api<T>(path, { background: true, signal, timeoutMs });
 const plainUrl = (url: string) => url;
 const markdownComponents: Components = {
   a({ children, href }) { return <span>{children}{href && children !== href && <span className="text-ink-tertiary"> ({href})</span>}</span>; },
@@ -28,7 +28,7 @@ const statusKey = {
   unavailable: "computer.agentTeam.config.unavailable",
 } as const;
 
-function DocumentView({ document, onRetry }: { document: LocalAgentConfigurationDocument | null; onRetry?: () => void }) {
+function DocumentView({ document, onRetry, member = false }: { document: LocalAgentConfigurationDocument | null; onRetry?: () => void; member?: boolean }) {
   if (!document) return <p role="status" className="text-[13px] text-ink-secondary">{t("computer.agentTeam.config.loading")}</p>;
   if (document.status === "ready" && document.markdown !== null) return <div dir="auto" data-testid="agent-config-markdown"
     className="min-w-0 text-[13px] leading-5 text-ink [overflow-wrap:anywhere] [&_h1]:mb-2 [&_h1]:text-[18px] [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-[16px] [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:font-semibold [&_p+p]:mt-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:ps-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:ps-5 [&_pre]:my-2 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-inset [&_pre]:p-3 [&_code]:text-[12px] [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto">
@@ -36,7 +36,7 @@ function DocumentView({ document, onRetry }: { document: LocalAgentConfiguration
   </div>;
   const status = document.status === "ready" ? "error" : document.status;
   return <div role="status" className="rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">
-    <p>{t(statusKey[status])}</p>
+    <p>{t(status === "unverified" && member ? "computer.agentTeam.config.memberUnverified" : statusKey[status])}</p>
     {status === "error" && onRetry && <button type="button" onClick={onRetry}
       className="mt-2 rounded-md px-2 py-1 font-medium text-accent-text hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">
       {t("computer.agentTeam.config.retry")}
@@ -73,10 +73,16 @@ export function AgentConfigurationViewer({ target, onClose, onRulesRead, fallbac
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); close(); return; }
       if (event.key !== "Tab") return;
-      const buttons = [...(dialogRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
-      if (!buttons.length) { event.preventDefault(); dialogRef.current?.focus(); return; }
-      if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons.at(-1)?.focus(); }
-      else if (!event.shiftKey && document.activeElement === buttons.at(-1)) { event.preventDefault(); buttons[0]?.focus(); }
+      const dialog = dialogRef.current;
+      const tabbables = [...(dialog?.querySelectorAll<HTMLElement>("button:not(:disabled), [tabindex]") ?? [])]
+        .filter((element) => element.tabIndex >= 0 && !element.hidden && !element.closest("[hidden], [inert]"));
+      if (!tabbables.length) { event.preventDefault(); dialog?.focus(); return; }
+      const focused = document.activeElement;
+      if (!dialog?.contains(focused) || focused === dialog ||
+          (event.shiftKey && focused === tabbables[0]) || (!event.shiftKey && focused === tabbables.at(-1))) {
+        event.preventDefault();
+        (event.shiftKey ? tabbables.at(-1) : tabbables[0])?.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => {
@@ -92,10 +98,11 @@ export function AgentConfigurationViewer({ target, onClose, onRulesRead, fallbac
     setConfiguration(null);
     setConfigurationProblem(null);
     setSkillId(null);
-    void read<LocalAgentConfigurationResponse>(`/api/local-dashboard/agents/${encodeURIComponent(target.agentId)}/configuration`, controller.signal)
+    if (!target.occupantId) { setConfigurationProblem(empty("unverified")); return () => controller.abort(); }
+    void read<LocalAgentConfigurationResponse>(`/api/local-dashboard/agents/${encodeURIComponent(target.agentId)}/configuration`, controller.signal, 12_000)
       .then((result) => {
         if (!active) return;
-        if (result.agentId !== target.agentId || result.teamId !== target.teamId) setConfigurationProblem(empty("unavailable"));
+        if (result.agentId !== target.agentId || result.teamId !== target.teamId || result.occupantId !== target.occupantId) setConfigurationProblem(empty("unavailable"));
         else setConfiguration(result);
       }).catch((error) => { if (active && !controller.signal.aborted) setConfigurationProblem(failure(error)); });
     return () => { active = false; controller.abort(); };
@@ -111,7 +118,7 @@ export function AgentConfigurationViewer({ target, onClose, onRulesRead, fallbac
       .then((result) => {
         if (!active) return;
         const same = result.agentId === target.agentId && result.teamId === target.teamId
-          && result.occupantId === configuration.occupantId && result.skillId === selectedSkill.id;
+          && result.occupantId === configuration.occupantId && result.occupantId === target.occupantId && result.skillId === selectedSkill.id;
         setSkillState({ id: selectedSkill.id, document: same ? result : empty("unavailable") });
       }).catch((error) => {
         if (active && !controller.signal.aborted) setSkillState({ id: selectedSkill.id, document: failure(error) });
@@ -167,9 +174,9 @@ export function AgentConfigurationViewer({ target, onClose, onRulesRead, fallbac
           {t(next === "agent" ? "computer.agentTeam.config.agent" : "computer.agentTeam.config.skills")}
         </button>)}
       </div>}
-      <div id={`${id}-panel`} role={member ? "tabpanel" : undefined} aria-labelledby={member ? `${id}-${tab}` : undefined}
-        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
-        {member && tab === "skills" ? !configuration ? <DocumentView document={configurationProblem} onRetry={() => setConfigurationAttempt((attempt) => attempt + 1)} />
+      <div id={`${id}-panel`} role={member ? "tabpanel" : "region"} aria-labelledby={member ? `${id}-${tab}` : `${id}-title`} tabIndex={0}
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px]">
+        {member && tab === "skills" ? !configuration ? <DocumentView document={configurationProblem} member onRetry={() => setConfigurationAttempt((attempt) => attempt + 1)} />
           : selectedSkill ? <>
             <button type="button" onClick={() => { setSkillId(null); setSkillState(null); }}
               className="mb-3 inline-flex items-center gap-1 rounded-md py-1 text-[12px] font-medium text-ink-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">
@@ -181,16 +188,24 @@ export function AgentConfigurationViewer({ target, onClose, onRulesRead, fallbac
               onRetry={() => setSkillAttempt((attempt) => attempt + 1)} />
           </> : <>
             {configuration.skillReferences === "unverified" && <p role="status" className="mb-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.config.associationsUnverified")}</p>}
+            {configuration.skillDiscovery !== "ready" && <p role="status" className="mb-3 text-[12px] text-ink-secondary">{t(configuration.skillDiscovery === "partial" ? "computer.agentTeam.config.discoveryPartial"
+              : configuration.skillDiscovery === "timeout" ? "computer.agentTeam.config.discoveryTimeout"
+                : configuration.skillDiscovery === "unavailable" ? "computer.agentTeam.config.discoveryUnavailable" : "computer.agentTeam.config.discoveryError")}</p>}
             {configuration.skills.length ? <ul className="space-y-2">
               {configuration.skills.map((skill) => <li key={skill.id}><button type="button" onClick={() => setSkillId(skill.id)}
                 className="flex w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-hairline/50 bg-inset px-3 py-2.5 text-left hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">
                 <span className="min-w-0 [overflow-wrap:anywhere]"><span className="block text-[13px] font-medium text-ink">{skill.name}</span>
-                  <span className="block text-[11px] text-ink-secondary">{t(skill.association === "agent" ? "computer.agentTeam.config.agentAssociation" : "computer.agentTeam.config.teamAssociation")}</span></span>
+                  <span className="block text-[11px] text-ink-secondary">{t(skill.association === "agent" ? "computer.agentTeam.config.agentAssociation"
+                    : skill.association === "team" ? "computer.agentTeam.config.teamAssociation" : "computer.agentTeam.config.codexAssociation")}
+                    {skill.codexAvailable && skill.association !== "codex" ? ` · ${t("computer.agentTeam.config.codexAvailable")}` : ""}</span></span>
                 <span className="shrink-0 text-right text-[11px] text-ink-secondary">{t("computer.agentTeam.config.loadedUnknown")}</span>
               </button></li>)}
-            </ul> : <p role="status" className="text-[13px] text-ink-secondary">{t("computer.agentTeam.config.noSkills")}</p>}
+            </ul> : configuration.skillReferences === "verified" && configuration.skillDiscovery === "ready"
+              ? <p role="status" className="text-[13px] text-ink-secondary">{t("computer.agentTeam.config.noSkills")}</p> : null}
           </>
-          : <DocumentView document={shownDocument ?? null} onRetry={retry} />}
+          : <>{shownDocument?.status === "ready" && <p className="mb-3 text-[11px] text-ink-secondary">{t(member
+            ? "computer.agentTeam.config.agentSource" : "computer.agentTeam.config.teamSource")}</p>}
+            <DocumentView document={shownDocument ?? null} member={member} onRetry={retry} /></>}
       </div>
     </aside>
   </div>, document.body);

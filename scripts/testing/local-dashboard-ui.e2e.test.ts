@@ -89,7 +89,9 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
     const response = await fetch(new URL("/__agent-team-update", agents), { method: "POST" });
     expect(response.ok).toBe(true);
     await expect.poll(() => read<string>("document.querySelector('[data-testid=selected-agent-team]').textContent"), { timeout: 10_000 }).toContain("Only the newest synthetic instruction");
-    expect(await read("({ top: document.querySelector('[data-testid=agent-team-panel]').scrollTop, selected: document.activeElement?.dataset.teamHouse })")).toEqual(before);
+    const after = await read<{ top: number; max: number; selected: string }>("(() => { const panel = document.querySelector('[data-testid=agent-team-panel]'); return { top: panel.scrollTop, max: panel.scrollHeight - panel.clientHeight, selected: document.activeElement?.dataset.teamHouse }; })()");
+    expect(after.selected).toBe(before.selected);
+    expect(Math.abs(after.top - Math.min(before.top, after.max))).toBeLessThanOrEqual(1);
     await read("document.querySelectorAll('[data-team-house]')[1].click()");
     await expect.poll(() => read<string>("document.querySelector('[data-testid=selected-agent-team]').textContent")).toContain("Lark");
     expect(await read<string>("document.querySelector('[data-testid=selected-agent-team]').textContent")).not.toContain("Only the newest synthetic instruction");

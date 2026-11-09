@@ -239,7 +239,9 @@ describe("the height a bot page reports", () => {
 
   it("settles when the layer covers the window only once the frame is small", async () => {
     const toolbar = { position: "absolute", width: "window", height: 44 } as const;
-    expect(await settled(boot(true, { scene: { flow: flow(0), under: [toolbar] } }))).toEqual([48, 520]);
+    const page = boot(true, { scene: { flow: flow(0), under: [toolbar] } });
+    await expect.poll(() => page.seen.heights).toEqual([48, 520]);
+    expect(await settled(page)).toEqual([48, 520]);
   });
 
   it("settles when the flow is sized from the window", async () => {

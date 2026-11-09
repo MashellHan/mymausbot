@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
 import { createLocalUsageProvider } from "./local-usage.ts";
-import { localUsageView } from "../src/lib/local-usage-view.ts";
+import { withGithubUsageFixture } from "../scripts/testing/merged-usage-fixture.ts";
+import { localUsageView, profileUsageView } from "../src/lib/local-usage-view.ts";
 import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 
 const folders: string[] = [];
@@ -68,6 +69,29 @@ async function historyFixture(asOf: number) {
 }
 
 describe("local Usage projection", () => {
+  it("carries observed repository comparisons through the actual provider without mixing Profile or earlier definitions", async () => {
+    const asOf = Date.parse("2026-11-09T08:00:00Z");
+    const { file } = await historyFixture(asOf);
+    const response = await createLocalUsageProvider({ file, githubFile: join(file, "..", "absent-profile.json"), mergedFile: join(file, "..", "absent-merged.json"), now: () => asOf }).get();
+    const snapshot = withGithubUsageFixture(response);
+    for (const window of Object.values(snapshot.github!.windows!)) {
+      window.knownPrs = 444; window.knownCommits = 888;
+      window.repositories.rows = [];
+    }
+    const view = localUsageView(snapshot);
+    for (const key of ["1", "7", "30"] as const) {
+      expect(view.windows![key]).toMatchObject(response.windows![key]);
+      expect(view.windows![key].repositories.rows[0]!.name).toBe("github.com/example/sample");
+      expect(view.windows![key].comparison.prs).not.toBeNull();
+      expect(view.windows![key].comparison.commits).not.toBeNull();
+      expect(profileUsageView(snapshot).windows![key]).toMatchObject({ prs: null, commits: null, knownPrs: 444, knownCommits: 888,
+        comparison: { prs: null, commits: null } });
+    }
+    expect(view.trend.at(-1)).toMatchObject({ prs: 4, commits: 8, wow: { prs: 300, commits: 300 } });
+    expect(view.windows!["30"].comparison.startDay).toBe("2026-09-11");
+    expect(localUsageView({ ...snapshot, github: undefined })).toEqual(view);
+  });
+
   it.each(["ready", "partial"] as const)("retains %s token history through unavailable baseline and recent rows without changing short windows", async (tokenStatus) => {
     const asOf = Date.parse("2026-11-09T08:00:00Z");
     const { file, snapshot } = await historyFixture(asOf);

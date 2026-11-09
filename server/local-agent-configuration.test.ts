@@ -8,6 +8,7 @@ import { createLocalAgentConfigurationProvider } from "./local-agent-configurati
 
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await removeTempDir(folder); });
+const noDiscovery = async () => ({ status: "ready" as const, skills: [] });
 
 async function fixture() {
   const home = await mkdtemp(join(tmpdir(), "mausbot-agent-config-"));
@@ -53,7 +54,7 @@ async function fixture() {
 describe("verified local Agent Team configuration", () => {
   it("binds the real role and multiple declared skills without claiming session loading", async () => {
     const data = await fixture();
-    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run });
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
     const design = await provider.getAgent("w6:p2");
     expect(design).toMatchObject({ agentId: "w6:p2", teamId: "w6", agent: { status: "ready", markdown: expect.stringContaining("# Agent design rules") },
       skillReferences: "verified", skills: [
@@ -72,9 +73,20 @@ describe("verified local Agent Team configuration", () => {
     expect(temporary.skills.map((skill) => skill.name)).toEqual(["github-accounts", "herdr"]);
   });
 
+  it("keeps verified role and declared skills when optional Codex discovery times out", async () => {
+    const data = await fixture();
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run,
+      discoverSkills: async () => ({ status: "timeout", skills: [] }) });
+    const result = await provider.getAgent("w6:p2");
+    expect(result).toMatchObject({ agent: { status: "ready", markdown: expect.stringContaining("# Agent design rules") },
+      skillReferences: "verified", skillDiscovery: "timeout" });
+    expect(result.skills.map((skill) => skill.name)).toEqual(["github-accounts", "herdr", "impeccable"]);
+    expect((await provider.getSkill("w6:p2", result.skills[2]!.id)).status).toBe("ready");
+  });
+
   it("uses the exact Mini Apps playbook and role links, then distinguishes absent and failed reads", async () => {
     const data = await fixture();
-    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run });
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
     const design = await provider.getAgent("w8:p4");
     expect(design.agent).toEqual({ status: "ready", markdown: expect.stringContaining("miniapp-design") });
     expect(design.skills.map((skill) => [skill.name, skill.loadedState])).toEqual([
@@ -97,7 +109,7 @@ describe("verified local Agent Team configuration", () => {
 
   it("reports missing and unreadable SKILL.md, and rejects role and skill symlink escapes", async () => {
     const data = await fixture();
-    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run });
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
     const design = await provider.getAgent("w8:p4");
     const hallmark = design.skills.find((skill) => skill.name === "hallmark")!;
     const path = data.skill(".agents", "hallmark");
@@ -121,6 +133,27 @@ describe("verified local Agent Team configuration", () => {
     expect((await provider.getAgent("w8:p4")).agent.status).toBe("unverified");
   });
 
+  it("rejects skill-root redirects into sibling private directories under home and cwd", async () => {
+    const data = await fixture();
+    const homeRoot = join(data.home, ".codex/skills");
+    const homeSibling = join(data.home, "workspace/department-b/private-skills");
+    await data.put(join(homeSibling, "impeccable/SKILL.md"), "# private home sibling");
+    await rm(homeRoot, { recursive: true });
+    await symlink(homeSibling, homeRoot);
+    const cwdRoot = join(data.repo, ".agents/skills");
+    const cwdSibling = join(data.repo, "department-b/private-skills");
+    await data.put(join(cwdSibling, "review/SKILL.md"), "# private cwd sibling");
+    await symlink(cwdSibling, cwdRoot);
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run,
+      discoverSkills: async () => ({ status: "ready", skills: [{ name: "review", path: join(cwdRoot, "review/SKILL.md") }] }) });
+    const result = await provider.getAgent("w6:p2");
+    for (const name of ["impeccable", "review"]) {
+      const skill = result.skills.find((item) => item.name === name)!;
+      expect((await provider.getSkill("w6:p2", skill.id)).status).toBe("error");
+    }
+    expect(JSON.stringify(result)).not.toMatch(/private home sibling|private cwd sibling/);
+  });
+
   it("revalidates the live occupant for opaque skill handles and binds concurrent results to their own identity", async () => {
     const data = await fixture();
     let reads = 0;
@@ -140,7 +173,7 @@ describe("verified local Agent Team configuration", () => {
       }
       return run(args);
     };
-    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: delayedRun });
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: delayedRun, discoverSkills: noDiscovery });
     const firstRead = provider.getAgent("w8:p4");
     await firstStarted;
     const second = await provider.getAgent("w8:p4");
@@ -155,5 +188,59 @@ describe("verified local Agent Team configuration", () => {
     expect(switched.occupantId).not.toBe(second.occupantId);
     expect((await provider.getAgent("w8:p4/../p1")).agent.status).toBe("unavailable");
     expect((await provider.getTeamRules("../w8")).status).toBe("unavailable");
+  });
+
+  it("binds an external Herdr team record to the live pane and keeps Codex discovery separate from session loading", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-safety-config-"));
+    folders.push(home);
+    const project = join(home, "workspace/m365-mobile-analysis");
+    const team = join(home, "workspace/.agents/teams/copilot-safety");
+    const put = async (path: string, value: string) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, value); };
+    const metadata = join(team, "session.json");
+    const playbook = join(team, "playbook.md");
+    const desktop = join(home, ".codex/skills/agent-desktop/SKILL.md");
+    const herdr = join(home, ".agents/skills/herdr/SKILL.md");
+    await put(join(project, "AGENTS.md"), "# Project instructions without a team playbook marker");
+    await put(metadata, JSON.stringify({ workspace_id: "w7", herdr_session: "default", project_root: project,
+      members: [{ pane_id: "w7:p1", agent_name: "safety-lead", agent_session_id: "session-one", role: "leader" }] }));
+    await put(playbook, "# Exact Copilot Safety playbook");
+    await put(join(team, "README.md"), "| Lead | safety-lead | astra | max | [leader](roles/leader.md) |");
+    await put(join(team, "roles/leader.md"), "# Verified Safety Lead role");
+    await put(desktop, "# Actual agent-desktop SKILL.md");
+    await put(herdr, "# Actual herdr SKILL.md");
+    let session = "session-one";
+    const run = async (args: readonly string[]) => JSON.stringify({ result: args.at(-2) === "workspace"
+      ? { workspaces: [{ workspace_id: "w7", label: "Copilot Safety" }] }
+      : { agents: [{ workspace_id: "w7", pane_id: "w7:p1", name: "safety-lead", cwd: project, agent: "codex",
+        agent_session: { source: "herdr:codex", value: session } }] } });
+    const provider = createLocalAgentConfigurationProvider({ home, run, discoverSkills: async (cwd) => {
+      expect(cwd).toBe(project);
+      return { status: "ready", skills: [{ name: "agent-desktop", path: desktop }, { name: "herdr", path: herdr }] };
+    } });
+    const first = await provider.getAgent("w7:p1");
+    expect(first).toMatchObject({ agent: { status: "ready", markdown: "# Verified Safety Lead role" },
+      skillReferences: "verified", skillDiscovery: "ready", skills: [
+        { name: "agent-desktop", association: "codex", codexAvailable: true, loadedState: "unknown" },
+        { name: "herdr", association: "codex", codexAvailable: true, loadedState: "unknown" },
+      ] });
+    expect((await provider.getTeamRules("w7")).markdown).toBe("# Exact Copilot Safety playbook");
+    expect((await provider.getSkill("w7:p1", first.skills[0]!.id)).markdown).toBe("# Actual agent-desktop SKILL.md");
+    await unlink(playbook);
+    expect((await provider.getTeamRules("w7")).status).toBe("missing");
+    session = "session-two";
+    const replaced = await provider.getAgent("w7:p1");
+    expect(replaced.agent.status).toBe("unverified");
+    expect(replaced.skillDiscovery).toBe("ready");
+    expect(replaced.occupantId).not.toBe(first.occupantId);
+    expect((await provider.getSkill("w7:p1", first.skills[0]!.id)).status).toBe("unavailable");
+    await unlink(metadata);
+    await symlink(join(home, "outside.json"), metadata);
+    expect((await provider.getTeamRules("w7")).status).toBe("error");
+    const escaped = await mkdtemp(join(tmpdir(), "mausbot-escaped-team-"));
+    folders.push(escaped);
+    const teamsRoot = join(home, "workspace/.agents/teams");
+    await rm(teamsRoot, { recursive: true });
+    await symlink(escaped, teamsRoot);
+    expect((await provider.getTeamRules("w7")).status).toBe("error");
   });
 });

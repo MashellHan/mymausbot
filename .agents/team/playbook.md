@@ -244,7 +244,7 @@ lint and source guards, then runs the 26-file security/data/dispatch core and
 at most four portable affected files. Record deferred affected files, including
 expensive browser and Electron tests. The `ci:full`, `qa:repair` and `windows`
 labels request full macOS checks; `windows` is a legacy request name and
-selects no Windows test runner. Full validation uses four macOS all-E2E shards
+selects no Windows test runner. Full validation uses eight macOS all-E2E shards
 and macOS specialist jobs, collecting portable contracts previously covered on
 Ubuntu. Windows/Ubuntu full tests and platform smokes are retired; platform
 build/resource/signing/publication integrity checks retain their own boundaries.

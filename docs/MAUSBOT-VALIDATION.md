@@ -108,11 +108,11 @@ does not silently turn a failed test into a skip.
 | --- | --- |
 | Ordinary PR | One Ubuntu fast path and the current-head `CI` gate; first attempt includes queue time in its five-minute target |
 | Explicit `ci:full`, `qa:repair` or `windows` label | Full macOS validation; the legacy `windows` label selects no Windows test runner; holds and review still apply |
-| Main integration, daily 05:00 full QA, release | Four macOS all-E2E shards and macOS specialist checks in their applicable lanes; platform builds/publication retain their own required checks |
+| Main integration, daily 05:00 full QA, release | Eight macOS all-E2E shards and macOS specialist checks in their applicable lanes; platform builds/publication retain their own required checks |
 | Missing or unreadable controls; applicable P0 or P1 hold | Fail closed or hold the affected merge; do not manufacture a green gate |
 | Stale full QA report without an applicable hold | Request shared recovery and restrict optional broader-lane reduction; ordinary fast PR selection remains available |
 
-Full Vitest selection uses four macOS shards with `OMB_VITEST_E2E=all`,
+Full Vitest selection uses eight macOS shards with `OMB_VITEST_E2E=all`,
 including portable contracts previously collected only on Ubuntu. Windows and
 Ubuntu full tests and platform smokes are retired. Each full plan/report records
 the platform policy; its actual selected jobs and complete execution determine
@@ -190,7 +190,7 @@ cancellation. A clock alone is never a disposition reason.
 
 The existing CI full lane runs on pinned main once daily at **05:00
 Asia/Shanghai** (`0 21 * * *` UTC), including unchanged source. It uses the
-complete macOS selection, with four all-E2E shards and specialist jobs. PR pushes
+complete macOS selection, with eight all-E2E shards and specialist jobs. PR pushes
 cannot cancel it. Root `pnpm test` alone is not a full QA run.
 
 `qa-report.yml` executes trusted main code with issue-write permission, separate

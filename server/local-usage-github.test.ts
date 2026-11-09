@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createLocalUsageGithubReader } from "./local-usage-github.ts";
 import { createLocalUsageProvider } from "./local-usage.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
-import { localUsageView } from "../src/lib/local-usage-view.ts";
+import { localUsageView, profileUsageView } from "../src/lib/local-usage-view.ts";
 import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 
 const now = Date.parse("2026-11-09T08:24:11Z");
@@ -49,15 +49,15 @@ describe("GitHub Profile source contract", () => {
     expect(source.windows).toEqual(baseline!.windows);
     expect(source.trend).toEqual(baseline!.trend);
     expect(source.history!.slice(-30)).toEqual(source.trend);
-    const short = localUsageView(snapshot);
+    const short = profileUsageView(snapshot);
     for (const range of ["60", "90", "6m"] as const) {
-      const view = localUsageView(snapshot, range);
+      const view = profileUsageView(snapshot, range);
       expect(view.windows).toEqual(short.windows);
       expect(view.trend.find((row) => row.day === "2026-09-20")).toMatchObject({ coverage: "partial", knownPrs: 0, knownCommits: 0 });
       expect(view.trend.find((row) => row.day === "2026-09-21")).toMatchObject({ coverage: "unavailable", knownPrs: null, knownCommits: null });
       expect(view.trend.at(-1)).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 100, totalTokens: null });
     }
-    const months = localUsageView(snapshot, "6m");
+    const months = profileUsageView(snapshot, "6m");
     expect(months.period).toEqual({ startDay: "2026-05-10", endDay: "2026-11-09", days: 184 });
     expect(months.trend.find((row) => row.day === "2026-08-01")).toMatchObject({ knownPrs: 2, knownCommits: 3, totalTokens: null });
     expect(months.trend[0]).toMatchObject({ coverage: "unavailable", knownPrs: null, knownCommits: null });
@@ -94,13 +94,51 @@ describe("GitHub Profile source contract", () => {
         categories: { work: counts, personal: { ...counts, input: 0, output: 0, newTokens: 0, cacheRead: 0 }, unclassified: { ...counts, input: 0, output: 0, newTokens: 0, cacheRead: 0 } } }] }));
     const provider = createLocalUsageProvider({ file: local, mergedFile: join(file, "..", "absent.json"), githubFile: file, now: () => now });
     const response = await provider.get();
-    const view = localUsageView(response);
+    const view = profileUsageView(response);
     expect(view.windows!["1"]).toMatchObject({ knownPrs: 1, knownCommits: 100, commits: null, totalTokens: 30 });
     expect(view.trend.at(-1)).toMatchObject({ knownPrs: 1, knownCommits: 100, totalTokens: 30 });
     expect(response.windows!["1"].commits).toBe(2997);
+    expect(localUsageView(response).windows!["1"]).toMatchObject({ commits: 2997, knownCommits: 2997, totalTokens: 30 });
+    expect(localUsageView(response).metricDefinition).toBe("repository-observations-v1");
     const onlyGithub = await createLocalUsageProvider({ file: join(file, "..", "no-local.json"), githubFile: file,
       mergedFile: join(file, "..", "no-merged.json"), now: () => now }).get();
-    expect(localUsageView(onlyGithub).windows!["1"]).toMatchObject({ knownPrs: 1, totalTokens: null });
+    expect(profileUsageView(onlyGithub).windows!["1"]).toMatchObject({ knownPrs: 1, totalTokens: null });
+  });
+
+  it("exposes per-account query totals independently and preserves unknown metadata on older snapshots", async () => {
+    const { file, raw, read } = await fixture();
+    const result = await read();
+    expect(result!.accounts).toEqual([expect.objectContaining({ host: "github.com", apiStatus: "ready", contributions: 119,
+      commits: 107, rawPrs: 2, restricted: 0, outsideWindowPrs: 0,
+      startAt: Date.parse("2026-11-02T00:00:00Z"), endAt: now })]);
+    expect(result!.windows!["7"]).toMatchObject({ prs: null, commits: null, knownPrs: 2, knownCommits: 107, coverage: "partial" });
+    delete raw.sources[0].collectionTotals;
+    delete raw.sources[0].outsideWindowPrs;
+    await writeFile(file, JSON.stringify(raw));
+    expect((await read())!.accounts![0]).toMatchObject({ contributions: null, commits: null, rawPrs: null, outsideWindowPrs: null });
+    for (const invalid of [true, -1, "119"]) {
+      const changed = structuredClone(raw);
+      changed.sources[0].collectionTotals = { contributions: invalid, commits: 107, rawPrs: 2 };
+      await writeFile(file, JSON.stringify(changed));
+      expect(await createLocalUsageGithubReader(file, () => now)()).toBeUndefined();
+    }
+  });
+
+  it("retains every configured empty API source as partial coverage rather than certifying private zeros", async () => {
+    const { file, raw, read } = await fixture();
+    const source = raw.sources[0];
+    for (const letter of ["a", "b", "c"]) {
+      const empty = structuredClone(source);
+      Object.assign(empty, { id: letter.repeat(64), account: letter.repeat(64), host: `${letter}.ghe.com`, collectionTotals: { contributions: 0, commits: 0, rawPrs: 0 } });
+      for (const day of empty.days) Object.assign(day, { rawPrs: 0, excludedForkPrs: 0, knownPrs: 0, profilePrs: 0, profileCommits: 0, repositories: [] });
+      raw.sources.push(empty); raw.activeSourceIds.push(empty.id);
+    }
+    await writeFile(file, JSON.stringify(raw));
+    const result = await read();
+    expect(result!.accounts).toHaveLength(4);
+    expect(result!.accounts!.slice(1).every(account => account.apiStatus === "ready" && account.contributions === 0)).toBe(true);
+    expect(result).toMatchObject({ status: "partial", sourceCoverage: { total: 4, ready: 4 }, windows: { "7": {
+      coverage: "partial", prs: null, commits: null, knownPrs: 2, knownCommits: 107, comparison: { prs: null, commits: null } } } });
   });
 
   it("rejects malformed or mixed definitions and preserves only an already observed stream as stale", async () => {

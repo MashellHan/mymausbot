@@ -3,13 +3,14 @@ import { useId, useState } from "react";
 import type { UsageTrendDay, UsageWindow } from "@/lib/local-usage-view";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
-import { metricText, UsageCount, UsageChange, usageMetrics, usageMetricHint } from "./LocalUsageValues";
+import { metricText, UsageCount, UsageChange, usageMetrics, useUsageMetricHint } from "./LocalUsageValues";
 import { InfoHint } from "./InfoHint";
 
 const tableRegion = "overflow-x-auto rounded-lg border border-hairline/60 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60";
 const previousWeekDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) - 7 * 86_400_000).toISOString().slice(0, 10);
 
 export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
+  const usageMetricHint = useUsageMetricHint();
   return <details className="group mt-4" data-usage-daily>
     <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg py-2 text-[14px] font-medium text-ink outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
       <ChevronRight size={16} className="shrink-0 transition-transform group-open:rotate-90" aria-hidden="true" />
@@ -45,6 +46,7 @@ const periods = ["1", "7", "30"] as const;
 type Period = typeof periods[number];
 
 export function UsageRepositoryTable({ windows }: { windows: Record<Period, UsageWindow> }) {
+  const usageMetricHint = useUsageMetricHint();
   const [period, setPeriod] = useState<Period>("1");
   const id = useId();
   const window = windows[period];

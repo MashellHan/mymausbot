@@ -87,11 +87,11 @@ const mainLane = () => ({ jobs: MAIN_JOBS, build: true, vitest_os: MAIN, package
   vitest_matrix: vitestMatrix(MAIN), platform_policy: PLATFORM_POLICY });
 
 describe("vitest matrix", () => {
-  it("gives the full lane four macOS all-E2E shards and keeps ordinary Ubuntu subset support", () => {
+  it("gives the full lane eight macOS all-E2E shards and keeps ordinary Ubuntu subset support", () => {
     const { include } = vitestMatrix(ALL);
     const count = (os: string) => include.filter((entry) => entry.os === os).length;
-    expect([count("ubuntu-latest"), count("windows-latest"), count("macos-latest")]).toEqual([0, 0, 4]);
-    expect(include[0]).toEqual({ os: "macos-latest", part: "all shard 1/4", shard: 1, shards: 4, files: "", e2e: "all", node_tests: true, workers: 1 });
+    expect([count("ubuntu-latest"), count("windows-latest"), count("macos-latest")]).toEqual([0, 0, 8]);
+    expect(include[0]).toEqual({ os: "macos-latest", part: "all shard 1/8", shard: 1, shards: 8, files: "", e2e: "all", node_tests: true, workers: 1 });
     expect(include.filter((entry) => entry.node_tests).map((entry) => [entry.os, entry.shard]))
       .toEqual([["macos-latest", 1]]);
     expect(include.every((entry) => entry.e2e === "all")).toBe(true);
@@ -345,14 +345,14 @@ describe("CI outputs", () => {
 
   it("puts all portable and host E2E files in macOS full shards", () => {
     const shards = ciOutputs({ checks: ["host-tests"] }, ALL).vitest_matrix.include;
-    expect(shards).toHaveLength(4);
+    expect(shards).toHaveLength(8);
     expect(shards.every((entry: { os: string; e2e: string }) => entry.os === "macos-latest" && entry.e2e === "all")).toBe(true);
   });
 
   it("runs the macOS full shards and applicable specialist jobs for main", () => {
     const out = ciOutputs(MAIN_SCOPE, MAIN);
     expect(out).toEqual(mainLane());
-    expect(out.vitest_matrix.include.map((entry: { os: string }) => entry.os)).toEqual(Array(4).fill("macos-latest"));
+    expect(out.vitest_matrix.include.map((entry: { os: string }) => entry.os)).toEqual(Array(8).fill("macos-latest"));
     expect(out.packaged_server_os).toEqual([]);
     for (const job of ["windows-cua", "package-linux", "browser-driver", "cloudflared-linux-arm64"]) expect(out.jobs, job).not.toContain(job);
     expect(MAIN_SCOPE.checks.every((check) => FULL_SCOPE.checks.includes(check))).toBe(true);
@@ -625,7 +625,7 @@ describe("CI scope CLI", () => {
       expect(output).toEqual(ciOutputs(selectCiScope([source]), source === "src/App.tsx" ? ALL : LINUX));
       expect(output.jobs).toEqual(jobs);
       expect(output.vitest_matrix.include.filter((entry: { files: string }) => !entry.files).map((entry: { os: string }) => entry.os))
-        .toEqual(oses.flatMap((os) => Array(os === "macos-latest" ? 4 : 8).fill(os)));
+        .toEqual(oses.flatMap((os) => Array(8).fill(os)));
       expect(stderr).toBe("");
     }
   });

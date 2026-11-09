@@ -24,7 +24,7 @@ legacy draft.
 
 The release commit needs the full macOS CI selection: the **CI passed on
 the release commit** job waits alongside platform builds for a passing `CI`
-gate and all four macOS all-E2E shards on the pinned commit or an identical
+gate and all eight macOS all-E2E shards on the pinned commit or an identical
 tree. Historical macOS host-only shards and retired Linux/Windows test results
 do not establish that coverage. Without matching full evidence, the job starts
 CI on the commit in a temporary `release-ci/v<version>` branch. Windows/Linux

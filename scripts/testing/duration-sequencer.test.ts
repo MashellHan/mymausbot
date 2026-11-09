@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BaseSequencer, type TestSequencerConstructor, type TestSpecification, type Vitest } from "vitest/node";
 import viteConfig from "../../vite.config.ts";
-import { VITEST_SHARDS } from "../ci-scope.mjs";
+import { VITEST_SHARDS, VITEST_WORKERS } from "../ci-scope.mjs";
 import { DurationSequencer, SHARD_WEIGHTS_FILE, loadPlatformShardWeights, loadShardWeights, planShards, weightKey } from "./duration-sequencer.ts";
 import { isPortableE2e } from "./host-e2e.ts";
 import { buildWeights, mergePlatformWeights, parseVitestLog, RUNNER_PLATFORMS } from "./update-shard-weights.mjs";
@@ -28,7 +28,7 @@ function context(index: number, count: number, log: (line: string) => void = () 
 /** Each CI platform's files, weights and shard count, as ci-scope.mjs and ci.yml run them. */
 const CI_PLATFORMS = Object.entries(VITEST_SHARDS).map(([os, count]) => {
   const platform = RUNNER_PLATFORMS[os as keyof typeof RUNNER_PLATFORMS] as NodeJS.Platform;
-  return { os, platform, count, files: os === "ubuntu-latest" ? FILES : FILES.filter((file) => !isPortableE2e(file)) };
+  return { os, platform, count, files: os === "windows-latest" ? FILES.filter((file) => !isPortableE2e(file)) : FILES };
 });
 
 async function split(Sequencer: TestSequencerConstructor, files: readonly string[], count: number) {
@@ -55,6 +55,12 @@ describe("vitest shard balance", () => {
     expect(Math.max(...loads) / mean, `recorded seconds per shard: ${loads.join(", ")}`).toBeLessThan(1.05);
   });
 
+  it("keeps macOS all-mode on one worker with room for observed 1.4x work under the 30-minute cap", () => {
+    const { loads } = planShards(FILES, loadShardWeights(ROOT, "darwin"), VITEST_SHARDS["macos-latest"]);
+    expect(VITEST_WORKERS["macos-latest"]).toBe(1);
+    expect(Math.max(...loads) * 1.4).toBeLessThan(28 * 60);
+  });
+
   it("runs every test file in exactly one shard for one to eight shards", async () => {
     for (let count = 1; count <= 8; count++) {
       const shards = await split(DurationSequencer, FILES, count);
@@ -73,8 +79,8 @@ describe("vitest shard balance", () => {
 
   it("plans the same split whatever order the files arrive in", () => {
     const shuffled = [...FILES].reverse();
-    const forward = planShards(FILES, WEIGHTS, 4).shardOf;
-    const backward = planShards(shuffled, WEIGHTS, 4).shardOf;
+    const forward = planShards(FILES, WEIGHTS, VITEST_SHARDS["macos-latest"]).shardOf;
+    const backward = planShards(shuffled, WEIGHTS, VITEST_SHARDS["macos-latest"]).shardOf;
     expect(shuffled.map((file) => forward[FILES.indexOf(file)])).toEqual(backward);
   });
 
@@ -107,11 +113,11 @@ describe("vitest shard balance", () => {
 
   it("logs its split, and annotates a CI run whose weights match no files", async () => {
     vi.stubEnv("GITHUB_ACTIONS", "true");
-    // The Windows and macOS CI shards run this file with OMB_VITEST_E2E=host.
+    // Host mode remains available for targeted local checks.
     vi.stubEnv("OMB_VITEST_E2E", "");
     const lines: string[] = [];
-    await new DurationSequencer(context(2, 4, (line) => lines.push(line))).shard(specs(FILES));
-    expect(lines).toEqual([expect.stringMatching(new RegExp(`^duration-sequencer: shard 2/4 runs \\d+ of ${FILES.length} files, ~\\d+s recorded; ${Object.keys(WEIGHTS).length} of ${Object.keys(WEIGHTS).length} weighted files found$`))]);
+    await new DurationSequencer(context(2, VITEST_SHARDS["macos-latest"], (line) => lines.push(line))).shard(specs(FILES));
+    expect(lines).toEqual([expect.stringMatching(new RegExp(`^duration-sequencer: shard 2/${VITEST_SHARDS["macos-latest"]} runs \\d+ of ${FILES.length} files, ~\\d+s recorded; ${Object.keys(WEIGHTS).length} of ${Object.keys(WEIGHTS).length} weighted files found$`))]);
 
     lines.length = 0;
     vi.stubEnv("OMB_VITEST_E2E", "host");

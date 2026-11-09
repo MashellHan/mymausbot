@@ -6,6 +6,8 @@ export type LocalAgentState = "idle" | "working" | "blocked" | "done" | "unknown
 export interface LocalAgentMember {
   id: string;
   name: string;
+  /** Opaque current Herdr occupant; absent when its session identity cannot be verified. */
+  occupantId?: string;
   kind: string;
   role: string | null;
   model: string | null;
@@ -78,7 +80,8 @@ export interface LocalAgentConfigurationDocument {
 export interface LocalAgentConfigurationSkill {
   id: string;
   name: string;
-  association: "agent" | "team";
+  association: "agent" | "team" | "codex";
+  codexAvailable?: boolean;
   loadedState: "unknown";
 }
 
@@ -88,6 +91,8 @@ export interface LocalAgentConfigurationResponse {
   occupantId: string | null;
   agent: LocalAgentConfigurationDocument;
   skillReferences: "verified" | "unverified";
+  /** Codex skills/list is scoped to the verified occupant's cwd; it does not report session loading. */
+  skillDiscovery: "ready" | "partial" | "unavailable" | "timeout" | "error";
   skills: LocalAgentConfigurationSkill[];
 }
 
@@ -266,6 +271,13 @@ export interface LocalUsageGithubResponse extends Omit<LocalUsageMergedResponse,
   dateBasis: { prs: "created-at/Asia-Shanghai"; commits: "github-profile-day" };
   chinaCommitAlignment: "unknown";
   qualification: "nonfork-at-capture";
+  /** API query-span observations include the UTC guard date and may include later bucket activity; private/email coverage is unknown. */
+  accounts?: {
+    id: string; host: string; apiStatus: LocalUsageStatus;
+    startAt: number | null; endAt: number | null;
+    contributions: number | null; commits: number | null; rawPrs: number | null;
+    restricted: number | null; outsideWindowPrs: number | null;
+  }[];
 }
 
 /** Windows include the capture date through asOf. The trend contains exactly the same 30 dates as window 30. */
