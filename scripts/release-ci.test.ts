@@ -109,14 +109,22 @@ describe("what a CI run proves", () => {
   it("is partial for retired Linux shards or an incomplete macOS full set", () => {
     expect(judgeRun(mainLane())).toBe("partial");
     const source = run(1, "push", "completed");
-    expect(judgeRun(green().filter((job) => job.name !== "vitest (macos-latest, all shard 4/4)"), planFor(source), source)).toBe("partial");
+    expect(judgeRun(green().filter((job) => job.name !== "vitest (macos-latest, all shard 8/8)"), planFor(source), source)).toBe("partial");
     expect(judgeRun([...mainLane(), ...shards("windows-latest")])).toBe("partial");
   });
 
-  it("rejects a MAIN_SCOPE plan even when four all-E2E shard names and the gate pass", () => {
+  it("rejects a MAIN_SCOPE plan even when eight all-E2E shard names and the gate pass", () => {
     const source = run(1, "push", "completed");
     expect(judgeRun(green(), planFor(source, false), source)).toBe("partial");
     expect(judgeRun(green(), null, source)).toBe("partial");
+  });
+
+  it("rejects a bound four-shard plan after the full selection grows to eight", () => {
+    const source = run(1, "push", "completed");
+    const plan = planFor(source);
+    const rows = plan.outputs.vitest_matrix.include.slice(0, 4).map((entry, index) => ({ ...entry, part: `all shard ${index + 1}/4`, shards: 4 }));
+    const outputs = { ...plan.outputs, vitest_matrix: { include: rows } };
+    expect(judgeRun(green(), { ...plan, outputs: { ...outputs, expected_jobs: expectedJobs(outputs) } }, source)).toBe("partial");
   });
 
   it("requires source identity and every full specialist job to pass", () => {
