@@ -7,7 +7,7 @@
 // runs and whether Start screen control worked; the run fails when any of those went wrong. It changes Defender's
 // settings and installs the app, so it runs only on a GitHub Windows runner.
 //
-//   node scripts/defender-check-win.mjs --installer release/OpenMausBot-<version>-setup.exe --out <folder> [--wait 120]
+//   node scripts/defender-check-win.mjs --installer release/mymausbot-<version>-setup.exe --out <folder> [--wait 120]
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -21,7 +21,7 @@ if (process.platform !== "win32" || process.env.GITHUB_ACTIONS !== "true") {
   process.exit(2);
 }
 if (!options.installer || !existsSync(options.installer) || !options.out) {
-  console.error("usage: node scripts/defender-check-win.mjs --installer <OpenMausBot-<version>-setup.exe> --out <folder> [--wait 120]");
+  console.error("usage: node scripts/defender-check-win.mjs --installer <mymausbot-<version>-setup.exe> --out <folder> [--wait 120]");
   process.exit(2);
 }
 
@@ -31,7 +31,7 @@ mkdirSync(SCRIPTS, { recursive: true });
 const WAIT_SECONDS = Math.max(10, Number(options.wait) || 120);
 const DEVTOOLS_PORT = 9339;
 const STARTED = new Date();
-const APP = "OpenMausBot.exe";
+const APP = "mymausbot.exe";
 const DRIVER = "cua-driver-background.exe";
 const DEFENDER_EVENTS = [1006, 1007, 1008, 1015, 1116, 1117];
 const MPCMDRUN = path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Windows Defender", "MpCmdRun.exe");
@@ -217,7 +217,7 @@ $downloads = Join-Path $env:USERPROFILE 'Downloads'
 New-Item -ItemType Directory -Force -Path $downloads | Out-Null
 $target = Join-Path $downloads ${quote(path.basename(installer))}
 Copy-Item -LiteralPath ${quote(installer)} -Destination $target -Force
-Set-Content -LiteralPath $target -Stream Zone.Identifier -Value @('[ZoneTransfer]', 'ZoneId=3', 'ReferrerUrl=https://www.openmausbot.com/download', 'HostUrl=https://github.com/milind-soni/OpenMausBot/releases/latest/download/OpenMausBot-setup.exe')
+Set-Content -LiteralPath $target -Stream Zone.Identifier -Value @('[ZoneTransfer]', 'ZoneId=3', 'ReferrerUrl=https://github.com/MashellHan/mymausbot/releases/latest', 'HostUrl=https://github.com/MashellHan/mymausbot/releases/latest/download/mymausbot-setup.exe')
 [pscustomobject]@{
   path = $target; bytes = (Get-Item -LiteralPath $target).Length; sha256 = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
   zone = @(Get-Content -LiteralPath $target -Stream Zone.Identifier) -join ' | '
@@ -287,7 +287,7 @@ if (-not $exited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyCon
 
 const installedFiles = (folder) => ps(String.raw`
 $root = ${quote(folder)}
-$names = @('OpenMausBot.exe', 'resources\cua-driver-background.exe', 'resources\cua-driver.exe')
+$names = @('mymausbot.exe', 'resources\cua-driver-background.exe', 'resources\cua-driver.exe')
 $sdk = Join-Path $root 'resources\cua-sdk'
 if (Test-Path -LiteralPath $sdk) {
   $names += @(Get-ChildItem -LiteralPath $sdk -Recurse -File | Where-Object { $_.Extension -in '.exe', '.node', '.dll' } | ForEach-Object { $_.FullName.Substring($root.Length + 1) })
