@@ -170,8 +170,8 @@ export interface LocalUsageComparison {
 }
 
 /** Numeric values are observed totals when coverage is partial; non-null knownPrs is a lower bound when prs is null. */
-export interface LocalUsageWindow {
-  days: 1 | 7 | 30;
+export interface LocalUsageWindow<Days extends 1 | 7 | 30 | 60 = 1 | 7 | 30> {
+  days: Days;
   startDay: string;
   endDay: string;
   asOf: number;
@@ -193,6 +193,8 @@ export interface LocalUsageWindow {
 /** Missing dates have null metrics. Token-unavailable dates have null token metrics. */
 export interface LocalUsageTrendDay {
   day: string;
+  /** Per-day repository observations; absent on older readers, never inferred from window totals. */
+  repositories?: LocalUsageRepositories;
   coverage: LocalUsageCoverage;
   tokenStatus: LocalUsageTokenStatus;
   prs: number | null;
@@ -220,8 +222,8 @@ export interface LocalUsageMergedRepository extends LocalUsageMergedCounts {
   comparison: LocalUsageCountComparison;
 }
 
-export interface LocalUsageMergedWindow extends LocalUsageMergedCounts {
-  days: 1 | 7 | 30;
+export interface LocalUsageMergedWindow<Days extends 1 | 7 | 30 | 60 = 1 | 7 | 30> extends LocalUsageMergedCounts {
+  days: Days;
   startDay: string;
   endDay: string;
   asOf: number;
@@ -247,6 +249,8 @@ export interface LocalUsageMergedWindow extends LocalUsageMergedCounts {
 
 export interface LocalUsageMergedTrendDay extends LocalUsageMergedCounts {
   day: string;
+  /** Per-day source-qualified repository observations, with the same coverage and metric definition. */
+  repositories?: LocalUsageMergedWindow["repositories"];
   coverage: LocalUsageCoverage;
   categories: Record<LocalUsageCategory, LocalUsageMergedCounts>;
   wow: Record<"prs" | "commits", LocalUsageWeekChange>;
@@ -259,6 +263,8 @@ export interface LocalUsageMergedResponse {
   sourceCoverage: { total: number; ready: number; partial: number; stale: number; unavailable: number } | null;
   overlaps: { repeatedShas: number; categoryConflicts: number; dayConflicts: number } | null;
   windows: Record<"1" | "7" | "30", LocalUsageMergedWindow> | null;
+  /** Source-window deduplication is independent of the longer daily-history horizon. */
+  sixtyDayRepositories?: Pick<LocalUsageMergedWindow<60>, "startDay" | "endDay" | "repositories">;
   trend: LocalUsageMergedTrendDay[];
   /** At most 191 actual China-calendar dates, including seven prior dates for daily comparisons. */
   history?: LocalUsageMergedTrendDay[];
@@ -289,6 +295,8 @@ export interface LocalUsageResponse {
   prSourceCoverage: LocalUsagePrSourceCoverage | null;
   prCoverage: Record<LocalUsageCategory, "ready" | "partial"> | null;
   windows: Record<"1" | "7" | "30", LocalUsageWindow> | null;
+  /** Source-aggregated 60-day detail; never a sum of overlapping per-repository totals. */
+  sixtyDayRepositories?: Pick<LocalUsageWindow<60>, "startDay" | "endDay" | "repositories">;
   trend: LocalUsageTrendDay[];
   /** Optional extended token observations; absent dates are unknown, including on legacy snapshots. */
   history?: LocalUsageTrendDay[];

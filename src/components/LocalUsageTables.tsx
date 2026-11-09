@@ -1,6 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import { useId, useState } from "react";
-import type { UsageTrendDay, UsageWindow } from "@/lib/local-usage-view";
+import type { UsageTrendDay, UsageWindow, UsageRepositoryWindow } from "@/lib/local-usage-view";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { metricText, UsageCount, UsageChange, usageMetrics, useUsageMetricHint } from "./LocalUsageValues";
@@ -18,12 +18,13 @@ export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
     </summary>
     <p className="mb-3 text-[13px] leading-5 text-ink-secondary">{t("computer.usage.wowHint")}</p>
     <div className={tableRegion} role="region" aria-label={t("computer.usage.dailyValues")} tabIndex={0}>
-      <table className="w-full min-w-[650px] table-fixed text-[13px] tabular-nums">
-        <colgroup><col className="w-[104px]" /><col /><col /><col /><col className="w-44" /></colgroup>
+      <table className="w-full min-w-[880px] table-fixed text-[13px] tabular-nums">
+        <colgroup><col className="w-[104px]" /><col /><col /><col /><col className="w-44" /><col className="w-56" /></colgroup>
         <thead className="bg-inset text-ink-secondary"><tr>
           <th scope="col" className="sticky left-0 z-10 bg-inset px-3 py-2 text-left font-medium">{t("computer.usage.day")}</th>
           {usageMetrics.map((metric) => <th key={metric} title={usageMetricHint(metric)} scope="col" className="px-3 py-2 text-right font-medium">{t(`computer.usage.metric.${metric}`)}</th>)}
           <th scope="col" className="px-3 py-2 text-right font-medium">{t("computer.usage.changeHeading")}</th>
+          <th scope="col" className="px-3 py-2 text-left font-medium">{t("computer.usage.repositories")}</th>
         </tr></thead>
         <tbody className="text-ink">
           {days.slice().reverse().map((day) => <tr key={day.day} className="border-t border-hairline/40">
@@ -35,6 +36,21 @@ export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
               <span className="text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</span>
               <UsageChange value={day.wow[metric]} startDay={previousWeekDay(day.day)} endDay={previousWeekDay(day.day)} metric={metric} daily className="text-[13px] text-ink" />
             </div>)}</td>
+            <td className="px-3 py-2 align-top">
+              {!day.repositories || day.repositories.coverage === "unavailable" ? <span className="text-ink-secondary">{t("computer.usage.repositoriesUnavailable")}</span>
+                : <details data-usage-day-repositories>
+                  <summary className="min-h-11 cursor-pointer rounded outline-none focus-visible:ring-2 focus-visible:ring-accent/60">{t("computer.usage.repositories")}</summary>
+                  {day.repositories.coverage === "partial" && <p className="text-ink-secondary">{t("computer.usage.repositoriesPartial")}</p>}
+                  <ul className="mt-1 space-y-2">
+                    {day.repositories.rows.map(row => <li key={row.id} className="[overflow-wrap:anywhere]">
+                      <span dir="auto">{row.name}</span> · {t(`computer.usage.category.${row.category}`)}
+                      <div>{t("computer.usage.metric.prs")} <UsageCount value={row.prs} known={row.knownPrs} /> · {t("computer.usage.metric.commits")} <UsageCount value={row.commits} known={row.knownCommits} /></div>
+                    </li>)}
+                    {!!((day.repositories.unattributedPrs ?? 0) + (day.repositories.unattributedCommits ?? 0)) && <li>{t("computer.usage.unattributedRepository")} · {t("computer.usage.metric.prs")} {metricText(day.repositories.unattributedPrs)} · {t("computer.usage.metric.commits")} {metricText(day.repositories.unattributedCommits)}</li>}
+                  </ul>
+                  {!day.repositories.rows.length && !((day.repositories.unattributedPrs ?? 0) + (day.repositories.unattributedCommits ?? 0)) && <p>{t(day.repositories.coverage === "ready" ? "computer.usage.noRepositoryActivity" : "computer.usage.repositoriesUnavailable")}</p>}
+                </details>}
+            </td>
           </tr>)}
         </tbody>
       </table>
@@ -42,14 +58,17 @@ export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
   </details>;
 }
 
-const periods = ["1", "7", "30"] as const;
-type Period = typeof periods[number];
+const shortPeriods = ["1", "7", "30"] as const;
+type Period = typeof shortPeriods[number] | "60";
 
-export function UsageRepositoryTable({ windows }: { windows: Record<Period, UsageWindow> }) {
+export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "1" }: {
+  windows: Record<typeof shortPeriods[number], UsageWindow>; historyWindow?: UsageRepositoryWindow | null; defaultPeriod?: Period;
+}) {
   const usageMetricHint = useUsageMetricHint();
-  const [period, setPeriod] = useState<Period>("1");
+  const [period, setPeriod] = useState<Period>(defaultPeriod);
+  const periods: readonly Period[] = historyWindow ? [...shortPeriods, "60"] : shortPeriods;
   const id = useId();
-  const window = windows[period];
+  const window = period === "60" && historyWindow ? historyWindow : windows[period === "60" ? "30" : period];
   const repositories = window.repositories;
   return <section className="mt-6" aria-labelledby={`${id}-heading`}>
     <div className="flex flex-wrap items-center justify-between gap-2">

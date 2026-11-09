@@ -44,7 +44,7 @@ function projection(raw: unknown, now: number): LocalUsageGithubResponse {
   const asOf = instant(snapshot.asOfAt), capturedAt = instant(snapshot.capturedAt), end = chinaDay(asOf);
   if (snapshot.version !== 1 || snapshot.metricDefinition !== "github-profile-v1" || snapshot.qualification !== "nonfork-at-capture" || basis.prs !== "created-at/Asia-Shanghai" ||
       basis.commits !== "github-profile-day" || capturedAt < asOf || capturedAt > now + 300_000 || asOf > now + 300_000 ||
-      operation.timeZone !== "Asia/Shanghai" || operation.startDay !== shift(end, -6) || operation.endDay !== end || operation.todayPartial !== true ||
+      operation.timeZone !== "Asia/Shanghai" || ![shift(end, -6), shift(end, -59)].includes(String(operation.startDay)) || operation.endDay !== end || operation.todayPartial !== true ||
       !Array.isArray(snapshot.activeSourceIds) || !snapshot.activeSourceIds.length || snapshot.activeSourceIds.length > 24 ||
       !Array.isArray(snapshot.sources) || snapshot.sources.length > 128) throw new Error("Invalid contribution definition or capture");
   const active = new Set(snapshot.activeSourceIds.map(opaque));
@@ -94,7 +94,7 @@ function projection(raw: unknown, now: number): LocalUsageGithubResponse {
   const sourceCoverage = { total: sources.length, ready: 0, partial: 0, stale: 0, unavailable: 0 };
   for (const source of sources) sourceCoverage[source.status]++;
 
-  function makeWindow(days: 1 | 7 | 30, through: string): LocalUsageMergedWindow {
+  function makeWindow<Days extends 1 | 7 | 30 | 60>(days: Days, through: string): LocalUsageMergedWindow<Days> {
     const start = shift(through, 1 - days), dates = Array.from({ length: days }, (_, index) => shift(start, index));
     const selected = sources.flatMap(source => dates.flatMap(day => source.rows.get(day) ?? []));
     const missingDays = dates.filter(day => sources.some(source => !source.rows.has(day)));
@@ -136,13 +136,15 @@ function projection(raw: unknown, now: number): LocalUsageGithubResponse {
   const history = Array.from({ length: MAX_USAGE_HISTORY_DAYS }, (_, index) => {
     const day = shift(end, index + 1 - MAX_USAGE_HISTORY_DAYS), current = makeWindow(1, day), previous = makeWindow(1, shift(day, -7));
     return { day, coverage: current.coverage, prs: current.prs, knownPrs: current.knownPrs,
-      commits: null, knownCommits: current.knownCommits, categories: current.categories,
+      commits: null, knownCommits: current.knownCommits, categories: current.categories, repositories: current.repositories,
       wow: { prs: change(current.prs, previous.prs), commits: null } };
   });
+  const sixty = makeWindow(60, end);
   const observed = sources.some(source => source.rows.size > 0);
   const stale = now - capturedAt > 900_000 || chinaDay(now) !== end || sources.some(source => source.status === "stale" || [...source.rows.values()].some(row => row.day >= shift(end, -6) && row.status === "stale"));
   return { metricDefinition: "github-profile-v1", dateBasis: { prs: "created-at/Asia-Shanghai", commits: "github-profile-day" },
-    chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture", accounts: sources.map(source => source.account), status: !observed ? "unavailable" : stale ? "stale" : "partial", asOf, timeZone: "Asia/Shanghai", sourceCoverage, windows, trend: history.slice(-30), history };
+    chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture", accounts: sources.map(source => source.account), status: !observed ? "unavailable" : stale ? "stale" : "partial", asOf, timeZone: "Asia/Shanghai", sourceCoverage, windows, trend: history.slice(-30), history,
+    sixtyDayRepositories: { startDay: sixty.startDay, endDay: sixty.endDay, repositories: sixty.repositories } };
 }
 
 export function createLocalUsageGithubReader(file: string, now: () => number = Date.now) {

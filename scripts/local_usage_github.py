@@ -70,11 +70,13 @@ def digest(*values):
     return hashlib.sha256(json.dumps(values, separators=(",", ":")).encode()).hexdigest()
 
 
-def capture_window(at):
+def capture_window(at, days=7):
+    if type(days) is not int or days not in (7, 60):
+        raise ValueError("Contribution window must be 7 or 60 China dates")
     if at.tzinfo is None:
         raise ValueError("Capture time requires an offset")
     end = at.astimezone(TZ).date()
-    return end - dt.timedelta(days=6), end
+    return end - dt.timedelta(days=days - 1), end
 
 
 def profile_identity(profile):
@@ -196,7 +198,7 @@ def collect_profile(config, profile, start, end, run, repository_category):
 
 def daily_source(data, first, last, at):
     days = {}
-    for offset in range(7):
+    for offset in range((last - first).days + 1):
         date = (first + dt.timedelta(days=offset)).isoformat()
         days[date] = {"day": date, "capturedAt": stamp(at), "status": "partial",
             "rawPrs": 0, "excludedForkPrs": 0, "inProgress": date == last.isoformat(), "knownPrs": 0, "profilePrs": 0, "profileCommits": 0, "repositories": {}}
@@ -237,13 +239,13 @@ def daily_source(data, first, last, at):
     return list(days.values())
 
 
-def collect(config, run, repository_category, *, at=None):
+def collect(config, run, repository_category, *, at=None, days=7):
     at = at or dt.datetime.now(dt.timezone.utc)
     if at.tzinfo is None:
         raise ValueError("Capture time requires an offset")
     at = at.astimezone(dt.timezone.utc).replace(microsecond=0)
-    first, last = capture_window(at)
-    # A full preceding UTC date is a guard band, not permission to persist an eighth operation date.
+    first, last = capture_window(at, days)
+    # A preceding UTC date is a guard band, not an additional admitted operation date.
     start = dt.datetime.combine(first - dt.timedelta(days=1), dt.time.min, dt.timezone.utc)
     profiles = config.get("githubProfiles", [])
     if not isinstance(profiles, list) or not profiles or len(profiles) > MAX_PROFILES:
@@ -283,8 +285,9 @@ def replace_days(previous, current):
         raise ValueError("Cannot blend different contribution definitions")
     window = current["operationWindow"]
     first, last = window["startDay"], window["endDay"]
-    if (dt.date.fromisoformat(last) - dt.date.fromisoformat(first)).days != 6:
-        raise ValueError("Contribution replacement requires seven China dates")
+    span = (dt.date.fromisoformat(last) - dt.date.fromisoformat(first)).days + 1
+    if span not in (7, 60):
+        raise ValueError("Contribution replacement requires 7 or 60 China dates")
     old_sources = {source["id"]: source for source in previous.get("sources", [])}
     if len(old_sources) != len(previous.get("sources", [])):
         raise ValueError("Duplicate retained contribution account")
@@ -302,9 +305,9 @@ def replace_days(previous, current):
         incoming = {row["day"]: row for row in source["days"]}
         if len(incoming) != len(source["days"]) or any(not first <= day <= last for day in incoming):
             raise ValueError("Contribution replacement outside admitted dates")
-        if source["status"] != "unavailable" and len(incoming) != 7:
+        if source["status"] != "unavailable" and len(incoming) != span:
             raise ValueError("Incomplete contribution operation dates")
-        for offset in range(7):
+        for offset in range(span):
             date = (dt.date.fromisoformat(first) + dt.timedelta(days=offset)).isoformat()
             fresh, retained = incoming.get(date), days.get(date)
             if fresh is None:

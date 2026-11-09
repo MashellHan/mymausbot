@@ -63,6 +63,35 @@ class RepairTests(unittest.TestCase):
         self.file.write_bytes(self.original)
         return previous
 
+    def test_sixty_day_plan_binds_span_and_retains_recovery_default_compatibility(self):
+        previous = self.seed()
+        self.collect_patch.stop()
+        try:
+            self.current = fixture['collect'](days=60)
+        finally:
+            self.collect = self.collect_patch.start()
+        self.current['capturedAt'] = self.current['asOfAt']
+        earlier = {**copy.deepcopy(previous['sources'][0]['days'][0]), 'day': '2026-08-01'}
+        previous['sources'][0]['days'].insert(0, earlier)
+        self.original = (json.dumps(previous, indent=2) + '\n').encode()
+        self.file.write_bytes(self.original)
+        with self.assertRaisesRegex(ValueError, 'requested bounded span'):
+            self.prepare()
+        self.assertEqual(self.file.read_bytes(), self.original)
+        plan = repair.prepare(self.file, self.operation, CONFIG, Api(), lambda r, c: 'personal', IDENTITY['collector'], at=AT, days=60)
+        self.assertEqual(plan['operationWindow']['startDay'], '2026-09-11')
+        self.assertEqual(self.file.read_bytes(), self.original)
+        digest = plan['planSha256']
+        self.assertEqual(repair.apply(self.file, self.operation, digest, at=AT), 'applied')
+        self.assertEqual(repair.apply(self.file, self.operation, digest, at=AT), 'unchanged')
+        result = json.loads(self.file.read_bytes())
+        self.assertEqual(result['sources'][0]['days'][0], earlier)
+        self.assertEqual(len(result['sources'][0]['days']), 61)
+        with self.assertRaises(ValueError):
+            repair.apply(self.file, self.operation, digest, at=AT + dt.timedelta(days=1))
+        self.assertEqual(repair.restore(self.file, self.operation, digest), 'restored')
+        self.assertEqual(self.file.read_bytes(), self.original)
+
     def test_prepare_is_private_dry_run_and_preserves_old_history_and_unrelated_paths(self):
         previous = self.seed()
         others = {self.root / name: ('synthetic-' + name).encode() for name in ['tokens.json', 'report.md', 'config.json', 'archive.json']}

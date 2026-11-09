@@ -293,3 +293,37 @@ Stop each foreground fixture with Ctrl-C. The separate collector tests use
 temporary files and synthetic API responses, including an assertion that the
 public sanitizer drops repository metadata. Required repository checks remain
 `pnpm lint`, `pnpm typecheck` and `pnpm i18n:check`.
+
+
+### Retained 60-day repository detail
+
+The 60-day trend also selects the 60-day repository tab. Daily values disclose
+repository/category observations for each date; the range table uses the provider's
+source-qualified 60-day aggregation, never a sum of the daily or repository rows.
+Remote PR-associated commits retain the original 60-day deduplication horizon for
+that window; 90-day/6-month history keeps its 191-day projection. A SHA's attributed
+date can therefore differ between these horizons. Shared repository appearances
+remain separate from the global attributed count. Local history reads the nested
+`localHistory.localRepositories`, not just the recent top-level repository
+snapshot. Missing per-day detail stays unavailable/partial; it is not reconstructed
+from category totals. Legacy snapshots without detail remain readable. The 1/7/30
+cards, comparisons and repository windows keep their definitions.
+
+The activity source selector keeps three independent definitions: local repository
+observations, remote PR records with their associated commits, and Profile references.
+Remote history retains configured GitHub/enterprise/ADO repository identities;
+its PR-associated commit counts are neither all repository Git commits nor Profile
+commit contributions. Dates and source identities must match before reconciliation.
+No cross-source totals are added together and remote PR records never fill a missing
+local or Profile day. Token history remains independent and uses actual date joins.
+The 90-day/calendar-month ranges keep their retention and unknown-date behavior.
+
+The Profile source reads typed contribution connections only. Access to a private
+repository does not establish that its commits/PRs appear in those connections;
+untyped restricted contributions cannot supply either metric. Direct default-branch
+repository evidence must be reconciled separately by author identity, qualification,
+dates and sampling time, not silently added to Profile day buckets. The bounded
+[repair recipe](local-usage-github-repair.md) supports an explicitly admitted 60-day
+capture while keeping seven-day defaults, source pins, OS lock and recovery semantics.
+Source changes alone neither capture nor admit production data. Actual-reader and
+rendered UI acceptance require their own recorded evidence.

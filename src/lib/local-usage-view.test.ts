@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LocalUsageResponse, LocalUsageWindow } from "../../shared/local-dashboard";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
-import { localUsageView, profileUsageView, retainUsageSnapshot } from "./local-usage-view";
+import { localUsageView, profileUsageView, mergedUsageView, retainUsageSnapshot } from "./local-usage-view";
 import { weeklyUsageTrend } from "./local-usage-trends";
 
 const shift = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
@@ -272,4 +272,56 @@ describe("independent repository activity view", () => {
     }
     expect(short.trend.at(-1)?.totalTokens).toBeNull();
   });
+});
+
+
+it("exposes sixty repository dates without converting missing detail into zero or changing short comparisons", () => {
+  const snapshot = fixture("2026-11-09");
+  const short = localUsageView(snapshot).windows;
+  const repository = snapshot.windows!["1"].repositories;
+  snapshot.history = Array.from({ length: 60 }, (_, index) => ({
+    ...snapshot.trend.at(-1)!, day: shift("2026-11-09", index - 59), repositories: structuredClone(repository),
+  }));
+  snapshot.trend = snapshot.history.slice(-30);
+  snapshot.sixtyDayRepositories = { startDay: "2026-09-11", endDay: "2026-11-09",
+    repositories: { ...repository, rows: [{ ...repository.rows[0]!, prs: 4, knownPrs: 4, commits: 9 }] } };
+  const complete = localUsageView(snapshot, "60");
+  expect(complete.sixtyDayRepositories).toMatchObject({ startDay: "2026-09-11", endDay: "2026-11-09",
+    repositories: { coverage: "ready", rows: [{ prs: 4, commits: 9, knownPrs: 4, knownCommits: 9 }] } });
+  expect(complete.trend[0]!.repositories!.rows[0]).toMatchObject({ name: "sample/merged", category: "work", commits: 5 });
+  delete snapshot.history[0]!.repositories;
+  snapshot.history[1]!.repositories = { ...repository, coverage: "partial", rows: [] };
+  snapshot.history[2]!.repositories = { ...repository, rows: [] };
+  snapshot.sixtyDayRepositories.repositories = { ...repository, coverage: "partial",
+    rows: [{ ...repository.rows[0]!, prs: null, knownPrs: 3, commits: 7 }] };
+  const partial = localUsageView(snapshot, "60");
+  expect(partial.sixtyDayRepositories!.repositories).toMatchObject({ coverage: "partial",
+    rows: [{ prs: null, commits: 7, knownPrs: 3, knownCommits: 7 }] });
+  expect(partial.trend[0]!.repositories).toBeUndefined();
+  expect(partial.trend[1]!.repositories).toMatchObject({ coverage: "partial", rows: [] });
+  expect(partial.trend[2]!.repositories).toMatchObject({ coverage: "ready", rows: [] });
+  expect(partial.windows).toEqual(short);
+  snapshot.sixtyDayRepositories.startDay = "2026-09-12";
+  expect(localUsageView(snapshot, "60").sixtyDayRepositories!.repositories.coverage).toBe("unavailable");
+  delete snapshot.sixtyDayRepositories;
+  expect(localUsageView(snapshot, "60").sixtyDayRepositories!.repositories.rows).toEqual([]);
+  const unknown = fixture("2026-11-09");
+  expect(localUsageView(unknown, "60").sixtyDayRepositories!.repositories).toMatchObject({ coverage: "unavailable", rows: [], unattributedPrs: null, unattributedCommits: null });
+  expect(profileUsageView(snapshot).sixtyDayRepositories!.repositories.coverage).toBe("unavailable");
+});
+
+it("keeps remote PR history source-qualified with its own dates and no local or Profile fallback", () => {
+  const snapshot = withMergedUsageFixture(fixture("2026-11-09"));
+  snapshot.merged!.history = [{ ...snapshot.merged!.trend.at(-1)!, day: "2026-09-11", knownPrs: 3,
+    repositories: { ...snapshot.merged!.windows!["1"].repositories,
+      rows: [{ ...snapshot.merged!.windows!["1"].repositories.rows[0]!, id: "remote-personal", name: "fixture/mini-apps", category: "personal", knownPrs: 3, knownCommits: 11 }] } }];
+  snapshot.merged!.sixtyDayRepositories = { startDay: "2026-09-11", endDay: "2026-11-09",
+    repositories: { ...snapshot.merged!.history[0]!.repositories!, rows: snapshot.merged!.history[0]!.repositories!.rows.map(row => ({ ...row, prs: null, commits: null })) } };
+  const local = localUsageView(snapshot, "60"), profile = profileUsageView(snapshot, "60"), remote = mergedUsageView(snapshot, "60");
+  expect(local.sixtyDayRepositories!.repositories.rows).toEqual([]);
+  expect(profile.sixtyDayRepositories!.repositories.rows).toEqual([]);
+  expect(remote.sixtyDayRepositories!.repositories.rows[0]).toMatchObject({ name: "fixture/mini-apps", category: "personal", knownPrs: 3, knownCommits: 11, prs: null, commits: null });
+  expect(remote.trend[0]).toMatchObject({ day: "2026-09-11", knownPrs: 3, totalTokens: null });
+  expect(mergedUsageView({ ...snapshot, merged: undefined }, "60").sixtyDayRepositories!.repositories.coverage).toBe("unavailable");
+  expect(remote.windows!["1"].comparison.prs).toBe(snapshot.merged!.windows!["1"].comparison.prs);
 });
