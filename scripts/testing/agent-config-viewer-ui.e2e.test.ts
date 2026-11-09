@@ -29,7 +29,7 @@ const enabled = process.env.OMB_AGENT_CONFIG_UI === "1";
     const page = await openHeadlessChrome(join(directory, "profile"));
     try {
       const key = async (name: string, modifiers = 0) => {
-        const code = name === "Tab" ? 9 : name === "Escape" ? 27 : 39;
+        const code = ({ Tab: 9, Escape: 27, ArrowRight: 39, PageDown: 34, End: 35 } as Record<string, number>)[name];
         await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: name, code: name, windowsVirtualKeyCode: code, modifiers });
         await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: name, code: name, windowsVirtualKeyCode: code, modifiers });
       };
@@ -50,15 +50,25 @@ const enabled = process.env.OMB_AGENT_CONFIG_UI === "1";
         await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.textContent?.includes('Synthetic Agent instructions')");
         await page.until("document.activeElement?.getAttribute('data-testid') === 'agent-config-viewer'");
         await key("Tab", 8);
-        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tab");
+        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tabpanel");
+        const documentScroll = await page.evaluate("(() => { const panel = document.querySelector('[role=tabpanel]'); return { height: panel.clientHeight, contentHeight: panel.scrollHeight }; })()");
+        expect(documentScroll.contentHeight).toBeGreaterThan(documentScroll.height);
+        await key("PageDown");
+        await page.until("document.querySelector('[role=tabpanel]').scrollTop > 0", 3_000);
+        await key("End");
+        await page.until("(() => { const panel = document.querySelector('[role=tabpanel]'); return panel.scrollTop >= panel.scrollHeight - panel.clientHeight - 1; })()", 3_000);
         await key("Tab");
         expect(await page.evaluate("document.activeElement?.getAttribute('aria-label')")).toBe(locale === "en" ? "Close" : "关闭");
         await key("Tab");
         expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tab");
+        await key("Tab");
+        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tabpanel");
+        await key("Tab", 8);
+        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tab");
         await key("Tab", 8);
         expect(await page.evaluate("document.activeElement?.getAttribute('aria-label')")).toBe(locale === "en" ? "Close" : "关闭");
         await key("Tab", 8);
-        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tab");
+        expect(await page.evaluate("document.activeElement?.getAttribute('role')")).toBe("tabpanel");
         await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.getBoundingClientRect().right <= innerWidth + 1", 3_000);
         const geometry = await page.evaluate(`(() => {
           const drawer = document.querySelector('[data-testid=agent-config-viewer]');
@@ -82,6 +92,7 @@ const enabled = process.env.OMB_AGENT_CONFIG_UI === "1";
           writeFileSync(join(process.env.OMB_AGENT_CONFIG_CAPTURE_DIR, `${width}-${locale}-geometry.json`), JSON.stringify(geometry, null, 2) + "\n");
           writeFileSync(join(process.env.OMB_AGENT_CONFIG_CAPTURE_DIR, `${width}-${locale}-agent.png`), await page.capture({ x: 0, y: 0, width: viewport, height: 900 }));
         }
+        await page.evaluate("document.querySelector('[role=tablist] [role=tab][aria-selected=true]').focus()");
         await key("ArrowRight");
         await page.until("document.querySelector('[role=tab][aria-selected=true]')?.textContent?.includes('Skills') || document.querySelector('[role=tab][aria-selected=true]')?.textContent?.includes('技能')");
         await page.until("document.querySelector('[data-testid=agent-config-viewer]')?.textContent?.includes('herdr')");

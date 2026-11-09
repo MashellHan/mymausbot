@@ -214,7 +214,8 @@ async function readSkill(home: string, cwd: string, path: string): Promise<Local
   if (!allowed || basename(path) !== "SKILL.md") return empty("error");
   try {
     const canonicalBase = await realpath(allowed.base);
-    if (!inside(canonicalBase, await realpath(allowed.root))) return empty("error");
+    const expectedRoot = join(canonicalBase, relative(allowed.base, allowed.root));
+    if (await realpath(allowed.root) !== expectedRoot) return empty("error");
   } catch (error) { return empty((error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "error"); }
   return readDocument(allowed.root, path);
 }

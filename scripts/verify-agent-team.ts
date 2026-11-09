@@ -4,6 +4,10 @@ import type { LocalAgentActivityResponse, LocalAgentTeamsResponse } from "../sha
 import type { Bot } from "../src/state/store.tsx";
 import { mountPreview, parkUntilSignal, type MountedPreview } from "./testing/preview-fixture.ts";
 
+const agentMarkdown = ["# Synthetic Agent instructions", "This text is fixture-only.",
+  ...Array.from({ length: 60 }, (_, index) => `Synthetic role paragraph ${index + 1}. This is readable guidance in the long document.`),
+  "[local file](file:///private/fixture)"].join("\n\n");
+
 const sample: LocalAgentTeamsResponse = {
   status: "ready", updatedAt: Date.UTC(2026, 10, 3, 8, 30), teamCount: 2,
   teams: [
@@ -97,7 +101,7 @@ try {
         const agentId = decodeURIComponent(match![1]!);
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ agentId, teamId: agentId.split(":")[0], occupantId: "o1111111111111111",
-          agent: { status: "ready", markdown: "# Synthetic Agent instructions\nThis text is fixture-only.\n[local file](file:///private/fixture)" },
+          agent: { status: "ready", markdown: agentMarkdown },
           skillReferences: "verified", skillDiscovery: "ready", skills: [
             { id: "s1111111111111111", name: "herdr", association: "team", loadedState: "unknown" },
             { id: "s2222222222222222", name: "impeccable", association: "agent", loadedState: "unknown" },

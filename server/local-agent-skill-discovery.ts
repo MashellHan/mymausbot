@@ -26,14 +26,14 @@ export function discoverCodexSkills(cwd: string, options: { cli?: string; env?: 
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      void killCliTree(child, 1_000).then((stopped) => resolve(stopped ? result : failed("error")),
+      void killCliTree(child, 500).then((stopped) => resolve(stopped ? result : failed("error")),
         () => resolve(failed("error")));
     };
     const send = (message: unknown) => {
       try { child.stdin.write(`${JSON.stringify(message)}\n`); }
       catch { finish(failed("error")); }
     };
-    const timer = setTimeout(() => finish(failed("timeout")), options.timeoutMs ?? 10_000);
+    const timer = setTimeout(() => finish(failed("timeout")), options.timeoutMs ?? 3_000);
     timer.unref?.();
     child.stdin.on("error", () => finish(failed("error")));
     child.stderr.resume();

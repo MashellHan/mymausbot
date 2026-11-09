@@ -73,6 +73,17 @@ describe("verified local Agent Team configuration", () => {
     expect(temporary.skills.map((skill) => skill.name)).toEqual(["github-accounts", "herdr"]);
   });
 
+  it("keeps verified role and declared skills when optional Codex discovery times out", async () => {
+    const data = await fixture();
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run,
+      discoverSkills: async () => ({ status: "timeout", skills: [] }) });
+    const result = await provider.getAgent("w6:p2");
+    expect(result).toMatchObject({ agent: { status: "ready", markdown: expect.stringContaining("# Agent design rules") },
+      skillReferences: "verified", skillDiscovery: "timeout" });
+    expect(result.skills.map((skill) => skill.name)).toEqual(["github-accounts", "herdr", "impeccable"]);
+    expect((await provider.getSkill("w6:p2", result.skills[2]!.id)).status).toBe("ready");
+  });
+
   it("uses the exact Mini Apps playbook and role links, then distinguishes absent and failed reads", async () => {
     const data = await fixture();
     const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run, discoverSkills: noDiscovery });
@@ -120,6 +131,27 @@ describe("verified local Agent Team configuration", () => {
     await unlink(role);
     await data.put(join(data.mini, "README.md"), "| Designer | miniapp-design | sol | high | [designer](roles/../outside.md) |");
     expect((await provider.getAgent("w8:p4")).agent.status).toBe("unverified");
+  });
+
+  it("rejects skill-root redirects into sibling private directories under home and cwd", async () => {
+    const data = await fixture();
+    const homeRoot = join(data.home, ".codex/skills");
+    const homeSibling = join(data.home, "workspace/department-b/private-skills");
+    await data.put(join(homeSibling, "impeccable/SKILL.md"), "# private home sibling");
+    await rm(homeRoot, { recursive: true });
+    await symlink(homeSibling, homeRoot);
+    const cwdRoot = join(data.repo, ".agents/skills");
+    const cwdSibling = join(data.repo, "department-b/private-skills");
+    await data.put(join(cwdSibling, "review/SKILL.md"), "# private cwd sibling");
+    await symlink(cwdSibling, cwdRoot);
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run: data.run,
+      discoverSkills: async () => ({ status: "ready", skills: [{ name: "review", path: join(cwdRoot, "review/SKILL.md") }] }) });
+    const result = await provider.getAgent("w6:p2");
+    for (const name of ["impeccable", "review"]) {
+      const skill = result.skills.find((item) => item.name === name)!;
+      expect((await provider.getSkill("w6:p2", skill.id)).status).toBe("error");
+    }
+    expect(JSON.stringify(result)).not.toMatch(/private home sibling|private cwd sibling/);
   });
 
   it("revalidates the live occupant for opaque skill handles and binds concurrent results to their own identity", async () => {

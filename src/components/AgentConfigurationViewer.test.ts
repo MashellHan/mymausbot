@@ -305,6 +305,21 @@ it("reports failed Codex discovery without presenting an unverified empty set as
   expect(viewer()?.textContent).not.toContain("No declared or enabled Codex skills were found");
 });
 
+it("keeps declared skills visible when Codex discovery times out inside the configuration read budget", async () => {
+  calls.api.mockImplementation(async (path: string) => path.endsWith("/rules") ? missingRules("w6") : {
+    ...configuration, skillDiscovery: "timeout",
+  });
+  await render();
+  await act(async () => trigger("w6:p2").click());
+  await vi.waitFor(() => expect(viewer()?.textContent).toContain("Verified Agent"));
+  expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/agents/w6%3Ap2/configuration",
+    expect.objectContaining({ timeoutMs: 12_000, signal: expect.any(AbortSignal) }));
+  await act(async () => viewer()!.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1]!.click());
+  expect(viewer()?.textContent).toContain("Codex skill discovery timed out for this workspace");
+  expect(viewer()?.textContent).toContain("impeccable");
+  expect(viewer()?.textContent).toContain("herdr");
+});
+
 it("closes a pending same-pane same-name viewer when the opaque occupant changes", async () => {
   const first = deferred<LocalAgentConfigurationResponse>();
   let requests = 0;
@@ -347,17 +362,19 @@ it("traps initial root Tab and Shift+Tab at actual tabbable boundaries", async (
   const dialog = viewer()!;
   const close = dialog.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!;
   const [agentTab, skillsTab] = [...dialog.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+  const panel = dialog.querySelector<HTMLElement>('[role="tabpanel"]')!;
   const tab = async (shiftKey = false) => act(async () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true }));
   });
   expect(skillsTab!.tabIndex).toBe(-1);
+  expect(panel.tabIndex).toBe(0);
   dialog.focus();
   await tab(true);
-  expect(document.activeElement).toBe(agentTab);
+  expect(document.activeElement).toBe(panel);
   await tab();
   expect(document.activeElement).toBe(close);
   await tab(true);
-  expect(document.activeElement).toBe(agentTab);
+  expect(document.activeElement).toBe(panel);
   dialog.focus();
   await tab();
   expect(document.activeElement).toBe(close);

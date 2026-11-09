@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -36,4 +36,34 @@ process.stdin.on("data", (chunk) => {
   expect(await discoverCodexSkills(cwd, { cli })).toEqual({ status: "ready", skills: [
     { name: "agent-desktop", path: "/synthetic/agent-desktop/SKILL.md" },
   ] });
+});
+
+it("returns a truthful timeout and stops a Codex app-server that never answers skills/list", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "mausbot-codex-slow-skills-"));
+  folders.push(cwd);
+  const cli = join(cwd, "fake-codex");
+  const pidFile = join(cwd, "pid");
+  const requested = join(cwd, "skills-requested");
+  await writeFile(cli, `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let end;
+  while ((end = buffer.indexOf("\\n")) !== -1) {
+    const request = JSON.parse(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+    if (request.method === "initialize") process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\\n");
+    if (request.method === "skills/list") fs.writeFileSync(${JSON.stringify(requested)}, "observed");
+  }
+});
+`);
+  await chmod(cli, 0o755);
+  const started = Date.now();
+  expect(await discoverCodexSkills(cwd, { cli, timeoutMs: 1_500 })).toEqual({ status: "timeout", skills: [] });
+  expect(Date.now() - started).toBeLessThan(4_000);
+  expect(await readFile(requested, "utf8")).toBe("observed");
+  const pid = Number(await readFile(pidFile, "utf8"));
+  expect(() => process.kill(pid, 0)).toThrow();
 });

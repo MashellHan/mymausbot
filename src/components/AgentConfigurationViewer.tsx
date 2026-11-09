@@ -15,7 +15,7 @@ export type AgentConfigurationTarget =
 
 const empty = (status: LocalAgentConfigurationDocument["status"]): LocalAgentConfigurationDocument => ({ status, markdown: null });
 const failure = (error: unknown) => empty(error instanceof ApiError && (error.status === 401 || error.status === 403) ? "unavailable" : "error");
-const read = <T,>(path: string, signal: AbortSignal) => api<T>(path, { background: true, signal, timeoutMs: 10_000 });
+const read = <T,>(path: string, signal: AbortSignal, timeoutMs = 10_000) => api<T>(path, { background: true, signal, timeoutMs });
 const plainUrl = (url: string) => url;
 const markdownComponents: Components = {
   a({ children, href }) { return <span>{children}{href && children !== href && <span className="text-ink-tertiary"> ({href})</span>}</span>; },
@@ -74,14 +74,14 @@ export function AgentConfigurationViewer({ target, onClose, onRulesRead, fallbac
       if (event.key === "Escape") { event.preventDefault(); close(); return; }
       if (event.key !== "Tab") return;
       const dialog = dialogRef.current;
-      const buttons = [...(dialog?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])]
-        .filter((button) => button.tabIndex >= 0 && !button.hidden && !button.closest("[hidden], [inert]"));
-      if (!buttons.length) { event.preventDefault(); dialog?.focus(); return; }
+      const tabbables = [...(dialog?.querySelectorAll<HTMLElement>("button:not(:disabled), [tabindex]") ?? [])]
+        .filter((element) => element.tabIndex >= 0 && !element.hidden && !element.closest("[hidden], [inert]"));
+      if (!tabbables.length) { event.preventDefault(); dialog?.focus(); return; }
       const focused = document.activeElement;
       if (!dialog?.contains(focused) || focused === dialog ||
-          (event.shiftKey && focused === buttons[0]) || (!event.shiftKey && focused === buttons.at(-1))) {
+          (event.shiftKey && focused === tabbables[0]) || (!event.shiftKey && focused === tabbables.at(-1))) {
         event.preventDefault();
-        (event.shiftKey ? buttons.at(-1) : buttons[0])?.focus();
+        (event.shiftKey ? tabbables.at(-1) : tabbables[0])?.focus();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -99,7 +99,7 @@ export function AgentConfigurationViewer({ target, onClose, onRulesRead, fallbac
     setConfigurationProblem(null);
     setSkillId(null);
     if (!target.occupantId) { setConfigurationProblem(empty("unverified")); return () => controller.abort(); }
-    void read<LocalAgentConfigurationResponse>(`/api/local-dashboard/agents/${encodeURIComponent(target.agentId)}/configuration`, controller.signal)
+    void read<LocalAgentConfigurationResponse>(`/api/local-dashboard/agents/${encodeURIComponent(target.agentId)}/configuration`, controller.signal, 12_000)
       .then((result) => {
         if (!active) return;
         if (result.agentId !== target.agentId || result.teamId !== target.teamId || result.occupantId !== target.occupantId) setConfigurationProblem(empty("unavailable"));
@@ -174,8 +174,8 @@ export function AgentConfigurationViewer({ target, onClose, onRulesRead, fallbac
           {t(next === "agent" ? "computer.agentTeam.config.agent" : "computer.agentTeam.config.skills")}
         </button>)}
       </div>}
-      <div id={`${id}-panel`} role={member ? "tabpanel" : undefined} aria-labelledby={member ? `${id}-${tab}` : undefined}
-        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+      <div id={`${id}-panel`} role={member ? "tabpanel" : "region"} aria-labelledby={member ? `${id}-${tab}` : `${id}-title`} tabIndex={0}
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-[-2px]">
         {member && tab === "skills" ? !configuration ? <DocumentView document={configurationProblem} member onRetry={() => setConfigurationAttempt((attempt) => attempt + 1)} />
           : selectedSkill ? <>
             <button type="button" onClick={() => { setSkillId(null); setSkillState(null); }}
