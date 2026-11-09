@@ -95,7 +95,7 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
   const count = snapshot?.teamCount ?? t("computer.agentTeam.unknownCount");
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
     ? null : new Date(snapshot.updatedAt).toLocaleString(activeLocale());
-  const countLabel = snapshot?.teamCount === 1 ? t("computer.agentTeam.headingOne") : t("computer.agentTeam.heading", { count });
+  const countLabel = snapshot?.teamCount === 1 ? t("computer.agentTeam.teamCountOne") : t("computer.agentTeam.teamCount", { count });
   const readLabel = readAt ? t("computer.agentTeam.readAt", { time: readAt }) : t("computer.agentTeam.neverRead");
   const stale = snapshot?.status === "stale";
   const teamTokens = { "24h": tokenLabel("24h", selectedTeam?.tokenUsage24h, stale),
