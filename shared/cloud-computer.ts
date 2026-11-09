@@ -7,6 +7,13 @@ export interface CloudEngine {
   computerMcp?: boolean;
 }
 
+export function cloudEngine(instance: { adapter: { capabilities: CloudEngine }; displayName?: string; driverKind?: string } | null | undefined, model?: string): CloudEngine & { name: string } {
+  return {
+    computerMcp: instance?.adapter.capabilities.computerMcp,
+    name: model?.trim() || instance?.displayName || instance?.driverKind || "This model",
+  };
+}
+
 /** An engine with computer tools gets the cloud computer as one more stdio
  * computer server, on a Boat and on a VPS alike. The turn always stays on the
  * bot's own engine; nothing hands it to another one. */

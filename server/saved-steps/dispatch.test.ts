@@ -12,6 +12,7 @@ import type { Message } from "../store.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { completeWindowState, windowState } from "../testing/saved-steps-fixtures.ts";
 import { SavedStepsDispatch, type DispatchDeps, type ReplayRequest } from "./dispatch.ts";
+import { hostPlacePicked } from "./saved-steps.ts";
 import { requestKey } from "./key.ts";
 import { declinedReply, fallbackNote } from "./replay.ts";
 import type { CallOutcome, ComputerCaller } from "./resolve.ts";
@@ -633,6 +634,17 @@ describe("SavedStepsDispatch.wouldReplay", () => {
     recipes.find.mockReturnValue(undefined);
     await dispatch.sendTurn(engine, request, input, start);
   };
+
+  it.each([
+    ["ready Auto host", undefined, undefined, true, INPUT, false],
+    ["unavailable explicit host", "local", "works-on", false, { ...INPUT, integrations: {} }, false],
+    ["ready explicit host", "local", "works-on", true, INPUT, true],
+    ["automatically pinned host", "local", "auto-pin", true, INPUT, false],
+  ] as const)("keeps caller-derived saved-step eligibility for %s", async (_, wants, source, mounted, input, expected) => {
+    await sendThrough({ ...REQ, placePicked: hostPlacePicked(wants, source, mounted) }, input);
+    expect(start).toHaveBeenCalledWith(input);
+    expect(dispatch.wouldReplay("t1", RECIPE_TOOLS)).toBe(expected);
+  });
 
   it("holds after a turn that met every replay condition", async () => {
     await sendThrough(REQ, INPUT);
