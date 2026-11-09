@@ -1276,7 +1276,7 @@ export function ComputerPanel({
             <DataPanel key={bot.id} bot={bot} requestedCard={dataRequest} />
           </Suspense>
         </div>
-      ) : panelView === "files" || panelView === "mini-apps" || panelView === "agent-team" || panelView === "usage" ? (
+      ) : panelView === "files" || panelView === "mini-apps" ? (
         <ComputerPanelInfoTab view={panelView} bot={bot} />
       ) : panelView === "android" && androidConnected ? (
         <div {...tabPanelProps("android")} className={cn("flex-1 overflow-y-auto px-4 pt-2", TAB_PANEL_FOCUS)}>

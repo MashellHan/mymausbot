@@ -220,19 +220,19 @@ describe("Computer panel tabs", () => {
     }
   });
 
-  it("shows Android when connected and keeps Mini Apps, Agent Team and Usage after Files in Simple mode", () => {
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+  it("shows Android when connected and keeps Mini Apps after Files in Simple mode", () => {
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Browser", "Data", "Files", "Mini Apps"]);
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Android", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Android", "Browser", "Data", "Files", "Mini Apps"]);
   });
 
-  it("shows Files, Mini Apps, Agent Team and Usage after the existing Advanced tabs", () => {
+  it("shows Files and Mini Apps after the existing Advanced tabs", () => {
     fixture.advanced = true;
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
     fixture.config = {};
     fixture.android = false;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps"]);
   });
 
   it("reads a Routines view stored by Advanced as the Computer tab in Simple", () => {

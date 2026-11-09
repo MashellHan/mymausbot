@@ -111,11 +111,14 @@ async function metadataInteractions(window) {
     return frame?.srcdoc.includes('fixture-note') && frame.sandbox.contains('allow-scripts')
       && !frame.sandbox.contains('allow-same-origin');
   })()`), Boolean, "real opaque Mini App iframe", 10_000);
-  const history = '[data-testid=mini-apps-panel] > header details';
+  assert.equal(await evaluate(window, 'document.querySelector("[data-testid=mini-apps-panel] > header").innerText.includes("Version history")'), false);
+  await click(window, '[data-mini-app-all]');
+  const history = '[data-mini-app-popover] details';
   await click(window, `${history} > summary`);
   const menu = await evaluate(window, `(() => {
     const header = document.querySelector('[data-testid=mini-apps-panel] > header');
-    const details = header.querySelector('details');
+    const details = header.querySelector('[data-mini-app-popover] details');
+    details.scrollIntoView({ block: 'nearest' });
     const box = details.querySelector('div').getBoundingClientRect();
     return { width: innerWidth, height: innerHeight, left: box.left, right: box.right, top: box.top, bottom: box.bottom,
       open: details.open, publisherChat: header.innerText.includes('Open publisher chat') };
@@ -124,7 +127,7 @@ async function metadataInteractions(window) {
     && menu.top >= 0 && menu.bottom <= menu.height, JSON.stringify(menu));
   result.geometry.push({ name: "metadata-history-360-midnight-en.png", ...menu });
   await capture(window, "metadata-history-360-midnight-en.png", true);
-  await click(window, `${history} > summary`);
+  await evaluate(window, 'window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); true');
   await evaluate(window, `(() => {
     const button = document.querySelector('[data-testid=mini-apps-panel] [role=tablist] [data-info-hint]');
     button.focus(); button.click();
@@ -137,6 +140,7 @@ async function metadataInteractions(window) {
   await until(() => evaluate(window, `document.activeElement === document.querySelector('[data-testid=mini-apps-panel] iframe')
     && window.metadataFrameBlur && !document.querySelector('[data-info-hint-content]')`), Boolean, "frame focus dismisses pinned metadata", 5_000);
   result.checks.push("Pinned metadata closes when actual focus enters the opaque Mini App iframe");
+  await click(window, '[data-mini-app-all]');
   await click(window, `${history} > summary`);
   await evaluate(window, `(() => {
     const button = [...document.querySelectorAll('${history} button')].find(node => node.textContent.startsWith('Version ${installed.previousVersion} ·'));
@@ -192,7 +196,7 @@ try {
   assert.equal(before.length, 5);
   const team = before.find((entry) => entry.dashboardIdentity === "agent-team");
   assert(team?.dashboard?.kind === "agent-team");
-  assert(before.some((entry) => entry.dashboardIdentity === "usage" && entry.title === "Work Tracker"));
+  assert(before.some((entry) => entry.dashboardIdentity === "usage" && entry.title === "Activities"));
   await evaluate(window, `(() => { const host=document.querySelector('[data-testid=mini-apps-panel]');
     const tabs=[...host.querySelectorAll('[role=tab]')]; tabs[0].focus();
     tabs[0].dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true})); return true; })()`);

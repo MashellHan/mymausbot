@@ -39,11 +39,8 @@ describe("computer panel view persistence", () => {
     expect(readComputerPanelView("scout", storage)).toBe("data");
   });
 
-  it("round-trips the Agent Team tab", () => {
-    const values = new Map<string, string>();
-    const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
-    writeComputerPanelView("scout", "agent-team", storage);
-    expect(readComputerPanelView("scout", storage)).toBe("agent-team");
+  it.each(["agent-team", "usage"])("opens Mini Apps for a saved %s tab", (view) => {
+    expect(readComputerPanelView("scout", { getItem: () => view })).toBe("mini-apps");
   });
 
   it("round-trips the Mini Apps tab", () => {
@@ -53,12 +50,7 @@ describe("computer panel view persistence", () => {
     expect(readComputerPanelView("scout", storage)).toBe("mini-apps");
   });
 
-  it("round-trips the Usage tab", () => {
-    const values = new Map<string, string>();
-    const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
-    writeComputerPanelView("scout", "usage", storage);
-    expect(readComputerPanelView("scout", storage)).toBe("usage");
-  });
+
 });
 
 describe("computer panel view availability", () => {
@@ -74,14 +66,14 @@ describe("computer panel view availability", () => {
   });
 
   it("shows Simple the Android tab, after Computer, only while a device is connected", () => {
-    expect(computerPanelTabs({ advanced: false, androidConnected: true })).toEqual(["computer", "android", "browser", "data", "files", "mini-apps", "agent-team", "usage"]);
-    expect(computerPanelTabs({ advanced: false, androidConnected: false })).toEqual(["computer", "browser", "data", "files", "mini-apps", "agent-team", "usage"]);
+    expect(computerPanelTabs({ advanced: false, androidConnected: true })).toEqual(["computer", "android", "browser", "data", "files", "mini-apps"]);
+    expect(computerPanelTabs({ advanced: false, androidConnected: false })).toEqual(["computer", "browser", "data", "files", "mini-apps"]);
     expect(resolveComputerPanelView("android", { advanced: false, androidConnected: true })).toBe("android");
     expect(resolveComputerPanelView("android", { advanced: false, androidConnected: false })).toBe("computer");
   });
 
   it("keeps a view whose trigger is on the row", () => {
-    for (const view of ["computer", "browser", "data", "files", "mini-apps", "agent-team", "usage"] as const) {
+    for (const view of ["computer", "browser", "data", "files", "mini-apps"] as const) {
       expect(resolveComputerPanelView(view, { advanced: true, androidConnected: true })).toBe(view);
       expect(resolveComputerPanelView(view, { advanced: false, androidConnected: false })).toBe(view);
     }

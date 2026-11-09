@@ -349,16 +349,17 @@ export function MiniAppsPanel() {
           <MiniAppLibraryPopover open={libraryOpen} inventory={inventory ?? []} issues={defaultIssues} busyKind={busyKind}
             focusKind={libraryFocus} owner={owner} nativeGuard={nativeGuard}
             onToggle={() => { setLibraryFocus(null); setLibraryOpen((current) => !current); }} onClose={() => setLibraryOpen(false)}
-            onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)} />
-        </div>}
-        {selected && <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[12px] text-ink-secondary [&:not(:empty)]:mt-2">
-            {document && appState && publisher && !dashboard && !selected.dashboard && !selected.dashboardIdentity
-              && <button type="button" onClick={() => openBot(dispatch, publisher, showThreads)} className="text-accent-text underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.openChat")}</button>}
-            {document && appState && document.versions.length > 1 && <details className="relative"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t("computer.miniApps.history")}</summary>
-              <div className="absolute right-0 top-full z-20 mt-1 max-h-60 min-w-44 overflow-y-auto rounded-xl border border-hairline bg-menu p-1.5 shadow-xl">
-                {document.versions.map((version) => <button key={version.version} type="button" disabled={rollbackVersion !== null || version.version === document.app.templateVersion} onClick={() => void rollback(version.version)} className="block w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">{t("computer.miniApps.version", { number: version.version })} · {stamp(version.createdAt)}</button>)}
-              </div>
-            </details>}
+            onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)}>
+            {selected && document && appState && (document.versions.length > 1 || publisher && !dashboardInstalled) && <div className="mt-3 border-t border-hairline/60 pt-3 text-[12px] text-ink-secondary">
+              <p className="mb-2 font-medium text-ink">{miniAppDisplayName(selected)}</p>
+              {publisher && !dashboardInstalled && <button type="button" onClick={() => { setLibraryOpen(false); openBot(dispatch, publisher, showThreads); }} className="text-accent-text underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.openChat")}</button>}
+              {document.versions.length > 1 && <details className="mt-2"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t("computer.miniApps.history")}</summary>
+                <div className="mt-1 max-h-60 overflow-y-auto">
+                  {document.versions.map((version) => <button key={version.version} type="button" disabled={rollbackVersion !== null || version.version === document.app.templateVersion} onClick={() => void rollback(version.version)} className="block w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">{t("computer.miniApps.version", { number: version.version })} · {stamp(version.createdAt)}</button>)}
+                </div>
+              </details>}
+            </div>}
+          </MiniAppLibraryPopover>
         </div>}
       </header>
       <>

@@ -55,7 +55,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
       for (const workspace of workspaces) {
         const id = workspace.workspace_id;
         if (typeof id !== "string" || !id || teams.has(id)) throw new Error("Invalid workspace identity");
-        teams.set(id, { id, name: dashboardText(workspace.label, 100) || id, agentCount: 0, activeAgentCount: 0, agents: [] });
+        teams.set(id, { id, name: dashboardText(workspace.label, 100) || id, agentCount: 0, activeAgentCount: 0, lastActivityAt: null, agents: [] });
       }
       const observations = await observationsFor(agents);
       const seen = new Set<string>();
@@ -66,6 +66,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
         seen.add(id);
         const sessionId = codexSessionId(agent);
         const observation = sessionId ? observations.get(sessionId) : null;
+        if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
         const tokens = agent.tokens as Record<string, unknown> | null;
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
