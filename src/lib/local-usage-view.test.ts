@@ -29,6 +29,34 @@ function fixture(endDay = "2026-11-06"): LocalUsageResponse {
 }
 
 describe("merged Usage view", () => {
+  it("uses dated history for 60/90 days and calendar months without changing cards or inventing old zeroes", () => {
+    const snapshot = fixture("2026-11-09");
+    snapshot.history = snapshot.trend.map((row) => ({ ...row, day: shift(row.day, -60), totalTokens: 42 }));
+    snapshot.merged!.history = snapshot.merged!.trend.map((row) => ({ ...row, day: shift(row.day, -60) }));
+    const base = localUsageView(snapshot);
+    expect(localUsageView(snapshot, "60").trend).toHaveLength(60);
+    const long = localUsageView(snapshot, "90");
+    expect(long.trend).toHaveLength(90);
+    expect(long.trend[0]).toMatchObject({ day: "2026-08-12", totalTokens: 42, prs: 1, commits: 5 });
+    expect(long.trend.find((row) => row.day === "2026-09-11")).toMatchObject({ prs: null, knownPrs: null, commits: null, totalTokens: null });
+    expect(long.windows).toEqual(base.windows);
+    const months = localUsageView(snapshot, "6m");
+    expect(months.period).toEqual({ startDay: "2026-05-10", endDay: "2026-11-09", days: 184 });
+    expect(months.trend[0]).toMatchObject({ coverage: "unavailable", tokenStatus: "unavailable", totalTokens: null, prs: null, commits: null });
+    const legacy = fixture();
+    expect(localUsageView(legacy, "90").trend[0]).toMatchObject({ totalTokens: null, knownPrs: null, coverage: "unavailable" });
+  });
+
+  it("aligns differing extended capture dates by their real dates", () => {
+    const snapshot = fixture("2026-01-02");
+    snapshot.merged = fixture("2026-01-01").merged;
+    snapshot.history = [{ ...snapshot.trend[0]!, day: "2025-11-03", totalTokens: 321 }];
+    const long = localUsageView(snapshot, "60");
+    expect(long.trend[0]).toMatchObject({ day: "2025-11-03", totalTokens: 321, prs: null });
+    expect(long.trend.at(-1)).toMatchObject({ day: "2026-01-01", totalTokens: 100, prs: 1 });
+    expect(long.windows).toEqual(localUsageView(snapshot).windows);
+  });
+
   it("takes every PR and commit value and comparison from remote data while retaining cached tokens", () => {
     const snapshot = fixture();
     for (const window of Object.values(snapshot.windows!)) {

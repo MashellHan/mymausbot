@@ -142,6 +142,41 @@ polls without overlap only while open and visible, and clears on 401/403.
 
 ## Isolated verification
 
+Activities shares a 30/60/90-day or six-month range across its three trends.
+The default 30-day projection and the 1/7/30-day cards, comparisons and repository
+tables retain their existing scope. Longer trends use one extended projection
+for the entire range, including dates also present in the default trend.
+Days in different source captures are joined by their actual China-calendar date.
+
+Six months means the interval after the clamped same date six calendar months
+earlier, through the data date, inclusive. For 2026-11-09 this is 2026-05-10 through
+2026-11-09; for 2024-08-31 the February boundary clamps to leap day, so the range
+starts 2024-03-01. Six-month bars group by Monday, counting only dates inside the
+range. Boundary tooltips show their actual start and end. Daily details retain
+all selected dates; shorter ranges restore daily bars. Missing dates remain
+unavailable, partial observations remain lower bounds, and verified zero remains zero.
+
+The private response includes at most 191 dates, enough for six calendar months
+and the daily comparison offset. The wrapper still requests the external
+collector's supported `history_days=59`; it retains validated daily Token totals
+in `trendHistory` across refreshes. It does not retrieve older Token logs or fill
+gaps. The remote merged-PR collector has a bounded 191-day search and preserves
+each stale source's actual coverage start. The server independently deduplicates
+the original 60-day card projection and the extended trend projection, so an
+earlier repeated commit cannot change existing card or repository accounting.
+Legacy 60-day ready caches provide no observations before their declared start.
+Deploy the wrapper and its adjacent module together to accumulate history;
+source changes alone do not backfill, run collection or update an installed App.
+
+Synthetic range and week regressions live in `shared/local-usage-range.test.ts`,
+`src/lib/local-usage-trends.test.ts`, `src/lib/local-usage-view.test.ts` and
+`src/components/LocalUsagePanel.test.ts`. The Python collector fixtures are
+`scripts/refresh-local-usage.test.py` and `scripts/local_usage_merged.test.py`.
+Use the shared selector and existing isolated renderer fixture below. Check
+60/90 daily bars, six-month Monday bars, boundary dates, missing and partial
+values, keyboard navigation and returning to 30 days in both locales at 360,
+400 and 960px. Browser acceptance requires an approved browser channel.
+
 Run the affected contracts and owner-access fixture:
 
 ```sh
