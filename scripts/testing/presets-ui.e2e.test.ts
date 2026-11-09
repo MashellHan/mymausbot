@@ -25,7 +25,7 @@ describe("Preset bots in the real renderer", () => {
     let stdout = "";
     let stderr = "";
     let info: { ui: string; url: string; botId: string; dataDir: string; logPath: string };
-    child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
+    child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch", "--simple"], {
       cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
@@ -64,7 +64,8 @@ describe("Preset bots in the real renderer", () => {
     await expect.poll(snapshot, { timeout: 10_000 }).toContain('button "You"');
     await click("You");
     await click("Settings");
-    await expect.poll(snapshot, { timeout: 10_000 }).toContain("Share as preset…");
+    // New bot defaults sit on the AI page.
+    await expect.poll(() => evaluate("(() => { document.querySelector('[data-settings-page=\"ai\"]')?.click(); return Boolean(document.querySelector('[data-new-bot-share]')); })()"), { timeout: 10_000 }).toBe(true);
     await click("Share as preset…");
     await expect.poll(snapshot, { timeout: 20_000 }).toContain("What's in the file");
     let dialog = await snapshot();

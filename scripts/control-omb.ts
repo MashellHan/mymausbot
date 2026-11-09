@@ -35,7 +35,7 @@ export interface ControlOmbDependencies {
 }
 
 export const HELP_UI = `renderer (needs a ui launch handle; every verb takes --ui HANDLE, never discovery):
-  node --experimental-strip-types scripts/control-omb.ts ui launch [--entry threads] [--tool-calls JSON] [--mode happy] [--engine codex]
+  node --experimental-strip-types scripts/control-omb.ts ui launch [--entry threads] [--simple] [--tool-calls JSON] [--mode happy] [--engine codex]
   ui snapshot --ui HANDLE [--interactive]
   ui click --ui HANDLE (--ref @eN | --name NAME)
   ui type --ui HANDLE (--ref @eN | --name NAME) --text TEXT

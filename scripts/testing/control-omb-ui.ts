@@ -424,7 +424,7 @@ export async function launchUi(
   io: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream } = process,
   fixtureOptions: { boatFixtureApi?: string } = {},
 ): Promise<void> {
-  const values = parse("ui launch", args, { entry: { type: "string" }, "tool-calls": { type: "string" }, mode: { type: "string" }, engine: { type: "string" } });
+  const values = parse("ui launch", args, { entry: { type: "string" }, "tool-calls": { type: "string" }, mode: { type: "string" }, engine: { type: "string" }, simple: { type: "boolean", default: false } });
   if (values.engine !== undefined && values.engine !== "codex") {
     throw new ControlOmbError(`unknown --engine ${JSON.stringify(values.engine)}`, "the fake Claude CLI always runs; --engine codex adds the fake Codex app-server beside it");
   }
@@ -432,6 +432,7 @@ export async function launchUi(
   if (!Object.hasOwn(ENTRIES, entryName)) {
     throw new ControlOmbError(`unknown --entry ${JSON.stringify(entryName)}`, `available entries: ${Object.keys(ENTRIES).join(", ")}`);
   }
+  if (values.simple === true && entryName !== "threads") throw new ControlOmbError("--simple requires the threads preview");
   const entry = ENTRIES[entryName as keyof typeof ENTRIES];
   const fakeEnv: NodeJS.ProcessEnv = {};
   if (values["tool-calls"] !== undefined) {
@@ -476,14 +477,16 @@ export async function launchUi(
     // notes would otherwise land there first.
     preview = await mountPreview(fixture, { ...entry, logLevel: "warn" });
     checkpoint();
+    const previewUrl = new URL(preview.previewUrl);
+    if (values.simple === true) previewUrl.searchParams.set("fixtureMode", "simple");
     const session: SessionEnv = { home: fixture.info.dataDir, session: `omb-ui-${new URL(fixture.info.url).port}`, chrome };
     const env = sessionEnv(session, parentEnv);
     opened = { binary, env };
-    await agentBrowser(binary, env, ["open", preview.previewUrl], 120_000);
+    await agentBrowser(binary, env, ["open", previewUrl.href], 120_000);
     checkpoint();
     const handle: UiHandle = {
       url: fixture.info.url,
-      previewUrl: preview.previewUrl,
+      previewUrl: previewUrl.href,
       session: session.session,
       binary,
       home: fixture.info.dataDir,

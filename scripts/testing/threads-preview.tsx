@@ -8,18 +8,19 @@ import { applySkinChoice, readSkinChoice } from "../../src/lib/skins";
 import "../../src/styles.css";
 
 // This entry point is served only by the disposable verification launcher.
+const query = new URLSearchParams(location.search);
 // The voice-latency harness opts in with ?ombVoiceProbe=1; the recorder in
 // src/lib/voice-latency-probe stays inert without this sink.
-if (new URLSearchParams(location.search).has("ombVoiceProbe")) {
+if (query.has("ombVoiceProbe")) {
   (window as typeof window & { __ombVoiceProbe?: unknown[] }).__ombVoiceProbe = [];
 }
 setAnalyticsEnabled(false);
 // ?onboarding=1 plays a brand-new install, and a new install opens in Simple mode.
-if (new URLSearchParams(location.search).has("onboarding")) setAdvancedMode(false);
-else setEmailGateDone("skipped");
+if (query.has("onboarding") || query.get("fixtureMode") === "simple") setAdvancedMode(false);
+if (!query.has("onboarding")) setEmailGateDone("skipped");
 // Every launch is a new browser, so the once-per-browser Simple mode popup shows only with ?simpleModePrompt=1.
-if (!new URLSearchParams(location.search).has("simpleModePrompt")) markSimpleModePromptSeen();
+if (!query.has("simpleModePrompt")) markSimpleModePromptSeen();
 // The same for the once-per-person Move from Grok Bot popup, with ?grokMovePopup=1.
-if (!new URLSearchParams(location.search).has("grokMovePopup")) localStorage.setItem(GROK_MOVE_NOTICE, "1");
+if (!query.has("grokMovePopup")) localStorage.setItem(GROK_MOVE_NOTICE, "1");
 applySkinChoice(readSkinChoice());
 createRoot(document.getElementById("root")!).render(<App />);

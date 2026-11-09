@@ -70,13 +70,20 @@ describe("Settings search in Simple mode", () => {
     expect(search().value).toBe("f");
   });
 
-  it("lists a builder control as Advanced and, when chosen, opens General at the Advanced mode row", () => {
+  it("keeps Advanced search and finds Automatic recovery under More settings", () => {
     type("font");
-    const result = host.querySelector<HTMLButtonElement>('[data-settings-advanced-only="settings.font.title"]')!;
-    expect(result.textContent).toBe("Interface font · Advanced");
-    flushSync(() => result.click());
+    const advanced = host.querySelector<HTMLButtonElement>('[data-settings-advanced-only="settings.font.title"]')!;
+    expect(advanced.textContent).toBe("Interface font · Advanced");
+    flushSync(() => advanced.click());
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "general" });
     expect(scrolled.map((element) => element.getAttribute("data-settings-block"))).toContain("advanced-mode");
+    type("recovery");
+    const result = host.querySelector<HTMLButtonElement>('[data-settings-more-result="settings.recovery.title"]')!;
+    expect(result.textContent).toBe("Automatic recovery · More settings");
+    flushSync(() => result.click());
+    expect(host.querySelector("h2")!.textContent).toBe("More settings");
+    expect(host.querySelector('[data-settings-block="limits"]')!.textContent).toContain("Automatic recovery");
+    expect(scrolled.map((element) => element.getAttribute("data-settings-block"))).toContain("limits");
     expect(search().value).toBe("");
   });
 
@@ -88,7 +95,7 @@ describe("Settings search in Simple mode", () => {
       .toEqual(["decisionModel", "imageGeneration", "backups", "experimental"]);
     const limits = host.querySelector('[data-settings-block="limits"]')!;
     expect(limits.querySelector("h3")!.textContent).toBe("Limits");
-    for (const title of ["Group turns", "Tool time limit", "Parallel threads", "Event log cleanup"]) expect(limits.textContent, title).toContain(title);
+    for (const title of ["Group turns", "Tool time limit", "Parallel threads", "Automatic recovery", "Event log cleanup"]) expect(limits.textContent, title).toContain(title);
     flushSync(() => host.querySelector<HTMLButtonElement>('[data-settings-more-section="backups"]')!.click());
     expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "toggleAppSettings", open: true, section: "backups" });
     expect(heading()).toBe("General");

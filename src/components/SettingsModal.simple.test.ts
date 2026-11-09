@@ -163,7 +163,7 @@ describe("Settings in Simple mode", () => {
     for (const id of hidden) expect(SIMPLE_HIDDEN_SECTIONS).toContain(id);
   });
 
-  it("opens General on Account, then Appearance, Language and typing, Notifications, System and Import, with More settings and Advanced mode last as plain rows", () => {
+  it("opens General on Account, then Appearance, Language and typing, Notifications, System and Import, with More settings and Advanced mode last", () => {
     const html = render();
     expect(currentPage(html)).toBe("general");
     expect(groupLabels(html)).toEqual(["Account", "Appearance", "Language and typing", "Notifications", "System", "Import", "Organization"]);
@@ -207,7 +207,7 @@ describe("Settings in Simple mode", () => {
     expect(fixture.switches.find((props) => props["aria-label"] === "Show your computers")?.checked).toBe(false);
   });
 
-  it("keeps the everyday rows, puts limits behind More settings, and leaves the six other builder controls to Advanced, where search still points", () => {
+  it("keeps the everyday rows, puts limits and Automatic recovery behind More settings, and leaves out the rest of Advanced's controls", () => {
     const general = open("general");
     for (const shown of ['aria-label="Send usage analytics"', 'aria-label="Color my messages with the bot&#x27;s color"', 'aria-label="Send messages with"',
       'aria-label="Notification sounds"', 'aria-label="Show the notification feed"', 'aria-label="App language"', 'role="radiogroup" aria-label="Light or dark"']) {
@@ -219,15 +219,17 @@ describe("Settings in Simple mode", () => {
       "Interface font", "Chat width", "Pinned bots as circles", "Universal pins", "Tool calls", "This run", "Keep prompt cache warm"]) {
       expect(everyPage, gone).not.toContain(`>${gone}<`);
     }
-    expect(SIMPLE_ADVANCED_ONLY.map((key) => t(key))).toEqual(["Automatic recovery", "Interface font", "Chat width", "Pinned bots as circles", "Universal pins", "This run"]);
-    expect(SIMPLE_MORE_LIMITS.map((key) => t(key))).toEqual(["Group turns", "Tool time limit", "Parallel threads", "Event log cleanup", "Keep prompt cache warm", "Repeat computer tasks without AI"]);
+    expect(SIMPLE_ADVANCED_ONLY.map((key) => t(key))).toEqual(["Interface font", "Chat width", "Pinned bots as circles", "Universal pins", "This run"]);
+    expect(SIMPLE_MORE_LIMITS.map((key) => t(key))).toEqual(["Group turns", "Tool time limit", "Parallel threads", "Automatic recovery", "Event log cleanup",
+      "Keep prompt cache warm", "Repeat computer tasks without AI"]);
   });
 
-  it("holds the defaults for new bots on AI as one row: the effort they start with, and Edit for the rest", () => {
+  it("holds the defaults for new bots on AI as one row: the effort they start with, sharing them as a preset, and Edit for the rest", () => {
     const html = open("engines");
     const row = html.slice(html.indexOf(">Defaults for new bots<"));
     expect(row).toContain(">Effort for new bots<");
     expect(row).toMatch(/<select[^>]*aria-label="Effort for new bots"/);
+    expect(row).toMatch(/data-new-bot-share="true"[^>]*>Share as preset…<\/button>/);
     expect(row).toMatch(/data-new-bot-defaults="true"[^>]*>Edit<\/button>/);
     expect(html.indexOf("MARKER:engines;")).toBeLessThan(html.indexOf(">Defaults for new bots<"));
     expect(html.indexOf(">Defaults for new bots<")).toBeLessThan(html.indexOf(">API keys<"));
@@ -371,7 +373,7 @@ describe("Settings in Simple mode", () => {
 describe("Settings in Advanced mode", () => {
   beforeEach(() => { fixture.advancedMode = true; });
 
-  it("keeps the grouped rail and General, Advanced mode switch first, on the same Settings look as Simple", () => {
+  it("keeps the grouped rail and General, with the Advanced mode switch first, on the same Settings look as Simple", () => {
     const html = render();
     expect(html).toContain("glass-surface");
     expect(html).toContain('data-settings-look="advanced"');
