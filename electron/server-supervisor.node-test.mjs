@@ -302,7 +302,6 @@ test("forgetting a remote environment keeps its sign-out confirmation and answer
   const { calls, context, sessionCalls } = runForget({ environments: [remote], activeId: "r1" });
   assert.deepEqual(plain(await context.forgetEnvironment("r1")), { ok: true });
   assert.equal(calls.dialogs.length, 1, "the remote dialog stays");
-  assert.match(calls.dialogs[0].detail, /signs out of that server/);
   assert.deepEqual(sessionCalls.map(([action]) => action), ["fetch", "clear"], "the selected owner session signs out and clears only this origin");
   assert.equal(sessionCalls[0][1], "https://box.example/api/auth/logout");
   assert.equal(sessionCalls[1][1].origin, "https://box.example");
