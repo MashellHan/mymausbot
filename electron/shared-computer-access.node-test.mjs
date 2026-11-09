@@ -89,6 +89,37 @@ test("saved grants and stale consent cannot bypass a disabled or unavailable loc
   }
 });
 
+test("desktop startup uses the maintainer gate without a background screen permission request", async t => {
+  const main = await readFile(new URL("./main.mjs", import.meta.url), "utf8");
+  assert.match(main, /sharingController\(\)\.start\(\{ maintainer: allowed \}\)/);
+  assert.doesNotMatch(main, /\baskForScreen\b/);
+  const { dir } = await fixture(t);
+  const env = { id: "saved", origin: "https://workspace.fixture.example", name: "Saved" };
+  const file = path.join(dir, "sharing.json");
+  await writeFile(file, JSON.stringify({ version: 1, records: { [env.id]: {
+    id: randomUUID(), sessionId: randomUUID(), environmentId: randomUUID(), secret: "a".repeat(64),
+    enabled: true, folders: [], terminal: false, computer: false,
+  } } }));
+  for (const allowed of [false, true]) {
+    let contacts = 0;
+    let permissionPrompts = 0;
+    let contacted = () => {};
+    const requestStarted = new Promise((resolve) => { contacted = resolve; });
+    const sharing = createComputerSharing({
+      file, environments: () => [env], enabled: async () => allowed, cuaConnection: async () => ({ mode: "unavailable" }),
+      askForScreen: () => { permissionPrompts++; },
+      fetch: async () => { contacts++; contacted(); throw new Error("fixture offline"); },
+    });
+    try {
+      sharing.start({ maintainer: allowed });
+      if (allowed) await Promise.race([requestStarted, delay(1_000).then(() => assert.fail("allowed sharing did not start"))]);
+      else await delay(30);
+      assert.equal(contacts > 0, allowed);
+      assert.equal(permissionPrompts, 0);
+    } finally { sharing.close(); }
+  }
+});
+
 test("selected folders are read-only; writes require an explicit grant and fresh hash", async t => {
   const { dir, folder, run } = await fixture(t);
   await writeFile(path.join(dir, "note.txt"), "hello 🌱");

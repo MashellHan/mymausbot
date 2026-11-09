@@ -10,7 +10,7 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-type Scenario = "lost-response" | "restart-after-5xx" | "in-progress" | "recovered-box";
+type Scenario = "lost-response" | "restart-after-5xx" | "in-progress" | "recovered-box" | "desktop-failure";
 
 const JOURNAL_MODULE_URL = pathToFileURL(join(process.cwd(), "server", "boat-create-idempotency.ts")).href;
 
@@ -125,7 +125,9 @@ describe("Boat create idempotency", () => {
         if (url.pathname === `/api/v1/sandboxes/${boxId()}` && req.method === "DELETE") {
           deletedBoats.push(boxId());
           res.writeHead(202);
-          return res.end(JSON.stringify({ ok: true }));
+          return res.end(JSON.stringify({ ok: true, type: "sandbox.deleting", operation: {
+            id: "bdop_0123456789abcdef0123456789abcdef", kind: "sandbox", targetId: boxId(), status: "completed",
+          } }));
         }
         res.writeHead(404).end(JSON.stringify({ ok: false, message: `unexpected ${req.method} ${url.pathname}` }));
       });
@@ -238,6 +240,20 @@ describe("Boat create idempotency", () => {
 
     expect(createCount).toBe(1);
     expect(deletedBoats).toEqual([]);
+  });
+
+  it("confirms deletion of a newly created Boat when its desktop link fails", async () => {
+    scenario = "desktop-failure";
+    failDesktop = true;
+    vi.resetModules();
+    const { provisionBoat } = await import("./boat.ts");
+    const botId = "desktop-failure-bot";
+    await expect(provisionBoat({ box: { token: "box_test" } } as any, botId, "Desktop Failure"))
+      .rejects.toThrow(/desktop link could not be created/);
+    expect(createKeys).toHaveLength(1);
+    expect(deletedBoats).toEqual(["bx_abcdefgh"]);
+    const { boatCreateRecoverySnapshot } = await import("./boat-create-idempotency.ts");
+    expect(boatCreateRecoverySnapshot().some((record) => record.botId === botId)).toBe(false);
   });
 
   it("fails closed when an ambiguous request has outlived the provider key", async () => {

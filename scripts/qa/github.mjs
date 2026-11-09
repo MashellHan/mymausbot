@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eligibleRun, fullPushPlan, narrowPushPlan } from "./contracts.mjs";
+import { eligibleRun, fullPushPlan, narrowPushPlan, preflightJob } from "./contracts.mjs";
 
 const closedSocket = (error) => error instanceof TypeError && ["fetch failed", "terminated"].includes(error.message)
   && error.cause?.code === "UND_ERR_SOCKET" && error.cause?.message === "other side closed";
@@ -84,7 +84,7 @@ function producingJob(job, jobs) {
 }
 
 export async function runPlan(run, jobs, artifacts, { api = github, readArtifact = artifactFiles } = {}) {
-  const preflight = jobs.find((job) => job.name.startsWith("typecheck + lint"));
+  const preflight = preflightJob(jobs);
   if (!preflight) return null;
   const matches = artifacts.filter((item) => item.name === `qa-plan-attempt-${preflight.run_attempt}`);
   if (matches.length > 1) throw new Error("Ambiguous current-run validation plan");
@@ -109,7 +109,7 @@ export async function fullRunEvidence(run, { api = github, readArtifact = artifa
   try {
     const jobs = await runJobs(run.id, run.run_attempt, api);
     const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", api);
-    const preflight = jobs.find((job) => job.name.startsWith("typecheck + lint"));
+    const preflight = preflightJob(jobs);
     if (artifacts.some((artifact) => artifact.name === `qa-plan-attempt-${preflight?.run_attempt}` && artifact.expired)) return "unknown";
     const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
     if (plan) return fullPushPlan(plan) ? "full" : narrowPushPlan(plan) ? "ineligible" : "unknown";

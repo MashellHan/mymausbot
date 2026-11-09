@@ -145,3 +145,19 @@ is CI's responsibility. Retain the hook and do not duplicate it immediately
 before pushing. If pnpm is absent from PATH, use the existing verified toolchain
 for that process; do not reinstall dependencies, change the lockfile/global
 configuration or bypass checks to repair PATH.
+
+## Process clock and PR recovery
+
+Timing and queue-age targets produce advisory scan findings. They never alone
+fail a merge/delivery gate, close a useful PR, cancel a pipeline or discard a
+successful validation result. Follow the validation policy's process scan and
+recovery mechanism; retain actual quality/source/security checks.
+
+On 2026-11-09, closure audit found #106 explicitly closed under the fixed
+24-hour disposition policy. Its accepted PhoneRegistry fixture improvement was
+still absent from main, so the same PR was reopened with its branch/head and
+prior evidence preserved. #103 had been closed after successful selected checks
+exceeded the five-minute gate target; its complete final commit later reached
+main through #110, so recovery records that verified supersession instead of
+repeating the implementation. Process issue #119 tracks the rule correction,
+remaining #106 adoption work and Lead's capacity-based follow-through.

@@ -1,8 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
 import { ALL_OS, ciOutputs, FULL_SCOPE, moveLinuxIntoStatic } from "../ci-scope.mjs";
 
-export const MERGE_JOBS = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
+export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "relay"];
+const PREFLIGHT_NAMES = {
+  hosted: ["typecheck + lint", "preflight"],
+  boat: ["typecheck + lint + Linux tests (Boat)", "preflight + Linux tests (Boat)"],
+};
+
+export function preflightJob(jobs) {
+  const matches = jobs.filter((job) => [...PREFLIGHT_NAMES.hosted, ...PREFLIGHT_NAMES.boat].includes(job.name));
+  if (matches.length > 1) throw new Error("Ambiguous workflow preflight");
+  return matches[0] ?? null;
+}
+
 const NAMES = {
+  build: "typecheck + build",
   "behavior-evals": "behavior evals (offline tiers 1-3)",
   "windows-cua": "Windows CUA host smoke",
   "electron-smokes": "macOS smokes (packaged server + Electron)",
@@ -11,10 +23,13 @@ const NAMES = {
   "control-plane": "control-plane check + workerd tests + dry run",
   "ui-smoke": "renderer smoke (control-omb ui, Ubuntu 24.04)",
   "package-linux": "package + smoke (Ubuntu 24.04 x64)",
+  relay: "relay typecheck + tests + fuzz + audit",
 };
 
-export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true) {
-  const jobs = [{ id: "static", name: outputs.linux_lanes ? "typecheck + lint + Linux tests (Boat)" : "typecheck + lint", build: outputs.build,
+export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true, preflightName) {
+  const names = outputs.linux_lanes ? PREFLIGHT_NAMES.boat : PREFLIGHT_NAMES.hosted;
+  if (preflightName !== undefined && !names.includes(preflightName)) throw new Error("Invalid workflow preflight");
+  const jobs = [{ id: "static", name: preflightName ?? names[0], build: outputs.build,
     ...(outputs.fast_pr ? { fast: true } : {}), linux: Boolean(outputs.linux_lanes),
     ...(outputs.linux_lanes?.vitest.length || outputs.linux_lanes?.evals ? { artifact: "qa-results-boat" } : {}) }];
   for (const id of outputs.jobs) {
@@ -47,6 +62,7 @@ export function inspectJobs(expected, observed) {
 
 const VALIDATION_STEPS = {
   static: ["Verify CI selection and documentation references", "Validate locale catalogs", "pnpm lint", "Source guards", "Security, data and dispatch core with bounded affected tests", "pnpm typecheck", "pnpm check:electron", "production UI build"],
+  build: ["pnpm typecheck", "pnpm check:electron", "production UI build"],
   vitest: ["Run tests"],
   "behavior-evals": ["Eval suite typecheck", "Eval vitest gate", "Tier 1 scenarios", "Tier 2 golden replay", "Tier 3 stays offline"],
   "packaged-server": ["pnpm test:packaged-server"],
@@ -58,6 +74,7 @@ const VALIDATION_STEPS = {
   "ui-smoke": ["Drive the real renderer through control-omb ui"],
   "browser-identity": ["Drive a real Chrome through the launcher"],
   "package-linux": ["Prove overlay-free X11 input routing", "Package from the verified offline CUA stage", "node scripts/verify-linux-package.mjs", "Reproduce and verify an in-place DEB upgrade", "Verify the installed browser", "Launch packaged app"],
+  relay: ["Audit the production dependencies", "pnpm check", "pnpm test"],
   "browser-driver": ["S4 on the runner's Google Chrome"],
 };
 
@@ -146,6 +163,7 @@ export function holdsFor(issues, areas, repairIds = []) {
   return issues.filter((issue) => {
     if (repairIds.includes(issue.number)) return false;
     const labels = issueLabels(issue);
+    if (labels.includes("qa:process")) return false;
     return labels.includes("qa:p0") || labels.includes("qa:p1") && issueAreas(issue).some((area) => area === "global" || areas.includes("global") || areas.includes(area));
   });
 }

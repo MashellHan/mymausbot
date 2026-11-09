@@ -51,6 +51,7 @@ const controller = (over: Partial<PhoneSetupController>): PhoneSetupController =
   retryAccount: noop,
   cancel: noop,
   refreshCode: noop,
+  renewPairing: async () => {},
   finish: noop,
   act: async () => {},
   accountAct: async () => {},

@@ -207,18 +207,18 @@ describe("Computer panel tabs", () => {
     }
   });
 
-  it("shows Mini Apps, Agent Team and Usage after Files in Simple mode", () => {
+  it("shows Mini Apps after Files in Simple mode", () => {
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Browser", "Data", "Files", "Mini Apps"]);
   });
 
-  it("shows Files, Mini Apps, Agent Team and Usage after the existing Advanced tabs", () => {
+  it("shows Files and Mini Apps after the existing Advanced tabs", () => {
     fixture.advanced = true;
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
     fixture.config = {};
     fixture.android = false;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps"]);
   });
 
   it("reads a Routines view stored by Advanced as the Computer tab in Simple", () => {
@@ -375,7 +375,16 @@ describe("Where the bot works", () => {
 
   it("leaves This Mac out on another server's page, where this computer can never be a bot's place", () => {
     fixture.localComputer = { available: false, support: "unsupported", enabled: false, status: "unavailable", reasonCode: "remote-server" };
-    expect(grid(render(makeBot())).map((node) => text(node.props.children))).toEqual(["Auto", "Cloud desktop", "Private desktop", "Browser", "Off"]);
+    const rendered = render(makeBot());
+    expect(grid(rendered).map((node) => text(node.props.children))).toEqual(["Auto", "Cloud desktop", "Private desktop", "Browser", "Off"]);
+    expect(placeLine(rendered)).toBe("Uses the built-in browser, or a running private desktop when a task needs one.");
+  });
+
+  it("shows a bot set to This Mac as Auto on another server's page, without changing its setting", () => {
+    fixture.localComputer = { available: false, support: "unsupported", enabled: false, status: "unavailable", reasonCode: "remote-server" };
+    const pressed = grid(render(makeBot({ computer: "local" }))).filter((node) => node.props["aria-pressed"]).map((node) => text(node.props.children));
+    expect(pressed).toEqual(["Auto"]);
+    expect(fixture.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "updateBot" }));
   });
 
   it("says what Auto does on My Cloud, where it starts a cloud computer by itself", () => {
@@ -527,6 +536,15 @@ describe("A chat pinned to a place", () => {
     fixture.advanced = true;
     fresh();
     expect(unpin(render(pinned()))).toBeUndefined();
+  });
+
+  it("saves Auto too when Use Auto stands in for This Mac on another server's page", () => {
+    fixture.localComputer = { available: false, support: "unsupported", enabled: false, status: "unavailable", reasonCode: "remote-server" };
+    const button = unpin(render(pinnedOn("local")))!;
+    expect(text(button.props.children)).toBe("Use Auto");
+    (button.props.onClick as () => void)();
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "updateBot", botId: "scout", patch: { computer: null } });
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "updateTask", botId: "scout", threadId: "thread-scout", patch: { surface: null } });
   });
 
   it("waits out a running turn, as the server refuses a busy chat's place change", () => {

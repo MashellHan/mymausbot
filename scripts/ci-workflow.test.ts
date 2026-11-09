@@ -7,7 +7,7 @@ import { interpolate } from "./testing/github-expression.ts";
 import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes"];
+const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "relay"];
 
 function runGate(state: ReturnType<typeof gateState>) {
   return verifyGate(state.outputs, { deadlineMs: 0, api: async (path: string) => path.startsWith("/issues?") ? [] : { jobs: state.jobs } });
@@ -206,8 +206,7 @@ describe("CI concurrency", () => {
     for (const path of named) expect(existsSync(new URL(`../${path}`, import.meta.url)), path).toBe(true);
     expect(named).toContain("src/locales/");
     expect(named).toContain("scripts/testing/file-size-ratchet.test.ts");
-    // Before the slow checks, so a failed guard reports within a minute.
-    expect(steps.indexOf(guards)).toBeLessThan(steps.findIndex((step) => step.run === "pnpm typecheck"));
+    expect(steps.some((step) => step.run === "pnpm typecheck")).toBe(true);
     // Every test the guards run stays in the suite: vitest's include has them, so the shards still deal them out.
     expect(workflow.jobs.vitest.needs).toBe("static");
   });
@@ -270,13 +269,19 @@ describe("CI concurrency", () => {
     expect(planUpload).toBeLessThan(steps.findIndex((step) => step.run === "pnpm install --frozen-lockfile"));
     const fast = steps.find((step) => step.name === "Security, data and dispatch core with bounded affected tests")!;
     expect(fast.if).toBe("steps.scope.outputs.fast_pr == 'true'");
-    expect(fast.run).toContain("vitest run ${{ steps.scope.outputs.fast_files }}");
+    expect(fast.run).toBe("node scripts/testing/fast-static-overlap.mjs run");
+    expect(fast.env).toMatchObject({ OMB_VITEST_E2E: "all", OMB_VITEST_WORKERS: 2,
+      OMB_VITEST_SUBSET: "${{ steps.scope.outputs.fast_files }}", OMB_FAST_TYPECHECK: "${{ steps.scope.outputs.build }}" });
+    expect(steps[steps.indexOf(fast) + 1]?.if).toBe("always() && steps.scope.outputs.fast_pr == 'true'");
     const built = (workflow.jobs.static.steps as { if?: string; run?: string }[]).filter((step) => step.if?.includes("outputs.build"));
     expect(built.map((step) => [step.if, step.run])).toEqual([
-      ["steps.scope.outputs.build == 'true'", "pnpm typecheck"],
+      ["always() && steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr == 'true'", "node scripts/testing/fast-static-overlap.mjs typecheck-result"],
+      ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm typecheck"],
       ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm check:electron"],
       ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm exec vite build"],
     ]);
+    expect(steps.find((step) => step.name === "pnpm typecheck (parallel result)")?.run)
+      .toBe("node scripts/testing/fast-static-overlap.mjs typecheck-result");
     expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
       step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/qa.test.ts",
     )).toBe(true);
@@ -378,7 +383,7 @@ describe("CI on Boat", () => {
 
   it("does the Linux work in the static job only where ci-scope moved it there, without Boat's extra rights or desktop", () => {
     const steps = workflow.jobs.static.steps as Step[];
-    const boatOnly = steps.slice(steps.findIndex((step) => step.name === "production UI build") + 1);
+    const boatOnly = steps.slice(steps.findIndex((step) => step.name === "Remove what Boat installs and GitHub's runners lack"));
     expect(boatOnly.map((step) => step.if)).toEqual([
       "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes",
       "${{ !cancelled() && steps.scope.outputs.linux_lanes }}", "failure() && steps.scope.outputs.linux_lanes", "always() && steps.scope.outputs.linux_lanes",

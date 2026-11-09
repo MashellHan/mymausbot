@@ -10,24 +10,25 @@ export const usageMetricHint = (metric: UsageMetric) => t(metric === "prs" ? "co
 export const changeText = (value: LocalUsageWeekChange) => value === null ? "—" : value === "new" ? t("computer.usage.newActivity")
   : new Intl.NumberFormat(activeLocale(), { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 1 }).format(value / 100);
 
-export function UsageChange({ value, startDay, endDay, metric, daily = false, className = "text-[13px] text-ink-secondary" }: {
+export function UsageChange({ value, startDay, endDay, metric, daily = false, periodDays, unavailableHint, className = "text-[13px] text-ink-secondary" }: {
   value: LocalUsageWeekChange; startDay: string; endDay: string;
-  metric: "prs" | "commits" | "totalTokens"; daily?: boolean; className?: string;
+  metric: "prs" | "commits" | "totalTokens"; daily?: boolean; periodDays?: 1 | 7 | 30; unavailableHint?: string; className?: string;
 }) {
   const shown = changeText(value);
+  const period = periodDays ? t(`computer.usage.changePeriod.${periodDays}`) : null;
+  const label = period ? t("computer.usage.periodChange", { period, change: shown }) : shown;
   const previous = startDay === endDay ? startDay : `${startDay}–${endDay}`;
   const description = `${t("computer.usage.changeDescription", { change: shown, previous })}`
     + `${daily ? ` ${t("computer.usage.dailyComparisonHint")}` : ""}`
+    + `${period ? ` ${t("computer.usage.periodComparisonHint", { period, days: periodDays! })}` : ""}`
     + ` ${usageMetricHint(metric)}`
-    + `${value === null ? ` ${t("computer.usage.changeUnavailableHint")}` : ""}`;
+    + `${value === null ? ` ${unavailableHint ?? t("computer.usage.changeUnavailableHint")}` : ""}`;
   return <span data-usage-change className={className} title={description}>
-    <span aria-hidden="true">({shown})</span><span className="sr-only">{description}</span>
+    <span aria-hidden="true">({label})</span><span className="sr-only">{description}</span>
   </span>;
 }
 
 export function UsageCount({ value, known }: { value: number | null; known: number | null }) {
-  return <span className="inline-flex flex-wrap items-baseline justify-end gap-x-1.5">
-    <span>{countText(value, known)}</span>
-    {value === null && known !== null && <span className="text-[12px] font-normal text-warning" title={t("computer.usage.syncedCountHint")}>{t("computer.usage.synced")}</span>}
-  </span>;
+  const partial = value === null && known !== null;
+  return <span data-usage-provisional={partial || undefined} title={partial ? t("computer.usage.syncedCountHint") : undefined}>{countText(value, known)}</span>;
 }

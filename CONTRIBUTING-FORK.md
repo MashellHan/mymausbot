@@ -10,6 +10,15 @@ historical. Never push to `upstream` or `legacy-fork`.
   purpose. Keep useful checkpoints; do not split changes just to inflate counts.
 - Use one focused feature branch and PR per reviewable outcome. Open drafts
   early for visibility, then mark ready with evidence when the slice works.
+- Lead owns every open PR, including drafts. Twelve hours without observed
+  activity and twenty-four hours open are advisory process-scan targets. Record
+  the blocker, owner and next action; continue required review/checks and retain
+  useful work. Never close, cancel, roll back or repeat checks solely for a clock.
+- Close a PR only for a substantive disposition, with the successor or product
+  decision recorded. If a process rule caused a mistaken closure, record the
+  PR, branch/head, evidence, reason and recovery owner. Reopen useful unadopted
+  work on the same PR or link verified adoption through another PR. Assign
+  pipeline/test improvements at available capacity and keep recovery visible.
 - Preserve meaningful commits when integrating. No routine squash, force-push,
   history rewriting or unreviewed direct changes to the default branch.
 - Run required hooks and checks. Test the changed contract meaningfully, then

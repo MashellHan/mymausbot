@@ -55,6 +55,17 @@ describe("shared local and CI check policy", () => {
     expect(selected.deferred).toEqual(expensive.sort());
   });
 
+  it("routes Relay's node:test suite away from Vitest while reporting fast deferral", () => {
+    const file = "relay/test/fuzz.test.ts";
+    const selected = plan([file], { policy, fastPr: true });
+    expect(selected.nativeRelay).toBe(true);
+    expect(selected.fastFiles).toEqual([...policy.core].sort());
+    expect(selected.deferred).toContain(file);
+    expect(selected.edit).not.toContain(file);
+    expect(selected.ready).not.toContain(file);
+    expect(plan(["relay/src/server.ts"], { policy }).nativeRelay).toBe(true);
+  });
+
   it("keeps a targeted server regression while deferring the whole entrypoint suite", () => {
     const files = ["docs/verification/tailscale.md", "server/forwarded-json.e2e.test.ts", "server/index.ts"];
     const present = (file: string) => file === "server/forwarded-json.e2e.test.ts" || existsSync(file);

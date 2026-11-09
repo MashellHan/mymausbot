@@ -56,6 +56,30 @@ afterEach(async () => {
 });
 
 describe("Agent Team panel", () => {
+  it("waits for a snapshot, selects the most recently active team and retains a manual collapse", async () => {
+    await render("content", { status: "unavailable", updatedAt: null, teamCount: null, teams: [] });
+    const recent = { ...ready, teams: ready.teams.map((team, index) => ({ ...team, activeAgentCount: 0,
+      lastActivityAt: 1_000 + index, agents: team.agents.map((agent) => ({ ...agent, state: "done" as const })) })) };
+    await render("content", recent);
+    expect(members()?.querySelector("h3")?.textContent).toBe("Maple Ops");
+    await act(async () => offices()[1]!.click());
+    await render("content", ready);
+    expect(members()).toBeNull();
+  });
+
+  it("prioritizes working teams over newer idle sessions", async () => {
+    await render("content", { ...ready, teams: ready.teams.map((team, index) => ({ ...team, lastActivityAt: 1_000 + index })) });
+    expect(members()?.querySelector("h3")?.textContent).toBe("Atlas Studio");
+    await act(async () => offices()[1]!.click());
+    await render("content", ready);
+    expect(members()?.querySelector("h3")?.textContent).toBe("Maple Ops");
+  });
+
+  it("leaves idle teams collapsed when their activity time is unknown", async () => {
+    await render("content", { ...ready, teams: [ready.teams[1]!] });
+    expect(members()).toBeNull();
+  });
+
   it("mounts recent activity only for the selected office and clears it on a team switch", async () => {
     const selected = { ...ready, teams: ready.teams.map((team) => team.id === "w1"
       ? { ...team, agents: team.agents.map((member, index) => index === 0 ? { ...member, id: "w1:p1" } : member) }
@@ -64,8 +88,7 @@ describe("Agent Team panel", () => {
       events: [{ id: "e1", at: null, kind: "user", tool: null, text: "Synthetic activity line" }] };
     calls.api.mockImplementation(async (path: string) => path === "/api/local-dashboard/agents" ? selected : detail);
     await render("panel");
-    expect(text()).not.toContain("Recent activity");
-    await act(async () => offices()[0]!.click());
+    expect(members()).not.toBeNull();
     const activity = members()!.querySelector<HTMLButtonElement>('[data-testid="agent-activity-w1:p1"] button')!;
     expect(activity.getAttribute("aria-expanded")).toBe("false");
     expect(calls.api).toHaveBeenCalledTimes(1);
@@ -86,16 +109,13 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("Agent Offices");
     expect(text()).not.toContain("Updates every 2 seconds");
     expect(offices()).toHaveLength(2);
-    expect(offices().map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "false"]);
+    expect(offices().map((button) => button.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
     expect(offices()[0]!.textContent).toContain("3 agents");
     expect(offices()[0]!.textContent).toContain("1 active");
     expect(offices()[1]!.textContent).toContain("2 agents");
-    expect(members()).toBeNull();
-    expect(text()).not.toContain("Mira");
-
+    expect(members()).not.toBeNull();
     const first = offices()[0]!;
     first.focus();
-    await act(async () => first.click());
     expect(offices().map((button) => button.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
     expect(first.getAttribute("aria-controls")).toBe(members()?.id);
     expect(members()?.querySelector("h3")?.textContent).toBe("Atlas Studio");
@@ -160,7 +180,7 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("1 agent");
     expect(text()).not.toContain("1 teams");
     expect(text()).not.toContain("1 agents");
-    expect(members()).toBeNull();
+    expect(members()).not.toBeNull();
 
     setLocale("zh");
     await render("content", single);
@@ -187,7 +207,6 @@ describe("Agent Team panel", () => {
     await render("panel");
     const first = offices()[0]!;
     first.focus();
-    await act(async () => first.click());
     const scroller = host.querySelector<HTMLElement>('[data-testid="agent-team-panel"]')!;
     const selector = host.querySelector<HTMLElement>(".agent-town-offices")!;
     scroller.scrollTop = 90;
@@ -213,7 +232,6 @@ describe("Agent Team panel", () => {
     await render("content");
     const first = offices()[0]!;
     first.focus();
-    await act(async () => first.click());
     expect(members()?.textContent).toContain("Mira");
     await render("content", { ...ready, teamCount: 1, teams: [ready.teams[1]!] });
     expect(members()).toBeNull();
@@ -238,7 +256,6 @@ describe("Agent Team panel", () => {
 
   it("returns focus from removed member content to the surviving selector", async () => {
     await render("content");
-    await act(async () => offices()[0]!.click());
     const selected = members()!;
     selected.tabIndex = -1;
     selected.focus();
@@ -253,7 +270,6 @@ describe("Agent Team panel", () => {
     await render("panel");
     const first = offices()[0]!;
     first.focus();
-    await act(async () => first.click());
     expect(members()?.textContent).toContain("Mira");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(text()).toContain("Local Herdr · — teams");

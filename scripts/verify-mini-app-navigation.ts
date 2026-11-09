@@ -8,7 +8,8 @@ import { launchVerificationServer, runControlOmb } from "./control-omb.ts";
 import { mountPreview } from "./testing/preview-fixture.ts";
 import type { MiniAppSummary } from "../shared/mini-apps.ts";
 
-assert.deepEqual(process.argv.slice(2), ["--check"]);
+const metadataOnly = process.argv.includes("--metadata-only");
+assert.deepEqual(process.argv.slice(2), metadataOnly ? ["--check", "--metadata-only"] : ["--check"]);
 const root = fileURLToPath(new URL("..", import.meta.url));
 const evidence = process.env.OMB_MINI_APP_NAV_EVIDENCE ?? join(root, ".impeccable", "review", "mini-app-navigation");
 mkdirSync(evidence, { recursive: true });
@@ -34,7 +35,8 @@ try {
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
   const child = spawn(electron as unknown as string,
-    [join(root, "scripts/testing/mini-app-navigation-ui-smoke.mjs"), fixture.info.dataDir, preview.previewUrl, evidence],
+    [join(root, "scripts/testing/mini-app-navigation-ui-smoke.mjs"), fixture.info.dataDir, preview.previewUrl, evidence,
+      ...(metadataOnly ? ["--metadata-only"] : [])],
     { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout!.on("data", (part) => { output += String(part); });

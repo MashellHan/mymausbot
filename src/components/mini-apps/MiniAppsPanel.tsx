@@ -10,7 +10,9 @@ import type { DefaultMiniAppKind, MiniAppArchive, MiniAppDefaultsResult, MiniApp
   MiniAppMutationResult, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
 import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?raw";
 import { revealSelectedTab, scrollTabsWithWheel } from "../computer-panel-tabs";
+import { InfoHint } from "../InfoHint";
 import { MiniAppDashboard } from "./MiniAppDashboard";
+import { ensureMiniAppDefaults } from "./MiniAppDefaultsBootstrap";
 import { MiniAppFrame } from "./MiniAppFrame";
 import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
 import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
@@ -127,21 +129,19 @@ export function MiniAppsPanel() {
     if (!visible || !nativeGuard || owner !== true || defaultsStarted.current) return;
     defaultsStarted.current = true;
     let settled = false;
-    const controller = new AbortController();
+    let active = true;
     setLoading(true);
-    void api<MiniAppDefaultsResult>("/api/mini-apps/defaults", {
-      method: "POST", body: JSON.stringify({ bookkeepingHtml }), signal: controller.signal, timeoutMs: 30_000,
-    }).then((result) => {
-      if (controller.signal.aborted) return;
+    void ensureMiniAppDefaults().then((result) => {
+      if (!active) return;
       setDefaultIssues(result.issues);
       setDefaultsError("");
       setDefaultsReady(true);
     }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return;
+      if (!active) return;
       setDefaultsError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
       setDefaultsReady(true);
-    }).finally(() => { settled = true; if (!controller.signal.aborted) setLoading(false); });
-    return () => { controller.abort(); if (!settled) defaultsStarted.current = false; };
+    }).finally(() => { settled = true; if (active) setLoading(false); });
+    return () => { active = false; if (!settled) defaultsStarted.current = false; };
   }, [visible, nativeGuard, owner]);
 
   useEffect(() => {
@@ -334,28 +334,32 @@ export function MiniAppsPanel() {
         </div>
         {apps && <div className="mt-2 flex min-w-0 items-center gap-2">
           {apps.length ? <div ref={tabListRef} role="tablist" aria-label={t("computer.miniApps.chooseApp")} onKeyDown={onNavKey} onWheel={scrollTabsWithWheel} className="flex min-w-0 flex-1 flex-nowrap gap-1 overflow-x-auto pb-1 [scrollbar-width:thin]">
-            {apps.map((app) => <button key={app.id} id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1} onClick={() => choose(app.id)}
+            {apps.map((app) => <div key={app.id} className="relative w-[104px] shrink-0">
+              <button id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1} onClick={() => choose(app.id)}
               aria-label={miniAppDisplayName(app)} title={miniAppDisplayName(app)}
-              className={`flex w-[104px] shrink-0 flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-[11px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}>
-              <MiniAppIcon kind={iconKindForApp(app)} launcher /><span className="line-clamp-2 min-h-8 w-full text-center leading-4">{miniAppDisplayName(app)}</span></button>)}
+              className={`flex w-full flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-[11px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}>
+                <MiniAppIcon kind={iconKindForApp(app)} launcher /><span className={`line-clamp-2 min-h-8 w-full text-center leading-4 ${app.id === selectedId ? "pr-6" : ""}`}>{miniAppDisplayName(app)}</span>
+              </button>
+              {app.id === selectedId && <InfoHint className="absolute bottom-5 right-1" label={`${miniAppDisplayName(app)}: ${t("app.info")}`}>
+                <p>{miniAppDisplayDescription(app)}</p>
+                <p className="tabular-nums text-ink-secondary">{t("computer.miniApps.published", { time: stamp(app.updatedAt) })}</p>
+              </InfoHint>}
+            </div>)}
           </div> : <div className="min-w-0 flex-1" />}
           <MiniAppLibraryPopover open={libraryOpen} inventory={inventory ?? []} issues={defaultIssues} busyKind={busyKind}
             focusKind={libraryFocus} owner={owner} nativeGuard={nativeGuard}
             onToggle={() => { setLibraryFocus(null); setLibraryOpen((current) => !current); }} onClose={() => setLibraryOpen(false)}
-            onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)} />
-        </div>}
-        {selected && <div className="mt-2 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
-          <p className="min-w-0 [overflow-wrap:anywhere]">{miniAppDisplayDescription(selected)}</p>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <p className="shrink-0 tabular-nums">{t("computer.miniApps.published", { time: stamp(selected.updatedAt) })}</p>
-            {document && appState && publisher && !dashboard && !selected.dashboard && !selected.dashboardIdentity
-              && <button type="button" onClick={() => openBot(dispatch, publisher, showThreads)} className="text-accent-text underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.openChat")}</button>}
-            {document && appState && document.versions.length > 1 && <details className="relative"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t("computer.miniApps.history")}</summary>
-              <div className="absolute right-0 top-full z-20 mt-1 max-h-60 min-w-44 overflow-y-auto rounded-xl border border-hairline bg-menu p-1.5 shadow-xl">
-                {document.versions.map((version) => <button key={version.version} type="button" disabled={rollbackVersion !== null || version.version === document.app.templateVersion} onClick={() => void rollback(version.version)} className="block w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">{t("computer.miniApps.version", { number: version.version })} · {stamp(version.createdAt)}</button>)}
-              </div>
-            </details>}
-          </div>
+            onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)}>
+            {selected && document && appState && (document.versions.length > 1 || publisher && !dashboardInstalled) && <div className="mt-3 border-t border-hairline/60 pt-3 text-[12px] text-ink-secondary">
+              <p className="mb-2 font-medium text-ink">{miniAppDisplayName(selected)}</p>
+              {publisher && !dashboardInstalled && <button type="button" onClick={() => { setLibraryOpen(false); openBot(dispatch, publisher, showThreads); }} className="text-accent-text underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.openChat")}</button>}
+              {document.versions.length > 1 && <details className="mt-2"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t("computer.miniApps.history")}</summary>
+                <div className="mt-1 max-h-60 overflow-y-auto">
+                  {document.versions.map((version) => <button key={version.version} type="button" disabled={rollbackVersion !== null || version.version === document.app.templateVersion} onClick={() => void rollback(version.version)} className="block w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">{t("computer.miniApps.version", { number: version.version })} · {stamp(version.createdAt)}</button>)}
+                </div>
+              </details>}
+            </div>}
+          </MiniAppLibraryPopover>
         </div>}
       </header>
       <>

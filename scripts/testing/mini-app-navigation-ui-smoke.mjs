@@ -87,6 +87,71 @@ const click = (window, selector) => evaluate(window, `(() => { const node=docume
   if (!node || node.disabled) throw Error('Unavailable control: ' + ${JSON.stringify(selector)}); node.click(); return true; })()`);
 const inventory = (window) => evaluate(window, '(async () => (await (await fetch("/api/mini-apps")).json()).apps)()');
 
+async function metadataInteractions(window) {
+  window.setContentSize(360, 780);
+  await open(window, "?locale=en&skin=midnight");
+  const installed = await evaluate(window, `(async () => {
+    const app = (await (await fetch('/api/mini-apps')).json()).apps.find(entry => entry.shippedTemplateKind === 'bookkeeping');
+    const response = await fetch('/api/mini-apps/' + app.id + '/publish', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requestKey: crypto.randomUUID(), expectedRevision: app.revision, slug: app.slug, title: app.title,
+        description: 'Synthetic Mini App metadata', bindings: [], publisherBotIds: [],
+        html: '<main style="padding:20px"><label>Note <input id="fixture-note"></label></main>' }) });
+    if (!response.ok) throw Error(await response.text());
+    return { previousVersion: app.templateVersion, ...(await response.json()).app };
+  })()`);
+  assert.deepEqual(installed.publisherBotIds, []);
+  await open(window, "?locale=en&skin=midnight");
+  await evaluate(window, `(() => {
+    const tab = document.querySelector('[data-testid=mini-apps-panel] [role=tab][data-app-id="${installed.id}"]');
+    if (tab.getAttribute('aria-selected') !== 'true') tab.click();
+    return true;
+  })()`);
+  await until(() => evaluate(window, `(() => {
+    const frame = document.querySelector('[data-testid=mini-apps-panel] iframe');
+    return frame?.srcdoc.includes('fixture-note') && frame.sandbox.contains('allow-scripts')
+      && !frame.sandbox.contains('allow-same-origin');
+  })()`), Boolean, "real opaque Mini App iframe", 10_000);
+  assert.equal(await evaluate(window, 'document.querySelector("[data-testid=mini-apps-panel] > header").innerText.includes("Version history")'), false);
+  await click(window, '[data-mini-app-all]');
+  const history = '[data-mini-app-popover] details';
+  await click(window, `${history} > summary`);
+  const menu = await evaluate(window, `(() => {
+    const header = document.querySelector('[data-testid=mini-apps-panel] > header');
+    const details = header.querySelector('[data-mini-app-popover] details');
+    details.scrollIntoView({ block: 'nearest' });
+    const box = details.querySelector('div').getBoundingClientRect();
+    return { width: innerWidth, height: innerHeight, left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+      open: details.open, publisherChat: header.innerText.includes('Open publisher chat') };
+  })()`);
+  assert(menu.open && !menu.publisherChat && menu.width === 360 && menu.left >= 0 && menu.right <= menu.width
+    && menu.top >= 0 && menu.bottom <= menu.height, JSON.stringify(menu));
+  result.geometry.push({ name: "metadata-history-360-midnight-en.png", ...menu });
+  await capture(window, "metadata-history-360-midnight-en.png", true);
+  await evaluate(window, 'window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); true');
+  await evaluate(window, `(() => {
+    const button = document.querySelector('[data-testid=mini-apps-panel] [role=tablist] [data-info-hint]');
+    button.focus(); button.click();
+    window.metadataFrameBlur = false;
+    window.addEventListener('blur', () => { window.metadataFrameBlur = true; }, { once: true });
+    return true;
+  })()`);
+  await until(() => evaluate(window, '!!document.querySelector("[data-info-hint-content]")'), Boolean, "pinned app metadata");
+  await evaluate(window, `document.querySelector('[data-testid=mini-apps-panel] iframe').contentWindow.focus(); true`);
+  await until(() => evaluate(window, `document.activeElement === document.querySelector('[data-testid=mini-apps-panel] iframe')
+    && window.metadataFrameBlur && !document.querySelector('[data-info-hint-content]')`), Boolean, "frame focus dismisses pinned metadata", 5_000);
+  result.checks.push("Pinned metadata closes when actual focus enters the opaque Mini App iframe");
+  await click(window, '[data-mini-app-all]');
+  await click(window, `${history} > summary`);
+  await evaluate(window, `(() => {
+    const button = [...document.querySelectorAll('${history} button')].find(node => node.textContent.startsWith('Version ${installed.previousVersion} ·'));
+    if (!button || button.disabled) throw Error('Previous version unavailable');
+    button.click(); return true;
+  })()`);
+  await until(() => inventory(window), apps => apps.some(app => app.id === installed.id
+    && app.templateVersion === installed.previousVersion && app.revision === installed.revision + 1), "history rollback preserves selected version");
+  result.checks.push("History without a publisher chat stays inside a 360px viewport and rolls back the selected version");
+}
+
 const timeout = setTimeout(() => { result.errors.push("Launcher fixture timed out");
   writeFileSync(join(evidence, "launcher-result.json"), JSON.stringify(result, null, 2) + "\n");
   app.exit(1); }, 170_000);
@@ -95,6 +160,10 @@ try {
   await bounded(app.whenReady(), "Electron ready", 30_000);
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   const window = makeWindow();
+  if (process.argv.includes("--metadata-only")) {
+    await metadataInteractions(window);
+    return;
+  }
   const vectors = [
     { width: 960, locale: "en", skin: "atelier", name: "launcher-960-atelier-en.png" },
     { width: 400, locale: "en", skin: "midnight", name: "launcher-400-midnight-en.png" },
@@ -106,12 +175,28 @@ try {
     await geometry(window, vector.width, vector.name);
     assert.equal(await evaluate(window, 'document.body.innerText.includes("Current app version") || document.body.innerText.includes("0 installed")'), false);
     await capture(window, vector.name);
+    assert.equal(await evaluate(window, `(() => {
+      const header = document.querySelector('[data-testid=mini-apps-panel] > header');
+      const button = header.querySelector('[role=tablist] [data-info-hint]');
+      return !!button && !button.closest('[role=tab]') && !/App updated|应用更新于/.test(header.innerText);
+    })()`), true);
+    await click(window, '[data-testid=mini-apps-panel] [role=tablist] [data-info-hint]');
+    await until(() => evaluate(window, 'document.querySelector("[data-info-hint-content]")?.textContent'), Boolean, "app metadata disclosure");
+    const info = await evaluate(window, `(() => {
+      const hint = document.querySelector('[data-info-hint-content]'); const box = hint.getBoundingClientRect();
+      return { text: hint.innerText, left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: innerWidth, height: innerHeight };
+    })()`);
+    assert(info.text.length > 10 && info.left >= 0 && info.right <= info.width && info.top >= 0 && info.bottom <= info.height);
+    await capture(window, vector.name.replace('.png', '-info.png'), true);
+    await evaluate(window, 'window.dispatchEvent(new KeyboardEvent("keydown", { key:"Escape", cancelable:true }))');
+    await until(() => evaluate(window, 'document.querySelector("[data-info-hint-content]") === null'), Boolean, "metadata dismisses with Escape");
   }
+  result.checks.push("App metadata stays collapsed beside the selected name and opens within the viewport");
   const before = await inventory(window);
   assert.equal(before.length, 5);
   const team = before.find((entry) => entry.dashboardIdentity === "agent-team");
   assert(team?.dashboard?.kind === "agent-team");
-  assert(before.some((entry) => entry.dashboardIdentity === "usage" && entry.title === "Work Tracker"));
+  assert(before.some((entry) => entry.dashboardIdentity === "usage" && entry.title === "Activities"));
   await evaluate(window, `(() => { const host=document.querySelector('[data-testid=mini-apps-panel]');
     const tabs=[...host.querySelectorAll('[role=tab]')]; tabs[0].focus();
     tabs[0].dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true})); return true; })()`);
@@ -159,6 +244,7 @@ try {
   await until(() => evaluate(denied, 'document.querySelector("[data-mini-app-popover]") !== null'), Boolean, "unsupported host grid");
   assert.equal(await evaluate(denied, '[...document.querySelectorAll("[data-mini-app-popover] [data-mini-app-grid-item]")].every(button => button.disabled)'), true);
   result.checks.push("Real chat shell stays clear; unsupported host cannot add or open default apps");
+  await metadataInteractions(window);
 } catch (error) {
   result.errors.push(error instanceof Error ? error.stack ?? error.message : String(error));
 } finally {

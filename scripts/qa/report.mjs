@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { stripVTControlCharacters } from "node:util";
+import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
-import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels } from "./contracts.mjs";
+import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels, preflightJob } from "./contracts.mjs";
 
 export function sanitize(value) {
   return stripVTControlCharacters(String(value ?? ""))
@@ -215,7 +215,13 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
   const artifacts = await pages(`/actions/runs/${id}/artifacts`, "artifacts", api);
   const results = [];
   const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
-  const expected = run.event === "push" && plan ? expectedJobs(plan.outputs, plan.outputs.full_required) : expectedJobs();
+  const producer = preflightJob(jobs);
+  if (run.event !== "push" && !plan) throw new Error("Trusted validation plan unavailable; historical coverage cannot be reconstructed");
+  const expected = plan ? expectedJobs(plan.outputs, plan.outputs.full_required, producer?.name)
+    : expectedJobs(undefined, true, producer?.name);
+  if (run.event !== "push" && (plan.outputs?.full_required !== true || !isDeepStrictEqual(plan.outputs.expected_jobs, expected))) {
+    throw new Error("Trusted full validation plan is inconsistent with its selected jobs");
+  }
   const selectedArtifacts = new Set();
   for (const artifact of artifacts.filter((item) => item.name.startsWith("qa-results-"))) {
     const match = artifact.name.match(/^(qa-results-.+)-attempt-(\d+)$/);

@@ -23,6 +23,8 @@ export interface LocalAgentTeam {
   agentCount: number;
   /** Agents currently working; blocked, idle and completed responses are not active. */
   activeAgentCount: number;
+  /** Latest timestamp in a verified live agent session; absent or null when unavailable. */
+  lastActivityAt?: number | null;
   agents: LocalAgentMember[];
 }
 

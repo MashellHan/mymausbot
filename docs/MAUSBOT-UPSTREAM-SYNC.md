@@ -23,10 +23,20 @@ publish to `upstream` or `legacy-fork`.
    Agent Team, Usage, sections, quoted replies, user data, pairing, and access
    boundaries.
 4. Run required hooks and meaningful affected tests on the integrated tree.
-   Give Reviewer the exact commit, tree, source range, resolutions, and test
-   evidence. Address findings and request a delta review of corrections.
+   Continue development, CLI/headless checks and PR preparation if local
+   Accessibility, Screen Recording or the CUA driver is unavailable. Mark each
+   affected native check as not run, pending environment; record its owner and
+   next action. Give Reviewer the exact commit, tree, source range, resolutions,
+   available evidence and pending checks without waiting for screen readiness.
+   Address findings and request a delta review of corrections.
 5. Lead decides the merge order and merges into the personal repository only when
    Reviewer has no unresolved findings and required checks pass.
+   An unavailable local screen check alone does not block an otherwise eligible
+   merge. Report development, verification and integration separately; merged
+   source may still await native verification. Keep the same source batch and
+   let its developer continue independent work while the assigned role or QA
+   completes the outstanding checks. Actual screen use retains all permission,
+   consent and access checks.
    Escalate uncertain product choices through Lead. Never push to upstream.
 
 Daily synchronization does not automatically replace the running desktop App.
@@ -49,3 +59,16 @@ All 987 installed package identities matched the lock; the other 201 entries
 were explicitly skipped by pnpm for platform/optional dependency selection.
 Keep the same task environment for checks and push hooks. This recovery does
 not change the global registry or the daily synchronization configuration.
+
+## v0.1.143 relay dependency recovery
+
+The relay has its own `relay/pnpm-lock.yaml` (SHA256
+`2e21f75b2ad92f23681ea10817cb26df579c0d1a51750636050e8f8adca9a61e`).
+An offline frozen install found that `@types/node@24.19.2` and
+`undici-types@7.24.6` were missing from the pnpm store. The official npm
+registry timed out during TLS setup. Original tarballs from the public Huawei
+npm mirror matched both lockfile SHA512 values and the package names and
+versions inside their archives. A command-scoped mirror registry and private
+metadata cache completed the normal frozen install without changing the lock;
+all five installed package identities matched it. This recovery is specific to
+the relay package and does not change the registry or the daily schedule.
