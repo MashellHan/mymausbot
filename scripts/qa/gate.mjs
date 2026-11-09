@@ -29,6 +29,7 @@ export async function verifyGate(outputs, { api = github, runId = process.env.GI
       if (pr.head.sha !== outputs.pr_head) throw new Error("PR head changed; wait for its current CI run");
       const labels = pr.labels.map((label) => label.name);
       if ((labels.includes("ci:full") || labels.includes("qa:repair")) && !outputs.full_required
+        || labels.includes("upstream-sync") && !outputs.full_required
         || labels.includes("windows") && outputs.fast_pr) throw new Error("Current PR controls require a fresh full CI run");
       if (outputs.full_required && labels.includes("qa:repair")) repairs = [...String(pr.body ?? "").matchAll(/^QA-Repair:\s*#(\d+)\s*$/gm)].map((hit) => Number(hit[1]));
     }

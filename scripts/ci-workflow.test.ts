@@ -8,14 +8,14 @@ import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
 const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "relay"];
-const prContext = (action: string | null, label: string | null, { number = 134, base = "a".repeat(40), head = "b".repeat(40), runId = 42 }: {
-  number?: number | null; base?: string | null; head?: string | null; runId?: number;
+const prContext = (action: string | null, label: string | null, { number = 134, base = "a".repeat(40), head = "b".repeat(40), baseRef = "main", runId = 42 }: {
+  number?: number | null; base?: string | null; head?: string | null; baseRef?: string; runId?: number;
 } = {}) => ({ github: { event_name: "pull_request", event: { action, label: label === null ? null : { name: label },
-  pull_request: { number, base: { sha: base }, head: { sha: head } } }, run_id: runId, ref: "refs/pull/134/merge" } });
+  pull_request: { number, base: { sha: base, ref: baseRef }, head: { sha: head } } }, run_id: runId, ref: "refs/pull/134/merge" } });
 const decision = (context: Parameters<typeof interpolate>[1]) => ({
   group: interpolate(workflow.concurrency.group, context),
   cancel: interpolate(workflow.concurrency["cancel-in-progress"], context),
-  static: workflow.jobs.static.if === undefined ? true : interpolate(workflow.jobs.static.if, context),
+  static: interpolate(workflow.jobs.static.if, context),
   gateName: interpolate(workflow.jobs.gate.name, context),
   gate: interpolate(workflow.jobs.gate.if.replace(/!cancelled\(\)/, "true"), context),
 });
@@ -52,13 +52,49 @@ describe("CI concurrency", () => {
     expect(decision({ github: { event_name: "workflow_dispatch", ref: "refs/heads/release/v1" } }).group).toBe("ci-workflow_dispatch-refs/heads/release/v1");
   });
 
-  it("keeps metadata events out of this required-check workflow and all validation jobs behind static", () => {
-    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened"]);
-    expect(workflow.jobs.static.if).toBeUndefined();
-    expect(workflow.jobs.gate.name).toBe("CI");
+  it.each(["qa:triaged", "qa:p1", "qa:kind:product", "qa:scope:agents", "owner:upstream", "bug"])(
+    "keeps %s metadata separate while its required proof gate stays pending", (label) => {
+      for (const action of ["labeled", "unlabeled"]) {
+        expect(decision(prContext(action, label))).toEqual({
+          group: "ci-metadata-134-42", cancel: false, static: false, gateName: "CI", gate: true,
+        });
+      }
+    },
+  );
+
+  it("keeps ordinary metadata proofs separate from each other and all test jobs behind static", () => {
+    expect(decision(prContext("labeled", "qa:triaged", { runId: 42 })).group)
+      .not.toBe(decision(prContext("labeled", "owner:upstream", { runId: 43 })).group);
     for (const [id, job] of Object.entries(workflow.jobs as Record<string, { needs?: unknown }>)) {
       if (id !== "static" && id !== "gate") expect(job.needs, id).toBeDefined();
     }
+  });
+
+  it("keeps label checks read-only for a PR targeting a non-main base", () => {
+    expect(workflow.on).not.toHaveProperty("pull_request_target");
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.jobs.gate.permissions).toEqual({ contents: "read", actions: "read", issues: "read", "pull-requests": "read" });
+    expect(decision(prContext("labeled", "ci:full", { baseRef: "release/test" })))
+      .toMatchObject({ group: "ci-pr-134", cancel: true, static: true, gateName: "CI", gate: true });
+  });
+
+  it.each(["ci:full", "qa:repair", "windows", "upstream-sync"])("runs required checks when %s is added or removed", (label) => {
+    for (const action of ["labeled", "unlabeled"]) {
+      expect(decision(prContext(action, label))).toEqual({
+        group: "ci-pr-134", cancel: true, static: true, gateName: "CI", gate: true,
+      });
+    }
+  });
+
+  it("runs validation for incomplete or unknown label events", () => {
+    for (const context of [
+      prContext("labeled", null),
+      prContext(null, "qa:triaged"),
+      prContext("edited", "qa:triaged"),
+      prContext("labeled", "qa:triaged", { number: null }),
+      prContext("labeled", "qa:triaged", { base: null }),
+      prContext("labeled", "qa:triaged", { head: null }),
+    ]) expect(decision(context)).toMatchObject({ cancel: true, static: true, gateName: "CI", gate: true });
   });
 
   it("runs the full lane once daily at 05:00 China time", () => {
@@ -84,8 +120,9 @@ describe("CI concurrency", () => {
   it("creates the required check immediately so a new full request replaces old green evidence", () => {
     expect(workflow.jobs.gate.if).toContain("!cancelled()");
     expect(workflow.jobs.gate.needs).toBeUndefined();
-    expect(decision(prContext("synchronize", null))).toMatchObject({ group: "ci-pr-134", gateName: "CI", gate: true });
-    expect(workflow.jobs.gate.steps.some((step: { run?: string }) => step.run === "node scripts/qa/gate.mjs")).toBe(true);
+    expect(decision(prContext("labeled", "ci:full"))).toMatchObject({ group: "ci-pr-134", gateName: "CI", gate: true });
+    expect(workflow.jobs.gate.steps.some((step: { run?: string }) => step.run === "node scripts/qa/label-gate.mjs")).toBe(true);
+    expect(decision(prContext("labeled", "qa:triaged"))).toMatchObject({ gateName: "CI", gate: true, static: false });
   });
 
   it("schedules one read-only final gate over the selected platform matrix", () => {
@@ -190,7 +227,8 @@ describe("CI concurrency", () => {
     // Windows jobs when it carries the windows label.
     expect(workflow.jobs.static.permissions).toEqual({ contents: "read", actions: "read", "pull-requests": "read", issues: "read" });
     const scope = workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope");
-    expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}", MAUSBOT_CI_MODE: "${{ vars.MAUSBOT_CI_MODE }}", OMB_CI_LINUX_IN_STATIC: "${{ runner.environment == 'self-hosted' }}" });
+    expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}", MAUSBOT_CI_MODE: "${{ vars.MAUSBOT_CI_MODE }}",
+      OMB_CI_LINUX_IN_STATIC: "${{ runner.environment == 'self-hosted' }}", OMB_CI_EXECUTION_BINDING: "1" });
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { permissions?: unknown }][]) {
       if (name === "gate") expect(job.permissions).toEqual({ contents: "read", actions: "read", issues: "read", "pull-requests": "read" });
       else if (name !== "static") expect(job.permissions, name).toBeUndefined();
@@ -266,7 +304,7 @@ describe("CI concurrency", () => {
   });
 
   it("validates selection and docs before fanout for a source change", () => {
-    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened"]);
+    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened", "labeled", "unlabeled"]);
     expect(decision(prContext("synchronize", null)).static).toBe(true);
     expect(workflow.jobs.static.steps[0].with["fetch-depth"]).toBe(0);
     expect(workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope").run).toBe("node scripts/ci-scope.mjs");
