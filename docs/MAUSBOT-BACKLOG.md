@@ -1,33 +1,35 @@
 # MausBot backlog
 
-## Active Mini Apps feedback
+## Mini Apps delivered locally
 
-Keep this list together through the final integrated App delivery. Source review,
-merge and local delivery are separate states; a merged PR alone does not mean the
-installed App has changed. Lead owns review and merge sequencing. Front owns one
-final latest-main build and isolated acceptance after the feedback fixes land.
+The installed App delivered on 2026-11-09 at 12:46 Asia/Shanghai was built from
+`18aa460c57445b353d30eb80dcd7b8edd1eb3150` after the reviewed integration
+in [PR #137](https://github.com/MashellHan/mymausbot/pull/137). The private
+delivery handoff has SHA-256
+`103d11e182b7c9bed6c998c3b1478ec2992c641bdabc141d5357ab002f649f0b`;
+the installed package and its compiled outputs were independently matched to that
+source. This is package/source evidence, not native click acceptance. The audit
+also confirmed that installed app identities, retained ledger Data, report
+editions and existing schedules were preserved, without publishing their private
+identifiers or contents here.
 
-| Outcome | Owner | Source status | Acceptance |
-| --- | --- | --- | --- |
-| Compact Mini App controls | Root | Merged, [PR #122](https://github.com/MashellHan/mymausbot/pull/122); local delivery pending | Remove the persistent publisher-chat and version-history row. Keep those actions and rollback accessible inside the anchored All apps menu. |
-| Main/Computer navigation | Root | Merged, PR #122; local delivery pending | Remove the original Agent Team and Usage tabs; preserve both Mini Apps and their data/access boundaries. Old saved tab selections open Mini Apps. |
-| Default Mini Apps entry | Root | In review, [PR #126](https://github.com/MashellHan/mymausbot/pull/126) | Opening the right Computer sidebar starts on Mini Apps, including compact chat controls and browser-backed bots. Explicit Data, Browser and Screen requests still reach their destination; manual tab selection remains usable while the panel is open. |
-| Activities name | Root | Merged, PR #122; local delivery pending | Replace Work Tracker with Activities for stock English/Chinese titles and existing defaults, preserving app IDs and custom names. |
-| Agent Team opening state | Root | Merged, PR #122; local delivery pending | Open a working team first, then a blocked or recently active verified team. Polling preserves explicit selection and collapse. |
-| Bookkeeping Recent layout | Front | Merged, PR #122; local delivery pending | Rename Records to Recent. Put daily trend above records with a Trend/Calendar switch; remove the separate Calendar top tab and make the calendar compact. |
-| Bookkeeping space and notices | Front | Merged, PR #122; local delivery pending | Put time selection by the title, wrapping beneath it when narrow. Put date coverage in a circled alert disclosure. Remove currency-exclusion notices; retain automatic refresh and existing data. |
-| Activities Token comparisons | Root | Merged, [PR #124](https://github.com/MashellHan/mymausbot/pull/124); collector wrapper deployed; local App delivery pending | Restore DoD and WoW for complete observed Token periods even when unrelated Git fetching fails. Label the periods, preserve cache-inclusive accounting, and explain genuinely missing prior history without inventing a comparison. Verify the next existing scheduled capture contains the new source metadata. |
-| Team Token usage in header | Front | In progress | Show rolling 24-hour and 7-day Tokens alongside the team title and Working state. Attribute only verified team sessions; disclose partial or unavailable observations and never substitute whole-machine usage. |
-| Bookkeeping spending layout | Root | In review, [PR #129](https://github.com/MashellHan/mymausbot/pull/129); design accepted | Order the page as compact spending summary, trend line, category distribution, then sortable records. Week/month show daily spending; yearly trends read the actual month buckets. Label the highest point. Place a donut chart left of sorted category amounts and percentage shares, stacking when narrow. Remove inflow/net from the summary, count only spending entries, and preserve previous-period comparisons and the compact calendar switch. Sorting and pagination must cover the whole ledger. |
-| X AI digest and GitHub Trending presentation | Designer; Front for guarded source opening | In progress | Use the supplied editorial references for clearer summary, item hierarchy, detail and source links. Preserve latest/history selection, automatic publication, authentic report data, narrow/light/dark rendering and custom-template protection. |
+| Delivered outcome | Merged source | Behavior in the `18aa460c` App |
+| --- | --- | --- |
+| Compact Mini Apps and navigation | [#122](https://github.com/MashellHan/mymausbot/pull/122), [#126](https://github.com/MashellHan/mymausbot/pull/126) | Mini Apps opens by default on the guarded local desktop; the one-row launcher and anchored All apps menu hold publisher chat, version history and removal. Agent Team and Activities are Mini Apps, not separate Computer tabs. Explicit Data, Browser, Screen and manual tab choices remain available. |
+| Agent Team and Activities | [#122](https://github.com/MashellHan/mymausbot/pull/122), [#124](https://github.com/MashellHan/mymausbot/pull/124), [#130](https://github.com/MashellHan/mymausbot/pull/130) | Agent Team opens a verified working, blocked or recently active team when available and shows only attributable rolling 24-hour/7-day Token observations. Activities keeps its existing `usage` identity, source coverage and complete-period Token comparisons; unavailable history is not fabricated. |
+| Bookkeeping | [#122](https://github.com/MashellHan/mymausbot/pull/122), [#129](https://github.com/MashellHan/mymausbot/pull/129) | Recent/Statistics, compact Trend/Calendar, spending summary and prior-period change, daily/monthly trend with peak, category shares and whole-ledger record sorting. The ledger and permissions remain local. |
+| X AI and GitHub reports | [#131](https://github.com/MashellHan/mymausbot/pull/131) | Editorial current/history reading, indexed detail and guarded source opening when the desktop grants that capability. Existing edition Data and custom-template protection remain intact. |
 
-Existing default installation, app icons, the single-row launcher and its
-anchored All apps menu remain part of acceptance. Applications open with usable
-data and without a setup step; removed apps stay removed. Report formatting must
-work for both retained historical reports and the next automated publication.
+## Acceptance and separate follow-ups
 
-## Following Mini Apps
+| Item | Status |
+| --- | --- |
+| Native visual, source-click and Agent Team header interaction | Pending: mounted controls were unavailable for this acceptance. Package, resource and startup evidence does not establish a native click or an OS permission grant. |
+| Next natural scheduled X/GitHub report publication | No post-upgrade acceptance receipt was located in the audit. Earlier real publication was already proven, and existing editions and schedules were preserved; absence of a new receipt is not a report failure. This follow-up is separate from the unapplied upstream-sync routine-owner prompt. |
+| Runtime [#136](https://github.com/MashellHan/mymausbot/pull/136) | Merged after the `18aa460c` build; it is not in the installed App. A later App update needs its own source-bound delivery evidence. |
+| Upstream [#134](https://github.com/MashellHan/mymausbot/pull/134) | Source and CI work remains separate and is not installed. Its corrections do not change the Mini Apps delivery status above. |
+| Generated Markdown/CSV preview | Queued after Mini Apps: open a generated file in the right panel, render Markdown or a CSV table, and retain download. |
 
-| Outcome | Owner | Status | Acceptance |
-| --- | --- | --- | --- |
-| Generated-file preview | Lead | Queued after Mini Apps | Clicking a generated Markdown or CSV file opens a preview in the right panel. Render Markdown and display CSV as a table; retain download. |
+Merged source, installed package and native interaction are separate results.
+Continue required review, CI, permission and Data checks for each pending item;
+do not infer delivery from a merge or a failure from missing new observation.
