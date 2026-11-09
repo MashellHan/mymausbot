@@ -59,6 +59,10 @@ test("security: only the person's own Cloud, a command only with the terminal le
   const command = { name: "notes", command: "npx", args: [], env: {} };
   const cloud = { cloud: { accountId: "a", origin: "https://x" }, terminal: false };
   assert.match(lentMcpRefusal({ terminal: true }, command), /only for the person's own Clouds/);
+  assert.match(lentMcpRefusal({ own: true, terminal: false }, command), /Running commands is not enabled/);
+  assert.equal(lentMcpRefusal({ own: true, terminal: true }, command), null);
+  assert.equal(lentMcpRefusal({ own: true, terminal: false }, http("http://127.0.0.1:19501/mcp")), null);
+  assert.match(lentMcpRefusal({ own: true }, http("https://example.com/mcp")), /this computer's own address/);
   assert.match(lentMcpRefusal(cloud, command), /Running commands is not enabled/);
   assert.equal(lentMcpRefusal({ ...cloud, terminal: true }, command), null);
   assert.equal(lentMcpRefusal(cloud, http("http://127.0.0.1:19501/mcp")), null);
@@ -108,6 +112,14 @@ test("the executor refuses before anything starts when the grant doesn't allow i
   await assert.rejects(executeSharedOperation({ ...grant, cloud: undefined, terminal: true }, operation, signal(), null, () => { started++; return null; }), /own Clouds/);
   await assert.rejects(executeSharedOperation({ ...grant, enabled: false }, operation, signal(), null, () => { started++; return null; }), /sharing is off/);
   assert.equal(started, 0);
+});
+
+test("a current own-server grant executes its permitted MCP operation through the same gate", async () => {
+  const server = http("http://127.0.0.1:19501/mcp");
+  const operation = { action: "mcp_tools", server };
+  const result = await executeSharedOperation({ enabled: true, own: true, terminal: false, folders: [] }, operation, signal(), null, async () => ({ call: async () => ({ tools: [{ name: "search" }] }) }));
+  assert.deepEqual(result, { tools: [{ name: "search" }] });
+  await assert.rejects(executeSharedOperation({ enabled: true, terminal: false, folders: [] }, operation, signal(), null, async () => ({ call: async () => result })), /own Clouds/);
 });
 
 test("a command server starts once, from the home folder, with its saved key, and keeps running between calls", async t => {

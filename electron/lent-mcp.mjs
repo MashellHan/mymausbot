@@ -59,7 +59,7 @@ export function isLoopbackAddress(url) {
  * lent terminal allows; a URL server must be at this computer's own loopback address on an explicit port of 1024 or
  * higher, and `createLentMcp` refuses this computer's own ports as it calls. */
 export function lentMcpRefusal(grant, server) {
-  if (!grant?.cloud) return "MCP servers run here only for the person's own Clouds";
+  if (!grant?.cloud && grant?.own !== true) return "MCP servers run here only for the person's own Clouds or servers of their own";
   if ("command" in server) return grant.terminal === true ? null : "Running commands is not enabled for this server";
   if (!isLoopbackAddress(server.url)) return "Only an MCP server at this computer's own address (127.0.0.1, localhost or ::1) can be reached";
   if (server.type === "sse") return "This MCP server uses the older SSE transport, which lending doesn't carry yet";
