@@ -136,6 +136,17 @@ describe("container images", () => {
     expect(grokRun(chain("server"))).toBe(-1);
   });
 
+  it("verifies either original uv archive before unpacking Cloud home tools", () => {
+    const home = chain("cloud-home");
+    expect(home).toContainEqual({ op: "ARG", args: "UV_VERSION=0.13.4" });
+    const run = home.find(step => step.op === "RUN" && step.args.includes("uv_arch=x86_64"))!.args;
+    expect(run).toContain("uv_sha=2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f");
+    expect(run).toContain("uv_sha=1ae72b4718729e2ccc4f1ae2c6d1e531ca8467800e0546e9130b3886023a60ab");
+    expect(run).toContain("curl -fsSL --retry 3 --retry-all-errors");
+    expect(run.indexOf("sha256sum -c -")).toBeGreaterThan(run.indexOf("curl -fsSL"));
+    expect(run.indexOf("tar -xz")).toBeGreaterThan(run.indexOf("sha256sum -c -"));
+  });
+
   it("scans the saved images for every throwaway build directory, and for one Grok", () => {
     const scan = (workflow.jobs["build-and-smoke"].steps as { name?: string; run?: string }[])
       .find(step => step.name?.startsWith("Prove each image ships its files once"))!.run!;
