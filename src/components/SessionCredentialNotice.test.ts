@@ -11,7 +11,7 @@ it("shows the App-run lifetime only in session mode, in either supported languag
   expect(renderToStaticMarkup(createElement(SessionCredentialNotice))).toBe("");
   vi.stubGlobal("window", { ogb: { credentialMode: () => "session" } });
   const english = renderToStaticMarkup(createElement(SessionCredentialNotice));
-  expect(english).toContain("only until you quit MausBot");
+  expect(english).toContain("only until you quit mymausbot");
   expect(english).toContain("Previously saved credentials are left untouched");
   setLocale("zh");
   expect(renderToStaticMarkup(createElement(SessionCredentialNotice))).toContain("退出后需要重新输入");
