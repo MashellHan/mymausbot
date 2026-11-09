@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, WINDOWS_OS } from "../ci-scope.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY } from "../ci-scope.mjs";
 import { executionComplete, expectedJobs, fullPushPlan, inspectJobs, eligibleRun, holdsFor, MERGE_JOBS, narrowPushPlan, triageOf } from "./contracts.mjs";
 import { fullRunEvidence, github, runJobs } from "./github.mjs";
 import { qaHealth } from "./health.mjs";
@@ -26,7 +26,7 @@ function pushPlan(selected = ciOutputs(FULL_SCOPE, ALL_OS), source = pushRun) {
       required_jobs: selected.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selected) } };
 }
 function narrowPlan(source = pushRun) {
-  const selected = ciOutputs(MAIN_SCOPE, WINDOWS_OS);
+  const selected = ciOutputs(MAIN_SCOPE, ALL_OS);
   const plan = pushPlan(selected, source);
   return { ...plan, plan: { ...plan.plan, full: false, scope: MAIN_SCOPE },
     outputs: { ...plan.outputs, full_required: false, expected_jobs: expectedJobs(selected, false) } };
@@ -72,6 +72,17 @@ describe("complete CI and trusted QA health", () => {
     const observed = { name: relay.name, status: "completed", conclusion: "success", steps };
     expect(executionComplete([relay], [observed], new Set())).toBe(true);
     expect(executionComplete([relay], [{ ...observed, steps: steps.slice(0, -1) }], new Set())).toBe(false);
+  });
+
+  it("requires one broker check and test in the selected control-plane job", () => {
+    const control = expectedJobs().find((item) => item.id === "control-plane")!;
+    expect(control.broker).toBe(true);
+    const steps = ["pnpm control-plane:check", "pnpm control-plane:test", "pnpm broker:check", "pnpm broker:test", "pnpm control-plane:dry-run"]
+      .map((name) => ({ name, conclusion: "success" }));
+    const job = { name: control.name, status: "completed", conclusion: "success", steps };
+    expect(executionComplete([control], [job], new Set())).toBe(true);
+    expect(executionComplete([control], [{ ...job, steps: steps.filter((step) => step.name !== "pnpm broker:check") }], new Set())).toBe(false);
+    expect(executionComplete([control], [{ ...job, steps: steps.filter((step) => step.name !== "pnpm broker:test") }], new Set())).toBe(false);
   });
 
   it("keeps the separate build required and its checks out of static", () => {
@@ -280,19 +291,20 @@ describe("complete CI and trusted QA health", () => {
     for (const id of Object.keys(workflow.jobs).filter((id) => !["gate", "deploy-composio-broker", "shadow"].includes(id))) {
       expect(jobs.some((job) => job.id === id), id).toBe(true);
     }
-    expect(jobs.filter((job) => job.id === "vitest")).toHaveLength(20);
+    expect(jobs.filter((job) => job.id === "vitest")).toHaveLength(4);
     const observed = jobs.map((job) => ({ ...job, status: "completed", conclusion: "success" }));
     expect(inspectJobs(jobs, observed).passed).toBe(true);
     expect(inspectJobs(jobs, observed.slice(1))).toMatchObject({ passed: false, missing: [jobs[0].name] });
     for (const conclusion of ["skipped", "cancelled", "timed_out", "failure"]) expect(inspectJobs(jobs, [{ ...observed[0], conclusion }, ...observed.slice(1)]).passed).toBe(false);
   });
 
-  it("recognizes only a full selected push plan, including the equivalent relocated Linux lane", () => {
+  it("recognizes only a full macOS selected push plan, including Boat static", () => {
     const plan = pushPlan();
     const narrow = narrowPlan();
     expect(plan.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
     expect(narrow.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
-    expect(plan.outputs.expected_jobs).toHaveLength(38);
+    expect(plan.outputs.expected_jobs).toHaveLength(13);
+    expect(plan.outputs.platform_policy).toEqual(PLATFORM_POLICY);
     expect(fullPushPlan(plan)).toBe(true);
     expect(fullPushPlan(pushPlan(moveLinuxIntoStatic(ciOutputs(FULL_SCOPE, ALL_OS))))).toBe(true);
     expect(narrowPushPlan(narrow)).toBe(true);
@@ -313,17 +325,19 @@ describe("complete CI and trusted QA health", () => {
     ]) expect(fullPushPlan(candidate)).toBe(false);
   });
 
-  it("reports a historical scheduled or manual full plan from its own bound 37 jobs", async () => {
-    const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+  it("reports a historical scheduled or manual full plan from its own bound 38 jobs", async () => {
+    const fixture = JSON.parse(readFileSync("scripts/qa/fixtures/full-platform-plan-pre-policy.json", "utf8"));
+    expect(fixture.producerSource).toBe("2a7e7c6d82d5db5518a82b3eb9f49098498a9490");
+    const historical = fixture.outputs;
+    const oldJobs = historical.expected_jobs;
+    expect(historical.platform_policy).toBeUndefined();
+    expect(historical.vitest_matrix.include).toHaveLength(20);
+    expect(expectedJobs(historical)).toEqual(oldJobs);
+    expect(oldJobs).toHaveLength(38);
     const selected = ciOutputs(FULL_SCOPE, ALL_OS);
-    const historical = { ...selected, jobs: selected.jobs.filter((id) => id !== "relay") };
-    const oldJobs = expectedJobs(historical);
-    expect(oldJobs).toHaveLength(37);
-    const outputs = { ...historical, full_required: true, reduced: false, qa_areas: ["global"],
-      required_jobs: historical.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: oldJobs };
     const observed = oldJobs.map((item, index) => ({ id: index + 1, name: item.name, run_attempt: 1, status: "completed", conclusion: "success",
-      steps: workflow.jobs[item.id].steps.map((step: { name?: string; run?: string }) => ({ name: step.name ?? `Run ${step.run}`, conclusion: "success" })) }));
-    let plan: any = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs };
+      steps: fixture.jobSteps[item.id].map((name: string) => ({ name, conclusion: "success" })) }));
+    let plan: any = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs: historical };
     let artifacts = [
       { name: "qa-plan-attempt-1", workflow_run: { id: run.id, head_sha: run.head_sha } },
       ...oldJobs.filter((item) => item.artifact).map((item) => ({ name: `${item.artifact}-attempt-1`, workflow_run: { id: run.id, head_sha: run.head_sha } })),
@@ -335,23 +349,61 @@ describe("complete CI and trusted QA health", () => {
         : path.includes("/artifacts?") ? { artifacts }
           : path.includes("ci.yml/runs") ? { workflow_runs: [] }
             : issuesApi(path, options);
+    const historicalResult = (title: string) => ({ "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: 0, numPendingTests: 0,
+      testResults: [{ name: testFile, status: "passed", assertionResults: [{ ancestorTitles: ["auth"], title, status: "passed" }] }] }) });
     const readArtifact = async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
       ? { "qa-plan.json": JSON.stringify(plan) }
-      : { "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: 0, numPendingTests: 0,
-        testResults: [{ name: testFile, status: "passed", assertionResults: [{ ancestorTitles: ["auth"], title: "saved contract", status: "passed" }] }] }) };
+      : historicalResult(artifact.name.startsWith("qa-results-foss-") ? "legacy FOSS contract" : "saved contract");
     for (event of ["schedule", "workflow_dispatch"]) {
       const report = await reportRun(run.id, { api, readArtifact, repository });
       expect(report).toMatchObject({ executionComplete: true, testsPassed: true, missing: [], deliveryComplete: true });
-      expect(report.jobs).toHaveLength(37);
+      expect(report.jobs).toHaveLength(38);
+      expect(report.platformPolicy).toBeUndefined();
+      expect(report.passed).toContain(testFindings(historicalResult("legacy FOSS contract"), "linux").passed[0]);
+      expect(report.passed).not.toContain(testFindings(historicalResult("legacy FOSS contract"), "darwin").passed[0]);
     }
     plan = { ...plan, outputs: { ...selected, full_required: true, reduced: false, qa_areas: ["global"],
       required_jobs: selected.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selected) } };
     const current = await reportRun(run.id, { api, readArtifact, repository });
-    expect(current).toMatchObject({ executionComplete: false, testsPassed: false, missing: ["relay typecheck + tests + fuzz + audit"] });
+    expect(current).toMatchObject({ executionComplete: false, testsPassed: false,
+      missing: expect.arrayContaining(["vitest (macos-latest, all shard 1/4)"]), platformPolicy: PLATFORM_POLICY });
     artifacts = artifacts.filter((item) => !item.name.startsWith("qa-plan"));
     await expect(reportRun(run.id, { api, readArtifact, repository })).rejects.toThrow("Trusted validation plan unavailable");
     artifacts = [{ name: "qa-plan-attempt-1", workflow_run: { id: 999, head_sha: run.head_sha } }, ...artifacts];
     await expect(reportRun(run.id, { api, readArtifact, repository })).rejects.toThrow("Missing current-run validation plan");
+  });
+
+  it("attributes current specialist artifacts to Darwin without verifying a legacy Linux case", async () => {
+    const { api: issuesApi, issues } = issueApi();
+    const oldFinding = testFindings(result("failed"), "linux").findings[0];
+    await deliverReport(makeReport({ run: { ...run, id: 99 }, expected: [], jobs: [],
+      results: [{ name: "qa-results-foss", ...testFindings(result("failed"), "linux") }] }), { api: issuesApi });
+    expect(issues).toHaveLength(1);
+    expect(issues[0].body).toContain(`<!-- mausbot-qa:${oldFinding.key} -->`);
+
+    const selected = ciOutputs(FULL_SCOPE, ALL_OS);
+    const plan = pushPlan(selected, run);
+    const expected = expectedJobs(selected);
+    const specialistArtifacts = expected.filter((item) => ["behavior-evals", "foss", "ui-smoke"].includes(item.id)).map((item) => item.artifact);
+    expect(specialistArtifacts).toEqual(["qa-results-evals-macos-latest", "qa-results-foss-macos-latest", "qa-results-ui-macos-latest"]);
+    const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+    const jobs = expected.map((item, index) => ({ id: index + 1, name: item.name, run_attempt: 1, status: "completed", conclusion: "success",
+      steps: workflow.jobs[item.id].steps.map((step: { name?: string; run?: string }) => ({ name: step.name ?? `Run ${step.run}`, conclusion: "success" })) }));
+    const artifacts = ["qa-plan", ...expected.flatMap((item) => item.artifact ? [item.artifact] : [])]
+      .map((name) => ({ name: `${name}-attempt-1`, workflow_run: { id: run.id, head_sha: run.head_sha } }));
+    const api = async (path: string, options?: object) => path === `/actions/runs/${run.id}` ? run
+      : path.includes("/jobs?") ? { jobs }
+        : path.includes("/artifacts?") ? { artifacts }
+          : path.includes("ci.yml/runs") ? { workflow_runs: [] }
+            : issuesApi(path, options);
+    const readArtifact = async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(plan) } : result("passed");
+    const reported = await reportRun(run.id, { api, readArtifact, repository });
+    const darwinKey = testFindings(result("passed"), "darwin").passed[0];
+    expect(reported).toMatchObject({ executionComplete: true, testsPassed: true, deliveryComplete: true, findings: [] });
+    expect(reported.passed).toContain(darwinKey);
+    expect(reported.passed).not.toContain(oldFinding.key);
+    expect(issues[0].labels.map((label: { name: string }) => label.name)).not.toContain("qa:verified");
   });
 
   it("binds a push plan to its trusted run, SHA and producing attempt without treating absent evidence as full", async () => {
@@ -785,7 +837,7 @@ describe("QA findings and idempotent delivery", () => {
   it("does not clear a preflight incident merely because its original step passed", async () => {
     const { api, issues } = issueApi();
     const preflight = passedPreflight();
-    const specialist = expectedJobs().find((item) => item.id === "cloudflared-linux-arm64")!;
+    const specialist = expectedJobs().find((item) => item.id === "relay")!;
     const contracts = [{ id: "static", name: preflight.name, build: false }, specialist];
     const failed = { ...preflight, conclusion: "failure", steps: preflight.steps.map((step) => ({ ...step, conclusion: step.name === "pnpm lint" ? "failure" : "success" })) };
     await deliverReport(makeReport({ run, expected: contracts, jobs: [failed, { ...specialist, status: "completed", conclusion: "skipped" }] }), { api });
@@ -794,7 +846,8 @@ describe("QA findings and idempotent delivery", () => {
     expect(narrow.executionComplete).toBe(true);
     await deliverReport(narrow, { api });
     expect(issues[0].labels.map((item: any) => item.name)).not.toContain("qa:verified");
-    const complete = makeReport({ run: { ...run, id: 102 }, expected: contracts, jobs: [preflight, { ...specialist, status: "completed", conclusion: "success", steps: [{ name: "Install and reuse the pinned connector", conclusion: "success" }] }] });
+    const complete = makeReport({ run: { ...run, id: 102 }, expected: contracts, jobs: [preflight, { ...specialist, status: "completed", conclusion: "success",
+      steps: ["Audit the production dependencies", "pnpm check", "pnpm test"].map((name) => ({ name, conclusion: "success" })) }] });
     expect(complete.executionComplete).toBe(true);
     await deliverReport(complete, { api });
     expect(issues[0].labels.map((item: any) => item.name)).toContain("qa:verified");

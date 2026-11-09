@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
-  ALL_OS, AREA_CHECKS, ciOutputs, FAST_AFFECTED_LIMIT, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, moveLinuxIntoStatic, QUEUED_SCOPE, readCheckPolicy, SELECTABLE_JOBS,
+  ALL_OS, AREA_CHECKS, ciOutputs, FAST_AFFECTED_LIMIT, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY, QUEUED_SCOPE, readCheckPolicy, SELECTABLE_JOBS,
   selectCheckPlan, selectCiScope,
   pullRequestControls, selectPushScope, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_LABEL, WINDOWS_OS, windowsReason,
 } from "./ci-scope.mjs";
@@ -20,11 +20,11 @@ const scopeWithEventControls = ["--input-type=module", "-e", `import { runCiScop
   await runCiScope({ fastPrEnabled: false, readPullRequest: async (pr) => ({ labels: (pr.labels ?? []).map(label => label.name), repairIds: [] }) });`];
 const legacyPrScope = ["--input-type=module", "-e", `import { runCiScope } from ${JSON.stringify(new URL("./ci-scope.mjs", import.meta.url).href)};
   await runCiScope({ fastPrEnabled: false });`];
-const ALL = ["macos-latest", "ubuntu-latest", "windows-latest"];
-const PR = ["ubuntu-latest", "windows-latest"];
+const ALL = ["macos-latest"];
+const PR = ["ubuntu-latest"];
 const LINUX = ["ubuntu-latest"];
-const MAIN = ["ubuntu-latest", "windows-latest"];
-const SERVER_JOBS = ["vitest", "behavior-evals", "packaged-server", "electron-smokes", "foss", "ui-smoke", "browser-identity", "package-linux", "browser-driver"];
+const MAIN = ALL;
+const SERVER_JOBS = ["vitest", "behavior-evals", "electron-smokes", "foss", "ui-smoke", "browser-identity", "browser-driver"];
 const temporaryDirectories: string[] = [];
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -76,30 +76,30 @@ function outputs(text: string) {
   expect(typeof parsed.full_required).toBe("boolean");
   expect(parsed.expected_jobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: "static" })]));
   expect(parsed.required_jobs.every((job: string) => parsed.jobs.includes(job))).toBe(true);
-  return Object.fromEntries(Object.entries(parsed).filter(([key]) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes"].includes(key)));
+  return Object.fromEntries(Object.entries(parsed).filter(([key]) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes", "boat_static", "platform_policy"].includes(key)));
 }
 
-const packaged = (oses: string[]) => oses.filter((os) => os !== "macos-latest");
-const everything = (oses: string[]) => ({ jobs: SELECTABLE_JOBS, build: true, vitest_os: oses, packaged_server_os: packaged(oses), vitest_matrix: vitestMatrix(oses) });
-const staticOnly = (oses: string[], build: boolean) => ({ jobs: [], build, vitest_os: oses, packaged_server_os: packaged(oses), vitest_matrix: vitestMatrix(oses) });
-/** What a push to main and a merge group run: Linux's and Windows' shards, the macOS smokes and the short Linux checks. */
-const MAIN_JOBS = ["vitest", "behavior-evals", "packaged-server", "electron-smokes", "foss", "control-plane", "ui-smoke", "browser-identity"];
-const mainLane = () => ({ jobs: MAIN_JOBS, build: true, vitest_os: MAIN, packaged_server_os: MAIN, vitest_matrix: vitestMatrix(MAIN) });
+const everything = () => ({ jobs: SELECTABLE_JOBS, build: true, vitest_os: ALL, packaged_server_os: [],
+  vitest_matrix: vitestMatrix(ALL), platform_policy: PLATFORM_POLICY });
+const staticOnly = (oses: string[], build: boolean) => ({ jobs: [], build, vitest_os: oses, packaged_server_os: [], vitest_matrix: vitestMatrix(oses) });
+const MAIN_JOBS = ["vitest", "behavior-evals", "electron-smokes", "foss", "control-plane", "ui-smoke", "browser-identity"];
+const mainLane = () => ({ jobs: MAIN_JOBS, build: true, vitest_os: MAIN, packaged_server_os: [],
+  vitest_matrix: vitestMatrix(MAIN), platform_policy: PLATFORM_POLICY });
 
 describe("vitest matrix", () => {
-  it("gives Linux and Windows eight shards each and macOS four, and only Linux every e2e file", () => {
-    const { include } = vitestMatrix(["macos-latest", "ubuntu-latest", "windows-latest"]);
+  it("gives the full lane four macOS all-E2E shards and keeps ordinary Ubuntu subset support", () => {
+    const { include } = vitestMatrix(ALL);
     const count = (os: string) => include.filter((entry) => entry.os === os).length;
-    expect([count("ubuntu-latest"), count("windows-latest"), count("macos-latest")]).toEqual([8, 8, 4]);
-    expect(include.find((entry) => entry.os === "windows-latest" && entry.shard === 8))
-      .toEqual({ os: "windows-latest", part: "shard 8/8", shard: 8, shards: 8, files: "", e2e: "host", node_tests: false, workers: 1 });
+    expect([count("ubuntu-latest"), count("windows-latest"), count("macos-latest")]).toEqual([0, 0, 4]);
+    expect(include[0]).toEqual({ os: "macos-latest", part: "all shard 1/4", shard: 1, shards: 4, files: "", e2e: "all", node_tests: true, workers: 1 });
     expect(include.filter((entry) => entry.node_tests).map((entry) => [entry.os, entry.shard]))
-      .toEqual([["macos-latest", 1], ["ubuntu-latest", 1], ["windows-latest", 1]]);
-    expect(include.filter((entry) => entry.e2e === "all").every((entry) => entry.os === "ubuntu-latest")).toBe(true);
+      .toEqual([["macos-latest", 1]]);
+    expect(include.every((entry) => entry.e2e === "all")).toBe(true);
+    expect(vitestMatrix(LINUX).include).toHaveLength(8);
   });
 
-  it("keeps a pull request's shards off macOS", () => {
-    expect(vitestMatrix(["ubuntu-latest", "windows-latest"]).include.some((entry) => entry.os === "macos-latest")).toBe(false);
+  it("keeps an ordinary PR fast scope on Ubuntu without a macOS job", () => {
+    expect(ciOutputs({ checks: ["build"] }, LINUX)).toEqual(staticOnly(LINUX, true));
   });
 });
 
@@ -116,12 +116,12 @@ describe("CI path scope", () => {
 
   it("runs a test under scripts/ wherever the suite runs, without the build", () => {
     expect(selectCiScope(["scripts/generate-locale.test.mjs", "scripts/testing/control-omb-ui.e2e.test.ts"]))
-      .toEqual({ areas: ["script-tests"], checks: ["browser-identity", "host-tests", "linux-tests", "ui-smoke"] });
+      .toEqual({ areas: ["script-tests"], checks: ["browser-identity", "host-tests", "ui-smoke"] });
   });
 
-  it("runs the build, the Linux shards and the renderer smoke for a renderer change", () => {
+  it("runs the build, macOS full tests and renderer smoke for a wider renderer change", () => {
     expect(selectCiScope(["src/App.tsx", "public/icon.svg", "cloud-buy-preview.html", "src/locales/en.json", "docs/guide.md"]))
-      .toEqual({ areas: ["docs", "web"], checks: ["build", "docs-tests", "linux-tests", "ui-smoke"] });
+      .toEqual({ areas: ["docs", "web"], checks: ["build", "docs-tests", "host-tests", "ui-smoke"] });
   });
 
   it("runs the locale tests alone for translations, their tests and their hashes", () => {
@@ -132,16 +132,16 @@ describe("CI path scope", () => {
 
   it.each([
     ["server/index.ts"], ["shared/types.ts"], ["companion/src/index.ts"], ["enterprise/license.ts"], ["evals/runners/run-evals.ts"],
-    ["skills/pdf/SKILL.md"], ["cloudflare/composio-broker/src/index.ts"], ["Dockerfile"], ["deploy/podman/run.sh"],
+    ["skills/pdf/SKILL.md"], ["Dockerfile"], ["deploy/podman/run.sh"],
     ...SRC_OUTSIDE_RENDERER.map((file) => [file]),
   ])("runs every check that runs the server for %j", (file) => {
     expect(selectCiScope([file])).toEqual({ areas: ["server"], checks: checks("server") });
   });
 
   it.each([["electron/cua.mjs"], ["electron/shared-computer-access.mjs"], ["electron/capabilities.cjs"], ["electron/screen-status.mjs"]])(
-    "runs the Windows computer-control smokes too for %j, which they start as the installed app does", (file) => {
+    "selects the macOS desktop contracts without retired Windows smoke for %j", (file) => {
       expect(selectCiScope([file])).toEqual({ areas: ["windows-computer-control"], checks: checks("server", "windows-computer-control") });
-      expect(selectCiScope([file]).checks).toContain("windows-cua");
+      expect(selectCiScope([file]).checks).not.toContain("windows-cua");
     });
 
   it.each([["electron/main.mjs"], ["build/icon.icns"], ["electron-builder.yml"], ["index.html"], ["rail.html"]])("runs the server's checks for the desktop's %j", (file) => {
@@ -150,6 +150,12 @@ describe("CI path scope", () => {
 
   it("runs only the control-plane job for the control plane", () => {
     expect(selectCiScope(["cloudflare/control-plane/src/index.ts"])).toEqual({ areas: ["control-plane"], checks: ["control-plane"] });
+  });
+
+  it("keeps broker-only changes on their own checked and tested job", () => {
+    expect(selectCiScope(["cloudflare/composio-broker/src/index.ts"]))
+      .toEqual({ areas: ["broker"], checks: ["build", "control-plane"] });
+    expect(ciOutputs(selectCiScope(["cloudflare/composio-broker/src/index.ts"]), LINUX).jobs).toEqual(["control-plane"]);
   });
 
   it.each([["relay/src/server.ts"], ["relay/pnpm-lock.yaml"], ["relay/Dockerfile"], ["relay/deploy/Caddyfile"], ["relay/README.md"]])(
@@ -164,7 +170,7 @@ describe("CI path scope", () => {
 
   it("selects every area's checks for a change across areas", () => {
     expect(selectCiScope(["src/App.tsx", "src/locales/de.json", "cloudflare/control-plane/src/index.ts"]))
-      .toEqual({ areas: ["control-plane", "locales", "web"], checks: ["build", "control-plane", "linux-tests", "locale-tests", "ui-smoke"] });
+      .toEqual({ areas: ["control-plane", "locales", "web"], checks: ["build", "control-plane", "host-tests", "locale-tests", "ui-smoke"] });
   });
 
   it("keeps filenames containing newlines as one path that can affect anything", () => {
@@ -191,13 +197,15 @@ describe("CI path scope", () => {
 });
 
 describe("CI outputs", () => {
-  it("runs a renderer change's tests on Linux only", () => {
-    const out = ciOutputs(selectCiScope(["src/App.tsx"]), PR);
-    expect(out).toEqual({ jobs: ["vitest", "ui-smoke"], build: true, vitest_os: PR, packaged_server_os: PR, vitest_matrix: vitestMatrix(["ubuntu-latest"]) });
+  it("runs a wider renderer change on macOS", () => {
+    const out = ciOutputs(selectCiScope(["src/App.tsx"]), ALL);
+    expect(out).toEqual({ jobs: ["vitest", "ui-smoke"], build: true, vitest_os: ALL, packaged_server_os: [],
+      vitest_matrix: vitestMatrix(ALL), platform_policy: PLATFORM_POLICY });
   });
 
-  it("runs a server change's tests on Linux and Windows, and its other checks", () => {
-    expect(ciOutputs(selectCiScope(["server/index.ts"]), PR)).toEqual({ jobs: SERVER_JOBS, build: true, vitest_os: PR, packaged_server_os: PR, vitest_matrix: vitestMatrix(PR) });
+  it("runs a wider server change's tests and specialists on macOS", () => {
+    expect(ciOutputs(selectCiScope(["server/index.ts"]), ALL)).toEqual({ jobs: SERVER_JOBS, build: true, vitest_os: ALL,
+      packaged_server_os: [], vitest_matrix: vitestMatrix(ALL), platform_policy: PLATFORM_POLICY });
   });
 
   it("runs the locale tests in their own shards, with the Electron node tests, when no full Linux run covers them", () => {
@@ -313,7 +321,7 @@ describe("CI outputs", () => {
       os: "ubuntu-latest", part: `locale tests ${shard}/2`, shard, shards: 2,
       files: VITEST_SUBSETS["locale-tests"].files.join(" "), e2e: "all", node_tests: shard === 1, workers: 4,
     })));
-    expect(ciOutputs(selectCiScope(["src/locales/de.json", "src/App.tsx"]), PR).vitest_matrix).toEqual(vitestMatrix(["ubuntu-latest"]));
+    expect(ciOutputs(selectCiScope(["src/locales/de.json", "src/App.tsx"]), ALL).vitest_matrix).toEqual(vitestMatrix(ALL));
   });
 
   it("runs the docs tests in one job for docs, and skips the build", () => {
@@ -332,39 +340,37 @@ describe("CI outputs", () => {
 
   it("runs every job, on every platform the event covers, for the full scope", () => {
     expect(ciOutputs(FULL_SCOPE, ALL)).toEqual(everything(ALL));
-    expect(ciOutputs(FULL_SCOPE, PR)).toEqual(everything(PR));
+    expect(() => ciOutputs(FULL_SCOPE, PR)).toThrow("Retired full test platform");
   });
 
-  it("puts every e2e-capable platform's shards in the vitest job only when its tests are selected", () => {
-    const windows = ciOutputs({ checks: ["host-tests"] }, ALL).vitest_matrix.include;
-    expect(new Set(windows.map((entry: { os: string }) => entry.os))).toEqual(new Set(["macos-latest", "windows-latest"]));
+  it("puts all portable and host E2E files in macOS full shards", () => {
+    const shards = ciOutputs({ checks: ["host-tests"] }, ALL).vitest_matrix.include;
+    expect(shards).toHaveLength(4);
+    expect(shards.every((entry: { os: string; e2e: string }) => entry.os === "macos-latest" && entry.e2e === "all")).toBe(true);
   });
 
-  it("runs Linux's and Windows' every shard, the macOS smokes and the short Linux checks for main", () => {
+  it("runs the macOS full shards and applicable specialist jobs for main", () => {
     const out = ciOutputs(MAIN_SCOPE, MAIN);
     expect(out).toEqual(mainLane());
-    expect(out.vitest_matrix.include.map((entry: { os: string }) => entry.os)).toEqual([...Array(8).fill("ubuntu-latest"), ...Array(8).fill("windows-latest")]);
-    expect(out.packaged_server_os).toEqual(MAIN);
+    expect(out.vitest_matrix.include.map((entry: { os: string }) => entry.os)).toEqual(Array(4).fill("macos-latest"));
+    expect(out.packaged_server_os).toEqual([]);
     for (const job of ["windows-cua", "package-linux", "browser-driver", "cloudflared-linux-arm64"]) expect(out.jobs, job).not.toContain(job);
     expect(MAIN_SCOPE.checks.every((check) => FULL_SCOPE.checks.includes(check))).toBe(true);
   });
 
-  it("leaves every Windows job out where the run's platforms leave Windows out", () => {
-    const out = ciOutputs(FULL_SCOPE, LINUX);
-    expect(out.jobs).toEqual(SELECTABLE_JOBS.filter((job) => job !== "windows-cua"));
-    expect(out.vitest_matrix).toEqual(vitestMatrix(LINUX));
-    expect(out.packaged_server_os).toEqual(LINUX);
-    expect(out.vitest_os).toEqual(LINUX);
-    expect(ciOutputs(FULL_SCOPE, WINDOWS_OS).jobs).toContain("windows-cua");
+  it("rejects a retired full platform while preserving Ubuntu ordinary selections", () => {
+    expect(() => ciOutputs(FULL_SCOPE, LINUX)).toThrow("Retired full test platform");
+    expect(() => ciOutputs(FULL_SCOPE, WINDOWS_OS)).toThrow("Retired full test platform");
+    expect(ciOutputs({ checks: ["docs-tests"] }, LINUX).vitest_os).toEqual(LINUX);
     expect(LINUX_OS).toEqual(LINUX);
-    expect(WINDOWS_OS).toEqual(PR);
+    expect(WINDOWS_OS).toEqual(["ubuntu-latest", "windows-latest"]);
   });
 
   it("runs only the broker's control-plane checks for a commit the merge queue already tested", () => {
     expect(ciOutputs(QUEUED_SCOPE, MAIN)).toEqual({ ...staticOnly(MAIN, false), jobs: ["control-plane"] });
   });
 
-  it("names each event's lane: a pull request its areas, main and the merge queue Linux, the rest every platform", () => {
+  it("names each event's lane: pull request, main and full macOS", () => {
     expect(laneOf("pull_request")).toBe("pr");
     expect(laneOf("push")).toBe("main");
     expect(laneOf("merge_group")).toBe("main");
@@ -374,36 +380,27 @@ describe("CI outputs", () => {
   });
 });
 
-describe("the Linux work in the static job, on a Boat VM", () => {
-  const linuxShards = vitestMatrix(LINUX).include;
-
-  it("runs a server change's Linux shards, behavior evals and packaged server there, and no Linux job", () => {
-    const out = moveLinuxIntoStatic(ciOutputs(selectCiScope(["server/index.ts"]), LINUX));
-    expect(out.jobs).toEqual(SERVER_JOBS.filter((job) => !["vitest", "behavior-evals", "packaged-server"].includes(job)));
-    expect(out.linux_lanes).toEqual({ vitest: linuxShards, evals: true, packaged_server: true });
-    expect(out.vitest_matrix).toEqual(vitestMatrix(LINUX));
-    expect(out.vitest_os).toEqual(LINUX);
+describe("Boat static and ordinary Ubuntu subsets", () => {
+  it("keeps full Mac work in its jobs when static runs on Boat", () => {
+    const out = moveLinuxIntoStatic(ciOutputs(FULL_SCOPE, ALL));
+    expect(out).toEqual({ ...everything(ALL), boat_static: true });
+    expect(out.linux_lanes).toBeUndefined();
   });
 
-  it("keeps the Windows shards and packaged server as jobs", () => {
-    const out = moveLinuxIntoStatic(ciOutputs(FULL_SCOPE, PR));
-    expect(out.jobs).toEqual(SELECTABLE_JOBS.filter((job) => job !== "behavior-evals"));
-    expect(out.vitest_matrix).toEqual(vitestMatrix(["windows-latest"]));
-    expect(out.packaged_server_os).toEqual(["windows-latest"]);
-    expect(out.linux_lanes).toEqual({ vitest: linuxShards, evals: true, packaged_server: true });
-    expect(moveLinuxIntoStatic(ciOutputs(MAIN_SCOPE, MAIN)).jobs).toEqual(MAIN_JOBS.filter((job) => job !== "behavior-evals"));
+  it("keeps macOS main behavior evals and full shards outside Boat static", () => {
+    const out = moveLinuxIntoStatic(ciOutputs(MAIN_SCOPE, MAIN));
+    expect(out.jobs).toEqual(MAIN_JOBS);
+    expect(out.boat_static).toBe(true);
   });
 
   it("runs a docs or translation change's subset there, and nothing when nothing is selected", () => {
     const docs = moveLinuxIntoStatic(ciOutputs({ checks: ["docs-tests"] }, LINUX));
     expect(docs.jobs).toEqual([]);
     expect(docs.linux_lanes).toEqual({ vitest: ciOutputs({ checks: ["docs-tests"] }, LINUX).vitest_matrix.include, evals: false, packaged_server: false });
-    expect(moveLinuxIntoStatic(ciOutputs({ checks: [] }, LINUX))).toEqual({
-      ...staticOnly(LINUX, false), linux_lanes: { vitest: [], evals: false, packaged_server: false },
-    });
+    expect(moveLinuxIntoStatic(ciOutputs({ checks: [] }, LINUX))).toEqual({ ...staticOnly(LINUX, false), boat_static: true });
   });
 
-  it("does it only when the static job is told it runs on Boat", () => {
+  it("keeps selected Mac work outside Boat static in a wider PR", () => {
     const { directory, git, base } = fixture("src/App.tsx");
     writeFileSync(join(directory, "src/App.tsx"), "changed\n");
     git("commit", "--quiet", "-am", "renderer");
@@ -415,8 +412,8 @@ describe("the Linux work in the static job, on a Boat VM", () => {
       env: { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, OMB_CI_LINUX_IN_STATIC: "true" },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(outputs(readFileSync(outputPath, "utf8"))).toEqual(moveLinuxIntoStatic(ciOutputs(selectCiScope(["src/App.tsx"]), LINUX)));
-    expect(result.stdout).toContain("this job runs 8 Linux vitest lane(s)");
+    expect(outputs(readFileSync(outputPath, "utf8"))).toEqual(moveLinuxIntoStatic(ciOutputs(selectCiScope(["src/App.tsx"]), ALL)));
+    expect(result.stdout).not.toContain("Linux vitest lane");
   });
 });
 
@@ -613,23 +610,22 @@ describe("CI scope CLI", () => {
     const { output, stderr } = run(directory, "pull_request", {
       pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
     });
-    // A server change that cannot break Windows first: its Windows jobs wait for main.
-    expect(output).toEqual({ jobs: SERVER_JOBS, build: true, vitest_os: LINUX, packaged_server_os: LINUX, vitest_matrix: vitestMatrix(LINUX) });
+    expect(output).toEqual(ciOutputs(selectCiScope([source]), ALL));
     expect(stderr).toBe("");
   });
 
-  it("runs a renderer pull request's tests on Linux, and a translation pull request's locale tests", () => {
-    for (const [source, jobs, oses] of [["src/App.tsx", ["vitest", "ui-smoke"], ["ubuntu-latest"]], ["src/locales/de.json", ["vitest"], []]] as const) {
+  it("runs wider renderer work on macOS and translation subsets on Ubuntu", () => {
+    for (const [source, jobs, oses] of [["src/App.tsx", ["vitest", "ui-smoke"], ALL], ["src/locales/de.json", ["vitest"], []]] as const) {
       const { directory, git, base } = fixture(source);
       writeFileSync(join(directory, source), "changed\n");
       git("commit", "--quiet", "-am", "change");
       const { output, stderr } = run(directory, "pull_request", {
         pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
       });
-      expect(output).toEqual(ciOutputs(selectCiScope([source]), LINUX));
+      expect(output).toEqual(ciOutputs(selectCiScope([source]), source === "src/App.tsx" ? ALL : LINUX));
       expect(output.jobs).toEqual(jobs);
       expect(output.vitest_matrix.include.filter((entry: { files: string }) => !entry.files).map((entry: { os: string }) => entry.os))
-        .toEqual(oses.flatMap((os) => Array(8).fill(os)));
+        .toEqual(oses.flatMap((os) => Array(os === "macos-latest" ? 4 : 8).fill(os)));
       expect(stderr).toBe("");
     }
   });
@@ -642,7 +638,7 @@ describe("CI scope CLI", () => {
     const { output } = run(directory, "pull_request", {
       pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
     });
-    expect(output).toEqual(ciOutputs({ checks: AREA_CHECKS.web }, LINUX));
+    expect(output).toEqual(ciOutputs({ checks: AREA_CHECKS.web }, ALL));
   });
 
   it.each(["missing", "invalid", "unavailable", "empty"])("falls back loudly for a %s diff", (kind) => {
@@ -896,7 +892,7 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     } finally { await localApi?.close(); }
   }
 
-  const serverJobs = (oses: string[]) => ({ jobs: SERVER_JOBS, build: true, vitest_os: oses, packaged_server_os: oses, vitest_matrix: vitestMatrix(oses) });
+  const serverJobs = () => ciOutputs(selectCiScope(["server/paths.ts"]), ALL);
 
   it("records the executed merge base when the PR event still names an older base", async () => {
     const { directory, git, base: eventBase } = fixture("server/paths.ts");
@@ -914,23 +910,23 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     const payload = { pull_request: { number: 7, base: { sha: eventBase }, head: { sha: head } } };
     const { output, plan, stderr } = await runPullRequest(directory, payload, { OMB_CI_EXECUTION_BINDING: "1" });
     expect(stderr).toBe("");
-    expect(output).toEqual(serverJobs(LINUX));
+    expect(output).toEqual(serverJobs());
     expect(plan.execution).toEqual({ merge, base: currentBase, head });
   });
 
-  it("runs the Windows jobs for a changed line that names Windows, and says why", async () => {
+  it("runs wider macOS validation for a changed line that names Windows", async () => {
     const { directory, payload } = serverChange('if (process.platform === "win32") quote();\n');
     const { output, stdout, stderr } = await runPullRequest(directory, payload);
-    expect(output).toEqual(serverJobs(PR));
-    expect(stdout).toContain('Windows runs for the changed line "+if (process.platform === \\"win32\\") quote();"');
+    expect(output).toEqual(serverJobs());
+    expect(stdout).toContain("CI scope: server ->");
     expect(stderr).toBe("");
   });
 
-  it("leaves the Windows jobs to main for a change that cannot break Windows first, and says how to run them", async () => {
+  it("uses the same macOS wider selection for server work without Windows text", async () => {
     const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
     const { output, stdout, stderr } = await runPullRequest(directory, payload);
-    expect(output).toEqual(serverJobs(LINUX));
-    expect(stdout).toContain('label the PR "windows" and re-run');
+    expect(output).toEqual(serverJobs());
+    expect(stdout).toContain("CI scope: server ->");
     expect(stderr).toBe("");
   });
 
@@ -973,12 +969,12 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     expect((await runPullRequest(directory, payload)).output).toEqual(everything(ALL));
   });
 
-  it("runs the Windows jobs for the label the pull request has now, so a re-run after labelling runs them", async () => {
+  it("uses current windows control to request macOS full validation", async () => {
     const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
     const api = await fakeLabelsApi(["bug", "windows"]);
     try {
       const { output, stderr } = await runPullRequest(directory, payload, api.env);
-      expect(output).toEqual(serverJobs(PR));
+      expect(output).toEqual(everything(ALL));
       expect(stderr).toBe("");
       expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
     } finally {
@@ -1006,11 +1002,11 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     }
   });
 
-  it("changes a non-full Windows-labelled PR to full for upstream-sync and back after removal", async () => {
+  it("keeps a Windows-labelled PR full when upstream-sync is removed", async () => {
     const { directory, payload } = serverChange("updated guide\n", "docs/guide.md");
-    for (const [action, labels, full] of [
-      ["labeled", ["windows", "upstream-sync"], true],
-      ["unlabeled", ["windows"], false],
+    for (const [action, labels] of [
+      ["labeled", ["windows", "upstream-sync"]],
+      ["unlabeled", ["windows"]],
     ] as const) {
       const api = await fakeLabelsApi([...labels]);
       try {
@@ -1018,9 +1014,9 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
         const { output, plan, stderr } = await runPullRequest(directory, event, api.env, true);
         expect(stderr).toBe("");
         expect(plan.outputs.fast_pr).toBe(false);
-        expect(plan.plan.full).toBe(full);
-        expect(plan.outputs.full_required).toBe(full);
-        expect(output.vitest_os).toEqual(full ? ALL : LINUX);
+        expect(plan.plan.full).toBe(true);
+        expect(plan.outputs.full_required).toBe(true);
+        expect(output.vitest_os).toEqual(ALL);
         expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
       } finally {
         await api.close();
@@ -1049,7 +1045,7 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     try {
       const payload = { pull_request: { number: 7, base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } } };
       const { output } = await runPullRequest(directory, payload, api.env);
-      expect(output).toEqual(ciOutputs(selectCiScope(["src/App.tsx"]), LINUX));
+      expect(output).toEqual(everything(ALL));
       expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
     } finally {
       await api.close();

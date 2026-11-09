@@ -1,14 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
-import { ALL_OS, ciOutputs, FULL_SCOPE, moveLinuxIntoStatic } from "../ci-scope.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY } from "../ci-scope.mjs";
 
-export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "relay"];
+export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "control-plane", "relay"];
 const PREFLIGHT_NAMES = {
   hosted: ["typecheck + lint", "preflight"],
   boat: ["typecheck + lint + Linux tests (Boat)", "preflight + Linux tests (Boat)"],
+  boatStatic: ["typecheck + lint (Boat)"],
 };
 
 export function preflightJob(jobs) {
-  const matches = jobs.filter((job) => [...PREFLIGHT_NAMES.hosted, ...PREFLIGHT_NAMES.boat].includes(job.name));
+  const matches = jobs.filter((job) => [...PREFLIGHT_NAMES.hosted, ...PREFLIGHT_NAMES.boat, ...PREFLIGHT_NAMES.boatStatic].includes(job.name));
   if (matches.length > 1) throw new Error("Ambiguous workflow preflight");
   return matches[0] ?? null;
 }
@@ -27,7 +28,8 @@ const NAMES = {
 };
 
 export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true, preflightName) {
-  const names = outputs.linux_lanes ? PREFLIGHT_NAMES.boat : PREFLIGHT_NAMES.hosted;
+  if (outputs.platform_policy !== undefined && !isDeepStrictEqual(outputs.platform_policy, PLATFORM_POLICY)) throw new Error("Invalid platform coverage policy");
+  const names = outputs.boat_static ? PREFLIGHT_NAMES.boatStatic : outputs.linux_lanes ? PREFLIGHT_NAMES.boat : PREFLIGHT_NAMES.hosted;
   if (preflightName !== undefined && !names.includes(preflightName)) throw new Error("Invalid workflow preflight");
   const jobs = [{ id: "static", name: preflightName ?? names[0], build: outputs.build,
     ...(outputs.fast_pr ? { fast: true } : {}), linux: Boolean(outputs.linux_lanes),
@@ -35,7 +37,9 @@ export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = tru
   for (const id of outputs.jobs) {
     if (!full && !MERGE_JOBS.includes(id)) continue;
     if (id === "vitest") {
-      for (const entry of outputs.vitest_matrix.include) jobs.push({ id, name: `vitest (${entry.os}, ${entry.part})`, artifact: `qa-results-vitest-${entry.os}-${entry.shard}`, nodeTests: entry.node_tests });
+      for (const entry of outputs.vitest_matrix.include) jobs.push({ id, name: `vitest (${entry.os}, ${entry.part})`,
+        artifact: `qa-results-vitest-${entry.os}-${entry.shard}`, nodeTests: entry.node_tests,
+        ...(entry.node_tests && outputs.platform_policy ? { electronOnly: true } : {}) });
     } else if (id === "packaged-server" || id === "browser-identity" || id === "browser-driver") {
       for (const os of id === "packaged-server" ? outputs.packaged_server_os : outputs.vitest_os) {
         const label = { "packaged-server": "packaged server smoke", "browser-identity": "browser identity", "browser-driver": "browser driver S4" }[id];
@@ -43,7 +47,9 @@ export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = tru
       }
     } else if (NAMES[id]) {
       const artifact = { "behavior-evals": "evals", foss: "foss", "ui-smoke": "ui" }[id];
-      jobs.push({ id, name: NAMES[id], ...(artifact ? { artifact: `qa-results-${artifact}` } : {}) });
+      jobs.push({ id, name: id === "ui-smoke" && outputs.platform_policy ? "renderer smoke (control-omb ui, macOS)" : NAMES[id],
+        ...(id === "control-plane" && outputs.platform_policy ? { broker: true } : {}),
+        ...(artifact ? { artifact: `qa-results-${artifact}${outputs.platform_policy ? "-macos-latest" : ""}` } : {}) });
     }
     else throw new Error(`No validation contract for selected job: ${id}`);
   }
@@ -91,7 +97,8 @@ export function executionComplete(expected, jobs, artifacts) {
       return true;
     });
     if (item.linux) steps.push("Linux tests (vitest shards, behavior evals, packaged server), side by side");
-    if (item.nodeTests) steps.push("Broker and Electron unit tests");
+    if (item.broker) steps.push("pnpm broker:check", "pnpm broker:test");
+    if (item.nodeTests) steps.push(item.electronOnly ? "Electron unit tests" : "Broker and Electron unit tests");
     if (item.id === "browser-driver" && item.name.includes("ubuntu")) steps.push("S4 inside the server image's runtime");
     if (item.id === "browser-driver" && item.name.includes("macos")) steps.push("The runner's Google Chrome did not change");
     return steps.every((prefix) => job.steps?.some((step) => (step.name.startsWith(prefix) || step.name.startsWith(`Run ${prefix}`)) && ["success", "failure"].includes(step.conclusion)));
@@ -105,19 +112,24 @@ export function eligibleRun(run, repository, fullOnly = true) {
 
 const fullSelection = ciOutputs(FULL_SCOPE, ALL_OS);
 const fullSelections = [fullSelection, moveLinuxIntoStatic(fullSelection)];
-const sameSelection = (outputs, selection) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes"]
+const sameSelection = (outputs, selection) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes", "boat_static", "platform_policy"]
   .every((key) => isDeepStrictEqual(outputs[key], selection[key]));
 
-/** A push's selected jobs must prove the same full scope as the nightly run, including relocated Linux lanes. */
-export function fullPushPlan(plan) {
+/** A trusted run's selected jobs must match the complete current full selection. */
+export function fullRunPlan(plan) {
   const outputs = plan?.outputs;
-  if (plan?.version !== 1 || plan.plan?.full !== true || plan.plan?.candidate !== false
-    || plan.plan?.admitted !== false || plan.plan?.reduced !== false
-    || !isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE) || outputs?.full_required !== true || outputs.reduced !== false
+  if (plan?.version !== 1 || outputs?.full_required !== true || outputs.reduced !== false
     || !isDeepStrictEqual(outputs.qa_areas, ["global"])) return false;
   return fullSelections.some((selection) => sameSelection(outputs, selection)
     && isDeepStrictEqual(outputs.expected_jobs, expectedJobs(selection))
     && isDeepStrictEqual(outputs.required_jobs, selection.jobs.filter((id) => MERGE_JOBS.includes(id))));
+}
+
+/** A push's full selection also binds its changed-source scope. */
+export function fullPushPlan(plan) {
+  return fullRunPlan(plan) && plan.plan?.full === true && plan.plan?.candidate === false
+    && plan.plan?.admitted === false && plan.plan?.reduced === false
+    && isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE);
 }
 
 /** A bound, internally consistent narrow plan can be skipped when finding the latest full execution. */

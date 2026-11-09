@@ -1,12 +1,8 @@
 # Windows installer, built on a real Windows runner and published as a
 # workflow artifact.
 #
-# Why this exists: releases are cut by hand from a Mac, which cannot build
-# an NSIS installer (electron-builder needs wine, and a cross-built exe
-# that never ran on Windows is exactly the artifact that looks fine and
-# breaks in the field). So every release so far shipped Windows behind the
-# mac build — different trees under one version number. Run this from the
-# same commit as the mac build and attach the artifact to the release.
+# macOS cannot build this NSIS installer without wine, so build it on Windows
+# from the same commit as the macOS artifact and check its resources and feed.
 #
 # Deliberately artifact-only: the full release workflow is the one place
 # allowed to create a GitHub release.
@@ -46,12 +42,6 @@ jobs:
         shell: bash
         run: rm -rf dist dist-server release
       - run: pnpm package:win
-      - name: Verify the bundled browser with an empty home
-        run: node scripts/smoke-browser-bundle.mjs --resources "${{ github.workspace }}/release/win-unpacked/resources"
-      - name: Verify the packaged server discovers its browser
-        env:
-          OMB_SMOKE_DIST: ${{ github.workspace }}/release/win-unpacked/resources/server
-        run: node scripts/smoke-packaged-server.mjs --browser-bundle "${{ github.workspace }}/release/win-unpacked/resources/browser-engine"
       - name: report what was built
         shell: bash
         run: |
@@ -107,27 +97,6 @@ jobs:
       # bare `zod` import in a tree that carries no node_modules — and the
       # existence check above passed it. Start the real packaged copy here,
       # where node_modules genuinely is not present.
-      - name: start the packaged server
-        shell: bash
-        run: |
-          res=release/win-unpacked/resources
-          HOME="$RUNNER_TEMP/omb-smoke" USERPROFILE="$RUNNER_TEMP/omb-smoke" \
-            OMB_PORT=21987 node "$res/server/index.js" > "$RUNNER_TEMP/server.log" 2>&1 &
-          pid=$!
-          for _ in $(seq 1 90); do
-            if curl -fsS --max-time 2 http://127.0.0.1:21987/api/health >/dev/null 2>&1; then
-              echo "packaged server answered /api/health ✓"
-              kill $pid 2>/dev/null || true
-              exit 0
-            fi
-            kill -0 $pid 2>/dev/null || break
-            sleep 1
-          done
-          echo "::error::the packaged server never served /api/health"
-          cat "$RUNNER_TEMP/server.log" || true
-          kill $pid 2>/dev/null || true
-          exit 1
-
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-installer

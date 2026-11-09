@@ -107,10 +107,20 @@ does not silently turn a failed test into a skip.
 | Change/state | Required evidence |
 | --- | --- |
 | Ordinary PR | One Ubuntu fast path and the current-head `CI` gate; first attempt includes queue time in its five-minute target |
-| Explicit `ci:full`, `qa:repair` or `windows` label | Selected wider checks; this is an exception to the ordinary fast path, never a waiver of holds or review |
-| Main integration, daily 05:00 full QA, release | Deferred platform, Electron, browser, full E2E and packaging checks in their applicable lanes; daily/release retain the full set |
+| Explicit `ci:full`, `qa:repair` or `windows` label | Full macOS validation; the legacy `windows` label selects no Windows test runner; holds and review still apply |
+| Main integration, daily 05:00 full QA, release | Four macOS all-E2E shards and macOS specialist checks in their applicable lanes; platform builds/publication retain their own required checks |
 | Missing or unreadable controls; applicable P0 or P1 hold | Fail closed or hold the affected merge; do not manufacture a green gate |
 | Stale full QA report without an applicable hold | Request shared recovery and restrict optional broader-lane reduction; ordinary fast PR selection remains available |
+
+Full Vitest selection uses four macOS shards with `OMB_VITEST_E2E=all`,
+including portable contracts previously collected only on Ubuntu. Windows and
+Ubuntu full tests and platform smokes are retired. Each full plan/report records
+the platform policy; its actual selected jobs and complete execution determine
+coverage. A historical macOS `host` subset cannot prove the new all-E2E scope.
+Retiring a platform does not mark its unresolved findings fixed or verified.
+Electron unit checks run before long Vitest work; broker tests have one owner
+in the control-plane job. Windows/Linux build, resource, signing and publication
+integrity checks remain separate from retired runtime tests.
 
 Sensitive auth, permission, credential, redaction, persistence, dispatch,
 driver and native changes still receive the fixed core, affected contracts and
@@ -179,7 +189,8 @@ cancellation. A clock alone is never a disposition reason.
 ## Automated QA and Lead rhythm
 
 The existing CI full lane runs on pinned main once daily at **05:00
-Asia/Shanghai** (`0 21 * * *` UTC), including unchanged source. PR pushes
+Asia/Shanghai** (`0 21 * * *` UTC), including unchanged source. It uses the
+complete macOS selection, with four all-E2E shards and specialist jobs. PR pushes
 cannot cancel it. Root `pnpm test` alone is not a full QA run.
 
 `qa-report.yml` executes trusted main code with issue-write permission, separate
@@ -349,7 +360,10 @@ prefix in `MAUSBOT_GH_COMMAND`, and optional `MAUSBOT_HERDR` /
 `MAUSBOT_HERDR_SESSION` (default `default`). Use the verified personal account
 helper on a Mac with multiple GitHub accounts; never store tokens in a plist.
 Install one launchd job with `StartInterval` set to 3600 seconds against a pinned checkout.
-Preserve the existing upstream sync and activity collectors. Resolve an
+After an accepted QA-contract change, update that existing runtime to the
+reviewed merged source at an inactive writer boundary; preserve its schedule,
+authentication routing and durable queue state. Do not start a second queue or
+a duplicate recovery run. Preserve the existing upstream sync and activity collectors. Resolve an
 uncertain receipt by reading Lead's actual state/output and the issue/PR;
 clear its pending entry only after determining whether submission happened.
 

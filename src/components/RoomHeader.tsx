@@ -1,13 +1,14 @@
 import type { RefObject } from "react";
-import { ChevronRight, Pause, Plus, Search } from "lucide-react";
+import { ChevronRight, Monitor, Pause, Plus, Search } from "lucide-react";
 
 import { cn } from "@/lib/cn";
+import { rememberComputerPanelOpen } from "@/lib/computer-panel-focus";
 import { roomContextWarnings } from "@/lib/context-warning";
 import { effectiveDefaultResponder, jevRoomRoutingOn } from "@/lib/group-routing";
 import { t } from "@/lib/i18n";
 import { normalizeState } from "@/lib/mascot";
 import { effectivePlace, placeLabelKey } from "@/lib/place";
-import { openRoomPanel } from "@/lib/room-panel";
+import { closeRoomPanel, openRoomPanel } from "@/lib/room-panel";
 import { chosenResponder, responderChoice, responderTitle } from "@/lib/room-responder";
 import { roomSpeakerIds } from "@/lib/room-threads";
 import { useStore, type Bot, type Group } from "@/state/store";
@@ -16,6 +17,7 @@ import { RoomContextBadge } from "./ContextWarning";
 import { ConversationTurnLimit } from "./ConversationTurnLimit";
 import { useCaptionChrome } from "./DesktopCapabilities";
 import { ExportTranscriptMenu } from "./ExportTranscriptMenu";
+import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
 import { RoomHeaderCallButton } from "./GroupCallView";
 import { GroupUsageChip } from "./GroupUsageChip";
 import { PlaceIcon } from "./PlaceIcon";
@@ -145,11 +147,35 @@ export function RoomHeader({
   onOpenMembers: () => void;
   membersTriggerRef: RefObject<HTMLButtonElement | null>;
 }) {
+  const { state, dispatch } = useStore();
   const { dragProps: headerDragProps, noDragStyle: headerNoDragStyle } = useCaptionChrome();
   const faces = memberMauses(group, members);
   const membersLabel = members.length === 1
     ? t("room.members.ariaOne")
     : t("room.members.ariaMany", { count: members.length });
+  const computerButton = !remoteClient && (
+    <button
+      type="button"
+      data-tour="computer"
+      onClick={(event) => {
+        if (!state.computerOpen) {
+          closeRoomPanel();
+          rememberComputerPanelOpen({ botId: `group:${group.id}`, opener: event.currentTarget, tabs: event.detail === 0 });
+        }
+        dispatch({ type: "toggleComputer" });
+      }}
+      style={headerNoDragStyle}
+      className={cn(
+        "flex size-8 shrink-0 items-center justify-center rounded-full", ELEVATED_FLOAT, ELEVATED_HOVER,
+        state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
+      )}
+      title={t("botPanel.tab.computer")}
+      aria-label={t("botPanel.tab.computer")}
+      aria-pressed={state.computerOpen}
+    >
+      <Monitor size={16} aria-hidden="true" />
+    </button>
+  );
   if (simple) {
     const more = members.length - SIMPLE_FACES;
     return (
@@ -159,7 +185,10 @@ export function RoomHeader({
             <button
               type="button"
               data-room-name
-              onClick={(event) => openRoomPanel(group.id, event.currentTarget)}
+              onClick={(event) => {
+                dispatch({ type: "toggleComputer", open: false });
+                openRoomPanel(group.id, event.currentTarget);
+              }}
               title={t("room.panel.open")}
               aria-label={t("room.panel.openAria", { name: group.name })}
               aria-haspopup="dialog"
@@ -171,7 +200,7 @@ export function RoomHeader({
             </button>
             {group.description && <p className="max-w-full truncate text-[12px] leading-4 text-ink-secondary">{group.description}</p>}
           </div>
-          <div data-roomhead-controls className="flex shrink-0 items-center">
+          <div data-roomhead-controls className="flex shrink-0 items-center gap-1.5">
             <button
               ref={membersTriggerRef}
               type="button"
@@ -191,6 +220,7 @@ export function RoomHeader({
                 )}
               </span>
             </button>
+            {computerButton}
           </div>
         </div>
       </div>
@@ -259,6 +289,7 @@ export function RoomHeader({
               </span>
             </button>
           )}
+          {computerButton}
         </div>
         </div>
       </div>

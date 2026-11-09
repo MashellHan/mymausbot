@@ -19,7 +19,30 @@ export function electronRecovery(version, platform, arch, checksums) {
   if (!digest) return null;
   const archive = `electron-v${version}-${platform}-${arch}.zip`;
   if (checksums[archive] !== digest) throw new Error(`The locked Electron checksum differs from its original release: ${archive}`);
-  return { archive, digest, mirror: MIRROR, directory: "{{ version }}" };
+  return { archive, digest, platform, arch, mirror: MIRROR, directory: "{{ version }}" };
+}
+
+export function electronInstallEnvironment(recovery, inherited = process.env) {
+  const env = { ...inherited };
+  const controlled = new Set([
+    "electron_use_remote_checksums", "npm_config_electron_use_remote_checksums",
+    "electron_custom_version", "npm_config_electron_customversion", "npm_config_electron_custom_version",
+    "npm_package_config_electron_customversion", "npm_package_config_electron_custom_version",
+    "electron_install_platform", "electron_install_arch", "npm_config_platform", "npm_config_arch",
+    "electron_mirror", "electron_custom_dir", "npm_config_electron_mirror", "npm_config_electron_customdir",
+  ]);
+  for (const name of Object.keys(env)) {
+    if (controlled.has(name.toLowerCase())) delete env[name];
+  }
+  return {
+    ...env,
+    ELECTRON_INSTALL_PLATFORM: recovery.platform,
+    ELECTRON_INSTALL_ARCH: recovery.arch,
+    npm_config_electron_mirror: recovery.mirror,
+    npm_config_electron_customdir: recovery.directory,
+    ELECTRON_MIRROR: recovery.mirror,
+    ELECTRON_CUSTOM_DIR: recovery.directory,
+  };
 }
 
 export function ensureElectronRuntime() {
@@ -36,13 +59,7 @@ export function ensureElectronRuntime() {
   const recovery = electronRecovery(version, process.platform, process.arch, checksums);
   if (!recovery) throw originalError;
   const installed = spawnSync(process.execPath, [join(packageDir, "install.js")], {
-    env: {
-      ...process.env,
-      npm_config_electron_mirror: recovery.mirror,
-      npm_config_electron_customdir: recovery.directory,
-      ELECTRON_MIRROR: recovery.mirror,
-      ELECTRON_CUSTOM_DIR: recovery.directory,
-    },
+    env: electronInstallEnvironment(recovery),
     stdio: "inherit",
     timeout: 180_000,
   });
