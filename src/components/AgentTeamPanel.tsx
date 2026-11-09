@@ -95,6 +95,8 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
   const count = snapshot?.teamCount ?? t("computer.agentTeam.unknownCount");
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
     ? null : new Date(snapshot.updatedAt).toLocaleString(activeLocale());
+  const countLabel = snapshot?.teamCount === 1 ? t("computer.agentTeam.teamCountOne") : t("computer.agentTeam.teamCount", { count });
+  const readLabel = readAt ? t("computer.agentTeam.readAt", { time: readAt }) : t("computer.agentTeam.neverRead");
   const stale = snapshot?.status === "stale";
   const teamTokens = { "24h": tokenLabel("24h", selectedTeam?.tokenUsage24h, stale),
     "7d": tokenLabel("7d", selectedTeam?.tokenUsage7d, stale) };
@@ -131,16 +133,13 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
 
   return (
     <div ref={panelRef} tabIndex={-1} className="@container/agents min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="agent-team-panel">
-      <header className="mb-4 pt-2">
-        <h2 className="text-[15px] font-semibold text-ink">{snapshot?.teamCount === 1 ? t("computer.agentTeam.headingOne") : t("computer.agentTeam.heading", { count })}</h2>
-        <p className="mt-1 text-[11px] text-ink-tertiary">{readAt ? t("computer.agentTeam.readAt", { time: readAt }) : t("computer.agentTeam.neverRead")}</p>
-      </header>
-      {snapshot === null ? <p role="status" className="text-[12px] text-ink-secondary">{t("computer.agentTeam.loading")}</p> : null}
-      {stale ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.agentTeam.stale")}</p> : null}
-      {snapshot?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.unavailable")}</p> : null}
-      {snapshot?.teamCount === 0 && snapshot.teams.length === 0 ? <p className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.empty")}</p> : null}
-      {!!snapshot?.teams.length && <AgentTown teams={snapshot.teams} stale={stale} selectedId={selectedTeamId} detailsId={`${baseId}-members`} selectorRef={selectorRef}
-        onSelect={(id) => setSelectedTeamId((current) => current === id ? null : id)} />}
+      <AgentTown teams={snapshot?.teams ?? []} stale={stale} selectedId={selectedTeamId} detailsId={`${baseId}-members`} selectorRef={selectorRef}
+        countLabel={countLabel} readLabel={readLabel} onSelect={(id) => setSelectedTeamId((current) => current === id ? null : id)}>
+        {snapshot === null ? <p role="status" className="text-[12px] text-ink-secondary">{t("computer.agentTeam.loading")}</p> : null}
+        {stale ? <p role="status" className="mb-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.agentTeam.stale")}</p> : null}
+        {snapshot?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.unavailable")}</p> : null}
+        {snapshot?.teamCount === 0 && snapshot.teams.length === 0 ? <p className="rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">{t("computer.agentTeam.empty")}</p> : null}
+      </AgentTown>
       {selectedTeam && <section key={selectedTeam.id} ref={membersRef} id={`${baseId}-members`} aria-labelledby={`${baseId}-team-name`} data-testid="selected-agent-team" className="min-w-0 rounded-xl border border-hairline/60 bg-card">
         <header className="flex min-w-0 items-start justify-between gap-3 border-b border-hairline/40 px-3 py-3">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
