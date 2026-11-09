@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,6 +15,7 @@ import { MiniApps, type MiniAppActor } from "./registry.ts";
 import { ReportStore } from "./report-store.ts";
 import { reportAppsForBot } from "./report-apps.ts";
 import { DEFAULT_APPS, pendingDefaultHtml } from "./default-documents.ts";
+import { SHIPPED_TEMPLATE_SHA256 } from "./default-template-history.ts";
 
 vi.mock("./default-template-history.ts", async (original) => {
   const history = await original<typeof import("./default-template-history.ts")>();
@@ -31,6 +33,7 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
 const owner: MiniAppActor = { writeAllowed: true, assertActive: () => undefined, canBind: () => true };
 const input: MiniAppDefaultsInput = { bookkeepingHtml: "<h1>Ledger</h1>" };
+const bundledBookkeepingHtml = readFileSync(new URL("../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8");
 const ledgerSql = 'CREATE TABLE ledger_master ("分类" VARCHAR, "时间" VARCHAR, "金额" VARCHAR, "账户" VARCHAR, "账本" VARCHAR, "货币" VARCHAR, "备注" VARCHAR)';
 
 function fixture() {
@@ -136,6 +139,8 @@ it("does not add apps for Bots or read-only actors", () => {
 });
 
 it("updates an untouched bundled page in place without rediscovering Data or restoring publisher grants", async () => {
+  expect(SHIPPED_TEMPLATE_SHA256.bookkeeping).toContain("31138080fea253d60cbd5286788fae32258530ebd238f3510a43c2358603aed1");
+  expect(SHIPPED_TEMPLATE_SHA256.bookkeeping).not.toContain(createHash("sha256").update(bundledBookkeepingHtml).digest("hex"));
   const { defaults, apps, data, restarted } = fixture();
   const ledger = await data.forBot("ledger");
   await ledger.run(ledgerSql, { connection: "bot", businessMutation: true });
@@ -145,7 +150,7 @@ it("updates an untouched bundled page in place without rediscovering Data or res
   const before = apps.document(owner, app.id);
   await apps.publish(owner, { ...publication(before), title: "Family ledger", description: "Our records", publisherBotIds: [] }, app.id);
   await (await data.forBot("reports")).run(ledgerSql, { connection: "bot", businessMutation: true });
-  const updatedInput = { bookkeepingHtml: "<main>Updated ledger</main>" };
+  const updatedInput = { bookkeepingHtml: bundledBookkeepingHtml };
   const result = await restarted().ensure(owner, updatedInput);
   expect(result.issues).toEqual([]);
   const updated = apps.document(owner, app.id);
@@ -153,6 +158,7 @@ it("updates an untouched bundled page in place without rediscovering Data or res
     publisherBotIds: [], revision: 3, templateVersion: 3 });
   expect(updated.html).toBe(updatedInput.bookkeepingHtml);
   expect(updated.bindings).toEqual(before.bindings);
+  expect(new Set(updated.versions.map((version) => version.version))).toEqual(new Set([1, 2, 3]));
   expect((await data.listDatasets("workspace-owner"))).toHaveLength(1);
   expect((await apps.query(owner, app.id, { queryId: "summary", parameters: {}, expectedRevision: 3 })).rows)
     .toEqual([["CNY", "1", "-12.34"]]);
