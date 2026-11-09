@@ -36,6 +36,8 @@ describe("CI control label routing", () => {
     expect(workflow.jobs.route.name).not.toBe("CI");
     expect(workflow.jobs.route.if).toBeUndefined();
     expect(workflow.permissions).toEqual({ contents: "read", actions: "write", "pull-requests": "read" });
+    expect(workflow.jobs.route.steps[0]).toMatchObject({ with: { "persist-credentials": false } });
+    expect(workflow.jobs.route.steps[0].with.ref).toBeUndefined();
     for (const label of ["qa:triaged", "qa:p2", "qa:kind:product", "qa:scope:agents", "owner:backend"]) {
       for (const action of ["labeled", "unlabeled"]) {
         const ctx = context(action, label);
