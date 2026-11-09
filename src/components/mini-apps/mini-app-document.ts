@@ -27,6 +27,7 @@ const MINI_APP_SDK_SOURCE = `(function () {
   var listeners = new Set();
   var sequence = 0;
   var closed = false;
+  var canOpenSources = false;
   function post(message) { parent.postMessage(message, "*"); }
   function request(message) {
     if (closed) return Promise.reject(new Error("This app was closed."));
@@ -85,9 +86,13 @@ const MINI_APP_SDK_SOURCE = `(function () {
   var ready = request({ jsonrpc: "2.0", method: "ui/initialize", params: {
     appInfo: { name: "mausbot-mini-app", version: "1" }, appCapabilities: {}, protocolVersion: "${APP_PROTOCOL_VERSION}"
   }}).then(function (answer) {
+    canOpenSources = !!(answer && answer.hostCapabilities && answer.hostCapabilities.openLinks);
     apply(answer && answer.hostContext);
     post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
   });
+  function openSource(url) {
+    return ready.then(function () { return request({ jsonrpc: "2.0", method: "ui/open-link", params: { url: url } }); }).then(function () {});
+  }
   var api = Object.freeze({
     query: function (queryId, parameters, options) {
       return ready.then(function () { return request({ mausMiniApp: 1, type: "query", queryId: queryId, parameters: parameters, options: options }); });
@@ -96,7 +101,8 @@ const MINI_APP_SDK_SOURCE = `(function () {
       if (typeof listener !== "function") throw new TypeError("A listener is required.");
       listeners.add(listener);
       return function () { listeners.delete(listener); };
-    }
+    },
+    get openSource() { return canOpenSources ? openSource : undefined; }
   });
   Object.defineProperty(window, "mausApp", { value: api, enumerable: true });
 })();`;
@@ -110,6 +116,8 @@ export function miniAppFrameDocument(document: MiniAppDocument): AppDocument {
     srcdoc: buildSrcdoc({ html, csp: MINI_APP_CSP }),
     csp: MINI_APP_CSP,
     network: { connect: [], resources: [] },
-    can: { serverTools: false, serverResources: false, message: false, openLinks: false, modelContext: false },
+    can: { serverTools: false, serverResources: false, message: false,
+      openLinks: document.app.status === "active" && (document.app.shippedTemplateKind === "x_ai_digest" || document.app.shippedTemplateKind === "github_activity"),
+      modelContext: false },
   };
 }

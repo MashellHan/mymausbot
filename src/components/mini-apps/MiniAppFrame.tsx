@@ -62,6 +62,7 @@ export function mountMiniAppFrame(options: {
   let state = options.state;
   let active = true;
   let host: AppFrameHost | null = null;
+  const frameDocument = miniAppFrameDocument(document);
   const controllers = new Map<AbortController, string>();
   let recentReads: number[] = [];
   const reply = (id: string, result?: MiniAppQueryResult, error?: string) => {
@@ -115,12 +116,16 @@ export function mountMiniAppFrame(options: {
   };
   window.addEventListener("message", handle);
   host = mountAppFrame({
-    container, doc: miniAppFrameDocument(document), title: document.app.title, height: 160, fill: true,
+    container, doc: frameDocument, title: document.app.title, height: 160, fill: true,
     hostContext: appHostContext({ width: container.clientWidth || 400, maxHeight: appMaxHeight() }), hostVersion: appVersion(),
     adapter: {
       callRpc: async () => { throw new Error("Generic app tools are unavailable."); },
       sendMessage: async () => { throw new Error("Chat is unavailable from a Mini App."); },
-      openLink: async () => { throw new Error("Links are unavailable from a Mini App."); },
+      openLink: async (url) => {
+        if (!active || !frameDocument.can.openLinks || state.status !== "active" || !miniAppNativeFrameGuard() || !window.ogb?.openExternal)
+          throw new Error("Links are unavailable from this Mini App.");
+        if (!await window.ogb.openExternal(url)) throw new Error("The source link could not be opened.");
+      },
       setContext: async () => { throw new Error("Model context is unavailable from a Mini App."); },
       resize: () => {},
       teardownRequested: () => host?.retire(),

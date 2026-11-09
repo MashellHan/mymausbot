@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Window as HappyWindow } from "happy-dom";
 import type { MiniAppDocument, MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
 
 const fixture = vi.hoisted(() => ({ api: vi.fn() }));
@@ -37,7 +38,7 @@ beforeEach(() => {
   window.document.body.append(container);
 });
 
-afterEach(() => { container.remove(); window.document.body.innerHTML = ""; vi.unstubAllGlobals(); });
+afterEach(() => { container.remove(); window.document.body.innerHTML = ""; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("persistent Mini App frame", () => {
   it("starts with an opaque document and no generic app capability", () => {
@@ -55,6 +56,40 @@ describe("persistent Mini App frame", () => {
     mount.retire();
   });
 
+  it("offers openSource only after a built-in report receives its link capability", async () => {
+    const report = { ...document, app: { ...app, shippedTemplateKind: "x_ai_digest" as const } };
+    const reportDoc = miniAppFrameDocument(report);
+    expect(reportDoc.can.openLinks).toBe(true);
+    expect(miniAppFrameDocument({ ...report, app: { ...report.app, status: "archived" } }).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument({ ...report, app: { ...report.app, shippedTemplateKind: "bookkeeping" } }).can.openLinks).toBe(false);
+    for (const [doc, allowed] of [[reportDoc, true], [miniAppFrameDocument(document), false]] as const) {
+      const view = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+      const sent: Array<Record<string, unknown>> = [];
+      const parent = { postMessage: (message: Record<string, unknown>) => sent.push(message) };
+      Object.defineProperty(view, "parent", { value: parent });
+      const script = /<script>([\s\S]*?)<\/script>/.exec(doc.srcdoc)?.[1];
+      expect(script).toBeTruthy();
+      view.eval(script!);
+      const sdk = (view as unknown as { mausApp: { openSource?: (url: string) => Promise<void> } }).mausApp;
+      expect(typeof sdk.openSource).toBe("undefined");
+      const initialize = sent.find((message) => message.method === "ui/initialize")!;
+      view.dispatchEvent(new view.MessageEvent("message", { source: parent as unknown as HappyWindow,
+        data: { jsonrpc: "2.0", id: initialize.id, result: { hostCapabilities: allowed ? { openLinks: {} } : {} } } }));
+      await Promise.resolve();
+      expect(typeof sdk.openSource).toBe(allowed ? "function" : "undefined");
+      if (allowed) {
+        const opening = sdk.openSource!("https://example.com/report");
+        await vi.waitFor(() => expect(sent.some((message) => message.method === "ui/open-link")).toBe(true));
+        const request = sent.find((message) => message.method === "ui/open-link")!;
+        expect(request.params).toEqual({ url: "https://example.com/report" });
+        view.dispatchEvent(new view.MessageEvent("message", { source: parent as unknown as HappyWindow,
+          data: { jsonrpc: "2.0", id: request.id, result: {} } }));
+        await expect(opening).resolves.toBeUndefined();
+      }
+      await view.happyDOM.abort();
+    }
+  });
+
   it("sends only declared named reads with the host's app and Data revisions", async () => {
     const mount = mountMiniAppFrame({ container, document, state, onRevoked: vi.fn() });
     const view = mount.iframe.contentWindow!;
@@ -69,6 +104,61 @@ describe("persistent Mini App frame", () => {
       method: "POST", body: JSON.stringify({ queryId: "summary", parameters: { currency: "CNY" }, expectedRevision: 3, expectedDataRevision: 7 }),
     }));
     expect(posted.mock.calls.find(([answer]) => (answer as { id?: string }).id === "good")?.[0]).toMatchObject({ result: page });
+    mount.retire();
+  });
+
+  it("opens a report source only through an engaged guarded desktop frame", async () => {
+    const openExternal = vi.fn(async () => true);
+    vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true }, openExternal });
+    const focused = vi.spyOn(window.document, "hasFocus").mockReturnValue(true);
+    const report = { ...document, app: { ...app, shippedTemplateKind: "github_activity" as const } };
+    const mount = mountMiniAppFrame({ container, document: report, state, onRevoked: vi.fn() });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    send(view, { jsonrpc: "2.0", id: "init", method: "ui/initialize", params: {} });
+    expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "init")?.[0])
+      .toMatchObject({ result: { hostCapabilities: { openLinks: {} } } });
+    send(view, { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+    send(view, { jsonrpc: "2.0", id: "early", method: "ui/open-link", params: { url: "https://example.com/report" } });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([message]) => (message as { id?: string }).id === "early")).toBe(true));
+    expect(openExternal).not.toHaveBeenCalled();
+    mount.iframe.dispatchEvent(new Event("pointerenter"));
+    mount.iframe.focus();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    send(view, { jsonrpc: "2.0", id: "invalid", method: "ui/open-link", params: { url: "https://user:pass@example.com/report" } });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([message]) => (message as { id?: string }).id === "invalid")).toBe(true));
+    expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "invalid")?.[0])
+      .toMatchObject({ error: { message: expect.stringContaining("Only http and https") } });
+    expect(openExternal).not.toHaveBeenCalled();
+    send(view, { jsonrpc: "2.0", id: "good", method: "ui/open-link", params: { url: "https://example.com/report" } });
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://example.com/report"));
+    await vi.waitFor(() => expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "good")?.[0]).toMatchObject({ result: {} }));
+    send(view, { jsonrpc: "2.0", id: "rate", method: "ui/open-link", params: { url: "https://example.com/again" } });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([message]) => (message as { id?: string }).id === "rate")).toBe(true));
+    expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "rate")?.[0])
+      .toMatchObject({ error: { message: expect.stringContaining("Too many links") } });
+    expect(openExternal).toHaveBeenCalledTimes(1);
+    mount.retire();
+    focused.mockRestore();
+  });
+
+  it("keeps an archived report from opening a source even after frame engagement", async () => {
+    const openExternal = vi.fn(async () => true);
+    vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true }, openExternal });
+    vi.spyOn(window.document, "hasFocus").mockReturnValue(true);
+    const report = { ...document, app: { ...app, shippedTemplateKind: "x_ai_digest" as const } };
+    const mount = mountMiniAppFrame({ container, document: report, state: { ...state, status: "archived" }, onRevoked: vi.fn() });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    send(view, { jsonrpc: "2.0", id: "init", method: "ui/initialize", params: {} });
+    send(view, { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+    mount.iframe.dispatchEvent(new Event("pointerenter"));
+    mount.iframe.focus();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    send(view, { jsonrpc: "2.0", id: "archived", method: "ui/open-link", params: { url: "https://example.com/report" } });
+    await vi.waitFor(() => expect(posted.mock.calls.find(([message]) => (message as { id?: string }).id === "archived")?.[0])
+      .toMatchObject({ error: { message: expect.stringContaining("unavailable") } }));
+    expect(openExternal).not.toHaveBeenCalled();
     mount.retire();
   });
 
