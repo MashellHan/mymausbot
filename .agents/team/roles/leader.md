@@ -28,7 +28,14 @@ Report completed or merged source as pending native verification when applicable
 do not claim unrun checks passed or affected screen behavior is accepted.
 
 Own the QA issue/PR queue in docs/MAUSBOT-VALIDATION.md. Acknowledge actionable
-handoffs and triage within thirty minutes. Keep a named existing role, priority,
+handoffs and target triage within thirty minutes. Keep a named existing role, priority,
 classification, scope, next action and due date on each finding; assign work and
 verify closure evidence. QA holds and required failed CI still block merging;
 confirmed unrelated CI debt does not block a requested local candidate.
+
+Treat timing, PR age and handoff deadlines as advisory process-scan cases.
+Preserve useful PRs and successful evidence; never close, cancel or repeat work
+solely for a clock. Own mistaken-closure recovery with the original PR/head,
+reason, review/check evidence, next action and successor or resume path. Assign
+pipeline/fixture improvements to existing members during available capacity;
+follow deferred recovery until adoption or an explicit substantive resolution.

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { artifactFiles, fullRunEvidence, github, pages } from "./github.mjs";
 import { eligibleRun, issueLabels, triageOf } from "./contracts.mjs";
 import { FULL_QA_FRESHNESS_MS, qaHealth } from "./health.mjs";
+import { scanProcesses } from "./scan.mjs";
 
 export function queueItems(issues, prs, now = Date.now()) {
   const items = [];
@@ -92,13 +93,22 @@ export function promptLead(message, { binary = process.env.MAUSBOT_HERDR || "her
   return { submittedAt: new Date().toISOString(), pane: agent.pane_id, receipt };
 }
 
-export async function drainQueue(state, { api = github, recover = recoverQa, send = promptLead, save = () => {}, now = Date.now() } = {}) {
+export async function drainQueue(state, { api = github, recover = recoverQa, scan = scanProcesses, send = promptLead, save = () => {}, now = Date.now() } = {}) {
   state.startedAt ??= new Date(now).toISOString();
   const qa = await recover(state, { api, now });
   save(state);
   const issues = (await pages("/issues?state=open&labels=qa", null, api)).filter((issue) => !issue.pull_request);
   const prs = await pages("/pulls?state=open", null, api);
-  const items = queueItems(issues, prs, now).filter((item) => !state.seen?.[item.key]);
+  let processItems = [];
+  try {
+    state.process ??= {};
+    state.lastProcessScan = await scan(state.process, { api, now, prs, issues, publish: true });
+    processItems = state.lastProcessScan.handoffs;
+  } catch (error) {
+    state.lastProcessScan = { at: new Date(now).toISOString(), outcome: "incomplete", error: error.message };
+  }
+  save(state);
+  const items = [...queueItems(issues, prs, now), ...processItems].filter((item) => !state.seen?.[item.key]);
   if (!qa.healthy) {
     const key = `qa-unavailable:${qa.report?.runId ?? "no-report"}:${new Date(now).toISOString().slice(0, 10)}`;
     if (!state.seen?.[key]) items.push({ key, text: `QA coverage reduction disabled: ${qa.reason}. Check the shared recovery/report delivery; do not start a full matrix for each PR.` });
