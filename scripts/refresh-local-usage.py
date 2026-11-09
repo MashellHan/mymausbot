@@ -277,6 +277,26 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
     original_run = collector.run
     azure = AzureMemorySession(azure_config_dir, config["authorEmails"])
 
+    original_aggregate = getattr(collector, "aggregate", None)
+    if original_aggregate is not None:
+        def aggregate(machines, *args, **kwargs):
+            snapshot = original_aggregate(machines, *args, **kwargs)
+            if len(snapshot["sources"]) != len(machines):
+                raise ValueError("Activity source coverage does not match the collected machines")
+            for source, machine in zip(snapshot["sources"], machines):
+                if source.get("device") != machine.get("device"):
+                    raise ValueError("Activity source identity does not match the collected machine")
+                errors = machine.get("errors")
+                git_fetch_only = isinstance(errors, list) and bool(errors) and all(
+                    isinstance(error, dict) and error.get("source") == "git-fetch" for error in errors
+                )
+                source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
+                    machine.get("status") == "partial" and git_fetch_only
+                ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
+            return snapshot
+
+        collector.aggregate = aggregate
+
     def run(args, timeout=35):
         if str(args[0]) == config["azureCli"]:
             return azure.run(args, timeout)
