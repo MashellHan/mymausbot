@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LocalUsageResponse, LocalUsageWindow } from "../../shared/local-dashboard";
-import { withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
+import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
 import { localUsageView, retainUsageSnapshot } from "./local-usage-view";
 
 const shift = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
@@ -21,14 +21,33 @@ function fixture(endDay = "2026-11-06"): LocalUsageResponse {
       ...comparison, totalTokens: 10, categories: { work: comparison, personal: comparison, unclassified: comparison } },
   });
   const windows = { "1": window(1), "7": window(7), "30": window(30) };
-  return withMergedUsageFixture({ ...unavailable, status: "ready", asOf, windows,
+  return withGithubUsageFixture({ ...unavailable, status: "ready", asOf, windows,
     trend: Array.from({ length: 30 }, (_, index) => ({ day: shift(endDay, index - 29), coverage: "ready", tokenStatus: "ready",
       ...counts, newTokens: 80, cacheRead: 20, totalTokens: 100, categories,
       wow: { prs: 50, commits: 25, newTokens: 10, totalTokens: 10 } })),
   });
 }
 
-describe("merged Usage view", () => {
+describe("GitHub contribution Usage view", () => {
+  it("keeps Profile exact counts and comparisons unknown at every fixture level", () => {
+    const snapshot = fixture();
+    const assertUnknown = (value: object) => {
+      for (const [key, item] of Object.entries(value)) {
+        if (["prs", "commits", "unattributedPrs", "unattributedCommits"].includes(key)) expect(item, key).toBeNull();
+        else if (item && typeof item === "object") assertUnknown(item);
+      }
+    };
+    assertUnknown(snapshot.github!.windows!);
+    assertUnknown(snapshot.github!.trend);
+    const view = localUsageView(snapshot);
+    for (const window of Object.values(view.windows!)) {
+      expect(window.categories.work).toEqual({ prs: null, knownPrs: 1, commits: null, knownCommits: 5 });
+      expect(window.repositories.rows[0]).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 5 });
+    }
+    expect(view.trend[0]!.categories.work).toEqual({ prs: null, knownPrs: 1, commits: null, knownCommits: 5 });
+    expect(snapshot.windows!["1"]).toMatchObject({ prs: 1, commits: 5, totalTokens: 100 });
+  });
+
   it.each(["ready", "partial"] as const)("retains %s tokens only in long ranges when a recent row becomes unavailable", (tokenStatus) => {
     const snapshot = fixture("2026-11-09"), date = "2026-11-01", missing = "2026-11-02";
     const known = { ...snapshot.trend.find((row) => row.day === date)!, tokenStatus, newTokens: 100, cacheRead: 20, totalTokens: 120 };
@@ -53,12 +72,12 @@ describe("merged Usage view", () => {
   it("uses dated history for 60/90 days and calendar months without changing cards or inventing old zeroes", () => {
     const snapshot = fixture("2026-11-09");
     snapshot.history = snapshot.trend.map((row) => ({ ...row, day: shift(row.day, -60), totalTokens: 42 }));
-    snapshot.merged!.history = snapshot.merged!.trend.map((row) => ({ ...row, day: shift(row.day, -60) }));
+    snapshot.github!.history = snapshot.github!.trend.map((row) => ({ ...row, day: shift(row.day, -60) }));
     const base = localUsageView(snapshot);
     expect(localUsageView(snapshot, "60").trend).toHaveLength(60);
     const long = localUsageView(snapshot, "90");
     expect(long.trend).toHaveLength(90);
-    expect(long.trend[0]).toMatchObject({ day: "2026-08-12", totalTokens: 42, prs: 1, commits: 5 });
+    expect(long.trend[0]).toMatchObject({ day: "2026-08-12", totalTokens: 42, prs: null, knownPrs: 1, commits: null, knownCommits: 5 });
     expect(long.trend.find((row) => row.day === "2026-09-11")).toMatchObject({ prs: null, knownPrs: null, commits: null, totalTokens: null });
     expect(long.windows).toEqual(base.windows);
     const months = localUsageView(snapshot, "6m");
@@ -70,11 +89,11 @@ describe("merged Usage view", () => {
 
   it("aligns differing extended capture dates by their real dates", () => {
     const snapshot = fixture("2026-01-02");
-    snapshot.merged = fixture("2026-01-01").merged;
+    snapshot.github = fixture("2026-01-01").github;
     snapshot.history = [{ ...snapshot.trend[0]!, day: "2025-11-03", totalTokens: 321 }];
     const long = localUsageView(snapshot, "60");
     expect(long.trend[0]).toMatchObject({ day: "2025-11-03", totalTokens: 321, prs: null });
-    expect(long.trend.at(-1)).toMatchObject({ day: "2026-01-01", totalTokens: 100, prs: 1 });
+    expect(long.trend.at(-1)).toMatchObject({ day: "2026-01-01", totalTokens: 100, prs: null, knownPrs: 1 });
     expect(long.windows).toEqual(localUsageView(snapshot).windows);
   });
 
@@ -87,16 +106,17 @@ describe("merged Usage view", () => {
     }
     snapshot.trend = snapshot.trend.map((day) => ({ ...day, prs: 8_888, commits: 88_888 }));
     const view = localUsageView(snapshot);
-    expect(view.windows!["1"]).toMatchObject({ prs: 1, commits: 5, totalTokens: 100, comparison: { prs: 50, commits: 25, totalTokens: 10 } });
-    expect(view.windows!["7"]).toMatchObject({ prs: 7, commits: 35, totalTokens: 700 });
-    expect(view.windows!["30"]).toMatchObject({ prs: 30, commits: 150, totalTokens: 3_000 });
-    expect(view.windows!["1"].repositories.rows[0]).toMatchObject({ name: "sample/merged", prs: 1, commits: 5 });
-    expect(view.trend.at(-1)).toMatchObject({ prs: 1, commits: 5, totalTokens: 100, wow: { prs: 50, commits: 25, totalTokens: 10 } });
+    expect(view.windows!["1"]).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 5, totalTokens: 100, comparison: { prs: null, commits: null, totalTokens: 10 } });
+    expect(view.windows!["7"]).toMatchObject({ prs: null, knownPrs: 7, commits: null, knownCommits: 35, totalTokens: 700 });
+    expect(view.windows!["30"]).toMatchObject({ prs: null, knownPrs: 30, commits: null, knownCommits: 150, totalTokens: 3_000 });
+    expect(view.windows!["1"].repositories.rows[0]).toMatchObject({ name: "sample/merged", prs: null, knownPrs: 1, commits: null, knownCommits: 5 });
+    expect(view.trend.at(-1)).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 5, totalTokens: 100, wow: { prs: null, commits: null, totalTokens: 10 } });
   });
 
-  it("does not reinterpret legacy PRs, commits, repositories or comparisons as merged data", () => {
+  it("does not reinterpret legacy PRs, commits, repositories or comparisons as contribution data", () => {
     const snapshot = fixture();
-    delete snapshot.merged;
+    snapshot.merged = withMergedUsageFixture(snapshot).merged;
+    delete snapshot.github;
     const view = localUsageView(snapshot);
     expect(view.status).toBe("partial");
     for (const window of Object.values(view.windows!)) {
@@ -106,6 +126,12 @@ describe("merged Usage view", () => {
     }
     expect(view.windows!["1"].totalTokens).toBe(100);
     expect(view.trend[0]).toMatchObject({ prs: null, commits: null, totalTokens: 100, wow: { prs: null, commits: null } });
+    snapshot.merged!.history = snapshot.merged!.trend.map((day) => ({ ...day, day: shift(day.day, -60) }));
+    for (const range of ["60", "90", "6m"] as const) {
+      for (const row of localUsageView(snapshot, range).trend) {
+        expect(row).toMatchObject({ prs: null, knownPrs: null, commits: null, knownCommits: null, coverage: "unavailable" });
+      }
+    }
   });
 
   it("preserves private comparison-history coverage beyond the visible 30-day trend", () => {
@@ -118,23 +144,23 @@ describe("merged Usage view", () => {
     });
   });
 
-  it("shows remote merged activity without any local snapshot or token history", () => {
-    const snapshot = { ...unavailable, merged: fixture().merged };
+  it("shows remote contribution activity without any local snapshot or token history", () => {
+    const snapshot = { ...unavailable, github: fixture().github };
     const view = localUsageView(snapshot);
-    expect(view.asOf).toBe(snapshot.merged!.asOf);
+    expect(view.asOf).toBe(snapshot.github!.asOf);
     expect(view.status).toBe("partial");
-    expect(view.windows!["1"]).toMatchObject({ prs: 1, commits: 5, totalTokens: null, tokenCoverage: "unavailable" });
-    expect(view.trend[0]).toMatchObject({ prs: 1, commits: 5, totalTokens: null });
+    expect(view.windows!["1"]).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 5, totalTokens: null, tokenCoverage: "unavailable" });
+    expect(view.trend[0]).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 5, totalTokens: null });
   });
 
   it("aligns token dates to a stale remote capture without shifting old counts onto the next day", () => {
     const snapshot = fixture("2026-01-01");
-    snapshot.merged = { ...fixture("2025-12-31").merged!, status: "stale" };
+    snapshot.github = { ...fixture("2025-12-31").github!, status: "stale" };
     snapshot.trend.at(-1)!.totalTokens = 9_999;
     const view = localUsageView(snapshot);
     expect(view.status).toBe("stale");
     expect(view.asOf).toBe(Date.parse("2025-12-31T08:00:00Z"));
-    expect(view.windows!["1"]).toMatchObject({ startDay: "2025-12-31", endDay: "2025-12-31", prs: 1, commits: 5, totalTokens: 100,
+    expect(view.windows!["1"]).toMatchObject({ startDay: "2025-12-31", endDay: "2025-12-31", prs: null, knownPrs: 1, commits: null, knownCommits: 5, totalTokens: 100,
       comparison: { startDay: "2025-12-30", endDay: "2025-12-30", totalTokens: 0 } });
     expect(view.windows!["30"]).toMatchObject({ tokenCoverage: "partial", totalTokens: 2_900, unavailableTokenDays: ["2025-12-02"],
       comparison: { totalTokens: null } });
@@ -145,19 +171,19 @@ describe("merged Usage view", () => {
 
   it("retains each failed stream independently while accepting fresh data from the other", () => {
     const previous = fixture("2026-11-05"), next = fixture("2026-11-06");
-    delete next.merged;
+    delete next.github;
     const kept = retainUsageSnapshot(previous, next);
     expect(kept.asOf).toBe(next.asOf);
     expect(kept.status).toBe("ready");
-    expect(kept.merged).toEqual({ ...previous.merged, status: "stale" });
-    expect(previous.merged!.status).toBe("ready");
-    const remoteOnly = { ...unavailable, merged: fixture("2026-11-06").merged };
+    expect(kept.github).toEqual({ ...previous.github, status: "stale" });
+    expect(previous.github!.status).toBe("partial");
+    const remoteOnly = { ...unavailable, github: fixture("2026-11-06").github };
     const renewed = retainUsageSnapshot(previous, remoteOnly);
     expect(renewed.asOf).toBe(previous.asOf);
     expect(renewed.status).toBe("stale");
-    expect(renewed.merged).toBe(remoteOnly.merged);
+    expect(renewed.github).toBe(remoteOnly.github);
     const offline = retainUsageSnapshot(remoteOnly, unavailable);
-    expect(offline.merged!.status).toBe("stale");
-    expect(localUsageView(offline).windows!["1"].commits).toBe(5);
+    expect(offline.github!.status).toBe("stale");
+    expect(localUsageView(offline).windows!["1"].knownCommits).toBe(5);
   });
 });

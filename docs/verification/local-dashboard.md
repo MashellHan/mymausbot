@@ -4,6 +4,8 @@ These panels are local-owner observations. Their existing routes reject paired
 devices, remote/proxied requests and service trust. No terminal output, complete
 conversation, checkout path or credential is returned. Repository names and a
 bounded, redacted latest instruction are available only through those routes.
+The native Activities Mini App reads the same Usage provider through its
+revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
 
 ## Usage definitions
 
@@ -11,36 +13,51 @@ bounded, redacted latest instruction are available only through those routes.
   timestamp in Asia/Shanghai. The trend uses the same 30 dates. Window changes
   compare the previous non-overlapping period; daily changes compare the same
   China-calendar date one week earlier. The capture day is still in progress.
-- PRs count PRs authored by the verified account owner and merged remotely in
-  the window. Their creation date and the device performing the merge do not
-  affect the count. Closed but unmerged PRs are excluded.
-- Commits count the original non-merge commits returned by those merged PRs,
-  including other contributors' commits within an owner-authored PR. A PR with
-  five original commits contributes five even after squash merge. Direct pushes,
-  unmerged branches and merge commits do not contribute. Both metrics use the
-  PR merge date, rather than a local author or commit timestamp.
-- PR identity includes the host and stable remote identity. Original commit SHAs
-  are deduplicated across PRs, devices and clones, and assigned to the earliest
-  observed merge within retained history. Conflicting categories are unclassified.
-  Repository rows deduplicate each SHA at its earliest merge within that repository;
-  a SHA shared by repositories can appear in several rows but once in the summary.
-- Enterprise and personal classification follows the existing repository rules.
-  GitHub/GHE searches cover the configured verified accounts. Azure DevOps queries
-  cover all repositories in each configured project, without requiring local
-  clones. `mergedAdoProjects` accepts HTTPS project URLs; known `adoRemotes` also
-  identify projects. Preserve known project configuration when moving devices.
-- Complete remote results are exact totals. Incomplete results show confirmed
-  numeric counts; the circle alert beside the period reveals coverage and missing
-  dates on hover, focus or click. Unobserved values are unavailable.
-  Only a successful complete empty result is a verified zero. Incomplete PR or
-  commit periods do not produce percentage comparisons. Zero to zero is 0%;
-  zero to a positive count is **New** only for a comparable metric.
+- PR references come from the authenticated account's typed GitHub contribution
+  connection, with both excludeFirst and excludePopular false. They count creations
+  by PR createdAt in Asia/Shanghai, not merges. Repositories currently marked isFork
+  are excluded from the known subset. The private source records rawPrs,
+  excludedForkPrs and knownPrs per China date, plus raw profilePrs source-day counts.
+  isPrivate is read explicitly; private PRs visible to this connection remain in the
+  subset. Current repository state cannot certify event-time eligibility, and
+  accessible private PRs can be absent from the connection. PR totals and comparisons
+  therefore stay unknown; visible subset counts carry a reference explanation.
+- Commit references use GitHub's repository-by-day commitCount buckets unchanged.
+  A daily connection's totalCount counts commits, so it must equal sum(commitCount),
+  not the number of day nodes. These buckets expose no SHA or per-commit author
+  instant: they cannot be shifted by eight hours into exact China-day counts.
+  Exact China-day commits and percentage comparisons remain null. A China date
+  whose Profile bucket has not started yet is unknown, not zero.
+- The versioned definition is github-profile-v1. GitHub's contribution engine
+  determines commit account/email attribution, standalone non-fork repository
+  eligibility, default/gh-pages branch and repository relationship rules. It is
+  not local all-branch Git history or commits carried by merged PRs. Credit units
+  are account × repository × Profile day; without SHAs, no global SHA deduplication
+  or per-commit timestamp precision is claimed. PR IDs and repository IDs include
+  host identity; duplicate account scope, PRs and repository/day buckets fail closed.
+- The client checks viewer identity/host, response errors, fixed collection bounds,
+  repository totals, all commit count sums, PR totals, pagination cursors and stable
+  collection metadata across pages. A fixed to is not a transactional snapshot;
+  index/history changes can alter a later response for the same cutoff.
+  maxRepositories is explicitly 100 (default 25);
+  the repository list has no cursor. More reported repositories than listed, a
+  truncated daily connection, ten PR pages or a 120-second capture budget exhausted
+  are unavailable coverage, never proof of zero or unlimited completeness.
+- hasAnyRestrictedContributions/restrictedContributionsCount describe mixed types;
+  they cannot be allocated to PRs or commits. Even restricted=0 does not certify
+  private/internal coverage. Independent email association remains unknown; local
+  authorEmails and failed email endpoints are not proof. Restricted activity and
+  private omissions remain partial. Calendar totalContributions is never used for either
+  metric. Complete empty visible observations remain distinct from missing data;
+  missing source dates are not filled with zero. Classification uses existing rules.
+- GitHub and Azure DevOps are separate sources. ADO alignment remains follow-up;
+  legacy merged ADO counts are not added as evidence of GitHub Profile parity.
 - Tokens remain local, including cache reads. Their existing synced-device
   comparison scope is preserved. Remote and token captures have independent
   timestamps; open the information icon beside Usage to inspect both. If capture dates
   differ, tokens are joined by calendar date to the displayed remote windows.
   Missing token dates stay unavailable, and an unavailable comparison stays null.
-  Missing remote data never falls back to created PRs or local Git commits.
+  Missing remote data never falls back to legacy PR or local Git counts.
 - The refresh wrapper records independent per-machine Token completeness. A
   partial machine whose only failures are Git fetches can compare complete
   observed Token periods; Git coverage stays partial. Unknown, log-read,
@@ -50,25 +67,52 @@ bounded, redacted latest instruction are available only through those routes.
   in titles and screen-reader descriptions; the 30-day change compares consecutive rolling
   periods, not calendar months. Missing baseline history has an explicit hint.
 
-The existing five-minute `scripts/refresh-local-usage.py` job writes the private
-`~/.local/share/mymausbot/usage/merged-v1.json` sidecar through its adjacent
-`local_usage_merged.py` module. Deploy both files together. No new scheduler runs
-inside the App, and the disabled chat-notifying collection routine is not needed.
-Deploy the updated refresh wrapper to that same job when updating Token coverage;
-the new source metadata appears on its next successful collection.
-The Activities Mini App reads every five minutes. Agent Team and Activities are
-available through Mini Apps; the separate Computer tabs are removed.
-Remote collection retains 60 China-calendar days for current and previous
-30-day periods. API/page/time limits and unavailable credentials are coverage
-gaps, not zero. Completed per-PR commit lists can be reused during later refreshes.
+The existing wrapper `scripts/refresh-local-usage.py` retains its local Token and
+legacy merged-source behavior. Deploy it with both adjacent modules,
+`local_usage_merged.py` and `local_usage_github.py`. The new private sidecar is
+`~/.local/share/mymausbot/usage/github-profile-v1.json` (0600, atomic replace,
+independent OS file lock released on process exit). The persistent `.lock` file
+must not be unlinked while writers may run; an old directory lock requires
+verified owner exit before manual removal. Collection is **opt-in** with the existing private
+configuration field `githubContributionSource: "github-profile-v1"`; --skip-api
+never collects it. Enabling this field is a separate data-admission operation,
+not part of source installation. No scheduler is added or enabled by the App.
 
-The existing Agent Town `latest.json`, public aggregate whitelist and nightly
-report retain their original definitions for compatibility. The App reads local
-Token metrics from that aggregate and remote PR/commit metrics from the separate
-optional `merged` response field. The sidecar is private with mode 0600; event
-identifiers are hashed, and credentials are never written to it. Remote events
-and repository metadata are not added to public transports. Stale data retains
-its actual event dates; transient API/read failures do not erase a good stream.
+Each capture recomputes today's China date plus the preceding six dates, with
+today in progress. The preceding UTC source date is a read-only query guard band,
+not an eighth replacement date. Source days outside those seven dates and inactive
+account history remain unchanged; failures retain prior observations as stale.
+Stable account identity changes for the same host/login reject the capture
+without replacing the cache or blending earlier account history.
+Profile dates and PR China dates are recorded separately. Old definitions are
+not reinterpreted, compared or backfilled. The new response field is `github`;
+Activities never falls back to `merged`, local commits or old created-PR counts.
+The 1/7/30 windows remain; older unknown dates stay missing. Tokens retain their
+original aggregate, comparison scope and actual-date join.
+The 60/90-day and six-calendar-month views use up to 191 dated observations from
+this same Profile source, including prior comparison dates. They never substitute
+legacy merged history. Only previously retained observations are available;
+selecting a longer range does not collect or backfill older data. Commit history
+keeps Profile bucket labels, while PR history keeps China creation dates.
+
+The existing Agent Town latest.json, legacy merged-v1.json, public whitelist and
+nightly report keep their old definitions for compatibility. The new private
+source is not published to them. Credentials are never stored. API/read failures
+retain a last observed stream as stale, without shifting its dates. Installation,
+actual UI readback, independent daily reconciliation and the bounded seven-day
+production repair are separate acceptance steps. Single-writer admission must
+cover every refresh caller, including any enabled nightly publication task.
+
+Official definitions are pinned to github/docs commit
+`8cd1075179df75319912891d6620c9cb78eefb4d`:
+[contribution reference](https://github.com/github/docs/blob/8cd1075179df75319912891d6620c9cb78eefb4d/content/account-and-profile/reference/profile-contributions-reference.md)
+and [GraphQL objects](https://docs.github.com/en/graphql/reference/objects#createdcommitcontributionconnection).
+The Profile contribution date label is not a certified China-calendar event date.
+
+Run `python3 scripts/local_usage_github.test.py` for synthetic API completeness,
+qualification, date boundary, opt-in and bounded-persistence tests. The synthetic
+`server/local-usage-github.test.ts` exercises Python capture → private file →
+provider → view, including unknown/stale coverage and independent Tokens.
 
 ### Microsoft authentication held in memory
 

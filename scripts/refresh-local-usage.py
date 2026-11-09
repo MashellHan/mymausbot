@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 
 import local_usage_merged
+import local_usage_github
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
@@ -372,6 +373,11 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 local_usage_merged.refresh(config, collector, collector.run, ado_request=azure.request, skip_api=skip_api)
             except Exception as error:
                 print("Remote merged Usage unavailable: " + type(error).__name__, file=sys.stderr)
+        if config.get("githubContributionSource") == local_usage_github.DEFINITION:
+            try:
+                local_usage_github.refresh(config, collector.run, collector.remote_category, skip_api=skip_api)
+            except Exception as error:
+                print("GitHub contribution Usage unavailable: " + type(error).__name__, file=sys.stderr)
 
 
 def main():

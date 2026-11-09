@@ -13,9 +13,26 @@ export function withMergedUsageFixture(snapshot: LocalUsageResponse): LocalUsage
   });
   const windows = snapshot.windows && { "1": mergedWindow(snapshot.windows["1"]),
     "7": mergedWindow(snapshot.windows["7"]), "30": mergedWindow(snapshot.windows["30"]) };
-  return { ...snapshot, merged: { status: snapshot.status, asOf: snapshot.asOf, timeZone: "Asia/Shanghai",
-    sourceCoverage: null, overlaps: null, windows, trend: snapshot.trend.map((day) => ({
+  const mergedTrend = (daily: LocalUsageResponse["trend"]) => daily.map((day) => ({
       day: day.day, coverage: day.coverage, ...counts(day), categories: categories(day.categories),
       wow: { prs: day.wow.prs, commits: day.wow.commits },
-    })) } };
+    }));
+  return { ...snapshot, merged: { status: snapshot.status, asOf: snapshot.asOf, timeZone: "Asia/Shanghai",
+    sourceCoverage: null, overlaps: null, windows, trend: mergedTrend(snapshot.trend),
+    ...(snapshot.history ? { history: mergedTrend(snapshot.history) } : {}) } };
+}
+
+export function withGithubUsageFixture(snapshot: LocalUsageResponse): LocalUsageResponse {
+  const merged = structuredClone(withMergedUsageFixture(snapshot).merged!);
+  const clearExactContributions = (value: object) => {
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "coverage" && item === "ready") (value as Record<string, unknown>)[key] = "partial";
+      else if (["prs", "commits", "unattributedPrs", "unattributedCommits"].includes(key)) (value as Record<string, unknown>)[key] = null;
+      else if (item && typeof item === "object") clearExactContributions(item);
+    }
+  };
+  clearExactContributions(merged);
+  return { ...snapshot, github: { status: merged.status === "ready" ? "partial" : merged.status, asOf: merged.asOf, timeZone: merged.timeZone,
+    sourceCoverage: merged.sourceCoverage, windows: merged.windows, trend: merged.trend, history: merged.history,
+    metricDefinition: "github-profile-v1", dateBasis: { prs: "created-at/Asia-Shanghai", commits: "github-profile-day" }, chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture" } };
 }

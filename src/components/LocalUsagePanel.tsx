@@ -214,9 +214,10 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
         {view && view.status !== "unavailable" && <InfoHint label={t("app.info")} warning={view.status !== "ready"}>
           {view.status === "partial" && <p>{t("computer.usage.partial")}</p>}
           {view.status === "stale" && <p>{t("computer.usage.stale")}</p>}
+          <p>{t("computer.usage.githubDateBasis")}</p>
           {view.asOf != null && <p><time dateTime={new Date(view.asOf).toISOString()}>{t("computer.usage.asOf", { time: asOfTime(view.asOf) })}</time></p>}
           <p>{t("computer.usage.captureTimes", {
-            merged: snapshot?.merged?.asOf != null ? asOfTime(snapshot.merged.asOf) : t("computer.usage.unavailable"),
+            merged: snapshot?.github?.asOf != null ? asOfTime(snapshot.github.asOf) : t("computer.usage.unavailable"),
             tokens: snapshot?.asOf != null ? asOfTime(snapshot.asOf) : t("computer.usage.unavailable"),
           })}</p>
         </InfoHint>}

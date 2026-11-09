@@ -200,12 +200,12 @@ export interface LocalUsageTrendDay {
   wow: Record<"prs" | "commits" | "newTokens" | "totalTokens", LocalUsageWeekChange>;
 }
 
-/** Remotely merged PRs and their original non-merge commits, separate from created PRs and local Git history. */
+/** Exact counts and visible references; Profile commit references retain source days, not exact China-day counts. */
 export interface LocalUsageMergedCounts {
   prs: number | null;
   knownPrs: number;
   commits: number | null;
-  knownCommits: number;
+  knownCommits: number | null;
 }
 
 export interface LocalUsageMergedRepository extends LocalUsageMergedCounts {
@@ -259,6 +259,15 @@ export interface LocalUsageMergedResponse {
   history?: LocalUsageMergedTrendDay[];
 }
 
+/** GitHub's typed contributions; knownCommits refers to Profile buckets, not an exact China-day count.
+ * Retained history uses the same split date bases; absent days remain unknown. */
+export interface LocalUsageGithubResponse extends Omit<LocalUsageMergedResponse, "overlaps"> {
+  metricDefinition: "github-profile-v1";
+  dateBasis: { prs: "created-at/Asia-Shanghai"; commits: "github-profile-day" };
+  chinaCommitAlignment: "unknown";
+  qualification: "nonfork-at-capture";
+}
+
 /** Windows include the capture date through asOf. The trend contains exactly the same 30 dates as window 30. */
 export interface LocalUsageResponse {
   status: LocalUsageStatus;
@@ -272,4 +281,5 @@ export interface LocalUsageResponse {
   /** Optional extended token observations; absent dates are unknown, including on legacy snapshots. */
   history?: LocalUsageTrendDay[];
   merged?: LocalUsageMergedResponse;
+  github?: LocalUsageGithubResponse;
 }

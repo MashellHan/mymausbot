@@ -155,14 +155,16 @@ describe("local Usage projection", () => {
     expect(extended.history).toHaveLength(191);
     const response = { status: "unavailable" as const, asOf: null, timeZone: "Asia/Shanghai" as const,
       sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [], merged: extended };
-    const long = localUsageView(response, "6m");
-    expect(long.trend.reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(2);
-    expect(weeklyUsageTrend(long.trend).reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(2);
-    expect(long.trend.find((row) => row.day === "2026-08-01")?.categories.unclassified.commits).toBe(1);
-    expect(localUsageView(response).trend.reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(1);
-    expect(localUsageView(response).windows?.["7"].repositories).toEqual(baseline.windows?.["7"].repositories);
-    for (const range of ["60", "90"] as const) {
-      expect(localUsageView(response, range).trend.reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(0);
+    const history = extended.history!;
+    expect(history.reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(2);
+    const daily = history.filter((row) => row.day >= "2026-05-10");
+    const withTokens = daily.map((row) => ({ ...row, tokenStatus: "unavailable" as const, newTokens: null, cacheRead: null,
+      totalTokens: null, wow: { ...row.wow, newTokens: null, totalTokens: null } }));
+    expect(weeklyUsageTrend(withTokens).reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(2);
+    expect(history.find((row) => row.day === "2026-08-01")?.categories.unclassified.commits).toBe(1);
+    for (const range of ["30", "60", "90", "6m"] as const) {
+      expect(localUsageView(response, range).windows).toBeNull();
+      expect(localUsageView(response, range).trend).toEqual([]);
     }
 
     await writeFile(mergedFile, JSON.stringify({ ...raw, windowStartDay: day("2026-11-09", -190), sources: [{ ...source,
