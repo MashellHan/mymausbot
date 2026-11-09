@@ -384,7 +384,7 @@ export function laneOf(event) {
   return "full";
 }
 
-export const VITEST_SHARDS = { "macos-latest": 4, "ubuntu-latest": 8, "windows-latest": 8 };
+export const VITEST_SHARDS = { "macos-latest": 8, "ubuntu-latest": 8, "windows-latest": 8 };
 
 // Test files at once on each platform's runner (OMB_VITEST_WORKERS, vite.config.ts). A Linux shard mostly waits on real
 // servers and fake engines: its 4 vCPU sat 70% idle one file at a time, and four files take a third of the time.

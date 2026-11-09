@@ -104,7 +104,8 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
   const selectedTeam = snapshot?.teams.find((team) => team.id === selectedTeamId);
   const viewerTeam = viewer && snapshot?.teams.find((team) => team.id === viewer.teamId);
   const activeViewer = active && viewerTeam && selectedTeamId === viewer?.teamId && (viewer?.kind === "team"
-    || viewerTeam.agents.some((member) => member.id === viewer?.agentId && member.name === viewer.name)) ? viewer : null;
+    || viewerTeam.agents.some((member) => member.id === viewer?.agentId && member.name === viewer.name &&
+      (member.occupantId ?? null) === viewer.occupantId)) ? viewer : null;
   const count = snapshot?.teamCount ?? t("computer.agentTeam.unknownCount");
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
     ? null : new Date(snapshot.updatedAt).toLocaleString(activeLocale());
@@ -190,11 +191,12 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
         </header>
         <div className="px-3 pb-1">
           {selectedTeam.agents.length ? <ul>{selectedTeam.agents.map((member) => memberRow(member, stale, active,
-            (selected) => setViewer({ kind: "member", teamId: selectedTeam.id, agentId: selected.id, name: selected.name }), readActivity))}</ul>
+            (selected) => setViewer({ kind: "member", teamId: selectedTeam.id, agentId: selected.id,
+              occupantId: selected.occupantId ?? null, name: selected.name }), readActivity))}</ul>
             : <p className="py-3 text-[12px] text-ink-tertiary">{t("computer.agentTeam.noAgents")}</p>}
         </div>
       </section>}
-      {activeViewer && <AgentConfigurationViewer key={`${activeViewer.kind}:${activeViewer.teamId}:${activeViewer.kind === "member" ? activeViewer.agentId : ""}:${activeViewer.name}`}
+      {activeViewer && <AgentConfigurationViewer key={`${activeViewer.kind}:${activeViewer.teamId}:${activeViewer.kind === "member" ? `${activeViewer.agentId}:${activeViewer.occupantId}` : ""}:${activeViewer.name}`}
         target={activeViewer} onClose={() => setViewer(null)} fallbackFocus={panelRef}
         onRulesRead={(result) => setTeamRules((current) => current?.teamId === result.teamId ? result : current)} />}
     </div>

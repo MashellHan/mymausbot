@@ -13,7 +13,7 @@ diagnostic. An overrun is an advisory process-scan case: successful checks stay
 green, and the gate waits for required work. Actual failures, missing required
 execution and unreadable controls remain quality decisions.
 
-Full validation uses **macOS only**: four Vitest shards with
+Full validation uses **macOS only**: eight Vitest shards with
 `OMB_VITEST_E2E=all`, plus the selected macOS specialist jobs. Windows and
 Ubuntu full suites and platform smokes are retired. Ordinary Ubuntu fast
 checks and platform builds/publication retain their separate boundaries.
@@ -50,7 +50,7 @@ The selector tests preserve the renderer/server import and locale boundaries.
 | --- | --- | --- |
 | Ordinary `pull_request` | fast | cached Ubuntu static checks, fixed core and bounded affected files, plus required `CI` |
 | Explicit wider PR request | full | selected full macOS validation with current-head review and QA holds |
-| Runtime `push` to main | full | `FULL_SCOPE`, including four macOS all-E2E shards and specialist jobs |
+| Runtime `push` to main | full | `FULL_SCOPE`, including eight macOS all-E2E shards and specialist jobs |
 | `merge_group` | main or full | combined-source macOS validation selected for the integration |
 | Guarded docs-only or version-only main push | scoped | smaller selection only with the existing prior-commit or exact merge-group evidence |
 | Daily schedule or `workflow_dispatch` | full | complete macOS selection; the daily schedule is `0 21 * * *` UTC, 05:00 Asia/Shanghai |
@@ -69,7 +69,7 @@ process scan records timing overruns without failing or cancelling the gate.
 
 ## Vitest shards
 
-The full matrix has four macOS shards, with at most four matrix jobs running
+The full matrix has eight macOS shards, with at most four matrix jobs running
 at once and one test file per worker. Each shard collects portable and host
 E2E files with `OMB_VITEST_E2E=all`; the previous macOS `host` subset is
 insufficient evidence for this selection. Individual OS-specific tests retain
@@ -97,7 +97,7 @@ To reproduce a current full shard, check out its exact revision, install the
 locked dependencies, then use its shard and environment values. For example:
 
 ```sh
-OMB_VITEST_E2E=all OMB_VITEST_SUBSET= OMB_VITEST_WORKERS=1 pnpm exec vitest run --shard=3/4
+OMB_VITEST_E2E=all OMB_VITEST_SUBSET= OMB_VITEST_WORKERS=1 pnpm exec vitest run --shard=3/8
 ```
 
 For an older run, use that run's checkout, platform, shard count and `all` or
@@ -108,7 +108,7 @@ removing 16 matrix jobs alone does not establish its new duration.
 
 ## macOS runners
 
-The account's macOS capacity is shared by the four shards and specialist
+The account's macOS capacity is shared by the eight shards and specialist
 jobs. Ordinary PRs use Ubuntu and do not wait for that fan-out. Full runs
 retain the packaged-server and Electron smokes in one macOS job; browser,
 renderer, eval, control-plane, Relay and open-source checks use their selected
