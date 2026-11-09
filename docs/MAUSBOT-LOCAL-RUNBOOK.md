@@ -84,8 +84,8 @@ the official app's signature or apply a blanket recursive signing command.
 Verify the completed bundle without changing it:
 
 ```sh
-codesign --verify --deep --strict --verbose=2 release/mac-arm64/OpenMausBot.app
-OMB_SMOKE_DIST="$PWD/release/mac-arm64/OpenMausBot.app/Contents/Resources/server" node scripts/smoke-packaged-server.mjs
+codesign --verify --deep --strict --verbose=2 release/mac-arm64/mymausbot.app
+OMB_SMOKE_DIST="$PWD/release/mac-arm64/mymausbot.app/Contents/Resources/server" node scripts/smoke-packaged-server.mjs
 ```
 
 The package smoke copies the server outside the checkout and uses disposable
