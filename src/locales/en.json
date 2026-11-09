@@ -9950,5 +9950,12 @@
   "remote.devices.removed": "Removed {name}.",
   "remote.e2e.anywhere": "Reachable from anywhere · end-to-end encrypted",
   "remote.e2e.connecting": "Connecting to MausBot Relay…",
-  "remote.e2e.local": "On this Wi-Fi and Tailscale · end-to-end encrypted"
+  "remote.e2e.local": "On this Wi-Fi and Tailscale · end-to-end encrypted",
+  "file.preview": "Preview file: {name}",
+  "file.back": "Back to files",
+  "file.loading": "Loading preview…",
+  "file.tooLarge": "This document is too large to preview (1 MB). Download a copy to read it.",
+  "file.invalid": "This file could not be read as Markdown. Download a copy to open it.",
+  "file.loadFailed": "Could not load this file. Try again or download a copy.",
+  "file.empty": "This document is empty."
 }

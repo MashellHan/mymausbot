@@ -67,10 +67,10 @@ describe("HTML file chip (#4406)", () => {
     expect(html).toMatch(/class="table-action" aria-label="Save a copy of report.html"/);
   });
 
-  it("leaves other files as they were: the name saves, the side button previews", () => {
+  it("opens CSV from its name and keeps a separate download action", () => {
     const csv = chip("data.csv");
-    expect(csv).toMatch(/aria-label="Save a copy of data.csv"/);
-    expect(csv).toContain("Preview table: data.csv");
+    expect(csv).toMatch(/class="table-action" aria-label="Save a copy of data.csv"/);
+    expect(csv).toMatch(/aria-label="Preview table: data.csv"[^>]*>[^]*data\.csv/);
     expect(csv).not.toContain("Preview page:");
   });
 });

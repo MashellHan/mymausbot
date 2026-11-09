@@ -7764,5 +7764,12 @@
   "remote.devices.removed": "已移除 {name}。",
   "remote.e2e.anywhere": "随时随地可访问 · 端到端加密",
   "remote.e2e.connecting": "正在连接 MausBot Relay…",
-  "remote.e2e.local": "在此 Wi-Fi 和 Tailscale 上 · 端到端加密"
+  "remote.e2e.local": "在此 Wi-Fi 和 Tailscale 上 · 端到端加密",
+  "file.preview": "预览文件：{name}",
+  "file.back": "返回文件列表",
+  "file.loading": "正在加载预览…",
+  "file.tooLarge": "文档超过预览大小上限（1 MB）。请下载后查看。",
+  "file.invalid": "无法将此文件读取为 Markdown。请下载后打开。",
+  "file.loadFailed": "无法加载文件。请重试或下载副本。",
+  "file.empty": "此文档为空。"
 }
