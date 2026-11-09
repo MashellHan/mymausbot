@@ -625,7 +625,7 @@ describe("CI scope CLI", () => {
       expect(output).toEqual(ciOutputs(selectCiScope([source]), source === "src/App.tsx" ? ALL : LINUX));
       expect(output.jobs).toEqual(jobs);
       expect(output.vitest_matrix.include.filter((entry: { files: string }) => !entry.files).map((entry: { os: string }) => entry.os))
-        .toEqual(oses.flatMap((os) => Array(os === "macos-latest" ? 4 : 8).fill(os)));
+        .toEqual(oses.flatMap((os) => Array(8).fill(os)));
       expect(stderr).toBe("");
     }
   });
