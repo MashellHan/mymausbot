@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 export function configureProductIdentity(app) {
@@ -9,7 +9,9 @@ export function configureProductIdentity(app) {
   const legacyProfile = path.join(app.getPath("appData"), "OpenMausBot");
   const renamedDefault = app.isPackaged && name === "mymausbot"
     && !app.commandLine.hasSwitch("user-data-dir") && userData === defaultProfile;
-  const profile = renamedDefault ? legacyProfile : userData;
+  const profile = renamedDefault
+    ? [legacyProfile, path.join(app.getPath("appData"), "openmausbot")].find(existsSync) ?? legacyProfile
+    : userData;
   mkdirSync(profile, { recursive: true });
   app.setPath("userData", profile);
   if (sessionData === userData) app.setPath("sessionData", profile);

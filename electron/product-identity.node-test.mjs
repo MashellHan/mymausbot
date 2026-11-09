@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { configureProductIdentity } from "./product-identity.mjs";
 
-function fixture(t, { name = "mymausbot", packaged = true, custom = false, explicit = false, legacy = true, customSession = false } = {}) {
+function fixture(t, { name = "mymausbot", packaged = true, custom = false, explicit = false, legacy = true, customSession = false, legacyName = "OpenMausBot" } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "mymausbot-identity-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const appData = path.join(root, "Application Support");
-  const legacyProfile = path.join(appData, "OpenMausBot");
+  const legacyProfile = path.join(appData, legacyName);
   if (legacy) {
     mkdirSync(legacyProfile, { recursive: true });
     writeFileSync(path.join(legacyProfile, "desktop-prefs.json"), '{"credentialMode":"session","language":"zh"}');
@@ -43,6 +43,16 @@ test("an explicitly separated browser session directory is preserved", t => {
   configureProductIdentity(app);
   assert.equal(app.getPath("userData"), legacyProfile);
   assert.equal(app.getPath("sessionData"), sessionData);
+});
+
+test("an existing profile named after the internal package stays accessible", t => {
+  const { app, legacyProfile } = fixture(t, { legacyName: "openmausbot" });
+  configureProductIdentity(app);
+  const actual = statSync(app.getPath("userData"));
+  const expected = statSync(legacyProfile);
+  assert.deepEqual([actual.dev, actual.ino], [expected.dev, expected.ino]);
+  assert.equal(app.getPath("sessionData"), app.getPath("userData"));
+  assert.equal(JSON.parse(readFileSync(path.join(app.getPath("userData"), "desktop-prefs.json"), "utf8")).credentialMode, "session");
 });
 
 test("a fresh installation uses the same stable desktop profile location", t => {
