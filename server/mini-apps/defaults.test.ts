@@ -139,7 +139,7 @@ it("does not add apps for Bots or read-only actors", () => {
 });
 
 it("updates an untouched bundled page in place without rediscovering Data or restoring publisher grants", async () => {
-  expect(SHIPPED_TEMPLATE_SHA256.bookkeeping).toContain("31138080fea253d60cbd5286788fae32258530ebd238f3510a43c2358603aed1");
+  expect(SHIPPED_TEMPLATE_SHA256.bookkeeping).toContain("2cdf85124737205c693df442bff7e8da5190aa8df8c7e42dde4b901be96789e9");
   expect(SHIPPED_TEMPLATE_SHA256.bookkeeping).not.toContain(createHash("sha256").update(bundledBookkeepingHtml).digest("hex"));
   const { defaults, apps, data, restarted } = fixture();
   const ledger = await data.forBot("ledger");
