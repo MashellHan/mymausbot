@@ -23,10 +23,20 @@ publish to `upstream` or `legacy-fork`.
    Agent Team, Usage, sections, quoted replies, user data, pairing, and access
    boundaries.
 4. Run required hooks and meaningful affected tests on the integrated tree.
-   Give Reviewer the exact commit, tree, source range, resolutions, and test
-   evidence. Address findings and request a delta review of corrections.
+   Continue development, CLI/headless checks and PR preparation if local
+   Accessibility, Screen Recording or the CUA driver is unavailable. Mark each
+   affected native check as not run, pending environment; record its owner and
+   next action. Give Reviewer the exact commit, tree, source range, resolutions,
+   available evidence and pending checks without waiting for screen readiness.
+   Address findings and request a delta review of corrections.
 5. Lead decides the merge order and merges into the personal repository only when
    Reviewer has no unresolved findings and required checks pass.
+   An unavailable local screen check alone does not block an otherwise eligible
+   merge. Report development, verification and integration separately; merged
+   source may still await native verification. Keep the same source batch and
+   let its developer continue independent work while the assigned role or QA
+   completes the outstanding checks. Actual screen use retains all permission,
+   consent and access checks.
    Escalate uncertain product choices through Lead. Never push to upstream.
 
 Daily synchronization does not automatically replace the running desktop App.

@@ -74,6 +74,21 @@ affected checks, while unchanged evidence remains valid. Root and specialists
 send nonblocking findings through Lead in one batch, avoiding repeated prompts
 and unrelated work on the delivery owner.
 
+Development and verification availability are separate. Missing local
+Accessibility, Screen Recording or CUA readiness blocks only the native screen
+operations and checks that require it. Continue source work, CLI/API/headless
+checks, source review and PR integration. In the existing handoff, record
+development complete at its exact commit and each unrun check as pending
+environment, with a reason, owner and next action. Report a genuinely failed
+test separately; neither status is a pass. Resume only the outstanding checks
+on unchanged inputs when the environment becomes ready.
+
+An unavailable local screen check alone does not hold an otherwise eligible
+merge. Required current-head CI, source acceptance and applicable QA holds
+still decide merging. Merged source can remain pending native verification;
+acceptance of that screen behavior and any delivery requiring it stays pending.
+Permission and consent checks still apply to actual screen use.
+
 ## Coverage boundaries
 
 `scripts/ci-scope.mjs` maps the full changed-file diff to contracts. An ordinary
