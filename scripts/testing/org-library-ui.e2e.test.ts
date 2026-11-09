@@ -55,7 +55,7 @@ describe("the organization library in the real renderer", () => {
     let stdout = "";
     let stderr = "";
     let info: { ui: string; url: string; botId: string; dataDir: string; logPath: string };
-    child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
+    child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch", "--simple"], {
       cwd: ROOT, env: { ...process.env, OMB_TEST_ORG_LIBRARY_KEY: key }, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });

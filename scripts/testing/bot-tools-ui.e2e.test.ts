@@ -36,7 +36,7 @@ describe("bot setup and tools in the real renderer", () => {
     const launcher = new URL("./control-omb-ui.ts", import.meta.url).href;
     const bootstrap = `import { launchUi } from ${JSON.stringify(launcher)};
       process.on('message', message => { if (message === 'stop') process.emit('SIGINT'); });
-      try { await launchUi([]); } finally { process.disconnect(); }`;
+      try { await launchUi(["--simple"]); } finally { process.disconnect(); }`;
     child = spawn(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", bootstrap], {
       cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe", "ipc"],
     });

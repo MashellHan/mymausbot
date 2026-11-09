@@ -142,7 +142,7 @@ describe("the thinking timer stays anchored across a thread switch", () => {
   });
 
   run("counts from the server's turn-start stamp, not from the re-selection", async () => {
-    launched = await launch(["--mode", "hang"]); // the turn never settles; the bot stays busy
+    launched = await launch(["--mode", "hang", "--simple"]); // the turn never settles; the bot stays busy
     const { info } = launched;
     const api = fixtureApi(info.url);
     const evaluate = async (js: string) => (await ui("eval", info.ui, "--js", js)).result;

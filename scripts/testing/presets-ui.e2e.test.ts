@@ -25,7 +25,7 @@ describe("Preset bots in the real renderer", () => {
     let stdout = "";
     let stderr = "";
     let info: { ui: string; url: string; botId: string; dataDir: string; logPath: string };
-    child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
+    child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch", "--simple"], {
       cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });

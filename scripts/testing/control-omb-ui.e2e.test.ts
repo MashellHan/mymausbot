@@ -112,7 +112,7 @@ describe("control-omb ui drives the real renderer", () => {
   });
 
   run("shows the matched text inside a searched message", async () => {
-    launched = await launch([]);
+    launched = await launch(["--simple"]);
     const { info } = launched;
     await ui("type", info.ui, "--name", "Message Pepper", "--text", "Find the striped zebra");
     await ui("press", info.ui, "--keys", "Enter");
@@ -157,7 +157,7 @@ describe("control-omb ui drives the real renderer", () => {
   }, LAUNCH_TIMEOUT_MS + 90_000);
 
   run("saves a key on Enter, checks it once saved, shows it masked, and keeps a refused or failed draft", async () => {
-    launched = await launch([]);
+    launched = await launch(["--simple"]);
     const { info } = launched;
     await fixtureApi(info.url)("PUT", "/api/config", {
       openaiCompat: { key: "fixture-saved-key", url: "http://127.0.0.1:1/v1" },
@@ -244,7 +244,7 @@ describe("control-omb ui drives the real renderer", () => {
   }, LAUNCH_TIMEOUT_MS + 180_000);
 
   run("sends a turn from the composer and shows the reply and the scripted tool chip", async () => {
-    launched = await launch(["--tool-calls", TOOL_CALLS]);
+    launched = await launch(["--simple", "--tool-calls", TOOL_CALLS]);
     const { info } = launched;
     expect(info.ui).toBe(join(info.dataDir, "ui.json"));
     expect(existsSync(info.ui)).toBe(true);
