@@ -424,13 +424,13 @@ export async function installAgentBrowserBinary(options: {
   timer.unref?.();
   let body: Buffer;
   try {
-    let response: Response;
-    for (let attempt = 0; ; attempt++) {
-      response = await (options.fetchImpl ?? fetch)(url, { redirect: "follow", signal: controller.signal });
-      if (response.status !== 504 || attempt === 2) break;
+    const fetcher = options.fetchImpl ?? fetch;
+    let response = await fetcher(url, { redirect: "follow", signal: controller.signal });
+    for (let attempt = 1; response.status === 504 && attempt < 3; attempt++) {
       await response.body?.cancel().catch(() => {});
-      options.log?.(`agent-browser download attempt ${attempt + 1}/3 returned HTTP 504; retrying`);
-      await sleep(1_000 * (attempt + 1), undefined, { signal: controller.signal });
+      options.log?.(`agent-browser download attempt ${attempt}/3 returned HTTP 504; retrying`);
+      await sleep(1_000 * attempt, undefined, { signal: controller.signal });
+      response = await fetcher(url, { redirect: "follow", signal: controller.signal });
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
