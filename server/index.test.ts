@@ -1604,8 +1604,8 @@ describe("harness HTTP API", () => {
       questionSocket?.destroy();
       try {
         if (activeServer) {
-          await waitForExit(activeServer.child, { signal: "SIGTERM" });
-          expectStoppedTestServerCleanly(activeServer.child, activeServer.stderr());
+          await waitForExit(activeServer.child, { signal: "SIGTERM", graceMs: 8_000 });
+          expectStoppedTestServerCleanly(activeServer.child, `${activeServer.stderr()} exit=${activeServer.child.exitCode} signal=${activeServer.child.signalCode}`);
         }
       } finally {
         await removeTempDir(isolatedHome);
