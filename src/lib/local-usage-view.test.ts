@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { LocalUsageResponse, LocalUsageWindow } from "../../shared/local-dashboard";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
 import { localUsageView, profileUsageView, retainUsageSnapshot } from "./local-usage-view";
+import { weeklyUsageTrend } from "./local-usage-trends";
 
 const shift = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
@@ -203,14 +204,44 @@ describe("independent repository activity view", () => {
     expect(view.metricDefinition).toBe("repository-observations-v1");
     for (const key of ["1", "7", "30"] as const) {
       expect(view.windows![key]).toMatchObject(snapshot.windows![key]);
-      expect(view.windows![key].knownCommits).toBeNull();
+      expect(view.windows![key].knownCommits).toBe(snapshot.windows![key].commits);
       expect(view.windows![key].repositories.rows.map(row => row.name)).toEqual(rows.map(row => row.name));
     }
-    expect(view.trend.at(-1)).toMatchObject({ prs: 1, commits: 5, knownCommits: null, wow: { prs: 50, commits: 25 } });
+    expect(view.trend.at(-1)).toMatchObject({ prs: 1, commits: 5, knownCommits: 5, wow: { prs: 50, commits: 25 } });
     expect(profileUsageView(snapshot).windows!["1"]).toMatchObject({ prs: null, commits: null, knownCommits: 5, comparison: { prs: null, commits: null } });
     delete snapshot.github;
     expect(localUsageView(snapshot)).toEqual(view);
     expect(original.windows).toEqual(snapshot.windows);
+  });
+
+  it("retains repository commit subtotals through mixed missing weeks without inventing exact totals or zeros", () => {
+    const snapshot = fixture("2026-11-09"), original = structuredClone(snapshot);
+    const zero = { prs: 0, knownPrs: 0, commits: 0 };
+    snapshot.history = Array.from({ length: 10 }, (_, index) => {
+      const observed = index < 3;
+      return { ...snapshot.trend[0]!, day: shift("2026-09-11", index), coverage: "ready" as const,
+        prs: observed ? 1 : 0, knownPrs: observed ? 1 : 0, commits: observed ? 8 : 0,
+        tokenStatus: "ready" as const, newTokens: 0, cacheRead: 0, totalTokens: 0,
+        categories: { work: { prs: observed ? 1 : 0, knownPrs: observed ? 1 : 0, commits: observed ? 6 : 0 },
+          personal: { ...zero, commits: observed ? 2 : 0 }, unclassified: zero } };
+    });
+    const view = localUsageView(snapshot, "6m"), weeks = weeklyUsageTrend(view.trend);
+    const mixed = weeks.find(week => week.day === "2026-09-07")!;
+    expect(view.trend.find(day => day.day === "2026-09-07")).toMatchObject({ commits: null, knownCommits: null, coverage: "unavailable" });
+    expect(view.trend.find(day => day.day === "2026-09-11")).toMatchObject({ commits: 8, knownCommits: 8 });
+    expect(mixed).toMatchObject({ endDay: "2026-09-13", commits: null, knownCommits: 24, coverage: "partial",
+      categories: { work: { commits: null, knownCommits: 18 }, personal: { commits: null, knownCommits: 6 },
+        unclassified: { commits: null, knownCommits: 0 } }, wow: { prs: null, commits: null } });
+    expect(weeks.find(week => week.day === "2026-09-14")).toMatchObject({ endDay: "2026-09-20", commits: 0, knownCommits: 0,
+      coverage: "ready", categories: { work: { commits: 0, knownCommits: 0 }, personal: { commits: 0, knownCommits: 0 },
+        unclassified: { commits: 0, knownCommits: 0 } } });
+    expect(weeks.find(week => week.day === "2026-09-21")).toMatchObject({ endDay: "2026-09-27", commits: null, knownCommits: null,
+      coverage: "unavailable", categories: { work: { commits: null, knownCommits: null }, personal: { commits: null, knownCommits: null },
+        unclassified: { commits: null, knownCommits: null } } });
+    expect(weeklyUsageTrend(profileUsageView(snapshot, "6m").trend).find(week => week.day === "2026-09-07"))
+      .toMatchObject({ commits: null, knownCommits: null, coverage: "unavailable" });
+    expect(snapshot.windows).toEqual(original.windows);
+    expect(view.windows).toEqual(localUsageView(snapshot).windows);
   });
 
   it("joins long repository and retained token observations by date without converting unknown history to zero", () => {

@@ -95,7 +95,7 @@ export function profileUsageView(snapshot: LocalUsageResponse, range: UsageTrend
 }
 
 const repositoryCounts = (value?: LocalUsageCounts): UsageCounts => ({
-  prs: value?.prs ?? null, knownPrs: value?.knownPrs ?? null, commits: value?.commits ?? null, knownCommits: null,
+  prs: value?.prs ?? null, knownPrs: value?.knownPrs ?? null, commits: value?.commits ?? null, knownCommits: value?.commits ?? null,
 });
 const repositoryCategories = (value?: Record<LocalUsageCategory, LocalUsageCounts>): Categories => ({
   work: repositoryCounts(value?.work), personal: repositoryCounts(value?.personal), unclassified: repositoryCounts(value?.unclassified),

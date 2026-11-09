@@ -98,7 +98,7 @@ describe("GitHub Profile source contract", () => {
     expect(view.windows!["1"]).toMatchObject({ knownPrs: 1, knownCommits: 100, commits: null, totalTokens: 30 });
     expect(view.trend.at(-1)).toMatchObject({ knownPrs: 1, knownCommits: 100, totalTokens: 30 });
     expect(response.windows!["1"].commits).toBe(2997);
-    expect(localUsageView(response).windows!["1"]).toMatchObject({ commits: 2997, knownCommits: null, totalTokens: 30 });
+    expect(localUsageView(response).windows!["1"]).toMatchObject({ commits: 2997, knownCommits: 2997, totalTokens: 30 });
     expect(localUsageView(response).metricDefinition).toBe("repository-observations-v1");
     const onlyGithub = await createLocalUsageProvider({ file: join(file, "..", "no-local.json"), githubFile: file,
       mergedFile: join(file, "..", "no-merged.json"), now: () => now }).get();
