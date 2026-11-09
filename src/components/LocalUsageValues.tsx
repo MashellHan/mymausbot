@@ -6,11 +6,11 @@ export const usageMetrics = ["prs", "commits", "totalTokens"] as const;
 export type UsageMetric = typeof usageMetrics[number];
 export const metricText = (value: number | null) => value === null ? t("computer.usage.unavailable") : value.toLocaleString(activeLocale());
 export const countText = (value: number | null, known: number | null) => metricText(value ?? known);
-export const UsageSourceContext = createContext<"repositories" | "profile">("repositories");
+export const UsageSourceContext = createContext<"repositories" | "profile" | "merged">("repositories");
 export function useUsageMetricHint() {
   const source = useContext(UsageSourceContext);
-  return (metric: UsageMetric) => t(metric === "prs" ? source === "profile" ? "computer.usage.githubPrHint" : "computer.usage.repositoryPrHint"
-    : metric === "commits" ? source === "profile" ? "computer.usage.githubCommitHint" : "computer.usage.repositoryCommitHint" : "computer.usage.activityScopeHint");
+  return (metric: UsageMetric) => t(metric === "prs" ? source === "profile" ? "computer.usage.githubPrHint" : source === "merged" ? "computer.usage.mergedPrHint" : "computer.usage.repositoryPrHint"
+    : metric === "commits" ? source === "profile" ? "computer.usage.githubCommitHint" : source === "merged" ? "computer.usage.mergedCommitHint" : "computer.usage.repositoryCommitHint" : "computer.usage.activityScopeHint");
 }
 export const changeText = (value: LocalUsageWeekChange) => value === null ? "—" : value === "new" ? t("computer.usage.newActivity")
   : new Intl.NumberFormat(activeLocale(), { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 1 }).format(value / 100);

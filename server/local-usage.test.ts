@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { createLocalUsageProvider } from "./local-usage.ts";
 import { withGithubUsageFixture } from "../scripts/testing/merged-usage-fixture.ts";
-import { localUsageView, profileUsageView } from "../src/lib/local-usage-view.ts";
+import { localUsageView, profileUsageView, mergedUsageView } from "../src/lib/local-usage-view.ts";
 import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 
 const folders: string[] = [];
@@ -656,4 +656,84 @@ describe("local Usage projection", () => {
     expect((await createLocalUsageProvider({ file, now: () => asOf }).get()).windows?.["1"]).toMatchObject({ prs: 1,
       repositories: { coverage: "unavailable", rows: [] } });
   });
+});
+
+
+it("reads nested sixty-day repository observations even when the top-level repository snapshot only has 31 dates", async () => {
+  const asOf = Date.parse("2026-11-09T08:00:00Z"), { file, snapshot } = await historyFixture(asOf);
+  const options = { file, githubFile: join(dirname(file), "no-profile.json"), mergedFile: join(dirname(file), "no-merged.json"), now: () => asOf };
+  const response = await createLocalUsageProvider(options).get(), view = localUsageView(response, "60");
+  expect(snapshot.localRepositories.rows[0]!.daily[0]!.day).toBe("2026-10-10");
+  expect(snapshot.localHistory.localRepositories.rows[0]!.daily[0]!.day).toBe("2026-09-11");
+  expect(view.trend[0]).toMatchObject({ day: "2026-09-11", prs: 1, commits: 2,
+    repositories: { coverage: "ready", rows: [{ name: "github.com/example/sample", category: "work", prs: 1, commits: 2 }] } });
+  expect(view.sixtyDayRepositories!.repositories).toMatchObject({ coverage: "ready", rows: [{ knownPrs: 69, knownCommits: 138 }] });
+  expect(view.windows).toEqual(localUsageView(response).windows);
+  const malformed = structuredClone(snapshot);
+  malformed.localHistory.localRepositories.rows[0]!.daily[0]!.commits = 9999;
+  await writeFile(file, JSON.stringify(malformed));
+  const unknown = localUsageView(await createLocalUsageProvider(options).get(), "60");
+  expect(unknown.trend[0]).toMatchObject({ coverage: "unavailable", prs: null, commits: null, repositories: undefined });
+  expect(unknown.sixtyDayRepositories!.repositories.coverage).toBe("partial");
+});
+
+it("projects retained enterprise and personal PR repository history separately from local and Profile metrics", async () => {
+  const asOf = Date.parse("2026-11-09T08:00:00Z"), { file } = await historyFixture(asOf);
+  const mergedFile = join(dirname(file), "remote.json"), id = (number: number) => number.toString(16).padStart(64, "0");
+  const work = { id: id(1), provider: "ado", category: "work", status: "ready", capturedAt: new Date(asOf).toISOString(),
+    items: [{ key: id(2), at: "2026-09-11T01:00:00Z", category: "work", repository: { id: id(3), name: "ado.example/work/repo" }, commits: [id(4), id(5)] }] };
+  const personal = { ...work, id: id(6), provider: "github", category: "personal",
+    items: [{ key: id(7), at: "2026-09-22T01:00:00Z", category: "personal", repository: { id: id(8), name: "github.com/fixture/mini-apps" }, commits: [id(9)] }] };
+  await writeFile(mergedFile, JSON.stringify({ version: 1, asOfAt: new Date(asOf).toISOString(), capturedAt: new Date(asOf).toISOString(),
+    windowStartDay: "2026-09-11", sources: [work, personal] }));
+  const response = await createLocalUsageProvider({ file, mergedFile, githubFile: join(dirname(file), "no-profile.json"), now: () => asOf }).get();
+  const view = mergedUsageView(response, "60");
+  expect(view.trend[0]!.repositories!.rows[0]).toMatchObject({ name: "ado.example/work/repo", category: "work", prs: 1, commits: 2 });
+  expect(view.trend.find(row => row.day === "2026-09-22")!.repositories!.rows[0]).toMatchObject({ name: "github.com/fixture/mini-apps", category: "personal", prs: 1, commits: 1 });
+  expect(view.sixtyDayRepositories!.repositories.rows).toHaveLength(2);
+  expect(localUsageView(response, "60").sixtyDayRepositories!.repositories.rows.map(row => row.name)).toEqual(["github.com/example/sample"]);
+  expect(profileUsageView(response, "60").sixtyDayRepositories!.repositories.rows).toEqual([]);
+});
+
+it("keeps sixty-day repository totals source-deduplicated across days and shared repositories instead of summing daily history", async () => {
+  const asOf = Date.parse("2026-11-09T08:00:00Z"), { file } = await historyFixture(asOf);
+  const mergedFile = join(dirname(file), "dedup.json"), id = (number: number) => number.toString(16).padStart(64, "0");
+  const first = { id: id(1), name: "github.com/fixture/work" }, second = { id: id(2), name: "github.com/fixture/personal" };
+  const items = [
+    { key: id(3), at: "2026-08-01T01:00:00Z", category: "work", repository: first, commits: [id(10)] },
+    { key: id(4), at: "2026-10-01T01:00:00Z", category: "work", repository: first, commits: [id(10)] },
+    { key: id(5), at: "2026-11-08T01:00:00Z", category: "work", repository: first, commits: [id(10)] },
+    { key: id(6), at: "2026-10-02T01:00:00Z", category: "personal", repository: second, commits: [id(10)] },
+  ];
+  const source = { id: id(7), provider: "github", category: "work", status: "ready", capturedAt: new Date(asOf).toISOString(), items };
+  await writeFile(mergedFile, JSON.stringify({ version: 1, asOfAt: source.capturedAt, capturedAt: source.capturedAt,
+    windowStartDay: "2026-05-03", sources: [source] }));
+  const response = await createLocalUsageProvider({ file, mergedFile, githubFile: join(dirname(file), "absent.json"), now: () => asOf }).get();
+  const view = mergedUsageView(response, "60"), repositoryWindow = view.sixtyDayRepositories!.repositories;
+  expect(repositoryWindow).toMatchObject({ coverage: "ready", sharedCommits: 1, unattributedCommits: 0,
+    rows: [{ name: first.name, prs: 2, commits: 1, comparison: { prs: null, commits: null } },
+      { name: second.name, prs: 1, commits: 1 }] });
+  expect(view.windows!["7"].commits).toBe(0); // Its original 60-day projection assigns the SHA to October 1.
+  expect(view.trend.reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(0); // The 191-day projection assigns it to August 1.
+  expect(view.trend.reduce((sum, row) => sum + (row.repositories?.rows.find(value => value.id === first.id)?.knownCommits ?? 0), 0)).toBe(0);
+  const short = response.merged!.windows;
+  for (const range of ["30", "90", "6m"] as const) expect(mergedUsageView(response, range).windows).toEqual(view.windows);
+  await writeFile(mergedFile, JSON.stringify({ version: 1, asOfAt: source.capturedAt, capturedAt: source.capturedAt,
+    windowStartDay: "2026-09-11", sources: [source] }));
+  const bounded = await createLocalUsageProvider({ file, mergedFile, now: () => asOf }).get();
+  expect(bounded.merged!.windows).toEqual(short);
+  expect(bounded.merged!.sixtyDayRepositories).toEqual(response.merged!.sixtyDayRepositories);
+});
+
+it("keeps nested sixty-day shared repository appearances separate from global local attribution", async () => {
+  const asOf = Date.parse("2026-11-09T08:00:00Z"), { file, snapshot } = await historyFixture(asOf);
+  snapshot.localHistory.localRepositories.rows.push({ id: "c".repeat(64), name: "github.com/fixture/shared", category: "work",
+    daily: [{ day: "2026-09-21", knownPrs: 0, commits: 2 }] });
+  await writeFile(file, JSON.stringify(snapshot));
+  const response = await createLocalUsageProvider({ file, githubFile: join(dirname(file), "absent.json"), mergedFile: join(dirname(file), "absent-remote.json"), now: () => asOf }).get();
+  const view = localUsageView(response, "60");
+  expect(response.sixtyDayRepositories!.repositories).toMatchObject({ coverage: "ready", sharedCommits: 2, unattributedCommits: 0 });
+  expect(view.sixtyDayRepositories!.repositories.rows.map(row => row.knownCommits)).toEqual([138, 2]);
+  expect(view.trend.find(row => row.day === "2026-09-21")).toMatchObject({ commits: 2, repositories: { sharedCommits: 2 } });
+  expect(response.windows!["1"].repositories.rows).toHaveLength(1);
 });

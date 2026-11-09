@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare, apply or restore a reviewed seven-China-day private contribution repair."""
+"""Prepare, apply or restore a reviewed 7- or 60-China-day private contribution repair."""
 
 import argparse
 import datetime as dt
@@ -98,25 +98,27 @@ def source_identity(collector):
 
 def validate_capture(current, now):
     at = github.instant(current["asOfAt"])
-    first, last = github.capture_window(at)
+    window = current["operationWindow"]
+    days = (dt.date.fromisoformat(window["endDay"]) - dt.date.fromisoformat(window["startDay"])).days + 1
+    first, last = github.capture_window(at, days)
     if (current.get("version") != 1 or current.get("metricDefinition") != github.DEFINITION
             or current.get("dateBasis") != github.DATE_BASIS or current.get("qualification") != "nonfork-at-capture"
             or current.get("operationWindow") != {"timeZone": "Asia/Shanghai", "startDay": str(first), "endDay": str(last), "todayPartial": True}
-            or github.capture_window(now) != (first, last) or at > now
+            or github.capture_window(now, days) != (first, last) or at > now
             or not at <= github.instant(current["capturedAt"]) <= now):
         raise ValueError("Repair definition, execution dates or cutoff mismatch")
     sources, active = current["sources"], current["activeSourceIds"]
     ids = [source["id"] for source in sources]
     if not ids or len(ids) > github.MAX_PROFILES or len(set(ids)) != len(ids) or set(ids) != set(active) or len(active) != len(ids):
         raise ValueError("Invalid repair account scope")
-    dates = {str(first + dt.timedelta(days=offset)) for offset in range(7)}
+    dates = {str(first + dt.timedelta(days=offset)) for offset in range(days)}
     for source in sources:
         if (source["status"] not in ("ready", "partial") or not re.fullmatch(r"[a-f0-9]{64}", source["account"])
                 or not re.fullmatch(r"[a-f0-9]{64}", source["id"])
                 or not re.fullmatch(r"github\.com|[a-z0-9-]+\.ghe\.com", source["host"])
                 or type(source["hasRestrictedContributions"]) is not bool
                 or github.count(source["restrictedContributions"]) > 0 and not source["hasRestrictedContributions"]
-                or len(source["days"]) != 7 or {row["day"] for row in source["days"]} != dates):
+                or len(source["days"]) != days or {row["day"] for row in source["days"]} != dates):
             raise ValueError("Unavailable or incomplete repair source")
         for row in source["days"]:
             if (row["status"] != "partial" or row["chinaCommits"] is not None or row["capturedAt"] != current["asOfAt"]
@@ -142,7 +144,7 @@ def validate_capture(current, now):
                 raise ValueError("Inconsistent repair commit buckets")
 
 
-def prepare(file, operation, config, run, repository_category, collector, *, at=None):
+def prepare(file, operation, config, run, repository_category, collector, *, at=None, days=7):
     now = at or dt.datetime.now(dt.timezone.utc)
     file, operation = Path(file).absolute(), Path(operation).absolute()
     if file == operation or operation in file.parents:
@@ -156,7 +158,9 @@ def prepare(file, operation, config, run, repository_category, collector, *, at=
         previous = json.loads(before) if before is not None else {}
         if before is not None and (not isinstance(previous, dict) or not previous):
             raise ValueError("Existing contribution cache is unreadable")
-        current = github.collect(config, run, repository_category, at=now)
+        current = github.collect(config, run, repository_category, at=now, days=days)
+        if (dt.date.fromisoformat(current["operationWindow"]["endDay"]) - dt.date.fromisoformat(current["operationWindow"]["startDay"])).days + 1 != days:
+            raise ValueError("Repair capture differs from the requested bounded span")
         finished = dt.datetime.now(dt.timezone.utc)
         validate_capture(current, finished)
         after = encoded(github.replace_days(previous, current))
@@ -240,6 +244,7 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
     preparing = sub.add_parser("prepare", help="private snapshot and dry-run only; target is not replaced")
     preparing.add_argument("--config", type=Path, required=True)
+    preparing.add_argument("--days", type=int, choices=(7, 60), default=7)
     preparing.add_argument("--collector", type=Path, required=True)
     preparing.add_argument("--collector-sha256", required=True)
     for name in ("prepare", "apply", "restore"):
@@ -258,7 +263,7 @@ def main():
             raise ValueError("Collector source pin changed")
         exec(compile(data, collector["path"], "exec"), module.__dict__)
         result = prepare(TARGET, args.operation_dir.expanduser(), json.loads(args.config.expanduser().read_text()),
-                         module.run, module.remote_category, collector)
+                         module.run, module.remote_category, collector, days=args.days)
     else:
         action = apply if args.action == "apply" else restore
         result = action(TARGET, args.operation_dir.expanduser(), args.plan_sha256)

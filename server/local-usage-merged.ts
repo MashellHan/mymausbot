@@ -150,7 +150,7 @@ function projection(raw: unknown, now: number, extended = false): LocalUsageMerg
     categoryConflicts: [...categories.values()].filter((values) => values.size > 1).length,
     dayConflicts: [...days.values()].filter((values) => values.size > 1).length };
 
-  function makeWindow(days: 1 | 7 | 30, through: string): LocalUsageMergedWindow {
+  function makeWindow<Days extends 1 | 7 | 30 | 60>(days: Days, through: string): LocalUsageMergedWindow<Days> {
     const startDay = shift(through, 1 - days);
     const selectedPrs = inside(prs, startDay, through), selectedCommits = inside(commits, startDay, through);
     const observed = !extended || sources.some((source) => source.status !== "unavailable" && through >= source.startDay
@@ -162,10 +162,6 @@ function projection(raw: unknown, now: number, extended = false): LocalUsageMerg
     const total = counts(selectedPrs, selectedCommits, complete);
     const categoryCounts = Object.fromEntries(CATEGORIES.map((key) => [key, counts(
       selectedPrs.filter((item) => item.category === key), selectedCommits.filter((item) => item.category === key), complete)])) as Record<Category, LocalUsageMergedCounts>;
-    if (extended) return { days, startDay, endDay: through, asOf, coverage, missingDays: [], ...total, categories: categoryCounts,
-      repositories: { coverage: "unavailable", rows: [], unattributedPrs: null, unattributedCommits: null, sharedCommits: 0 },
-      comparison: { startDay: shift(startDay, -days), endDay: shift(startDay, -1), missingDays: [], prs: null, commits: null,
-        categories: Object.fromEntries(CATEGORIES.map((key) => [key, { prs: null, commits: null }])) as LocalUsageMergedWindow["comparison"]["categories"] } };
     const repoRows = new Map<string, { repository: Repo; category: Category; prs: Set<string>; commits: Set<string> }>();
     const rowFor = (repo: Repo, kind: Category) => {
       const row = repoRows.get(repo.id) ?? { repository: repo, category: kind, prs: new Set<string>(), commits: new Set<string>() };
@@ -214,14 +210,17 @@ function projection(raw: unknown, now: number, extended = false): LocalUsageMerg
     const currentDay = shift(endDay, index + 1 - span);
     const current = makeWindow(1, currentDay), previous = makeWindow(1, shift(currentDay, -7));
     return { day: currentDay, coverage: current.coverage, prs: current.prs, knownPrs: current.knownPrs,
-      commits: current.commits, knownCommits: current.knownCommits, categories: current.categories,
+      commits: current.commits, knownCommits: current.knownCommits, categories: current.categories, repositories: current.repositories,
       wow: { prs: change(current.prs, previous.prs), commits: change(current.commits, previous.commits) } };
   });
   const stale = now - capturedAt > STALE_MS || day(now) !== endDay || sourceCoverage.stale > 0;
   const unavailable = sourceCoverage.total === 0 || sourceCoverage.unavailable === sourceCoverage.total;
   const status = unavailable ? "unavailable" : stale ? "stale" : complete ? "ready" : "partial";
+  const sixty = extended ? undefined : makeWindow(60, endDay);
+  if (sixty) for (const row of sixty.repositories.rows) row.comparison = { prs: null, commits: null };
   return { status, asOf, timeZone: "Asia/Shanghai", sourceCoverage, overlaps, windows, trend,
-    ...(!extended ? { history: projection(raw, now, true).trend } : {}) };
+    ...(!extended && sixty ? { history: projection(raw, now, true).trend,
+      sixtyDayRepositories: { startDay: sixty.startDay, endDay: sixty.endDay, repositories: sixty.repositories } } : {}) };
 }
 
 export function createLocalUsageMergedReader(file: string, now: () => number = Date.now) {

@@ -1,7 +1,7 @@
 import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { LocalUsageCategory, LocalUsageResponse } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
-import { localUsageView, profileUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
+import { localUsageView, profileUsageView, mergedUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
 import { weeklyUsageTrend, type UsageTrendBucket } from "@/lib/local-usage-trends";
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
 import { metricText, countText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
@@ -239,8 +239,8 @@ function ProfileReferences({ snapshot }: { snapshot: LocalUsageResponse }) {
 
 export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | null }) {
   const [range, setRange] = useState<UsageTrendRange>("30");
-  const [source, setSource] = useState<"repositories" | "profile">("repositories");
-  const view = snapshot && (source === "profile" ? profileUsageView : localUsageView)(snapshot, range);
+  const [source, setSource] = useState<"repositories" | "profile" | "merged">("repositories");
+  const view = snapshot && (source === "profile" ? profileUsageView : source === "merged" ? mergedUsageView : localUsageView)(snapshot, range);
   const chartDays = view ? range === "6m" ? weeklyUsageTrend(view.trend) : view.trend : [];
   const windows = view?.windows;
   const showUnclassified = view?.trend.some((day) => (day.categories.unclassified.prs ?? day.categories.unclassified.knownPrs ?? 0) > 0
@@ -253,7 +253,7 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
         {view && view.status !== "unavailable" && <InfoHint label={t("app.info")} warning={view.status !== "ready"}>
           {view.status === "partial" && <p>{t("computer.usage.partial")}</p>}
           {view.status === "stale" && <p>{t("computer.usage.stale")}</p>}
-          <p>{t(source === "profile" ? "computer.usage.githubDateBasis" : "computer.usage.repositoryDateBasis")}</p>
+          <p>{t(source === "profile" ? "computer.usage.githubDateBasis" : source === "merged" ? "computer.usage.mergedDateBasis" : "computer.usage.repositoryDateBasis")}</p>
           {view.asOf != null && <p><time dateTime={new Date(view.asOf).toISOString()}>{t(source === "profile" ? "computer.usage.profileCutoff" : "computer.usage.asOf", { time: asOfTime(view.asOf) })}</time></p>}
           <p>{t("computer.usage.sourceTimes", {
             github: snapshot?.github?.asOf != null ? asOfTime(snapshot.github.asOf) : t("computer.usage.unavailable"),
@@ -261,12 +261,13 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
           })}</p>
         </InfoHint>}
         <Select size="lg" aria-label={t("computer.usage.activitySource")} value={source}
-          onChange={event => setSource(event.target.value as "repositories" | "profile")} className="ml-auto max-w-full">
+          onChange={event => setSource(event.target.value as "repositories" | "profile" | "merged")} className="ml-auto max-w-full">
           <option value="repositories">{t("computer.usage.repositoryActivity")}</option>
           <option value="profile">{t("computer.usage.profileReferences")}</option>
+          <option value="merged">{t("computer.usage.mergedActivity")}</option>
         </Select>
       </header>
-      <p data-usage-metric-definition className="mb-3 text-[13px] text-ink-secondary">{t(source === "profile" ? "computer.usage.githubDateBasis" : "computer.usage.repositoryScope")}</p>
+      <p data-usage-metric-definition className="mb-3 text-[13px] text-ink-secondary">{t(source === "profile" ? "computer.usage.githubDateBasis" : source === "merged" ? "computer.usage.mergedDateBasis" : "computer.usage.repositoryScope")}</p>
       {snapshot === null ? <p role="status" className="text-[14px] text-ink-secondary">{t("computer.usage.loading")}</p> : null}
       {view?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
       {windows && <>
@@ -293,7 +294,7 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
           </div>
           <UsageDailyTable days={view.trend} />
         </section>
-        <UsageRepositoryTable windows={windows} />
+        <UsageRepositoryTable key={`${source}:${range}`} windows={windows} historyWindow={view.sixtyDayRepositories} defaultPeriod={range === "60" ? "60" : "1"} />
       </>}
       {snapshot && <ProfileReferences snapshot={snapshot} />}
     </div>

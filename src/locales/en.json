@@ -10286,6 +10286,10 @@
   "computer.usage.observedCountHint": "Observed count. Some configured sources or dates are incomplete; this is not a GitHub Profile total.",
   "computer.usage.activitySource": "Activity source",
   "computer.usage.repositoryActivity": "Repository activity",
+  "computer.usage.mergedActivity": "Remote PR records",
+  "computer.usage.mergedDateBasis": "Configured GitHub, enterprise and ADO PR records, dated by PR creation in China time. Commits are those attached to these PRs, deduplicated under this source definition; they are neither all repository Git commits nor GitHub Profile contributions. Missing sources or dates remain incomplete.",
+  "computer.usage.mergedPrHint": "Observed PR creations from configured remote sources, dated in China time. Separate from local repository observations and Profile-qualified references.",
+  "computer.usage.mergedCommitHint": "Observed commits attached to configured remote PR records, deduplicated by this source. Not local all-branch Git commits or GitHub Profile commit contributions.",
   "computer.usage.profileCutoff": "Requested cutoff {time} China time; day buckets are not instant-bounded",
   "computer.usage.sourceTimes": "GitHub requested cutoff: {github}. Repository/Token observation: {local}."
 }

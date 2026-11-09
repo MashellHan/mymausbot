@@ -12,11 +12,11 @@ import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 const now = Date.parse("2026-11-09T08:24:11Z");
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await removeTempDir(folder); });
-function syntheticCapture() {
+function syntheticCapture(days = 7) {
   return JSON.parse(execFileSync("python3", ["-c", [
     "import json,runpy,sys; sys.path.insert(0,'scripts')",
     "fixture=runpy.run_path('scripts/local_usage_github.test.py')",
-    "print(json.dumps(fixture['collect']()))",
+    `print(json.dumps(fixture['collect'](days=${days})))`,
   ].join("; ")], { encoding: "utf8" }));
 }
 async function fixture() {
@@ -186,4 +186,24 @@ describe("GitHub Profile source contract", () => {
     await writeFile(file, JSON.stringify(fresh));
     expect((await createLocalUsageGithubReader(file, () => now + 86_400_000)())!.status).toBe("stale");
   });
+});
+
+
+it("reads an explicit sixty-day Profile operation while preserving unknown exact counts and seven-day compatibility", async () => {
+  const { file, read } = await fixture(), raw = syntheticCapture(60);
+  raw.capturedAt = raw.asOfAt;
+  await writeFile(file, JSON.stringify(raw));
+  const result = await read();
+  expect(result!.history!.filter(row => row.coverage !== "unavailable")).toHaveLength(60);
+  expect(result!.history!.find(row => row.day === "2026-09-11")).toMatchObject({ coverage: "partial", prs: null, commits: null, knownPrs: 0, knownCommits: 0, repositories: { coverage: "partial" } });
+  expect(result!.windows!["7"].comparison).toMatchObject({ prs: null, commits: null });
+  expect(result!.windows!["7"].repositories.rows[0]).toMatchObject({ knownCommits: 107 });
+  expect(result!.sixtyDayRepositories).toMatchObject({ startDay: "2026-09-11", endDay: "2026-11-09",
+    repositories: { coverage: "partial", rows: [{ prs: null, commits: null, knownCommits: 107 }] } });
+  const short = syntheticCapture();short.capturedAt = short.asOfAt;
+  await writeFile(file, JSON.stringify(short));
+  expect((await read())!.windows!["7"]).toMatchObject({ knownPrs: result!.windows!["7"].knownPrs, knownCommits: result!.windows!["7"].knownCommits, comparison: { prs: null, commits: null } });
+  raw.operationWindow.startDay = "2026-10-11";
+  await writeFile(file, JSON.stringify(raw));
+  expect(await createLocalUsageGithubReader(file, () => now)()).toBeUndefined();
 });
