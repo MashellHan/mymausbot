@@ -197,7 +197,7 @@ describe("Bookkeeping Manager local ledger views", () => {
     trigger.blur();
     app.click("coverage-info");
     expect(popover.hasAttribute("hidden")).toBe(false);
-    app.view.document.body.dispatchEvent(new app.view.Event("pointerdown", { bubbles: true }) as unknown as Event);
+    app.view.document.body.dispatchEvent(new app.view.Event("pointerdown", { bubbles: true }));
     expect(popover.hasAttribute("hidden")).toBe(true);
     app.unknownDates(); app.changed();
     await app.view.happyDOM.whenAsyncComplete();
