@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Shanghai")
 DAY = dt.timedelta(days=1)
+MAX_HISTORY_DAYS = 191
 MAX_SOURCES = 24
 MAX_PAGES = 10
 MAX_ITEMS = 1000
@@ -64,7 +65,7 @@ def stamp(value):
 
 def window(at):
     day = at.astimezone(TZ).date()
-    first = day - 59 * DAY
+    first = day - (MAX_HISTORY_DAYS - 1) * DAY
     start = dt.datetime.combine(first, dt.time.min, TZ).astimezone(dt.timezone.utc)
     return start, first.isoformat()
 
@@ -403,11 +404,12 @@ def refresh(config, monitor, run, *, file=None, at=None, ado_request=None, skip_
     for key, provider, category, collect in jobs:
         base = {"id": key, "provider": provider, "category": category, "items": []}
         old = prior.get(key, base)
+        old = {**old, "startDay": old.get("startDay", previous.get("windowStartDay", start_day))}
         if skip_api:
             source = {**old, "status": "stale" if old.get("capturedAt") else "unavailable"}
         else:
             try:
-                source = {**base, "status": "ready", "capturedAt": stamp(at), "items": collect(old)}
+                source = {**base, "status": "ready", "capturedAt": stamp(at), "startDay": start_day, "items": collect(old)}
             except PartialResult as error:
                 retained = {item["key"]: item for item in old.get("items", []) if isinstance(item, dict) and isinstance(item.get("key"), str)}
                 retained.update((item["key"], item) for item in error.items)
@@ -416,6 +418,7 @@ def refresh(config, monitor, run, *, file=None, at=None, ado_request=None, skip_
             except (OSError, subprocess.SubprocessError, KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
                 source = {**old, "status": "stale" if old.get("capturedAt") else "unavailable", "errorCode": type(error).__name__}
         try:
+            source["startDay"] = max(start_day, dt.date.fromisoformat(source.get("startDay", start_day)).isoformat())
             source["items"] = [item for item in source.get("items", []) if start <= instant(item["at"]) < at]
         except (KeyError, TypeError, ValueError):
             source = {**base, "status": "unavailable", "errorCode": "InvalidCache"}

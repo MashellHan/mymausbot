@@ -188,7 +188,15 @@ integration runs, reads result artifacts as data, and records execution
 completeness, outcomes and report delivery separately. Report artifacts are
 retained for 30 days and raw test results for seven days.
 
-Defects are keyed by contract and platform, not commit. The reporter updates
+Report one shared spelling or naming problem in one issue, listing every affected
+file, case and platform. Update that issue on repeat findings; do not file one
+issue per file. The runner identifies product-name-only assertion mismatches from
+the full string assertion values, before Vitest shortens the displayed message.
+Formatted objects are not evidence of a name-only difference. Other
+shared causes require confirmed evidence before grouping. Every affected case
+still needs positive complete-execution evidence without retries.
+
+Other defects are keyed by contract and platform, not commit. The reporter updates
 or reopens an existing issue, preserves triage text, and groups demonstrated
 common dependency setup failures. Failed preflight or a workflow with no jobs
 has one incident listing dependent jobs. A later complete run must positively

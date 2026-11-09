@@ -9,6 +9,7 @@ import type {
 } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
 import { createLocalUsageMergedReader } from "./local-usage-merged.ts";
+import { MAX_USAGE_HISTORY_DAYS } from "../shared/local-usage-range.ts";
 
 const CATEGORIES: LocalUsageCategory[] = ["work", "personal", "unclassified"];
 const WINDOWS = [1, 7, 30] as const;
@@ -206,8 +207,8 @@ function tokenComparisonReady(window: LocalUsageWindow, sources: LocalUsageSourc
 
 function trend(window: LocalUsageWindow, daily: Map<string, DailyRow>, sources: LocalUsageSourceCoverage,
   activityScopeReady: boolean, tokenScopeReady: boolean, prs: LocalUsagePrSourceCoverage, prComplete: boolean,
-  prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>): LocalUsageTrendDay[] {
-  return Array.from({ length: 30 }, (_, index) => {
+  prCoverage: Record<LocalUsageCategory, "ready" | "partial">, observedCategories: Set<LocalUsageCategory>, span = 30): LocalUsageTrendDay[] {
+  return Array.from({ length: span }, (_, index) => {
     const day = offsetDay(window.startDay, index);
     const current = buildWindow(1, day, window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories);
     const previous = buildWindow(1, offsetDay(day, -7), window.asOf, daily, sources, prs, prComplete, prCoverage, observedCategories);
@@ -435,8 +436,51 @@ function project(raw: unknown, now: number): LocalUsageResponse {
   }
   const stale = chinaDay(now) !== endDay || now - asOf > STALE_AFTER_MS;
   const status = stale ? "stale" : snapshot.status === "ready" && windows["30"].coverage === "ready" ? "ready" : "partial";
+  const recentTrend = trend(windows["30"], daily, sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories);
+  const baseline = trend({ ...windows["30"], startDay: offsetDay(endDay, -59) }, comparisonDaily,
+    sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories, 60);
+  const history = tokenHistory(snapshot.trendHistory, endDay, recentTrend, baseline);
   return { status, asOf, timeZone: "Asia/Shanghai", sourceCoverage: sources, prSourceCoverage: prs,
-    prCoverage, windows, trend: trend(windows["30"], daily, sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories) };
+    prCoverage, windows, trend: recentTrend, history };
+}
+
+function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[], baseline: LocalUsageTrendDay[]): LocalUsageTrendDay[] {
+  const result = new Map<string, LocalUsageTrendDay>();
+  try {
+    if (raw !== undefined) {
+      const data = object(raw);
+      if (data.version !== 1 || !Array.isArray(data.daily) || data.daily.length > MAX_USAGE_HISTORY_DAYS) throw new Error("Invalid token history");
+      for (const value of data.daily) {
+        const row = object(value), day = row.day;
+        dayNumber(day);
+        if (typeof day !== "string" || day < offsetDay(endDay, 1 - MAX_USAGE_HISTORY_DAYS) || day > endDay || result.has(day)
+          || !["ready", "partial", "unavailable"].includes(String(row.tokenStatus))) throw new Error("Invalid token history day");
+        const missing = row.tokenStatus === "unavailable";
+        const newTokens = missing && row.newTokens === null ? null : count(row.newTokens);
+        const cacheRead = missing && row.cacheRead === null ? null : count(row.cacheRead);
+        const totalTokens = missing && row.totalTokens === null ? null : count(row.totalTokens);
+        if (missing ? [newTokens, cacheRead, totalTokens].some((value) => value !== null)
+          : newTokens === null || cacheRead === null || totalTokens !== sum([newTokens, cacheRead])) throw new Error("Invalid token history accounting");
+        const empty = () => ({ prs: null, knownPrs: null, commits: null });
+        result.set(day, { day, coverage: "unavailable", tokenStatus: row.tokenStatus as LocalUsageTokenStatus,
+          ...empty(), newTokens, cacheRead, totalTokens, categories: { work: empty(), personal: empty(), unclassified: empty() },
+          wow: { prs: null, commits: null, newTokens: null, totalTokens: null } });
+      }
+    }
+  } catch { result.clear(); }
+  for (const row of [...baseline, ...recent]) {
+    const known = result.get(row.day);
+    result.set(row.day, row.tokenStatus === "unavailable" && known && known.tokenStatus !== "unavailable"
+      ? { ...row, tokenStatus: "partial", newTokens: known.newTokens, cacheRead: known.cacheRead, totalTokens: known.totalTokens,
+        wow: { ...row.wow, newTokens: null, totalTokens: null } } : row);
+  }
+  for (const row of result.values()) {
+    if (recent.some((recent) => recent.day === row.day)) continue;
+    const previous = result.get(offsetDay(row.day, -7));
+    if (row.tokenStatus === "ready" && previous?.tokenStatus === "ready") row.wow = { ...row.wow,
+      newTokens: weekChange(row.newTokens, previous.newTokens), totalTokens: weekChange(row.totalTokens, previous.totalTokens) };
+  }
+  return [...result.values()].sort((a, b) => a.day.localeCompare(b.day));
 }
 
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",

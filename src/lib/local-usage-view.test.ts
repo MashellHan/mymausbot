@@ -29,6 +29,55 @@ function fixture(endDay = "2026-11-06"): LocalUsageResponse {
 }
 
 describe("merged Usage view", () => {
+  it.each(["ready", "partial"] as const)("retains %s tokens only in long ranges when a recent row becomes unavailable", (tokenStatus) => {
+    const snapshot = fixture("2026-11-09"), date = "2026-11-01", missing = "2026-11-02";
+    const known = { ...snapshot.trend.find((row) => row.day === date)!, tokenStatus, newTokens: 100, cacheRead: 20, totalTokens: 120 };
+    snapshot.trend = snapshot.trend.map((row) => [date, missing].includes(row.day)
+      ? { ...row, tokenStatus: "unavailable", newTokens: null, cacheRead: null, totalTokens: null,
+        wow: { ...row.wow, newTokens: null, totalTokens: null } } : row);
+    const baseline = localUsageView(snapshot);
+    snapshot.history = [known, { ...known, day: "2026-11-08", totalTokens: 999 }];
+    for (const range of ["60", "90", "6m"] as const) {
+      const view = localUsageView(snapshot, range);
+      expect(view.trend.find((row) => row.day === date)).toMatchObject({ tokenStatus: "partial", newTokens: 100,
+        cacheRead: 20, totalTokens: 120, wow: { newTokens: null, totalTokens: null } });
+      expect(view.trend.find((row) => row.day === missing)).toMatchObject({ tokenStatus: "unavailable", totalTokens: null });
+      expect(view.trend.find((row) => row.day === "2026-11-08")).toMatchObject({ tokenStatus: "ready", totalTokens: 100 });
+      expect(view.windows).toEqual(baseline.windows);
+    }
+    expect(localUsageView(snapshot)).toEqual(baseline);
+    expect(snapshot.history[0]).toEqual(known);
+    expect(snapshot.history[0]?.tokenStatus).toBe(tokenStatus);
+  });
+
+  it("uses dated history for 60/90 days and calendar months without changing cards or inventing old zeroes", () => {
+    const snapshot = fixture("2026-11-09");
+    snapshot.history = snapshot.trend.map((row) => ({ ...row, day: shift(row.day, -60), totalTokens: 42 }));
+    snapshot.merged!.history = snapshot.merged!.trend.map((row) => ({ ...row, day: shift(row.day, -60) }));
+    const base = localUsageView(snapshot);
+    expect(localUsageView(snapshot, "60").trend).toHaveLength(60);
+    const long = localUsageView(snapshot, "90");
+    expect(long.trend).toHaveLength(90);
+    expect(long.trend[0]).toMatchObject({ day: "2026-08-12", totalTokens: 42, prs: 1, commits: 5 });
+    expect(long.trend.find((row) => row.day === "2026-09-11")).toMatchObject({ prs: null, knownPrs: null, commits: null, totalTokens: null });
+    expect(long.windows).toEqual(base.windows);
+    const months = localUsageView(snapshot, "6m");
+    expect(months.period).toEqual({ startDay: "2026-05-10", endDay: "2026-11-09", days: 184 });
+    expect(months.trend[0]).toMatchObject({ coverage: "unavailable", tokenStatus: "unavailable", totalTokens: null, prs: null, commits: null });
+    const legacy = fixture();
+    expect(localUsageView(legacy, "90").trend[0]).toMatchObject({ totalTokens: null, knownPrs: null, coverage: "unavailable" });
+  });
+
+  it("aligns differing extended capture dates by their real dates", () => {
+    const snapshot = fixture("2026-01-02");
+    snapshot.merged = fixture("2026-01-01").merged;
+    snapshot.history = [{ ...snapshot.trend[0]!, day: "2025-11-03", totalTokens: 321 }];
+    const long = localUsageView(snapshot, "60");
+    expect(long.trend[0]).toMatchObject({ day: "2025-11-03", totalTokens: 321, prs: null });
+    expect(long.trend.at(-1)).toMatchObject({ day: "2026-01-01", totalTokens: 100, prs: 1 });
+    expect(long.windows).toEqual(localUsageView(snapshot).windows);
+  });
+
   it("takes every PR and commit value and comparison from remote data while retaining cached tokens", () => {
     const snapshot = fixture();
     for (const window of Object.values(snapshot.windows!)) {
