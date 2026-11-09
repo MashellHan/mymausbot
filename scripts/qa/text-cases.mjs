@@ -1,21 +1,12 @@
-export function combineTextFindings(findings, issues, byKey, signature, stateOf) {
-  const owners = new Map();
-  for (const issue of issues) {
-    const state = stateOf(issue);
-    for (const key of state?.caseKeys ?? []) {
-      if (owners.has(key)) throw new Error(`Ambiguous QA text case ${key}`);
-      owners.set(key, state);
-    }
-  }
+export function combineTextFindings(findings, issues, byKey, signature) {
   const combined = new Map();
   for (const finding of findings) {
-    const owner = owners.get(finding.key);
-    const change = owner?.textChange ?? finding.textChange;
+    const change = finding.textChange;
     if (!change || byKey.has(finding.key) || issues.some((issue) => issue.body?.includes(`<!-- mausbot-qa:${finding.key} -->`))) {
       combined.set(finding.key, finding);
       continue;
     }
-    const key = owner?.key ?? signature(`text:${change.from}\0${change.to}`, "shared");
+    const key = signature(`text:${change.from}\0${change.to}`, "shared");
     if (!combined.has(key)) combined.set(key, { ...finding, key, contract: `Product name mismatch: ${change.from} / ${change.to}`,
       platform: "shared", file: undefined, textChange: change, cases: [] });
     combined.get(key).cases.push(finding);

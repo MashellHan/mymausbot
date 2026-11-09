@@ -191,7 +191,8 @@ retained for 30 days and raw test results for seven days.
 Report one shared spelling or naming problem in one issue, listing every affected
 file, case and platform. Update that issue on repeat findings; do not file one
 issue per file. The runner identifies product-name-only assertion mismatches from
-the full assertion values, before Vitest shortens the displayed message. Other
+the full string assertion values, before Vitest shortens the displayed message.
+Formatted objects are not evidence of a name-only difference. Other
 shared causes require confirmed evidence before grouping. Every affected case
 still needs positive complete-execution evidence without retries.
 

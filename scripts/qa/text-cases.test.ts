@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { deliverReport, signature, testFindings } from "./report.mjs";
+import { queueItems } from "./queue.mjs";
 
 const change = { from: "MausBot", to: "mymausbot" };
 const rootKey = signature(`text:${change.from}\0${change.to}`, "shared");
@@ -12,7 +13,7 @@ function finding(file = "src/menu.test.ts", platform = "linux") {
 }
 
 const report = (runId: number, findings: any[] = [], passed: string[] = [], executionComplete = true) => ({
-  runId, attempt: 1, sha: "a".repeat(40), finishedAt: "2026-11-09T01:00:00Z", url: `https://github.com/example/repo/actions/runs/${runId}`,
+  runId, attempt: 1, sha: "a".repeat(40), finishedAt: new Date(Date.UTC(2026, 10, 9, 1, runId)).toISOString(), url: `https://github.com/example/repo/actions/runs/${runId}`,
   findings, passed, executionComplete, deliveryComplete: false,
 });
 
@@ -64,7 +65,7 @@ describe("one issue per product naming problem", () => {
     expect(issue().labels).not.toContain("qa:verified");
     await deliverReport(report(3, [], keys, false), env);
     expect(issue().labels).not.toContain("qa:verified");
-    await deliverReport(report(4, [{ ...cases[0], textChange: undefined, kind: "flake", retries: 1 }], keys), env);
+    await deliverReport(report(4, [{ ...cases[0], kind: "flake", retries: 1 }], keys), env);
     expect(env.issues).toHaveLength(1);
     expect(issue().labels).not.toContain("qa:verified");
     await deliverReport(report(5, [], keys), env);
@@ -77,6 +78,28 @@ describe("one issue per product naming problem", () => {
     expect(env.issues).toHaveLength(1);
     expect(issue().state).toBe("open");
     expect(issue().labels).not.toContain("qa:verified");
+    await deliverReport(report(7, [], keys), env);
+    issue().labels = ["qa", "qa:scope:global", "qa:kind:product", "qa:p2", "owner:back", "qa:triaged", "qa:verified"];
+    const epoch = stateOf(issue()).triageEpoch;
+    await deliverReport(report(8, cases), env);
+    expect(issue().labels).toContain("qa:untriaged");
+    expect(issue().labels).not.toContain("qa:triaged");
+    expect(stateOf(issue()).triageEpoch).not.toBe(epoch);
+  });
+
+  it("does not absorb a later behavior failure or an unproven retry because its case was previously grouped", async () => {
+    for (const kind of ["product", "flake"]) {
+      const env = fixture(), original = finding();
+      await deliverReport(report(1, [original]), env);
+      const unrelated = { ...original, textChange: undefined, kind, assertion: "Expected 403, received 200", retries: kind === "flake" ? 1 : 0 };
+      await deliverReport(report(2, [unrelated]), env);
+      await deliverReport(report(3, [unrelated]), env);
+      expect(env.issues).toHaveLength(2);
+      expect(stateOf(env.issues[0]).key).toBe(rootKey);
+      expect(env.issues[0].body).not.toContain("Expected 403");
+      expect(stateOf(env.issues[1]).key).toBe(original.key);
+      expect(env.issues[1].body).toContain("Expected 403");
+    }
   });
 
   it("leaves unrelated failures separate and retries partial delivery without duplicate issues", async () => {
@@ -112,6 +135,8 @@ describe("one issue per product naming problem", () => {
     expect(issues[2].labels).not.toContain("qa:verified");
     await deliverReport(report(4, [], [...keys, added.key]), env);
     expect(issues[2].labels).toContain("qa:verified");
+    const epoch = issues[2].body.match(/"triageEpoch":"([^"]+)"/)[1];
+    const before = queueItems([issues[2]], [], Date.parse(report(4).finishedAt))[0].key;
     let writes = 0;
     const interrupted = async (path: string, options?: any) => {
       if (path === "/issues/3" && ++writes === 2) throw new Error("summary unavailable");
@@ -121,5 +146,7 @@ describe("one issue per product naming problem", () => {
     await deliverReport(report(5, [added]), env);
     expect(issues[2].labels).not.toContain("qa:verified");
     expect(issues[2].body).toContain('"runId":5');
+    expect(issues[2].body.match(/"triageEpoch":"([^"]+)"/)[1]).not.toBe(epoch);
+    expect(queueItems([issues[2]], [], Date.parse(report(5).finishedAt))[0].key).not.toBe(before);
   });
 });

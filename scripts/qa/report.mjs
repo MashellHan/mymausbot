@@ -177,16 +177,17 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     Object.assign(issue, patch);
     changedKeys.add(stateOf(issue).key);
   };
-  const findings = combineTextFindings(report.findings, issues, byKey, signature, stateOf);
+  const findings = combineTextFindings(report.findings, issues, byKey, signature);
   for (const finding of findings) {
     const issue = issues.find((entry) => entry.body?.includes(marker(finding.key)));
     const grouped = byKey.has(finding.key);
     const previous = issue ? stateOf(issue) : null;
+    const recurrence = issue && !grouped && (issue.state === "closed" || issueLabels(issue).includes("qa:verified"));
     const runKey = `${report.runId}:${report.attempt}`;
     if (!newerThan(report, previous)) continue;
     const area = finding.cases ? "global" : policy.areas.find((entry) => entry.tests.includes(finding.file))?.id ?? "global";
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
-      triageEpoch: !issue || issue.state === "closed" && !grouped ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
+      triageEpoch: !issue || recurrence ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
       lastExecution: runKey, lastExecutionAt: report.finishedAt,
       ...(finding.cases ? { textChange: finding.textChange, verified: false,
         caseKeys: [...new Set([...(previous?.caseKeys ?? []), ...(groups.find((group) => group.parent === issue)?.keys ?? []), ...finding.cases.map((entry) => entry.key)])] } : {}),
@@ -195,7 +196,7 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     const defaults = ["qa", "qa:untriaged", `qa:kind:${finding.kind}`, `qa:scope:${area}`, "owner:lead"];
     if (issue) {
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified");
-      await update(issue, { body, ...(!grouped ? { state: "open" } : {}), labels: issue.state === "closed" && !grouped ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
+      await update(issue, { body, ...(!grouped ? { state: "open" } : {}), labels: recurrence ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
     } else {
       const created = await api("/issues", { method: "POST", body: { title: `[QA] ${sanitize(finding.contract).slice(0, 150)} (${sanitize(finding.platform).slice(0, 35)})`, body, labels: defaults } });
       issues.push(created);

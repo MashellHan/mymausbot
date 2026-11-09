@@ -181,13 +181,15 @@ describe("the runner", () => {
       'it("contains", () => expect("<section>" + "x".repeat(100) + "Fully quit mymausbot</section>").toContain("Fully quit MausBot"));',
       'it("object", () => expect({name: "mymausbot", version: 2}).toEqual({name: "MausBot", version: 2}));',
       'it("auth", () => expect(200).toBe(403));',
+      'it("literal operation", () => expect("choose to include mymausbot").toBe("MausBot"));',
+      'it("hidden behavior", () => { const deep = (value) => Array.from({length: 25}).reduce((nested) => ({nested}), value); expect({name: "mymausbot", data: deep(403)}).toEqual({name: "MausBot", data: deep(200)}); });',
     ].join("\n"));
     const { output, code } = await vitest(directory, { CI: undefined });
     expect(code).toBe(1);
     const data = JSON.parse(output.slice(output.indexOf("{"), output.lastIndexOf("}") + 1));
     const cases = data.testResults[0].assertionResults;
     expect(cases.map((entry: any) => entry.meta.qaTextChange)).toEqual([
-      { from: "MausBot", to: "mymausbot" }, { from: "MausBot", to: "mymausbot" }, { from: "MausBot", to: "mymausbot" }, undefined,
+      { from: "MausBot", to: "mymausbot" }, { from: "MausBot", to: "mymausbot" }, undefined, undefined, undefined, undefined,
     ]);
     expect(cases.every((entry: any) => entry.status === "failed")).toBe(true);
   }, 60_000);

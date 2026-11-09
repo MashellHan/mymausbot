@@ -49,7 +49,8 @@ export async function refreshQaGroups(groups, changedKeys, report, api) {
     const previous = JSON.parse(parent.body.match(/<!-- mausbot-qa-group-report (.+) -->/)?.[1] ?? "null");
     const source = previous && (previous.runId > report.runId || previous.runId === report.runId && previous.attempt > report.attempt)
       ? previous : { runId: report.runId, attempt: report.attempt, sha: report.sha, url: report.url };
-    const latest = { ...source, triageEpoch: recurrence ? report.finishedAt : previous?.triageEpoch ?? parent.created_at ?? report.finishedAt };
+    const epoch = [direct?.triageEpoch, previous?.triageEpoch].filter(Boolean).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+    const latest = { ...source, triageEpoch: recurrence ? report.finishedAt : epoch ?? parent.created_at ?? report.finishedAt };
     const summary = ["<!-- mausbot-qa-group-status:start -->",
       `<!-- mausbot-qa-group-report ${JSON.stringify(latest)} -->`,
       `Verified member cases: ${verified.length}/${members.length}. Pending cases remain tracked by this issue.`,
