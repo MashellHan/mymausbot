@@ -243,9 +243,14 @@ age kept as diagnostic. One cached Ubuntu static/setup path retains typecheck,
 lint and source guards, then runs the 26-file security/data/dispatch core and
 at most four portable affected files. Record deferred affected files, including
 expensive browser and Electron tests. The `ci:full`, `qa:repair` and `windows`
-labels request explicit wider checks.
-Long platform, Electron, browser, full E2E and packaging checks belong to the
-applicable post-integration, daily 05:00 and release lanes. Actual failed required work remains a quality incident. Timing overruns and
+labels request full macOS checks; `windows` is a legacy request name and
+selects no Windows test runner. Full validation uses four macOS all-E2E shards
+and macOS specialist jobs, collecting portable contracts previously covered on
+Ubuntu. Windows/Ubuntu full tests and platform smokes are retired; platform
+build/resource/signing/publication integrity checks retain their own boundaries.
+Electron unit checks precede the long Vitest block, and broker tests run once
+in the control-plane job. Long checks belong to the applicable post-integration,
+daily 05:00 and release lanes. Actual failed required work remains a quality incident. Timing overruns and
 other process targets are advisory scan cases; successful validation remains
 green. Use the independent process scan and existing Lead queue, without
 blocking merges or delivery on process metadata or elapsed time. Current-head
@@ -255,13 +260,16 @@ The existing Lead owns review and CI follow-through while local delivery and
 independent development continue.
 
 The automated QA runner is the existing CI full lane, once daily at 05:00
-Asia/Shanghai. It does not need another persistent model. Its trusted reporter
+Asia/Shanghai, using the full macOS selection. It does not need another
+persistent model. Its trusted reporter records the selected platform policy and
 files deduplicated issues;
 the hourly queue hands actionable work to mausbot-lead. Lead acknowledges,
 targets triage within thirty minutes, assigns an existing developer/maintainer and sets
 priority, scope, classification, next action and due date. Reviewer reviews fixes;
-QA verifies after integration; Lead closes with evidence. Read the mechanism
-for hold/repair boundaries and rollback. Shadow mode preserves existing checks;
+QA verifies after integration; Lead closes with evidence. Retiring a platform
+does not verify its old failures. Refresh the existing pinned hourly queue to
+the accepted merged QA contracts without changing its cadence or state. Read
+the mechanism for hold/repair boundaries and rollback. Shadow mode preserves existing checks;
 admission requires the documented pilot evidence.
 
 ## Upstream integration

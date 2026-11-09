@@ -1,13 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { EVALS_LANE, PACKAGED_SERVER_LANE, vitestLane } from "./ci-linux-lanes.mjs";
-import { SELECTABLE_JOBS, vitestMatrix } from "./ci-scope.mjs";
+import { SELECTABLE_JOBS, ciOutputs, LINUX_OS, vitestMatrix } from "./ci-scope.mjs";
 import { interpolate } from "./testing/github-expression.ts";
 import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-const requiredRuntimeJobs = ["vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "relay"];
+const requiredRuntimeJobs = ["vitest", "behavior-evals", "electron-smokes", "control-plane", "relay"];
 const prContext = (action: string | null, label: string | null, { number = 134, base = "a".repeat(40), head = "b".repeat(40), baseRef = "main", runId = 42 }: {
   number?: number | null; base?: string | null; head?: string | null; baseRef?: string; runId?: number;
 } = {}) => ({ github: { event_name: "pull_request", event: { action, label: label === null ? null : { name: label },
@@ -143,27 +142,25 @@ describe("CI concurrency", () => {
     expect(run.env?.OMB_VITEST_E2E).toBe("${{ matrix.e2e }}");
     expect(run.env?.OMB_VITEST_SUBSET).toBe("${{ matrix.files }}");
     expect(run.env?.OMB_VITEST_WORKERS).toBe("${{ matrix.workers }}");
-    const { include } = vitestMatrix(["macos-latest", "ubuntu-latest", "windows-latest"]);
-    for (const os of ["macos-latest", "ubuntu-latest", "windows-latest"]) {
-      const shards = include.filter((entry) => entry.os === os);
-      expect(shards.map((entry) => entry.shard)).toEqual(Array.from({ length: shards[0]!.shards }, (_, i) => i + 1));
-      expect(new Set(shards.map((entry) => entry.e2e))).toEqual(new Set([os === "ubuntu-latest" ? "all" : "host"]));
-    }
-    const units = (workflow.jobs.vitest.steps as { name?: string; if?: string; "timeout-minutes"?: number }[]).find((step) => step.name === "Broker and Electron unit tests")!;
+    const { include } = vitestMatrix(["macos-latest"]);
+    expect(include.map((entry) => entry.shard)).toEqual([1, 2, 3, 4]);
+    expect(include.every((entry) => entry.e2e === "all")).toBe(true);
+    const units = (workflow.jobs.vitest.steps as { name?: string; if?: string; run?: string; "timeout-minutes"?: number }[]).find((step) => step.name === "Electron unit tests")!;
     expect(units["timeout-minutes"]).toBe(5);
-    // Once per platform's full run, and beside the locale tests, never once per shard.
+    expect(units.run).toBe("pnpm test:electron");
     expect(units.if).toBe("matrix.node_tests");
-    // Browser jobs keep one job per platform, and the packaged server one per platform without the macOS smokes.
+    expect(workflow.jobs.vitest.steps.indexOf(units)).toBeLessThan(workflow.jobs.vitest.steps.indexOf(run));
+    expect(workflow.jobs["control-plane"].steps.filter((step: { run?: string }) => step.run === "pnpm broker:test")).toHaveLength(1);
+    expect(workflow.jobs.vitest.steps.some((step: { run?: string }) => step.run?.includes("broker:test"))).toBe(false);
     expect(workflow.jobs["browser-identity"].strategy.matrix.os).toBe("${{ fromJSON(needs.static.outputs.vitest_os) }}");
     expect(workflow.jobs["browser-driver"].strategy.matrix.os).toBe("${{ fromJSON(needs.static.outputs.vitest_os) }}");
-    expect(workflow.jobs["packaged-server"].strategy.matrix.os).toBe("${{ fromJSON(needs.static.outputs.packaged_server_os) }}");
+    expect(workflow.jobs["packaged-server"]).toBeUndefined();
   });
 
-  it("keeps each PR to one macOS job", () => {
-    const macosJobs = Object.entries(workflow.jobs as Record<string, { "runs-on": string; strategy?: { matrix?: { os?: unknown } } }>)
-      .filter(([, job]) => job["runs-on"] === "macos-latest" || JSON.stringify(job.strategy?.matrix?.os ?? "").includes("macos"))
-      .map(([name]) => name);
-    expect(macosJobs.sort()).toEqual(["electron-smokes"]);
+  it("keeps the ordinary PR fast selection on Ubuntu and the packaged smoke in macOS full", () => {
+    const ordinary = ciOutputs({ checks: ["build"] }, LINUX_OS);
+    expect(ordinary.jobs).toEqual([]);
+    expect(ordinary.vitest_os).toEqual(["ubuntu-latest"]);
     const smokes = workflow.jobs["electron-smokes"].steps.map((step: { run?: string }) => step.run);
     expect(smokes).toContain("pnpm test:packaged-server");
   });
@@ -361,13 +358,14 @@ describe("CI concurrency", () => {
         expect(check.env).toEqual({ CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}" });
         expect(check.run).toContain("::warning");
         for (const step of rest) expect(step.if).toBe("steps.token.outputs.present == 'true'");
-        // The broker is typechecked and tested in the same checkout it deploys.
+        // The required control-plane dependency checked and tested this exact checkout.
         const runs = rest.map((step) => step.run);
-        const deploy = rest.findIndex((step) => (step as { uses?: string }).uses?.startsWith("cloudflare/wrangler-action@"));
-        expect(runs.indexOf("pnpm broker:check")).toBeGreaterThan(-1);
-        expect(runs.indexOf("pnpm broker:check")).toBeLessThan(deploy);
-        expect(runs.indexOf("pnpm broker:test")).toBeGreaterThan(-1);
-        expect(runs.indexOf("pnpm broker:test")).toBeLessThan(deploy);
+        expect(runs).not.toContain("pnpm broker:check");
+        expect(runs).not.toContain("pnpm broker:test");
+        const checked = workflow.jobs["control-plane"].steps.map((step: { run?: string }) => step.run);
+        expect(checked).toContain("pnpm broker:check");
+        expect(checked).toContain("pnpm broker:test");
+        expect(checked.indexOf("pnpm broker:check")).toBeLessThan(checked.indexOf("pnpm broker:test"));
         continue;
       }
       expect(job.needs).toBe("static");
@@ -415,13 +413,13 @@ describe("CI on Boat", () => {
     name: interpolate(workflow.jobs.static.name, context),
     timeout: interpolate(String(workflow.jobs.static["timeout-minutes"]), context),
   });
-  const boat = { runsOn: "boat-xlarge", name: "typecheck + lint + Linux tests (Boat)", timeout: 45 };
+  const boat = { runsOn: "boat-xlarge", name: "typecheck + lint (Boat)", timeout: 45 };
   const github = (timeout: number) => ({ runsOn: "ubuntu-latest", name: "typecheck + lint", timeout });
 
   it.each([
     ["the owner's push to main", { event: "push" }],
     ["a merge group the owner queued", { event: "merge_group" }],
-  ])("runs the static job, with the Linux work, on one Boat VM for %s", (_, run) => {
+  ])("runs static source checks on one Boat VM for %s", (_, run) => {
     expect(routed(runContext(run))).toEqual(boat);
   });
 
@@ -460,19 +458,10 @@ describe("CI on Boat", () => {
     expect(boatOnly.at(-2)).toEqual({ ...upload, if: "failure() && steps.scope.outputs.linux_lanes" });
   });
 
-  it("runs on Boat exactly the commands the Linux jobs run on GitHub's runners", () => {
-    const steps = (job: string) => workflow.jobs[job].steps as Step[];
-    const work = (job: string) => steps(job).filter((step) => step.run && step.run !== "pnpm install --frozen-lockfile").map((step) => step.run);
-    for (const entry of vitestMatrix(["ubuntu-latest"]).include.slice(0, 2)) {
-      const context = { matrix: entry, runner: { temp: "/t" }, github: { workspace: "/w" } };
-      const tests = steps("vitest").find((step) => step.name === "Run tests")!;
-      const units = steps("vitest").find((step) => step.name === "Broker and Electron unit tests")!;
-      const lane = vitestLane(entry, "/w/qa-results/vitest-retries.jsonl");
-      expect(lane.commands).toEqual([interpolate(tests.run!, context), ...(entry.node_tests ? [units.run] : [])]);
-      expect(lane.env).toEqual(Object.fromEntries(Object.entries(tests.env!).map(([key, value]) => [key, interpolate(value, context)])));
-    }
-    expect(EVALS_LANE.commands).toEqual(work("behavior-evals"));
-    expect(PACKAGED_SERVER_LANE.commands).toEqual(work("packaged-server"));
+  it("does not run retired full Linux lanes on Boat", () => {
+    expect(workflow.jobs.static.steps.some((step: Step) => step.run === "node scripts/ci-linux-lanes.mjs" && !step.if)).toBe(false);
+    expect(workflow.jobs["behavior-evals"]["runs-on"]).toBe("macos-latest");
+    expect(workflow.jobs["control-plane"]["runs-on"]).toBe("macos-latest");
   });
 
   it("starts Boat VMs from no other workflow", () => {

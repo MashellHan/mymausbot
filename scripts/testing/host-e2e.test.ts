@@ -21,7 +21,7 @@ describe("the e2e files every host runs", () => {
 
   it("include every e2e file with a test that Linux skips", () => {
     const missing = portableE2eFiles(ROOT, INCLUDE).filter((file) => SKIPPED_ON_LINUX.test(readFileSync(path.join(ROOT, file), "utf8")));
-    expect(missing, "add these to HOST_E2E in scripts/testing/host-e2e.ts, with what they check that Linux cannot").toEqual([]);
+    expect(missing, "add these to HOST_E2E in scripts/testing/host-e2e.ts, with their host-specific behavior").toEqual([]);
   });
 
   it("recognises the ways a test is skipped on Linux", () => {

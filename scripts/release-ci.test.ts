@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { VITEST_SHARDS } from "./ci-scope.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, VITEST_SHARDS } from "./ci-scope.mjs";
+import { expectedJobs, MERGE_JOBS } from "./qa/contracts.mjs";
 import { githubApi, judgeRun, waitForReleaseCi } from "./release-ci.mjs";
 
 const SHA = "a".repeat(40);
@@ -10,7 +11,7 @@ const TREE = "1".repeat(40);
 const PARENT_TREE = "2".repeat(40);
 
 type Step = { status?: string; conclusion?: string | null };
-type Job = { name: string; conclusion: string | null; steps?: Step[] };
+type Job = { name: string; conclusion: string | null; status?: string; run_attempt?: number; steps?: Step[] };
 type Run = {
   id: number; event: string; status: string; head_branch: string; head_sha: string; created_at: string;
   run_attempt?: number; head_commit?: { tree_id: string };
@@ -19,13 +20,20 @@ type Commit = { tree: string; parents: string[]; files: string[] };
 
 const started: Step[] = [{ status: "completed", conclusion: "success" }];
 const vitest = (os: string, conclusion: string | null, steps: Step[] = started, shard = 1): Job =>
-  ({ name: `vitest (${os}, shard ${shard}/${VITEST_SHARDS[os as keyof typeof VITEST_SHARDS]})`, conclusion, steps });
+  ({ name: `vitest (${os}, ${os === "macos-latest" ? "all " : ""}shard ${shard}/${VITEST_SHARDS[os as keyof typeof VITEST_SHARDS]})`, conclusion, steps });
 const shards = (os: string): Job[] =>
   Array.from({ length: VITEST_SHARDS[os as keyof typeof VITEST_SHARDS] }, (_, i) => vitest(os, "success", started, i + 1));
-const gate = (conclusion: string | null): Job => ({ name: "CI", conclusion, steps: started });
-/** Every platform's every vitest shard ran and passed, and so did the gate: the full lane. */
-const green = (): Job[] => [gate("success"), ...Object.keys(VITEST_SHARDS).flatMap(shards)];
-/** A push to main or a merge group: the gate and every Linux shard passed, nothing else ran. */
+const gate = (conclusion: string | null): Job => ({ name: "CI", status: "completed", conclusion, run_attempt: 1, steps: started });
+const fullSelection = ciOutputs(FULL_SCOPE, ALL_OS);
+const fullExpected = expectedJobs(fullSelection);
+const planFor = (run: Run, full = true) => {
+  const selection = full ? fullSelection : ciOutputs(MAIN_SCOPE, ALL_OS);
+  return { version: 1, runId: run.id, attempt: run.run_attempt ?? 1, sha: run.head_sha,
+    ...(run.event === "push" || run.event === "merge_group" ? { plan: { full, candidate: false, admitted: false, reduced: false, scope: full ? FULL_SCOPE : MAIN_SCOPE } } : {}),
+    outputs: { ...selection, full_required: full, reduced: false, qa_areas: ["global"],
+      required_jobs: selection.jobs.filter((id) => MERGE_JOBS.includes(id)), expected_jobs: expectedJobs(selection, full) } };
+};
+const green = (): Job[] => [gate("success"), ...fullExpected.map((item) => ({ name: item.name, conclusion: "success", status: "completed", run_attempt: 1, steps: started }))];
 const mainLane = (): Job[] => [gate("success"), ...shards("ubuntu-latest")];
 /** A docs- or version-only run: the gate passes with vitest skipped. */
 const scoped = (): Job[] => [gate("success"), { name: "vitest (${{ matrix.os }}, shard ${{ matrix.shard }}/4)", conclusion: "skipped", steps: [] }];
@@ -39,7 +47,7 @@ const pkg = (version: string, extra: Record<string, unknown> = {}) =>
   `${JSON.stringify({ name: "openmausbot", private: true, version, scripts: { test: "vitest run" }, ...extra }, null, 2)}\n`;
 
 /** A scripted GitHub. Each poll (one sleep) moves to the next state. */
-function fakeGitHub(polls: Array<{ runs: Run[]; jobs?: Record<number, Job[]> }>, setup: {
+function fakeGitHub(polls: Array<{ runs: Run[]; jobs?: Record<number, Job[]>; plans?: Record<number, "main" | null> }>, setup: {
   commits?: Record<string, Commit>; files?: Record<string, string>;
 } = {}) {
   const calls: string[] = [];
@@ -54,6 +62,7 @@ function fakeGitHub(polls: Array<{ runs: Run[]; jobs?: Record<number, Job[]> }>,
     async runsForCommit(sha: string) { return state().runs.filter((run) => run.head_sha === sha); },
     async recentRuns() { return state().runs.filter((run) => run.status === "completed"); },
     async runJobs(runId: number) { return state().jobs?.[runId] ?? []; },
+    async runPlan(source: Run) { return state().plans?.[source.id] === null ? null : planFor(source, state().plans?.[source.id] !== "main"); },
     async commit(sha: string) {
       const commit = commits[sha];
       if (!commit) throw new Error(`GET /commits/${sha}: HTTP 404`);
@@ -86,17 +95,42 @@ const versionBump = {
 };
 
 describe("what a CI run proves", () => {
-  it("is green only when the gate passed and every platform's every vitest shard ran and passed", () => {
-    expect(judgeRun(green())).toBe("green");
+  it("is green only when the gate and every macOS all-E2E shard passed", () => {
+    const source = run(1, "push", "completed");
+    expect(judgeRun(green(), planFor(source), source)).toBe("green");
+    expect(judgeRun([gate("success"), ...Array.from({ length: 4 }, (_, i) => ({
+      name: `vitest (macos-latest, shard ${i + 1}/4)`, conclusion: "success", steps: started,
+    }))], planFor(source), source)).toBe("partial");
     expect(judgeRun(scoped())).toBe("scoped");
     expect(judgeRun([gate("success")])).toBe("scoped");
     expect(judgeRun([gate("success"), vitest("ubuntu-latest", "success"), vitest("windows-latest", "skipped")])).toBe("scoped");
   });
 
-  it("is partial when only some platforms' shards ran, as on a push to main or in a merge group", () => {
+  it("is partial for retired Linux shards or an incomplete macOS full set", () => {
     expect(judgeRun(mainLane())).toBe("partial");
-    expect(judgeRun(green().filter((job) => job.name !== "vitest (macos-latest, shard 4/4)"))).toBe("partial");
+    const source = run(1, "push", "completed");
+    expect(judgeRun(green().filter((job) => job.name !== "vitest (macos-latest, all shard 4/4)"), planFor(source), source)).toBe("partial");
     expect(judgeRun([...mainLane(), ...shards("windows-latest")])).toBe("partial");
+  });
+
+  it("rejects a MAIN_SCOPE plan even when four all-E2E shard names and the gate pass", () => {
+    const source = run(1, "push", "completed");
+    expect(judgeRun(green(), planFor(source, false), source)).toBe("partial");
+    expect(judgeRun(green(), null, source)).toBe("partial");
+  });
+
+  it("requires source identity and every full specialist job to pass", () => {
+    const source = run(1, "workflow_dispatch", "completed");
+    const plan = planFor(source);
+    expect(judgeRun(green(), plan, source)).toBe("green");
+    for (const patch of [{ runId: 2 }, { sha: OTHER }, { attempt: 2 }]) {
+      expect(judgeRun(green(), { ...plan, ...patch }, source)).toBe("partial");
+    }
+    for (const id of ["relay", "browser-driver", "foss", "ui-smoke", "browser-identity"]) {
+      const specialist = fullExpected.find((item) => item.id === id)!;
+      expect(judgeRun(green().filter((job) => job.name !== specialist.name), plan, source)).toBe("partial");
+      expect(judgeRun(green().map((job) => job.name === specialist.name ? { ...job, conclusion: "failure" } : job), plan, source)).toBe("partial");
+    }
   });
 
   it("tells a runner that never came from a test that failed", () => {
@@ -122,6 +156,17 @@ describe("release CI gate", () => {
     const { calls, options } = fakeGitHub([{ runs: [run(1, "push", "completed")], jobs: { 1: green() } }]);
     expect(await waitForReleaseCi(options)).toEqual({ ok: true, runId: 1, via: "commit" });
     expect(calls).toEqual([]);
+  });
+
+  it("starts its own lane when the current commit has only a non-full main plan", async () => {
+    const source = run(1, "push", "completed");
+    const lane = run(2, "workflow_dispatch", "completed", "release-ci/v0.1.94", 5);
+    const { calls, options } = fakeGitHub([
+      { runs: [source], jobs: { 1: green() }, plans: { 1: "main" } },
+      { runs: [source, lane], jobs: { 1: green(), 2: green() }, plans: { 1: "main" } },
+    ]);
+    expect(await waitForReleaseCi(options)).toEqual({ ok: true, runId: 2, via: "commit" });
+    expect(calls).toEqual(LANE);
   });
 
   it.each(["workflow_dispatch", "schedule"])("waits for a %s run that is still going, then passes", async (event) => {
@@ -438,6 +483,76 @@ describe("a runner that never came", () => {
 });
 
 describe("GitHub calls", () => {
+  it("recovers a release lane from a failed-only rerun with a copied preflight and its original plan", async () => {
+    const first = { created_at: "2026-11-05T12:18:00Z", started_at: "2026-11-05T12:18:19Z", completed_at: "2026-11-05T12:22:32Z" };
+    const next = { created_at: "2026-11-05T12:47:31Z", started_at: "2026-11-05T12:47:32Z", completed_at: "2026-11-05T12:47:34Z" };
+    const staticJob = green().find((job) => job.name === "typecheck + lint")!;
+    const relayJob = green().find((job) => job.name === "relay typecheck + tests + fuzz + audit")!;
+    const original = { ...staticJob, ...first, id: 10 };
+    const copied = { ...original, id: 11, run_attempt: 2, created_at: next.created_at };
+    const failedRelay = { ...relayJob, ...first, id: 20, conclusion: "failure", steps: [] };
+    const recoveredRelay = { ...relayJob, ...next, id: 21, run_attempt: 2 };
+    const failedGate = { ...gate("failure"), ...first, id: 30 };
+    const recoveredGate = { ...gate("success"), ...next, id: 31, run_attempt: 2 };
+    const others = green().filter((job) => !["CI", original.name, relayJob.name].includes(job.name));
+    let rows = [...others, failedGate, recoveredGate, original, copied, failedRelay, recoveredRelay];
+    const attempt = (number: number) => run(7, "workflow_dispatch", "completed", "release-ci/v0.1.94", 0, { run_attempt: number });
+    const plan = planFor(attempt(1));
+    const requests: string[] = [];
+    const readNames: string[] = [];
+    let phase = 0;
+    const fetchImpl = async (url: string, init: { method: string }) => {
+      const path = url.replace("https://api.github.com/repos/o/r", "");
+      requests.push(`${init.method} ${path}`);
+      if (path.startsWith("/commits/")) return Response.json({ commit: { tree: { sha: TREE } }, parents: [{ sha: PARENT }], files: [{ filename: "server/index.ts" }] });
+      if (path.includes("/runs?head_sha=")) return Response.json({ workflow_runs: phase ? [attempt(phase)] : [] });
+      if (path.includes("/runs?status=completed")) return Response.json({ workflow_runs: [] });
+      if (path.includes("/jobs?filter=all")) return Response.json({ jobs: phase === 1 ? [failedGate, original, failedRelay] : rows });
+      if (path.includes("/artifacts?")) return Response.json({ artifacts: [{ id: 9, name: "qa-plan-attempt-1", workflow_run: { id: 7, head_sha: SHA } }] });
+      if (path.endsWith("/dispatches")) { phase = 1; return new Response(null, { status: 204 }); }
+      if (path.endsWith("/rerun-failed-jobs")) { phase = 2; return new Response(null, { status: 201 }); }
+      if (init.method === "DELETE") return new Response(null, { status: 204 });
+      if (init.method === "POST") return Response.json({}, { status: 201 });
+      throw new Error(path);
+    };
+    const api = githubApi({ token: "t", repository: "o/r", fetchImpl: fetchImpl as typeof fetch,
+      artifactReader: async (artifact: { name: string }) => { readNames.push(artifact.name); return { "qa-plan.json": JSON.stringify(plan) }; } });
+    let clock = 0;
+    expect(await waitForReleaseCi({ api, sha: SHA, version: "0.1.94", now: () => clock, sleep: async (ms: number) => { clock += ms; }, log: () => {}, maxWaitMs: 10 * 60_000 }))
+      .toEqual({ ok: true, runId: 7, via: "commit" });
+    expect(requests).toContain("POST /actions/runs/7/rerun-failed-jobs");
+    expect(requests).toContain("GET /actions/runs/7/jobs?filter=all&per_page=100&page=1");
+    expect(readNames).toEqual(["qa-plan-attempt-1"]);
+    const normalized = await api.runJobs(7, 2);
+    expect(normalized.find((job) => job.name === original.name)).toMatchObject({ id: 10, run_attempt: 1 });
+    expect(normalized.find((job) => job.name === relayJob.name)).toMatchObject({ id: 21, run_attempt: 2, priorFailures: [{ attempt: 1, conclusion: "failure" }] });
+    rows = rows.filter((job) => job !== original);
+    await expect(api.runJobs(7, 2)).rejects.toThrow("Ambiguous workflow job execution");
+    rows = [...rows, original, { ...original, id: 12 }];
+    await expect(api.runJobs(7, 2)).rejects.toThrow("Ambiguous workflow job execution");
+  });
+
+  it("loads the plan from the producing run and rejects a different source SHA", async () => {
+    const source = run(7, "workflow_dispatch", "completed");
+    const requests: string[] = [];
+    let plan = planFor(source);
+    const fetchImpl = async (url: string) => {
+      const path = url.replace("https://api.github.com/repos/o/r", "");
+      requests.push(path);
+      if (path.includes("/jobs?")) return Response.json({ jobs: green() });
+      if (path.includes("/artifacts?")) return Response.json({ artifacts: [{ id: 9, name: "qa-plan-attempt-1", expired: false, workflow_run: { id: 7 } }] });
+      throw new Error(path);
+    };
+    const api = githubApi({ token: "t", repository: "o/r", fetchImpl: fetchImpl as typeof fetch,
+      artifactReader: async () => ({ "qa-plan.json": JSON.stringify(plan) }) });
+    const jobs = await api.runJobs(7, 1);
+    expect(await api.runPlan(source, jobs)).toEqual(plan);
+    plan = { ...plan, sha: OTHER };
+    await expect(api.runPlan(source, jobs)).rejects.toThrow("Missing current-run validation plan");
+    expect(requests).toEqual(["/actions/runs/7/jobs?filter=all&per_page=100&page=1",
+      "/actions/runs/7/artifacts?per_page=100&page=1", "/actions/runs/7/artifacts?per_page=100&page=1"]);
+  });
+
   it("moves an existing lane branch instead of failing, and reads jobs from the latest attempt", async () => {
     const requests: string[] = [];
     const fetchImpl = async (url: string, init: { method: string; body?: string }) => {
@@ -448,12 +563,12 @@ describe("GitHub calls", () => {
     };
     const api = githubApi({ token: "t", repository: "o/r", fetchImpl: fetchImpl as typeof fetch });
     await api.pointBranch("release-ci/v1.2.3", SHA);
-    expect(judgeRun(await api.runJobs(7))).toBe("green");
+    expect(await api.runJobs(7, 1)).toEqual(green().map((job) => ({ ...job, priorFailures: [] })));
     await api.dispatchCi("release-ci/v1.2.3");
     expect(requests).toEqual([
       `POST /git/refs {"ref":"refs/heads/release-ci/v1.2.3","sha":"${SHA}"}`,
       `PATCH /git/refs/heads/release-ci/v1.2.3 {"sha":"${SHA}","force":true}`,
-      "GET /actions/runs/7/jobs?per_page=100",
+      "GET /actions/runs/7/jobs?filter=all&per_page=100&page=1",
       'POST /actions/workflows/ci.yml/dispatches {"ref":"release-ci/v1.2.3"}',
     ]);
   });
