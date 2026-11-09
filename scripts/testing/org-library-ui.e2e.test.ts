@@ -55,7 +55,7 @@ describe("the organization library in the real renderer", () => {
     let stdout = "";
     let stderr = "";
     let info: { ui: string; url: string; botId: string; dataDir: string; logPath: string };
-    child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch"], {
+    child = spawn(process.execPath, ["--experimental-strip-types", join(ROOT, "scripts/control-omb.ts"), "ui", "launch", "--simple"], {
       cwd: ROOT, env: { ...process.env, OMB_TEST_ORG_LIBRARY_KEY: key }, stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
@@ -131,9 +131,12 @@ describe("the organization library in the real renderer", () => {
       .find(([, entry]) => entry.role === "button" && /Open .+ profile/.test(entry.name));
     expect(profile).toBeDefined();
     await ui("click", "--ref", `@${profile![0]}`);
-    await click("Identity");
+    // The bot's panel: where it came from on Bot settings, the organization's skills on Library → Skills.
+    await click("Bot settings");
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("From Sales desk 1.3.0 · Acme Partners");
-    await click("Skills");
+    await click("Details");
+    await click("Library");
+    await ui("eval", "--js", "document.querySelector('[data-panel-page=\"skills\"]').click(); true");
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("Skills your organization shares");
     await evidence("org-library-bot-skills.png");
     await click("Add follow-up to this bot");
