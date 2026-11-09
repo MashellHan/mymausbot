@@ -789,7 +789,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
     expect(existsSync(dumpFile)).toBe(false);
   });
 
-  it.skipIf(process.platform === "linux")("carries the recorded macOS permission failure into the failed turn", async () => {
+  it.skipIf(process.platform === "linux")("keeps a channel speaker's non-screen work available when macOS screen permission is missing", async () => {
     const { bots, group } = await room();
     const reason = "embedded host failed: Screen Recording required; grant access in System Settings and restart OpenMausBot";
     mkdirSync(dirname(cuaDescriptor), { recursive: true });
@@ -798,11 +798,12 @@ describe("Group Local VM ownership on the real isolated server", () => {
     try {
       await api("PATCH", `/api/bots/${bots[0].id}`, { computer: "local" });
       await send(group.id);
-      const state = await until(() => api("GET", "/api/bots?messages=30"),
-        value => JSON.stringify(value).includes(reason));
-      if (process.platform === "darwin") expect(JSON.stringify(state)).toContain("Relaunch OpenMausBot after granting the missing macOS permission");
+      const sent = await dump() as { systemPrompt: string; mcpConfig: { mcpServers: Record<string, unknown> } };
+      expect(sent.mcpConfig.mcpServers.computer).toBeUndefined();
+      expect(sent.systemPrompt).toContain(reason);
+      expect(sent.systemPrompt).toContain("No computer tools are mounted");
+      writeFileSync(finishFile, "finish");
       await idle(bots[0].id);
-      expect(existsSync(dumpFile)).toBe(false);
     } finally {
       rmSync(cuaDescriptor, { force: true });
       await appHandsItOver();
