@@ -190,7 +190,7 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     const defaults = ["qa", "qa:untriaged", `qa:kind:${finding.kind}`, `qa:scope:${area}`, "owner:lead"];
     if (issue) {
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified");
-      await update(issue, { body, state: grouped ? issue.state : "open", labels: issue.state === "closed" && !grouped ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
+      await update(issue, { body, ...(!grouped ? { state: "open" } : {}), labels: issue.state === "closed" && !grouped ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
     } else {
       const created = await api("/issues", { method: "POST", body: { title: `[QA] ${sanitize(finding.contract).slice(0, 150)} (${sanitize(finding.platform).slice(0, 35)})`, body, labels: defaults } });
       issues.push(created);

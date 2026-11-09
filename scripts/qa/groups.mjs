@@ -5,7 +5,7 @@ const statusBlock = /<!-- mausbot-qa-group-status:start -->[\s\S]*?<!-- mausbot-
 const priority = (issue) => Math.min(3, ...issueLabels(issue).filter((label) => /^qa:p[012]$/.test(label)).map((label) => Number(label.at(-1))));
 
 export function qaGroups(issues) {
-  const groups = [], byKey = new Map();
+  const groups = [], byKey = new Map(), memberNumbers = new Set();
   for (const parent of issues.filter((issue) => issue.body?.includes("<!-- mausbot-qa-group "))) {
     const matches = [...parent.body.matchAll(marker)];
     if (matches.length !== 1 || issueLabels(parent).includes("qa:process")) throw new Error(`Invalid QA group #${parent.number}`);
@@ -16,10 +16,15 @@ export function qaGroups(issues) {
       const candidates = issues.filter((issue) => issue.body?.includes(`<!-- mausbot-qa:${key} -->`));
       if (candidates.length !== 1 || byKey.has(key)) throw new Error(`Missing or ambiguous QA group member ${key}`);
       const member = candidates[0];
+      const markers = [...member.body.matchAll(/<!-- mausbot-qa:([a-f\d]{24}) -->/g)];
+      const states = [...member.body.matchAll(/<!-- mausbot-qa-state (.+) -->/g)];
+      if (memberNumbers.has(member.number) || markers.length !== 1 || markers[0][1] !== key
+        || states.length !== 1 || JSON.parse(states[0][1])?.key !== key) throw new Error(`Ambiguous QA group member #${member.number}`);
       if (member === parent || issueLabels(member).includes("qa:process") || priority(parent) > priority(member)
         || !issueAreas(parent).includes("global") && issueAreas(member).some((area) => !issueAreas(parent).includes(area))) {
         throw new Error(`QA group #${parent.number} does not retain member #${member.number}'s priority and scope`);
       }
+      memberNumbers.add(member.number);
       byKey.set(key, parent);
       return member;
     });

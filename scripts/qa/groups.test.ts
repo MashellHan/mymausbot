@@ -114,6 +114,22 @@ describe("confirmed QA root-cause groups", () => {
     expect(parent.body).toContain("Verified member cases: 2/2");
   });
 
+  it("preserves a concurrent consolidation after reading an open member", async () => {
+    const { issues, parent, api } = fixture();
+    issues[0].state = "open";
+    const concurrent = async (path: string, options: any = {}) => {
+      const result = await api(path, options);
+      if (path.startsWith("/issues?")) issues[0].state = "closed";
+      return result;
+    };
+    await deliverReport(report(2, [], [keys[0]], false), { api: concurrent, policy });
+    expect(issues[0].state).toBe("closed");
+    expect(issues[0].body).toContain("new failure");
+    expect(parent.state).toBe("open");
+    const patch = api.mock.calls.find(([path, options]) => path === "/issues/1" && options?.method === "PATCH");
+    expect(patch?.[1].body).not.toHaveProperty("state");
+  });
+
   it("gives each reopened parent a new queue epoch without waking all consolidated records", async () => {
     const { parent, api } = fixture();
     parent.state = "closed";
@@ -129,13 +145,20 @@ describe("confirmed QA root-cause groups", () => {
     expect(second[0].key).not.toBe(first[0].key);
   });
 
-  it.each(["duplicate", "missing", "priority", "scope", "overlap"])("rejects %s membership before writing any evidence", async (invalid) => {
+  it.each(["duplicate", "missing", "priority", "scope", "overlap", "alias", "state-key", "state-missing", "state-duplicate"])("rejects %s membership before writing any evidence", async (invalid) => {
     const { issues, parent, api } = fixture();
     if (invalid === "duplicate") parent.body = parent.body.replace(JSON.stringify(keys), JSON.stringify([keys[0], keys[0]]));
     if (invalid === "missing") issues.splice(0, 1);
     if (invalid === "priority") parent.labels = parent.labels.map((label) => label === "qa:p1" ? "qa:p2" : label);
     if (invalid === "scope") parent.labels = parent.labels.map((label) => label === "qa:scope:global" ? "qa:scope:usage" : label);
     if (invalid === "overlap") issues.push({ ...parent, number: 4 });
+    if (invalid === "alias") {
+      issues[0].body += `\n<!-- mausbot-qa:${keys[1]} -->`;
+      issues.splice(1, 1);
+    }
+    if (invalid === "state-key") issues[0].body = issues[0].body.replace(`"key":"${keys[0]}"`, `"key":"${keys[1]}"`);
+    if (invalid === "state-missing") issues[0].body = issues[0].body.replace(/<!-- mausbot-qa-state (.+) -->/, "");
+    if (invalid === "state-duplicate") issues[0].body += `\n${issues[0].body.match(/<!-- mausbot-qa-state (.+) -->/)?.[0]}`;
     await expect(deliverReport(report(2, keys), { api, policy })).rejects.toThrow();
     expect(api.mock.calls.every(([, options]) => options?.method !== "PATCH" && options?.method !== "POST")).toBe(true);
   });
