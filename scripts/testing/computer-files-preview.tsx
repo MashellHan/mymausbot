@@ -1,27 +1,41 @@
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ComputerFilesPane } from "../../src/components/ComputerFilesPane";
+import { ComputerPanel } from "../../src/components/ComputerPanel";
+import { ChatMarkdown } from "../../src/components/ChatMarkdown";
 import { BotEditorStore, initialState, type Bot } from "../../src/state/store";
 import { applySkin } from "../../src/lib/skins";
 import { setAnalyticsEnabled } from "../../src/lib/analytics";
 import { setLocale } from "../../src/lib/i18n";
+import { rememberComputerPanelOpen } from "../../src/lib/computer-panel-focus";
 import "../../src/styles.css";
 
 setAnalyticsEnabled(false);
 setLocale("en");
 applySkin(new URLSearchParams(location.search).get("skin") === "atelier" ? "atelier" : "midnight");
 const bot: Bot = await fetch("/__computer-files-fixture").then((response) => response.json());
-const value = {
-  state: { ...initialState, bots: [bot], selectedId: bot.id },
-  dispatch: () => {},
-  flushBotPatches: async () => null,
-  refreshInstances: async () => {},
-  refreshModels: async () => {},
-};
-createRoot(document.getElementById("root")!).render(
-  <BotEditorStore value={value}>
-    <main className="mx-auto flex min-h-screen max-w-md flex-col bg-app pt-6 text-ink">
-      <h1 className="mb-4 px-5 text-lg font-medium">File reviewer · Files</h1>
-      <ComputerFilesPane bot={bot} />
+function Preview() {
+  const [open, setOpen] = useState(false);
+  const value: Parameters<typeof BotEditorStore>[0]["value"] = {
+    state: { ...initialState, bots: [bot], selectedId: bot.id, computerOpen: open },
+    dispatch: (action) => { if (action.type === "toggleComputer") setOpen(action.open ?? !open); },
+    flushBotPatches: async () => null, refreshInstances: async () => {}, refreshModels: async () => {},
+  };
+  return <BotEditorStore value={value}>
+    <main className="relative flex h-screen overflow-hidden bg-app text-ink">
+      <section data-file-preview-chat className="min-w-0 flex-1 overflow-y-auto p-6">
+        <header className="mb-8 flex items-center justify-between gap-3">
+          <h1 className="text-lg font-medium">File reviewer</h1>
+          <button type="button" className="ui-button ui-button-sm" onClick={(event) => {
+            rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: false }); setOpen(true);
+          }}>Open panel</button>
+        </header>
+        {bot.messages.filter((message) => message.role === "bot" && message.kind === "text").map((message) =>
+          <article key={message.id} className="mb-6 max-w-2xl text-sm leading-relaxed">
+            <ChatMarkdown text={message.text ?? ""} message={{ threadId: bot.threadId, messageId: message.id }} />
+          </article>)}
+      </section>
+      {open && <ComputerPanel bot={bot} />}
     </main>
-  </BotEditorStore>,
-);
+  </BotEditorStore>;
+}
+createRoot(document.getElementById("root")!).render(<StrictMode><Preview /></StrictMode>);

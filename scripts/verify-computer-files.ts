@@ -16,16 +16,16 @@ try {
   const bot = bots.find((item: { name: string }) => item.name === "File reviewer");
   const workspace = join(fixture.info.dataDir, "sample-project");
   mkdirSync(workspace, { recursive: true });
-  await api("PATCH", `/api/bots/${bot.id}`, { cwd: workspace });
+  await api("PATCH", `/api/bots/${bot.id}`, { cwd: workspace, computer: "off" });
   const files = {
-    "report #1.md": "# Review\n\nThis is a synthetic report.\n",
-    "metrics.csv": "Project,Changes\nAlpha,12\nBeta,7\n",
-    "missing.txt": "Removed after the turn.\n",
+    "report #1.md": "# Weekly review\n\nThis is a **synthetic report** for file preview.\n\n## Highlights\n\n- Alpha shipped twelve changes.\n- Beta completed seven improvements.\n\n| Project | Changes |\n| --- | ---: |\n| Alpha | 12 |\n| Beta | 7 |\n\n```text\nrelease-2026-11\n```\n\n[Private file](file:///private/unshared.md)\n\n<script>window.previewUnsafe = true</script>\n",
+    "metrics.csv": 'Project,Changes,Code,Notes\nAlpha,12,001,"Ready, reviewed"\nBeta,7,002,"Line one\nLine two"\n',
+    "missing.md": "Removed after the turn.\n",
     "unshared.txt": "Changed, but never shared in a message.\n",
   };
   for (const [name, text] of Object.entries(files)) writeFileSync(join(workspace, name), text);
   const reply = ["The report and table are ready.",
-    ...["report #1.md", "metrics.csv", "missing.txt"].map((name) => `[${name}](${pathToFileURL(join(workspace, name)).href})`),
+    ...["report #1.md", "metrics.csv", "missing.md"].map((name) => `[${name}](${pathToFileURL(join(workspace, name)).href})`),
   ].join("\n\n");
   const wrapper = join(fixture.info.dataDir, "files-claude.mjs");
   writeFileSync(wrapper, ["#!/usr/bin/env node",
@@ -39,7 +39,7 @@ try {
   if (!messages.some((message: { text?: string }) => message.text === reply)) {
     throw new Error("Fixture did not produce the shared-file reply");
   }
-  rmSync(join(workspace, "missing.txt"));
+  rmSync(join(workspace, "missing.md"));
   ui = await mountPreview(fixture, {
     entry: "/scripts/testing/computer-files-preview.tsx", route: "/__computer-files.html", title: "Isolated OMB files",
     extraRoutes: [{ path: "/__computer-files-fixture", handler: async (_req, res) => {

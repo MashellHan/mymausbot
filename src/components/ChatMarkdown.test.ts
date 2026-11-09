@@ -768,7 +768,8 @@ describe("ChatMarkdown attachments", () => {
       text: "[macOS](file:///Users/milind/report.md) [Windows](C:/Users/Maus/report.md)",
       message: { threadId: "thread-1", messageId: "message-1" },
     }));
-    expect(html).toContain('title="Save a copy"');
+    expect(html).toContain('title="Preview file: report.md"');
+    expect(html).toContain('aria-label="Save a copy of report.md"');
     expect(html).not.toContain("/Users/milind/report.md");
     expect(html).not.toContain("C:/Users/Maus/report.md");
   });
@@ -810,7 +811,8 @@ describe("ChatMarkdown attachments", () => {
         text: "[Report](C:\\Users\\Maus\\.openmausbot\\report.md)\n\n![Chart](C:\\Users\\Maus\\.openmausbot\\chart.png)",
         message: { threadId: "thread-1", messageId: "message-1" },
       }));
-      expect(html).toContain('title="Save a copy"');
+      expect(html).toContain('title="Preview file: report.md"');
+      expect(html).toContain('aria-label="Save a copy of report.md"');
       expect(html).not.toContain('href=""');
       expect(html).not.toContain("Image unavailable");
       expect(save.mock.calls[0]?.[0]).toBe("C:\\Users\\Maus\\.openmausbot\\report.md");

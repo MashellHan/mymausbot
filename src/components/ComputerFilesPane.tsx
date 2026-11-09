@@ -1,5 +1,5 @@
 import { FileText, FolderOpen } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useStore, visibleMessages, type Bot } from "@/state/store";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { collectMessageFiles, fileIdentity, splitMessageAttachments, type GalleryFile } from "./AttachmentGallery";
@@ -7,6 +7,8 @@ import { AttachedFileChip, type MessageAttachmentContext } from "./AttachmentPre
 import { shortPath } from "@/lib/short-path";
 import { t } from "@/lib/i18n";
 import { openBotSettings } from "./bot-panel/panel-link";
+import type { PanelFilePreview } from "@/lib/file-preview";
+import { MessageFilePreview } from "./MessageFilePreview";
 
 const MAX_FILES = 20;
 
@@ -76,7 +78,9 @@ function splitPath(path: string): { name: string; folder: string } {
   return cut < 0 ? { name: path, folder: "" } : { name: path.slice(cut + 1), folder: path.slice(0, cut) };
 }
 
-export function ComputerFilesPane({ bot }: { bot: Bot }) {
+export function ComputerFilesPane({ bot, filePreview, onPreviewClose }: {
+  bot: Bot; filePreview?: PanelFilePreview | null; onPreviewClose?: () => void;
+}) {
   const { dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
   const home = capabilities.host.homeDir;
@@ -85,8 +89,15 @@ export function ComputerFilesPane({ bot }: { bot: Bot }) {
   const cwd = pinned === undefined ? bot.cwd : pinned;
   const files = recentChangedFiles(bot);
   const shared = useMemo(() => sharedFileReferences(bot), [bot.messages, bot.activeLeafId, bot.threadId, bot.tasks, bot.cwd]);
+  const list = useRef<HTMLDivElement>(null);
+  const ours = filePreview?.botId === bot.id && filePreview.message.threadId === bot.threadId ? filePreview : null;
+  const preview = ours && visibleMessages(bot).some((message) => message.id === ours.message.messageId) ? ours : null;
+  useEffect(() => {
+    if (filePreview && !preview) onPreviewClose?.();
+  }, [filePreview, preview, onPreviewClose]);
   return (
-    <div className="flex-1 overflow-y-auto px-5 pb-5" data-testid="computer-files">
+    <>
+    <div ref={list} hidden={Boolean(preview)} tabIndex={-1} className="flex-1 overflow-y-auto px-5 pb-5" data-testid="computer-files">
       <div className="mt-2 rounded-xl bg-card p-4">
         <div className="text-[13px] font-medium text-ink">{t("computer.files.folder")}</div>
         <div className="mt-2 flex items-center gap-2">
@@ -141,5 +152,10 @@ export function ComputerFilesPane({ bot }: { bot: Bot }) {
         )}
       </div>
     </div>
+    {preview && <MessageFilePreview key={preview.nonce} file={preview} onBack={() => {
+      onPreviewClose?.();
+      requestAnimationFrame(() => { (preview.returnFocus?.isConnected ? preview.returnFocus : list.current)?.focus(); });
+    }} />}
+    </>
   );
 }
