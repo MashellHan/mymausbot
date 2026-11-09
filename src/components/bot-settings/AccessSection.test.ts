@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StoreProvider, type Bot, type ConfigStatus } from "@/state/store";
+import { readComputerPanelView } from "@/lib/computer-panel-view";
 import type { useBotSettingsDerived } from "./useBotSettingsDerived";
 
 const fixture = vi.hoisted(() => ({
@@ -190,7 +191,12 @@ describe("AccessSection Works on", () => {
     return [node, ...Children.toArray(node.props.children).flatMap(nodes)];
   };
 
-  it("is one line and the way to the Computer panel, where the place is chosen", () => {
+  it.each([null, "mini-apps", "browser"])("opens Screen from Works on with a saved %s tab", (previous) => {
+    const saved = new Map<string, string>(previous ? [["omb-computer-panel-view:bot-1", previous]] : []);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => saved.set(key, value),
+    });
     const markup = render(makeBot());
     expect(markup).toContain("Where Scout works: Chooses for you");
     expect(markup).toContain("Open the Screen panel");
@@ -202,6 +208,7 @@ describe("AccessSection Works on", () => {
     renderToStaticMarkup(createElement(StoreProvider, null, createElement(Capture)));
     const open = nodes(tree).find((node) => node.type === "button" && renderToStaticMarkup(node).includes("Open the Screen panel"))!;
     open.props.onClick!();
+    expect(readComputerPanelView("bot-1")).toBe("computer");
     expect(fixture.dispatch.mock.calls).toEqual([
       [{ type: "toggleSettings", open: false }],
       [{ type: "toggleComputer", open: true }],

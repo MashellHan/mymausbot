@@ -13,12 +13,12 @@ describe("computer panel view persistence", () => {
     writeComputerPanelView("sprout", "browser", storage);
 
     expect(readComputerPanelView("sprout", storage)).toBe("browser");
-    expect(readComputerPanelView("another-bot", storage)).toBe("computer");
+    expect(readComputerPanelView("another-bot", storage)).toBe("mini-apps");
   });
 
   it("falls back safely for stale values or blocked storage", () => {
-    expect(readComputerPanelView("sprout", { getItem: () => "unknown" })).toBe("computer");
-    expect(readComputerPanelView("sprout", { getItem: () => { throw new Error("blocked"); } })).toBe("computer");
+    expect(readComputerPanelView("sprout", { getItem: () => "unknown" })).toBe("mini-apps");
+    expect(readComputerPanelView("sprout", { getItem: () => { throw new Error("blocked"); } })).toBe("mini-apps");
 
     const setItem = vi.fn(() => { throw new Error("blocked"); });
     expect(() => writeComputerPanelView("sprout", "browser", { setItem })).not.toThrow();
@@ -29,7 +29,11 @@ describe("computer panel view persistence", () => {
     const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
     writeComputerPanelView("scout", "routines", storage);
     expect(readComputerPanelView("scout", storage)).toBe("routines");
-    expect(readComputerPanelView("other", storage)).toBe("computer");
+    expect(readComputerPanelView("other", storage)).toBe("mini-apps");
+  });
+
+  it("preserves an explicit Screen target", () => {
+    expect(readComputerPanelView("scout", { getItem: () => "computer" })).toBe("computer");
   });
 
   it("round-trips the Data tab", () => {
