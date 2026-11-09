@@ -51,6 +51,8 @@ export function localUsageView(snapshot: LocalUsageResponse) {
     const previousStart = shiftDay(window.startDay, -window.days), previousEnd = shiftDay(window.startDay, -1);
     const tokens = tokensIn(snapshot, window.startDay, window.endDay);
     const previousTokens = tokensIn(snapshot, previousStart, previousEnd);
+    const local = snapshot.windows?.[key];
+    const localMatches = local?.startDay === window.startDay && local.endDay === window.endDay;
     return [key, {
       days: window.days, startDay: window.startDay, endDay: window.endDay, asOf: window.asOf,
       ...counts(observed), ...tokens, categories: categoryCounts(observed?.categories),
@@ -59,7 +61,7 @@ export function localUsageView(snapshot: LocalUsageResponse) {
       missingDays: remote?.missingDays ?? [],
       repositories: remote?.repositories ?? { coverage: "unavailable", rows: [], unattributedPrs: null, unattributedCommits: null, sharedCommits: 0 },
       comparison: { startDay: previousStart, endDay: previousEnd, missingDays: remote?.comparison.missingDays ?? [],
-        unavailableTokenDays: previousTokens.unavailableTokenDays,
+        unavailableTokenDays: localMatches ? local.comparison.unavailableTokenDays : previousTokens.unavailableTokenDays,
         prs: observed?.comparison.prs ?? null, commits: observed?.comparison.commits ?? null,
         totalTokens: tokenChange(snapshot, window), categories: observed?.comparison.categories ?? emptyComparisons() },
     } satisfies UsageWindow];
