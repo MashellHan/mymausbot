@@ -1,19 +1,16 @@
-// The release's CI gate: ship only a commit whose code passed CI with every
-// platform's vitest shards run, on the commit itself, on a commit with the same
+// The release's CI gate: ship only a commit whose code passed the full macOS
+// Vitest shards, on the commit itself, on a commit with the same
 // tree, or (for a version-only bump) on its parent.
 //
-// A push to main or a merge group runs no macOS shards, so the release
-// commit's own run proves nothing; CI then starts on a `release-ci/v<version>`
-// branch no merge on main can touch, as a manual run of every platform. A main
+// CI starts a `release-ci/v<version>` branch when the commit lacks that proof.
+// The branch has its own concurrency group, so a main
 // run is never re-run in place: the re-run would join main's group and cancel
 // the newest merge's waiting run.
 import { pathToFileURL } from "node:url";
-import { FULL_LANE_EVENTS, VITEST_SHARDS, versionOnlyPackageJson } from "./ci-scope.mjs";
+import { ALL_OS, FULL_LANE_EVENTS, vitestMatrix, versionOnlyPackageJson } from "./ci-scope.mjs";
 
 const RELEASE_EVENTS = new Set(["push", "merge_group", ...FULL_LANE_EVENTS]);
-/** Every platform's every shard, by job name. */
-const FULL_MATRIX = Object.entries(VITEST_SHARDS)
-  .flatMap(([os, shards]) => Array.from({ length: shards }, (_, i) => `vitest (${os}, shard ${i + 1}/${shards})`));
+const FULL_MATRIX = vitestMatrix(ALL_OS).include.map((entry) => `vitest (${entry.os}, ${entry.part})`);
 export const POLL_MS = 60_000;
 export const MAX_WAIT_MS = 170 * 60_000;
 
@@ -26,9 +23,8 @@ const neverStarted = (job) => !(job.steps ?? []).some((step) => step.conclusion 
 
 /**
  * What one finished CI run proves.
- * - "green": the gate passed and every platform's every vitest shard ran and passed.
- * - "partial": the gate passed and every vitest job that ran passed, but not every platform's shards ran (a push to
- *   main or a merge group runs no macOS shards).
+ * - "green": the gate passed and every full macOS Vitest shard ran and passed.
+ * - "partial": the gate passed and every Vitest job that ran passed, but the full macOS set did not run.
  * - "scoped": the gate passed but vitest did not run (docs- or version-only).
  * - "runner-lost": the gate failed, and every other failed job never started.
  * - "red": the gate failed for any other reason.
