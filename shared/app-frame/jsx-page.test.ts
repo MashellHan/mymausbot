@@ -129,7 +129,7 @@ export default function Page() { const theme = useTheme(); return <div><p id="th
     expect(loads).toContain("echarts");
     expect(rendered.querySelector("#theme")?.textContent).toBe("dark");
     expect(rendered.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Sales");
-    expect(fakeEcharts.made[0]).toMatchObject({ theme: "dark", options: [{ backgroundColor: "transparent", series: [{ type: "bar", data: [1, 2] }] }] });
+    await expect.poll(() => fakeEcharts.made[0]).toMatchObject({ theme: "dark", options: [{ backgroundColor: "transparent", series: [{ type: "bar", data: [1, 2] }] }] });
   });
 
   it("runs a published page's transpiled code without loading the compiler", async () => {
