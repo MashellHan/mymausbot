@@ -449,7 +449,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Delete the enterprise folder
         run: rm -rf enterprise
-      - run: pnpm typecheck
+      - name: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: |
+          pnpm typecheck --project ui --fresh
+          pnpm typecheck --project server --fresh
       - run: pnpm exec vitest run server/enterprise.test.ts server/brand.test.ts --reporter=default --reporter=json --outputFile.json=qa-results/vitest.json
       - name: The server boots and reports the open-source edition
         run: |
