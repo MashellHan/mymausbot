@@ -41,12 +41,22 @@ bounded, redacted latest instruction are available only through those routes.
   differ, tokens are joined by calendar date to the displayed remote windows.
   Missing token dates stay unavailable, and an unavailable comparison stays null.
   Missing remote data never falls back to created PRs or local Git commits.
+- The refresh wrapper records independent per-machine Token completeness. A
+  partial machine whose only failures are Git fetches can compare complete
+  observed Token periods; Git coverage stays partial. Unknown, log-read,
+  stale and previously sampled missing sources remain incomplete. Never-sampled
+  devices remain outside the observed comparison scope. Cards label daily and
+  weekly Token changes as DoD/WoW; the 30-day change compares consecutive rolling
+  periods, not calendar months. Missing baseline history has an explicit hint.
 
 The existing five-minute `scripts/refresh-local-usage.py` job writes the private
 `~/.local/share/mymausbot/usage/merged-v1.json` sidecar through its adjacent
 `local_usage_merged.py` module. Deploy both files together. No new scheduler runs
 inside the App, and the disabled chat-notifying collection routine is not needed.
-The visible Usage tab and the installed Usage Mini App read every five minutes.
+Deploy the updated refresh wrapper to that same job when updating Token coverage;
+the new source metadata appears on its next successful collection.
+The Activities Mini App reads every five minutes. Agent Team and Activities are
+available through Mini Apps; the separate Computer tabs are removed.
 Remote collection retains 60 China-calendar days for current and previous
 30-day periods. API/page/time limits and unavailable credentials are coverage
 gaps, not zero. Completed per-PR commit lists can be reused during later refreshes.
@@ -155,7 +165,9 @@ relabeled as merged. Faint full-height Monday separators mark each week.
 In both locales at 360px, expand the daily table and scroll fully right. Each
 WoW metric name and value must remain visible beside the fixed date column.
 
-For Agent Team use `scenario=live`. No members appear until an office is selected.
+For Agent Team use `scenario=live`. The working team opens by default; when none
+is working or blocked, use the most recent verified session timestamp. Unknown
+activity times do not imply recency. A manual selection or collapse survives polling.
 Select an office, focus its card and scroll the selector and member list. POST to
 `/__agent-team-update` on that fixture's printed origin. Within the next polling
 interval, the active count, instruction, effort and context change while

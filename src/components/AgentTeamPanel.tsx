@@ -66,6 +66,7 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
   snapshot: LocalAgentTeamsResponse | null; active?: boolean; readActivity?: AgentActivityReader;
 }) {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const initialized = useRef(false);
   const baseId = useId();
   const selectorRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -77,6 +78,15 @@ export function AgentTeamView({ snapshot, active = true, readActivity }: {
   const readAt = snapshot?.updatedAt === null || snapshot?.updatedAt === undefined
     ? null : new Date(snapshot.updatedAt).toLocaleString(activeLocale());
   const stale = snapshot?.status === "stale";
+
+  useEffect(() => {
+    if (initialized.current || !active || !snapshot?.teams.length || snapshot.status === "unavailable") return;
+    initialized.current = true;
+    const candidates = snapshot.teams.filter((team) => team.activeAgentCount > 0 || team.agents.some((member) => member.state === "blocked") || (team.lastActivityAt ?? 0) > 0);
+    const priority = (team: typeof candidates[number]) => team.activeAgentCount > 0 ? 2 : team.agents.some((member) => member.state === "blocked") ? 1 : 0;
+    candidates.sort((a, b) => priority(b) - priority(a) || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
+    setSelectedTeamId(candidates[0]?.id ?? null);
+  }, [active, snapshot]);
 
   useEffect(() => {
     const rememberFocus = (event: FocusEvent) => { focusedElement.current = event.target as Element; };

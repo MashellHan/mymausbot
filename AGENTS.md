@@ -29,6 +29,15 @@ before proceeding. A missing file in that checkout is not a missing policy.
 - Route nonblocking corrections through Lead in one batch at a safe boundary.
   Keep cleanup, unrelated QA and new features outside the active delivery.
 
+## Process targets
+
+Timing, PR age and handoff/triage deadlines are advisory process-scan criteria.
+They must not fail a quality gate, invalidate a successful check, close a useful
+PR or cancel delivery. Record and assign optimization/recovery work through Lead;
+retain actual validation failures, source binding and data/security decisions.
+Recover useful mistakenly closed PRs or link verified adoption through another
+PR, preserving source and review/check history.
+
 ## Comments
 
 Write a comment only for what the code cannot say:

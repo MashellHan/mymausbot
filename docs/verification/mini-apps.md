@@ -40,11 +40,11 @@ preload. Normal-App delivery checks the installed source and real inventory
 read-only. Default migration may create the five included entries and retain their
 existing Data sources; count and metadata alone do not prove displayed contents.
 
-## Built-in Agent Team and Usage
+## Built-in Agent Team and Activities
 
 Use the existing synthetic dashboard snapshots with an isolated Mini Apps
 registry. Open both default entries through the library and compare their
-values with the old tabs on the same captured data. Keep Bookkeeping and both
+values with the synthetic snapshots. The original Computer tabs are removed. Keep Bookkeeping and both
 report apps installed to check that their ordinary HTML path still works.
 
 The focused contracts are:
@@ -63,8 +63,10 @@ visible repair action and require an owner regrant before showing live data.
 Verify the same app ID after repair and refusal of an unrelated custom app with
 the same slug. Persistent built-in identity alone must never authorize a read.
 
-In the renderer, check folded activity and an initially unselected office,
-two-second team refresh, five-minute Usage refresh, and cancellation on hide or
+In the renderer, check folded member activity and an initially selected active
+team, falling back to the most recently active verified session. Preserve manual
+selection and collapse through refreshes. Verify
+two-second team refresh, five-minute Activities refresh, and cancellation on hide or
 unmount. Offline data must remain unavailable or stale, and authorization loss
 must clear old observations. Check keyboard navigation, light/dark themes and
 English/Chinese at 960, 400 and 360 pixels. Built-in views must require the

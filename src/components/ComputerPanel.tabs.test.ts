@@ -29,8 +29,6 @@ vi.mock("./AndroidDevicePanel", () => ({ AndroidDevicePanel: () => null, useAndr
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: ({ page }: { page?: unknown }) => { fixture.page = page; return null; } }));
 vi.mock("./CloudBackendPicker", () => ({ CloudBackendPicker: () => null }));
 vi.mock("./bot-settings/RoutinesSection", () => ({ RoutinesSection: () => null }));
-vi.mock("./AgentTeamPanel", () => ({ AgentTeamPanel: () => createElement("div", { "data-testid": "agent-team-panel" }) }));
-vi.mock("./LocalUsagePanel", () => ({ LocalUsagePanel: () => createElement("div", { "data-testid": "local-usage-panel" }) }));
 vi.mock("./mini-apps/MiniAppsPanel", () => ({ MiniAppsPanel: () => createElement("div", { "data-testid": "mini-apps-panel" }) }));
 vi.mock("./data/DataPanel", () => ({ DataPanel: () => createElement("div", { "data-testid": "data-panel" }) }));
 vi.mock("@/state/store", async (importOriginal) => ({
@@ -117,6 +115,15 @@ afterEach(() => {
 });
 
 describe("Computer panel tab", () => {
+  it.each(["agent-team", "usage"])("restores the retired %s tab into Mini Apps", async (view) => {
+    localStorage.setItem("omb-computer-panel-view:scout", view);
+    await open(makeBot());
+    expect(selected()).toBe("Mini Apps");
+    expect(document.querySelector('[data-testid="mini-apps-panel"]')).not.toBeNull();
+    expect(tabLabels()).not.toContain("Agent Team");
+    expect(tabLabels()).not.toContain("Usage");
+  });
+
   it("names the tablist from the active catalog", async () => {
     setLocale("de");
     await open(makeBot());
@@ -158,11 +165,11 @@ describe("Computer panel tab", () => {
 
   it("marks the selected trigger and only that one", async () => {
     await open(makeBot());
-    expect(tabs().map((candidate) => candidate.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false", "false", "false", "false", "false"]);
+    expect(tabs().map((candidate) => candidate.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false", "false", "false"]);
 
     flushSync(() => tab("Data").click());
     await settle();
-    expect(tabs().map((candidate) => candidate.getAttribute("aria-selected"))).toEqual(["false", "false", "false", "true", "false", "false", "false", "false"]);
+    expect(tabs().map((candidate) => candidate.getAttribute("aria-selected"))).toEqual(["false", "false", "false", "true", "false", "false"]);
   });
 
   it("keeps one Tab stop and moves it with the arrow, Home and End keys", async () => {
@@ -183,16 +190,16 @@ describe("Computer panel tab", () => {
     // Wraps around the row's ends.
     press("Screen", "ArrowLeft");
     await settle();
-    expect(selected()).toBe("Usage");
-    press("Usage", "ArrowRight");
+    expect(selected()).toBe("Mini Apps");
+    press("Mini Apps", "ArrowRight");
     await settle();
     expect(selected()).toBe("Screen");
 
     press("Screen", "End");
     await settle();
-    expect(selected()).toBe("Usage");
-    expect(document.activeElement).toBe(tab("Usage"));
-    press("Usage", "Home");
+    expect(selected()).toBe("Mini Apps");
+    expect(document.activeElement).toBe(tab("Mini Apps"));
+    press("Mini Apps", "Home");
     await settle();
     expect(selected()).toBe("Screen");
     expect(document.activeElement).toBe(tab("Screen"));
@@ -211,7 +218,7 @@ describe("Computer panel tab", () => {
   it("moves over an Android tab that appeared", async () => {
     fixture.android = true;
     await open(makeBot());
-    expect(tabLabels()).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+    expect(tabLabels()).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
     press("Routines", "ArrowRight");
     await settle();
     expect(selected()).toBe("Android");
@@ -230,10 +237,10 @@ describe("Computer panel tab", () => {
     expect(selected()).toBe("Screen");
   });
 
-  it("reaches Files, Mini Apps, Agent Team and Usage in Simple mode", async () => {
+  it("reaches Files and Mini Apps in Simple mode", async () => {
     fixture.advanced = false;
     await open(makeBot());
-    expect(tabLabels()).toEqual(["Screen", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]);
+    expect(tabLabels()).toEqual(["Screen", "Browser", "Data", "Files", "Mini Apps"]);
     press("Data", "ArrowRight");
     await settle();
     expect(selected()).toBe("Files");
@@ -243,12 +250,12 @@ describe("Computer panel tab", () => {
     expect(document.activeElement).toBe(tab("Mini Apps"));
     press("Mini Apps", "ArrowRight");
     await settle();
-    expect(selected()).toBe("Agent Team");
-    expect(document.activeElement).toBe(tab("Agent Team"));
-    press("Agent Team", "End");
+    expect(selected()).toBe("Screen");
+    expect(document.activeElement).toBe(tab("Screen"));
+    press("Screen", "End");
     await settle();
-    expect(selected()).toBe("Usage");
-    expect(document.activeElement).toBe(tab("Usage"));
+    expect(selected()).toBe("Mini Apps");
+    expect(document.activeElement).toBe(tab("Mini Apps"));
   });
 
   it("reveals the selected Mini Apps tab when the actual panel narrows", async () => {
@@ -286,14 +293,14 @@ describe("Computer panel tab", () => {
       expect(document.activeElement).toBe(mini);
       press("Mini Apps", "ArrowRight");
       await settle();
-      expect(selected()).toBe("Agent Team");
-      expect(document.querySelector('[data-testid="agent-team-panel"]')).not.toBeNull();
+      expect(selected()).toBe("Screen");
+      expect(document.activeElement).toBe(tab("Screen"));
     } finally { globalThis.ResizeObserver = original; }
   });
 
   it("points every selected trigger at its panel and the panel back", async () => {
     await open(makeBot());
-    for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]) {
+    for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps"]) {
       flushSync(() => tab(label).click());
       await settle();
       const trigger = tab(label);
@@ -305,7 +312,7 @@ describe("Computer panel tab", () => {
 
   it("puts every selected panel in the tab sequence", async () => {
     await open(makeBot());
-    for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps", "Agent Team", "Usage"]) {
+    for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps"]) {
       flushSync(() => tab(label).click());
       await settle();
       const panel = document.getElementById(tab(label).getAttribute("aria-controls")!);

@@ -6,17 +6,24 @@ This standalone repository (`fork=false`) preserves upstream licensing and histo
 `MashellHan/openmausbot` repository, whose PR, issue, review and CI links are
 historical. Never push to `upstream` or `legacy-fork`.
 
+The product name is exactly lowercase `mymausbot`, including desktop bundles,
+window titles and phone installation metadata. Updates come from
+`MashellHan/mymausbot`. Keep existing application IDs, data paths, pairing and
+protocol identifiers compatible, and preserve upstream attribution during sync.
+
 - Commit each coherent, working slice with a message describing behavior and
   purpose. Keep useful checkpoints; do not split changes just to inflate counts.
 - Use one focused feature branch and PR per reviewable outcome. Open drafts
   early for visibility, then mark ready with evidence when the slice works.
-- Lead owns progress on every open PR, including drafts. Move review, fixes, CI
-  resolution or merge forward before 12 hours pass without substantive progress;
-  status-only comments, empty commits and draft toggles do not reset that clock.
-- Merge or close each PR within 24 hours of creation. Required review and CI
-  still gate merges. If a PR cannot merge, close it without deleting its branch
-  or commits and record the blocker, owner, concrete next action and condition
-  to resume. Do not close and reopen a PR to reset either clock.
+- Lead owns every open PR, including drafts. Twelve hours without observed
+  activity and twenty-four hours open are advisory process-scan targets. Record
+  the blocker, owner and next action; continue required review/checks and retain
+  useful work. Never close, cancel, roll back or repeat checks solely for a clock.
+- Close a PR only for a substantive disposition, with the successor or product
+  decision recorded. If a process rule caused a mistaken closure, record the
+  PR, branch/head, evidence, reason and recovery owner. Reopen useful unadopted
+  work on the same PR or link verified adoption through another PR. Assign
+  pipeline/test improvements at available capacity and keep recovery visible.
 - Preserve meaningful commits when integrating. No routine squash, force-push,
   history rewriting or unreviewed direct changes to the default branch.
 - Run required hooks and checks. Test the changed contract meaningfully, then
