@@ -45,7 +45,7 @@ it("clears the owner snapshot on a real API 401 even when session recheck is unr
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); await sessionCheck(); });
     expect(fetch).toHaveBeenCalledWith("/api/auth/session", expect.objectContaining({ credentials: "same-origin" }));
     expect(sessionEnded()).toBe(false);
-    expect(host.textContent).toContain("Local Herdr · — teams");
+    expect(host.textContent).toContain("— teams");
     expect(host.textContent).toContain("teams are unavailable");
     expect(host.textContent).not.toContain("Atlas Studio");
   } finally {

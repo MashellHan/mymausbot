@@ -5374,6 +5374,8 @@
   "computer.agentTeam.loading": "正在读取本机团队…",
   "computer.agentTeam.heading": "本机 Herdr · {count} 个团队",
   "computer.agentTeam.headingOne": "本机 Herdr · 1 个团队",
+  "computer.agentTeam.teamCount": "{count} 个团队",
+  "computer.agentTeam.teamCountOne": "1 个团队",
   "computer.agentTeam.unknownCount": "—",
   "computer.agentTeam.readAt": "最近读取：{time}",
   "computer.agentTeam.neverRead": "尚未成功读取",

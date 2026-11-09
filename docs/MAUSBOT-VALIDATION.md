@@ -143,7 +143,7 @@ The trusted-main `scan` job in `qa-report.yml` runs after PR CI completes; it is
 not a required PR check and uses `continue-on-error`. Its
 `process-scan.json` reports `passed`, `optimization_needed` or `incomplete`.
 The workflow scan is read-only and retains its report artifact. The existing
-serialized thirty-minute Lead queue scans open PRs and recent PR runs and is the
+serialized hourly Lead queue scans open PRs and recent PR runs and is the
 only publisher of process issues; there is no new scheduler. Scanner outages cannot fail the quality gate or
 prevent ordinary QA/PR handoffs.
 It also inspects procedural closure reasons among the latest 100 closed PRs
@@ -221,7 +221,7 @@ this reporter support before closing members, and preserve the original links,
 case keys, platforms, assertions, tested revisions, runs and pending work in
 the consolidation handoff.
 
-The local thirty-minute queue uses the existing `mausbot-lead` Herdr agent. It
+The local hourly queue uses the existing `mausbot-lead` Herdr agent. It
 submits new QA work, ready PR heads, verification and overdue conditions. Normal
 recurrence updates the issue without another wake-up. A durable submission
 receipt is not an acknowledgement: Lead acknowledges and triages on the issue
@@ -340,7 +340,7 @@ The queue entry point is `node scripts/qa/queue.mjs`. It requires
 prefix in `MAUSBOT_GH_COMMAND`, and optional `MAUSBOT_HERDR` /
 `MAUSBOT_HERDR_SESSION` (default `default`). Use the verified personal account
 helper on a Mac with multiple GitHub accounts; never store tokens in a plist.
-Install one launchd job with `StartInterval` set to 1800 seconds against a pinned checkout.
+Install one launchd job with `StartInterval` set to 3600 seconds against a pinned checkout.
 Preserve the existing upstream sync and activity collectors. Resolve an
 uncertain receipt by reading Lead's actual state/output and the issue/PR;
 clear its pending entry only after determining whether submission happened.
