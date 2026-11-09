@@ -15,9 +15,9 @@ const prContext = (action: string | null, label: string | null, { number = 134, 
 const decision = (context: Parameters<typeof interpolate>[1]) => ({
   group: interpolate(workflow.concurrency.group, context),
   cancel: interpolate(workflow.concurrency["cancel-in-progress"], context),
-  static: interpolate(workflow.jobs.static.if, context),
+  static: workflow.jobs.static.if === undefined ? true : interpolate(workflow.jobs.static.if, context),
   gateName: interpolate(workflow.jobs.gate.name, context),
-  gate: interpolate(workflow.jobs.gate.if.replace(/!cancelled\(\)\s*&&\s*/, ""), context),
+  gate: interpolate(workflow.jobs.gate.if.replace(/!cancelled\(\)/, "true"), context),
 });
 
 function runGate(state: ReturnType<typeof gateState>) {
@@ -52,41 +52,13 @@ describe("CI concurrency", () => {
     expect(decision({ github: { event_name: "workflow_dispatch", ref: "refs/heads/release/v1" } }).group).toBe("ci-workflow_dispatch-refs/heads/release/v1");
   });
 
-  it.each(["qa:triaged", "qa:p1", "qa:kind:product", "qa:scope:agents", "owner:upstream", "bug"])(
-    "does not cancel checks or publish a CI check for %s metadata", (label) => {
-      for (const action of ["labeled", "unlabeled"]) {
-        expect(decision(prContext(action, label))).toEqual({
-          group: "ci-metadata-134-42", cancel: false, static: false, gateName: "PR metadata ignored", gate: false,
-        });
-      }
-    },
-  );
-
-  it("keeps ignored metadata runs separate from each other and all validation jobs behind static", () => {
-    expect(decision(prContext("labeled", "qa:triaged", { runId: 42 })).group)
-      .not.toBe(decision(prContext("labeled", "owner:upstream", { runId: 43 })).group);
+  it("keeps metadata events out of this required-check workflow and all validation jobs behind static", () => {
+    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened"]);
+    expect(workflow.jobs.static.if).toBeUndefined();
+    expect(workflow.jobs.gate.name).toBe("CI");
     for (const [id, job] of Object.entries(workflow.jobs as Record<string, { needs?: unknown }>)) {
       if (id !== "static" && id !== "gate") expect(job.needs, id).toBeDefined();
     }
-  });
-
-  it.each(["ci:full", "qa:repair", "windows", "upstream-sync"])("runs required checks when %s is added or removed", (label) => {
-    for (const action of ["labeled", "unlabeled"]) {
-      expect(decision(prContext(action, label))).toEqual({
-        group: "ci-pr-134", cancel: true, static: true, gateName: "CI", gate: true,
-      });
-    }
-  });
-
-  it("runs validation for incomplete or unknown label events", () => {
-    for (const context of [
-      prContext("labeled", null),
-      prContext(null, "qa:triaged"),
-      prContext("edited", "qa:triaged"),
-      prContext("labeled", "qa:triaged", { number: null }),
-      prContext("labeled", "qa:triaged", { base: null }),
-      prContext("labeled", "qa:triaged", { head: null }),
-    ]) expect(decision(context)).toMatchObject({ cancel: true, static: true, gateName: "CI", gate: true });
   });
 
   it("runs the full lane once daily at 05:00 China time", () => {
@@ -112,7 +84,7 @@ describe("CI concurrency", () => {
   it("creates the required check immediately so a new full request replaces old green evidence", () => {
     expect(workflow.jobs.gate.if).toContain("!cancelled()");
     expect(workflow.jobs.gate.needs).toBeUndefined();
-    expect(decision(prContext("labeled", "ci:full"))).toMatchObject({ group: "ci-pr-134", gateName: "CI", gate: true });
+    expect(decision(prContext("synchronize", null))).toMatchObject({ group: "ci-pr-134", gateName: "CI", gate: true });
     expect(workflow.jobs.gate.steps.some((step: { run?: string }) => step.run === "node scripts/qa/gate.mjs")).toBe(true);
   });
 
@@ -294,7 +266,7 @@ describe("CI concurrency", () => {
   });
 
   it("validates selection and docs before fanout for a source change", () => {
-    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened", "labeled", "unlabeled"]);
+    expect(workflow.on.pull_request.types).toEqual(["opened", "synchronize", "reopened"]);
     expect(decision(prContext("synchronize", null)).static).toBe(true);
     expect(workflow.jobs.static.steps[0].with["fetch-depth"]).toBe(0);
     expect(workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope").run).toBe("node scripts/ci-scope.mjs");

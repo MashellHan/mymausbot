@@ -13,7 +13,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
   # The merge queue runs CI on the PR merged onto the current main BEFORE it
   # lands, so a PR that is green alone but red together with what just
   # merged is stopped in the queue instead of on main (that shape reddened
@@ -40,24 +40,12 @@ concurrency:
   # scripts/release-ci.mjs starts) their event and branch. A PR's group is
   # named by its number, never by github.ref: a merged PR's closed event
   # reports the base branch as github.ref, so a ref-named group let every merge
-  # cancel main's run (ci-stop-closed.yml). Metadata label events get a separate
-  # run group because GitHub evaluates concurrency before skipped jobs.
+  # cancel main's run (ci-stop-closed.yml).
   group: >-
-    ci-${{ github.event_name == 'pull_request'
-    && contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
-    && github.event.pull_request.number && github.event.pull_request.base.sha && github.event.pull_request.head.sha
-    && github.event.label.name
-    && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)
-    && format('metadata-{0}-{1}', github.event.pull_request.number, github.run_id)
-    || github.event_name == 'merge_group' && github.event.merge_group.head_ref
+    ci-${{ github.event_name == 'merge_group' && github.event.merge_group.head_ref
     || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)
     || github.event_name == 'push' && github.ref || format('{0}-{1}', github.event_name, github.ref) }}
-  cancel-in-progress: >-
-    ${{ github.event_name == 'pull_request'
-    && !(contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
-    && github.event.pull_request.number && github.event.pull_request.base.sha && github.event.pull_request.head.sha
-    && github.event.label.name
-    && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ── The test leg, in pieces ──────────────────────────────────────────────
@@ -65,12 +53,6 @@ jobs:
   # platform, and every smoke reports on its own. One final `CI` check
   # aggregates the required jobs (see docs/ci.md for ruleset migration).
   static:
-    if: >-
-      ${{ !(github.event_name == 'pull_request'
-      && contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
-      && github.event.pull_request.number && github.event.pull_request.base.sha && github.event.pull_request.head.sha
-      && github.event.label.name
-      && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)) }}
     name: >-
       ${{ vars.BOAT_CI == 'on' && contains(fromJSON('["push", "merge_group"]'), github.event_name)
       && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
@@ -471,20 +453,8 @@ jobs:
           retention-days: 7
 
   gate:
-    # GitHub reports a skipped job as successful: an ignored label must never publish the required CI name.
-    name: >-
-      ${{ github.event_name == 'pull_request'
-      && contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
-      && github.event.pull_request.number && github.event.pull_request.base.sha && github.event.pull_request.head.sha
-      && github.event.label.name
-      && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)
-      && 'PR metadata ignored' || 'CI' }}
-    if: >-
-      ${{ !cancelled() && !(github.event_name == 'pull_request'
-      && contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
-      && github.event.pull_request.number && github.event.pull_request.base.sha && github.event.pull_request.head.sha
-      && github.event.label.name
-      && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)) }}
+    name: CI
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:

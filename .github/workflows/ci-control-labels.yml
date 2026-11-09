@@ -1,0 +1,37 @@
+name: CI control labels
+
+on:
+  pull_request_target:
+    types: [labeled, unlabeled]
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+
+concurrency:
+  group: >-
+    ci-control-${{ github.event.label.name
+    && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)
+    && format('metadata-{0}', github.run_id)
+    || format('pr-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: >-
+    ${{ !github.event.label.name
+    || contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name) }}
+
+jobs:
+  route:
+    name: Route validation control
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Refresh current PR validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci-label-controls.mjs
