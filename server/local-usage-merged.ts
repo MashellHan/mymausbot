@@ -1,4 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
+import { MAX_USAGE_HISTORY_DAYS } from "../shared/local-usage-range.ts";
 import type { LocalUsageCategory, LocalUsageCoverage, LocalUsageMergedCounts, LocalUsageMergedResponse,
   LocalUsageMergedTrendDay, LocalUsageMergedWindow, LocalUsagePeriodChange } from "../shared/local-dashboard.ts";
 
@@ -72,14 +73,17 @@ function inside<T extends { day: string }>(rows: T[], from: string, through: str
   return rows.filter((row) => row.day >= from && row.day <= through);
 }
 
-function projection(raw: unknown, now: number): LocalUsageMergedResponse {
+function projection(raw: unknown, now: number, extended = false): LocalUsageMergedResponse {
   const snapshot = object(raw);
   const asOf = instant(snapshot.asOfAt), capturedAt = instant(snapshot.capturedAt);
   if (snapshot.version !== 1 || asOf > now + 5 * 60_000 || capturedAt < asOf || capturedAt > now + 5 * 60_000) {
     throw new Error("Invalid remote Usage snapshot");
   }
-  const endDay = day(asOf), firstDay = shift(endDay, -59);
-  if (snapshot.windowStartDay !== firstDay || !Array.isArray(snapshot.sources) || snapshot.sources.length > 24) {
+  const endDay = day(asOf), firstDay = shift(endDay, extended ? 1 - MAX_USAGE_HISTORY_DAYS : -59);
+  const declaredStart = String(snapshot.windowStartDay);
+  shift(declaredStart, 0);
+  if (declaredStart < shift(endDay, 1 - MAX_USAGE_HISTORY_DAYS) || declaredStart > shift(endDay, -59)
+    || !Array.isArray(snapshot.sources) || snapshot.sources.length > 24) {
     throw new Error("Invalid remote Usage window");
   }
   const sourceIds = new Set<string>();
@@ -95,6 +99,9 @@ function projection(raw: unknown, now: number): LocalUsageMergedResponse {
     if (status === "ready" && observedAt !== asOf || status === "stale" && (observedAt === null || observedAt > asOf)) {
       throw new Error("Invalid remote Usage source time");
     }
+    const startDay = source.startDay === undefined ? declaredStart : String(source.startDay);
+    shift(startDay, 0);
+    if (startDay < declaredStart || startDay > endDay) throw new Error("Invalid remote source history range");
     category(source.category);
     const items: Pr[] = source.items.map((value) => {
       const item = object(value), at = instant(item.at), repo = repository(item.repository);
@@ -102,8 +109,8 @@ function projection(raw: unknown, now: number): LocalUsageMergedResponse {
       const commits = item.commits.map(opaque);
       if (new Set(commits).size !== commits.length) throw new Error("Duplicate original commit in PR");
       return { key: opaque(item.key), at, day: day(at), category: category(item.category), repository: repo, commits };
-    }).filter((item) => item.day >= firstDay && item.day <= endDay);
-    return { status, items };
+    }).filter((item) => item.day >= firstDay && item.day >= declaredStart && item.day <= endDay);
+    return { status, items, startDay, endDay: observedAt === null ? null : day(observedAt) };
   });
   const sourceCoverage = { total: sources.length, ready: 0, partial: 0, stale: 0, unavailable: 0 };
   for (const source of sources) sourceCoverage[source.status]++;
@@ -142,14 +149,23 @@ function projection(raw: unknown, now: number): LocalUsageMergedResponse {
   const overlaps = { repeatedShas: [...repeats.values()].filter((count) => count > 1).length,
     categoryConflicts: [...categories.values()].filter((values) => values.size > 1).length,
     dayConflicts: [...days.values()].filter((values) => values.size > 1).length };
-  const coverage: LocalUsageCoverage = complete ? "ready" : sourceCoverage.total === 0 || sourceCoverage.unavailable === sourceCoverage.total ? "unavailable" : "partial";
 
   function makeWindow(days: 1 | 7 | 30, through: string): LocalUsageMergedWindow {
     const startDay = shift(through, 1 - days);
     const selectedPrs = inside(prs, startDay, through), selectedCommits = inside(commits, startDay, through);
+    const observed = !extended || sources.some((source) => source.status !== "unavailable" && through >= source.startDay
+      && source.endDay !== null && through <= source.endDay) || selectedPrs.length > 0 || selectedCommits.length > 0;
+    const complete = sourceCoverage.total > 0 && sources.every((source) => source.status === "ready"
+      && (!extended || through >= source.startDay && source.endDay !== null && through <= source.endDay));
+    const coverage: LocalUsageCoverage = !observed ? "unavailable" : complete ? "ready"
+      : sourceCoverage.total === 0 || sourceCoverage.unavailable === sourceCoverage.total ? "unavailable" : "partial";
     const total = counts(selectedPrs, selectedCommits, complete);
     const categoryCounts = Object.fromEntries(CATEGORIES.map((key) => [key, counts(
       selectedPrs.filter((item) => item.category === key), selectedCommits.filter((item) => item.category === key), complete)])) as Record<Category, LocalUsageMergedCounts>;
+    if (extended) return { days, startDay, endDay: through, asOf, coverage, missingDays: [], ...total, categories: categoryCounts,
+      repositories: { coverage: "unavailable", rows: [], unattributedPrs: null, unattributedCommits: null, sharedCommits: 0 },
+      comparison: { startDay: shift(startDay, -days), endDay: shift(startDay, -1), missingDays: [], prs: null, commits: null,
+        categories: Object.fromEntries(CATEGORIES.map((key) => [key, { prs: null, commits: null }])) as LocalUsageMergedWindow["comparison"]["categories"] } };
     const repoRows = new Map<string, { repository: Repo; category: Category; prs: Set<string>; commits: Set<string> }>();
     const rowFor = (repo: Repo, kind: Category) => {
       const row = repoRows.get(repo.id) ?? { repository: repo, category: kind, prs: new Set<string>(), commits: new Set<string>() };
@@ -193,17 +209,19 @@ function projection(raw: unknown, now: number): LocalUsageMergedResponse {
       commits: change(current.categories[key].commits, previous.categories[key].commits) };
     windows[String(size) as "1" | "7" | "30"] = current;
   }
-  const trend: LocalUsageMergedTrendDay[] = Array.from({ length: 30 }, (_, index) => {
-    const currentDay = shift(endDay, index - 29);
+  const span = extended ? MAX_USAGE_HISTORY_DAYS : 30;
+  const trend: LocalUsageMergedTrendDay[] = Array.from({ length: span }, (_, index) => {
+    const currentDay = shift(endDay, index + 1 - span);
     const current = makeWindow(1, currentDay), previous = makeWindow(1, shift(currentDay, -7));
-    return { day: currentDay, coverage, prs: current.prs, knownPrs: current.knownPrs,
+    return { day: currentDay, coverage: current.coverage, prs: current.prs, knownPrs: current.knownPrs,
       commits: current.commits, knownCommits: current.knownCommits, categories: current.categories,
       wow: { prs: change(current.prs, previous.prs), commits: change(current.commits, previous.commits) } };
   });
   const stale = now - capturedAt > STALE_MS || day(now) !== endDay || sourceCoverage.stale > 0;
   const unavailable = sourceCoverage.total === 0 || sourceCoverage.unavailable === sourceCoverage.total;
   const status = unavailable ? "unavailable" : stale ? "stale" : complete ? "ready" : "partial";
-  return { status, asOf, timeZone: "Asia/Shanghai", sourceCoverage, overlaps, windows, trend };
+  return { status, asOf, timeZone: "Asia/Shanghai", sourceCoverage, overlaps, windows, trend,
+    ...(!extended ? { history: projection(raw, now, true).trend } : {}) };
 }
 
 export function createLocalUsageMergedReader(file: string, now: () => number = Date.now) {

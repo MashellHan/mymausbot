@@ -32,6 +32,73 @@ def command(url="https://dev.azure.com/example/_apis/connectionData?connectOptio
             "--resource", usage.ADO_RESOURCE, "-o", "json"]
 
 
+class TokenHistoryTests(unittest.TestCase):
+    @staticmethod
+    def snapshot(date, value=10, status="ready"):
+        category = {"input": value, "output": 0, "cacheRead": 2}
+        zero = {"input": 0, "output": 0, "cacheRead": 0}
+        at = dt.datetime.fromisoformat(date + "T08:00:00+00:00")
+        return {"version": 1, "timeZone": "Asia/Shanghai", "updatedAt": int(at.timestamp() * 1000),
+                "daily": [{"day": date, "tokenStatus": status,
+                           "categories": {"work": category, "personal": zero, "unclassified": zero}}]}
+
+    def test_observed_days_survive_the_collectors_60_day_cutoff_without_filling_gaps(self):
+        previous = self.snapshot("2026-06-01")
+        previous["localHistory"] = {"version": 1, "daily": previous["daily"]}
+        first = usage.retain_token_history(self.snapshot("2026-08-02", 0, "partial"), previous)
+        self.assertEqual([row["day"] for row in first["trendHistory"]["daily"]], ["2026-06-01", "2026-08-02"])
+        self.assertEqual(first["trendHistory"]["daily"][0]["totalTokens"], 12)
+        self.assertEqual(first["trendHistory"]["daily"][1]["tokenStatus"], "partial")
+        next_snapshot = self.snapshot("2026-11-09", 0, "unavailable")
+        result = usage.retain_token_history(next_snapshot, first)
+        self.assertEqual([row["day"] for row in result["trendHistory"]["daily"]], ["2026-06-01", "2026-08-02", "2026-11-09"])
+        self.assertIsNone(result["trendHistory"]["daily"][-1]["totalTokens"])
+        self.assertEqual(len(result["daily"]), 1)
+
+    def test_bounded_history_discards_future_invalid_and_expired_rows_and_preserves_zero(self):
+        previous = self.snapshot("2026-11-08")
+        projected = {"day": "2026-05-03", "tokenStatus": "ready", "newTokens": 0, "cacheRead": 0, "totalTokens": 0}
+        previous["trendHistory"] = {"version": 1, "daily": [projected,
+            {**projected, "day": "2026-05-02"}, {**projected, "day": "2026-11-10"},
+            {**projected, "day": "2026-06-01", "newTokens": -1},
+            {**projected, "day": "2026-06-02", "totalTokens": 1},
+            {**projected, "day": "2026-02-30"}]}
+        result = usage.retain_token_history(self.snapshot("2026-11-09"), previous)
+        rows = result["trendHistory"]["daily"]
+        self.assertEqual([row["day"] for row in rows], ["2026-05-03", "2026-11-08", "2026-11-09"])
+        self.assertEqual(rows[0]["totalTokens"], 0)
+        self.assertEqual(rows[0]["tokenStatus"], "ready")
+        previous["localHistory"] = False
+        previous["trendHistory"] = None
+        usage.retain_token_history(self.snapshot("2026-11-09"), previous)
+
+    def test_unavailable_refresh_preserves_known_tokens_as_partial_beyond_the_60_day_cutoff(self):
+        for status in ("ready", "partial"):
+            with self.subTest(status=status):
+                previous = self.snapshot("2026-11-08")
+                known = [{"day": date, "tokenStatus": status, "newTokens": 100, "cacheRead": 20, "totalTokens": 120}
+                         for date in ("2026-10-01", "2026-11-01")]
+                previous["trendHistory"] = {"version": 1, "daily": known}
+                current = self.snapshot("2026-11-09")
+                unknown = [self.snapshot(date, 0, "unavailable")["daily"][0]
+                           for date in ("2026-10-01", "2026-10-02", "2026-11-01", "2026-11-02")]
+                current["localHistory"] = {"version": 1, "daily": unknown}
+                current["daily"].extend(unknown[2:])
+                result = usage.retain_token_history(current, previous)
+                rows = {row["day"]: row for row in result["trendHistory"]["daily"]}
+                for row in known:
+                    self.assertEqual(rows[row["day"]], {**row, "tokenStatus": "partial"})
+                for date in ("2026-10-02", "2026-11-02"):
+                    self.assertEqual(rows[date], {"day": date, "tokenStatus": "unavailable",
+                                                "newTokens": None, "cacheRead": None, "totalTokens": None})
+                self.assertEqual(current["localHistory"]["daily"], unknown)
+                self.assertEqual(previous["trendHistory"]["daily"], known)
+                later = usage.retain_token_history(self.snapshot("2027-01-15"), result)
+                retained = {row["day"]: row for row in later["trendHistory"]["daily"]}
+                for row in known:
+                    self.assertEqual(retained[row["day"]], {**row, "tokenStatus": "partial"})
+
+
 class MemoryAuthTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

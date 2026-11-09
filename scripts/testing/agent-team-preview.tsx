@@ -10,7 +10,8 @@ const params = new URLSearchParams(location.search);
 const width = Number(params.get("width"));
 if ([360, 400, 960].includes(width)) {
   const style = document.createElement("style");
-  style.textContent = `[data-computer-panel] { width: ${width}px !important; }`;
+  style.textContent = `[data-computer-panel] { width: ${width}px !important; }
+    @media (max-width: 400px) { main[aria-label="Synthetic chat background"] { display: none; } }`;
   document.head.append(style);
 }
 setAnalyticsEnabled(false);

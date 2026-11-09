@@ -1,12 +1,32 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { AlertTriangle, Loader2, Shield } from "lucide-react";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { macCuaPermissionMessage, missingMacCuaPermissions } from "@/lib/mac-cua-permissions";
 import { MacCuaRecoveryActions } from "./MacCuaRecoveryActions";
+import { NotNowButton } from "./NoticeCard";
 import { t } from "@/lib/i18n";
+
+let hiddenUntilRelaunch = false;
+const hiddenListeners = new Set<() => void>();
+const subscribeHidden = (listener: () => void) => { hiddenListeners.add(listener); return () => { hiddenListeners.delete(listener); }; };
+const readHidden = () => hiddenUntilRelaunch;
+
+export function hideMacLocalControlUntilRelaunch() {
+  hiddenUntilRelaunch = true;
+  for (const listener of hiddenListeners) listener();
+}
+
+export async function openMacControlSettings(
+  open: (pane: "accessibility" | "screen") => Promise<void> | undefined = (pane) => window.ogb?.permOpenSettings?.(pane),
+) {
+  await open("accessibility");
+  if (hiddenUntilRelaunch) return;
+  await open("screen");
+}
 
 export function MacLocalControl() {
   const { capabilities } = useDesktopCapabilities();
+  const hidden = useSyncExternalStore(subscribeHidden, readHidden, readHidden);
   const reason = capabilities.localComputer.available ? null : capabilities.localComputer.message;
   const permissionMessage = macCuaPermissionMessage(missingMacCuaPermissions(reason));
   const [pending, setPending] = useState(false);
@@ -27,15 +47,14 @@ export function MacLocalControl() {
   const openSettings = async () => {
     setError(null);
     try {
-      await window.ogb?.permOpenSettings?.("accessibility");
-      await window.ogb?.permOpenSettings?.("screen");
+      await openMacControlSettings();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   };
 
   if (capabilities.host.platform !== "darwin" || capabilities.localComputer.reasonCode === "remote-server") return null;
-  if (capabilities.localComputer.available) return null;
+  if (capabilities.localComputer.available || hidden) return null;
 
   return (
     <section className="mt-4 rounded-xl border border-warning/25 bg-warning/10 p-4">
@@ -74,6 +93,7 @@ export function MacLocalControl() {
               {pending && <Loader2 size={13} className="animate-spin" />}
               {t("commandAllowlist.retry")}
             </button>
+            {!pending && <NotNowButton onClick={hideMacLocalControlUntilRelaunch} />}
           </div>
         </div>
       </div>

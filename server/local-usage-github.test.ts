@@ -7,6 +7,7 @@ import { createLocalUsageGithubReader } from "./local-usage-github.ts";
 import { createLocalUsageProvider } from "./local-usage.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { localUsageView } from "../src/lib/local-usage-view.ts";
+import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 
 const now = Date.parse("2026-11-09T08:24:11Z");
 const folders: string[] = [];
@@ -28,6 +29,46 @@ async function fixture() {
 }
 
 describe("GitHub Profile source contract", () => {
+  it("projects retained Profile dates through provider and long views without changing short windows or inventing old zeroes", async () => {
+    const { file, raw, read } = await fixture();
+    const retained = structuredClone(raw.sources[0].days.at(-1));
+    Object.assign(retained, { day: "2026-08-01", capturedAt: "2026-08-01T04:00:00Z", inProgress: false,
+      rawPrs: 2, excludedForkPrs: 0, knownPrs: 2, profilePrs: 2, profileCommits: 3 });
+    retained.repositories[0].knownPrs = 2;
+    retained.repositories[0].profileCommits = 3;
+    const zero = { ...structuredClone(raw.sources[0].days[0]), day: "2026-09-20", capturedAt: "2026-09-20T04:00:00Z" };
+    raw.sources[0].days.unshift(zero);
+    await writeFile(file, JSON.stringify(raw));
+    const baseline = await read();
+    raw.sources[0].days.unshift(retained);
+    await writeFile(file, JSON.stringify(raw));
+    const provider = createLocalUsageProvider({ file: join(file, "..", "absent-local.json"), githubFile: file,
+      mergedFile: join(file, "..", "absent-merged.json"), now: () => now });
+    const snapshot = await provider.get(), source = snapshot.github!;
+    expect(source.history).toHaveLength(191);
+    expect(source.windows).toEqual(baseline!.windows);
+    expect(source.trend).toEqual(baseline!.trend);
+    expect(source.history!.slice(-30)).toEqual(source.trend);
+    const short = localUsageView(snapshot);
+    for (const range of ["60", "90", "6m"] as const) {
+      const view = localUsageView(snapshot, range);
+      expect(view.windows).toEqual(short.windows);
+      expect(view.trend.find((row) => row.day === "2026-09-20")).toMatchObject({ coverage: "partial", knownPrs: 0, knownCommits: 0 });
+      expect(view.trend.find((row) => row.day === "2026-09-21")).toMatchObject({ coverage: "unavailable", knownPrs: null, knownCommits: null });
+      expect(view.trend.at(-1)).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 100, totalTokens: null });
+    }
+    const months = localUsageView(snapshot, "6m");
+    expect(months.period).toEqual({ startDay: "2026-05-10", endDay: "2026-11-09", days: 184 });
+    expect(months.trend.find((row) => row.day === "2026-08-01")).toMatchObject({ knownPrs: 2, knownCommits: 3, totalTokens: null });
+    expect(months.trend[0]).toMatchObject({ coverage: "unavailable", knownPrs: null, knownCommits: null });
+    const weeks = weeklyUsageTrend(months.trend);
+    expect(weeks[0]).toMatchObject({ day: "2026-05-10", endDay: "2026-05-10" });
+    expect(weeks.at(-1)).toMatchObject({ day: "2026-11-09", endDay: "2026-11-09" });
+    expect(weeks.reduce((sum, row) => sum + (row.knownCommits ?? 0), 0)).toBe(110);
+    expect(weeks.reduce((sum, row) => sum + (row.categories.personal.knownPrs ?? 0), 0)).toBe(4);
+    expect(weeks.every((row) => row.prs === null && row.commits === null && row.wow.prs === null && row.wow.commits === null)).toBe(true);
+  });
+
   it("reads the Python capture without rebinning commit buckets or certifying the nonfork PR subset", async () => {
     const { read, raw } = await fixture();
     expect(raw.sources[0].days.at(-1)).toMatchObject({ rawPrs: 1, knownPrs: 1, excludedForkPrs: 0 });

@@ -211,6 +211,7 @@ describe("CI outputs", () => {
       "scripts/testing/bot-tools-ui.e2e.test.ts",
       "scripts/testing/key-readback.e2e.test.ts",
       "scripts/testing/one-workspace-ui.e2e.test.ts",
+      "scripts/testing/rail-profile-ui.e2e.test.ts",
       "scripts/testing/secret-card-descriptions.test.ts",
       "scripts/testing/team-own-chat.e2e.test.ts",
       "server/body-thread-guards.e2e.test.ts",
@@ -220,6 +221,7 @@ describe("CI outputs", () => {
       "server/cloud-lending-chrome.e2e.test.ts",
       "server/cloud-lending-memory.e2e.test.ts",
       "server/cloud-lending.e2e.test.ts",
+      "server/cloud-lent-mcp.e2e.test.ts",
       "server/cloud-send-kinds.e2e.test.ts",
       "server/cloud-send-move.e2e.test.ts",
       "server/cloud-send-rooms.e2e.test.ts",
@@ -255,6 +257,7 @@ describe("CI outputs", () => {
       "server/parked-cards.e2e.test.ts",
       "server/question-cards.e2e.test.ts",
       "server/shared-computers.e2e.test.ts",
+      "server/shared-computers.gate.test.ts",
       "server/team-move.e2e.test.ts",
       "server/use-my-mac.e2e.test.ts",
       "server/workspace-banner.e2e.test.ts",
@@ -895,6 +898,26 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
 
   const serverJobs = (oses: string[]) => ({ jobs: SERVER_JOBS, build: true, vitest_os: oses, packaged_server_os: oses, vitest_matrix: vitestMatrix(oses) });
 
+  it("records the executed merge base when the PR event still names an older base", async () => {
+    const { directory, git, base: eventBase } = fixture("server/paths.ts");
+    git("switch", "-c", "feature");
+    writeFileSync(join(directory, "server/paths.ts"), "changed source\n");
+    git("commit", "--quiet", "-am", "source");
+    const head = git("rev-parse", "HEAD");
+    git("switch", "-c", "current-base", eventBase);
+    writeFileSync(join(directory, "docs/guide.md"), "new base guidance\n");
+    git("add", "--", "docs/guide.md");
+    git("commit", "--quiet", "-m", "base advanced");
+    const currentBase = git("rev-parse", "HEAD");
+    git("merge", "--quiet", "--no-ff", "--no-edit", "feature");
+    const merge = git("rev-parse", "HEAD");
+    const payload = { pull_request: { number: 7, base: { sha: eventBase }, head: { sha: head } } };
+    const { output, plan, stderr } = await runPullRequest(directory, payload, { OMB_CI_EXECUTION_BINDING: "1" });
+    expect(stderr).toBe("");
+    expect(output).toEqual(serverJobs(LINUX));
+    expect(plan.execution).toEqual({ merge, base: currentBase, head });
+  });
+
   it("runs the Windows jobs for a changed line that names Windows, and says why", async () => {
     const { directory, payload } = serverChange('if (process.platform === "win32") quote();\n');
     const { output, stdout, stderr } = await runPullRequest(directory, payload);
@@ -960,6 +983,26 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
       expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
     } finally {
       await api.close();
+    }
+  });
+
+  it("selects full validation for upstream-sync alone and restores the normal plan after removal", async () => {
+    const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
+    for (const [action, labels, full] of [
+      ["labeled", ["upstream-sync"], true],
+      ["unlabeled", [], false],
+    ] as const) {
+      const api = await fakeLabelsApi([...labels]);
+      try {
+        const event = { ...payload, action, label: { name: "upstream-sync" } };
+        const { output, plan, stderr } = await runPullRequest(directory, event, api.env, true);
+        expect(stderr).toBe("");
+        expect(plan.outputs.full_required).toBe(full);
+        expect(plan.outputs.fast_pr).toBe(!full);
+        expect(plan.plan.full).toBe(full);
+        expect(output.vitest_os).toEqual(full ? ALL : LINUX);
+        expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
+      } finally { await api.close(); }
     }
   });
 

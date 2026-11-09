@@ -134,12 +134,12 @@ class RemoteMergedTests(unittest.TestCase):
         github = Github()
         first = merged.refresh(self.config, self.monitor, github, file=self.file, at=AT)
         self.assertEqual(stat.S_IMODE(self.file.stat().st_mode), 0o600)
-        self.assertEqual(first["windowStartDay"], "2026-09-08")
+        self.assertEqual(first["windowStartDay"], "2026-04-30")
         self.assertEqual(first["sources"][0]["status"], "ready")
         items = first["sources"][0]["items"]
         self.assertEqual(len(items), 3)
         self.assertEqual([len(item["commits"]) for item in items], [5, 1, 1])
-        self.assertIn("merged:2026-09-07T16:00:00Z..2026-11-06T07:59:59Z", " ".join(str(call) for call in github.calls))
+        self.assertIn("merged:2026-04-29T16:00:00Z..2026-11-06T07:59:59Z", " ".join(str(call) for call in github.calls))
         self.assertNotIn("created:", " ".join(str(call) for call in github.calls))
         self.assertTrue(all("pr-" not in json.dumps(item) and sha(1) not in json.dumps(item) for item in items))
         github.calls.clear()
@@ -151,6 +151,21 @@ class RemoteMergedTests(unittest.TestCase):
         self.assertEqual(stale["sources"][0]["status"], "stale")
         self.assertEqual(stale["sources"][0]["items"], items)
         self.assertEqual(merged.refresh(self.config, self.monitor, github, file=self.file, at=AT, skip_api=True)["sources"][0]["status"], "stale")
+
+    def test_legacy_ready_cache_keeps_its_actual_start_on_skip_or_failure(self):
+        github = Github()
+        first = merged.refresh(self.config, self.monitor, github, file=self.file, at=AT)
+        first["windowStartDay"] = "2026-09-08"
+        first["sources"][0].pop("startDay")
+        self.file.write_text(json.dumps(first))
+        skipped = merged.refresh(self.config, self.monitor, github, file=self.file, at=AT, skip_api=True)
+        self.assertEqual(skipped["windowStartDay"], "2026-04-30")
+        self.assertEqual(skipped["sources"][0]["startDay"], "2026-09-08")
+        self.assertEqual(skipped["sources"][0]["status"], "stale")
+        self.assertEqual(merged.window(AT)[0].astimezone(merged.TZ).date().isoformat(), "2026-04-30")
+        refreshed = merged.refresh(self.config, self.monitor, github, file=self.file, at=AT)
+        self.assertEqual(refreshed["sources"][0]["startDay"], "2026-04-30")
+        self.assertEqual(refreshed["sources"][0]["status"], "ready")
 
     def test_large_pr_comparison_recovers_all_original_commits_and_is_cached(self):
         github = LargeGithub()
@@ -172,7 +187,7 @@ class RemoteMergedTests(unittest.TestCase):
                 def empty(args, timeout):
                     fields = dict(arg.split("=", 1) for index, arg in enumerate(args) if index > 0 and args[index - 1] == "-f")
                     self.assertEqual(fields["search"], "is:pr is:merged author:" + OWNER +
-                                     " merged:2026-09-07T16:00:00Z.." + last_second)
+                                     " merged:2026-04-29T16:00:00Z.." + last_second)
                     return json.dumps({"data": {"viewer": {"login": OWNER}, "search": {"issueCount": 0,
                         "nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}})
                 result = merged.refresh(self.config, self.monitor, empty, file=self.file, at=at)

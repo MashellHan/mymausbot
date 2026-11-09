@@ -141,9 +141,13 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 poppler-utils unzip bubblewrap socat \
   && rm -rf /var/lib/apt/lists/* \
   && HOME=/tmp/omb-build-home npm install -g pnpm@10.33.0 \
-  && uv_arch=x86_64 && if [ "$TARGETARCH" = arm64 ]; then uv_arch=aarch64; fi \
+  && uv_arch=x86_64 && uv_sha=2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f \
+  && if [ "$TARGETARCH" = arm64 ]; then uv_arch=aarch64; uv_sha=1ae72b4718729e2ccc4f1ae2c6d1e531ca8467800e0546e9130b3886023a60ab; fi \
   && mkdir -p /tmp/uv-install \
-  && curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uv_arch}-unknown-linux-gnu.tar.gz" | tar -xz -C /tmp/uv-install --strip-components=1 \
+  && curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 --max-time 120 \
+    "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uv_arch}-unknown-linux-gnu.tar.gz" -o /tmp/uv-install/uv.tar.gz \
+  && printf '%s  %s\n' "$uv_sha" /tmp/uv-install/uv.tar.gz | sha256sum -c - \
+  && tar -xz -C /tmp/uv-install --strip-components=1 -f /tmp/uv-install/uv.tar.gz \
   && install -m 0755 /tmp/uv-install/uv /tmp/uv-install/uvx /usr/local/bin/ \
   && bwrap --version && socat -V | head -1 && HOME=/tmp/omb-build-home pnpm --version && uv --version | grep -qF "uv ${UV_VERSION}" \
   && rm -rf /tmp/omb-build-home /tmp/uv-install /tmp/node-compile-cache
@@ -224,7 +228,10 @@ COPY --from=build --chown=maus:maus /src/dist-native/duckdb/target ./duckdb
 COPY --from=build --chown=maus:maus /src/dist-server ./dist-server
 COPY --from=build --chown=maus:maus /src/dist ./dist
 COPY --from=build --chown=maus:maus /src/skills ./skills
-ENV HOME=/data
+# `docker compose exec omb openmausbot pair`: the commands the CLI prints start the same way.
+RUN printf '#!/bin/sh\nexec node /app/dist-server/openmausbot.js "$@"\n' > /usr/local/bin/openmausbot && chmod 0755 /usr/local/bin/openmausbot
+ENV HOME=/data \
+    OMB_CLI_PREFIX="docker compose exec omb openmausbot"
 VOLUME ["/data"]
 USER maus
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

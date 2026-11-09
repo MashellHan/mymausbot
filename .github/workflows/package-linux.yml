@@ -36,7 +36,7 @@ jobs:
       - name: Install package validation and native smoke tools
         run: >-
           sudo apt-get update && sudo apt-get install -y
-          at-spi2-core dbus-x11 desktop-file-utils libxi6 libxkbcommon0 squashfs-tools x11-utils xdotool xvfb
+          at-spi2-core dbus-x11 desktop-file-utils libxi6 libxkbcommon0 openbox squashfs-tools x11-utils xdotool xvfb
       - run: pnpm install --frozen-lockfile
       - name: Clean generated output
         run: pnpm clean
@@ -121,12 +121,13 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: openmausbot-ubuntu-smoke-diagnostics
+          name: mymausbot-ubuntu-smoke-diagnostics
           path: |
-            /tmp/omb-linux-smoke-*
-            /tmp/omb-linux-smoke-runtime-*
+            /tmp/omb-linux-smoke-*/cua-invocations.ndjson
+            /tmp/omb-linux-smoke-*/cua-serve-count
+            /tmp/omb-linux-smoke-*/config/*/cua-connection.json
+            /tmp/omb-linux-smoke-*/config/*/cua-local-control.json
           if-no-files-found: warn
-          include-hidden-files: true
           retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
