@@ -4,6 +4,7 @@ export const SHIPPED_TEMPLATE_SHA256: Record<MiniAppShippedTemplateKind, readonl
   bookkeeping: [
     "4f7a3a893d159ffdc74abbf7cf661e6308ef7a9ca23afa99680e157ec8d7b268",
     "7b2d4e122ab40c2d27494c75f662fd5e41d8ac213c72ee47b16f67fd677102ae",
+    "31138080fea253d60cbd5286788fae32258530ebd238f3510a43c2358603aed1",
   ],
   x_ai_digest: [
     "d666b5e1ab66557ed79bd21959d6d8092882f3127c666d19ec89b2e9ee554298",

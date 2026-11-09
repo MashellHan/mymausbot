@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { LayoutGrid } from "lucide-react";
 import { usePopoverDismiss } from "@/hooks/use-popover-dismiss";
 import { t } from "@/lib/i18n";
@@ -6,7 +6,7 @@ import type { DefaultMiniAppKind, MiniAppDefaultsResult, MiniAppSummary } from "
 import { MiniAppLibraryEntries } from "./MiniAppLibraryEntries";
 
 export function MiniAppLibraryPopover({ open, inventory, issues, busyKind, focusKind, owner, nativeGuard,
-  onToggle, onClose, onOpen, onAdd, onRemove }: {
+  onToggle, onClose, onOpen, onAdd, onRemove, children }: {
   open: boolean;
   inventory: MiniAppSummary[];
   issues: MiniAppDefaultsResult["issues"];
@@ -14,6 +14,7 @@ export function MiniAppLibraryPopover({ open, inventory, issues, busyKind, focus
   focusKind: DefaultMiniAppKind | null;
   owner: boolean | null;
   nativeGuard: boolean;
+  children?: ReactNode;
   onToggle(): void;
   onClose(): void;
   onOpen(id: string): void;
@@ -42,6 +43,7 @@ export function MiniAppLibraryPopover({ open, inventory, issues, busyKind, focus
       style={{ width: "min(420px, calc(100cqw - 24px))" }}>
       <MiniAppLibraryEntries inventory={inventory} issues={issues} busyKind={busyKind} owner={owner}
         nativeGuard={nativeGuard} onOpen={onOpen} onAdd={onAdd} onRemove={onRemove} />
+      {children}
     </div>}
   </div>;
 }
