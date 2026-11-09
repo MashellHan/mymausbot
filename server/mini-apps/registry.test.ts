@@ -4,7 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MiniAppDataBinding, MiniAppNamedPage } from "../../shared/mini-app-data.ts";
 import type { MiniAppPublish } from "../../shared/mini-apps.ts";
-import type { LocalAgentActivityResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
+import type { LocalAgentActivityResponse, LocalAgentConfigurationResponse, LocalAgentSkillDocumentResponse,
+  LocalAgentTeamRulesResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
 import { AppDocs, APP_DOCS_SWEEP_GRACE_MS } from "../app-docs.ts";
 import { DATA_DIR } from "../config.ts";
 import { applicationDatabase, closeMessageDb } from "../message-db.ts";
@@ -21,11 +22,19 @@ const publication = (extra: Partial<MiniAppPublish> = {}): MiniAppPublish => ({ 
   slug: "inventory", title: "Inventory", description: "Synthetic stock report", html: "<h1>Inventory</h1>", bindings: [binding], ...extra });
 const teamsSnapshot: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1000, teamCount: 0, teams: [] };
 const activitySnapshot: LocalAgentActivityResponse = { agentId: "w6:p1", status: "ready", updatedAt: 1000, truncated: false, events: [] };
+const configurationSnapshot: LocalAgentConfigurationResponse = { agentId: "w6:p1", teamId: "w6", occupantId: null,
+  agent: { status: "unverified", markdown: null }, skillReferences: "unverified", skills: [] };
+const skillSnapshot: LocalAgentSkillDocumentResponse = { agentId: "w6:p1", teamId: "w6", occupantId: null,
+  skillId: "s1234567890abcdef", status: "unavailable", markdown: null };
+const teamRulesSnapshot: LocalAgentTeamRulesResponse = { teamId: "w6", status: "unverified", markdown: null };
 const usageSnapshot: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
   sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
 const dashboardProviders = () => ({
   agents: { get: vi.fn(async () => teamsSnapshot) },
   activity: { get: vi.fn(async (_agentId: string) => activitySnapshot) },
+  configuration: { getAgent: vi.fn(async (_agentId: string) => configurationSnapshot),
+    getSkill: vi.fn(async (_agentId: string, _skillId: string) => skillSnapshot),
+    getTeamRules: vi.fn(async (_teamId: string) => teamRulesSnapshot) },
   usage: { get: vi.fn(async () => usageSnapshot) },
 });
 

@@ -7,7 +7,7 @@
 //   final   the same pass again, for what changed since, with the sign-ins that refresh themselves
 //   check   what arrived, against what is here; anything missing goes again, three passes at most
 //   switch  My Cloud switches on what was on here, and keeps which computer its bots came from
-//   done    home is My Cloud: this computer lends itself, stops its phone link, and says once what arrived
+//   done    home is My Cloud: this computer lends itself and says once what arrived
 //
 // Before the switch a failure lifts the freeze and tries again later; from the switch on the move only goes forward, so
 // nothing ever runs in two places. If My Cloud ends, this computer is home again at once (`home-again`), then brings
@@ -57,7 +57,7 @@ const NAMED_MAX = 5;
 export const KEPT_MS = 30 * DAY;
 const PHASES = new Set(["copy", "wait", "freeze", "final", "check", "switch", "done", "keeping", "home-again", "back"]);
 const FROZEN = new Set(["freeze", "final", "check"]);
-/** The phases in which home is My Cloud: the window shows it, and this computer's phone link stays off. */
+/** The phases in which home is My Cloud: the window shows it. */
 const AWAY = new Set(["switch", "done", "keeping"]);
 /** The phases that use My Cloud's owner session, a pass that failed and waits to go again included. */
 const MOVING = new Set(["copy", "wait", "freeze", "final", "check", "switch"]);
@@ -166,7 +166,7 @@ export function arrivedCounts(here, there) {
  *   session(): Promise<{ call(method: string, route: string, body?: unknown): Promise<{ ok: boolean, status: number, body: any }>, close(): Promise<void> }>,
  *   release?(): Promise<void>,
  *   lend?(projects: string[]): Promise<unknown>,
- *   phone?: { paired(): boolean, stop(): Promise<void>, start(): Promise<void> },
+ *   phone?: { paired(): boolean, start(): Promise<void> },
  *   openHome?(): void,
  *   openLocal?(): void,
  *   lastInput?(): number,
@@ -194,8 +194,9 @@ export function createOneHome(deps) {
   const log = deps.log ?? (() => {});
   const t = deps.t ?? nativeText.englishText.t;
   let running = null, again = false, timer = null, closed = false, waitingFor = null, waitingWhat = null, wasReady = null, reportFailedAt = -Infinity, keptFailedAt = -Infinity;
-  /** What the last run found holding the move that only a run can find out. */
-  let noted = null;
+  /** What the last run found holding the move that only a run can find out; `heldOff`, a first move waits for this
+   * computer's own copy, said once in the log. */
+  let noted = null, heldOff = false;
 
   const read = () => parseJournal(deps.journal.read());
   const kept = () => { try { return parseKeep(deps.keep?.read()).on; } catch { return false; } };
@@ -395,8 +396,9 @@ export function createOneHome(deps) {
     return null;
   }
 
-  /** Once home is My Cloud: the bots' project folders are lent to it with this computer, its own phone link stops, and
-   * the Admin is told it moved, once per sign-in (tried again at most hourly while the Admin can't take it). */
+  /** Once home is My Cloud: the bots' project folders are lent to it with this computer, and the Admin is told it moved,
+   * once per sign-in (tried again at most hourly while the Admin can't take it). The phone link stays on: a phone paired
+   * here hears from the frozen copy where its bots went, and reaches a workspace of this computer's own while one runs. */
   async function settle(journal, cloud = deps.cloud()) {
     let next = journal;
     if (deps.reportMove && cloud?.signIn && next.reported !== cloud.signIn && now() - reportFailedAt >= HOUR) {
@@ -412,12 +414,6 @@ export function createOneHome(deps) {
         await deps.lend?.([...new Set(bots.map((bot) => bot?.cwd).filter((cwd) => typeof cwd === "string" && cwd))]);
         next = write({ ...next, lent: true });
       } catch (error) { log(`one home: this computer is lent later (${error?.message ?? error})`); }
-    }
-    if (!next.phoneStopped) {
-      try {
-        if (next.phone) await deps.phone?.stop();
-        next = write({ ...next, phoneStopped: true });
-      } catch (error) { log(`one home: the phone link stops later (${error?.message ?? error})`); }
     }
     return next;
   }
@@ -663,6 +659,10 @@ export function createOneHome(deps) {
       // A frozen server with no move under way is one this app no longer knows about: it is never lifted blindly.
       noted = await deps.local.frozen().then((frozen) => (frozen ? "frozen_without_move" : null), () => "local_unavailable");
       if (noted) { log(`one home: ${noted === "frozen_without_move" ? "this computer is frozen with no move under way" : "this computer's server did not say whether it is frozen"}`); return; }
+      // Only from this computer's own copy: while another folder's server runs (the clean workspace, a profile, a named
+      // local environment) nothing starts or counts as failing, and it looks again in a minute.
+      if (deps.ownCopy?.() === false) { noted = "local_unavailable"; if (!heldOff) log("one home: the move waits until this computer's own copy runs"); heldOff = true; later(MINUTE); return; }
+      heldOff = false;
       journal = write({ v: 1, phase: "copy", cloud: { origin: cloud.origin, account: cloud.account, machine: cloud.machine, ...(cloud.name ? { name: cloud.name } : {}) }, startedAt: now() });
     }
     if (journal.thaw && !(await thaw(journal))) return;
