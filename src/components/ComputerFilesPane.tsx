@@ -154,7 +154,7 @@ export function ComputerFilesPane({ bot, filePreview, onPreviewClose }: {
     </div>
     {preview && <MessageFilePreview key={preview.nonce} file={preview} onBack={() => {
       onPreviewClose?.();
-      requestAnimationFrame(() => { (preview.returnFocus?.isConnected ? preview.returnFocus : list.current)?.focus(); });
+      requestAnimationFrame(() => { (list.current?.contains(preview.returnFocus) ? preview.returnFocus : list.current)?.focus(); });
     }} />}
     </>
   );

@@ -28,7 +28,8 @@ Check the following in the browser:
    leading-zero codes, a quoted comma and a multiline cell. Search and column
    sorting remain available; the download action stays separate.
 4. **Back to files**, or Escape while focus is in the preview, restores the
-   file list and its scroll position. Changing panel tabs or closing the panel
+   file list and its scroll position, keeping focus in the visible list.
+   Closing the panel returns focus to the chat opener. Changing panel tabs or closing the panel
    clears the preview. A generic **Open panel** still starts on Mini Apps.
 5. `missing.md` is intentionally absent. Its preview shows a retryable load
    error with Download still available. Saving it reports the server's error.
@@ -36,6 +37,9 @@ Check the following in the browser:
    link in chat, and offers no download or preview. A digest is not a grant.
 7. Repeat at 400 and 360 px and with `?skin=atelier` for the light theme.
    Header actions stay reachable; prose wraps and tables/code scroll locally.
+8. With `?defer-panel=1`, click the report, **Close panel**, **Open panel**,
+   then **Finish loading panel**. The cancelled file request must not run:
+   the panel stays on Mini Apps and makes no file read.
 
 Focused checks:
 

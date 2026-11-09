@@ -7,6 +7,7 @@ import { applySkin } from "../../src/lib/skins";
 import { setAnalyticsEnabled } from "../../src/lib/analytics";
 import { setLocale } from "../../src/lib/i18n";
 import { rememberComputerPanelOpen } from "../../src/lib/computer-panel-focus";
+import { useFilePreviewScope } from "../../src/lib/file-preview";
 import "../../src/styles.css";
 
 setAnalyticsEnabled(false);
@@ -15,6 +16,8 @@ applySkin(new URLSearchParams(location.search).get("skin") === "atelier" ? "atel
 const bot: Bot = await fetch("/__computer-files-fixture").then((response) => response.json());
 function Preview() {
   const [open, setOpen] = useState(false);
+  const [panelReady, setPanelReady] = useState(!new URLSearchParams(location.search).has("defer-panel"));
+  useFilePreviewScope(bot.id, bot.threadId, open);
   const value: Parameters<typeof BotEditorStore>[0]["value"] = {
     state: { ...initialState, bots: [bot], selectedId: bot.id, computerOpen: open },
     dispatch: (action) => { if (action.type === "toggleComputer") setOpen(action.open ?? !open); },
@@ -26,15 +29,17 @@ function Preview() {
         <header className="mb-8 flex items-center justify-between gap-3">
           <h1 className="text-lg font-medium">File reviewer</h1>
           <button type="button" className="ui-button ui-button-sm" onClick={(event) => {
+            if (open) { setOpen(false); return; }
             rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: false }); setOpen(true);
-          }}>Open panel</button>
+          }}>{open ? "Close panel" : "Open panel"}</button>
+          {!panelReady && <button type="button" className="ui-button ui-button-sm" onClick={() => setPanelReady(true)}>Finish loading panel</button>}
         </header>
         {bot.messages.filter((message) => message.role === "bot" && message.kind === "text").map((message) =>
           <article key={message.id} className="mb-6 max-w-2xl text-sm leading-relaxed">
             <ChatMarkdown text={message.text ?? ""} message={{ threadId: bot.threadId, messageId: message.id }} />
           </article>)}
       </section>
-      {open && <ComputerPanel bot={bot} />}
+      {open && panelReady && <ComputerPanel bot={bot} />}
     </main>
   </BotEditorStore>;
 }

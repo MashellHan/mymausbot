@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BotEditorStore, initialState, type Bot, type Message } from "@/state/store";
 import { parseTableFile, type TextTable } from "@/lib/table-data";
 import { rememberComputerPanelOpen } from "@/lib/computer-panel-focus";
+import { useFilePreviewScope } from "@/lib/file-preview";
 import { setLocale } from "@/lib/i18n";
 import { AttachedFileChip } from "./AttachmentPreview";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -48,8 +49,9 @@ class ParserWorker {
   }
 }
 
-function ChatFixture({ bot, initiallyOpen = false }: { bot: Bot; initiallyOpen?: boolean }) {
+function ChatFixture({ bot, initiallyOpen = false, panelReady = true }: { bot: Bot; initiallyOpen?: boolean; panelReady?: boolean }) {
   const [open, setOpen] = useState(initiallyOpen);
+  useFilePreviewScope(bot.id, bot.threadId, open);
   const value: Parameters<typeof BotEditorStore>[0]["value"] = {
     state: { ...initialState, bots: [bot], selectedId: bot.id, computerOpen: open },
     dispatch: (action) => { if (action.type === "toggleComputer") setOpen(action.open ?? !open); },
@@ -60,16 +62,17 @@ function ChatFixture({ bot, initiallyOpen = false }: { bot: Bot; initiallyOpen?:
       createElement(ChatMarkdown, { text: reply.text!, message: { ...message, threadId: bot.threadId } }),
       createElement(AttachedFileChip, { file: { path: "/workspace/attached.md", name: "attached.md", private: true }, message: { ...message, threadId: bot.threadId } }),
       createElement("button", { onClick: (event) => {
+        if (open) { setOpen(false); return; }
         rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: false }); setOpen(true);
-      } }, "Open panel")),
-    open && createElement(ComputerPanel, { key: bot.id, bot }),
+      } }, open ? "Close panel" : "Open panel")),
+    open && panelReady && createElement(ComputerPanel, { key: bot.id, bot }),
   ] });
 }
 
 let root: Root;
 let host: HTMLDivElement;
-const renderChat = (bot = makeBot(), initiallyOpen = false, strict = false) => {
-  const chat = createElement(ChatFixture, { bot, initiallyOpen });
+const renderChat = (bot = makeBot(), initiallyOpen = false, strict = false, panelReady = true) => {
+  const chat = createElement(ChatFixture, { bot, initiallyOpen, panelReady });
   flushSync(() => root.render(strict ? createElement(StrictMode, null, chat) : chat));
 };
 const button = (label: string, scope: ParentNode = host) => [...scope.querySelectorAll<HTMLButtonElement>("button")]
@@ -132,6 +135,45 @@ describe("generated files in the right panel", () => {
     expect(list.hidden).toBe(false); expect(list.scrollTop).toBe(90);
     click(button("Preview file: attached.md"));
     await vi.waitFor(() => expect(preview()?.querySelector("h2")?.textContent).toBe("attached.md"));
+  });
+
+  it("keeps Back and Escape focus in Files when the original link is in chat", async () => {
+    renderChat(); openReport();
+    await vi.waitFor(() => expect(preview()?.textContent).toContain("Weekly review"));
+    click(button("Back to files"));
+    const list = host.querySelector('[data-testid="computer-files"]');
+    await vi.waitFor(() => expect(document.activeElement).toBe(list));
+    openReport();
+    await vi.waitFor(() => expect(preview()?.textContent).toContain("Weekly review"));
+    flushSync(() => button("Back to files").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await vi.waitFor(() => expect(document.activeElement).toBe(list));
+  });
+
+  it("discards a cancelled request before the lazy panel mounts, even on a quick generic reopen", async () => {
+    renderChat(makeBot(), false, true, false); openReport();
+    expect(fetch).not.toHaveBeenCalled();
+    click(button("Close panel"));
+    click(button("Open panel"));
+    renderChat(makeBot(), false, true, true);
+    await vi.waitFor(() => expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Mini Apps"));
+    expect(preview()).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["bot", "thread"])("discards a pending request when leaving the %s before the lazy panel mounts", async (scope) => {
+    renderChat(makeBot(), false, false, false); openReport();
+    renderChat(makeBot(scope === "bot" ? { id: "other" } : { threadId: "other-thread" }), false, false, false);
+    renderChat();
+    await vi.waitFor(() => expect(host.querySelector("[data-computer-panel]")).not.toBeNull());
+    expect(preview()).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("retains an uncancelled request until the lazy panel mounts under StrictMode", async () => {
+    renderChat(makeBot(), false, true, false); openReport();
+    expect(fetch).not.toHaveBeenCalled();
+    renderChat(makeBot(), false, true, true);
+    await vi.waitFor(() => expect(preview()?.textContent).toContain("Weekly review"));
   });
 
   it("parses CSV with quoting, multiline cells and string IDs, and keeps downloading separate", async () => {

@@ -27,6 +27,12 @@ let pending: PanelFilePreview | null = null;
 let nonce = 0;
 const takers = new Set<() => void>();
 
+export function useFilePreviewScope(botId: string | undefined, threadId: string | undefined, open: boolean): void {
+  useEffect(() => {
+    if (pending && (!open || pending.botId !== botId || pending.message.threadId !== threadId)) pending = null;
+  }, [botId, threadId, open]);
+}
+
 export function usePanelFileRequest(botId: string, threadId: string, open: (file: PanelFilePreview) => void): void {
   const latest = useRef(open);
   latest.current = open;
