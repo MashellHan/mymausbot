@@ -6,7 +6,7 @@ import { copyText, type CopyFeedback } from "@/lib/copy-text";
 import { api } from "@/state/store";
 import { isOwnerOrAdmin, readSessionState, type SessionState } from "../lib/session";
 import { readMembership } from "../lib/membership";
-import { lastSeen, minutesLeft } from "../lib/pairing-time";
+import { codeUntil, lastSeen } from "../lib/pairing-time";
 import { revealPhonePairing } from "../lib/phone-pairing";
 import { Card, SettingRow, SIMPLE_CARD } from "./SettingsPrimitives";
 import { Select } from "./Select";
@@ -184,7 +184,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
                 {offer.nativeUrl ? (
                   <p className="text-[13px] leading-relaxed text-ink">{t("remote.serverPairing.funnel.scan")}</p>
                 ) : <div className="font-mono text-[18px] tracking-[0.14em] text-ink">{offer.code}</div>}
-                <div className="mt-1 text-[13px] text-ink-secondary">{t("remote.serverPairing.expires", { minutes: minutesLeft(offer.expiresAt, now) })}</div>
+                <div className="mt-1 text-[13px] text-ink-secondary">{codeUntil(offer.expiresAt)}</div>
                 {link ? (
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <code className="break-all text-[12px] text-ink-secondary">{offer.nativeOrigin ?? link}</code>

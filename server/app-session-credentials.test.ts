@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ChatGptPlanAuthController } from "./drivers/chatgpt-plan-auth.ts";
 import { claudeAuthStatus } from "./drivers/claude-auth-status.ts";
-import { LOGINS_FILE, LOGINS_KEY_FILE, LoginStore } from "./login-store.ts";
+import { LOGINS_FILE, LOGINS_KEY_FILE, VaultStore as LoginStore } from "./vault-store.ts";
 import { McpOAuthStore } from "./mcp-oauth-store.ts";
 import { SecretVault } from "./secret-vault.ts";
 

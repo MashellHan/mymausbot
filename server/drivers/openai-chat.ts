@@ -14,8 +14,9 @@ import { ASK_USER_TOOL, ASK_USER_TOOL_DEFINITION, askQuestionSummary, parseAskQu
 import { allowsTool, parseToolScope } from "../../shared/tool-scope.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { toolDetailPreview } from "../tool-summary.ts";
-import { ChatToolSessionError, chatToolNotices, mountChatTools, type ChatToolDefinition, type ChatToolSession, type ChatToolResult } from "./chat-mcp-tools.ts";
+import { ChatToolSessionError, chatToolNotices, mountChatTools, refitChatTools, type ChatToolDefinition, type ChatToolSession, type ChatToolResult } from "./chat-mcp-tools.ts";
 import { noteToolBudget } from "../tool-budgets.ts";
+import { chatToolLimitFor, chatToolLimitKey } from "../tool-count-limit.ts";
 import { assertImageTransport, chatImageBudget, chatToolImages, chatUserContent, type ChatContentPart } from "./chat-images.ts";
 import { promptHalves, volatileContextNote, withContextNote } from "./prompt-split.ts";
 import { createChatToolApproval, refusal } from "./chat-tool-approval.ts";
@@ -35,6 +36,7 @@ import { toolSchemaProfileFor } from "../tool-schema-profile.ts";
 import { classifyContinuable, writeTurnHandoff } from "../turn-continuation.ts";
 import { KEY_REJECTED_REASON, keyRejected, noteKeyAccepted, noteKeyRejected, rejectsKey } from "../key-rejections.ts";
 import { FETCH_LIMIT_MS, fetchPastLimit } from "./openai-chat-fetch.ts";
+import { announcesAction } from "./chat-announcement.ts";
 
 export interface OpenAIChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -185,18 +187,6 @@ function replayDelivered(
 
 const CORRECTIVE_ROUND = "[OpenMausBot: a tool call in this turn failed (its result is marked ok:false). Re-run the failed operations with corrected inputs where possible, check the results, then give your final answer. Do not report results you did not get.]";
 const NUDGE_ANNOUNCED_ACTION = "You said what you would do next but called no tool. Use your tools for only the remaining work, or reply with verified results if nothing is left to do. Never repeat an operation that succeeded, was denied, or may already have taken effect; inspect its state instead. Do not retry a destructive operation.";
-
-export function announcesAction(text: string): boolean {
-  const reply = text.trim();
-  if (!reply || reply.length > 4_000 || reply.includes("?")) return false;
-  if (reply.length > 400) {
-    const tail = reply.split(/\n\s*\n/).at(-1)!.trim();
-    return tail.length <= 400 && /^(?:let me|i['\u2019]ll|i will|i(?:['\u2019]m| am) going to)\s+(?:now\s+)?(?:execute|send|type|press|launch|open|check|inspect|read|fetch|run|create|write|verify)\b/i.test(tail);
-  }
-  return /(?:[:\u2014\u2013]|\.\.\.|\u2026)$/.test(reply) ||
-    /^(?:checking|let me(?! know\b)|i'll|i will|i'm going to|i am going to|opening|pulling|looking|searching|navigating|reading|fetching|loading|now (?:i'll|let me|opening|checking|pulling|reading))\b/i.test(reply) ||
-    /^i(?:['\u2019]m| am)\b[^.!?\n]*\band (?:i )?will\s+(?:launch|open|check|pull|look|search|navigate|read|fetch|load|run|inspect)\b/i.test(reply);
-}
 
 const UNREADABLE_CALL = "[OpenMausBot: your last tool call could not be read, so nothing ran. Call the tool again using only the tools you were given, with valid JSON arguments.]";
 const LOCAL_CORRECTIVE_ROUNDS = 2;
@@ -530,13 +520,14 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
     const retainImages = chatImageBudget();
     for (const message of messages) retainImages(message.content);
     const model = turn.model || options.models().default;
-    const secrets = [options.apiKey].filter((value): value is string => Boolean(value));
+    const maskable = (value: unknown): value is string => typeof value === "string" && value.length >= 8; // a short placeholder key ("1") would redact every match
+    const secrets = [options.apiKey].filter(maskable);
     for (const integration of Object.values(turn.integrations ?? {})) {
       const entries = object(integration);
       const specs = entries && "command" in entries ? [entries] : Object.values(entries ?? {}).map(object);
       for (const spec of specs) {
         for (const [key, value] of Object.entries(object(spec?.env) ?? {})) {
-          if (/key|token|password|secret|authorization/i.test(key) && typeof value === "string" && value) secrets.push(value);
+          if (/key|token|password|secret|authorization/i.test(key) && maskable(value)) secrets.push(value);
         }
       }
     }
@@ -609,7 +600,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
         if (!parsed.ok) throw new Error(parsed.error);
         const scope = parsed.scope;
         tools = await mountChatTools(options.tools === false ? undefined : turn.integrations, abort.signal, options.computerUse, scope, turn.mcpCallTimeoutMs,
-          toolSchemaProfileFor({ url: options.apiUrl, model }), turn.cwd ?? turn.toolResultFolder, safeText);
+          toolSchemaProfileFor({ url: options.apiUrl, model }), turn.cwd ?? turn.toolResultFolder, safeText, chatToolLimitFor(options.apiUrl, model));
         noteToolBudget(turn.botId, tools.budget);
         for (const message of chatToolNotices(tools)) emit({ ...base(turn.threadId, turnId), type: "runtime.notice", message: safeText(message) });
         const questionAllowed = options.tools !== false && allowsTool(scope, { kind: "native", name: ASK_USER_TOOL });
@@ -674,6 +665,14 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
             } catch (value) {
               const error = asError(value);
               const verdict = classifyError(error);
+              // A provider refuses a request with too many tools before running anything: learn its limit and list fewer.
+              const refit = streamed || seenCalls.size || abort.signal.aborted ? undefined : await refitChatTools(tools, error, chatToolLimitKey(options.apiUrl, model), [ASK_USER_TOOL_DEFINITION]);
+              if (refit) {
+                for (const message of refit) emit({ ...base(turn.threadId, turnId), type: "runtime.notice", message: safeText(message) });
+                noteToolBudget(turn.botId, tools.budget);
+                emit({ ...base(turn.threadId, turnId), type: "turn.retrying", attempt: 1, delayMs: 0, reason: "tool_limit" });
+                continue;
+              }
               // A rejected reasoning echo executed nothing upstream, so the stripped resend repeats nothing.
               if (error instanceof UnsupportedReasoningReplayError && !streamed && !abort.signal.aborted) {
                 reasoningReplayRejected.add(model);
@@ -944,7 +943,7 @@ export function createOpenAIChatRuntime<Config>(options: RuntimeOptions<Config>)
         browserMcp: options.tools !== false, nativeImageInput: true, images: true } : {}),
         sessionModelSwitch: "in-session", customMcp: options.tools !== false, agentsMcp: options.tools !== false, composioMcp: options.tools !== false,
         dataMcp: options.tools !== false,
-        highlevelMcp: options.tools !== false,
+        emailMcp: options.tools !== false,
         deviceMcp: options.tools !== false,
         queueing: true,
         ...(options.tools !== false ? { askTool: { kind: "native" as const, name: ASK_USER_TOOL } } : {}),

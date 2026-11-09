@@ -118,6 +118,7 @@ jobs:
         run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/qa.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
+      - run: pnpm check:contrast
       - run: pnpm lint
       - name: Source guards
         # The tests that only read the source: seconds here, and they stay in the shards. On Nov 3-4 2026 one of them was
@@ -667,7 +668,7 @@ jobs:
           OMB_UI_E2E: "1"
           OMB_DASHBOARD_UI: "1"
           OMB_UI_EVIDENCE_DIR: .omb-scratch/verify-evidence
-        run: pnpm exec vitest run scripts/testing/local-dashboard-ui.e2e.test.ts scripts/testing/control-omb-ui.e2e.test.ts scripts/testing/bot-tools-ui.e2e.test.ts scripts/testing/thinking-timer-ui.e2e.test.ts scripts/testing/team-share-ui.e2e.test.ts scripts/testing/org-library-ui.e2e.test.ts scripts/testing/presets-ui.e2e.test.ts scripts/testing/browser-evidence.e2e.test.ts scripts/testing/browser-fill.e2e.test.ts scripts/testing/rich-table-composer-ui.e2e.test.ts scripts/testing/computer-panel-focus-ui.e2e.test.ts scripts/testing/mobile-code-blocks-ui.e2e.test.ts scripts/testing/inline-page-height-ui.e2e.test.ts --reporter=default --reporter=json --outputFile.json=qa-results/vitest.json
+        run: pnpm exec vitest run scripts/testing/local-dashboard-ui.e2e.test.ts scripts/testing/control-omb-ui.e2e.test.ts scripts/testing/bot-tools-ui.e2e.test.ts scripts/testing/thinking-timer-ui.e2e.test.ts scripts/testing/team-share-ui.e2e.test.ts scripts/testing/org-library-ui.e2e.test.ts scripts/testing/presets-ui.e2e.test.ts scripts/testing/browser-evidence.e2e.test.ts scripts/testing/browser-fill.e2e.test.ts scripts/testing/rich-table-composer-ui.e2e.test.ts scripts/testing/computer-panel-focus-ui.e2e.test.ts scripts/testing/mobile-code-blocks-ui.e2e.test.ts scripts/testing/inline-page-height-ui.e2e.test.ts scripts/testing/room-pages-ui.e2e.test.ts --reporter=default --reporter=json --outputFile.json=qa-results/vitest.json
       - name: Upload the renderer screenshot
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -679,6 +680,7 @@ jobs:
             .omb-scratch/verify-evidence/share-team-dialog.png
             .omb-scratch/verify-evidence/mobile-code-blocks/
             .omb-scratch/verify-evidence/inline-page-height/
+            .omb-scratch/verify-evidence/room-pages-*.png
           if-no-files-found: warn
           retention-days: 7
 
@@ -755,7 +757,7 @@ jobs:
       - name: Install package validation and native smoke tools
         run: >-
           sudo apt-get update && sudo apt-get install -y
-          at-spi2-core dbus-x11 desktop-file-utils libxi6 libxkbcommon0 squashfs-tools x11-utils xdotool xvfb
+          at-spi2-core dbus-x11 desktop-file-utils libxi6 libxkbcommon0 openbox squashfs-tools x11-utils xdotool xvfb
       - run: pnpm install --frozen-lockfile
       - name: Stage the pinned CUA runtime
         run: pnpm build:cua:linux

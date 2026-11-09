@@ -45,10 +45,10 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   dataDir: string;
   validPublisher(id: string): boolean;
   dashboardProviders?: LocalDashboardProviders;
-}) {
-  const { store, dataDir, validPublisher, dashboardProviders, ...shared } = input;
+} & Pick<Parameters<typeof createChatApps>[0], "liveRows" | "liveRoots" | "paused">) {
+  const { store, dataDir, validPublisher, dashboardProviders, liveRows, liveRoots, paused, ...shared } = input;
   const chatApps = createChatApps({ store, dataDir,
-    references: () => [...appDocRefs(), ...miniAppDocRefs()] });
+    references: () => [...appDocRefs(), ...miniAppDocRefs()], liveRows, liveRoots, paused });
   const deps = { ...shared, apps: new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
     dashboardProviders: dashboardProviders ?? localDashboardProviders }),
     reports: new ReportStore(shared.data, createReportTemplate) };

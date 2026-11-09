@@ -58,6 +58,7 @@ export const VITEST_SUBSETS = {
       "scripts/testing/bot-tools-ui.e2e.test.ts",
       "scripts/testing/key-readback.e2e.test.ts",
       "scripts/testing/one-workspace-ui.e2e.test.ts",
+      "scripts/testing/rail-profile-ui.e2e.test.ts",
       "scripts/testing/secret-card-descriptions.test.ts",
       "scripts/testing/team-own-chat.e2e.test.ts",
       "server/body-thread-guards.e2e.test.ts",
@@ -67,6 +68,7 @@ export const VITEST_SUBSETS = {
       "server/cloud-lending-chrome.e2e.test.ts",
       "server/cloud-lending-memory.e2e.test.ts",
       "server/cloud-lending.e2e.test.ts",
+      "server/cloud-lent-mcp.e2e.test.ts",
       "server/cloud-send-kinds.e2e.test.ts",
       "server/cloud-send-move.e2e.test.ts",
       "server/cloud-send-rooms.e2e.test.ts",
@@ -102,6 +104,7 @@ export const VITEST_SUBSETS = {
       "server/parked-cards.e2e.test.ts",
       "server/question-cards.e2e.test.ts",
       "server/shared-computers.e2e.test.ts",
+      "server/shared-computers.gate.test.ts",
       "server/team-move.e2e.test.ts",
       "server/use-my-mac.e2e.test.ts",
       "server/workspace-banner.e2e.test.ts",
@@ -174,6 +177,7 @@ export const SRC_OUTSIDE_RENDERER = [
   "src/lib/citations.ts",
   "src/lib/composer-attachments.ts",
   "src/lib/random-uuid.ts",
+  "src/lib/receipts.ts",
 ];
 
 export const DOCS = /^(?:[^/]+\.md|docs\/.+\.md|\.agents\/team\/(?:playbook|roles\/[^/]+)\.md|\.github\/FUNDING\.yml)$/;

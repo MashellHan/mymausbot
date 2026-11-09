@@ -4,7 +4,7 @@
 // Nothing here is an HTTP answer, a log line or a chat message, and nothing is kept.
 import type { LoginBots } from "../shared/logins.ts";
 import { loginFingerprints, VERIFY_NONCE } from "./cloud-send-verify.ts";
-import type { LoginStore } from "./login-store.ts";
+import type { VaultStore } from "./vault-store.ts";
 import { ONE_PASSWORD_MALFORMED, ONE_PASSWORD_REFUSED } from "./onepassword.ts";
 import type { TotpKey } from "./totp.ts";
 
@@ -45,7 +45,7 @@ export type LoginHandoffResult = { type: typeof LOGIN_HANDOFF_RESULT; requestId:
 
 const REQUEST_ID = /^[\w-]{8,64}$/u;
 const LOGIN_ID = /^[\w-]{1,128}$/u;
-const CONNECTION_ID = /^(?:mcp:[a-z][a-z0-9_-]{0,31}|key:\w{1,40}|composio|highlevel|email)$/u;
+const CONNECTION_ID = /^(?:mcp:[a-z][a-z0-9_-]{0,31}|key:\w{1,40}|composio|email)$/u;
 const INSTALLATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const DIGEST = /^[0-9a-f]{64}$/u;
 
@@ -73,7 +73,7 @@ function parse(raw: unknown): { requestId: string; what: Ask } | null {
   return null;
 }
 
-type HandoffStore = Pick<LoginStore, "changes" | "get" | "onePasswordToken" | "onePasswordGrants">;
+type HandoffStore = Pick<VaultStore, "changes" | "get" | "onePasswordToken" | "onePasswordGrants">;
 /** This computer's own 1Password problem, from its last read of the vaults (OnePasswordLogins.status().error). */
 type OnePasswordProblem = () => string | undefined;
 
