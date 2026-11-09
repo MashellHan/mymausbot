@@ -70,7 +70,7 @@ describe("CI concurrency", () => {
     }
   });
 
-  it.each(["ci:full", "qa:repair", "windows"])("runs required checks when %s is added or removed", (label) => {
+  it.each(["ci:full", "qa:repair", "windows", "upstream-sync"])("runs required checks when %s is added or removed", (label) => {
     for (const action of ["labeled", "unlabeled"]) {
       expect(decision(prContext(action, label))).toEqual({
         group: "ci-pr-134", cancel: true, static: true, gateName: "CI", gate: true,
