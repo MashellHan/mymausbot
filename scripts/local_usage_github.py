@@ -1,10 +1,13 @@
 """Read the authenticated account's GitHub contribution source, without local Git fallback."""
 
 import datetime as dt
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -283,6 +286,10 @@ def replace_days(previous, current):
         raise ValueError("Contribution capture moved backwards")
     for source in current["sources"]:
         old = old_sources.get(source["id"], {"id": source["id"], "days": []})
+        if (old["days"] and not old.get("account")
+                or source["status"] != "unavailable" and not source.get("account")
+                or old.get("account") and source.get("account") and old["account"] != source["account"]):
+            raise ValueError("Contribution account identity changed or is missing")
         days = {row["day"]: row for row in old["days"]}
         if len(days) != len(old["days"]):
             raise ValueError("Duplicate retained contribution day")
@@ -303,14 +310,31 @@ def replace_days(previous, current):
     return {**current, "sources": list(old_sources.values())}
 
 
+@contextmanager
+def target_lock(file):
+    lock = Path(file).with_suffix(".lock")
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("Contribution lock must be a regular file")
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+    finally:
+        # Keep the inode: unlinking permits concurrent writers to lock different files.
+        os.close(fd)
+
+
 def refresh(config, run, repository_category, *, file=None, at=None, skip_api=False):
     if config.get("githubContributionSource") != DEFINITION or skip_api:
         return None
     file = Path(file or Path.home() / ".local/share/mymausbot/usage/github-profile-v1.json")
     file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock = file.with_suffix(".lock")
-    lock.mkdir(mode=0o700)
-    try:
+    with target_lock(file):
         previous = previous_snapshot(file)
         if file.exists() and not previous:
             raise ValueError("Existing contribution cache is unreadable")
@@ -318,5 +342,3 @@ def refresh(config, run, repository_category, *, file=None, at=None, skip_api=Fa
         result = replace_days(previous, current)
         write_private(file, result)
         return result
-    finally:
-        lock.rmdir()

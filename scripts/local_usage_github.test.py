@@ -3,7 +3,10 @@ import datetime as dt
 import json
 from pathlib import Path
 import stat
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -201,6 +204,40 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             github.replace_days({**old, 'metricDefinition': 'legacy'}, current)
 
+    def test_same_login_with_different_stable_account_cannot_replace_retained_history(self):
+        old = collect()
+        earlier = {**old['sources'][0]['days'][0], 'day': '2026-10-01', 'knownPrs': 123}
+        old['sources'][0]['days'].insert(0, earlier)
+        api = Api()
+        api.edit = lambda response, fields: response['data']['viewer'].update(id='replacement-account')
+        current = collect(api)
+        self.assertEqual(current['sources'][0]['id'], old['sources'][0]['id'])
+        self.assertNotEqual(current['sources'][0]['account'], old['sources'][0]['account'])
+        before = copy.deepcopy(old)
+        with tempfile.TemporaryDirectory() as folder:
+            file = Path(folder) / 'profile.json'
+            github.write_private(file, old)
+            original = file.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'account identity'):
+                github.refresh(CONFIG, api, lambda r, c: 'personal', file=file, at=AT)
+            self.assertEqual(file.read_bytes(), original)
+            self.assertEqual(json.loads(original)['sources'][0]['days'][0], earlier)
+        self.assertEqual(old, before)
+        missing_identity = copy.deepcopy(old)
+        del missing_identity['sources'][0]['account']
+        with self.assertRaisesRegex(ValueError, 'account identity'):
+            github.replace_days(missing_identity, current)
+
+    def test_initial_unavailable_source_can_acquire_identity_and_failure_preserves_it(self):
+        api = Api()
+        api.edit = lambda response, fields: response.update(errors=[{'message': 'synthetic'}])
+        unavailable = collect(api)
+        ready = github.replace_days(unavailable, collect())
+        failed_again = github.replace_days(ready, unavailable)
+        self.assertEqual(failed_again['sources'][0]['account'], ready['sources'][0]['account'])
+        self.assertEqual(len(failed_again['sources'][0]['days']), 7)
+        self.assertTrue(all(day['status'] == 'stale' for day in failed_again['sources'][0]['days']))
+
     def test_opt_in_skip_api_private_atomic_output_and_overlap_lock(self):
         with tempfile.TemporaryDirectory() as folder:
             file = Path(folder) / 'private' / 'profile.json'
@@ -213,17 +250,47 @@ class ProfileTests(unittest.TestCase):
             self.assertEqual(json.loads(file.read_text()), result)
             self.assertEqual(stat.S_IMODE(file.stat().st_mode), 0o600)
             lock = file.with_suffix('.lock')
-            lock.mkdir()
             before = file.read_bytes()
-            with self.assertRaises(FileExistsError):
-                github.refresh(CONFIG, api, lambda r, c: 'personal', file=file, at=AT)
+            with github.target_lock(file):
+                calls = len(api.calls)
+                with self.assertRaises(OSError):
+                    github.refresh(CONFIG, api, lambda r, c: 'personal', file=file, at=AT)
+                self.assertEqual(len(api.calls), calls)
             self.assertEqual(file.read_bytes(), before)
-            lock.rmdir()
             with patch.object(github, 'collect', side_effect=ValueError('synthetic')):
                 with self.assertRaises(ValueError):
                     github.refresh(CONFIG, api, lambda r, c: 'personal', file=file, at=AT)
-            self.assertFalse(lock.exists())
+            self.assertTrue(lock.is_file())
+            with github.target_lock(file):
+                pass
             self.assertEqual(file.read_bytes(), before)
+
+    def test_active_writer_cannot_be_stolen_and_killed_writer_releases_system_lock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            file, ready = Path(folder) / 'profile.json', Path(folder) / 'ready'
+            api = Api()
+            github.refresh(CONFIG, api, lambda r, c: 'personal', file=file, at=AT)
+            before, calls = file.read_bytes(), len(api.calls)
+            code = ('import sys,time; from pathlib import Path; import local_usage_github as g\n'
+                    'with g.target_lock(Path(sys.argv[1])):\n'
+                    ' Path(sys.argv[2]).touch()\n time.sleep(60)\n')
+            child = subprocess.Popen([sys.executable, '-c', code, str(file), str(ready)], cwd=Path(__file__).parent)
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.exists() and child.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(ready.exists(), 'Synthetic writer failed to acquire lock')
+                with self.assertRaises(OSError):
+                    github.refresh(CONFIG, api, lambda r, c: 'personal', file=file, at=AT)
+                self.assertEqual(len(api.calls), calls)
+                self.assertEqual(file.read_bytes(), before)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=5)
+            recovered = github.refresh(CONFIG, api, lambda r, c: 'personal', file=file, at=AT)
+            self.assertEqual(json.loads(file.read_text()), recovered)
+            self.assertEqual(recovered['sources'][0]['days'], json.loads(before)['sources'][0]['days'])
 
 
 if __name__ == '__main__':

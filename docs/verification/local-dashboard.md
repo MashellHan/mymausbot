@@ -71,7 +71,9 @@ The existing wrapper `scripts/refresh-local-usage.py` retains its local Token an
 legacy merged-source behavior. Deploy it with both adjacent modules,
 `local_usage_merged.py` and `local_usage_github.py`. The new private sidecar is
 `~/.local/share/mymausbot/usage/github-profile-v1.json` (0600, atomic replace,
-independent overlap lock). Collection is **opt-in** with the existing private
+independent OS file lock released on process exit). The persistent `.lock` file
+must not be unlinked while writers may run; an old directory lock requires
+verified owner exit before manual removal. Collection is **opt-in** with the existing private
 configuration field `githubContributionSource: "github-profile-v1"`; --skip-api
 never collects it. Enabling this field is a separate data-admission operation,
 not part of source installation. No scheduler is added or enabled by the App.
@@ -80,6 +82,8 @@ Each capture recomputes today's China date plus the preceding six dates, with
 today in progress. The preceding UTC source date is a read-only query guard band,
 not an eighth replacement date. Source days outside those seven dates and inactive
 account history remain unchanged; failures retain prior observations as stale.
+Stable account identity changes for the same host/login reject the capture
+without replacing the cache or blending earlier account history.
 Profile dates and PR China dates are recorded separately. Old definitions are
 not reinterpreted, compared or backfilled. The new response field is `github`;
 Activities never falls back to `merged`, local commits or old created-PR counts.

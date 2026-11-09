@@ -111,7 +111,7 @@ describe("installed native Mini App dashboards", () => {
     await vi.waitFor(() => expect(host.querySelectorAll("[data-usage-trend]")).toHaveLength(3));
     expect(host.textContent).toContain("1-day window");
     expect(host.textContent).toContain("2026-11-07");
-    expect(host.querySelector("[data-usage-provisional]")?.textContent).toBe("2");
+    expect([...host.querySelectorAll("section dd [data-usage-provisional]")].slice(0, 2).map((value) => value.textContent)).toEqual(["1", "2"]);
     expect(host.querySelector('[data-usage-week-start="2026-11-02"]')).not.toBeNull();
     expect(host.querySelector('[data-usage-weekend-tick]')).toBeNull();
     expect(calls.api.mock.calls[0]![0]).toBe(`/api/mini-apps/${appId}/dashboard`);
