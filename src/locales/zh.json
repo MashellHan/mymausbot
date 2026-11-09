@@ -5388,6 +5388,8 @@
   "computer.agentTeam.loading": "正在读取本机团队…",
   "computer.agentTeam.heading": "本机 Herdr · {count} 个团队",
   "computer.agentTeam.headingOne": "本机 Herdr · 1 个团队",
+  "computer.agentTeam.teamCount": "{count} 个团队",
+  "computer.agentTeam.teamCountOne": "1 个团队",
   "computer.agentTeam.unknownCount": "—",
   "computer.agentTeam.readAt": "最近读取：{time}",
   "computer.agentTeam.neverRead": "尚未成功读取",
@@ -7968,5 +7970,12 @@
   "remote.client.endsDec7": "这种连接方式将于 12 月 7 日停止。之后请在另一台电脑的「手机和设备」中重新配对这台电脑。",
   "phone.code.pairingCode": "配对码",
   "phone.code.typeIntro": "打开 {app} 应用并输入这个配对码。",
-  "phone.signIn.emailCode": "邮件中的登录码"
+  "phone.signIn.emailCode": "邮件中的登录码",
+"file.preview": "预览文件：{name}",
+  "file.back": "返回文件列表",
+  "file.loading": "正在加载预览…",
+  "file.tooLarge": "文档超过预览大小上限（1 MB）。请下载后查看。",
+  "file.invalid": "无法将此文件读取为 Markdown。请下载后打开。",
+  "file.loadFailed": "无法加载文件。请重试或下载副本。",
+  "file.empty": "此文档为空。"
 }

@@ -5591,6 +5591,8 @@
   "computer.agentTeam.loading": "Loading local teams…",
   "computer.agentTeam.heading": "Local Herdr · {count} teams",
   "computer.agentTeam.headingOne": "Local Herdr · 1 team",
+  "computer.agentTeam.teamCount": "{count} teams",
+  "computer.agentTeam.teamCountOne": "1 team",
   "computer.agentTeam.unknownCount": "—",
   "computer.agentTeam.readAt": "Last read {time}",
   "computer.agentTeam.neverRead": "No successful read yet",
@@ -10227,5 +10229,12 @@
   "phone.code.typeIntro": "Open the {app} app and type this pairing code.",
   "phone.signIn.emailCode": "Sign-in code from your email",
   "settings.simple.account.noNameHint": "Not set yet",
-  "settings.simple.account.yourName": "Your name"
+  "settings.simple.account.yourName": "Your name",
+"file.preview": "Preview file: {name}",
+  "file.back": "Back to files",
+  "file.loading": "Loading preview…",
+  "file.tooLarge": "This document is too large to preview (1 MB). Download a copy to read it.",
+  "file.invalid": "This file could not be read as Markdown. Download a copy to open it.",
+  "file.loadFailed": "Could not load this file. Try again or download a copy.",
+  "file.empty": "This document is empty."
 }

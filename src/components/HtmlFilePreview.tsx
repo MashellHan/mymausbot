@@ -51,12 +51,6 @@ export function HtmlFileButton({ path, name, message }: { path: string; name: st
   </>;
 }
 
-/** A file chip's name button: an HTML file's name opens its preview, any other file's name saves it. */
-export function chipNameAction(preview: ReturnType<typeof useHtmlPreview>, save: ReturnType<typeof useLocalFileSave>, name: string, retryable: boolean) {
-  if (preview.html) return { onClick: preview.show, disabled: false, "aria-label": t("html.preview", { name }) };
-  return { onClick: () => void save.save(), disabled: save.state === "saving", "aria-label": retryable ? t("attach.retrySaveAria", { name }) : t("attach.saveAria", { name }) };
-}
-
 /** Saves a file whose name opens its preview instead. */
 export function SaveIconButton({ name, save, retryable }: { name: string; save: ReturnType<typeof useLocalFileSave>; retryable: boolean }) {
   const label = retryable ? t("attach.retrySaveAria", { name }) : t("attach.saveAria", { name });

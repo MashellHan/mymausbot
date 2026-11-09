@@ -27,6 +27,7 @@ import { routineRunLabel, routineRunTone } from "@/lib/routine-display";
 import { AndroidDevicePanel, useAndroidUsbDevices } from "./AndroidDevicePanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { usePanelPage, type PanelPage } from "@/lib/page-open";
+import { usePanelFileRequest, type PanelFilePreview } from "@/lib/file-preview";
 const DataPanel = lazy(() => import("./data/DataPanel").then((module) => ({ default: module.DataPanel })));
 const loadLiveDesktop = () => import("./LiveDesktop").then((module) => ({ default: module.LiveDesktop }));
 const LiveDesktop = lazy(loadLiveDesktop);
@@ -284,6 +285,15 @@ export function ComputerPanel({
     setPanelView(view);
     writeComputerPanelView(bot.id, view);
   };
+  const [filePreview, setFilePreview] = useState<PanelFilePreview | null>(null);
+  usePanelFileRequest(bot.id, bot.threadId, (file) => {
+    explicitPanelView.current = true;
+    setPanelView("files");
+    setFilePreview(file);
+  });
+  useEffect(() => {
+    setFilePreview((file) => file && (panelView !== "files" || file.botId !== bot.id || file.message.threadId !== bot.threadId) ? null : file);
+  }, [bot.id, bot.threadId, panelView]);
 
   const previousPanelTarget = useRef<string | null>(null);
   // Excludes the model and Auto's resolved surface: neither may move the tab.
@@ -1281,7 +1291,7 @@ export function ComputerPanel({
           </Suspense>
         </div>
       ) : panelView === "files" || panelView === "mini-apps" ? (
-        <ComputerPanelInfoTab view={panelView} bot={bot} />
+        <ComputerPanelInfoTab view={panelView} bot={bot} filePreview={filePreview} onPreviewClose={() => setFilePreview(null)} />
       ) : panelView === "android" && androidConnected ? (
         <div {...tabPanelProps("android")} className={cn("flex-1 overflow-y-auto px-4 pt-2", TAB_PANEL_FOCUS)}>
           <AndroidDevicePanel status={androidStatus} />
