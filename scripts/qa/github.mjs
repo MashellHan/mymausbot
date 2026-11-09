@@ -83,7 +83,8 @@ function producingJob(job, jobs) {
   return originals[0];
 }
 
-export async function runPlan(run, jobs, artifacts, { api = github, readArtifact = artifactFiles } = {}) {
+export async function runPlan(run, jobs, artifacts, { api = github, readArtifact = artifactFiles, shaIdentity = "run-head" } = {}) {
+  if (!["run-head", "executed-pr-merge"].includes(shaIdentity)) throw new Error("Invalid plan SHA identity mode");
   const preflight = preflightJob(jobs);
   if (!preflight) return null;
   const matches = artifacts.filter((item) => item.name === `qa-plan-attempt-${preflight.run_attempt}`);
@@ -94,7 +95,11 @@ export async function runPlan(run, jobs, artifacts, { api = github, readArtifact
     throw new Error("Missing current-run validation plan; rerun all jobs for this revision");
   }
   const plan = JSON.parse((await readArtifact(artifact, api))["qa-plan.json"]);
-  if (plan.version !== 1 || plan.sha !== run.head_sha || plan.runId !== run.id || plan.attempt !== preflight.run_attempt || plan.attempt > run.run_attempt) {
+  const shaMatches = shaIdentity === "executed-pr-merge"
+    ? /^[a-f\d]{40}$/i.test(plan.sha ?? "") && plan.sha === plan.execution?.merge
+      && /^[a-f\d]{40}$/i.test(plan.execution?.base ?? "") && plan.execution?.head === run.head_sha
+    : plan.sha === run.head_sha;
+  if (plan.version !== 1 || !shaMatches || plan.runId !== run.id || plan.attempt !== preflight.run_attempt || plan.attempt > run.run_attempt) {
     throw new Error("Missing current-run validation plan; rerun all jobs for this revision");
   }
   return plan;
