@@ -13,7 +13,6 @@ import { useSpeech } from "@/lib/tts/useSpeech";
 import { localSystemVoiceActive } from "@/lib/local-voice";
 import { computerStartLine, useScreensWhile } from "@/lib/computer-start";
 import { rememberComputerPanelOpen } from "@/lib/computer-panel-focus";
-import { writeComputerPanelView } from "@/lib/computer-panel-view";
 import { useCaptionChrome, useDesktopCapabilities } from "@/components/DesktopCapabilities";
 import {
   api,
@@ -1117,13 +1116,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, state, showThreads)} />
           {!phoneMenu && <button
             data-tour="computer"
-            onClick={(event) => {
-              if (!state.computerOpen) {
-                writeComputerPanelView(bot.id, "mini-apps");
-                rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: event.detail === 0 });
-              }
-              dispatch({ type: "toggleComputer" });
-            }}
+            onClick={(event) => { if (!state.computerOpen) rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: event.detail === 0 }); dispatch({ type: "toggleComputer" }); }}
             className={cn(
               "relative",
               "flex size-8 items-center justify-center rounded-full transition-colors hover:bg-ink/[0.06]",
