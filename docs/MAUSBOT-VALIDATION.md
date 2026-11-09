@@ -143,7 +143,7 @@ The trusted-main `scan` job in `qa-report.yml` runs after PR CI completes; it is
 not a required PR check and uses `continue-on-error`. Its
 `process-scan.json` reports `passed`, `optimization_needed` or `incomplete`.
 The workflow scan is read-only and retains its report artifact. The existing
-serialized thirty-minute Lead queue scans open PRs and recent PR runs and is the
+serialized hourly Lead queue scans open PRs and recent PR runs and is the
 only publisher of process issues; there is no new scheduler. Scanner outages cannot fail the quality gate or
 prevent ordinary QA/PR handoffs.
 It also inspects procedural closure reasons among the latest 100 closed PRs
@@ -197,7 +197,31 @@ Execution order and attempts govern updates; a slow old run cannot overwrite
 newer evidence merely by finishing later. A pass after the existing two allowed CI retries remains a
 flake. No additional full-suite retry budget is added.
 
-The local thirty-minute queue uses the existing `mausbot-lead` Herdr agent. It
+Track a confirmed shared root cause in one QA issue. Keep its individual
+contract/platform keys and original evidence; matching text or a shared file
+alone does not establish a common cause. Lead may consolidate existing case
+issues under that parent with one reviewed membership list. The parent must
+retain the strongest member priority and every affected scope. Closing member
+records as consolidated is a tracking change, not a repair or verification.
+
+The parent body declares existing member keys in one machine-readable line:
+
+```text
+<!-- mausbot-qa-group ["0123456789abcdef01234567","89abcdef0123456789abcdef"] -->
+```
+
+The reporter keeps updating original member evidence without reopening
+consolidated records, and updates one parent summary. A new member failure
+reopens a closed or verified parent for triage. The parent is only marked
+`qa:verified` after every member has positive evidence under the existing
+complete-execution and retry rules; Lead still owns closure. Old reports
+cannot overwrite newer member evidence. Unknown or unrelated findings retain
+their own triage until a shared cause and membership are confirmed. Deploy
+this reporter support before closing members, and preserve the original links,
+case keys, platforms, assertions, tested revisions, runs and pending work in
+the consolidation handoff.
+
+The local hourly queue uses the existing `mausbot-lead` Herdr agent. It
 submits new QA work, ready PR heads, verification and overdue conditions. Normal
 recurrence updates the issue without another wake-up. A durable submission
 receipt is not an acknowledgement: Lead acknowledges and triages on the issue
@@ -316,7 +340,7 @@ The queue entry point is `node scripts/qa/queue.mjs`. It requires
 prefix in `MAUSBOT_GH_COMMAND`, and optional `MAUSBOT_HERDR` /
 `MAUSBOT_HERDR_SESSION` (default `default`). Use the verified personal account
 helper on a Mac with multiple GitHub accounts; never store tokens in a plist.
-Install one launchd job with `StartInterval` set to 1800 seconds against a pinned checkout.
+Install one launchd job with `StartInterval` set to 3600 seconds against a pinned checkout.
 Preserve the existing upstream sync and activity collectors. Resolve an
 uncertain receipt by reading Lead's actual state/output and the issue/PR;
 clear its pending entry only after determining whether submission happened.

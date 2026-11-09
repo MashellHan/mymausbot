@@ -27,8 +27,8 @@ import { ThreadLink, ThreadRefsContext, threadLinkFromProps, type ThreadRefsValu
 import { MarkdownTable } from "./MarkdownTable";
 import { CodeBlock, CodePlate, codeHash } from "./CodeBlock";
 export { CodeBlock, HIGHLIGHT_CACHE_MAX, HIGHLIGHT_CACHE_MAX_CHARS, HIGHLIGHT_MAX_CHARS, type CodeBlockProps } from "./CodeBlock";
-import { FilePreviewButton } from "./FilePreviewButton";
-import { SaveIconButton, useHtmlPreview } from "./HtmlFilePreview";
+import { useFilePreview } from "./FilePreviewButton";
+import { SaveIconButton } from "./HtmlFilePreview";
 import { useRevealOriginalMenu } from "./RevealOriginalMenu";
 
 const mermaidCache = new Map<string, string>();
@@ -324,7 +324,7 @@ export function MermaidDiagram({ code }: MermaidDiagramProps) {
 // source: the original a delivered copy came from, offered on right-click (Show in Finder) like in the gallery.
 function LocalFileLink({ filePath, name, source, children, message }: { filePath: string; name?: string; source?: string; children?: ReactNode; message?: MessageAttachmentContext }) {
   const save = useLocalFileSave(filePath, name, message);
-  const preview = useHtmlPreview(filePath, name ?? fileName(filePath), message);
+  const preview = useFilePreview(filePath, name ?? fileName(filePath), message);
   const revealMenu = useRevealOriginalMenu();
   if (!message) {
     return <span title={t("chat.file.legacy")} className="break-words text-ink-secondary">{children}</span>;
@@ -340,18 +340,16 @@ function LocalFileLink({ filePath, name, source, children, message }: { filePath
   return (
     <span dir="ltr" className="inline-flex flex-wrap items-center gap-x-1.5 [unicode-bidi:isolate]" {...revealMenu.targetProps(source)}>
       {revealMenu.menu}
-      {preview.html
-        ? <SaveIconButton name={name ?? fileName(filePath)} save={save} retryable={save.state === "failed" && !save.outsideWorkspace} />
-        : <FilePreviewButton path={filePath} name={name ?? fileName(filePath)} message={message} />}
+      {preview.available && <SaveIconButton name={name ?? fileName(filePath)} save={save} retryable={save.state === "failed" && !save.outsideWorkspace} />}
       <button
         type="button"
-        onClick={preview.html ? preview.show : () => void save.save()}
-        disabled={!preview.html && save.state === "saving"}
-        title={preview.html ? t("html.preview", { name: name ?? fileName(filePath) }) : t("chat.file.saveCopy")}
+        onClick={preview.available ? preview.show : () => void save.save()}
+        disabled={!preview.available && save.state === "saving"}
+        title={preview.available ? preview.label : t("chat.file.saveCopy")}
         className="inline-flex items-center gap-1 break-words text-start text-accent underline decoration-accent/40 hover:decoration-accent disabled:cursor-wait"
       >
         {children}
-        {preview.html ? (
+        {preview.available ? (
           <Eye size={12} className="shrink-0" aria-hidden="true" />
         ) : save.state === "saving" ? (
           <LoaderCircle size={12} className="shrink-0 animate-spin" aria-hidden="true" />
@@ -634,7 +632,7 @@ function MarkdownLink({ href, children, ...rest }: { href?: string; children?: R
   if (localPath) {
     const copy = delivered && Object.hasOwn(delivered, fileName(localPath)) ? delivered[fileName(localPath)] : undefined;
     const source = copy && originals && Object.hasOwn(originals, copy) ? originals[copy] : undefined;
-    return <LocalFileLink filePath={copy ?? localPath} name={copy ? fileName(localPath) : undefined} source={source} message={message}>{children}</LocalFileLink>;
+    return <LocalFileLink filePath={copy ?? href} name={fileName(localPath)} source={source} message={message}>{children}</LocalFileLink>;
   }
   if (!/^https?:\/\//i.test(href)) {
     return (

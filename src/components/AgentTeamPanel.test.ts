@@ -37,7 +37,7 @@ const ready: LocalAgentTeamsResponse = {
 
 let host: HTMLDivElement;
 let root: Root;
-const render = async (view: "content" | "panel", snapshot: LocalAgentTeamsResponse = ready) => {
+const render = async (view: "content" | "panel", snapshot: LocalAgentTeamsResponse | null = ready) => {
   await act(async () => root.render(view === "content"
     ? createElement(AgentTeamView, { snapshot }) : createElement(AgentTeamPanel)));
 };
@@ -61,6 +61,23 @@ afterEach(async () => {
 });
 
 describe("Agent Team panel", () => {
+  it("keeps the count, read time and Pause beside Agent Offices without a separate page header", async () => {
+    await render("content");
+    const header = host.querySelector<HTMLElement>('[data-testid="agent-offices-header"]')!;
+    const summary = header.querySelector<HTMLElement>('[data-testid="agent-town-summary"]')!;
+    const pause = header.querySelector<HTMLButtonElement>("button")!;
+    expect(header.querySelector("h2")?.textContent).toBe("Agent Offices");
+    expect(summary.textContent).toContain("2 teams · Last read");
+    expect(host.querySelector('[data-testid="agent-team-panel"] > header')).toBeNull();
+    expect(text()).not.toContain("Local Herdr ·");
+    expect(pause.getAttribute("aria-label")).toBe("Pause town animation");
+    expect(pause.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => pause.click());
+    expect(pause.getAttribute("aria-label")).toBe("Play town animation");
+    expect(pause.getAttribute("aria-pressed")).toBe("true");
+    expect(members()?.querySelector("h3")?.textContent).toBe("Atlas Studio");
+  });
+
   it("keeps verified team tokens beside its name and state while labeling partial, stale and missing coverage", async () => {
     await render("content");
     const header = members()!.querySelector("header")!;
@@ -156,7 +173,7 @@ describe("Agent Team panel", () => {
 
   it("shows one selected office at a time and preserves selection, focus and scroll through a stale update", async () => {
     await render("content");
-    expect(text()).toContain("Local Herdr · 2 teams");
+    expect(text()).toContain("2 teams");
     expect(text()).toContain("Agent Offices");
     expect(text()).not.toContain("Updates every 2 seconds");
     expect(offices()).toHaveLength(2);
@@ -195,7 +212,7 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("Last observed · Needs input");
     expect(offices()[0]!.textContent).toContain("1 last active");
     expect(members()?.querySelector<HTMLElement>("li .bg-ink-secondary\\/30")).not.toBeNull();
-    expect(text()).toContain("Local Herdr · 2 teams");
+    expect(text()).toContain("2 teams");
 
     await act(async () => offices()[1]!.click());
     expect(offices().map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
@@ -212,22 +229,31 @@ describe("Agent Team panel", () => {
   });
 
   it("distinguishes no snapshot from a real empty team list", async () => {
+    await render("content", null);
+    expect(text()).toContain("— teams");
+    expect(text()).toContain("No successful read yet");
+    expect(text()).toContain("Loading local teams");
+    expect(host.querySelector('[data-testid="agent-offices-header"] h2')?.textContent).toBe("Agent Offices");
+    expect(host.querySelector('.agent-town-offices')).toBeNull();
+
     await render("content", { status: "unavailable", updatedAt: null, teamCount: null, teams: [] });
-    expect(text()).toContain("Local Herdr · — teams");
+    expect(text()).toContain("— teams");
     expect(text()).toContain("teams are unavailable");
     expect(text()).not.toContain("0 teams");
+    expect(host.querySelector('[data-testid="agent-offices-header"] button')).toBeNull();
     expect(members()).toBeNull();
 
     await render("content", { status: "ready", updatedAt: ready.updatedAt, teamCount: 0, teams: [] });
-    expect(text()).toContain("Local Herdr · 0 teams");
+    expect(text()).toContain("0 teams");
     expect(text()).toContain("No local Herdr teams found");
+    expect(host.querySelector('.agent-town-offices')).toBeNull();
     expect(members()).toBeNull();
   });
 
   it("uses singular copy for one team and one agent in English and Chinese", async () => {
     const single = { ...ready, teamCount: 1, teams: [{ ...ready.teams[0]!, agentCount: 1, activeAgentCount: 1, agents: [ready.teams[0]!.agents[0]!] }] };
     await render("content", single);
-    expect(text()).toContain("Local Herdr · 1 team");
+    expect(text()).toContain("1 team");
     expect(text()).toContain("1 agent");
     expect(text()).not.toContain("1 teams");
     expect(text()).not.toContain("1 agents");
@@ -235,7 +261,7 @@ describe("Agent Team panel", () => {
 
     setLocale("zh");
     await render("content", single);
-    expect(text()).toContain("本机 Herdr · 1 个团队");
+    expect(text()).toContain("1 个团队");
     expect(text()).toContain("1 个成员");
   });
 
@@ -244,10 +270,10 @@ describe("Agent Team panel", () => {
     calls.api.mockResolvedValueOnce(ready).mockRejectedValueOnce(new Error("offline"));
     await render("panel");
     expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/agents", expect.objectContaining({ background: true, signal: expect.any(AbortSignal) }));
-    expect(text()).toContain("Local Herdr · 2 teams");
+    expect(text()).toContain("2 teams");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     expect(text()).toContain("Showing the last known teams");
-    expect(text()).toContain("Local Herdr · 2 teams");
+    expect(text()).toContain("2 teams");
   });
 
   it("replaces selected office details every two seconds without moving focus or scroll", async () => {
@@ -323,7 +349,7 @@ describe("Agent Team panel", () => {
     first.focus();
     expect(members()?.textContent).toContain("Mira");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-    expect(text()).toContain("Local Herdr · — teams");
+    expect(text()).toContain("— teams");
     expect(text()).toContain("teams are unavailable");
     expect(text()).not.toContain("Atlas Studio");
     expect(members()).toBeNull();
@@ -336,7 +362,7 @@ describe("Agent Team panel", () => {
       .mockRejectedValueOnce(new Error("offline"));
     await render("panel");
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
-    expect(text()).toContain("Local Herdr · 0 teams");
+    expect(text()).toContain("0 teams");
     expect(text()).toContain("Showing the last known teams");
     expect(text()).toContain("No local Herdr teams found");
     expect(text()).not.toContain("No successful read yet");
