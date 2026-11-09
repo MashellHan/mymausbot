@@ -96,7 +96,7 @@ beforeAll(() => {
 });
 beforeEach(() => {
   // The panel remembers each conversation's tab, so one test's click must not choose the next test's tab.
-  const saved = new Map<string, string>();
+  const saved = new Map<string, string>([["omb-computer-panel-view:scout", "computer"]]);
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => saved.get(key) ?? null,
     setItem: (key: string, value: string) => void saved.set(key, value),
@@ -115,6 +115,31 @@ afterEach(() => {
 });
 
 describe("Computer panel tab", () => {
+  it("opens Mini Apps by default even when the bot uses the browser", async () => {
+    localStorage.removeItem("omb-computer-panel-view:scout");
+    fixture.browser = true;
+    await open(makeBot({ computer: "browser" }));
+    expect(selected()).toBe("Mini Apps");
+    expect(document.querySelector('[data-testid="mini-apps-panel"]')).not.toBeNull();
+    await open(makeBot({ computer: "browser", busy: true }));
+    expect(selected()).toBe("Mini Apps");
+    flushSync(() => tab("Data").click());
+    await open(makeBot({ computer: "browser", busy: false }));
+    expect(selected()).toBe("Data");
+  });
+
+  it("honors a new Mini Apps open over a previously selected browser", async () => {
+    localStorage.setItem("omb-computer-panel-view:scout", "browser");
+    fixture.browser = true;
+    await open(makeBot({ computer: "browser" }));
+    expect(selected()).toBe("Browser");
+    root?.unmount();
+    root = null;
+    localStorage.setItem("omb-computer-panel-view:scout", "mini-apps");
+    await open(makeBot({ computer: "browser" }));
+    expect(selected()).toBe("Mini Apps");
+  });
+
   it.each(["agent-team", "usage"])("restores the retired %s tab into Mini Apps", async (view) => {
     localStorage.setItem("omb-computer-panel-view:scout", view);
     await open(makeBot());

@@ -290,11 +290,15 @@ export function ComputerPanel({
   const panelTargetKey = `${profileBot.id}:${profileBot.threadId}:${livePlace}:${profileBot.cloudBackend ?? "box"}`;
   useEffect(() => {
     const previous = previousPanelTarget.current;
+    if (previous === null) {
+      previousPanelTarget.current = panelTargetKey;
+      explicitPanelView.current = true;
+      return;
+    }
     if (previous === panelTargetKey && (explicitPanelView.current || !(bot.computer === "browser" && browserEnabled))) return;
     if (previous !== panelTargetKey) explicitPanelView.current = false;
     previousPanelTarget.current = panelTargetKey;
-    setPanelView(bot.computer === "browser" && browserEnabled ? "browser"
-      : previous === null ? readComputerPanelView(bot.id) : "computer");
+    setPanelView(bot.computer === "browser" && browserEnabled ? "browser" : "computer");
   }, [panelTargetKey, bot.id, bot.computer, browserEnabled]);
 
   useEffect(() => {

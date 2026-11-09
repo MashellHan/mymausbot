@@ -76,6 +76,7 @@ const screen = (fields: { botId?: string; threadId?: string; png: string; mime?:
 };
 
 beforeAll(async () => {
+  vi.stubGlobal("localStorage", { getItem: (key: string) => key.startsWith("omb-computer-panel-view:") ? "computer" : null, setItem: () => {} });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   const state: AppState = {
     ...initialState,

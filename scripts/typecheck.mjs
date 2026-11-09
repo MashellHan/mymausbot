@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -7,7 +7,8 @@ const compiler = createRequire(import.meta.url).resolve("typescript/bin/tsc");
 const configs = { ui: "tsconfig.json", server: "tsconfig.server.json" };
 const args = process.argv.slice(2);
 let projects = Object.keys(configs);
-let fresh = Boolean(process.env.CI && process.env.CI !== "false");
+const ci = Boolean(process.env.CI && process.env.CI !== "false");
+let fresh = ci;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--fresh") fresh = true;
   else if (args[i] === "--project" && Object.hasOwn(configs, args[i + 1])) projects = [args[++i]];
@@ -15,13 +16,28 @@ for (let i = 0; i < args.length; i++) {
 }
 const directory = join(process.cwd(), ".omb-scratch", "typecheck");
 mkdirSync(directory, { recursive: true });
-for (const project of projects) {
+function check(project) {
   const state = join(directory, `${project}.tsbuildinfo`);
   if (fresh) rmSync(state, { force: true });
   const started = Date.now();
-  const result = spawnSync(process.execPath, [compiler, "--project", configs[project],
-    "--incremental", "--tsBuildInfoFile", state], { stdio: "inherit" });
-  console.log(`Typecheck ${project}: ${((Date.now() - started) / 1000).toFixed(1)}s; ${fresh ? "fresh" : "incremental"}; exit ${result.status ?? 1}`);
-  if (result.error) console.error(result.error.message);
-  if (result.status !== 0) { process.exitCode = result.status ?? 1; break; }
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [compiler, "--project", configs[project],
+      "--incremental", "--tsBuildInfoFile", state], { stdio: "inherit" });
+    child.once("error", (error) => console.error(error.message));
+    child.once("close", (code) => {
+      const exitCode = code !== null && code >= 0 ? code : 1;
+      console.log(`Typecheck ${project}: ${((Date.now() - started) / 1000).toFixed(1)}s; ${fresh ? "fresh" : "incremental"}; exit ${exitCode}`);
+      resolve(exitCode);
+    });
+  });
+}
+
+if (ci) {
+  const results = await Promise.all(projects.map(check));
+  process.exitCode = results.find((code) => code !== 0) ?? 0;
+} else {
+  for (const project of projects) {
+    const code = await check(project);
+    if (code !== 0) { process.exitCode = code; break; }
+  }
 }

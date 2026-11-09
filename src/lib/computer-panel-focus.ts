@@ -3,6 +3,7 @@
  * is a lazy screen, so the intent is recorded on open and taken by the panel's
  * first render, never by a timer on the opener's side. */
 import { useEffect, useRef, type RefObject } from "react";
+import { writeComputerPanelView } from "./computer-panel-view";
 
 export type ComputerPanelOpen = {
   botId: string;
@@ -18,6 +19,7 @@ let pendingBrowserView: string | null = null;
 let opener: { botId: string; element: HTMLElement | null } | null = null;
 
 export function rememberComputerPanelOpen(open: ComputerPanelOpen): void {
+  writeComputerPanelView(open.botId, "mini-apps");
   opener = { botId: open.botId, element: open.opener };
   pendingTabFocus = open.tabs ? open.botId : null;
   pendingBrowserView = open.browser ? open.botId : null;
