@@ -257,7 +257,7 @@ independent development continue.
 The automated QA runner is the existing CI full lane, once daily at 05:00
 Asia/Shanghai. It does not need another persistent model. Its trusted reporter
 files deduplicated issues;
-the thirty-minute queue hands actionable work to mausbot-lead. Lead acknowledges,
+the hourly queue hands actionable work to mausbot-lead. Lead acknowledges,
 targets triage within thirty minutes, assigns an existing developer/maintainer and sets
 priority, scope, classification, next action and due date. Reviewer reviews fixes;
 QA verifies after integration; Lead closes with evidence. Read the mechanism
