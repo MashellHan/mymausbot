@@ -1,8 +1,8 @@
 import type {
   LocalUsageCategory, LocalUsageCounts, LocalUsageMergedCounts, LocalUsageResponse,
   LocalUsageTrendDay, LocalUsageWindow,
-} from "../../shared/local-dashboard";
-import { usageTrendRange, type UsageTrendRange } from "../../shared/local-usage-range";
+} from "../../shared/local-dashboard.ts";
+import { usageTrendRange, type UsageTrendRange } from "../../shared/local-usage-range.ts";
 
 type UsageCounts = LocalUsageCounts & { knownCommits: number | null };
 type Categories = Record<LocalUsageCategory, UsageCounts>;

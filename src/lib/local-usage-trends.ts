@@ -1,5 +1,5 @@
-import { shiftUsageDay } from "../../shared/local-usage-range";
-import type { UsageTrendDay } from "./local-usage-view";
+import { shiftUsageDay } from "../../shared/local-usage-range.ts";
+import type { UsageTrendDay } from "./local-usage-view.ts";
 
 export type UsageTrendBucket = UsageTrendDay & { endDay?: string };
 
