@@ -25,10 +25,10 @@ export function readComputerPanelView(
   try {
     const value = storage.getItem(storageKey(botId));
     if (value === "agent-team" || value === "usage") return "mini-apps";
-    if (value === "android" || value === "browser" || value === "routines" || value === "files" || value === "data" || value === "mini-apps") return value;
+    if (value === "computer" || value === "android" || value === "browser" || value === "routines" || value === "files" || value === "data" || value === "mini-apps") return value;
   } catch {
   }
-  return "computer";
+  return "mini-apps";
 }
 
 export function writeComputerPanelView(

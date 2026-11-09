@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   focusComputerPanelEntry,
   releaseComputerPanelFocus,
@@ -26,11 +26,16 @@ const focusedId = () => document.activeElement?.id || document.activeElement?.ta
 
 afterEach(() => {
   document.body.innerHTML = "";
+  vi.unstubAllGlobals();
 });
 
 describe("computer panel entry focus", () => {
   it("takes the one-shot focus for the bot that opened it, and only once", () => {
+    const saved = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key), setItem: (key: string, value: string) => saved.set(key, value) });
+    localStorage.setItem("omb-computer-panel-view:scout", "browser");
     rememberComputerPanelOpen({ botId: "scout", opener: null, tabs: true });
+    expect(localStorage.getItem("omb-computer-panel-view:scout")).toBe("mini-apps");
     expect(takeComputerPanelTabFocus("scout")).toBe(true);
     expect(takeComputerPanelTabFocus("scout")).toBe(false);
     expect(takeComputerPanelTabFocus("other")).toBe(false);
