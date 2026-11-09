@@ -8,7 +8,7 @@ import { expect, it } from "vitest";
 it("rechecks changed source and imported types while keeping independent UI/server compiler state", () => {
   const root = mkdtempSync(join(tmpdir(), "mausbot-typecheck-"));
   const script = fileURLToPath(new URL("./typecheck.mjs", import.meta.url));
-  const run = (ci = "") => spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8", env: { ...process.env, CI: ci } });
+  const run = (ci = "", args: string[] = []) => spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8", env: { ...process.env, CI: ci } });
   const write = (file: string, value: string) => writeFileSync(join(root, file), value);
   try {
     const options = { strict: true, noEmit: true, types: [], target: "ES2023", module: "ESNext", moduleResolution: "bundler", skipLibCheck: true };
@@ -39,6 +39,13 @@ it("rechecks changed source and imported types while keeping independent UI/serv
     const recovered = run("true");
     expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
     expect(recovered.stdout.match(/fresh/g)).toHaveLength(2);
+    for (const project of ["ui", "server"]) {
+      const selected = run("true", ["--project", project, "--fresh"]);
+      expect(selected.status, selected.stdout + selected.stderr).toBe(0);
+      expect(selected.stdout).toContain(`Typecheck ${project}:`);
+      expect(selected.stdout).not.toContain(`Typecheck ${project === "ui" ? "server" : "ui"}:`);
+      expect(selected.stdout).toContain("fresh; exit 0");
+    }
     write("ui.ts", "export const value: number = 'wrong';\n");
     write("model.ts", "export type Count = string;\n");
     const bothBroken = run("true");

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { SELECTABLE_JOBS, ciOutputs, LINUX_OS, vitestMatrix } from "./ci-scope.mjs";
 import { interpolate } from "./testing/github-expression.ts";
+import { executionComplete, expectedJobs } from "./qa/contracts.mjs";
 import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
@@ -267,6 +268,29 @@ describe("CI concurrency", () => {
     expect(steps.some((step) => step.run === "pnpm typecheck")).toBe(true);
     // Every test the guards run stays in the suite: vitest's include has them, so the shards still deal them out.
     expect(workflow.jobs.vitest.needs).toBe("static");
+  });
+
+  it("checks both FOSS projects fresh and sequentially within one bounded macOS heap", () => {
+    const foss = workflow.jobs.foss;
+    const steps = foss.steps as Step[];
+    const removed = steps.findIndex((step) => step.name === "Delete the enterprise folder");
+    const checked = steps.findIndex((step) => step.name === "pnpm typecheck");
+    const tested = steps.findIndex((step) => step.run?.startsWith("pnpm exec vitest run server/enterprise.test.ts"));
+    expect(foss["runs-on"]).toBe("macos-latest");
+    expect(removed).toBeGreaterThan(-1);
+    expect(checked).toBeGreaterThan(removed);
+    expect(tested).toBeGreaterThan(checked);
+    expect(steps[checked]!.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=4096" });
+    expect(steps[checked]!.run!.trim().split("\n")).toEqual([
+      "pnpm typecheck --project ui --fresh", "pnpm typecheck --project server --fresh",
+    ]);
+    expect(steps[checked]).not.toHaveProperty("continue-on-error");
+    expect(workflow.jobs.static.steps.some((step: Step) => step.run === "pnpm typecheck")).toBe(true);
+    const contract = expectedJobs().find((item) => item.id === "foss")!;
+    const job = { name: contract.name, status: "completed", conclusion: "success", steps: steps.map((step) => ({
+      name: step.name ?? `Run ${step.run}`, conclusion: "success",
+    })) };
+    expect(executionComplete([contract], [job], new Set([contract.artifact]))).toBe(true);
   });
 
   it.each(requiredRuntimeJobs)("allows an unselected %s to be skipped", async (job) => {
