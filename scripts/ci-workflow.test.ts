@@ -144,7 +144,7 @@ describe("CI concurrency", () => {
     expect(run.env?.OMB_VITEST_SUBSET).toBe("${{ matrix.files }}");
     expect(run.env?.OMB_VITEST_WORKERS).toBe("${{ matrix.workers }}");
     const { include } = vitestMatrix(["macos-latest"]);
-    expect(include.map((entry) => entry.shard)).toEqual([1, 2, 3, 4]);
+    expect(include.map((entry) => entry.shard)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(include.every((entry) => entry.e2e === "all")).toBe(true);
     const units = (workflow.jobs.vitest.steps as { name?: string; if?: string; run?: string; "timeout-minutes"?: number }[]).find((step) => step.name === "Electron unit tests")!;
     expect(units["timeout-minutes"]).toBe(5);
