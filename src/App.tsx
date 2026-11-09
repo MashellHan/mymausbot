@@ -14,6 +14,7 @@ import { ThreadRefsProvider } from "@/components/ThreadRefs";
 import { MiniAppDefaultsBootstrap } from "@/components/mini-apps/MiniAppDefaultsBootstrap";
 import { initAnalytics } from "@/lib/analytics";
 import { parseComputerHelp } from "@/lib/computer-control";
+import { writeComputerPanelView } from "@/lib/computer-panel-view";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
 import { GroupView } from "@/components/GroupView";
@@ -244,6 +245,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   };
 
   const openComputerFromWorkspace = (botId: string) => {
+    writeComputerPanelView(botId, "computer");
     setLocalVmWorkspaceBotId(null);
     dispatch({ type: "select", id: botId });
     dispatch({ type: "toggleComputer", open: true });
