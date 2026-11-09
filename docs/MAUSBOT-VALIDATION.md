@@ -48,7 +48,9 @@ When the affected contract requires local type validation, use
 The TypeScript compiler always runs and invalidates affected source/imports;
 it maintains real incremental state under `.omb-scratch/typecheck/` rather than
 reusing a previous success receipt. Each worktree has its own state. CI and
-`--fresh` remove the selected compiler state before checking. `pnpm build`
+`--fresh` remove the selected compiler state before checking. In CI, UI and
+server compilation run concurrently with separate compiler state; both must
+finish successfully. Local compilation keeps the sequential loop. `pnpm build`
 includes the same complete typecheck; do not separately invoke it immediately
 before the build. Emitting server/companion builds keep their existing checks.
 
