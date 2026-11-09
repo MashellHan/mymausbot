@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
 import { createLocalUsageProvider } from "./local-usage.ts";
+import { localUsageView } from "../src/lib/local-usage-view.ts";
+import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 
 const folders: string[] = [];
 const day = (date: string, offset: number) => new Date(Date.parse(`${date}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
@@ -66,6 +68,115 @@ async function historyFixture(asOf: number) {
 }
 
 describe("local Usage projection", () => {
+  it.each(["ready", "partial"] as const)("retains %s token history through unavailable baseline and recent rows without changing short windows", async (tokenStatus) => {
+    const asOf = Date.parse("2026-11-09T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    const dates = ["2026-10-01", "2026-11-01"], missing = ["2026-10-02", "2026-11-02"];
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) if ([...dates, ...missing].includes(row.day)) row.tokenStatus = "unavailable";
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const baseline = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const history = { version: 1, daily: dates.map((day) => ({ day, tokenStatus, newTokens: 100, cacheRead: 20, totalTokens: 120 })) };
+    await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: history }));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows).toEqual(baseline.windows);
+    expect(response.trend).toEqual(baseline.trend);
+    expect(localUsageView(response)).toEqual(localUsageView(baseline));
+    for (const date of dates) expect(response.history?.find((row) => row.day === date)).toMatchObject({
+      tokenStatus: "partial", newTokens: 100, cacheRead: 20, totalTokens: 120, wow: { newTokens: null, totalTokens: null },
+    });
+    for (const range of ["60", "90", "6m"] as const) {
+      const view = localUsageView(response, range);
+      expect(view.windows).toEqual(localUsageView(baseline).windows);
+      for (const date of dates) expect(view.trend.find((row) => row.day === date)).toMatchObject({ tokenStatus: "partial", totalTokens: 120 });
+      for (const date of missing) expect(view.trend.find((row) => row.day === date)).toMatchObject({ tokenStatus: "unavailable", totalTokens: null });
+    }
+    const laterAsOf = Date.parse("2027-01-15T08:00:00Z"), later = await historyFixture(laterAsOf);
+    expect(later.snapshot.localHistory.daily.some((row) => dates.includes(row.day))).toBe(false);
+    await writeFile(later.file, JSON.stringify({ ...later.snapshot,
+      trendHistory: { version: 1, daily: history.daily.map((row) => ({ ...row, tokenStatus: "partial" })) } }));
+    const retained = localUsageView(await createLocalUsageProvider({ file: later.file, now: () => laterAsOf }).get(), "6m");
+    for (const date of dates) expect(retained.trend.find((row) => row.day === date)).toMatchObject({
+      tokenStatus: "partial", newTokens: 100, cacheRead: 20, totalTokens: 120,
+    });
+  });
+
+  it("reads bounded token history while retaining legacy windows and rejecting invalid extensions", async () => {
+    const asOf = Date.parse("2026-11-09T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    const baseline = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const history = { version: 1, daily: [
+      { day: "2026-06-01", tokenStatus: "ready", newTokens: 10, cacheRead: 2, totalTokens: 12 },
+      { day: "2026-06-02", tokenStatus: "partial", newTokens: 0, cacheRead: 0, totalTokens: 0 },
+      { day: "2026-06-03", tokenStatus: "unavailable", newTokens: null, cacheRead: null, totalTokens: null },
+    ] };
+    await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: history }));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows).toEqual(baseline.windows);
+    expect(response.trend).toEqual(baseline.trend);
+    expect(response.history).toEqual(expect.arrayContaining([
+      expect.objectContaining({ day: "2026-06-01", tokenStatus: "ready", totalTokens: 12 }),
+      expect.objectContaining({ day: "2026-06-02", tokenStatus: "partial", totalTokens: 0 }),
+      expect.objectContaining({ day: "2026-06-03", tokenStatus: "unavailable", totalTokens: null }),
+      expect.objectContaining({ day: "2026-09-11", totalTokens: 64 }),
+    ]));
+    for (const patch of [{ day: "2026-11-10" }, { day: "2025-01-01" }, { totalTokens: 99 }, { newTokens: -1 }, { tokenStatus: "ready", cacheRead: null }]) {
+      await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: { version: 1, daily: [{ ...history.daily[0], ...patch }] } }));
+      const invalid = await createLocalUsageProvider({ file, now: () => asOf }).get();
+      expect(invalid.windows).toEqual(baseline.windows);
+      expect(invalid.history?.some((row) => row.day === "2026-06-01")).toBe(false);
+    }
+  });
+
+  it("keeps the original 60-day card deduplication independent of longer merge history", async () => {
+    const asOf = Date.parse("2026-11-09T08:00:00Z");
+    const { file } = await fixture(asOf);
+    const mergedFile = join(dirname(file), "merged-v1.json");
+    const id = (value: number) => value.toString(16).padStart(64, "0");
+    const repository = { id: id(2), name: "github.com/example/project" };
+    const source = { id: id(1), provider: "github", category: "work", status: "ready", capturedAt: new Date(asOf).toISOString(), items: [
+      { key: id(3), at: "2026-11-08T01:00:00Z", category: "work", repository, commits: [id(10)] },
+      { key: id(4), at: "2026-08-01T01:00:00Z", category: "personal", repository, commits: [id(10), id(11)] },
+    ] };
+    const raw = { version: 1, asOfAt: new Date(asOf).toISOString(), capturedAt: new Date(asOf).toISOString(),
+      windowStartDay: day("2026-11-09", -59), sources: [source] };
+    await writeFile(mergedFile, JSON.stringify(raw));
+    const baseline = (await createLocalUsageProvider({ file, mergedFile, now: () => asOf }).get()).merged!;
+    expect(baseline.history?.find((row) => row.day === "2026-08-01")?.coverage).toBe("unavailable");
+    await writeFile(mergedFile, JSON.stringify({ ...raw, windowStartDay: day("2026-11-09", -190) }));
+    const extended = (await createLocalUsageProvider({ file, mergedFile, now: () => asOf }).get()).merged!;
+    expect(extended.windows).toEqual(baseline.windows);
+    expect(extended.overlaps).toEqual(baseline.overlaps);
+    expect(extended.trend).toEqual(baseline.trend);
+    expect(extended.windows?.["7"]).toMatchObject({ prs: 1, commits: 1 });
+    expect(extended.history?.find((row) => row.day === "2026-08-01")).toMatchObject({ prs: 1, commits: 2 });
+    expect(extended.history?.find((row) => row.day === "2026-11-08")).toMatchObject({ prs: 1, commits: 0 });
+    expect(extended.history).toHaveLength(191);
+    const response = { status: "unavailable" as const, asOf: null, timeZone: "Asia/Shanghai" as const,
+      sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [], merged: extended };
+    const history = extended.history!;
+    expect(history.reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(2);
+    const daily = history.filter((row) => row.day >= "2026-05-10");
+    const withTokens = daily.map((row) => ({ ...row, tokenStatus: "unavailable" as const, newTokens: null, cacheRead: null,
+      totalTokens: null, wow: { ...row.wow, newTokens: null, totalTokens: null } }));
+    expect(weeklyUsageTrend(withTokens).reduce((sum, row) => sum + (row.commits ?? 0), 0)).toBe(2);
+    expect(history.find((row) => row.day === "2026-08-01")?.categories.unclassified.commits).toBe(1);
+    for (const range of ["30", "60", "90", "6m"] as const) {
+      expect(localUsageView(response, range).windows).toBeNull();
+      expect(localUsageView(response, range).trend).toEqual([]);
+    }
+
+    await writeFile(mergedFile, JSON.stringify({ ...raw, windowStartDay: day("2026-11-09", -190), sources: [{ ...source,
+      status: "stale", startDay: raw.windowStartDay }] }));
+    const stale = (await createLocalUsageProvider({ file, mergedFile, now: () => asOf }).get()).merged!;
+    expect(stale.history?.find((row) => row.day === "2026-05-10")?.coverage).toBe("unavailable");
+    for (const windowStartDay of [day("2026-11-09", -191), "2026-02-30", "2026-11-08"]) {
+      await writeFile(mergedFile, JSON.stringify({ ...raw, windowStartDay }));
+      expect((await createLocalUsageProvider({ file, mergedFile, now: () => asOf }).get()).merged).toBeUndefined();
+    }
+  });
+
   it("keeps remotely merged PRs independent of local logs and deduplicates original commits across PRs", async () => {
     const asOf = Date.parse("2026-11-06T08:00:00Z");
     const { file } = await fixture(asOf);

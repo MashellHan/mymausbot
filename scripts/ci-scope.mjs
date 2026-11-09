@@ -58,6 +58,7 @@ export const VITEST_SUBSETS = {
       "scripts/testing/bot-tools-ui.e2e.test.ts",
       "scripts/testing/key-readback.e2e.test.ts",
       "scripts/testing/one-workspace-ui.e2e.test.ts",
+      "scripts/testing/rail-profile-ui.e2e.test.ts",
       "scripts/testing/secret-card-descriptions.test.ts",
       "scripts/testing/team-own-chat.e2e.test.ts",
       "server/body-thread-guards.e2e.test.ts",
@@ -67,6 +68,7 @@ export const VITEST_SUBSETS = {
       "server/cloud-lending-chrome.e2e.test.ts",
       "server/cloud-lending-memory.e2e.test.ts",
       "server/cloud-lending.e2e.test.ts",
+      "server/cloud-lent-mcp.e2e.test.ts",
       "server/cloud-send-kinds.e2e.test.ts",
       "server/cloud-send-move.e2e.test.ts",
       "server/cloud-send-rooms.e2e.test.ts",
@@ -102,6 +104,7 @@ export const VITEST_SUBSETS = {
       "server/parked-cards.e2e.test.ts",
       "server/question-cards.e2e.test.ts",
       "server/shared-computers.e2e.test.ts",
+      "server/shared-computers.gate.test.ts",
       "server/team-move.e2e.test.ts",
       "server/use-my-mac.e2e.test.ts",
       "server/workspace-banner.e2e.test.ts",
@@ -174,6 +177,7 @@ export const SRC_OUTSIDE_RENDERER = [
   "src/lib/citations.ts",
   "src/lib/composer-attachments.ts",
   "src/lib/random-uuid.ts",
+  "src/lib/receipts.ts",
 ];
 
 export const DOCS = /^(?:[^/]+\.md|docs\/.+\.md|\.agents\/team\/(?:playbook|roles\/[^/]+)\.md|\.github\/FUNDING\.yml)$/;
@@ -464,6 +468,14 @@ const SHA = /^[a-f\d]{40}(?:[a-f\d]{24})?$/i;
 
 const git = (args) => execFileSync("git", args, { encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
 
+export function executedPullRequest(head, parents = () => git(["rev-list", "--parents", "-n", "1", "HEAD"])) {
+  const commits = parents().trim().split(/\s+/);
+  if (commits.length !== 3 || !commits.every((sha) => SHA.test(sha)) || commits[2] !== head) {
+    throw new Error("PR checkout is not the event head merged onto a base commit");
+  }
+  return { merge: commits[0], base: commits[1], head };
+}
+
 export function changedFiles(range) {
   // Disabling rename detection retains both old and new paths, including deletions.
   const diff = git(["diff", "--name-only", "--no-renames", "-z", range, "--"]);
@@ -530,7 +542,7 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
   let scope = lane === "main" ? MAIN_SCOPE : FULL_SCOPE;
   let vitestOs = lane === "main" ? WINDOWS_OS : ALL_OS;
   const mode = ["legacy", "shadow", "tiered"].includes(process.env.MAUSBOT_CI_MODE) ? process.env.MAUSBOT_CI_MODE : "legacy";
-  let plan, labels = [], repairIds = [], base, files, range, prNumber = null, prHead = null, onlyVersion = false;
+  let plan, labels = [], repairIds = [], base, files, range, prNumber = null, prHead = null, onlyVersion = false, execution = null;
   if (lane === "pr") {
     try {
       const { pull_request: pr } = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
@@ -540,6 +552,10 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
       prHead = head ?? null;
       if (![base, head].every((sha) => typeof sha === "string" && SHA.test(sha))) {
         throw new Error("Missing or invalid pull request commit SHAs");
+      }
+      if (process.env.OMB_CI_EXECUTION_BINDING === "1") {
+        execution = executedPullRequest(head);
+        base = execution.base;
       }
       range = `${base}...${head}`;
       files = changedFiles(range);
@@ -558,6 +574,7 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
           : `CI scope: nothing here can break Windows first, so its jobs wait for main (label the PR "${WINDOWS_LABEL}" and re-run to run them)`);
       }
     } catch (error) {
+      if (process.env.OMB_CI_EXECUTION_BINDING === "1" && !execution) throw error;
       console.warn(`CI scope: using all checks because the pull request diff is unavailable: ${error.message}`);
     }
   } else if (process.env.GITHUB_EVENT_NAME === "push") {
@@ -601,7 +618,7 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
       policy = readCheckPolicy();
       labels.push("ci:full");
     }
-    const fastPr = fastPrEnabled && lane === "pr" && !labels.some((label) => ["ci:full", "qa:repair", WINDOWS_LABEL].includes(label));
+    const fastPr = fastPrEnabled && lane === "pr" && !labels.some((label) => ["ci:full", "qa:repair", WINDOWS_LABEL, "upstream-sync"].includes(label));
     const input = { files, policy, labels, lines: changedCodeLines(range), mode, fastPr,
       forceFull: process.env.GITHUB_EVENT_NAME === "push" && scope !== QUEUED_SCOPE
         && scope.checks.some((check) => check !== "build") };
@@ -632,7 +649,7 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
   outputs.pr_number = prNumber;
   outputs.pr_head = prHead;
   outputs.shadow = mode === "shadow" && plan?.candidate ? plan.core : [];
-  const receipt = { version: 1, sha: process.env.GITHUB_SHA, runId: Number(process.env.GITHUB_RUN_ID), attempt: Number(process.env.GITHUB_RUN_ATTEMPT || 1), createdAt: new Date().toISOString(), plan, outputs };
+  const receipt = { version: 1, sha: process.env.GITHUB_SHA, runId: Number(process.env.GITHUB_RUN_ID), attempt: Number(process.env.GITHUB_RUN_ATTEMPT || 1), createdAt: new Date().toISOString(), execution, plan, outputs };
   writeFileSync("qa-plan.json", JSON.stringify(receipt, null, 2) + "\n");
   console.log(`CI scope: ${scope.areas.join(", ")} -> ${outputs.jobs.join(", ") || "static checks only"}`);
   if (outputs.deferred_files.length) console.log(`CI scope: deferred affected tests to full main validation: ${outputs.deferred_files.join(", ")}`);

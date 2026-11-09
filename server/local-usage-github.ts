@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import type { LocalUsageCategory, LocalUsageGithubResponse, LocalUsageMergedCounts, LocalUsageMergedWindow } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
+import { MAX_USAGE_HISTORY_DAYS } from "../shared/local-usage-range.ts";
 
 const CATEGORIES: LocalUsageCategory[] = ["work", "personal", "unclassified"];
 const DAY = 86_400_000;
@@ -123,8 +124,8 @@ function projection(raw: unknown, now: number): LocalUsageGithubResponse {
     return current;
   }
   const windows = { "1": comparedWindow(1, end), "7": comparedWindow(7, end), "30": comparedWindow(30, end) };
-  const trend = Array.from({ length: 30 }, (_, index) => {
-    const day = shift(end, index - 29), current = makeWindow(1, day), previous = makeWindow(1, shift(day, -7));
+  const history = Array.from({ length: MAX_USAGE_HISTORY_DAYS }, (_, index) => {
+    const day = shift(end, index + 1 - MAX_USAGE_HISTORY_DAYS), current = makeWindow(1, day), previous = makeWindow(1, shift(day, -7));
     return { day, coverage: current.coverage, prs: current.prs, knownPrs: current.knownPrs,
       commits: null, knownCommits: current.knownCommits, categories: current.categories,
       wow: { prs: change(current.prs, previous.prs), commits: null } };
@@ -132,7 +133,7 @@ function projection(raw: unknown, now: number): LocalUsageGithubResponse {
   const observed = sources.some(source => source.rows.size > 0);
   const stale = now - capturedAt > 900_000 || chinaDay(now) !== end || sources.some(source => source.status === "stale" || [...source.rows.values()].some(row => row.day >= shift(end, -6) && row.status === "stale"));
   return { metricDefinition: "github-profile-v1", dateBasis: { prs: "created-at/Asia-Shanghai", commits: "github-profile-day" },
-    chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture", status: !observed ? "unavailable" : stale ? "stale" : "partial", asOf, timeZone: "Asia/Shanghai", sourceCoverage, windows, trend };
+    chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture", status: !observed ? "unavailable" : stale ? "stale" : "partial", asOf, timeZone: "Asia/Shanghai", sourceCoverage, windows, trend: history.slice(-30), history };
 }
 
 export function createLocalUsageGithubReader(file: string, now: () => number = Date.now) {

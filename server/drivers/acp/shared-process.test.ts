@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProviderInstance, RuntimeEvent, SendTurnInput } from "../../contracts.ts";
 import { TurnNotStartedError } from "../../contracts.ts";
+import { botBox } from "../../bot-box/box.ts";
+import { planBox, visibleInBox } from "../../bot-box/plan.ts";
 import { engineHomes } from "../../engine-homes/engine-homes.ts";
+import { audienceHome } from "../../engine-homes/layout.ts";
 import * as procs from "../../procs.ts";
 import { removeTempDir } from "../../testing/cleanup.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
@@ -115,16 +118,57 @@ describe("ACP threads sharing one agent process", () => {
     expect(g.spawned).toHaveLength(2);
   });
 
-  it("on a Team Cloud never shares a process between two audiences, whose engines have homes of their own", async () => {
+  it("gives each folder in a process to one thread for the process's life, since the agent keeps MCP servers per folder", async () => {
+    const f = await fixture();
+    const shared = join(f.scratch, "project");
+    mkdirSync(shared, { recursive: true });
+    await Promise.all([f.run("thread-a", { cwd: shared }), f.run("thread-b", { cwd: shared })]);
+    expect(f.spawned).toHaveLength(2);
+    await f.run("thread-c", { cwd: shared });
+    expect(f.spawned).toHaveLength(3);
+    await f.run("thread-a", { cwd: shared });
+    await f.run("thread-d");
+    expect(f.spawned).toHaveLength(3);
+  });
+
+  it("in the bot box shares a process only among one bot's conversations, boxed with all of that bot's conversation folders", async () => {
+    vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const f = await fixture();
+    const folder = (bot: string, thread: string) => join(f.scratch, "task-workspaces", bot, thread);
+    for (const [bot, thread] of [["bot-a", "thread-a"], ["bot-a", "thread-b"], ["bot-b", "thread-c"]]) mkdirSync(folder(bot, thread), { recursive: true });
+    await f.run("thread-a", { cwd: folder("bot-a", "thread-a") });
+    await f.run("thread-b", { cwd: folder("bot-a", "thread-b") });
+    expect(f.spawned, "the second conversation of the same bot joins its process").toHaveLength(1);
+    await f.run("thread-c", { cwd: folder("bot-b", "thread-c") });
+    expect(f.spawned, "another bot's folders are not in that process's box").toHaveLength(2);
+    const boxes = vi.mocked(procs.spawnCli).mock.calls.filter((call) => call[3] === "bot").map((call) => call[2].box);
+    expect(boxes.every((box) => typeof box === "object" && box.botThreads === true)).toBe(true);
+  });
+
+  it("on a Team Cloud keeps a full-access box within its conversation, including task files and uploads", async () => {
+    vi.spyOn(botBox, "enabled").mockReturnValue(true);
     const f = await fixture();
     const dataDir = mkdtempSync(join(tmpdir(), "omb-acp-homes-"));
     scratches.push(dataDir);
+    const folder = (thread: string) => join(dataDir, "task-workspaces", "bot-a", thread);
+    for (const thread of ["thread-a", "thread-b", "thread-c"]) mkdirSync(folder(thread), { recursive: true });
     engineHomes.start({ dataDir, serverHome: dataDir, audienceOf: (threadId) => (threadId === "thread-c" ? "member:p_cleo" : "member:p_ada"), threads: () => [], log: () => {} });
     try {
-      await Promise.all(["thread-a", "thread-b"].map((threadId) => engineHomes.within(threadId, () => f.run(threadId))));
-      expect(f.spawned).toHaveLength(1);
-      expect((await engineHomes.within("thread-c", () => f.run("thread-c"))).done).toMatchObject({ ok: true });
+      await Promise.all(["thread-a", "thread-b"].map((threadId) => engineHomes.within(threadId, () => f.run(threadId, { cwd: folder(threadId) }))));
       expect(f.spawned).toHaveLength(2);
+      expect((await engineHomes.within("thread-c", () => f.run("thread-c", { cwd: folder("thread-c") }))).done).toMatchObject({ ok: true });
+      expect(f.spawned).toHaveLength(3);
+      const boxes = vi.mocked(procs.spawnCli).mock.calls.filter((call) => call[3] === "bot").map((call) => call[2].box);
+      expect(boxes.every((box) => typeof box === "object" && box.botThreads === false)).toBe(true);
+      const plan = planBox({ dataDir, home: dataDir, codeRoots: [], engineRoots: [], bridges: [] }, {
+        command: "opencode", args: [], cwd: folder("thread-a"), env: {}, home: audienceHome(dataDir, "member:p_ada"), botThreads: false,
+      });
+      expect(visibleInBox(plan, join(folder("thread-a"), "task.md"))).toBe("rw");
+      expect(visibleInBox(plan, join(dataDir, "box-uploads", "bot-a", "thread-a", "photo.png"))).toBe("ro");
+      for (const thread of ["thread-b", "thread-c"]) {
+        expect(visibleInBox(plan, join(folder(thread), "secret.md"))).toBe("none");
+        expect(visibleInBox(plan, join(dataDir, "box-uploads", "bot-a", thread, "secret.png"))).toBe("none");
+      }
     } finally {
       engineHomes.stop();
     }

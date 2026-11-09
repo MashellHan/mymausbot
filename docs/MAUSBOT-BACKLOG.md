@@ -30,6 +30,30 @@ identifiers or contents here.
 | Upstream [#134](https://github.com/MashellHan/mymausbot/pull/134) | Source and CI work remains separate and is not installed. Its corrections do not change the Mini Apps delivery status above. |
 | Generated Markdown/CSV preview | Queued after Mini Apps: open a generated file in the right panel, render Markdown or a CSV table, and retain download. |
 
+## Resumed Activities contribution and data repair
+
+The user explicitly resumed the following two items on 2026-11-09. Historical
+initialization or pause instructions no longer apply to these items;
+seemyagentteam migration remains paused. These entries do not mark a repair,
+backfill or installation complete.
+
+| Item | Owner, status and dependency | Acceptance boundary |
+| --- | --- | --- |
+| [#364: GitHub Profile PR/commit alignment](https://github.com/MashellHan/mymausbot/issues/364) | `miniapp-lead` is accountable; existing `miniapp-dev` has started runtime/source investigation. `miniapp-review` and `miniapp-qa` provide independent review and acceptance. | Verify the actual collector, scheduler, writers, source versions and reader/UI chain; reconcile official GitHub definitions and daily account contributions, including repository/branch/fork eligibility, identity, deduplication, dates/time zones and private/restricted visibility. Preserve unknown/partial states and a metric-version boundary. Local all-branch commits or merged-PR counts are not Profile parity. Azure DevOps parity is a separate source-specific follow-up associated with this issue. |
+| [#365: Latest-seven-day data repair](https://github.com/MashellHan/mymausbot/issues/365) | Same accountable owner and existing team; production execution depends on accepted #364 and independent data admission. Runtime tracing, isolated repair tooling and rehearsal may proceed. | At execution use that capture day plus the preceding six China calendar days, with today partial through the capture cutoff. For a 2026-11-09 execution this is 2026-11-03 through 2026-11-09; recalculate rather than reusing the example. Require a recoverable private snapshot, single-writer control, isolated rehearsal, idempotent bounded deduplication/upsert, preservation of earlier history and unrelated Token/Data, and per-day persisted, reader and rendered readback. A dry-run or source merge does not complete this issue. |
+
+Use the existing issues and team, not duplicate tasks or monitoring routines.
+Keep raw private records and recovery snapshots outside Git. Tests use isolated
+synthetic fixtures; real bounded repair runs only after its review and data
+admission gates. Record each item's PR/head/merge, required checks, independent
+review/QA, real data execution, installed source/version and actual UI acceptance
+separately. `mausbot-lead` retains host integration and sole App delivery
+coordination; these tasks do not independently restart the user's App.
+
+Existing unfinished long-period trends, configuration viewer, Tokens/title
+installation and report interaction acceptance remain separate, alongside the
+other follow-ups above. This addition does not close or certify any of them.
+
 Merged source, installed package and native interaction are separate results.
 Continue required review, CI, permission and Data checks for each pending item;
 do not infer delivery from a merge or a failure from missing new observation.

@@ -1,6 +1,7 @@
-import { ArrowLeft, Mail, Wifi } from "lucide-react";
+import { ArrowLeft, Mail } from "lucide-react";
 import { t } from "@/lib/i18n";
 import type { PhoneSetupController } from "./PhoneSetupFlow";
+import { PhoneSetupSignInRoutes } from "./PhoneSetupSignInRoutes";
 
 export function PhoneSignInStep({ c, actionError, canSubmitEmail }: {
   c: PhoneSetupController;
@@ -53,7 +54,7 @@ export function PhoneSignInStep({ c, actionError, canSubmitEmail }: {
           </label>
           {c.codeSent && (
             <label className="flex flex-col gap-1.5">
-              <span className="text-[12px] font-medium text-ink-secondary">{t("phone.signIn.code")}</span>
+                <span className="text-[12px] font-medium text-ink-secondary">{t("phone.signIn.emailCode")}</span>
               <input
                 autoFocus
                 autoComplete="one-time-code"
@@ -101,19 +102,7 @@ export function PhoneSignInStep({ c, actionError, canSubmitEmail }: {
         </button>
       )}
       {actionError && <p role="alert" className="mt-3 text-[13px] text-danger">{actionError}</p>}
-      <div className="my-4 flex items-center gap-3 text-[11px] text-ink-secondary">
-        <span className="h-px flex-1 bg-hairline/40" /> {t("phone.signIn.or")} <span className="h-px flex-1 bg-hairline/40" />
-      </div>
-      <button
-        disabled={c.busy || c.accountBusy}
-        onClick={c.useLocal}
-        className="flex items-center justify-center gap-2 rounded-lg border border-hairline/50 py-2.5 text-[13px] text-ink hover:bg-control disabled:opacity-40"
-      >
-        <Wifi size={15} /> {t("phone.signIn.wifiInstead")}
-      </button>
-      <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-secondary">
-        {t("phone.signIn.wifiNote")}
-      </p>
+      <PhoneSetupSignInRoutes c={c} />
     </div>
   );
 }

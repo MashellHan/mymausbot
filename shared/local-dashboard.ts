@@ -67,6 +67,41 @@ export interface LocalAgentActivityResponse {
   events: LocalAgentActivityEvent[];
 }
 
+export type LocalAgentConfigurationDocumentStatus = "ready" | "missing" | "error" | "unverified" | "unavailable";
+
+/** Content comes only from a server-verified Herdr member or team association. */
+export interface LocalAgentConfigurationDocument {
+  status: LocalAgentConfigurationDocumentStatus;
+  markdown: string | null;
+}
+
+export interface LocalAgentConfigurationSkill {
+  id: string;
+  name: string;
+  association: "agent" | "team";
+  loadedState: "unknown";
+}
+
+export interface LocalAgentConfigurationResponse {
+  agentId: string;
+  teamId: string;
+  occupantId: string | null;
+  agent: LocalAgentConfigurationDocument;
+  skillReferences: "verified" | "unverified";
+  skills: LocalAgentConfigurationSkill[];
+}
+
+export interface LocalAgentSkillDocumentResponse extends LocalAgentConfigurationDocument {
+  agentId: string;
+  teamId: string;
+  occupantId: string | null;
+  skillId: string;
+}
+
+export interface LocalAgentTeamRulesResponse extends LocalAgentConfigurationDocument {
+  teamId: string;
+}
+
 export type LocalUsageStatus = "ready" | "partial" | "stale" | "unavailable";
 export type LocalUsageCoverage = "ready" | "partial" | "unavailable";
 export type LocalUsageTokenStatus = "ready" | "partial" | "unavailable";
@@ -220,9 +255,12 @@ export interface LocalUsageMergedResponse {
   overlaps: { repeatedShas: number; categoryConflicts: number; dayConflicts: number } | null;
   windows: Record<"1" | "7" | "30", LocalUsageMergedWindow> | null;
   trend: LocalUsageMergedTrendDay[];
+  /** At most 191 actual China-calendar dates, including seven prior dates for daily comparisons. */
+  history?: LocalUsageMergedTrendDay[];
 }
 
-/** GitHub's typed contributions; knownCommits refers to Profile buckets, not an exact China-day count. */
+/** GitHub's typed contributions; knownCommits refers to Profile buckets, not an exact China-day count.
+ * Retained history uses the same split date bases; absent days remain unknown. */
 export interface LocalUsageGithubResponse extends Omit<LocalUsageMergedResponse, "overlaps"> {
   metricDefinition: "github-profile-v1";
   dateBasis: { prs: "created-at/Asia-Shanghai"; commits: "github-profile-day" };
@@ -240,6 +278,8 @@ export interface LocalUsageResponse {
   prCoverage: Record<LocalUsageCategory, "ready" | "partial"> | null;
   windows: Record<"1" | "7" | "30", LocalUsageWindow> | null;
   trend: LocalUsageTrendDay[];
+  /** Optional extended token observations; absent dates are unknown, including on legacy snapshots. */
+  history?: LocalUsageTrendDay[];
   merged?: LocalUsageMergedResponse;
   github?: LocalUsageGithubResponse;
 }

@@ -209,7 +209,7 @@ test("Pause stops every Cloud at once and lasts across restarts; Resume lends ag
   await until(() => homes[HOME].connects.length === 1 && homes[OTHER].connects.length === 1, "both Clouds to be lent");
   mac.sharing.pause();
   await until(() => homes[HOME].disconnects.length === 1 && homes[OTHER].disconnects.length === 1, "both Clouds to be told");
-  assert.deepEqual(mac.summaries.at(-1), { lending: [], clouds: ["My Cloud", "Client A"], waiting: [], using: [], paused: true, terminal: false, busy: null, screen: null });
+  assert.deepEqual(mac.summaries.at(-1), { lending: [], clouds: ["My Cloud", "Client A"], waiting: [], using: [], paused: true, terminal: false, terminalSwitch: true, busy: null, screen: null });
   assert.equal(mac.sharing.lentToCloud(myCloud).paused, true, "Files keeps My Cloud's copies, and holds bots' changes there");
   const plans = path.join(mac.dir, "Plans");
   await mkdir(plans);
@@ -444,7 +444,7 @@ test("a Cloud's bot needing apps and screen reports missing permissions without 
   homes[HOME].push({ action: "computer_tools" });
   await until(() => homes[HOME].results.length === 1, "the answer");
   assert.deepEqual(asked, [], "a bot request cannot start the permission prompt");
-  assert.match(homes[HOME].results[0].content[0].text, /allow Accessibility and Screen Recording for OpenMausBot in System Settings/);
+  assert.match(homes[HOME].results[0].content[0].text, /allow Accessibility and Screen Recording for mymausbot in System Settings/);
 });
 
 test("the move's project folders are lent to My Cloud with editing on top; while paused the move is told to try later", async t => {
@@ -484,7 +484,7 @@ test("the menu-bar item: which Clouds are using this Mac, Pause or Resume, the t
   assert.equal(trays.length, 1);
   assert.deepEqual(labels(), ["Client A is using this Mac", "-", "Pause", "Let Clouds run commands on this Mac", "See activity"]);
   assert.equal(trays[0].title, "Client A is using this Mac");
-  assert.equal(trays[0].tip, "OpenMausBot: Client A is using this Mac");
+  assert.equal(trays[0].tip, "mymausbot: Client A is using this Mac");
   trays[0].menu.find(item => item.label === "Pause").click();
   trays[0].menu.find(item => item.label === "See activity").click();
   indicator.update({ clouds: ["My Cloud"], using: [], paused: true });

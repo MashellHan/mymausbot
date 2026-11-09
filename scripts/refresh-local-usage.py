@@ -2,6 +2,7 @@
 """Refresh an existing activity collector with Microsoft tokens held in memory."""
 
 import argparse
+import datetime as dt
 import http.client
 import importlib.util
 import inspect
@@ -23,6 +24,59 @@ import local_usage_github
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
 REPOSITORY_TIMEOUT = 15
+
+
+def retain_token_history(snapshot, previous):
+    at = snapshot.get("updatedAt")
+    if type(at) is not int:
+        return snapshot
+    end = dt.datetime.fromtimestamp(at / 1000, local_usage_merged.TZ).date()
+    first = end - dt.timedelta(days=local_usage_merged.MAX_HISTORY_DAYS - 1)
+    records = {}
+
+    def retain(rows, projected=False):
+        if not isinstance(rows, list) or len(rows) > local_usage_merged.MAX_HISTORY_DAYS:
+            return
+        for row in rows:
+            try:
+                day = dt.date.fromisoformat(row["day"])
+                status = row["tokenStatus"]
+                if day.isoformat() != row["day"] or not first <= day <= end or status not in ("ready", "partial", "unavailable"):
+                    continue
+                if status == "unavailable":
+                    new, cache = None, None
+                elif projected:
+                    new, cache = row["newTokens"], row["cacheRead"]
+                    if row["totalTokens"] != new + cache:
+                        continue
+                else:
+                    categories = [row["categories"][key] for key in ("work", "personal", "unclassified")]
+                    values = [value[key] for value in categories for key in ("input", "output", "cacheRead")]
+                    if any(type(value) is not int or value < 0 for value in values):
+                        continue
+                    new = sum(value["input"] + value["output"] for value in categories)
+                    cache = sum(value["cacheRead"] for value in categories)
+                if status != "unavailable" and any(type(value) is not int or not 0 <= value <= 2**53 - 1 for value in (new, cache, new + cache)):
+                    continue
+                known = records.get(row["day"])
+                if status == "unavailable" and known and known["tokenStatus"] != "unavailable":
+                    records[row["day"]] = {**known, "tokenStatus": "partial"}
+                else:
+                    records[row["day"]] = {"day": row["day"], "tokenStatus": status,
+                        "newTokens": new, "cacheRead": cache, "totalTokens": None if new is None else new + cache}
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+
+    if isinstance(previous, dict) and previous.get("version") == 1 and previous.get("timeZone") == "Asia/Shanghai":
+        retain(previous.get("daily"))
+        for key in ("localHistory", "trendHistory"):
+            if isinstance(previous.get(key), dict):
+                retain(previous[key].get("daily"), key == "trendHistory")
+    if isinstance(snapshot.get("localHistory"), dict):
+        retain(snapshot["localHistory"].get("daily"))
+    retain(snapshot.get("daily"))
+    snapshot["trendHistory"] = {"version": 1, "daily": [records[day] for day in sorted(records)]}
+    return snapshot
 
 
 def load_collector(collector_path):
@@ -294,7 +348,8 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and git_fetch_only
                 ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
-            return snapshot
+            previous = collector.read_json(Path(config["storageDir"]).expanduser() / "latest.json", {}) if "storageDir" in config else {}
+            return retain_token_history(snapshot, previous)
 
         collector.aggregate = aggregate
 

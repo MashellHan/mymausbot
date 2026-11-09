@@ -3,8 +3,9 @@ import { hostedWorkspaceConfiguration } from "../enterprise.ts";
 import { confirmSessionConfig, loadConfig, sessionCredentialsEnabled } from "../config.ts";
 import { runsElsewhere, type McpConfig, type McpConfigDeps, type McpConfigResult } from "../host/mcp-config.ts";
 import { McpOAuthError, McpSignInError, mcpCallbackOrigin } from "../mcp-oauth.ts";
-import { isRemoteMcpServer, mcpServerBody, mcpServerServes, parseMcpServerMutation, parseMcpServersImport, parseStoredMcpServer } from "../mcp-registry.ts";
+import { isRemoteMcpServer, mcpServerBody, mcpServerServes, parseMcpServerMutation, parseMcpServersImport, parseStoredMcpServer, type StoredMcpServer } from "../mcp-registry.ts";
 import { personKey } from "../person-key.ts";
+import type { RequestAuth } from "../request-auth.ts";
 import { toolBudgetOf } from "../tool-budgets.ts";
 import { isLoopbackHost, isProxied, provesSameOrigin, requestOrigin } from "../request-auth.ts";
 import { PASS, type RouteHandler } from "./table.ts";
@@ -29,6 +30,10 @@ export interface McpServerRouteDeps extends Pick<McpConfigDeps, "cfg" | "session
   bot(id: string): { id: string; mcpServers?: readonly string[] | null } | null;
   /** Secrets as booleans, sign-in state attached. */
   mcpServerResponse(): { servers: readonly ListedMcpServer[] };
+  /** Whose lent computers this request may test a server on; null: nobody's. */
+  lender?(auth: RequestAuth): string | null;
+  /** A server the person adds that needs their own computer, marked as running on the one of theirs lent now. */
+  place?(server: StoredMcpServer, auth: RequestAuth): Promise<{ ok: true; server: StoredMcpServer } | { ok: false; error: string }>;
 }
 
 export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
@@ -95,6 +100,7 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
             const member = auth.kind === "session" ? sessionMember(auth.session) : null;
             return member ? deps.teamConnections.people.connection(personKey({ id: "", email: member.member.email }), name, url) : null;
           },
+          lender: deps.lender?.(auth) ?? null,
         });
         return answer(res, json, result);
       } finally {
@@ -165,7 +171,9 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
       const name = typeof body?.name === "string" ? body.name : "";
       const parsed = parseMcpServerMutation(name, mcpServerBody(body));
       if (!parsed.ok) return json(res, 400, { error: parsed.error });
-      return committed(res, json, config.add(name, parsed.server));
+      const placed = deps.place ? await deps.place(parsed.server, auth) : { ok: true as const, server: parsed.server };
+      if (!placed.ok) return json(res, 409, { error: placed.error });
+      return committed(res, json, config.add(name, placed.server));
     }
 
     // The {"mcpServers": {...}} block other agent tools write; imported servers stay disabled until enabled.
@@ -181,7 +189,14 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
         }
         if (!text.trim()) return { status: 400, error: "Paste the JSON block first." };
         const parsed = parseMcpServersImport(text);
-        return parsed.ok ? { servers: parsed.servers } : { status: 400, error: parsed.error };
+        if (!parsed.ok) return { status: 400, error: parsed.error };
+        const servers: Record<string, StoredMcpServer> = {};
+        for (const [name, server] of Object.entries(parsed.servers)) {
+          const placed = deps.place ? await deps.place(server, auth) : { ok: true as const, server };
+          if (!placed.ok) return { status: 409, error: placed.error };
+          servers[name] = placed.server;
+        }
+        return { servers };
       }));
     }
 

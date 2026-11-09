@@ -2,9 +2,12 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { LocalUsageCategory, LocalUsageResponse } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
 import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
+import { weeklyUsageTrend, type UsageTrendBucket } from "@/lib/local-usage-trends";
+import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
 import { metricText, countText, UsageCount, UsageChange, usageMetricHint, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable } from "./LocalUsageTables";
 import { InfoHint } from "./InfoHint";
+import { Select } from "./Select";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
@@ -102,7 +105,7 @@ function categoryValue(day: UsageTrendDay, metric: "prs" | "commits", category: 
   return metric === "prs" ? counts.prs ?? counts.knownPrs : counts.commits ?? counts.knownCommits;
 }
 
-function TrendChart({ days, metric }: { days: UsageTrendDay[]; metric: Metric }) {
+function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric: Metric; weekly: boolean }) {
   const [activeDay, setActiveDay] = useState<string | null>(null);
   const [focusDay, setFocusDay] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -129,10 +132,10 @@ function TrendChart({ days, metric }: { days: UsageTrendDay[]; metric: Metric })
     }
   }, [activeDay, active, focusDay, rovingDay]);
   return (
-    <div className="relative min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric}>
+    <div className="relative min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric} data-usage-granularity={weekly ? "week" : "day"}>
       <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 inset-x-2.5 grid gap-[2px]"
         style={{ gridTemplateColumns: `repeat(${Math.max(1, days.length)}, minmax(0, 1fr))` }}>
-        {days.map((day, index) => index > 0 && new Date(`${day.day}T00:00:00Z`).getUTCDay() === 1
+        {days.map((day, index) => !weekly && index > 0 && new Date(`${day.day}T00:00:00Z`).getUTCDay() === 1
           ? <span key={day.day} data-usage-week-start={day.day} className="-ml-px border-l border-ink/[0.08]" style={{ gridColumn: index + 1 }} /> : null)}
       </div>
       <h4 title={usageMetricHint(metric)} className="relative text-[13px] font-medium text-ink-secondary"><span className="bg-inset pr-1">{t(`computer.usage.metric.${metric}`)}</span></h4>
@@ -141,7 +144,8 @@ function TrendChart({ days, metric }: { days: UsageTrendDay[]; metric: Metric })
           const date = new Date(`${day.day}T00:00:00Z`);
           const value = values[index];
           const known = metric === "prs" ? day.knownPrs : day.knownCommits;
-          const label = `${metricText(value)}${metric !== "totalTokens" && day[metric] === null && known !== null ? ` · ${t("computer.usage.synced")}` : ""}`;
+          const label = `${metricText(value)}${metric !== "totalTokens" && day[metric] === null && known !== null ? ` · ${t("computer.usage.synced")}` : ""}`
+            + `${metric === "totalTokens" && day.tokenStatus === "partial" ? ` · ${t("computer.usage.coverage.partial")}` : ""}`;
           const segments = metric === "totalTokens" ? [] : categoryOrder.map((category) => ({
             category, value: categoryValue(day, metric, category) ?? 0,
             partial: day.categories[category][metric] === null,
@@ -150,7 +154,7 @@ function TrendChart({ days, metric }: { days: UsageTrendDay[]; metric: Metric })
           return <button key={day.day} type="button" data-usage-day={day.day}
             ref={(element) => { if (element) buttons.current.set(day.day, element); else buttons.current.delete(day.day); }}
             tabIndex={day.day === rovingDay ? 0 : -1}
-            aria-label={t("computer.usage.trendPoint", { day: `${day.day} ${weekdayFormat.format(date)}`, metric: t(`computer.usage.metric.${metric}`), value: label })}
+            aria-label={t("computer.usage.trendPoint", { day: weekly ? `${day.day} – ${day.endDay}` : `${day.day} ${weekdayFormat.format(date)}`, metric: t(`computer.usage.metric.${metric}`), value: label })}
             aria-describedby={activeDay === day.day ? tooltipId : undefined}
             onMouseEnter={() => setActiveDay(day.day)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setActiveDay(null); }}
             onFocus={(event) => { focusedButton.current = event.currentTarget; setFocusDay(day.day); setActiveDay(day.day); }}
@@ -177,7 +181,7 @@ function TrendChart({ days, metric }: { days: UsageTrendDay[]; metric: Metric })
       {active && <div id={tooltipId} role="tooltip" data-usage-tooltip
         className="pointer-events-none absolute bottom-2 right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2 py-1.5 text-[12px] text-ink shadow-lg">
         <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
-          <time dateTime={active.day} className="font-medium">{active.day} · {weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}</time>
+          <time dateTime={active.day} className="font-medium">{active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}</time>
           <span>{t(`computer.usage.metric.${metric}`)}: {metric === "prs" ? <UsageCount value={active.prs} known={active.knownPrs} /> : metric === "commits" ? <UsageCount value={active.commits} known={active.knownCommits} /> : metricText(active.totalTokens)}</span>
         </div>
         {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
@@ -189,13 +193,17 @@ function TrendChart({ days, metric }: { days: UsageTrendDay[]; metric: Metric })
         </div>}
         {metric !== "totalTokens" && active[metric] === null && trendValue(active, metric) !== null
           && <p className="mt-1 text-ink-secondary">{t("computer.usage.syncedCountHint")}</p>}
+        {metric === "totalTokens" && active.tokenStatus === "partial"
+          && <p className="mt-1 text-ink-secondary">{t("computer.usage.partial")}</p>}
       </div>}
     </div>
   );
 }
 
 export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | null }) {
-  const view = snapshot && localUsageView(snapshot);
+  const [range, setRange] = useState<UsageTrendRange>("30");
+  const view = snapshot && localUsageView(snapshot, range);
+  const chartDays = view ? range === "6m" ? weeklyUsageTrend(view.trend) : view.trend : [];
   const windows = view?.windows;
   const showUnclassified = view?.trend.some((day) => (day.categories.unclassified.prs ?? day.categories.unclassified.knownPrs ?? 0) > 0
     || (day.categories.unclassified.commits ?? day.categories.unclassified.knownCommits ?? 0) > 0) ?? false;
@@ -223,7 +231,12 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
         <section className="mt-4">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <h3 className="text-[16px] font-semibold text-ink">{t("computer.usage.trend")}</h3>
-            <span className="text-[13px] tabular-nums text-ink-secondary">{windows["30"].startDay} – {windows["30"].endDay}</span>
+            <span data-usage-trend-range className="text-[13px] tabular-nums text-ink-secondary">{view.period?.startDay} – {view.period?.endDay}</span>
+            <Select size="lg" aria-label={t("computer.usage.trendRange")} value={range} onChange={(event) => setRange(event.target.value as UsageTrendRange)}
+              className="ml-auto max-w-full">
+              {usageTrendRanges.map((value) => <option key={value} value={value}>{value === "6m"
+                ? t("computer.usage.sixMonths") : t("computer.usage.periodDays", { days: value })}</option>)}
+            </Select>
           </div>
           <div data-usage-category-legend className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ink-secondary">
             {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category} className="inline-flex items-center gap-1">
@@ -231,7 +244,7 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
             </span>)}
           </div>
           <div className="mt-2 grid grid-cols-1 gap-3">
-            {metrics.map((metric) => <TrendChart key={metric} days={view.trend} metric={metric} />)}
+            {metrics.map((metric) => <TrendChart key={metric} days={chartDays} metric={metric} weekly={range === "6m"} />)}
           </div>
           <UsageDailyTable days={view.trend} />
         </section>
