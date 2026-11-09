@@ -1,7 +1,7 @@
 import { appendFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
+import { github, pages, runJobs } from "./github.mjs";
 import { issueLabels, triageOf } from "./contracts.mjs";
 import { sanitize, signature } from "./report.mjs";
 
@@ -29,8 +29,8 @@ export function queueCases(issues, prs, now = Date.now()) {
   return findings;
 }
 
-export function ciCase(run, jobs, plan, now = Date.now()) {
-  if (!plan?.outputs?.fast_pr) return null;
+export function ciCase(run, jobs, fast, now = Date.now()) {
+  if (!fast) return null;
   const gate = jobs.find((job) => job.name === "CI" && job.run_attempt === run.run_attempt);
   const start = Date.parse(run.run_attempt === 1 ? run.created_at : run.run_started_at);
   const end = gate?.status === "completed" ? Date.parse(gate.completed_at)
@@ -79,7 +79,7 @@ export async function closureCases(state, { api = github, now = Date.now() } = {
   return { findings, checked };
 }
 
-export async function scanProcesses(state = {}, { api = github, readArtifact = artifactFiles, now = Date.now(), repository = process.env.GITHUB_REPOSITORY, prs, issues, runId } = {}) {
+export async function scanProcesses(state = {}, { api = github, now = Date.now(), repository = process.env.GITHUB_REPOSITORY, prs, issues, runId } = {}) {
   if (runId !== undefined && !/^\d+$/.test(String(runId))) throw new Error("A numeric CI run ID is required");
   const openPrs = prs ?? await pages("/pulls?state=open", null, api);
   const qaIssues = issues ?? (await pages("/issues?state=open&labels=qa", null, api)).filter((issue) => !issue.pull_request);
@@ -95,15 +95,15 @@ export async function scanProcesses(state = {}, { api = github, readArtifact = a
     if (now - Date.parse(run.run_attempt === 1 ? run.created_at : run.run_started_at) <= FAST_PR_TARGET_MS) continue;
     try {
       const jobs = await runJobs(run.id, run.run_attempt, api);
-      const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", api);
-      const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
-      const item = ciCase(run, jobs, plan, now);
+      const fast = jobs.some((job) => job.steps?.some((step) => step.name === "Security, data and dispatch core with bounded affected tests"
+        && (step.status === "in_progress" || step.status === "completed" && step.conclusion !== "skipped")));
+      const item = ciCase(run, jobs, fast, now);
       if (item) findings.push(item);
       const pr = openPrs.find((entry) => entry.head.sha === run.head_sha);
-      if (!plan && pr && !issueLabels(pr).some((label) => ["ci:full", "qa:repair", "windows"].includes(label))) {
-        findings.push(finding("ci-latency", `run:${run.id}:${run.run_attempt}`, `CI run ${run.id}, attempt ${run.run_attempt}: ordinary PR #${pr.number} has no available validation plan after the five-minute target. Inspect queue/setup and preserve required validation; timing alone must not fail or cancel the run.`));
+      if (!fast && run.status !== "completed" && pr && !issueLabels(pr).some((label) => ["ci:full", "qa:repair", "windows"].includes(label))) {
+        findings.push(finding("ci-latency", `run:${run.id}:${run.run_attempt}`, `CI run ${run.id}, attempt ${run.run_attempt}: ordinary PR #${pr.number} has not reached its fast checks after the five-minute target. Inspect queue/setup and preserve required validation; timing alone must not fail or cancel the run.`));
       }
-      if (run.status === "completed" && plan) completed[key] = now;
+      if (run.status === "completed") completed[key] = now;
     } catch (error) {
       errors.push({ runId: run.id, message: sanitize(error.message) });
     }
@@ -116,9 +116,10 @@ export async function scanProcesses(state = {}, { api = github, readArtifact = a
     errors.push({ stage: "closed-pr-audit", message: sanitize(error.message) });
   }
   const handoffs = await recordCases(findings, { api, now });
+  const unresolved = findings.some((item) => handoffs.some((handoff) => handoff.key === `process:${item.key}`));
   state.completedRuns = Object.fromEntries(Object.entries({ ...state.completedRuns, ...completed }).filter(([, at]) => now - at < 7 * 24 * HOUR_MS));
   state.closedPrs = Object.fromEntries(Object.entries({ ...state.closedPrs, ...closures?.checked }).filter(([, at]) => now - at < 7 * 24 * HOUR_MS));
-  return { at: new Date(now).toISOString(), outcome: errors.length ? "incomplete" : findings.length ? "optimization_needed" : "passed", findings, errors, handoffs };
+  return { at: new Date(now).toISOString(), outcome: errors.length ? "incomplete" : unresolved ? "optimization_needed" : "passed", findings, errors, handoffs };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

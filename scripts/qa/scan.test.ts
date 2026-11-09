@@ -15,10 +15,9 @@ const run = { id: 100, run_attempt: 1, event: "pull_request", path: ".github/wor
   head_sha: "a".repeat(40), status: "completed", created_at: new Date(start).toISOString(), updated_at: new Date(now).toISOString() };
 const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
   expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
-const plan = { version: 1, runId: run.id, attempt: 1, sha: run.head_sha, outputs };
 const jobs = [
   { name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success", started_at: new Date(start + 3_000).toISOString(),
-    completed_at: new Date(start + 307_000).toISOString(), steps: [{ name: "core + affected", started_at: new Date(start + 93_000).toISOString(), completed_at: new Date(start + 307_000).toISOString() }] },
+    completed_at: new Date(start + 307_000).toISOString(), steps: [{ name: "Security, data and dispatch core with bounded affected tests", status: "completed", conclusion: "success", started_at: new Date(start + 93_000).toISOString(), completed_at: new Date(start + 307_000).toISOString() }] },
   { name: "CI", run_attempt: 1, status: "completed", conclusion: "success", completed_at: new Date(start + 313_000).toISOString() },
 ];
 
@@ -32,11 +31,10 @@ function fixture() {
     }
     if (path.startsWith("/pulls?")) return [];
     if (path.includes("/jobs?")) return { jobs };
-    if (path.includes("/artifacts?")) return { artifacts: [{ name: "qa-plan-attempt-1", workflow_run: { id: run.id } }] };
     if (path.includes("/ci.yml/runs?")) return { workflow_runs: [run] };
     throw new Error(`Unexpected API request: ${path}`);
   });
-  return { api, issues, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(plan) }) };
+  return { api, issues };
 }
 
 describe("advisory process scan", () => {
@@ -55,12 +53,23 @@ describe("advisory process scan", () => {
   });
 
   it("measures reruns from their attempt and ignores wider lanes and the exact target", () => {
-    expect(ciCase(run, [{ ...jobs[1], completed_at: new Date(start + 300_000).toISOString() }], plan, now)).toBeNull();
-    expect(ciCase(run, jobs, { ...plan, outputs: { ...outputs, fast_pr: false } }, now)).toBeNull();
+    expect(ciCase(run, [{ ...jobs[1], completed_at: new Date(start + 300_000).toISOString() }], true, now)).toBeNull();
+    expect(ciCase(run, jobs, false, now)).toBeNull();
     const rerunStart = start + 10_000_000;
     const rerun = { ...run, run_attempt: 2, run_started_at: new Date(rerunStart).toISOString() };
     const gate = { ...jobs[1], run_attempt: 2, completed_at: new Date(rerunStart + 301_000).toISOString() };
-    expect(ciCase(rerun, [gate], plan, now)?.text).toContain("attempt-to-gate=301s; original-created-to-gate=10301s");
+    expect(ciCase(rerun, [gate], true, now)?.text).toContain("attempt-to-gate=301s; original-created-to-gate=10301s");
+  });
+
+  it("does not diagnose a wider run with a skipped fast core or revive a resolved old run", async () => {
+    const f = fixture();
+    const wide = async (path: string, options?: Parameters<typeof f.api>[1]) => path.includes("/jobs?")
+      ? { jobs: [{ ...jobs[0], steps: [{ ...jobs[0].steps[0], conclusion: "skipped" }] }, jobs[1]] } : f.api(path, options);
+    expect((await scanProcesses({}, { api: wide, now, repository: "example/mausbot" })).outcome).toBe("passed");
+    await scanProcesses({}, { ...f, now, repository: "example/mausbot" });
+    f.issues[0].state = "closed";
+    expect((await scanProcesses({}, { ...f, now, repository: "example/mausbot" })).outcome).toBe("passed");
+    expect(f.issues).toHaveLength(1);
   });
 
   it("records PR and QA deadlines without permitting closure or quality holds", async () => {
@@ -76,7 +85,7 @@ describe("advisory process scan", () => {
   });
 
   it("queues process cases already filed by the workflow without refiling or reviving resolved cases", async () => {
-    const f = fixture(), cases = [ciCase(run, jobs, plan, now)!];
+    const f = fixture(), cases = [ciCase(run, jobs, true, now)!];
     const first = await recordCases(cases, { api: f.api, now });
     expect(await recordCases([], { api: f.api, now })).toEqual(first);
     expect(f.issues).toHaveLength(1);
@@ -143,5 +152,7 @@ describe("advisory process scan", () => {
     expect(workflow.jobs.report.needs).toBeUndefined();
     expect(workflow.on).not.toHaveProperty("pull_request_target");
     expect(workflow.jobs.scan.steps.find((step: { with?: { path?: string } }) => step.with?.path === "process-scan.json").if).toBe("always()");
+    const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+    expect(ci.jobs.static.steps.find((step: { name?: string }) => step.name === "Security, data and dispatch core with bounded affected tests").if).toBe("steps.scope.outputs.fast_pr == 'true'");
   });
 });
