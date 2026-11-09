@@ -289,6 +289,142 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(repair.restore(self.file, self.operation, digest), 'unchanged')
         self.assertEqual((self.operation / 'before.bin').read_bytes(), self.original)
 
+    @unittest.skipIf(os.name == 'nt', 'Directory fsync is POSIX-specific')
+    def test_prepare_syncs_each_new_directory_entry_before_plan_is_available(self):
+        self.file = self.root / 'targets' / 'nested' / 'profile.json'
+        self.operation = self.root / 'recovery' / 'nested' / 'one'
+        events = []
+        mkdir, sync, write = Path.mkdir, repair.sync_directory, repair.atomic_bytes
+
+        def create(directory, *args, **kwargs):
+            absent = not directory.exists()
+            result = mkdir(directory, *args, **kwargs)
+            if absent:
+                events.append(('mkdir', directory))
+            return result
+
+        def synced(directory):
+            sync(directory)
+            events.append(('sync', directory))
+
+        def written(file, data):
+            events.append(('write', file))
+            write(file, data)
+
+        with patch.object(Path, 'mkdir', new=create), patch.object(repair, 'sync_directory', side_effect=synced), \
+                patch.object(repair, 'atomic_bytes', side_effect=written):
+            self.prepare()
+        created = [path for event, path in events if event == 'mkdir']
+        self.assertEqual(created, [self.root / 'targets', self.file.parent, self.root / 'recovery',
+                                   self.operation.parent, self.operation])
+        plan_index = events.index(('write', self.operation / 'plan.json'))
+        for directory in created:
+            index = events.index(('mkdir', directory))
+            self.assertEqual(events[index + 1], ('sync', directory.parent))
+            self.assertLess(index + 1, plan_index)
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+        self.assertFalse(self.file.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Directory fsync is POSIX-specific')
+    def test_failed_mkdir_parent_sync_refuses_plan_and_retry_syncs_existing_ancestor(self):
+        self.seed()
+        self.operation = self.root / 'recovery' / 'nested' / 'one'
+        sync = repair.sync_directory
+
+        def failed(directory):
+            if directory == self.root and (self.root / 'recovery').exists():
+                raise OSError('synthetic new directory parent fsync failure')
+            sync(directory)
+
+        with patch.object(repair, 'sync_directory', side_effect=failed):
+            with self.assertRaisesRegex(OSError, 'parent fsync'):
+                self.prepare()
+        self.assertTrue((self.root / 'recovery').is_dir())
+        self.assertFalse(self.operation.parent.exists())
+        self.assertFalse((self.operation / 'plan.json').exists())
+        self.assertEqual(self.file.read_bytes(), self.original)
+
+        events = []
+        mkdir = Path.mkdir
+
+        def create(directory, *args, **kwargs):
+            events.append(('mkdir', directory))
+            return mkdir(directory, *args, **kwargs)
+
+        def synced(directory):
+            sync(directory)
+            events.append(('sync', directory))
+
+        self.operation = self.operation.with_name('two')
+        with patch.object(Path, 'mkdir', new=create), patch.object(repair, 'sync_directory', side_effect=synced):
+            self.prepare()
+        self.assertLess(events.index(('sync', self.root)), events.index(('mkdir', self.operation.parent)))
+        self.assertEqual(self.file.read_bytes(), self.original)
+
+    @unittest.skipIf(os.name == 'nt', 'Directory fsync is POSIX-specific')
+    def test_apply_retry_finishes_directory_fsync_after_rename_without_replacement(self):
+        self.seed()
+        digest = self.prepare()
+        fsync = os.fsync
+
+        def interrupted(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError('synthetic post-rename directory fsync failure')
+            fsync(fd)
+
+        with patch.object(os, 'fsync', side_effect=interrupted):
+            with self.assertRaisesRegex(OSError, 'post-rename'):
+                repair.apply(self.file, self.operation, digest, at=AT)
+        self.assertEqual(self.file.read_bytes(), (self.operation / 'after.json').read_bytes())
+        self.assertEqual((self.operation / 'before.bin').read_bytes(), self.original)
+        with patch.object(repair.os, 'replace', side_effect=AssertionError('must not replace again')), \
+                patch.object(repair, 'sync_directory', wraps=repair.sync_directory) as sync:
+            self.assertEqual(repair.apply(self.file, self.operation, digest, at=AT), 'unchanged')
+        sync.assert_called_once_with(self.file.parent)
+        with patch.object(repair, 'sync_directory', side_effect=OSError('still not durable')):
+            with self.assertRaisesRegex(OSError, 'still not durable'):
+                repair.apply(self.file, self.operation, digest, at=AT)
+
+    @unittest.skipIf(os.name == 'nt', 'Directory fsync is POSIX-specific')
+    def test_restore_retry_finishes_directory_fsync_after_rename_without_replacement(self):
+        self.seed()
+        digest = self.prepare()
+        repair.apply(self.file, self.operation, digest, at=AT)
+        fsync = os.fsync
+
+        def interrupted(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError('synthetic restore post-rename directory fsync failure')
+            fsync(fd)
+
+        with patch.object(os, 'fsync', side_effect=interrupted):
+            with self.assertRaisesRegex(OSError, 'post-rename'):
+                repair.restore(self.file, self.operation, digest)
+        self.assertEqual(self.file.read_bytes(), self.original)
+        with patch.object(repair.os, 'replace', side_effect=AssertionError('must not replace again')), \
+                patch.object(repair, 'sync_directory', wraps=repair.sync_directory) as sync:
+            self.assertEqual(repair.restore(self.file, self.operation, digest), 'unchanged')
+        sync.assert_called_once_with(self.file.parent)
+
+    @unittest.skipIf(os.name == 'nt', 'Directory fsync is POSIX-specific')
+    def test_restore_initial_absence_syncs_deletion_and_retry_completes_pending_sync(self):
+        digest = self.prepare()
+        repair.apply(self.file, self.operation, digest, at=AT)
+        with patch.object(repair, 'sync_directory', side_effect=OSError('synthetic deletion fsync failure')) as sync:
+            with self.assertRaisesRegex(OSError, 'deletion fsync'):
+                repair.restore(self.file, self.operation, digest)
+        sync.assert_called_once_with(self.file.parent)
+        self.assertFalse(self.file.exists())
+        self.assertTrue((self.operation / 'plan.json').is_file())
+        with patch.object(repair, 'sync_directory', side_effect=OSError('still not durable')):
+            with self.assertRaisesRegex(OSError, 'still not durable'):
+                repair.restore(self.file, self.operation, digest)
+        with patch.object(Path, 'unlink', side_effect=AssertionError('must not unlink again')), \
+                patch.object(repair, 'sync_directory', wraps=repair.sync_directory) as sync:
+            self.assertEqual(repair.restore(self.file, self.operation, digest), 'unchanged')
+        sync.assert_called_once_with(self.file.parent)
+        self.assertFalse(self.file.exists())
+
     @unittest.skipIf(os.name == 'nt', 'Synthetic symlink requires POSIX permissions')
     def test_symlink_target_is_not_read_or_replaced(self):
         other = self.root / 'unrelated.json'

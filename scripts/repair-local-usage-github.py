@@ -45,6 +45,24 @@ def read_bytes(file):
     return data
 
 
+def sync_directory(directory):
+    if os.name != "nt":
+        fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def durable_mkdir(directory, *, exist_ok=False):
+    if directory.parent == directory:
+        return
+    durable_mkdir(directory.parent, exist_ok=True)
+    directory.mkdir(mode=0o700, exist_ok=exist_ok)
+    # Existing ancestors may come from an interrupted mkdir before its parent fsync.
+    sync_directory(directory.parent)
+
+
 def atomic_bytes(file, data):
     if len(data) > MAX_BYTES:
         raise ValueError("Repair artifact exceeds size bound")
@@ -55,12 +73,7 @@ def atomic_bytes(file, data):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, file)
-        if os.name != "nt":
-            directory = os.open(file.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+        sync_directory(file.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -137,7 +150,7 @@ def prepare(file, operation, config, run, repository_category, collector, *, at=
     if config.get("githubContributionSource") != github.DEFINITION:
         raise ValueError("Contribution source has not been admitted")
     identity = source_identity(collector)
-    file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    durable_mkdir(file.parent, exist_ok=True)
     with github.target_lock(file):
         before = read_bytes(file)
         previous = json.loads(before) if before is not None else {}
@@ -150,8 +163,7 @@ def prepare(file, operation, config, run, repository_category, collector, *, at=
         capture = encoded(current)
         if source_identity(collector) != identity:
             raise ValueError("Repair source changed during capture")
-        operation.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        operation.mkdir(mode=0o700)
+        durable_mkdir(operation)
         if before is not None:
             atomic_bytes(operation / "before.bin", before)
         atomic_bytes(operation / "capture.json", capture)
@@ -193,6 +205,7 @@ def apply(file, operation, expected_hash, *, at=None):
         validate_capture(current, at or dt.datetime.now(dt.timezone.utc))
         actual = read_bytes(file)
         if actual == after:
+            sync_directory(file.parent)
             return "unchanged"
         if actual != before:
             raise ValueError("Concurrent target change; refusing replacement")
@@ -208,11 +221,13 @@ def restore(file, operation, expected_hash):
         _, _, before, after = load_plan(file, operation, expected_hash)
         actual = read_bytes(file)
         if actual == before:
+            sync_directory(file.parent)
             return "unchanged"
         if actual != after:
             raise ValueError("Concurrent target change; refusing restore")
         if before is None:
             file.unlink()
+            sync_directory(file.parent)
         else:
             atomic_bytes(file, before)
         if read_bytes(file) != before:
