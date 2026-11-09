@@ -17,6 +17,12 @@ export interface LocalAgentMember {
   taskHint: string | null;
 }
 
+/** A partial count is a lower bound from verified current-team sessions; null never means zero. */
+export interface LocalAgentTokenUsageWindow {
+  coverage: "ready" | "partial" | "unavailable";
+  knownTokens: number | null;
+}
+
 export interface LocalAgentTeam {
   id: string;
   name: string;
@@ -25,6 +31,8 @@ export interface LocalAgentTeam {
   activeAgentCount: number;
   /** Latest timestamp in a verified live agent session; absent or null when unavailable. */
   lastActivityAt?: number | null;
+  tokenUsage24h?: LocalAgentTokenUsageWindow;
+  tokenUsage7d?: LocalAgentTokenUsageWindow;
   agents: LocalAgentMember[];
 }
 

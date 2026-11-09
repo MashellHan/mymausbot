@@ -101,12 +101,18 @@ describe("PhoneRegistry", () => {
   });
 
   it("keeps only the newest blocks", () => {
+    writeFileSync(file, JSON.stringify({ version: 1, phones: [],
+      blocked: Array.from({ length: MAX_BLOCKED }, (_, i) => `session:s${i}`) }));
     const registry = new PhoneRegistry(file, now);
-    for (let i = 0; i <= MAX_BLOCKED; i++) registry.remove(`session:s${i}`, { block: true });
+    expect(registry.blocked("session:s0")).toBe(true);
+    registry.remove(`session:s${MAX_BLOCKED}`, { block: true });
     expect(registry.blocked("session:s0")).toBe(false);
     expect(registry.blocked("session:s1")).toBe(true);
     expect(registry.blocked(`session:s${MAX_BLOCKED}`)).toBe(true);
-    expect(new PhoneRegistry(file, now).blocked(`session:s${MAX_BLOCKED}`)).toBe(true);
+    const reloaded = new PhoneRegistry(file, now);
+    expect(reloaded.blocked("session:s0")).toBe(false);
+    expect(reloaded.blocked("session:s1")).toBe(true);
+    expect(reloaded.blocked(`session:s${MAX_BLOCKED}`)).toBe(true);
   });
 
   it.each([false, true])("reports a failed removal save and persists its retry (block=%s)", (block) => {

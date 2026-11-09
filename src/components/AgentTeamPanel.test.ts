@@ -20,12 +20,14 @@ const { ApiError } = await import("@/state/store");
 const ready: LocalAgentTeamsResponse = {
   status: "ready", updatedAt: Date.UTC(2026, 10, 3, 8), teamCount: 2,
   teams: [
-    { id: "w1", name: "Atlas Studio", agentCount: 3, activeAgentCount: 1, agents: [
+    { id: "w1", name: "Atlas Studio", agentCount: 3, activeAgentCount: 1,
+      tokenUsage24h: { coverage: "ready", knownTokens: 123_456 }, tokenUsage7d: { coverage: "ready", knownTokens: 1_234_567 }, agents: [
       { id: "p1", name: "A very long synthetic agent name that must wrap inside the panel", kind: "codex", role: "Lead", model: "a-very-long-synthetic-model-identifier-that-must-wrap-in-a-narrow-panel", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "working", taskHint: "Draft a synthetic release plan with enough detail to occupy more than two lines in a narrow panel without showing any private terminal text." },
       { id: "p2", name: "Mira", kind: "codex", role: null, model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, state: "blocked", taskHint: null },
       { id: "p3", name: "Pine", kind: "codex", role: "Reviewer", model: "model-b", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "idle", taskHint: "Review sample cards" },
     ] },
-    { id: "w2", name: "Maple Ops", agentCount: 2, activeAgentCount: 0, agents: [
+    { id: "w2", name: "Maple Ops", agentCount: 2, activeAgentCount: 0,
+      tokenUsage24h: { coverage: "unavailable", knownTokens: null }, tokenUsage7d: { coverage: "unavailable", knownTokens: null }, agents: [
       { id: "p4", name: "Lark", kind: "codex", role: "Developer", model: "model-c", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "done", taskHint: "Prepare sample data" },
       { id: "p5", name: "Sage", kind: "codex", role: "Designer", model: "model-d", reasoningEffort: "high", contextUsed: 48_000, contextWindow: 256_000, state: "unknown", taskHint: null },
     ] },
@@ -56,6 +58,52 @@ afterEach(async () => {
 });
 
 describe("Agent Team panel", () => {
+  it("keeps verified team tokens beside its name and state while labeling partial, stale and missing coverage", async () => {
+    await render("content");
+    const header = members()!.querySelector("header")!;
+    const usage = header.querySelector<HTMLElement>('[data-testid="team-token-24h"]')!;
+    const week = header.querySelector<HTMLElement>('[data-testid="team-token-7d"]')!;
+    expect(header.textContent).toContain("Atlas Studio");
+    expect(header.textContent).toContain("Working");
+    expect(usage.textContent).toBe("24h tokens 123.5K");
+    expect(usage.getAttribute("aria-label")).toBe("Current verified team sessions only · 24h tokens 123,456");
+    expect(week.textContent).toBe("7d tokens 1.2M");
+    expect(week.getAttribute("aria-label")).toBe("Current verified team sessions only · 7d tokens 1,234,567");
+
+    const partial = { ...ready, teams: ready.teams.map((team) => team.id === "w1"
+      ? { ...team, tokenUsage24h: { coverage: "partial" as const, knownTokens: 42 },
+        tokenUsage7d: { coverage: "partial" as const, knownTokens: 420 } } : team) };
+    await render("content", partial);
+    expect(usage.textContent).toBe("24h tokens ≥42 · partial");
+    expect(week.textContent).toBe("7d tokens ≥420 · partial");
+    await render("content", { ...partial, status: "stale" });
+    expect(usage.textContent).toBe("Last observed · 24h tokens ≥42 · partial");
+    expect(week.textContent).toBe("Last observed · 7d tokens ≥420 · partial");
+    await render("content", { ...partial, teams: partial.teams.map((team) => team.id === "w1"
+      ? { ...team, tokenUsage24h: { coverage: "partial" as const, knownTokens: null },
+        tokenUsage7d: { coverage: "partial" as const, knownTokens: null } } : team) });
+    expect(usage.textContent).toBe("24h tokens · partial");
+    expect(week.textContent).toBe("7d tokens · partial");
+    setLocale("zh");
+    await render("content", { ...ready, teams: ready.teams.map((team) => team.id === "w1"
+      ? { ...team, tokenUsage24h: { coverage: "unavailable" as const, knownTokens: null },
+        tokenUsage7d: { coverage: "unavailable" as const, knownTokens: null } } : team) });
+    expect(usage.textContent).toBe("近 24 小时 Token 不可用");
+    expect(week.textContent).toBe("近 7 天 Token 不可用");
+  });
+
+  it("shows exact partial lower bounds across compact unit boundaries", async () => {
+    for (const knownTokens of [999, 1_000, 123_456, 999_999, 1_000_000]) {
+      const partial = { ...ready, teams: ready.teams.map((team) => team.id === "w1"
+        ? { ...team, tokenUsage24h: { coverage: "partial" as const, knownTokens },
+          tokenUsage7d: { coverage: "partial" as const, knownTokens } } : team) };
+      await render("content", partial);
+      const exact = knownTokens.toLocaleString("en");
+      expect(members()!.querySelector('[data-testid="team-token-24h"]')?.textContent).toBe(`24h tokens ≥${exact} · partial`);
+      expect(members()!.querySelector('[data-testid="team-token-7d"]')?.textContent).toBe(`7d tokens ≥${exact} · partial`);
+    }
+  });
+
   it("waits for a snapshot, selects the most recently active team and retains a manual collapse", async () => {
     await render("content", { status: "unavailable", updatedAt: null, teamCount: null, teams: [] });
     const recent = { ...ready, teams: ready.teams.map((team, index) => ({ ...team, activeAgentCount: 0,
