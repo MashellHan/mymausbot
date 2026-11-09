@@ -9,8 +9,8 @@ const SESSION_FILE = /-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i;
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,79}$/;
 const READ_BYTES = 512 * 1024;
 const INITIAL_BYTES = 8 * 1024 * 1024;
-const empty = () => ({ model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, taskHint: null });
-type Observation = Pick<LocalAgentMember, "model" | "reasoningEffort" | "contextUsed" | "contextWindow" | "taskHint">;
+const empty = () => ({ model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, taskHint: null, lastActivityAt: null });
+type Observation = Pick<LocalAgentMember, "model" | "reasoningEffort" | "contextUsed" | "contextWindow" | "taskHint"> & { lastActivityAt: number | null };
 type Cached = { signature: string; identity: string; size: number; offset: number; observation: Observation };
 
 export function dashboardText(value: unknown, limit: number): string | null {
@@ -32,6 +32,9 @@ function apply(observation: Observation, line: string) {
   if (!line.includes('"turn_context"') && !line.includes('"event_msg"')) return;
   let event: Record<string, unknown>;
   try { event = record(JSON.parse(line)); } catch { return; }
+  if (event.type !== "turn_context" && event.type !== "event_msg") return;
+  const at = typeof event.timestamp === "string" ? Date.parse(event.timestamp) : NaN;
+  if (Number.isFinite(at) && at > 0) observation.lastActivityAt = Math.max(observation.lastActivityAt ?? 0, at);
   const payload = record(event.payload);
   if (event.type === "turn_context") {
     const model = typeof payload.model === "string" && MODEL.test(payload.model) ? payload.model : null;

@@ -1,12 +1,9 @@
 import { createRoot } from "react-dom/client";
-import { ComputerPanel } from "../../src/components/ComputerPanel";
+import { AgentTeamPanel } from "../../src/components/AgentTeamPanel";
 import { setAnalyticsEnabled } from "../../src/lib/analytics";
-import { writeComputerPanelView } from "../../src/lib/computer-panel-view";
-import { setAdvancedMode } from "../../src/lib/interface-mode";
 import { setLocale } from "../../src/lib/i18n";
 import { loadLocalePack } from "../../src/locales";
 import { applySkin } from "../../src/lib/skins";
-import { BotEditorStore, initialState, type Bot } from "../../src/state/store";
 import "../../src/styles.css";
 
 const params = new URLSearchParams(location.search);
@@ -21,28 +18,14 @@ const locale = params.get("locale") === "zh" ? "zh" : "en";
 await loadLocalePack(locale);
 setLocale(locale);
 applySkin(params.get("skin") === "atelier" ? "atelier" : "midnight");
-setAdvancedMode(params.get("mode") === "advanced");
-
-const bot: Bot = await fetch("/__agent-team-bot").then((response) => response.json());
-writeComputerPanelView(bot.id, "agent-team");
-const value = {
-  state: { ...initialState, bots: [bot], selectedId: bot.id },
-  dispatch: () => {},
-  flushBotPatches: async () => null,
-  refreshInstances: async () => {},
-  refreshModels: async () => {},
-};
-
 createRoot(document.getElementById("root")!).render(
-  <BotEditorStore value={value}>
     <div className="flex h-screen overflow-hidden bg-app text-ink">
       <main className="min-w-0 flex-1 p-6" aria-label="Synthetic chat background">
         <h1 className="text-[15px] font-medium">Sample assistant</h1>
         <p className="mt-3 text-[13px] text-ink-secondary">Synthetic visual fixture</p>
       </main>
-      <ComputerPanel bot={bot} />
-    </div>
-  </BotEditorStore>,
+      <aside data-computer-panel className="flex w-[400px] min-w-0 shrink-0 flex-col bg-panel"><AgentTeamPanel /></aside>
+    </div>,
 );
 
 if (params.has("select") || params.has("focus")) {
@@ -51,9 +34,9 @@ if (params.has("select") || params.has("focus")) {
     if (!offices.length) return;
     observer.disconnect();
     const office = params.get("select") === "second" ? offices[1] : offices[0];
-    if (params.has("select")) office?.click();
+    if (params.has("select") && office?.getAttribute("aria-pressed") !== "true") office?.click();
     const target = params.get("focus") === "tab"
-      ? document.querySelector<HTMLElement>('[data-testid="computer-tabs"] [aria-selected="true"]')
+      ? document.querySelector<HTMLElement>('[data-team-house][aria-pressed="true"]')
       : params.get("focus") === "selector" ? document.querySelector<HTMLElement>(".agent-town-offices")
         : params.get("focus") === "office" ? office : null;
     target?.focus();
