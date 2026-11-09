@@ -12,12 +12,14 @@ const fixture = vi.hoisted(() => {
     menus: [] as { ariaLabel: string; items: SidebarMenuItem[]; placement?: string; openOnHover?: boolean; trigger: string }[],
     dispatch: vi.fn(),
     inspectorOpen: false,
+    computerOpen: false,
+    savePanel: vi.fn(),
     find: vi.fn(),
   };
 });
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
-  return { ...original, useStore: () => ({ state: { ...original.initialState, inspectorOpen: fixture.inspectorOpen }, dispatch: fixture.dispatch }) };
+  return { ...original, useStore: () => ({ state: { ...original.initialState, inspectorOpen: fixture.inspectorOpen, computerOpen: fixture.computerOpen }, dispatch: fixture.dispatch }) };
 });
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, setAdvancedMode: vi.fn() }));
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => fixture.advanced && fixture.threadsChosen }));
@@ -64,6 +66,9 @@ beforeEach(() => {
   fixture.advanced = false;
   fixture.threadsChosen = true;
   fixture.inspectorOpen = false;
+  fixture.computerOpen = false;
+  fixture.savePanel.mockClear();
+  vi.stubGlobal("localStorage", { getItem: () => null, setItem: fixture.savePanel });
   fixture.dispatch.mockClear();
   fixture.find.mockClear();
 });
@@ -152,6 +157,18 @@ describe("ChatShareMenu, the bot panel's Share", () => {
 });
 
 describe("ChatHeaderMenu, Advanced mode's header ⋯", () => {
+  it("opens Mini Apps from the compact header menu and leaves selection alone when closing", () => {
+    let menu = menuOf(createElement(ChatMoreMenu, { bot, phoneHeader: true }));
+    menu.items.find((item) => item.key === "computer")!.onSelect();
+    expect(fixture.savePanel).toHaveBeenCalledWith("omb-computer-panel-view:pepper", "mini-apps");
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleComputer" });
+    fixture.computerOpen = true;
+    fixture.savePanel.mockClear();
+    menu = menuOf(createElement(ChatMoreMenu, { bot, phoneHeader: true }));
+    menu.items.find((item) => item.key === "computer")!.onSelect();
+    expect(fixture.savePanel).not.toHaveBeenCalled();
+  });
+
   it("keeps main's items, trigger and hover menu below the header", () => {
     fixture.advanced = true;
     const menu = menuOf(createElement(ChatHeaderMenu, { bot }));
