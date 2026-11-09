@@ -65,12 +65,12 @@ describe("Browser panel installation access", () => {
 });
 
 describe("Computer panel on a narrow screen", () => {
-  it("covers the window below md instead of docking a 400px column", () => {
+  it("covers the chat while a 960px panel and chat cannot fit side by side", () => {
     const markup = render({});
     const aside = /<aside class="([^"]*)"/.exec(markup)!;
-    expect(aside[1].split(" ")).toEqual(expect.arrayContaining(["max-md:absolute", "max-md:inset-0", "max-md:z-40", "max-md:w-full!"]));
+    expect(aside[1].split(" ")).toEqual(expect.arrayContaining(["max-2xl:absolute", "max-2xl:inset-y-0", "max-2xl:right-0", "max-2xl:z-40", "max-2xl:w-full!", "max-2xl:max-w-[960px]"]));
     const separator = /<div role="separator"[^>]*class="([^"]*)"/.exec(markup)!;
-    expect(separator[1].split(" ")).toContain("max-md:hidden");
+    expect(separator[1].split(" ")).toContain("max-2xl:hidden");
   });
 });
 
