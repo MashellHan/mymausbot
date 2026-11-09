@@ -783,6 +783,18 @@ describe("ChatMarkdown attachments", () => {
     }
   });
 
+  it("keeps encoded file URLs intact for the server's single decode", () => {
+    const save = vi.spyOn(AttachmentPreview, "useLocalFileSave");
+    const message = { threadId: "thread-1", messageId: "message-1" };
+    const path = "file:///workspace/report%20%231%2520.md";
+    try {
+      const html = renderToStaticMarkup(createElement(ChatMarkdown, { text: `[Report](${path})`, message }));
+      expect(save).toHaveBeenCalledWith(path, "report #1%20.md", message);
+      expect(html).toContain('title="Preview file: report #1%20.md"');
+      expect(html).not.toContain('href="file:');
+    } finally { save.mockRestore(); }
+  });
+
   it("keeps delivered-file downloads scoped alongside GitHub reference pills", () => {
     const save = vi.spyOn(AttachmentPreview, "useLocalFileSave");
     const message = { threadId: "thread-1", messageId: "message-1" };

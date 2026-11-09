@@ -25,13 +25,13 @@ const markdown = "# Weekly review\n\nA **complete** report.\n\n| Project | Chang
 const csv = 'Code,Name,Notes\n001,"Alpha, Inc","Line one\nLine two"\n9007199254740993,Beta,Ready\n';
 const message = { threadId: "thread / 1", messageId: "reply / 1" };
 const reply = { id: message.messageId, role: "bot", kind: "text", at: 1,
-  text: "[Report](file:///workspace/report%20one.md)\n\n[Data](/workspace/data.csv)",
+  text: "[Report](file:///workspace/report%20%231.md)\n\n[Data](/workspace/data.csv)",
 } as Message;
 const makeBot = (patch: Partial<Bot> = {}) => ({
   id: "scout", threadId: message.threadId, name: "Scout", cwd: "/workspace", computer: "off",
   modelSelection: { instanceId: "claude", model: "m" },
   messages: [reply, { id: "digest", role: "bot", kind: "digest", at: 2,
-    digest: { files: { added: ["report one.md", "data.csv", "unshared.md"], changed: [], deleted: [] } } }],
+    digest: { files: { added: ["report #1.md", "data.csv", "unshared.md"], changed: [], deleted: [] } } }],
   ...patch,
 }) as Bot;
 
@@ -105,7 +105,7 @@ describe("generated files in the right panel", () => {
     expect(host.querySelector('[data-computer-panel] [role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Files");
     expect(document.querySelector("dialog")).toBeNull();
     expect(fetch).toHaveBeenCalledWith("/api/threads/thread%20%2F%201/messages/reply%20%2F%201/file", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ path: "/workspace/report one.md" }),
+      method: "POST", body: JSON.stringify({ path: "file:///workspace/report%20%231.md" }),
     }));
     expect(preview()?.querySelector("article strong")?.textContent).toBe("complete");
     expect(preview()?.querySelector("article table")).not.toBeNull();
@@ -123,7 +123,7 @@ describe("generated files in the right panel", () => {
     expect(fetch).not.toHaveBeenCalled();
     expect(list.textContent).toContain("Not shared");
     expect(button("Preview file: unshared.md")).toBeUndefined();
-    const trigger = button("Preview file: report one.md", list);
+    const trigger = button("Preview file: report #1.md", list);
     click(trigger);
     await vi.waitFor(() => expect(preview()?.textContent).toContain("Weekly review"));
     expect(list.hidden).toBe(true);

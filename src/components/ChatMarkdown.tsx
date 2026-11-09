@@ -632,7 +632,7 @@ function MarkdownLink({ href, children, ...rest }: { href?: string; children?: R
   if (localPath) {
     const copy = delivered && Object.hasOwn(delivered, fileName(localPath)) ? delivered[fileName(localPath)] : undefined;
     const source = copy && originals && Object.hasOwn(originals, copy) ? originals[copy] : undefined;
-    return <LocalFileLink filePath={copy ?? localPath} name={copy ? fileName(localPath) : undefined} source={source} message={message}>{children}</LocalFileLink>;
+    return <LocalFileLink filePath={copy ?? href} name={fileName(localPath)} source={source} message={message}>{children}</LocalFileLink>;
   }
   if (!/^https?:\/\//i.test(href)) {
     return (
