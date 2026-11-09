@@ -39,5 +39,12 @@ it("rechecks changed source and imported types while keeping independent UI/serv
     const recovered = run("true");
     expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
     expect(recovered.stdout.match(/fresh/g)).toHaveLength(2);
+    write("ui.ts", "export const value: number = 'wrong';\n");
+    write("model.ts", "export type Count = string;\n");
+    const bothBroken = run("true");
+    expect(bothBroken.status).toBe(2);
+    expect(bothBroken.stdout).toContain("ui.ts");
+    expect(bothBroken.stdout).toContain("server.ts");
+    expect(bothBroken.stdout.match(/fresh; exit 2/g)).toHaveLength(2);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
