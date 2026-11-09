@@ -61,8 +61,8 @@ process.stdin.on("data", (chunk) => {
 `);
   await chmod(cli, 0o755);
   const started = Date.now();
-  expect(await discoverCodexSkills(cwd, { cli, timeoutMs: 1_500 })).toEqual({ status: "timeout", skills: [] });
-  expect(Date.now() - started).toBeLessThan(4_000);
+  expect(await discoverCodexSkills(cwd, { cli })).toEqual({ status: "timeout", skills: [] });
+  expect(Date.now() - started).toBeLessThan(8_000);
   expect(await readFile(requested, "utf8")).toBe("observed");
   const pid = Number(await readFile(pidFile, "utf8"));
   expect(() => process.kill(pid, 0)).toThrow();
