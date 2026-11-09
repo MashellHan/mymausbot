@@ -107,7 +107,7 @@ const MINI_APP_SDK_SOURCE = `(function () {
   Object.defineProperty(window, "mausApp", { value: api, enumerable: true });
 })();`;
 
-export function miniAppFrameDocument(document: MiniAppDocument): AppDocument {
+export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean): AppDocument {
   const html = `<style>${APP_THEME_STYLE}</style><script>${MINI_APP_SDK_SOURCE}</script>${stripDocumentPreamble(document.html)}`;
   return {
     v: 1,
@@ -117,7 +117,7 @@ export function miniAppFrameDocument(document: MiniAppDocument): AppDocument {
     csp: MINI_APP_CSP,
     network: { connect: [], resources: [] },
     can: { serverTools: false, serverResources: false, message: false,
-      openLinks: document.app.status === "active" && (document.app.shippedTemplateKind === "x_ai_digest" || document.app.shippedTemplateKind === "github_activity"),
+      openLinks: desktopOpenerAvailable && document.app.status === "active" && (document.app.shippedTemplateKind === "x_ai_digest" || document.app.shippedTemplateKind === "github_activity"),
       modelContext: false },
   };
 }

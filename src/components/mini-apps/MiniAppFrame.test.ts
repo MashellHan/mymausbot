@@ -42,7 +42,7 @@ afterEach(() => { container.remove(); window.document.body.innerHTML = ""; vi.re
 
 describe("persistent Mini App frame", () => {
   it("starts with an opaque document and no generic app capability", () => {
-    const doc = miniAppFrameDocument(document);
+    const doc = miniAppFrameDocument(document, false);
     expect(doc.srcdoc).toMatch(/^<!DOCTYPE html><meta http-equiv="Content-Security-Policy"/);
     expect(doc.srcdoc).toContain("window, \"mausApp\"");
     expect(doc.srcdoc).not.toContain("window.mausbot");
@@ -58,11 +58,12 @@ describe("persistent Mini App frame", () => {
 
   it("offers openSource only after a built-in report receives its link capability", async () => {
     const report = { ...document, app: { ...app, shippedTemplateKind: "x_ai_digest" as const } };
-    const reportDoc = miniAppFrameDocument(report);
+    const reportDoc = miniAppFrameDocument(report, true);
     expect(reportDoc.can.openLinks).toBe(true);
-    expect(miniAppFrameDocument({ ...report, app: { ...report.app, status: "archived" } }).can.openLinks).toBe(false);
-    expect(miniAppFrameDocument({ ...report, app: { ...report.app, shippedTemplateKind: "bookkeeping" } }).can.openLinks).toBe(false);
-    for (const [doc, allowed] of [[reportDoc, true], [miniAppFrameDocument(document), false]] as const) {
+    expect(miniAppFrameDocument(report, false).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument({ ...report, app: { ...report.app, status: "archived" } }, true).can.openLinks).toBe(false);
+    expect(miniAppFrameDocument({ ...report, app: { ...report.app, shippedTemplateKind: "bookkeeping" } }, true).can.openLinks).toBe(false);
+    for (const [doc, allowed] of [[reportDoc, true], [miniAppFrameDocument(document, false), false]] as const) {
       const view = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
       const sent: Array<Record<string, unknown>> = [];
       const parent = { postMessage: (message: Record<string, unknown>) => sent.push(message) };
@@ -88,6 +89,14 @@ describe("persistent Mini App frame", () => {
       }
       await view.happyDOM.abort();
     }
+    const fallback = mountMiniAppFrame({ container, document: report, state, onRevoked: vi.fn() });
+    const frame = fallback.iframe.contentWindow!;
+    const posted = vi.spyOn(frame, "postMessage");
+    send(frame, { jsonrpc: "2.0", id: "init", method: "ui/initialize", params: {} });
+    const answer = posted.mock.calls.find(([message]) => (message as { id?: string }).id === "init")?.[0] as
+      { result: { hostCapabilities: { openLinks?: object } } };
+    expect(answer.result.hostCapabilities.openLinks).toBeUndefined();
+    fallback.retire();
   });
 
   it("sends only declared named reads with the host's app and Data revisions", async () => {

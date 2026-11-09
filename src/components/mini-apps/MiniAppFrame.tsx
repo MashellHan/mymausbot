@@ -62,7 +62,7 @@ export function mountMiniAppFrame(options: {
   let state = options.state;
   let active = true;
   let host: AppFrameHost | null = null;
-  const frameDocument = miniAppFrameDocument(document);
+  const frameDocument = miniAppFrameDocument(document, typeof window.ogb?.openExternal === "function");
   const controllers = new Map<AbortController, string>();
   let recentReads: number[] = [];
   const reply = (id: string, result?: MiniAppQueryResult, error?: string) => {
