@@ -47,6 +47,7 @@ class Api:
             'nodes': self.prs[offset:offset+1]}
         collection = {'startedAt': fields['from'], 'endedAt': fields['to'],
             'hasAnyRestrictedContributions': False, 'restrictedContributionsCount': 0,
+            'contributionCalendar': {'totalContributions': total + len(self.prs) + 10},
             'totalCommitContributions': total, 'totalRepositoriesWithContributedCommits': 1,
             'totalPullRequestContributions': len(self.prs),
             'commitContributionsByRepository': [{'repository': repo(), 'contributions': {
@@ -81,6 +82,36 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(days['2026-11-07']['profileCommits'], 0)
         self.assertNotIn('"one"', json.dumps(result))
         self.assertEqual(result['qualification'], 'nonfork-at-capture')
+
+    def test_query_totals_are_distinct_observations_and_pr_instants_filter_bucket_overrun(self):
+        api = Api()
+        api.prs.append(pr('later', '2026-11-09T12:00:00Z'))
+        original = api.__call__
+        def run(args, timeout):
+            value = json.loads(original(args, timeout))
+            connection = value['data']['viewer']['contributionsCollection']['pullRequestContributions']
+            if any(arg == 'after=next' for arg in args):
+                connection['nodes'] = api.prs[1:]
+            return json.dumps(value)
+        source = collect(run)['sources'][0]
+        self.assertEqual(source['status'], 'ready')
+        self.assertEqual(source['outsideWindowPrs'], 1)
+        self.assertEqual(source['collectionTotals'], {'contributions': 120, 'commits': 107, 'rawPrs': 3})
+        self.assertEqual(sum(row['knownPrs'] for row in source['days']), 2)
+        self.assertEqual(sum(row['profileCommits'] for row in source['days']), 107)
+        self.assertTrue(all(row['chinaCommits'] is None and row['status'] == 'partial' for row in source['days']))
+
+    def test_invalid_or_drifting_calendar_total_is_unavailable_not_typed_zero(self):
+        for invalid in [True, -1, None, '120', 'drift']:
+            with self.subTest(invalid=invalid):
+                api = Api()
+                def edit(value, fields):
+                    calendar = value['data']['viewer']['contributionsCollection']['contributionCalendar']
+                    calendar['totalContributions'] = 120 if invalid == 'drift' and not fields.get('after') else invalid
+                api.edit = edit
+                source = collect(api)['sources'][0]
+                self.assertEqual(source['status'], 'unavailable')
+                self.assertEqual(source['days'], [])
 
     def test_forks_are_diagnostic_only_and_private_nonfork_is_in_known_subset(self):
         api = Api()

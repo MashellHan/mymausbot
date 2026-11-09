@@ -28,6 +28,7 @@ QUERY = """query($from: DateTime!, $to: DateTime!, $after: String) {
     id login url
     contributionsCollection(from: $from, to: $to) {
       startedAt endedAt hasAnyRestrictedContributions restrictedContributionsCount
+      contributionCalendar { totalContributions }
       totalCommitContributions totalRepositoriesWithContributedCommits
       totalPullRequestContributions(excludeFirst: false, excludePopular: false)
       commitContributionsByRepository(maxRepositories: 100) {
@@ -111,7 +112,7 @@ def collect_profile(config, profile, start, end, run, repository_category):
                 or (count(collection["restrictedContributionsCount"]) > 0 and not collection["hasAnyRestrictedContributions"])):
             raise ValueError("Invalid contribution window or restricted coverage")
         signature = {key: collection[key] for key in ["startedAt", "endedAt", "hasAnyRestrictedContributions",
-            "restrictedContributionsCount", "totalCommitContributions", "totalRepositoriesWithContributedCommits",
+            "restrictedContributionsCount", "contributionCalendar", "totalCommitContributions", "totalRepositoriesWithContributedCommits",
             "totalPullRequestContributions", "commitContributionsByRepository"]}
         signature["account"] = viewer["id"]
         if baseline is not None and baseline != signature:
@@ -157,7 +158,7 @@ def collect_profile(config, profile, start, end, run, repository_category):
         for node in nodes:
             pr = node["pullRequest"]
             occurred_at, created_at = instant(node["occurredAt"]), instant(pr["createdAt"])
-            if (not start <= created_at <= end or pr["author"]["login"].casefold() != profile["login"].casefold()):
+            if pr["author"]["login"].casefold() != profile["login"].casefold():
                 raise ValueError("Invalid pull request contribution identity or date")
             key = digest(profile["host"].lower(), pr["id"])
             if key in prs:
@@ -178,7 +179,11 @@ def collect_profile(config, profile, start, end, run, repository_category):
                 "restrictedContributions": count(collection["restrictedContributionsCount"]),
                 "hasRestrictedContributions": collection["hasAnyRestrictedContributions"],
                 "startedAt": collection["startedAt"], "endedAt": collection["endedAt"],
-                "commits": commits, "prs": list(prs.values())}
+                "collectionTotals": {"contributions": count(collection["contributionCalendar"]["totalContributions"]),
+                    "commits": count(collection["totalCommitContributions"]),
+                    "rawPrs": count(collection["totalPullRequestContributions"])},
+                "outsideWindowPrs": sum(not start <= instant(pr["createdAt"]) <= end for pr in prs.values()),
+                "commits": commits, "prs": [pr for pr in prs.values() if start <= instant(pr["createdAt"]) <= end]}
         if page["hasNextPage"] is not True:
             raise ValueError("Invalid contribution pagination state")
         next_cursor = page["endCursor"]
@@ -261,7 +266,8 @@ def collect(config, run, repository_category, *, at=None):
             data = collect_profile(config, profile, start, at, bounded_run, repository_category)
             source = {**base, "account": data["account"], "status": "partial" if data["hasRestrictedContributions"] else "ready",
                 "restrictedContributions": data["restrictedContributions"], "hasRestrictedContributions": data["hasRestrictedContributions"],
-                "startedAt": data["startedAt"], "endedAt": data["endedAt"],
+                "startedAt": data["startedAt"], "endedAt": data["endedAt"], "collectionTotals": data["collectionTotals"],
+                "outsideWindowPrs": data["outsideWindowPrs"],
                 "days": daily_source(data, first, last, at)}
         except (OSError, subprocess.SubprocessError, KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
             source = {**base, "errorCode": type(error).__name__}

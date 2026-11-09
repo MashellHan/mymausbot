@@ -79,7 +79,16 @@ function projection(raw: unknown, now: number): LocalUsageGithubResponse {
           sum(repositories.map(repo => repo.knownPrs)) !== knownPrs || profileCommits !== null && sum(repositories.map(repo => repo.profileCommits ?? 0)) !== profileCommits) throw new Error("Inconsistent contribution accounting");
       rows.set(day, { day, status: String(row.status), knownPrs, profileCommits, repositories });
     }
-    return { id, status: status as "ready" | "partial" | "stale" | "unavailable", rows };
+    const totals = source.collectionTotals === undefined ? null : object(source.collectionTotals);
+    const startAt = source.startedAt === undefined ? null : instant(source.startedAt);
+    const endAt = source.endedAt === undefined ? null : instant(source.endedAt);
+    if (totals && (startAt === null || endAt === null || startAt > endAt || endAt > asOf)) throw new Error("Invalid contribution query totals");
+    const account = { id, host: String(source.host), apiStatus: status as "ready" | "partial" | "stale" | "unavailable",
+      startAt, endAt, contributions: totals ? count(totals.contributions) : null,
+      commits: totals ? count(totals.commits) : null, rawPrs: totals ? count(totals.rawPrs) : null,
+      restricted: source.restrictedContributions === undefined ? null : count(source.restrictedContributions),
+      outsideWindowPrs: source.outsideWindowPrs === undefined ? null : count(source.outsideWindowPrs) };
+    return { id, status: account.apiStatus, rows, account };
   }).filter(source => active.has(source.id));
   if (sources.length !== active.size) throw new Error("Missing configured contribution source");
   const sourceCoverage = { total: sources.length, ready: 0, partial: 0, stale: 0, unavailable: 0 };
@@ -133,7 +142,7 @@ function projection(raw: unknown, now: number): LocalUsageGithubResponse {
   const observed = sources.some(source => source.rows.size > 0);
   const stale = now - capturedAt > 900_000 || chinaDay(now) !== end || sources.some(source => source.status === "stale" || [...source.rows.values()].some(row => row.day >= shift(end, -6) && row.status === "stale"));
   return { metricDefinition: "github-profile-v1", dateBasis: { prs: "created-at/Asia-Shanghai", commits: "github-profile-day" },
-    chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture", status: !observed ? "unavailable" : stale ? "stale" : "partial", asOf, timeZone: "Asia/Shanghai", sourceCoverage, windows, trend: history.slice(-30), history };
+    chinaCommitAlignment: "unknown", qualification: "nonfork-at-capture", accounts: sources.map(source => source.account), status: !observed ? "unavailable" : stale ? "stale" : "partial", asOf, timeZone: "Asia/Shanghai", sourceCoverage, windows, trend: history.slice(-30), history };
 }
 
 export function createLocalUsageGithubReader(file: string, now: () => number = Date.now) {

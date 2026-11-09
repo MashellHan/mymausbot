@@ -43,7 +43,7 @@ function tokenChange(snapshot: LocalUsageResponse, window: Pick<LocalUsageWindow
   return previous.totalTokens === 0 ? current.totalTokens === 0 ? 0 : "new" as const : (current.totalTokens - previous.totalTokens) / previous.totalTokens * 100;
 }
 
-export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange = "30") {
+export function profileUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange = "30") {
   const github = snapshot.github?.metricDefinition === "github-profile-v1" ? snapshot.github : undefined;
   const basis = github?.windows ?? snapshot.windows;
   const windows = basis && Object.fromEntries(periods.map((key) => {
@@ -92,6 +92,40 @@ export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRa
   const status = statuses.every((status) => status === "unavailable") ? "unavailable"
     : statuses.includes("stale") ? "stale" : statuses.every((status) => status === "ready") ? "ready" : "partial";
   return { windows, trend, period, status, asOf: github?.asOf ?? snapshot.asOf };
+}
+
+const repositoryCounts = (value?: LocalUsageCounts): UsageCounts => ({
+  prs: value?.prs ?? null, knownPrs: value?.knownPrs ?? null, commits: value?.commits ?? null, knownCommits: null,
+});
+const repositoryCategories = (value?: Record<LocalUsageCategory, LocalUsageCounts>): Categories => ({
+  work: repositoryCounts(value?.work), personal: repositoryCounts(value?.personal), unclassified: repositoryCounts(value?.unclassified),
+});
+
+export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange = "30") {
+  const windows = snapshot.windows && Object.fromEntries(periods.map((key) => {
+    const window = snapshot.windows![key];
+    return [key, { ...window, ...repositoryCounts(window), categories: repositoryCategories(window.categories),
+      repositories: { ...window.repositories, rows: window.repositories.rows.map((row) => ({ ...row, ...repositoryCounts(row) })) },
+    } satisfies UsageWindow];
+  })) as Record<typeof periods[number], UsageWindow> | null;
+  const period = windows && usageTrendRange(windows["30"].endDay, range);
+  const activityDays = new Map((range === "30" ? snapshot.trend : [...(snapshot.history ?? []), ...snapshot.trend]).map((day) => [day.day, day]));
+  const tokenDays = new Map<string, LocalUsageTrendDay>();
+  for (const row of range === "30" ? snapshot.trend : [...(snapshot.history ?? []), ...snapshot.trend]) {
+    const known = tokenDays.get(row.day);
+    tokenDays.set(row.day, range !== "30" && row.tokenStatus === "unavailable" && known && known.tokenStatus !== "unavailable"
+      ? { ...known, tokenStatus: "partial", wow: { ...known.wow, newTokens: null, totalTokens: null } } : row);
+  }
+  const trend: UsageTrendDay[] = period ? Array.from({ length: period.days }, (_, index) => {
+    const day = shiftDay(period.startDay, index), raw = activityDays.get(day), token = tokenDays.get(day);
+    const activity = raw?.coverage !== "unavailable" ? raw : undefined;
+    return { day, coverage: raw?.coverage ?? "unavailable", ...repositoryCounts(activity), categories: repositoryCategories(activity?.categories),
+      tokenStatus: token?.tokenStatus ?? "unavailable", newTokens: token?.newTokens ?? null,
+      cacheRead: token?.cacheRead ?? null, totalTokens: token?.totalTokens ?? null,
+      wow: { prs: activity?.wow.prs ?? null, commits: activity?.wow.commits ?? null,
+        newTokens: token?.wow.newTokens ?? null, totalTokens: token?.wow.totalTokens ?? null } };
+  }) : [];
+  return { windows, trend, period, status: snapshot.status, asOf: snapshot.asOf, metricDefinition: "repository-observations-v1" as const };
 }
 
 export function retainUsageSnapshot(previous: LocalUsageResponse | null, next: LocalUsageResponse): LocalUsageResponse {

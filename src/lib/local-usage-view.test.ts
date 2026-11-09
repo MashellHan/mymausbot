@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LocalUsageResponse, LocalUsageWindow } from "../../shared/local-dashboard";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
-import { localUsageView, retainUsageSnapshot } from "./local-usage-view";
+import { localUsageView, profileUsageView, retainUsageSnapshot } from "./local-usage-view";
 
 const shift = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
@@ -39,7 +39,7 @@ describe("GitHub contribution Usage view", () => {
     };
     assertUnknown(snapshot.github!.windows!);
     assertUnknown(snapshot.github!.trend);
-    const view = localUsageView(snapshot);
+    const view = profileUsageView(snapshot);
     for (const window of Object.values(view.windows!)) {
       expect(window.categories.work).toEqual({ prs: null, knownPrs: 1, commits: null, knownCommits: 5 });
       expect(window.repositories.rows[0]).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 5 });
@@ -54,17 +54,17 @@ describe("GitHub contribution Usage view", () => {
     snapshot.trend = snapshot.trend.map((row) => [date, missing].includes(row.day)
       ? { ...row, tokenStatus: "unavailable", newTokens: null, cacheRead: null, totalTokens: null,
         wow: { ...row.wow, newTokens: null, totalTokens: null } } : row);
-    const baseline = localUsageView(snapshot);
+    const baseline = profileUsageView(snapshot);
     snapshot.history = [known, { ...known, day: "2026-11-08", totalTokens: 999 }];
     for (const range of ["60", "90", "6m"] as const) {
-      const view = localUsageView(snapshot, range);
+      const view = profileUsageView(snapshot, range);
       expect(view.trend.find((row) => row.day === date)).toMatchObject({ tokenStatus: "partial", newTokens: 100,
         cacheRead: 20, totalTokens: 120, wow: { newTokens: null, totalTokens: null } });
       expect(view.trend.find((row) => row.day === missing)).toMatchObject({ tokenStatus: "unavailable", totalTokens: null });
       expect(view.trend.find((row) => row.day === "2026-11-08")).toMatchObject({ tokenStatus: "ready", totalTokens: 100 });
       expect(view.windows).toEqual(baseline.windows);
     }
-    expect(localUsageView(snapshot)).toEqual(baseline);
+    expect(profileUsageView(snapshot)).toEqual(baseline);
     expect(snapshot.history[0]).toEqual(known);
     expect(snapshot.history[0]?.tokenStatus).toBe(tokenStatus);
   });
@@ -73,28 +73,28 @@ describe("GitHub contribution Usage view", () => {
     const snapshot = fixture("2026-11-09");
     snapshot.history = snapshot.trend.map((row) => ({ ...row, day: shift(row.day, -60), totalTokens: 42 }));
     snapshot.github!.history = snapshot.github!.trend.map((row) => ({ ...row, day: shift(row.day, -60) }));
-    const base = localUsageView(snapshot);
-    expect(localUsageView(snapshot, "60").trend).toHaveLength(60);
-    const long = localUsageView(snapshot, "90");
+    const base = profileUsageView(snapshot);
+    expect(profileUsageView(snapshot, "60").trend).toHaveLength(60);
+    const long = profileUsageView(snapshot, "90");
     expect(long.trend).toHaveLength(90);
     expect(long.trend[0]).toMatchObject({ day: "2026-08-12", totalTokens: 42, prs: null, knownPrs: 1, commits: null, knownCommits: 5 });
     expect(long.trend.find((row) => row.day === "2026-09-11")).toMatchObject({ prs: null, knownPrs: null, commits: null, totalTokens: null });
     expect(long.windows).toEqual(base.windows);
-    const months = localUsageView(snapshot, "6m");
+    const months = profileUsageView(snapshot, "6m");
     expect(months.period).toEqual({ startDay: "2026-05-10", endDay: "2026-11-09", days: 184 });
     expect(months.trend[0]).toMatchObject({ coverage: "unavailable", tokenStatus: "unavailable", totalTokens: null, prs: null, commits: null });
     const legacy = fixture();
-    expect(localUsageView(legacy, "90").trend[0]).toMatchObject({ totalTokens: null, knownPrs: null, coverage: "unavailable" });
+    expect(profileUsageView(legacy, "90").trend[0]).toMatchObject({ totalTokens: null, knownPrs: null, coverage: "unavailable" });
   });
 
   it("aligns differing extended capture dates by their real dates", () => {
     const snapshot = fixture("2026-01-02");
     snapshot.github = fixture("2026-01-01").github;
     snapshot.history = [{ ...snapshot.trend[0]!, day: "2025-11-03", totalTokens: 321 }];
-    const long = localUsageView(snapshot, "60");
+    const long = profileUsageView(snapshot, "60");
     expect(long.trend[0]).toMatchObject({ day: "2025-11-03", totalTokens: 321, prs: null });
     expect(long.trend.at(-1)).toMatchObject({ day: "2026-01-01", totalTokens: 100, prs: null, knownPrs: 1 });
-    expect(long.windows).toEqual(localUsageView(snapshot).windows);
+    expect(long.windows).toEqual(profileUsageView(snapshot).windows);
   });
 
   it("takes every PR and commit value and comparison from remote data while retaining cached tokens", () => {
@@ -105,7 +105,7 @@ describe("GitHub contribution Usage view", () => {
       window.repositories = { ...window.repositories, rows: [] };
     }
     snapshot.trend = snapshot.trend.map((day) => ({ ...day, prs: 8_888, commits: 88_888 }));
-    const view = localUsageView(snapshot);
+    const view = profileUsageView(snapshot);
     expect(view.windows!["1"]).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 5, totalTokens: 100, comparison: { prs: null, commits: null, totalTokens: 10 } });
     expect(view.windows!["7"]).toMatchObject({ prs: null, knownPrs: 7, commits: null, knownCommits: 35, totalTokens: 700 });
     expect(view.windows!["30"]).toMatchObject({ prs: null, knownPrs: 30, commits: null, knownCommits: 150, totalTokens: 3_000 });
@@ -117,7 +117,7 @@ describe("GitHub contribution Usage view", () => {
     const snapshot = fixture();
     snapshot.merged = withMergedUsageFixture(snapshot).merged;
     delete snapshot.github;
-    const view = localUsageView(snapshot);
+    const view = profileUsageView(snapshot);
     expect(view.status).toBe("partial");
     for (const window of Object.values(view.windows!)) {
       expect(window).toMatchObject({ prs: null, knownPrs: null, commits: null, knownCommits: null,
@@ -128,7 +128,7 @@ describe("GitHub contribution Usage view", () => {
     expect(view.trend[0]).toMatchObject({ prs: null, commits: null, totalTokens: 100, wow: { prs: null, commits: null } });
     snapshot.merged!.history = snapshot.merged!.trend.map((day) => ({ ...day, day: shift(day.day, -60) }));
     for (const range of ["60", "90", "6m"] as const) {
-      for (const row of localUsageView(snapshot, range).trend) {
+      for (const row of profileUsageView(snapshot, range).trend) {
         expect(row).toMatchObject({ prs: null, knownPrs: null, commits: null, knownCommits: null, coverage: "unavailable" });
       }
     }
@@ -136,17 +136,17 @@ describe("GitHub contribution Usage view", () => {
 
   it("preserves private comparison-history coverage beyond the visible 30-day trend", () => {
     const snapshot = fixture();
-    expect(localUsageView(snapshot).windows!["30"].comparison.unavailableTokenDays).toEqual([]);
+    expect(profileUsageView(snapshot).windows!["30"].comparison.unavailableTokenDays).toEqual([]);
     snapshot.windows!["30"].comparison = { ...snapshot.windows!["30"].comparison,
       totalTokens: null, unavailableTokenDays: ["2026-09-20"] };
-    expect(localUsageView(snapshot).windows!["30"].comparison).toMatchObject({
+    expect(profileUsageView(snapshot).windows!["30"].comparison).toMatchObject({
       totalTokens: null, unavailableTokenDays: ["2026-09-20"],
     });
   });
 
   it("shows remote contribution activity without any local snapshot or token history", () => {
     const snapshot = { ...unavailable, github: fixture().github };
-    const view = localUsageView(snapshot);
+    const view = profileUsageView(snapshot);
     expect(view.asOf).toBe(snapshot.github!.asOf);
     expect(view.status).toBe("partial");
     expect(view.windows!["1"]).toMatchObject({ prs: null, knownPrs: 1, commits: null, knownCommits: 5, totalTokens: null, tokenCoverage: "unavailable" });
@@ -157,7 +157,7 @@ describe("GitHub contribution Usage view", () => {
     const snapshot = fixture("2026-01-01");
     snapshot.github = { ...fixture("2025-12-31").github!, status: "stale" };
     snapshot.trend.at(-1)!.totalTokens = 9_999;
-    const view = localUsageView(snapshot);
+    const view = profileUsageView(snapshot);
     expect(view.status).toBe("stale");
     expect(view.asOf).toBe(Date.parse("2025-12-31T08:00:00Z"));
     expect(view.windows!["1"]).toMatchObject({ startDay: "2025-12-31", endDay: "2025-12-31", prs: null, knownPrs: 1, commits: null, knownCommits: 5, totalTokens: 100,
@@ -184,6 +184,61 @@ describe("GitHub contribution Usage view", () => {
     expect(renewed.github).toBe(remoteOnly.github);
     const offline = retainUsageSnapshot(remoteOnly, unavailable);
     expect(offline.github!.status).toBe("stale");
-    expect(localUsageView(offline).windows!["1"].knownCommits).toBe(5);
+    expect(profileUsageView(offline).windows!["1"].knownCommits).toBe(5);
+  });
+});
+
+
+describe("independent repository activity view", () => {
+  it("preserves every configured repository and same-definition comparison without promoting Profile references", () => {
+    const snapshot = fixture();
+    const rows = [
+      { id: "work-one", name: "work/service", category: "work" as const, prs: 3, knownPrs: 3, commits: 8, comparison: { prs: "new" as const, commits: 0 } },
+      { id: "work-two", name: "work/tool", category: "work" as const, prs: null, knownPrs: 2, commits: 7, comparison: { prs: null, commits: null } },
+      { id: "private", name: "personal/private-apps", category: "personal" as const, prs: 4, knownPrs: 4, commits: 10, comparison: { prs: -50, commits: 25 } },
+    ];
+    for (const window of Object.values(snapshot.windows!)) window.repositories.rows = rows;
+    const original = structuredClone(snapshot);
+    const view = localUsageView(snapshot);
+    expect(view.metricDefinition).toBe("repository-observations-v1");
+    for (const key of ["1", "7", "30"] as const) {
+      expect(view.windows![key]).toMatchObject(snapshot.windows![key]);
+      expect(view.windows![key].knownCommits).toBeNull();
+      expect(view.windows![key].repositories.rows.map(row => row.name)).toEqual(rows.map(row => row.name));
+    }
+    expect(view.trend.at(-1)).toMatchObject({ prs: 1, commits: 5, knownCommits: null, wow: { prs: 50, commits: 25 } });
+    expect(profileUsageView(snapshot).windows!["1"]).toMatchObject({ prs: null, commits: null, knownCommits: 5, comparison: { prs: null, commits: null } });
+    delete snapshot.github;
+    expect(localUsageView(snapshot)).toEqual(view);
+    expect(original.windows).toEqual(snapshot.windows);
+  });
+
+  it("joins long repository and retained token observations by date without converting unknown history to zero", () => {
+    const snapshot = fixture("2026-11-09"), old = { ...snapshot.trend[0]!, day: "2026-08-01", commits: 17 };
+    snapshot.history = [old, { ...snapshot.trend.at(-1)!, commits: 999 }];
+    const short = localUsageView(snapshot);
+    for (const range of ["60", "90", "6m"] as const) {
+      const view = localUsageView(snapshot, range);
+      expect(view.windows).toEqual(short.windows);
+      expect(view.trend.at(-1)).toMatchObject({ day: "2026-11-09", commits: 5 });
+      expect(view.trend.find(row => row.day === "2026-10-10")).toMatchObject({ coverage: "unavailable", prs: null, commits: null });
+    }
+    expect(localUsageView(snapshot, "6m").trend.find(row => row.day === old.day)).toMatchObject({ commits: 17 });
+    snapshot.github = fixture("2026-11-08").github;
+    expect(localUsageView(snapshot, "6m").period).toEqual({ startDay: "2026-05-10", endDay: "2026-11-09", days: 184 });
+    expect(localUsageView(snapshot, "6m").trend.at(-1)).toMatchObject({ day: "2026-11-09", commits: 5 });
+  });
+
+  it.each(["ready", "partial"] as const)("keeps %s retained Tokens when recent observation is unavailable", tokenStatus => {
+    const snapshot = fixture("2026-11-09"), known = { ...snapshot.trend.at(-1)!, tokenStatus, newTokens: 100, cacheRead: 20, totalTokens: 120 };
+    snapshot.history = [known];
+    Object.assign(snapshot.trend.at(-1)!, { tokenStatus: "unavailable", newTokens: null, cacheRead: null, totalTokens: null });
+    const short = localUsageView(snapshot);
+    for (const range of ["60", "90", "6m"] as const) {
+      expect(localUsageView(snapshot, range).trend.at(-1)).toMatchObject({ tokenStatus: "partial", newTokens: 100, cacheRead: 20, totalTokens: 120,
+        wow: { newTokens: null, totalTokens: null } });
+      expect(localUsageView(snapshot, range).windows).toEqual(short.windows);
+    }
+    expect(short.trend.at(-1)?.totalTokens).toBeNull();
   });
 });
