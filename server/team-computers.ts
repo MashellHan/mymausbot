@@ -19,6 +19,10 @@ const entrySchema = z.object({
 }).strict();
 const fileSchema = z.object({ version: z.literal(1), environmentId: z.string().uuid(), computers: z.array(entrySchema).max(100) }).strict();
 export type TeamComputerRecord = z.infer<typeof entrySchema>;
+export function teamComputerPrompt(computer: TeamComputerRecord | undefined): string {
+  return computer ? `Your team shares the cloud computer ${JSON.stringify(computer.name)}. Its desktop files and desktop browser logins are shared with other Auto bots in your team; only one turn may drive it at a time. The separate built-in Browser is not this desktop and does not automatically share its logins.` : "";
+}
+
 export const teamComputerOwner = (id: string): string => `computer_${id}`;
 const failure = (message: string, status = 409) => Object.assign(new Error(message), { status });
 

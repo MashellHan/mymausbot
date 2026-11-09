@@ -4,6 +4,7 @@ import type { AppConfig } from "../config.ts";
 import type { RuntimeEvent } from "../contracts.ts";
 import { createComputerJournalRoutes } from "../routes/computer-journal.ts";
 import { createSavedStepsRoutes } from "../routes/saved-steps.ts";
+import type { ComputerWant, PlaceSource } from "../surface.ts";
 import type { RouteHandler } from "../routes/table.ts";
 import type { Message } from "../store.ts";
 import { openComputerCaller } from "./computer-client.ts";
@@ -61,6 +62,10 @@ export interface SavedSteps {
 
 export function savedStepsEnabled(cfg: Pick<AppConfig, "features">): boolean {
   return cfg.features?.savedSteps !== false;
+}
+
+export function hostPlacePicked(wants: ComputerWant, placeSource: PlaceSource | undefined, mounted: boolean): boolean {
+  return wants === "local" && placeSource !== "auto-pin" && mounted;
 }
 
 const keepsFromSaving = (event: RuntimeEvent): boolean =>

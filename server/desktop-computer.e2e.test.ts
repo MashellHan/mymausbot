@@ -325,6 +325,47 @@ describe("this computer belongs to the desktop app's own server", () => {
     await observed(trace, "turn.idle", () => idle(bot.id, task.threadId));
   });
 
+  it("keeps non-screen routine work available when the app's computer driver is unavailable", async () => {
+    const trace = beginCase("app-owned unavailable computer");
+    const descriptor = join(home, "user-data", "cua-connection.json");
+    const reason = "embedded host failed: Screen Recording required; grant access in System Settings and restart OpenMausBot";
+    writeFileSync(descriptor, JSON.stringify({ mode: "unavailable", reason }), { mode: 0o600 });
+    try {
+      await start(trace, true);
+      const { bot } = await apiOk("POST", "/api/bots", { name: "Non-screen fixture" });
+      trace.botId = bot.id;
+      await apiOk("PATCH", `/api/bots/${bot.id}`, { computer: "local" });
+      const { routine } = await apiOk("POST", "/api/routines", {
+        botId: bot.id, name: "Non-screen development", prompt: "Review the repository with Git and coordinate a teammate; no screen work.",
+        schedule: { type: "daily", time: "09:00", weekdays: [1] },
+      });
+      resetTurn();
+      const { run } = await apiOk("POST", `/api/routines/${routine.id}/run`);
+      const started = await until(() => apiOk("GET", "/api/routines"), value =>
+        Boolean(value.runs.find((entry: any) => entry.id === run.id)?.threadId));
+      const threadId = started.runs.find((entry: any) => entry.id === run.id).threadId;
+      trace.threadId = threadId;
+      const sent = await dump();
+      expect(sent.mcpConfig?.mcpServers?.computer).toBeUndefined();
+      expect(sent.mcpConfig?.mcpServers?.agents).toBeTruthy();
+      if (process.platform === "linux") {
+        expect(sent.systemPrompt).not.toContain(reason);
+        expect(sent.systemPrompt).toContain("make sure OpenMausBot has the permissions it asks for");
+      } else expect(sent.systemPrompt).toContain(reason);
+      expect(sent.systemPrompt).toContain("No computer tools are mounted");
+      expect(sent.systemPrompt).toContain("If the task needs this screen, report it as unavailable");
+      expect(JSON.stringify(sent)).not.toContain("/fixture/cua-driver");
+      writeFileSync(finishFile, "finish");
+      await until(() => apiOk("GET", "/api/routines"), value =>
+        value.runs.find((entry: any) => entry.id === run.id)?.status === "completed");
+      await idle(bot.id, threadId);
+      const { messages } = await apiOk("GET", `/api/threads/${threadId}/messages?limit=100`);
+      expect(messages.some((message: any) => message.turnSucceeded === true)).toBe(true);
+    } finally {
+      writeFileSync(descriptor, JSON.stringify(record), { mode: 0o600 });
+    }
+  });
+
   itHost("the app's own server still uses this computer, from the record the app hands it", async () => {
     const trace = beginCase("app-owned");
     await start(trace, true);
