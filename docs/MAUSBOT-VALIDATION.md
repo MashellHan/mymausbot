@@ -128,6 +128,9 @@ not a required PR check and uses `continue-on-error`. Its
 The existing ten-minute Lead queue also scans open PRs and recent PR runs;
 there is no new scheduler. Scanner outages cannot fail the quality gate or
 prevent ordinary QA/PR handoffs.
+It also inspects procedural closure reasons among the latest 100 closed PRs
+within seven days, records preserved source and compares their heads with main.
+Lead verifies recovery or supersession; the scanner never closes or reopens PRs.
 
 Cases use only `qa:process`, without `qa`. They are deduplicated by rule and
 subject and excluded from QA holds and reduction-health issue classification,

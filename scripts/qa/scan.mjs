@@ -59,6 +59,26 @@ export async function recordCases(findings, { api = github, now = Date.now() } =
   }));
 }
 
+export async function closureCases(state, { api = github, now = Date.now() } = {}) {
+  const findings = [], checked = {};
+  const prs = await api("/pulls?state=closed&sort=updated&direction=desc&per_page=100");
+  for (const pr of prs) {
+    const closed = Date.parse(pr.closed_at), key = `${pr.number}:${pr.closed_at}`;
+    if (pr.merged_at || !Number.isFinite(closed) || now - closed > 7 * 24 * HOUR_MS || state.closedPrs?.[key]) continue;
+    const comments = await pages(`/issues/${pr.number}/comments`, null, api);
+    const reason = comments.toReversed().find((comment) => /\bclos(?:ing|ed)\b/i.test(comment.body)
+      && /24[- ]hour|five[- ]minute|CI performance|(?:required|CI) gate failed/i.test(comment.body));
+    if (reason) {
+      const comparison = await api(`/compare/main...${pr.head.sha}`);
+      const recovery = comparison.ahead_by === 0 ? "Its head is already included in main; record the superseding integration instead of duplicating the change."
+        : "Its head is not included in main; Lead must verify whether the source was otherwise adopted and reopen useful unadopted work on the same PR.";
+      findings.push(finding("pr-policy-closure", `pr:${pr.number}:${pr.closed_at}`, `PR #${pr.number} closure evidence: ${sanitize(reason.body.split("\n")[0])} Preserve branch ${sanitize(pr.head.ref)} and head ${pr.head.sha}, prior review/check evidence and the recovery owner. ${recovery}`));
+    }
+    checked[key] = now;
+  }
+  return { findings, checked };
+}
+
 export async function scanProcesses(state = {}, { api = github, readArtifact = artifactFiles, now = Date.now(), repository = process.env.GITHUB_REPOSITORY, prs, issues, runId } = {}) {
   if (runId !== undefined && !/^\d+$/.test(String(runId))) throw new Error("A numeric CI run ID is required");
   const openPrs = prs ?? await pages("/pulls?state=open", null, api);
@@ -88,8 +108,16 @@ export async function scanProcesses(state = {}, { api = github, readArtifact = a
       errors.push({ runId: run.id, message: sanitize(error.message) });
     }
   }
+  let closures;
+  try {
+    closures = await closureCases(state, { api, now });
+    findings.push(...closures.findings);
+  } catch (error) {
+    errors.push({ stage: "closed-pr-audit", message: sanitize(error.message) });
+  }
   const handoffs = await recordCases(findings, { api, now });
   state.completedRuns = Object.fromEntries(Object.entries({ ...state.completedRuns, ...completed }).filter(([, at]) => now - at < 7 * 24 * HOUR_MS));
+  state.closedPrs = Object.fromEntries(Object.entries({ ...state.closedPrs, ...closures?.checked }).filter(([, at]) => now - at < 7 * 24 * HOUR_MS));
   return { at: new Date(now).toISOString(), outcome: errors.length ? "incomplete" : findings.length ? "optimization_needed" : "passed", findings, errors, handoffs };
 }
 

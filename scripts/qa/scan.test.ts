@@ -8,7 +8,7 @@ import { parse } from "yaml";
 import { holdsFor } from "./contracts.mjs";
 import { verifyGate } from "./gate.mjs";
 import { drainQueue } from "./queue.mjs";
-import { ciCase, queueCases, recordCases, scanProcesses } from "./scan.mjs";
+import { ciCase, closureCases, queueCases, recordCases, scanProcesses } from "./scan.mjs";
 
 const start = Date.parse("2026-11-09T01:00:00Z"), now = start + 400_000;
 const run = { id: 100, run_attempt: 1, event: "pull_request", path: ".github/workflows/ci.yml", repository: { full_name: "example/mausbot" },
@@ -95,6 +95,20 @@ describe("advisory process scan", () => {
     expect(state).not.toHaveProperty("completedRuns");
     await scanProcesses(state, { ...f, now, repository: "example/mausbot" });
     expect(f.issues).toHaveLength(1);
+  });
+
+  it("detects procedural closures and distinguishes recovery from main adoption without mutating a PR", async () => {
+    const api = vi.fn(async (path: string) => {
+      if (path.startsWith("/pulls?")) return [103, 106].map((number) => ({ number, closed_at: new Date(now).toISOString(), merged_at: null,
+        head: { ref: `saved-${number}`, sha: String(number).repeat(13).padEnd(40, "a").slice(0, 40) } }));
+      if (path.includes("/comments?")) return [{ body: "Closing under the fixed 24-hour PR disposition policy." }];
+      return { ahead_by: path.includes("103") ? 0 : 1 };
+    });
+    const result = await closureCases({}, { api, now });
+    expect(result.findings[0].text).toContain("already included in main");
+    expect(result.findings[1].text).toContain("reopen useful unadopted work on the same PR");
+    expect(api.mock.calls.every((call) => call.length === 1)).toBe(true);
+    expect((await closureCases({ closedPrs: result.checked }, { api, now })).findings).toEqual([]);
   });
 
   it("continues an ordinary handoff when the independent scanner is unavailable", async () => {
