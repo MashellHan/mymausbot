@@ -86,6 +86,8 @@ resolves an eligible existing local producer, prepares its retained report table
 and grants that Bot as editor. An empty table shows that no edition has been
 published; it does not display invented sample content. Existing schedules and
 other outputs remain in place. See the [report publication contract](mini-app-reports.md).
+The [personal source agreement](mini-app-source-contract.md) separates current
+host APIs from the proposed package manifest and install provenance.
 
 ## Bookkeeping
 
