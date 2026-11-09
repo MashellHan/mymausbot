@@ -1,7 +1,8 @@
 import type {
   LocalUsageCategory, LocalUsageCounts, LocalUsageMergedCounts, LocalUsageResponse,
   LocalUsageTrendDay, LocalUsageWindow,
-} from "../../shared/local-dashboard";
+} from "../../shared/local-dashboard.ts";
+import { usageTrendRange, type UsageTrendRange } from "../../shared/local-usage-range.ts";
 
 type UsageCounts = LocalUsageCounts & { knownCommits: number | null };
 type Categories = Record<LocalUsageCategory, UsageCounts>;
@@ -42,7 +43,7 @@ function tokenChange(snapshot: LocalUsageResponse, window: Pick<LocalUsageWindow
   return previous.totalTokens === 0 ? current.totalTokens === 0 ? 0 : "new" as const : (current.totalTokens - previous.totalTokens) / previous.totalTokens * 100;
 }
 
-export function localUsageView(snapshot: LocalUsageResponse) {
+export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange = "30") {
   const merged = snapshot.merged;
   const basis = merged?.windows ?? snapshot.windows;
   const windows = basis && Object.fromEntries(periods.map((key) => {
@@ -66,10 +67,19 @@ export function localUsageView(snapshot: LocalUsageResponse) {
         totalTokens: tokenChange(snapshot, window), categories: observed?.comparison.categories ?? emptyComparisons() },
     } satisfies UsageWindow];
   })) as Record<typeof periods[number], UsageWindow> | null;
-  const remoteDays = new Map(merged?.trend.map((day) => [day.day, day]));
-  const tokenDays = new Map(snapshot.trend.map((day) => [day.day, day]));
-  const trend: UsageTrendDay[] = basis ? Array.from({ length: 30 }, (_, index) => {
-    const day = shiftDay(basis["30"].startDay, index), raw = remoteDays.get(day);
+  const remoteTrend = range === "30" ? merged?.trend ?? []
+    : merged?.history ?? merged?.trend ?? [];
+  const remoteDays = new Map(remoteTrend.map((day) => [day.day, day]));
+  const tokenTrend = range === "30" ? snapshot.trend : [...(snapshot.history ?? []), ...snapshot.trend];
+  const tokenDays = new Map<string, LocalUsageTrendDay>();
+  for (const row of tokenTrend) {
+    const known = tokenDays.get(row.day);
+    tokenDays.set(row.day, range !== "30" && row.tokenStatus === "unavailable" && known && known.tokenStatus !== "unavailable"
+      ? { ...known, tokenStatus: "partial", wow: { ...known.wow, newTokens: null, totalTokens: null } } : row);
+  }
+  const period = basis && usageTrendRange(basis["30"].endDay, range);
+  const trend: UsageTrendDay[] = period ? Array.from({ length: period.days }, (_, index) => {
+    const day = shiftDay(period.startDay, index), raw = remoteDays.get(day);
     const remote = raw?.coverage !== "unavailable" ? raw : undefined, token = tokenDays.get(day);
     return { day, coverage: raw?.coverage ?? "unavailable", ...counts(remote), categories: categoryCounts(remote?.categories),
       tokenStatus: token?.tokenStatus ?? "unavailable", newTokens: token?.newTokens ?? null,
@@ -81,7 +91,7 @@ export function localUsageView(snapshot: LocalUsageResponse) {
   const statuses = [merged?.status ?? "unavailable", tokenStatus];
   const status = statuses.every((status) => status === "unavailable") ? "unavailable"
     : statuses.includes("stale") ? "stale" : statuses.every((status) => status === "ready") ? "ready" : "partial";
-  return { windows, trend, status, asOf: merged?.asOf ?? snapshot.asOf };
+  return { windows, trend, period, status, asOf: merged?.asOf ?? snapshot.asOf };
 }
 
 export function retainUsageSnapshot(previous: LocalUsageResponse | null, next: LocalUsageResponse): LocalUsageResponse {

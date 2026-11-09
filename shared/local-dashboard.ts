@@ -220,6 +220,8 @@ export interface LocalUsageMergedResponse {
   overlaps: { repeatedShas: number; categoryConflicts: number; dayConflicts: number } | null;
   windows: Record<"1" | "7" | "30", LocalUsageMergedWindow> | null;
   trend: LocalUsageMergedTrendDay[];
+  /** At most 191 actual China-calendar dates, including seven prior dates for daily comparisons. */
+  history?: LocalUsageMergedTrendDay[];
 }
 
 /** Windows include the capture date through asOf. The trend contains exactly the same 30 dates as window 30. */
@@ -232,5 +234,7 @@ export interface LocalUsageResponse {
   prCoverage: Record<LocalUsageCategory, "ready" | "partial"> | null;
   windows: Record<"1" | "7" | "30", LocalUsageWindow> | null;
   trend: LocalUsageTrendDay[];
+  /** Optional extended token observations; absent dates are unknown, including on legacy snapshots. */
+  history?: LocalUsageTrendDay[];
   merged?: LocalUsageMergedResponse;
 }
