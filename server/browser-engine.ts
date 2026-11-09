@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
@@ -423,8 +424,18 @@ export async function installAgentBrowserBinary(options: {
   timer.unref?.();
   let body: Buffer;
   try {
-    const response = await (options.fetchImpl ?? fetch)(url, { redirect: "follow", signal: controller.signal });
-    if (!response.ok) throw new Error(`the agent-browser download failed (HTTP ${response.status})`);
+    let response: Response;
+    for (let attempt = 0; ; attempt++) {
+      response = await (options.fetchImpl ?? fetch)(url, { redirect: "follow", signal: controller.signal });
+      if (response.status !== 504 || attempt === 2) break;
+      await response.body?.cancel().catch(() => {});
+      options.log?.(`agent-browser download attempt ${attempt + 1}/3 returned HTTP 504; retrying`);
+      await sleep(1_000 * (attempt + 1), undefined, { signal: controller.signal });
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`the agent-browser download failed (HTTP ${response.status})`);
+    }
     const declared = Number(response.headers.get("content-length") ?? NaN);
     if (Number.isFinite(declared) && declared !== asset.bytes) throw new Error("the agent-browser download did not match its pinned size; nothing was installed");
     // Stream, never buffer: a body past the pinned size is cut off mid-flight.

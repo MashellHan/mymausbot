@@ -843,6 +843,35 @@ describe("finding the browser engine", () => {
 });
 
 describe("installing the browser engine", () => {
+  it("recovers from two HTTP 504 responses using the same pinned release and verifies its bytes", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "omb-engine-504-recovery-"));
+    scratch.push(dataDir);
+    const body = Buffer.from("synthetic pinned agent-browser");
+    const asset = { target: "darwin-arm64", asset: "agent-browser-darwin-arm64", sha256: createHash("sha256").update(body).digest("hex"), bytes: body.length };
+    const requests: Array<{ url: string; signal: AbortSignal | undefined }> = [];
+    const fetched = vi.fn(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      requests.push({ url: String(input), signal: init?.signal as AbortSignal | undefined });
+      return new Response(requests.length < 3 ? "gateway" : body, { status: requests.length < 3 ? 504 : 200 });
+    });
+    const installed = await installAgentBrowserBinary({ dataDir, platform: "darwin", arch: "arm64", asset, fetchImpl: fetched });
+    expect(requests.map((request) => request.url)).toEqual(Array(3).fill(agentBrowserReleaseUrl(asset)));
+    expect(new Set(requests.map((request) => request.signal)).size).toBe(1);
+    expect(readFileSync(installed)).toEqual(body);
+  }, 10_000);
+
+  it("stops after three HTTP 504 responses and does not retry another status", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "omb-engine-504-exhausted-"));
+    scratch.push(dataDir);
+    const asset = { target: "darwin-arm64", asset: "agent-browser-darwin-arm64", sha256: "a".repeat(64), bytes: 5 };
+    const gateway = vi.fn(async () => new Response(null, { status: 504 }));
+    await expect(installAgentBrowserBinary({ dataDir, platform: "darwin", arch: "arm64", asset, fetchImpl: gateway })).rejects.toThrow(/HTTP 504/u);
+    expect(gateway).toHaveBeenCalledTimes(3);
+    expect(existsSync(pinnedBinaryPath(dataDir, "darwin", "arm64"))).toBe(false);
+    const forbidden = vi.fn(async () => new Response(null, { status: 403 }));
+    await expect(installAgentBrowserBinary({ dataDir, platform: "darwin", arch: "arm64", asset, fetchImpl: forbidden })).rejects.toThrow(/HTTP 403/u);
+    expect(forbidden).toHaveBeenCalledOnce();
+  }, 10_000);
+
   it("downloads the pinned asset, verifies size and digest, and only then names the file", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "omb-engine-install-"));
     scratch.push(dataDir);
