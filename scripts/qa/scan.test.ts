@@ -41,13 +41,13 @@ describe("advisory process scan", () => {
   it("keeps a slow successful gate green and files one independent optimization case", async () => {
     const f = fixture(), state = {};
     await expect(verifyGate(outputs, { api: f.api, createdAt: start, now: () => now })).resolves.toBeUndefined();
-    const result = await scanProcesses(state, { ...f, now, repository: "example/mausbot" });
+    const result = await scanProcesses(state, { ...f, now, repository: "example/mausbot", publish: true });
     expect(result.outcome).toBe("optimization_needed");
     expect(result.findings[0].text).toContain("attempt-to-gate=313s");
     expect(result.findings[0].text).toContain("static-queue=3s");
     expect(result.findings[0].text).toContain('"seconds":214');
     expect(f.issues[0].labels).toEqual(["qa:process"]);
-    await scanProcesses(state, { ...f, now, repository: "example/mausbot" });
+    await scanProcesses(state, { ...f, now, repository: "example/mausbot", publish: true });
     expect(f.issues).toHaveLength(1);
     expect(f.api.mock.calls.filter(([path]) => path.includes("/jobs?"))).toHaveLength(2);
   });
@@ -61,14 +61,51 @@ describe("advisory process scan", () => {
     expect(ciCase(rerun, [gate], true, now)?.text).toContain("attempt-to-gate=301s; original-created-to-gate=10301s");
   });
 
+  it("keeps concurrent workflow observation read-only while the queue publishes once", async () => {
+    const f = fixture();
+    const [observation, publication] = await Promise.all([
+      scanProcesses({}, { ...f, now, repository: "example/mausbot" }),
+      scanProcesses({}, { ...f, now, repository: "example/mausbot", publish: true }),
+    ]);
+    expect(observation.outcome).toBe("optimization_needed");
+    expect(observation.handoffs).toEqual([]);
+    expect(publication.handoffs).toHaveLength(1);
+    expect(f.api.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(1);
+  });
+
+  it.each(["skipped", "cancelled"])("does not diagnose pending wide or cancelled work from a %s fast core", async (conclusion) => {
+    const f = fixture();
+    const api = async (path: string, options?: Parameters<typeof f.api>[1]) => {
+      if (path.includes("/ci.yml/runs?")) return { workflow_runs: [{ ...run, status: "in_progress" }] };
+      if (path.includes("/jobs?")) return { jobs: [{ ...jobs[0], steps: [{ ...jobs[0].steps[0], conclusion }] }] };
+      return f.api(path, options);
+    };
+    const result = await scanProcesses({}, { api, now, repository: "example/mausbot", prs: [{ number: 1, head: { sha: run.head_sha }, labels: [] }], issues: [] });
+    expect(result.findings).toEqual([]);
+    expect(f.issues).toEqual([]);
+  });
+
+  it("records queue or setup latency when fast-core execution is not yet observed", async () => {
+    const f = fixture();
+    const api = async (path: string, options?: Parameters<typeof f.api>[1]) => {
+      if (path.includes("/ci.yml/runs?")) return { workflow_runs: [{ ...run, status: "queued" }] };
+      if (path.includes("/jobs?")) return { jobs: [] };
+      return f.api(path, options);
+    };
+    const result = await scanProcesses({}, { api, now, repository: "example/mausbot", prs: [{ number: 1, head: { sha: run.head_sha }, labels: [] }], issues: [] });
+    expect(result.findings.map((item) => item.rule)).toEqual(["ci-latency"]);
+    expect(result.findings[0].text).toContain("Inspect queue/setup");
+    expect(f.issues).toEqual([]);
+  });
+
   it("does not diagnose a wider run with a skipped fast core or revive a resolved old run", async () => {
     const f = fixture();
     const wide = async (path: string, options?: Parameters<typeof f.api>[1]) => path.includes("/jobs?")
       ? { jobs: [{ ...jobs[0], steps: [{ ...jobs[0].steps[0], conclusion: "skipped" }] }, jobs[1]] } : f.api(path, options);
     expect((await scanProcesses({}, { api: wide, now, repository: "example/mausbot" })).outcome).toBe("passed");
-    await scanProcesses({}, { ...f, now, repository: "example/mausbot" });
+    await scanProcesses({}, { ...f, now, repository: "example/mausbot", publish: true });
     f.issues[0].state = "closed";
-    expect((await scanProcesses({}, { ...f, now, repository: "example/mausbot" })).outcome).toBe("passed");
+    expect((await scanProcesses({}, { ...f, now, repository: "example/mausbot", publish: true })).outcome).toBe("passed");
     expect(f.issues).toHaveLength(1);
   });
 
@@ -84,7 +121,7 @@ describe("advisory process scan", () => {
     expect(queueCases([{ ...qa, labels: ["qa:verified"] }], [], start)).toEqual([]);
   });
 
-  it("queues process cases already filed by the workflow without refiling or reviving resolved cases", async () => {
+  it("queues process cases already filed by the serialized publisher without refiling or reviving resolved cases", async () => {
     const f = fixture(), cases = [ciCase(run, jobs, true, now)!];
     const first = await recordCases(cases, { api: f.api, now });
     expect(await recordCases([], { api: f.api, now })).toEqual(first);
@@ -100,9 +137,9 @@ describe("advisory process scan", () => {
       if (options?.method === "POST") throw new Error("issue delivery unavailable");
       return f.api(path, options);
     };
-    await expect(scanProcesses(state, { ...f, api: unavailable, now, repository: "example/mausbot" })).rejects.toThrow("issue delivery unavailable");
+    await expect(scanProcesses(state, { ...f, api: unavailable, now, repository: "example/mausbot", publish: true })).rejects.toThrow("issue delivery unavailable");
     expect(state).not.toHaveProperty("completedRuns");
-    await scanProcesses(state, { ...f, now, repository: "example/mausbot" });
+    await scanProcesses(state, { ...f, now, repository: "example/mausbot", publish: true });
     expect(f.issues).toHaveLength(1);
   });
 
@@ -123,11 +160,13 @@ describe("advisory process scan", () => {
   it("continues an ordinary handoff when the independent scanner is unavailable", async () => {
     const pr = { number: 106, draft: false, head: { sha: run.head_sha }, body: `QA-Handoff: ${run.head_sha}`, html_url: "https://github.com/example/mausbot/pull/106" };
     const send = vi.fn(async () => ({ submittedAt: new Date(now).toISOString() })), state = {};
+    const scan = vi.fn(async () => { throw new Error("scan unavailable"); });
     const result = await drainQueue(state, { api: async (path: string) => path.startsWith("/pulls?") ? [pr] : [],
-      recover: async () => ({ healthy: true }), scan: async () => { throw new Error("scan unavailable"); }, send, now });
+      recover: async () => ({ healthy: true }), scan, send, now });
     expect(result.sent).toBe(true);
     expect(send).toHaveBeenCalledTimes(1);
     expect(state).toHaveProperty("lastProcessScan.outcome", "incomplete");
+    expect(scan).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ publish: true }));
   });
 
   it("retains a scan failure receipt without contacting GitHub for an invalid source", () => {
@@ -149,6 +188,7 @@ describe("advisory process scan", () => {
     const workflow = parse(readFileSync(".github/workflows/qa-report.yml", "utf8"));
     expect(workflow.jobs.scan["continue-on-error"]).toBe(true);
     expect(workflow.jobs.scan.steps[0].with.ref).toBe("main");
+    expect(workflow.jobs.scan.permissions).toEqual({ contents: "read", actions: "read", issues: "read", "pull-requests": "read" });
     expect(workflow.jobs.report.needs).toBeUndefined();
     expect(workflow.on).not.toHaveProperty("pull_request_target");
     expect(workflow.jobs.scan.steps.find((step: { with?: { path?: string } }) => step.with?.path === "process-scan.json").if).toBe("always()");

@@ -102,7 +102,7 @@ export async function drainQueue(state, { api = github, recover = recoverQa, sca
   let processItems = [];
   try {
     state.process ??= {};
-    state.lastProcessScan = await scan(state.process, { api, now, prs, issues });
+    state.lastProcessScan = await scan(state.process, { api, now, prs, issues, publish: true });
     processItems = state.lastProcessScan.handoffs;
   } catch (error) {
     state.lastProcessScan = { at: new Date(now).toISOString(), outcome: "incomplete", error: error.message };

@@ -140,8 +140,9 @@ later clean execution covers it.
 The trusted-main `scan` job in `qa-report.yml` runs after PR CI completes; it is
 not a required PR check and uses `continue-on-error`. Its
 `process-scan.json` reports `passed`, `optimization_needed` or `incomplete`.
-The existing ten-minute Lead queue also scans open PRs and recent PR runs;
-there is no new scheduler. Scanner outages cannot fail the quality gate or
+The workflow scan is read-only and retains its report artifact. The existing
+serialized ten-minute Lead queue scans open PRs and recent PR runs and is the
+only publisher of process issues; there is no new scheduler. Scanner outages cannot fail the quality gate or
 prevent ordinary QA/PR handoffs.
 It also inspects procedural closure reasons among the latest 100 closed PRs
 within seven days, records preserved source and compares their heads with main.
