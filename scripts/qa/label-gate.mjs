@@ -103,7 +103,7 @@ export async function reattestMetadata({ event, repository = process.env.GITHUB_
     throw new Error("Source CI required checks did not pass on this attempt");
   }
   const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", api);
-  const plan = await loadPlan(run, jobs, artifacts, { api, readArtifact });
+  const plan = await loadPlan(run, jobs, artifacts, { api, readArtifact, shaIdentity: "executed-pr-merge" });
   if (!plan || plan.outputs?.pr_number !== request.number || plan.outputs?.pr_head !== request.head) {
     throw new Error("Missing exact source CI plan");
   }

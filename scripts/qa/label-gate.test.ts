@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { executedPullRequest } from "../ci-scope.mjs";
 import { verifyGate } from "./gate.mjs";
+import { runPlan } from "./github.mjs";
 import { executionMatches, labelGate, ordinaryMetadata, reattestMetadata } from "./label-gate.mjs";
 
 const repository = "MashellHan/mymausbot";
@@ -18,8 +19,10 @@ const source = { id: 50, event: "pull_request", path: ".github/workflows/ci.yml"
   pull_requests: [{ number: 134, head: { sha: head }, base: { sha: base } }] };
 const jobs = [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" },
   { name: "CI", run_attempt: 1, status: "completed", conclusion: "success" }];
-const plan = { execution: { merge, base, head }, outputs: { pr_number: 134, pr_head: head } };
+const plan = { version: 1, sha: merge, runId: 50, attempt: 1, execution: { merge, base, head },
+  outputs: { pr_number: 134, pr_head: head } };
 const commit = { sha: merge, parents: [{ sha: base }, { sha: head }], commit: { tree: { sha: tree } } };
+const artifact = { id: 99, name: "qa-plan-attempt-1", expired: false, workflow_run: { id: 50 } };
 
 function fixture({ request = event(), sourceRun = source, current = pr(), sourcePlan = plan, mergeCommit = commit,
   final = current, liveBase = base, liveMergeSha = merge }: { request?: ReturnType<typeof event>;
@@ -32,7 +35,7 @@ function fixture({ request = event(), sourceRun = source, current = pr(), source
     if (path === "/branches/main") return { commit: { sha: liveBase } };
     if (path === "/git/ref/pull/134/merge") return { object: { sha: liveMergeSha } };
     if (path.startsWith("/actions/workflows/ci.yml/runs?")) return { workflow_runs: [sourceRun] };
-    if (path === "/actions/runs/50/artifacts?per_page=100&page=1") return { artifacts: [] };
+    if (path === "/actions/runs/50/artifacts?per_page=100&page=1") return { artifacts: [artifact] };
     if (path === `/commits/${merge}`) return mergeCommit;
     if (path === `/commits/${liveMergeSha}`) return { sha: liveMergeSha,
       parents: [{ sha: liveBase }, { sha: head }], commit: { tree: { sha: tree } } };
@@ -72,6 +75,35 @@ describe("required CI decision for label events", () => {
     expect(found.loadPlan).toHaveBeenCalledOnce();
     expect(found.verify).toHaveBeenCalledWith(plan.outputs, expect.objectContaining({ runId: 50, attempt: 1, deadlineMs: 0 }));
     expect(found.api.mock.calls.every(([path]) => !String(path).includes("/rerun"))).toBe(true);
+  });
+
+  it("loads a real run-attempt artifact when the API head H differs from executed merge M", async () => {
+    const found = fixture();
+    const readArtifact = vi.fn(async () => ({ "qa-plan.json": JSON.stringify(plan) }));
+    await expect(runPlan(source, jobs, [artifact], { api: found.api, readArtifact })).rejects.toThrow("Missing current-run validation plan");
+    expect(await reattestMetadata({ event: found.request, repository, currentRunId: 100, api: found.api,
+      loadJobs: found.loadJobs, readArtifact, verify: found.verify })).toEqual({ sourceRunId: 50, attempt: 1, head, base });
+    expect(readArtifact).toHaveBeenCalledWith(artifact, found.api);
+    expect(found.verify).toHaveBeenCalledOnce();
+    for (const invalid of [
+      { ...plan, sha: head },
+      { ...plan, execution: { ...plan.execution, head: "d".repeat(40) } },
+      { ...plan, attempt: 2 },
+    ]) {
+      const bad = fixture();
+      await expect(reattestMetadata({ event: bad.request, repository, currentRunId: 100, api: bad.api,
+        loadJobs: bad.loadJobs, readArtifact: async () => ({ "qa-plan.json": JSON.stringify(invalid) }), verify: bad.verify }))
+        .rejects.toThrow("Missing current-run validation plan");
+      expect(bad.verify).not.toHaveBeenCalled();
+    }
+    const changedParent = fixture({ liveMergeSha: "f".repeat(40),
+      mergeCommit: { ...commit, parents: [{ sha: "d".repeat(40) }, { sha: head }] } });
+    await expect(reattestMetadata({ event: changedParent.request, repository, currentRunId: 100, api: changedParent.api,
+      loadJobs: changedParent.loadJobs, readArtifact, verify: changedParent.verify })).rejects.toThrow("did not execute this PR base and head");
+    const changedTree = fixture({ liveMergeSha: "f".repeat(40),
+      mergeCommit: { ...commit, commit: { tree: { sha: "d".repeat(40) } } } });
+    await expect(reattestMetadata({ event: changedTree.request, repository, currentRunId: 100, api: changedTree.api,
+      loadJobs: changedTree.loadJobs, readArtifact, verify: changedTree.verify })).rejects.toThrow("did not execute this PR base and head");
   });
 
   it("rejects a base-only advance even when the run's mutable PR association has advanced", async () => {

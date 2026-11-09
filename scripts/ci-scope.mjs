@@ -614,7 +614,7 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
       policy = readCheckPolicy();
       labels.push("ci:full");
     }
-    const fastPr = fastPrEnabled && lane === "pr" && !labels.some((label) => ["ci:full", "qa:repair", WINDOWS_LABEL].includes(label));
+    const fastPr = fastPrEnabled && lane === "pr" && !labels.some((label) => ["ci:full", "qa:repair", WINDOWS_LABEL, "upstream-sync"].includes(label));
     const input = { files, policy, labels, lines: changedCodeLines(range), mode, fastPr,
       forceFull: process.env.GITHUB_EVENT_NAME === "push" && scope !== QUEUED_SCOPE
         && scope.checks.some((check) => check !== "build") };

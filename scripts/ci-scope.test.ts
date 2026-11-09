@@ -983,6 +983,26 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     }
   });
 
+  it("selects full validation for upstream-sync alone and restores the normal plan after removal", async () => {
+    const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
+    for (const [action, labels, full] of [
+      ["labeled", ["upstream-sync"], true],
+      ["unlabeled", [], false],
+    ] as const) {
+      const api = await fakeLabelsApi([...labels]);
+      try {
+        const event = { ...payload, action, label: { name: "upstream-sync" } };
+        const { output, plan, stderr } = await runPullRequest(directory, event, api.env, true);
+        expect(stderr).toBe("");
+        expect(plan.outputs.full_required).toBe(full);
+        expect(plan.outputs.fast_pr).toBe(!full);
+        expect(plan.plan.full).toBe(full);
+        expect(output.vitest_os).toEqual(full ? ALL : LINUX);
+        expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
+      } finally { await api.close(); }
+    }
+  });
+
   it("changes a non-full Windows-labelled PR to full for upstream-sync and back after removal", async () => {
     const { directory, payload } = serverChange("updated guide\n", "docs/guide.md");
     for (const [action, labels, full] of [
