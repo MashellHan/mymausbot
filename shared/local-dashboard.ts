@@ -67,6 +67,41 @@ export interface LocalAgentActivityResponse {
   events: LocalAgentActivityEvent[];
 }
 
+export type LocalAgentConfigurationDocumentStatus = "ready" | "missing" | "error" | "unverified" | "unavailable";
+
+/** Content comes only from a server-verified Herdr member or team association. */
+export interface LocalAgentConfigurationDocument {
+  status: LocalAgentConfigurationDocumentStatus;
+  markdown: string | null;
+}
+
+export interface LocalAgentConfigurationSkill {
+  id: string;
+  name: string;
+  association: "agent" | "team";
+  loadedState: "unknown";
+}
+
+export interface LocalAgentConfigurationResponse {
+  agentId: string;
+  teamId: string;
+  occupantId: string | null;
+  agent: LocalAgentConfigurationDocument;
+  skillReferences: "verified" | "unverified";
+  skills: LocalAgentConfigurationSkill[];
+}
+
+export interface LocalAgentSkillDocumentResponse extends LocalAgentConfigurationDocument {
+  agentId: string;
+  teamId: string;
+  occupantId: string | null;
+  skillId: string;
+}
+
+export interface LocalAgentTeamRulesResponse extends LocalAgentConfigurationDocument {
+  teamId: string;
+}
+
 export type LocalUsageStatus = "ready" | "partial" | "stale" | "unavailable";
 export type LocalUsageCoverage = "ready" | "partial" | "unavailable";
 export type LocalUsageTokenStatus = "ready" | "partial" | "unavailable";
