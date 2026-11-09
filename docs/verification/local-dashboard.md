@@ -41,11 +41,20 @@ bounded, redacted latest instruction are available only through those routes.
   differ, tokens are joined by calendar date to the displayed remote windows.
   Missing token dates stay unavailable, and an unavailable comparison stays null.
   Missing remote data never falls back to created PRs or local Git commits.
+- The refresh wrapper records independent per-machine Token completeness. A
+  partial machine whose only failures are Git fetches can compare complete
+  observed Token periods; Git coverage stays partial. Unknown, log-read,
+  stale and previously sampled missing sources remain incomplete. Never-sampled
+  devices remain outside the observed comparison scope. Cards label daily and
+  weekly Token changes as DoD/WoW; the 30-day change compares consecutive rolling
+  periods, not calendar months. Missing baseline history has an explicit hint.
 
 The existing five-minute `scripts/refresh-local-usage.py` job writes the private
 `~/.local/share/mymausbot/usage/merged-v1.json` sidecar through its adjacent
 `local_usage_merged.py` module. Deploy both files together. No new scheduler runs
 inside the App, and the disabled chat-notifying collection routine is not needed.
+Deploy the updated refresh wrapper to that same job when updating Token coverage;
+the new source metadata appears on its next successful collection.
 The Activities Mini App reads every five minutes. Agent Team and Activities are
 available through Mini Apps; the separate Computer tabs are removed.
 Remote collection retains 60 China-calendar days for current and previous
