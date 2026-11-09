@@ -35,6 +35,8 @@ export interface JsonScrubber {
   end(): string;
 }
 
+export class JsonScrubLimitError extends Error {}
+
 /** Re-emits the body compactly (no insignificant whitespace), commas placed by this reader so that dropping a
  * member never leaves a stray one. */
 export function createJsonScrubber(): JsonScrubber {
@@ -51,6 +53,7 @@ export function createJsonScrubber(): JsonScrubber {
   const fail = (why: string): never => {
     throw new Error(`not JSON: ${why}`);
   };
+  const limit = (why: string): never => { throw new JsonScrubLimitError(`not JSON: ${why}`); };
   const emit = (text: string): void => {
     if (dropDepth < 0) out.push(text);
   };
@@ -69,7 +72,7 @@ export function createJsonScrubber(): JsonScrubber {
     const top = stack.at(-1);
     if (top && !top.object && top.members++ > 0) emit(",");
     if (char === "{" || char === "[") {
-      if (stack.length >= MAX_DEPTH) fail("nested too deep");
+      if (stack.length >= MAX_DEPTH) limit("nested too deep");
       emit(char);
       stack.push({ object: char === "{", members: 0 });
       state = char === "{" ? FIRST_KEY : FIRST_VALUE;
@@ -139,7 +142,7 @@ export function createJsonScrubber(): JsonScrubber {
           if (closed) valueDone();
         } else {
           key += run;
-          if (key.length > MAX_KEY_CHARS) fail("key too long");
+          if (key.length > MAX_KEY_CHARS) limit("key too long");
           if (closed) state = COLON;
         }
         continue;
@@ -148,7 +151,7 @@ export function createJsonScrubber(): JsonScrubber {
       if (state === ATOM_TEXT) {
         if (ATOM_CHAR.test(char)) {
           atom += char;
-          if (atom.length > MAX_ATOM_CHARS) fail("value too long");
+          if (atom.length > MAX_ATOM_CHARS) limit("value too long");
           i++;
         } else {
           finishAtom(); // the character is read again as what follows the value

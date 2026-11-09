@@ -178,6 +178,17 @@ describe("a JSON reply past the whole-body ceiling", () => {
     expect(raw.equals(notJson)).toBe(true);
   });
 
+  it("fails closed when valid large JSON exceeds a scrubber limit before streaming", async () => {
+    const body = Buffer.from(JSON.stringify({ resumeCursors: { agent: "private-cursor" }, sshAlias: "private-alias", ["k".repeat(70_000)]: "x", padding: "y".repeat(LOW_CEILING) }));
+    expect(body.length).toBeGreaterThan(LOW_CEILING);
+    respond = (res) => send(res, body);
+    const { status, raw, complete } = await device(ports.lan);
+    expect(status).toBe(502);
+    expect(complete).toBe(true);
+    expect(raw.toString("utf8")).not.toContain("private-cursor");
+    expect(raw.toString("utf8")).not.toContain("private-alias");
+  });
+
   it("is cut off, never finished unscrubbed, when it stops being JSON after its start went out", async () => {
     const tail = Buffer.from(' {"resumeCursors":{"agent":"late-cursor"}}');
     respond = (res) => send(res, Buffer.concat([BODY, tail]));

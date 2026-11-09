@@ -21,7 +21,7 @@ import {
   isCloudDesktopAccess,
   isMessageFileDownload,
 } from "./routes.ts";
-import { createJsonScrubber } from "./json-scrub.ts";
+import { createJsonScrubber, JsonScrubLimitError } from "./json-scrub.ts";
 import { acceptsGzip, gzipCandidate, sendTunnelJson, varyOnEncoding } from "./tunnel-gzip.ts";
 import { CompanionViewerRelay, requestTarget } from "./viewer-relay.ts";
 import { createSseScrubber, isJson, scrub } from "./wire.ts";
@@ -174,7 +174,12 @@ function streamScrubbedJson(harness: IncomingMessage, res: ServerResponse, held:
   let first: string;
   try {
     first = scrubber.write(decoder.write(head));
-  } catch {
+  } catch (error) {
+    if (error instanceof JsonScrubLimitError) {
+      harness.destroy();
+      sendJson(res, 502, { error: "the response from OpenMausBot exceeded the JSON scrubber limit" });
+      return;
+    }
     res.writeHead(status, privateHeaders(harness.headers));
     toDevice(res, head, harness);
     harness.on("data", (chunk: Buffer) => toDevice(res, chunk, harness));
