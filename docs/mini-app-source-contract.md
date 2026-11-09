@@ -1,10 +1,9 @@
 # Personal Mini App source agreement (host side)
 
-This describes the host at the current repository checkout and a proposed
-contract with the separate personal source repository
-`MashellHan/mymausbotminiapps`. The manifest and versioned installer below are
-**not implemented host APIs**. The host still bundles its own template copies;
-it does not fetch another repository or run an install script from it.
+This host-side agreement accepts the source ownership and current file format in
+the separate personal repository `MashellHan/mymausbotminiapps`. Its archive is
+not a host installation. The host still bundles its own template copies; it
+does not consume that repository, fetch `main` or run an install script from it.
 
 ## Source and runtime ownership
 
@@ -24,6 +23,14 @@ a known HTML hash and its exact expected binding. It preserves custom pages
 instead of blindly replacing them. Applicable upstream license and notices must
 follow copied code into the personal repository.
 
+The accepted archive uses `inventory.json` and
+`apps/bookkeeping/{index.html,queries.json}`,
+`apps/x-ai-digest/{index.html,queries.json}` and
+`apps/github-activity/{index.html,queries.json}`. The HTML files are the raw
+artifacts; there is no separate manifest or build output. Agent Team and
+Activities are inventory references to host-native views, without runnable HTML
+packages or authored app versions.
+
 ## Implemented host contract
 
 - HTML publication is self-contained and limited to **512 KiB** by
@@ -34,7 +41,10 @@ follow copied code into the personal repository.
 - `window.mausApp.query(queryId, parameters, { cursor?,
   expectedDataRevision? })` returns columns, rows, a Data revision and an
   optional cursor. `window.mausApp.onDataChanged(listener)` reports a mounted
-  view's Data change. These are current runtime methods, not a package installer.
+  view's Data change. A guarded source opener is available only to eligible
+  report frames when the desktop grants it after user action; it gives no
+  general navigation or frame network access. These are runtime capabilities,
+  not a package installer.
 - `mini_app_publish` or the owner API publishes a complete HTML and concrete
   binding set with `expectedRevision` and an idempotent `requestKey`. New
   template versions are immutable. Rollback selects a previous template and
@@ -47,63 +57,86 @@ follow copied code into the personal repository.
   and Data; restoring a backup does not restore revoked grants. A package cannot
   set these grants for itself.
 
-## Proposed portable package contract
+## Accepted archive identity and version layers
 
-The following is a **field-shape proposal**, not accepted input for any current
-host endpoint. Relative source and artifact paths must be agreed with the
-personal repository before a copy is consumed:
+The personal repository's `inventory.json` has `catalogVersion: 1` and records
+three runnable HTML sources:
 
-```json
-{
-  "manifestVersion": 1,
-  "packageId": "mymausbotminiapps.x-ai-digest",
-  "appVersion": "1.0.0",
-  "protocolVersion": "2026-01-26",
-  "hostCompatibility": { "minVersion": "<tested-host-version>" },
-  "source": {
-    "repository": "MashellHan/mymausbotminiapps",
-    "commit": "<40-hex-git-sha>",
-    "path": "<relative-source-directory>"
-  },
-  "artifact": {
-    "path": "<relative-self-contained-html>",
-    "sha256": "<64-hex-sha256>"
-  },
-  "dataSlots": [{ "name": "report", "bindingId": "report" }]
-}
-```
+| `packageId` | `appVersion` | Raw artifact and declaration |
+| --- | --- | --- |
+| `mashellhan.bookkeeping` | `0.1.0` | `apps/bookkeeping/index.html` and `queries.json` |
+| `mashellhan.x-ai-digest` | `0.1.0` | `apps/x-ai-digest/index.html` and `queries.json` |
+| `mashellhan.github-activity` | `0.1.0` | `apps/github-activity/index.html` and `queries.json` |
 
-`packageId` identifies the authored package; the host assigns a different local
-`appId` on installation. `appVersion` names authored content. The existing
-`templateVersion` and `app.revision` are local registry counters; Data revision
-is separate. `protocolVersion` names the frame wire contract (`APP_PROTOCOL_VERSION`
-in `shared/app.ts`), while `hostCompatibility` states which tested host versions
-can consume the artifact. The source commit identifies source code; the artifact
-SHA-256 verifies the exact HTML bytes. None is a substitute for another.
+Each `inventory.json` artifact entry records its relative path, byte count and
+SHA-256 of the unmodified HTML or query JSON. There is no separate per-app
+manifest or build step in this archive. Native Agent Team and Activities entries
+are host references with `appVersion: null`; their inventory identities are not
+runnable packages. The personal repository commit identifies authored source;
+an artifact SHA-256 identifies exact file bytes, not a compatible host version.
 
-`dataSlots` name portable needs, such as `ledger` or `report`. A future owner
-installation step would resolve each slot to an authorized local dataset and
-physical table, validate its fields and named queries, then publish the concrete
-binding. The manifest must not contain local `datasetId`, `appId`, transactions,
-report editions, publisher IDs, credentials or grants. An installation record
-would keep the package-to-app mapping, resolved slots, source commit, authored
-version, artifact hash and resulting template version **locally**, outside the
-source package.
+These names and versions are independent of the host's local `appId`, slug,
+`templateVersion`, app revision and Data revision. `catalogVersion: 1` describes
+the inventory format. `contractVersion: "0.1-draft"` in the inventory and
+`queries.json` describes the source/declaration draft; it is **not** the existing
+frame wire `APP_PROTOCOL_VERSION = "2026-01-26"` from `shared/app.ts`. The
+archive's `hostReference.commit` pins host source
+`37c487f849a600c55234b4cdfaf9eec68ac66453` for provenance. It is not a
+tested minimum host version or a compatibility range. Compatibility with other
+host versions is unknown and does not block this source archive.
 
-A future installer should consume the same verified artifact contract whether
-the HTML is vendored into the host build or obtained by a later versioned
-mechanism. It must compare installed bytes and bindings before replacing a copy,
-check host/protocol compatibility and request explicit local binding/grant
-decisions. An upgrade or rollback keeps personal Data and local configuration;
-it never silently restores a revoked permission. No automatic download of
-`main`, remote script execution, package market or public/private publishing
-feature is part of this agreement.
+`queries.json.dataSlots[].id` is the logical slot and future binding ID: `ledger`
+for Bookkeeping and `report` for each report. Portable declarations contain no
+local `datasetId`. The report slots describe the managed
+`main.omb_report_editions_v1` table and retain each kind's fixed report filter;
+they are not ledger mappings. The ledger slot leaves the physical table unset
+and uses example source types, so the owner must discover and validate the real
+local table, columns and types before binding it. No personal records, local `appId`,
+publisher grants, credentials or permissions belong in the source files.
 
-## Points to align with the personal repository
+## Fixed host copies and future consumption
 
-Confirm its actual app source directories, artifact build recipe, `packageId`
-names, version numbering, compatibility-range syntax and logical slot
-declarations. The host can then record a pinned source commit and artifact hash
-for each bundled copy. Until an installer and provenance record exist, continue
-using the implemented publication path and its stock/custom protection; do not
-present the proposed manifest as a callable interface.
+The host still owns its copies listed above and its installed AppDocs versions.
+The archived report HTML came from already captured installed v2 exports and
+matched the pinned `37c487f` host source at that time. The Bookkeeping HTML is a
+bundled-source baseline, not proof of any installed customization. A later
+installed host build, including `18aa460c57445b353d30eb80dcd7b8edd1eb3150`,
+must not be replaced with those older archive bytes merely because a path or
+slug matches.
+
+When a host maintainer actually adopts a fixed personal-repository copy, record
+**in this contract document in the same adoption change**: repository, pinned
+source commit, relative source path, `appVersion`, exact raw artifact SHA-256,
+and host copy location. The adopting host commit is identified by the reviewed
+change itself. Compare the candidate with the current host copy, installed HTML
+and bindings, customization and local schema
+before any update. No such adoption record is made by this documentation change;
+there is no running consumer or local install-provenance API behind this proposal.
+
+The implemented stock updater in `server/mini-apps/default-updates.ts` already
+requires an owner-marked shipped kind, a known HTML hash and its exact expected
+binding, and preserves custom templates and a later selected history version.
+That safeguard is not a repository sync mechanism. A future installer could
+consume the same `inventory.json` and `apps/<slug>/{index.html,queries.json}`
+bytes, resolve slots to authorized local Data, verify compatibility and then use
+the existing `expectedRevision`/`requestKey` publication path. The slot resolver,
+package-to-app mapping, installer fields/API and automatic artifact consumption
+remain **proposals**, not callable host features. Unknown compatibility, missing
+source provenance, ambiguous Data mapping, a custom-template conflict or an
+incompatible schema must stop adoption rather than expand read rights or
+silently overwrite local state.
+
+Template updates and report Data editions remain separate. Upgrade or rollback
+must preserve personal Data and local configuration and must never restore a
+revoked publisher or dashboard grant. No automatic download of `main`, remote
+script execution, package market or public/private publishing feature is part
+of this agreement.
+
+## Alignment status
+
+The host accepts the existing source ownership, file format, package identities,
+logical slot IDs and version meanings above. The personal repository has already
+accepted the same six documentation choices. This aligns source/archive
+documentation; it does not install a package, certify a host compatibility range
+or create a consumer API. Future installer behavior and conflict presentation
+need their own reviewed contract and implementation when requested.
