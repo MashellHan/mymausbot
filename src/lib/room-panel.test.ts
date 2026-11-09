@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppState } from "@/state/store";
 import { closeRoomPanel, openRoomPanel, simpleRoomHeader, useRoomPanel, useRoomPanelShown } from "./room-panel";
 
-type Shell = Pick<AppState, "selectedId" | "activeView" | "settingsOpen">;
+type Shell = Pick<AppState, "selectedId" | "activeView" | "settingsOpen" | "computerOpen">;
 
 let root: Root;
 let container: HTMLDivElement;
@@ -18,7 +18,7 @@ function Probe({ group, state, simple }: { group?: { id: string }; state: Shell;
   return null;
 }
 const room = { id: "desk" };
-const inRoom: Shell = { selectedId: "desk", activeView: "chat", settingsOpen: false };
+const inRoom: Shell = { selectedId: "desk", activeView: "chat", settingsOpen: false, computerOpen: false };
 const render = (state: Shell, simple = true, group: { id: string } | null = room) =>
   flushSync(() => root.render(createElement(Probe, { group: group ?? undefined, state, simple })));
 const open = () => flushSync(() => openRoomPanel("desk"));
@@ -86,6 +86,11 @@ describe("the Room panel's open state", () => {
     open();
     render({ ...inRoom, settingsOpen: true });
     expect(seen.open).toBeNull();
+
+    render(inRoom);
+    open();
+    render({ ...inRoom, computerOpen: true });
+    expect([seen.open, seen.shown]).toEqual([null, false]);
 
     render(inRoom);
     open();

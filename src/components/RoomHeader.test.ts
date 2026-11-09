@@ -61,6 +61,7 @@ const CONTROLS = {
   folder: 'title="Group working folder"',
   responder: 'aria-label="Default responder"',
   members: 'aria-label="Manage members: 9 bots in this group"',
+  computer: 'data-tour="computer"',
 };
 const shown = (markup: string) => Object.entries(CONTROLS).filter(([, mark]) => markup.includes(mark)).map(([name]) => name);
 const BULLETIN = "Desk HQ: the recruiting desk&#x27;s room.";
@@ -74,10 +75,10 @@ beforeEach(() => {
 afterEach(() => closeRoomPanel());
 
 describe("the room header in Simple mode", () => {
-  it("shows only the room's name and up to three faces with +N", () => {
+  it("shows the room's name, up to three faces with +N and Computer", () => {
     const markup = view(room());
     const head = header(markup);
-    expect(shown(head)).toEqual(["members"]);
+    expect(shown(head)).toEqual(["members", "computer"]);
     expect(head).toContain("data-room-name=");
     expect(head).toContain('aria-label="Open settings for Desk HQ"');
     expect(head).toContain("The recruiting desk");
@@ -108,15 +109,15 @@ describe("the room header in Simple mode", () => {
     expect(markup).toContain(BULLETIN);
   });
 
-  it("leaves a DM's header as it is", () => {
+  it("also offers Computer in a DM", () => {
     const markup = view(room({ dm: true, memberIds: ["bot-0"], name: "Desk Manager" }));
-    expect(shown(header(markup))).toEqual(["find", "export", "turnLimit", "usage"]);
+    expect(shown(header(markup))).toEqual(["find", "export", "turnLimit", "usage", "computer"]);
     expect(header(markup)).not.toContain("data-room-name");
   });
 
-  it("leaves a room that is still being set up as it is", () => {
+  it("offers Computer while a room is still being set up", () => {
     const markup = view(room({ setupCompletedAt: null, setupSkippedAt: null }));
-    expect(shown(header(markup))).toEqual(["find", "export", "usage", "members"]);
+    expect(shown(header(markup))).toEqual(["find", "export", "usage", "members", "computer"]);
     expect(header(markup)).not.toContain("data-room-name");
   });
 });
@@ -155,7 +156,7 @@ describe("the Simple header's buttons", () => {
     expect(onOpenMembers).toHaveBeenCalledTimes(1);
   });
 
-  it("cuts both buttons out of the window's drag region", () => {
+  it("cuts the header buttons out of the window's drag region", () => {
     fixture.chrome = captionChrome("mac-inset");
     // Read off the markup: happy-dom's CSSStyleDeclaration drops the Electron-only property.
     const markup = renderToStaticMarkup(createElement(RoomHeader, {
@@ -164,7 +165,7 @@ describe("the Simple header's buttons", () => {
     }));
     expect(markup).toMatch(/^<div data-window-drag="" style="-webkit-app-region:drag"/);
     const buttons = markup.match(/<button[^>]*>/g)!;
-    expect(buttons).toHaveLength(2);
+    expect(buttons).toHaveLength(3);
     for (const button of buttons) expect(button).toContain('style="-webkit-app-region:no-drag"');
   });
 });
