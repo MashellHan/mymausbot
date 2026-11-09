@@ -395,7 +395,7 @@ const bridge = {
   openAtLogin: {
     state: () => ipcRenderer.invoke("open-at-login:state"),
     set: on => on !== true || isLocalPage || navigator.userActivation?.isActive === true
-      ? ipcRenderer.invoke("open-at-login:set", on === true) : Promise.reject(new Error("Turn on the switch to open OpenMausBot at login.")),
+      ? ipcRenderer.invoke("open-at-login:set", on === true) : Promise.reject(new Error("Turn on the switch to open mymausbot at login.")),
   },
   setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
   credentialMode: () => ipcRenderer.sendSync("credential-mode:read"),

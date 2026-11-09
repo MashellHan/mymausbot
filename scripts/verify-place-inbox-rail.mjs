@@ -1,6 +1,6 @@
 // The rail's "{name}: needs you" in the real packaged app, with a synthetic Admin and synthetic Clouds at their real
 // addresses. Run on a disposable GitHub macOS runner only: it edits /etc/hosts and trusts a throwaway certificate.
-//   node scripts/verify-place-inbox-rail.mjs --app release/mac-arm64/OpenMausBot.app --out <evidence dir>
+//   node scripts/verify-place-inbox-rail.mjs --app release/mac-arm64/mymausbot.app --out <evidence dir>
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const option = (name) => { const at = process.argv.indexOf(name); return at === -1 ? undefined : process.argv[at + 1]; };
 if (process.env.GITHUB_ACTIONS !== "true" || process.platform !== "darwin") throw new Error("This check edits /etc/hosts and the system keychain: it runs on a disposable GitHub macOS runner only.");
-const APP = resolve(option("--app") ?? "release/mac-arm64/OpenMausBot.app");
+const APP = resolve(option("--app") ?? "release/mac-arm64/mymausbot.app");
 const OUT = resolve(option("--out") ?? mkdtempSync(join(tmpdir(), "omb-rail-evidence-")));
 mkdirSync(OUT, { recursive: true });
 const ROOT = new URL("..", import.meta.url);
