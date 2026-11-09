@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { BrowserEvidence, type StepRecord } from "../../server/browser-evidence.ts";
 import { agentBrowserIntegration, closeBrowserSession, prepareBrowserSessionState, resolveAgentBrowserBinary, setBrowserViewport } from "../../server/browser-engine.ts";
+import { reduceRequest } from "../../server/browser-page-health.ts";
 import { relay, RelayPorts, relayTarget } from "../../server/browser-relay.ts";
 import { BrowserRuntime, browserRuntimeEnv, type BrowserSpawnSpec, type BrowserTiming } from "../../server/browser-runtime.ts";
 import { BrowserSteps, type StepContext } from "../../server/browser-steps.ts";
@@ -198,14 +199,25 @@ describe("page health and browser steps on the real engine", () => {
     await call("open", { url: `${base}/` }, false);
     await runtime.take(session, "person");
     const port = (await new RelayPorts().port(target()))!;
+    const failedSignupIds = async () => {
+      const answer = await relay(port, { action: "requests", status: "400-599" }, { timeoutMs: 2_000 });
+      if (!answer.success || !Array.isArray(answer.data?.requests)) return [];
+      return answer.data.requests.flatMap((raw) => {
+        const request = reduceRequest(raw, null);
+        const id = (raw as { requestId?: unknown } | null)?.requestId;
+        return request?.method === "POST" && request.path === "/api/signup" && request.status === 500 && typeof id === "string" ? [id] : [];
+      });
+    };
     expect((await relay(port, { action: "click", selector: "#signup" }, { timeoutMs: 10_000 })).success).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    let humanIds: string[] = [];
+    await expect.poll(async () => { humanIds = await failedSignupIds(); return humanIds.length; }, { timeout: 10_000 }).toBeGreaterThan(0);
     runtime.release(session, "person");
     const next = (await call("snapshot", {}, false)).join("\n");
     expect(next).not.toContain("Page reported");
-    await call("click", { selector: "#signup" }, false);
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    expect((await call("snapshot", {}, false)).join("\n")).toContain('1 failed request: POST "/api/signup" → 500');
+    const ownClick = (await call("click", { selector: "#signup" }, false)).join("\n");
+    await expect.poll(async () => (await failedSignupIds()).some((id) => !humanIds.includes(id)), { timeout: 10_000 }).toBe(true);
+    const ownSnapshot = (await call("snapshot", {}, false)).join("\n");
+    expect(`${ownClick}\n${ownSnapshot}`).toContain('1 failed request: POST "/api/signup" → 500');
   }, 120_000);
 
   runPosix("never starts a dead Chrome itself; the bot's next call does, at 1280x720, and the bot is told", async () => {
