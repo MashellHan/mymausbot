@@ -33,7 +33,8 @@ export async function qaHealth({ api = github, readArtifact = artifactFiles, now
     const age = now - Date.parse(report.finishedAt);
     if (!Number.isFinite(age) || age < -60_000 || age > FULL_QA_FRESHNESS_MS) throw new Error("Full QA report is older than twenty-six hours or has invalid time");
     const issues = (await pages("/issues?state=open&labels=qa", null, api)).filter((issue) => !issue.pull_request);
-    const blockedAreas = [...new Set(issues.filter((issue) => !triageOf(issue).complete || issueLabels(issue).some((label) => ["qa:p0", "qa:p1"].includes(label))).flatMap(issueAreas))];
+    const blockedAreas = [...new Set(issues.filter((issue) => !issueLabels(issue).includes("qa:process")
+      && (!triageOf(issue).complete || issueLabels(issue).some((label) => ["qa:p0", "qa:p1"].includes(label)))).flatMap(issueAreas))];
     return { healthy: report.executionComplete, reason: report.executionComplete ? "" : "Full QA execution was incomplete", report, issues, blockedAreas };
   } catch (error) {
     return { healthy: false, reason: error.message, report, issues: [], blockedAreas: ["global"] };

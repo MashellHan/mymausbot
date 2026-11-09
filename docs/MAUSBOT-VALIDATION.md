@@ -1,8 +1,10 @@
 # MausBot validation
 
-An ordinary PR's first required-gate attempt has five minutes from run creation,
-including queue and setup time. A rerun uses its current attempt start; the
-original run's age remains diagnostic. Local feedback and App
+An ordinary PR targets five minutes from run creation, including queue and
+setup time. A rerun is measured from its current attempt start; the original
+run's age remains diagnostic. Timing, queue age, handoff and follow-up deadlines
+are advisory scan criteria. Missing a target creates an optimization case; it
+does not fail a quality gate, close a PR, cancel delivery or invalidate a pass. Local feedback and App
 delivery are measured separately; this is not a test-count reduction quota.
 `MAUSBOT_CI_MODE=shadow` and unadmitted areas remain available for the broader
 validation rollout; neither is a prerequisite for the ordinary fast PR gate.
@@ -87,7 +89,7 @@ does not silently turn a failed test into a skip.
 
 | Change/state | Required evidence |
 | --- | --- |
-| Ordinary PR | One Ubuntu fast path and the current-head `CI` gate; first attempt includes queue time in its five-minute budget |
+| Ordinary PR | One Ubuntu fast path and the current-head `CI` gate; first attempt includes queue time in its five-minute target |
 | Explicit `ci:full`, `qa:repair` or `windows` label | Selected wider checks; this is an exception to the ordinary fast path, never a waiver of holds or review |
 | Main integration, daily 05:00 full QA, release | Deferred platform, Electron, browser, full E2E and packaging checks in their applicable lanes; daily/release retain the full set |
 | Missing or unreadable controls; applicable P0 or P1 hold | Fail closed or hold the affected merge; do not manufacture a green gate |
@@ -104,16 +106,54 @@ The required `CI` check starts with the workflow and binds its selection
 artifact to the run, revision and producing attempt. It waits for the selected
 required jobs, rechecks current PR controls and QA holds, and fails on missing,
 skipped, cancelled or failed required work. An ordinary fast run that exceeds
-five minutes from first-attempt creation, or from the current rerun attempt's
-start, is a CI performance incident, not a passing timeout. A real test failure
-takes priority over the timing incident. Explicit wider runs and post-integration
+five minutes remains pending until its required work completes. Successful
+quality checks produce a green gate regardless of elapsed time. The independent
+process scan records timing violations, including queue/setup and slow phases.
+Actual required failures or incomplete execution still fail; execution safety
+timeouts are not the five-minute performance target. Explicit wider runs and post-integration
 validation keep their selected platform and specialist jobs. Unreadable
 controls fail closed; an unreadable issue list cannot grant an exemption.
 Failed-job reruns reuse valid
 successful evidence from the same immutable run and revision, with the newest
-attempt of each job taking precedence. A pass after a failed workflow attempt
+attempt of each job taking precedence. A pass after an actual failed validation attempt
 remains a finding for Lead to classify and cannot verify the incident until a
 later clean execution covers it.
+
+## Advisory process scan and PR recovery
+
+`scripts/qa/scan.mjs` records process cases separately from quality results.
+The trusted-main `scan` job in `qa-report.yml` runs after PR CI completes; it is
+not a required PR check and uses `continue-on-error`. Its
+`process-scan.json` reports `passed`, `optimization_needed` or `incomplete`.
+The existing ten-minute Lead queue also scans open PRs and recent PR runs;
+there is no new scheduler. Scanner outages cannot fail the quality gate or
+prevent ordinary QA/PR handoffs.
+
+Cases use only `qa:process`, without `qa`. They are deduplicated by rule and
+subject and excluded from QA holds and reduction-health issue classification,
+even if another label is accidentally added. Five-minute gate latency,
+12-hour observed PR inactivity, 24-hour open PR age, 30-minute triage and repair
+due dates are optimization targets. GitHub's update timestamp is an inactivity
+indicator; Lead inspects substantive progress rather than treating comments,
+labels or empty commits as progress. Local edit/ready receipts already record
+over-budget work without failing successful checks.
+
+Lead records the blocker, current owner and next useful action, then assigns
+pipeline or fixture improvements to an existing member during available
+capacity. Preserve priority feature delivery. Do not close a useful PR, cancel
+its pipeline, force rollback, or repeat unchanged review/tests merely to meet a
+clock. Missing handoff text calls for completing the handoff, not discarding
+work. Actual review findings, source binding, failed required checks and
+applicable data/security holds remain quality decisions.
+
+If a procedural rule caused a mistaken closure, record the original PR URL,
+branch/head, accepted review and check evidence, closure reason, owner, next
+action and recovery condition in a process issue. Reopen the same PR when its
+work remains useful and unadopted; retain its original dates and history. If it
+already reached main through another PR, link that integration and verify the
+source instead of recreating the change. Keep deferred recovery owned and
+visible until adoption, demonstrated supersession or an explicit product
+cancellation. A clock alone is never a disposition reason.
 
 ## Automated QA and Lead rhythm
 
@@ -145,7 +185,7 @@ retried. Preflight outages before any prompt attempt retry on the next tick.
 The schedule requires this Mac and Herdr to be available; CI's coverage
 fallback does not depend on them.
 
-Within 30 minutes Lead sets `qa:triaged`, removes `qa:untriaged`, chooses
+Lead targets triage within 30 minutes and sets `qa:triaged`, removes `qa:untriaged`, chooses
 `qa:p0`, `qa:p1` or `qa:p2`, selects a `qa:kind:*` and `qa:scope:*`, and records:
 
 ```text
@@ -169,7 +209,9 @@ integration, and Lead closes with that evidence. The reporter sets `qa:verified`
 and leaves closure to Lead. Keep priority/owner/next-action/due-date records
 current; a `qa:triaged` label by itself is insufficient.
 
-No complete delivered full report within 26 hours disables reduced coverage.
+No complete delivered full report within 26 hours restricts future optional
+coverage reduction and requests shared recovery. Its age does not invalidate
+an already selected run or independently fail the merge gate.
 This allows the 24-hour cadence plus a two-hour grace period; report health
 and shared execution recovery use the same window.
 The queue requests one shared recovery run per failed scheduled cycle, reusing

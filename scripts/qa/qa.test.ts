@@ -155,7 +155,7 @@ describe("complete CI and trusted QA health", () => {
     expect(executionComplete([staticJob], [{ ...observed[0], steps: observed[0].steps.slice(0, -2) }], new Set())).toBe(false);
   });
 
-  it("counts fast PR queue and setup from creation, prioritizing real test failures", async () => {
+  it("keeps successful fast PR validation green after the timing target", async () => {
     const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
       expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
     const createdAt = 1_000_000;
@@ -164,7 +164,7 @@ describe("complete CI and trusted QA health", () => {
     const jobs = [staticJob];
     const api = async (path: string) => path.startsWith("/issues?") ? [] : { jobs };
     await expect(verifyGate(outputs, { api, createdAt, now: () => createdAt + 299_000 })).resolves.toBeUndefined();
-    await expect(verifyGate(outputs, { api, createdAt, now: () => createdAt + 300_001 })).rejects.toThrow(/CI performance: fast PR exceeded 5 minutes.*static-queue=90s.*static-checks=200s/);
+    await expect(verifyGate(outputs, { api, createdAt, now: () => createdAt + 300_001 })).resolves.toBeUndefined();
     jobs[0] = { ...staticJob, conclusion: "failure" };
     await expect(verifyGate(outputs, { api, createdAt, now: () => createdAt + 300_001 })).rejects.toThrow("Required validation failed");
   });
@@ -181,7 +181,7 @@ describe("complete CI and trusted QA health", () => {
       "Required validation failed: typecheck + lint > Security, data and dispatch core with bounded affected tests");
   });
 
-  it("classifies a queued ordinary PR with no plan at five minutes", async () => {
+  it("keeps waiting for a queued PR plan after five minutes without hiding failed checks", async () => {
     const createdAt = 1_000_000;
     const prHead = "b".repeat(40);
     const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress", conclusion: null as string | null,
@@ -191,8 +191,8 @@ describe("complete CI and trusted QA health", () => {
       : path === "/pulls/7" ? { head: { sha: prHead }, labels: [] }
         : path.includes("/jobs") ? { jobs: [preflight] } : { artifacts: [] };
     const invoke = () => gateRun({ api, runId: run.id, attempt: 1, sha: run.head_sha, event: "pull_request",
-      eventPayload: { pull_request: { number: 7, head: { sha: prHead }, labels: [] } }, now: () => createdAt + 300_001, deadlineMs: 400_000 });
-    await expect(invoke()).rejects.toThrow("CI performance: fast PR validation plan unavailable after 5 minutes");
+      eventPayload: { pull_request: { number: 7, head: { sha: prHead }, labels: [] } }, now: () => createdAt + 300_001, deadlineMs: 400_000, wait: async () => { throw new Error("waiting for validation plan"); } });
+    await expect(invoke()).rejects.toThrow("waiting for validation plan");
     preflight.steps = [{ name: "Security, data and dispatch core with bounded affected tests", conclusion: "failure" },
       { name: "Upload fast results", conclusion: null }];
     await expect(invoke()).rejects.toThrow("Preflight failed: Security, data and dispatch core with bounded affected tests");
@@ -202,7 +202,7 @@ describe("complete CI and trusted QA health", () => {
     await expect(invoke()).rejects.toThrow("Preflight failure");
   });
 
-  it("uses current PR controls for a no-plan budget even when event labels are stale", async () => {
+  it("retains current PR controls while waiting beyond the timing target", async () => {
     const createdAt = 1_000_000, prHead = "b".repeat(40);
     let currentLabels: string[] = [], currentHead = prHead, readError = false;
     const api = async (path: string) => path === "/actions/runs/100"
@@ -219,7 +219,7 @@ describe("complete CI and trusted QA health", () => {
       await expect(invoke([])).rejects.toThrow("waiting for full plan");
     }
     currentLabels = [];
-    await expect(invoke(["ci:full"])).rejects.toThrow("CI performance: fast PR validation plan unavailable after 5 minutes");
+    await expect(invoke(["ci:full"])).rejects.toThrow("waiting for full plan");
     currentHead = "c".repeat(40);
     await expect(invoke([])).rejects.toThrow("PR head changed");
     currentHead = prHead;
@@ -247,7 +247,7 @@ describe("complete CI and trusted QA health", () => {
     await expect(invoke()).rejects.toThrow("Invalid current PR run creation evidence");
   });
 
-  it("budgets a rerun from its current attempt start while retaining the original run age", async () => {
+  it("keeps a successful rerun green independently of original and attempt age", async () => {
     const prHead = "b".repeat(40), mergeSha = "c".repeat(40), original = 1_000_000, rerun = 10_000_000;
     const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
       expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
@@ -263,7 +263,7 @@ describe("complete CI and trusted QA health", () => {
       runId: run.id, attempt: 2, sha: mergeSha, event: "pull_request", eventPayload: { pull_request: { number: 7, head: { sha: prHead }, labels: [] } },
       now: () => rerun + elapsed });
     await expect(invoke(120_000)).resolves.toBeUndefined();
-    await expect(invoke(300_001)).rejects.toThrow(/CI performance: fast PR exceeded 5 minutes.*original-created-to-gate=/);
+    await expect(invoke(300_001)).resolves.toBeUndefined();
   });
 
   it("invalidates a fast plan when the Windows request is added after selection", async () => {
@@ -509,11 +509,13 @@ describe("complete CI and trusted QA health", () => {
     expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(true);
   });
 
-  it("cannot pass a selected missing full job or a newly unavailable reduced-coverage guard", async () => {
+  it("retains required jobs and severity holds without failing on QA report age", async () => {
     const outputs = { full_required: true, expected_jobs: [{ id: "static", name: "preflight" }, ...expected], required_jobs: ["vitest"], qa_areas: ["usage"], reduced: false };
     const api = async (path: string) => path.startsWith("/issues?") ? [] : { jobs: [] };
     await expect(verifyGate(outputs, { api, deadlineMs: 0 })).rejects.toThrow("Incomplete required validation");
-    await expect(verifyGate({ ...outputs, full_required: false, reduced: true }, { api, health: async () => ({ healthy: false, reason: "stale", blockedAreas: [] }) })).rejects.toThrow("stale");
+    const passedApi = async (path: string) => path.startsWith("/issues?") ? []
+      : { jobs: outputs.expected_jobs.map((item) => ({ name: item.name, run_attempt: 1, status: "completed", conclusion: "success" })) };
+    await expect(verifyGate({ ...outputs, full_required: false, reduced: true }, { api: passedApi, deadlineMs: 0 })).resolves.toBeUndefined();
     expect(holdsFor([{ number: 1, labels: ["qa:p0"] }, { number: 2, labels: ["qa:p1", "qa:scope:usage"] }], ["agents"], [])).toHaveLength(1);
     expect(holdsFor([{ number: 1, labels: ["qa:p0"] }], ["agents"], [1])).toEqual([]);
   });

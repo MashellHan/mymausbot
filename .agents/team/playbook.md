@@ -112,15 +112,23 @@ findings and required checks pass. Creating and pushing reviewable PRs is
 authorized here.
 Never equate a green badge or an idle agent with completed work.
 
-Lead owns disposition of every open PR, including drafts. Review the open queue
-at existing handoffs and queue touchpoints; act before 12 hours pass since its
-creation or last substantive progress. A review, fix, CI diagnosis or resolution,
-or merge counts as progress. Status-only comments, labels, empty commits and
-draft toggles do not. Merge or close each PR within 24 hours of its creation.
-Keep required review and current-head CI gates for merges; if they cannot finish
-in time, close the PR with its branch and commits intact and record the blocker,
-owner, concrete next action and condition to resume. Do not close and reopen to
-reset a clock or add a scheduler for this policy.
+Lead owns disposition of every open PR, including drafts. Inspect the queue at
+existing handoffs and queue touchpoints. Twelve hours without observed activity
+and twenty-four hours open are advisory scan targets, not closure deadlines.
+Inspect real review/fix/CI progress; status-only comments, labels, empty commits
+and draft toggles do not establish it. Record a blocker, owner and next action
+and retain useful work, even when review, CI or priority delivery takes longer.
+Never close, cancel, roll back or rerun solely because a process clock elapsed.
+Close only for a substantive disposition such as demonstrated supersession or
+an explicit product cancellation, with source/evidence and successor recorded.
+
+A mistaken procedural closure is a process incident. Keep its original PR,
+branch/head, accepted reviews/checks, closure reason, recovery owner and next
+step. Reopen useful unadopted work on the same PR; link verified main adoption
+when another PR already carried it. Assign pipeline/fixture improvements at
+available capacity and follow deferred recovery through adoption or an explicit
+resolution. Original dates remain diagnostic; reopening does not grant a test
+waiver or require extra checks merely to reset a clock.
 
 Freeze a coherent candidate after focused contract checks. Send its immutable
 commit, available evidence and explicitly pending UI/package checks immediately;
@@ -199,17 +207,18 @@ existing coordinated procedure for an actual App switch.
 Follow [the validation mechanism](../../docs/MAUSBOT-VALIDATION.md). Use
 check:plan, check:edit and check:ready for the small local loop; retain normal
 push hooks and avoid repeating identical checks immediately before them.
-An ordinary PR's first required-gate attempt has five minutes from run creation,
-including queue time; a rerun uses its current attempt start, with the original
+An ordinary PR targets five minutes from run creation, including queue time; a rerun uses its current attempt start, with the original
 age kept as diagnostic. One cached Ubuntu static/setup path retains typecheck,
 lint and source guards, then runs the 26-file security/data/dispatch core and
 at most four portable affected files. Record deferred affected files, including
 expensive browser and Electron tests. The `ci:full`, `qa:repair` and `windows`
 labels request explicit wider checks.
 Long platform, Electron, browser, full E2E and packaging checks belong to the
-applicable post-integration, daily 05:00 and release lanes. A failed or
-over-budget gate is a CI incident, not a waived check; current-head review
-and QA holds still control merging.
+applicable post-integration, daily 05:00 and release lanes. Actual failed required work remains a quality incident. Timing overruns and
+other process targets are advisory scan cases; successful validation remains
+green. Use the independent process scan and existing Lead queue, without
+blocking merges or delivery on process metadata or elapsed time. Current-head
+review and actual QA holds still control merging.
 Dev leaves a durable PR-body handoff with `QA-Handoff: <current head SHA>`.
 The existing Lead owns review and CI follow-through while local delivery and
 independent development continue.
@@ -218,7 +227,7 @@ The automated QA runner is the existing CI full lane, once daily at 05:00
 Asia/Shanghai. It does not need another persistent model. Its trusted reporter
 files deduplicated issues;
 the ten-minute queue hands actionable work to mausbot-lead. Lead acknowledges,
-triages within thirty minutes, assigns an existing developer/maintainer and sets
+targets triage within thirty minutes, assigns an existing developer/maintainer and sets
 priority, scope, classification, next action and due date. Reviewer reviews fixes;
 QA verifies after integration; Lead closes with evidence. Read the mechanism
 for hold/repair boundaries and rollback. Shadow mode preserves existing checks;
