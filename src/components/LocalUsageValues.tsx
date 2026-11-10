@@ -15,9 +15,9 @@ export function useUsageMetricHint() {
 export const changeText = (value: LocalUsageWeekChange) => value === null ? "—" : value === "new" ? t("computer.usage.newActivity")
   : new Intl.NumberFormat(activeLocale(), { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 1 }).format(value / 100);
 
-export function UsageChange({ value, startDay, endDay, metric, daily = false, periodDays, unavailableHint, className = "text-[13px] text-ink-secondary" }: {
+export function UsageChange({ value, startDay, endDay, metric, daily = false, periodDays, known = false, unavailableHint, className = "text-[13px] text-ink-secondary" }: {
   value: LocalUsageWeekChange; startDay: string; endDay: string;
-  metric: "prs" | "commits" | "totalTokens"; daily?: boolean; periodDays?: 1 | 7 | 30; unavailableHint?: string; className?: string;
+  metric: "prs" | "commits" | "totalTokens"; daily?: boolean; periodDays?: 1 | 7 | 30; known?: boolean; unavailableHint?: string; className?: string;
 }) {
   const usageMetricHint = useUsageMetricHint();
   const source = useContext(UsageSourceContext);
@@ -28,9 +28,10 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
     ? "computer.usage.primaryChangeDescription" : "computer.usage.changeDescription", { change: shown, previous })}`
     + `${daily ? ` ${t("computer.usage.dailyComparisonHint")}` : ""}`
     + `${period ? ` ${t("computer.usage.periodComparisonHint", { period, days: periodDays! })}` : ""}`
+    + `${known ? ` ${t("computer.usage.primaryKnownLabel")}.` : ""}`
     + ` ${usageMetricHint(metric)}`
     + `${value === null ? ` ${unavailableHint ?? t("computer.usage.changeUnavailableHint")}` : ""}`;
-  return <span data-usage-change className={className} title={description}>
+  return <span data-usage-change data-usage-provisional={known || undefined} className={className} title={description}>
     <span aria-hidden="true">{shown}</span><span className="sr-only">{description}</span>
   </span>;
 }

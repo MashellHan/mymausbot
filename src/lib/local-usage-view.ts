@@ -8,6 +8,7 @@ import { usageTrendRange, type UsageTrendRange } from "../../shared/local-usage-
 type UsageCounts = LocalUsageCounts & { knownCommits: number | null };
 type Categories = Record<LocalUsageCategory, UsageCounts>;
 export type UsageWindow = Omit<LocalUsageWindow, "categories" | "repositories"> & UsageCounts & {
+  comparison: LocalUsageWindow["comparison"] & { known?: { prs: LocalUsageWindow["comparison"]["prs"]; commits: LocalUsageWindow["comparison"]["commits"] } };
   categories: Categories;
   repositories: Omit<LocalUsageWindow["repositories"], "rows"> & { rows: (LocalUsageWindow["repositories"]["rows"][number] & UsageCounts)[] };
 };
@@ -66,6 +67,7 @@ function remoteUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange, g
       comparison: { startDay: previousStart, endDay: previousEnd, missingDays: remote?.comparison.missingDays ?? [],
         unavailableTokenDays: localMatches ? local.comparison.unavailableTokenDays : previousTokens.unavailableTokenDays,
         prs: observed?.comparison.prs ?? null, commits: observed?.comparison.commits ?? null,
+        known: observed && "known" in observed.comparison ? observed.comparison.known : undefined,
         totalTokens: tokenChange(snapshot, window), categories: observed?.comparison.categories ?? emptyComparisons() },
     } satisfies UsageWindow];
   })) as Record<typeof periods[number], UsageWindow> | null;

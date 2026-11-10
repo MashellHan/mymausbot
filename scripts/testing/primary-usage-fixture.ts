@@ -30,8 +30,17 @@ export function primaryUsageSnapshotFixture(endDay = "2026-11-03") {
   return { version: 2, github: provider("github"), ado: provider("ado") };
 }
 
-export function primaryUsageFixture(endDay = "2026-11-03"): LocalContributionsResponse {
+export function primaryUsageFixture(endDay = "2026-11-03", knownOnly = false): LocalContributionsResponse {
   const now = Date.parse(`${endDay}T08:31:00Z`);
   const snapshot = parseContributionSnapshot(primaryUsageSnapshotFixture(endDay), now);
+  if (knownOnly) for (const source of snapshot.github.sources) {
+    source.status = "partial";
+    source.coverage.visibilityComplete = false;
+    for (const day of source.days) {
+      day.status = "partial";
+      day.prs = null;
+      day.commits = null;
+    }
+  }
   return aggregateContributionSnapshot(snapshot, now);
 }

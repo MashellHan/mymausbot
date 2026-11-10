@@ -39,7 +39,7 @@ const enabled = process.env.OMB_PRIMARY_USAGE_UI === "1";
     const page = await browser.waitForPage();
     const read = <T>(expression: string) => page.evaluate(expression) as Promise<T>;
     for (const [width, locale, skin] of [[360, "en", "midnight"], [960, "zh", "atelier"]] as const) {
-      await page.navigate(`${url.split("?")[0]}?width=${width}&locale=${locale}&skin=${skin}&scenario=ready`,
+      await page.navigate(`${url.split("?")[0]}?width=${width}&locale=${locale}&skin=${skin}&scenario=known-counts`,
         { readiness: "domcontentloaded", timeoutMs: 45_000 });
       await expect.poll(() => read<string>("document.querySelector('[data-usage-metric-definition]')?.textContent ?? ''"),
         { timeout: 30_000 }).toContain(locale === "en" ? "Profile dates" : "Profile 日期");
@@ -57,10 +57,22 @@ const enabled = process.env.OMB_PRIMARY_USAGE_UI === "1";
       expect(Math.abs(state.width - width)).toBeLessThanOrEqual(1);
       expect(state.cards[0]).toContain("5");
       expect(state.cards[1]).toContain("9");
+      expect(await read<number>("document.querySelectorAll('section dl > div > dd > [data-usage-change][data-usage-provisional]').length")).toBe(6);
       expect(state.rows).toContain("fixture/github-repo");
       expect(state.rows).toContain("fixture/ado-repo");
       const topShot = await page.session.send<{ data: string }>("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       writeFileSync(join(evidence, `primary-top-${width}-${locale}.png`), Buffer.from(topShot.data, "base64"));
+      await read("document.querySelector('[data-usage-trend=commits] [data-usage-day=\"2026-11-03\"]').scrollIntoView({block:'center'}); document.querySelector('[data-usage-trend=commits] [data-usage-day=\"2026-11-03\"]').focus()");
+      const tooltip = await read<{ text: string; paragraphs: number; nativeHints: number }>(`(() => {
+        const node = document.querySelector('[data-usage-trend=commits] [role=tooltip]');
+        return { text: node?.textContent ?? '', paragraphs: node?.querySelectorAll('p').length,
+          nativeHints: node?.querySelectorAll('[title], [aria-description]').length };
+      })()`);
+      expect(tooltip.text).toMatch(/2026-11-03.*9.*5.*4/s);
+      expect(tooltip.paragraphs).toBe(0);
+      expect(tooltip.nativeHints).toBe(0);
+      const hoverShot = await page.session.send<{ data: string }>("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+      writeFileSync(join(evidence, `primary-hover-${width}-${locale}.png`), Buffer.from(hoverShot.data, "base64"));
       await page.session.send("Page.bringToFront");
       await read("document.querySelector('[data-usage-primary-sources] summary').scrollIntoView({block:'center'}); document.querySelector('[data-usage-primary-sources] summary').focus()");
       expect(await read<boolean>("document.activeElement === document.querySelector('[data-usage-primary-sources] summary')")).toBe(true);
