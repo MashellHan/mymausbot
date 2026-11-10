@@ -15,7 +15,9 @@ RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 DATE_BASIS = {"prs": "created-at/UTC", "commits": "author-at/UTC"}
 GUID = re.compile(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", re.I)
 SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", re.I)
-COAUTHOR = re.compile(r"^[ \t]*Co-authored-by:[ \t]*.+?[ \t]*<([^<>\s]+@[^<>\s]+)>[ \t]*$", re.I | re.M)
+COAUTHOR_PREFIX = re.compile(r"^[ \t]*(?i:Co-authored-by):", re.M)
+COAUTHOR = re.compile(r"^[ \t]*(?i:Co-authored-by):[ \t]*(?P<name>.+?)[ \t]*<(?P<email>[^<>\s]+@[^<>\s]+)>[ \t]*$", re.M)
+COAUTHOR_ESCAPED = re.compile(r"^[ \t]*(?i:Co-authored-by):[ \t]*(?P<name>.+?)[ \t]*&lt;(?P<email>[^<>&\s]+@[^<>&\s]+)&gt;[ \t]*$", re.M)
 MAX_PROJECTS = 12
 MAX_REPOSITORIES = 2000
 MAX_PAGES = 1000
@@ -241,10 +243,14 @@ def credited_commit(reader, org, project, repo_id, item, emails, first):
     if instant(detail["author"]["date"]) != authored:
         raise ValueError("ADO author date changed during scan")
     comment = detail.get("comment")
-    if (not isinstance(comment, str)
-            or len(COAUTHOR.findall(comment)) != len(re.findall(r"^[ \t]*Co-authored-by:", comment, re.I | re.M))):
+    if not isinstance(comment, str):
         raise ValueError("Invalid ADO commit comment")
-    coauthors = {mail.casefold() for mail in COAUTHOR.findall(comment)}
+    matches = [*COAUTHOR.finditer(comment), *COAUTHOR_ESCAPED.finditer(comment)]
+    if (sorted(match.start() for match in matches) != [match.start() for match in COAUTHOR_PREFIX.finditer(comment)]
+            or any(not match.group("name").strip() or re.search(r"[<>]|&(?:lt|gt|amp);", match.group("name"), re.I)
+                   for match in matches)):
+        raise ValueError("Invalid ADO commit comment")
+    coauthors = {match.group("email").casefold() for match in matches}
     author_email = detail["author"].get("email", "").casefold()
     if author_email not in emails and not coauthors.intersection(emails):
         return None
