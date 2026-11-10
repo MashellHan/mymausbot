@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { assertClosedSqliteCopy } from "./closed-sqlite-snapshot.mjs";
+import { inspectPrivateCredentialStorage } from "./private-credential-storage.mjs";
 
 const requireValue = (condition, message) => { if (!condition) throw new Error(message); };
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -118,7 +120,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (check === "request" && files.length === 1) checkRequestSource(read(files[0]));
     else if (check === "inventory" && files.length === 2) assertInventorySame(...files.map(read));
     else if (check === "routines" && files.length === 2) assertRoutinesSame(...files.map(read));
-    else throw new Error("Use check:delivery request <request.json> | inventory <before.json> <after.json> | routines <before.json> <after.json>");
+    else if (check === "closed-sqlite" && files.length === 2) assertClosedSqliteCopy(...files);
+    else if (check === "private-storage" && files.length >= 2 && files.length <= 3) {
+      inspectPrivateCredentialStorage(files[0], { phase: files[1], ...(files[2] ? { expected: read(files[2]) } : {}) });
+    } else throw new Error("Use check:delivery request <request.json> | inventory <before.json> <after.json> | routines <before.json> <after.json> | closed-sqlite <source-dir> <copy-dir> | private-storage <fixture-root> <prelaunch|postlaunch> [expected.json]");
     console.log(JSON.stringify({ passed: true, check, readOnly: true }));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
