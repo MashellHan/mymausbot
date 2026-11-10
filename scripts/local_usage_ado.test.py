@@ -112,6 +112,116 @@ def collect(api, *, previous=None, at=AT, config=CONFIG):
 
 
 class AdoTests(unittest.TestCase):
+    def saved_proof_fixture(self):
+        api = Api()
+        responses = {}
+
+        def record(args, timeout):
+            result = api(args, timeout)
+            responses[args[5]] = json.loads(result)
+            return result
+
+        envelope = ado.collect(CONFIG, record, lambda remote, config: "work", at=AT)
+        self.assertTrue(envelope["collection"]["complete"])
+        source = envelope["sources"][0]
+        work = envelope["state"]["projects"]["example/project"]["work"]
+        proof = work["repoDone"][REPO]
+        source["provenance"].update({"selectedRepositoryNames": ["repository"],
+            "historyCommits": len(api.histories[HEAD]), "detailsVerified": len(proof["checked"]),
+            "headUnchanged": True})
+        envelope.pop("state")
+        return api, envelope, [{"source": copy.deepcopy(source), "work": copy.deepcopy(work),
+                                "proof": copy.deepcopy(proof)}], responses
+
+    def test_saved_proof_adoption_preserves_warm_counts_and_changed_head_reachability(self):
+        api, envelope, documents, responses = self.saved_proof_fixture()
+        second = copy.deepcopy(CONFIG)
+        second["mergedAdoProjects"] = []
+        second["adoRemotes"] = ["https://dev.azure.com/other/project/_git/other"]
+        second["adoPrincipals"]["other"] = {"stableId": OWNER, "alias": EMAIL}
+        self.assertEqual(len(documents), 1)
+
+        other_api = Api()
+        other_api.repos[0]["name"] = "other"
+        other_api.prs = []
+        other_api.histories[HEAD] = [commit(HEAD, "2026-11-09T12:00:00Z")]
+        other_api.details = {HEAD: other_api.histories[HEAD][0]}
+        other_responses = {}
+
+        def other_run(args, timeout):
+            target = args[5].replace("/other/project/", "/example/project/").replace("/other/_apis/", "/example/_apis/")
+            mapped = list(args)
+            mapped[5] = target
+            result = other_api(mapped, timeout)
+            other_responses[args[5]] = json.loads(result)
+            return result
+
+        second_envelope = ado.collect(second, other_run, lambda remote, config: "work", at=AT)
+        second_source = second_envelope["sources"][0]
+        second_work = second_envelope["state"]["projects"]["other/project"]["work"]
+        second_proof = second_work["repoDone"][REPO]
+        second_source["provenance"].update({"selectedRepositoryNames": ["other"],
+            "historyCommits": 1, "detailsVerified": len(second_proof["checked"]), "headUnchanged": True})
+        documents.append({"source": copy.deepcopy(second_source), "work": copy.deepcopy(second_work),
+                          "proof": copy.deepcopy(second_proof)})
+        responses.update(other_responses)
+        combined = copy.deepcopy(envelope)
+        combined["sources"].append(second_source)
+        combined["activeSourceIds"].append(second_source["id"])
+        combined["capturedAt"] = max(envelope["capturedAt"], second_envelope["capturedAt"])
+        config = copy.deepcopy(CONFIG)
+        config["adoRemotes"].append(second["adoRemotes"][0])
+        config["adoPrincipals"].update(second["adoPrincipals"])
+        adopted = ado.adopt_saved_proofs(config, combined, documents, responses,
+                                         lambda remote, cfg: "work")
+        self.assertEqual(adopted["state"]["schema"], 3)
+        self.assertEqual(len(adopted["state"]["projects"]), 2)
+
+        def resumed_run(args, timeout):
+            return json.dumps(responses[args[5]])
+
+        warm = ado.collect(config, resumed_run, lambda remote, cfg: "work",
+                           at=AT + dt.timedelta(minutes=5), previous=adopted)
+        self.assertTrue(warm["collection"]["complete"])
+        self.assertEqual([(sum(day["prs"] for day in source["days"]),
+                           sum(day["commits"] for day in source["days"]))
+                          for source in warm["sources"]], [(3, 2), (0, 1)])
+        new_head, older_side = "d" * 40, "e" * 40
+        api.heads[REPO] = new_head
+        api.histories[new_head] = [commit(new_head, "2026-11-09T12:00:00Z", parents=2),
+                                   *api.histories[HEAD], commit(older_side, "2026-10-10T12:00:00Z")]
+        api.details.update({row["commitId"]: row for row in api.histories[new_head]})
+
+        def changed_run(args, timeout):
+            return other_run(args, timeout) if "/other/" in args[5] else api(args, timeout)
+
+        changed = ado.collect(config, changed_run, lambda remote, cfg: "work",
+                              at=AT + dt.timedelta(minutes=5), previous=adopted)
+        self.assertTrue(changed["collection"]["complete"])
+        self.assertEqual(sum(day["commits"] for day in changed["sources"][0]["days"]), 4)
+        self.assertEqual(changed["state"]["projects"]["example/project"]["cache"][REPO]["relation"], "descendant")
+
+        for mutate in (
+            lambda value: value["sources"][0]["days"][-2].__setitem__("commits", 99),
+            lambda value: value["sources"][0]["provenance"].__setitem__("selectedRepositoryIds", []),
+            lambda value: value["collection"].__setitem__("complete", False),
+        ):
+            invalid = copy.deepcopy(combined)
+            mutate(invalid)
+            with self.assertRaises(ValueError):
+                ado.adopt_saved_proofs(config, invalid, documents, responses, lambda remote, cfg: "work")
+        bad_proofs = copy.deepcopy(documents)
+        bad_proofs[0]["proof"]["head"] = OTHER
+        with self.assertRaises(ValueError):
+            ado.adopt_saved_proofs(config, combined, bad_proofs, responses, lambda remote, cfg: "work")
+        with self.assertRaises(ValueError):
+            ado.adopt_saved_proofs(config, combined, documents, {}, lambda remote, cfg: "work")
+        bad_config = copy.deepcopy(config)
+        bad_config["adoAuthorEmails"] = ["personal@example.test"]
+        with self.assertRaises(ValueError):
+            ado.adopt_saved_proofs(bad_config, combined, documents, responses,
+                                   lambda remote, cfg: "work")
+
     def test_full_commit_detail_may_omit_optional_truncation_flag(self):
         api = Api()
         api.details[HEAD].pop("commentTruncated")
@@ -567,7 +677,6 @@ class AdoTests(unittest.TestCase):
         self.assertFalse(any("/commits?" in args[5] or "/refs?" in args[5] for args in api.calls))
         self.assertIsNone(source["days"][-1]["commits"])
         self.assertEqual(source["days"][-1]["knownCommits"], 0)
-        self.assertIn("configured-repository-scope", source["coverage"]["reasons"])
         self.assertIn("repository-visibility-gap", source["coverage"]["reasons"])
 
     def test_explicit_remote_scope_keeps_sixty_day_rows_without_scanning_other_repos(self):
@@ -595,16 +704,17 @@ class AdoTests(unittest.TestCase):
         first = collect(api, config=config)
         self.assertIs(contributions.envelope(first, "ado"), first)
         source = first["sources"][0]
-        self.assertEqual(source["status"], "partial")
+        self.assertEqual(source["status"], "ready")
+        self.assertTrue(source["coverage"]["visibilityComplete"])
+        self.assertEqual(source["provenance"]["scopeDefinition"], "explicit-configured-repositories")
         self.assertEqual(source["provenance"]["selectedRepositoryCount"], 2)
         self.assertEqual(source["provenance"]["configuredRepositoryCount"], 2)
-        self.assertIn("configured-repository-scope", source["coverage"]["reasons"])
         self.assertEqual(source["days"][-2]["knownPrs"], 3)
-        self.assertIsNone(source["days"][-2]["prs"])
-        self.assertIsNone(next(day for day in source["days"] if day["day"] == "2026-09-15")["prs"])
+        self.assertEqual(source["days"][-2]["prs"], 3)
+        self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["prs"], 1)
         self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownPrs"], 1)
         older_day = next(day for day in source["days"] if day["day"] == "2026-09-20")
-        self.assertIsNone(older_day["commits"])
+        self.assertEqual(older_day["commits"], 1)
         self.assertEqual(older_day["knownCommits"], 1)
         self.assertEqual(older_day["repositories"][0]["commits"], 1)
         self.assertFalse(any(unknown_id in args[5] for args in api.calls))
@@ -615,6 +725,66 @@ class AdoTests(unittest.TestCase):
         self.assertIn(observed_id, second["state"]["projects"]["example/project"]["work"]["selectedRepoIds"])
         self.assertNotIn(unknown_id, second["state"]["projects"]["example/project"]["work"]["selectedRepoIds"])
         self.assertEqual(second["sources"][0]["provenance"]["selectedRepositoryCount"], 2)
+
+    def test_legacy_inventory_expected_ids_migrate_only_verified_selected_ids(self):
+        api = Api()
+        unselected = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        replacement = "cccccccc-dddd-eeee-ffff-000000000000"
+        other = {"id": unselected, "name": "unselected", "defaultBranch": "refs/heads/main",
+                 "isDisabled": False}
+        api.repos.append(other)
+        previous = collect(api)
+        self.assertEqual(previous["sources"][0]["status"], "ready")
+        state = previous["state"]["projects"]["example/project"]
+        self.assertEqual(state["work"]["selectedRepoIds"], [REPO])
+        state["expectedRepositoryIds"] = sorted([REPO, unselected])
+        state.pop("expectedRepositoryScope")
+
+        api.calls.clear()
+        warm = collect(api, previous=previous, at=AT + dt.timedelta(minutes=5))
+        self.assertEqual(warm["sources"][0]["status"], "ready")
+        self.assertEqual(warm["state"]["projects"]["example/project"]["expectedRepositoryIds"], [REPO])
+        self.assertEqual(warm["state"]["projects"]["example/project"]["expectedRepositoryScope"], "selected")
+        self.assertFalse(any(unselected in args[5] for args in api.calls))
+
+        api.repos = [other]
+        api.prs = []
+        missing = collect(api, previous=previous, at=AT + dt.timedelta(minutes=10))
+        self.assertFalse(missing["sources"][0]["coverage"]["visibilityComplete"])
+        self.assertIn("repository-visibility-gap", missing["sources"][0]["coverage"]["reasons"])
+        failed_state = missing["state"]["projects"]["example/project"]
+        self.assertEqual(failed_state["expectedRepositoryIds"], [REPO])
+        self.assertEqual(failed_state["expectedRepositoryScope"], "selected")
+        self.assertEqual(failed_state["work"]["selectedRepoIds"], [])
+        self.assertEqual(failed_state["cache"], {})
+
+        api.repos.append({"id": replacement, "name": "repository", "defaultBranch": "refs/heads/main",
+                          "isDisabled": False})
+        api.calls.clear()
+        replaced = collect(api, previous=missing, at=AT + dt.timedelta(minutes=15))
+        self.assertFalse(replaced["sources"][0]["coverage"]["visibilityComplete"])
+        self.assertIn("configured-repository-identity-changed", replaced["sources"][0]["coverage"]["reasons"])
+        self.assertEqual(replaced["state"]["projects"]["example/project"]["expectedRepositoryIds"], [REPO])
+        self.assertEqual(replaced["state"]["projects"]["example/project"]["expectedRepositoryScope"], "selected")
+        self.assertFalse(any(replacement in args[5] for args in api.calls))
+
+        legacy_failed = copy.deepcopy(missing)
+        legacy_state = legacy_failed["state"]["projects"]["example/project"]
+        legacy_state.pop("expectedRepositoryScope")
+        legacy_state["expectedRepositoryIds"] = sorted([REPO, unselected])
+        self.assertEqual(legacy_state["work"]["selectedRepoIds"], [])
+        self.assertEqual(legacy_state["cache"], {})
+        api.calls.clear()
+        unresolved = collect(api, previous=legacy_failed, at=AT + dt.timedelta(minutes=20))
+        unresolved_state = unresolved["state"]["projects"]["example/project"]
+        self.assertNotEqual(unresolved["sources"][0]["status"], "ready")
+        self.assertIn("legacy-repository-scope-unresolved", unresolved["sources"][0]["coverage"]["reasons"])
+        self.assertEqual(unresolved_state["expectedRepositoryScope"], "legacy-unresolved")
+        self.assertEqual(unresolved_state["expectedRepositoryIds"], sorted([REPO, unselected]))
+        self.assertFalse(any(replacement in args[5] for args in api.calls))
+        after = collect(api, previous=unresolved, at=AT + dt.timedelta(minutes=25))
+        self.assertNotEqual(after["sources"][0]["status"], "ready")
+        self.assertEqual(after["state"]["projects"]["example/project"]["expectedRepositoryScope"], "legacy-unresolved")
 
     def test_missing_or_ambiguous_remote_allowlist_never_starts_history(self):
         api = Api()
@@ -658,7 +828,7 @@ class AdoTests(unittest.TestCase):
             api.repos.append({"id": repo_id, "name": name, "defaultBranch": "refs/heads/main", "isDisabled": False})
             api.heads[repo_id] = head
             api.histories[head] = [commit(head, "2026-11-09T12:00:00Z")] + [
-                commit(f"{index * 1000 + item:040x}", "2026-11-09T12:00:00Z") for item in range(1, 25)]
+                commit(f"{(index + 1) * 1000 + item:040x}", "2026-11-09T12:00:00Z") for item in range(1, 25)]
         api.details = {row["commitId"]: row for rows in api.histories.values() for row in rows}
         broad = copy.deepcopy(CONFIG)
         broad["adoRemotes"] = [f"https://dev.azure.com/example/project/_git/repository-{index}" for index in range(3)]
@@ -674,7 +844,7 @@ class AdoTests(unittest.TestCase):
         self.assertTrue(set(work["progress"]).issubset({REPO}))
         self.assertTrue(set(work["repoDone"]).issubset({REPO}))
         self.assertTrue(all(not any(repo_id in args[5] for repo_id in ids[1:]) for args in api.calls))
-        self.assertIn("configured-repository-scope", current["sources"][0]["coverage"]["reasons"])
+        self.assertNotIn(ids[1], current["state"]["projects"]["example/project"]["cache"])
 
     def test_narrowed_allowlist_cannot_retain_old_broad_ready_days_as_stale(self):
         api = Api()
@@ -692,9 +862,9 @@ class AdoTests(unittest.TestCase):
         api.calls.clear()
         current = collect(api, previous=previous, at=AT + dt.timedelta(minutes=5), config=narrow)
         day = current["sources"][0]["days"][-2]
-        self.assertEqual(current["sources"][0]["status"], "partial")
-        self.assertEqual(day["status"], "partial")
-        self.assertIsNone(day["commits"])
+        self.assertEqual(current["sources"][0]["status"], "ready")
+        self.assertEqual(day["status"], "ready")
+        self.assertEqual(day["commits"], 2)
         self.assertEqual(day["knownCommits"], 2)
         state = current["state"]["projects"]["example/project"]
         self.assertEqual(set(state["cache"]), {REPO})

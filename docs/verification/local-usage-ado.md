@@ -65,15 +65,15 @@ aliases. The PR key is organization/project scope plus repository GUID plus PR
 ID. The repository category callback determines work/personal/unclassified
 independently of the authenticated account.
 
-Disabled repositories remain explicit visibility gaps; they are not assigned
-zero commits. A verified repository with no default branch has no reachable
-default-head commits. Previously observed repository IDs and explicitly
+Selected disabled repositories remain explicit visibility gaps; they are not assigned
+zero commits. A verified selected repository with no default branch has no reachable
+default-head commits. Previously selected repository IDs and explicitly
 configured remotes remain expected scope: disappearance from a later inventory
 or an unexplained empty first inventory stays partial or stale, not zero.
 Unselected repositories may contain commit-only activity that the allowlist did
-not observe. Provider-wide totals remain partial with known selected subtotals;
-selected repository rows may become exact only after their own pinned history
-is complete. A missing or ambiguous configured name never selects a substitute.
+not observe. `ready` and exact day totals certify only the explicit configured
+repository scope, identified in source provenance; they do not certify
+provider-wide activity. A missing or ambiguous configured name never selects a substitute.
 Missing refs, incomplete pages, expired authentication,
 budget exhaustion and malformed coauthor evidence keep exact totals null.
 Exact PR totals also require verified repository visibility; a complete PR
@@ -113,8 +113,24 @@ repository scans whose ID and default branch still match that inventory.
 The private continuation binds the configured remote-name set; changing that
 set rechecks inventory and PR pages, keeps only compatible selected pinned
 progress, and cannot carry old broader day rows as stale scoped data.
+Older schema-3 inventory expectations migrate once from the verified selected
+repository IDs; the selected GUID expectations then survive failed refreshes.
+If an older failed checkpoint has lost both its selected IDs and pinned cache,
+its remaining inventory expectations stay bound and coverage remains incomplete
+instead of accepting a replacement name.
 Completed pinned proofs remain cached. Neither a request budget nor a force
 push can turn an unscanned portion into a certified zero.
+
+`adopt_saved_proofs` can attach schema-3 continuation to an isolated, complete
+two-source ADO envelope from the same configured remotes. It requires the
+original per-repository pinned proof and work plus saved authenticated response
+bodies. A network-free collector replay must reproduce both selected heads,
+checked commit IDs, credited item fields, PR rows and all 60 UTC day totals.
+Identity, author aliases, repository GUIDs, cutoff and selected-scope provenance
+must also match. Missing or divergent evidence rejects adoption; a state-less
+envelope cannot be passed directly as `previous` or replaced with `None` for a
+warm refresh. The operator validates the full isolated snapshot before any
+separate production adoption.
 
 The private state, account identities and repository names stay in the local
 usage snapshot. Public PR text and logs must not include the user's private
