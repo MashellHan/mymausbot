@@ -157,9 +157,11 @@ describe("bot setup and tools in the real renderer", () => {
     // Add the server where every app is added, from the panel's Connect another app.
     await openApps();
     await evaluate("document.querySelector('[data-panel-link=\"add-app\"]').click(); true");
-    await click("MCP servers");
-    // The registry loads on mount; Add MCP server is disabled until it finishes.
-    await expect.poll(() => evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Add MCP server')?.disabled"), { timeout: 10_000 }).toBe(false);
+    const mcpFilter = () => evaluate("document.querySelector('[data-apps-filter=mcp]')?.getAttribute('aria-pressed')");
+    await expect.poll(mcpFilter, { timeout: 10_000 }).toMatch(/^(?:true|false)$/);
+    if ((await mcpFilter()) !== "true") await click("MCP servers");
+    await expect.poll(mcpFilter, { timeout: 10_000 }).toBe("true");
+    await expect.poll(() => evaluate("[...document.querySelectorAll('[data-mcp-servers] button')].some(b => b.textContent.trim() === 'Add MCP server' && !b.disabled)"), { timeout: 10_000 }).toBe(true);
     await click("Add MCP server");
     await expect.poll(() => evaluate("Boolean(document.querySelector('textarea[aria-label=\"Server link or setup command\"]'))"), { timeout: 10_000 }).toBe(true);
     const pasted = await ui("snapshot", "--interactive");

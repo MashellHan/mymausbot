@@ -111,11 +111,22 @@ async function leftBehind(of: { threadIds?: string[]; routineIds?: string[] }, s
   macAway = true;
 }
 /** A turn a restart cuts reruns at the next start, beside this test's next turn, and could be the one toolsFor connects to. */
-async function stopRunningTurns() {
-  const running = async () => ((await api("GET", "/api/bots?messages=0", { token: owner })).body.bots as Array<{ id: string; tasks?: Array<{ threadId: string; busy?: boolean }> }>)
-    .flatMap((bot) => (bot.tasks ?? []).filter((task) => task.busy).map((task) => ({ bot, threadId: task.threadId })));
-  for (const { bot, threadId } of await running()) await stop(bot, threadId);
-  await expect.poll(async () => (await running()).length, { timeout: 10_000 }).toBe(0);
+async function stopRunningTurns(
+  running: () => Promise<Array<{ bot: { id: string }; threadId: string; turnStartedAt?: number }>> = async () =>
+    ((await api("GET", "/api/bots?messages=0", { token: owner })).body.bots as Array<{ id: string; tasks?: Array<{ threadId: string; busy?: boolean; turnStartedAt?: number }> }>)
+      .flatMap((bot) => (bot.tasks ?? []).filter((task) => task.busy).map((task) => ({ bot, threadId: task.threadId, turnStartedAt: task.turnStartedAt }))),
+  stopTurn: (bot: { id: string }, threadId: string) => Promise<void> = stop,
+) {
+  const stopped = new Set<string>();
+  await expect.poll(async () => {
+    for (const { bot, threadId, turnStartedAt } of await running()) {
+      const generation = `${bot.id}:${threadId}:${turnStartedAt ?? "unknown"}`;
+      if (stopped.has(generation)) continue;
+      stopped.add(generation);
+      await stopTurn(bot, threadId);
+    }
+    return (await running()).length;
+  }, { timeout: 10_000 }).toBe(0);
 }
 /** After a restart, wait for the lent Mac's connector, so what a turn is offered is never just the Mac being offline. */
 async function macOnline() {
@@ -262,6 +273,18 @@ afterAll(async () => {
   for (const proxy of proxies) proxy.kill();
   if (child) await waitForExit(child, { signal: "SIGTERM" });
   if (home) await removeTempDir(home);
+});
+
+it("cleanup stops a later turn generation without repeating Stop on the first", async () => {
+  const first = { bot: { id: "first" }, threadId: "thread-a", turnStartedAt: 1 };
+  const later = { bot: { id: "second" }, threadId: "thread-b", turnStartedAt: 2 };
+  let reads = 0;
+  const stopped: string[] = [];
+  await stopRunningTurns(async () => {
+    reads++;
+    return reads === 1 ? [first] : reads <= 3 ? [first, later] : [];
+  }, async (_bot, threadId) => { stopped.push(threadId); });
+  expect(stopped).toEqual(["thread-a", "thread-b"]);
 });
 
 it("a conversation a guest left behind is never captured into the bot's memory; the owner's own chat is", async () => {
