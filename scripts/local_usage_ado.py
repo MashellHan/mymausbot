@@ -515,19 +515,28 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             raise ValueError("Invalid ADO continuation cache")
         if prior.get("emailHash") != email_hash:
             prior = {}
-        if prior.get("expectedRepositoryScope") not in (None, "selected"):
+        prior_scope = prior.get("expectedRepositoryScope")
+        if prior_scope not in (None, "selected", "legacy-unresolved"):
             raise ValueError("Invalid ADO expected repository scope")
         same_scope = prior.get("remoteScopeHash") == scope_hash
         old_cache = prior.get("cache", {})
         cache = old_cache if same_scope else {}
         prior_work = prior.get("work")
         expected_ids = set()
+        unresolved_scope = same_scope and prior_scope == "legacy-unresolved"
         if same_scope:
-            if prior.get("expectedRepositoryScope") == "selected":
+            if prior_scope is not None:
                 expected_ids = set(prior.get("expectedRepositoryIds", []))
-            elif isinstance(prior_work, dict):
-                expected_ids = set(prior_work.get("selectedRepoIds", []))
-        expected_ids.update(cache)
+                expected_ids.update(cache)
+            else:
+                selected_before = set(prior_work.get("selectedRepoIds", [])) if isinstance(prior_work, dict) else set()
+                if selected_before:
+                    expected_ids = selected_before
+                elif cache:
+                    expected_ids = set(cache)
+                else:
+                    expected_ids = set(prior.get("expectedRepositoryIds", []))
+                    unresolved_scope = bool(expected_ids)
         work = prior_work
         rollover_progress = {}
         new_first = (at.date() - dt.timedelta(days=59)).isoformat()
@@ -542,7 +551,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             work = new_work(at)
         reader.source_calls = 0
         reader.source_end = min(reader.end, time.monotonic() + SECONDS_PER_PROJECT)
-        reasons = []
+        reasons = ["legacy-repository-scope-unresolved"] if unresolved_scope else []
         verified = False
         try:
             if emails is None:
@@ -655,7 +664,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         sources.append(source)
         states[scope] = {"account": account, "emailHash": email_hash,
                          "remoteScopeHash": scope_hash,
-                         "expectedRepositoryScope": "selected",
+                         "expectedRepositoryScope": "legacy-unresolved" if unresolved_scope else "selected",
                          "expectedRepositoryIds": sorted(expected_ids), "cache": cache, "work": work}
     captured = stamp(dt.datetime.now(dt.timezone.utc))
     return {"version": 2, "metricDefinition": DEFINITION, "provider": "ado",

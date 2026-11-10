@@ -115,6 +115,9 @@ set rechecks inventory and PR pages, keeps only compatible selected pinned
 progress, and cannot carry old broader day rows as stale scoped data.
 Older schema-3 inventory expectations migrate once from the verified selected
 repository IDs; the selected GUID expectations then survive failed refreshes.
+If an older failed checkpoint has lost both its selected IDs and pinned cache,
+its remaining inventory expectations stay bound and coverage remains incomplete
+instead of accepting a replacement name.
 Completed pinned proofs remain cached. Neither a request budget nor a force
 push can turn an unscanned portion into a certified zero.
 

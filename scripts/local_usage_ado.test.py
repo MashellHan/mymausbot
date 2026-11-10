@@ -768,6 +768,24 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(replaced["state"]["projects"]["example/project"]["expectedRepositoryScope"], "selected")
         self.assertFalse(any(replacement in args[5] for args in api.calls))
 
+        legacy_failed = copy.deepcopy(missing)
+        legacy_state = legacy_failed["state"]["projects"]["example/project"]
+        legacy_state.pop("expectedRepositoryScope")
+        legacy_state["expectedRepositoryIds"] = sorted([REPO, unselected])
+        self.assertEqual(legacy_state["work"]["selectedRepoIds"], [])
+        self.assertEqual(legacy_state["cache"], {})
+        api.calls.clear()
+        unresolved = collect(api, previous=legacy_failed, at=AT + dt.timedelta(minutes=20))
+        unresolved_state = unresolved["state"]["projects"]["example/project"]
+        self.assertNotEqual(unresolved["sources"][0]["status"], "ready")
+        self.assertIn("legacy-repository-scope-unresolved", unresolved["sources"][0]["coverage"]["reasons"])
+        self.assertEqual(unresolved_state["expectedRepositoryScope"], "legacy-unresolved")
+        self.assertEqual(unresolved_state["expectedRepositoryIds"], sorted([REPO, unselected]))
+        self.assertFalse(any(replacement in args[5] for args in api.calls))
+        after = collect(api, previous=unresolved, at=AT + dt.timedelta(minutes=25))
+        self.assertNotEqual(after["sources"][0]["status"], "ready")
+        self.assertEqual(after["state"]["projects"]["example/project"]["expectedRepositoryScope"], "legacy-unresolved")
+
     def test_missing_or_ambiguous_remote_allowlist_never_starts_history(self):
         api = Api()
         no_remotes = copy.deepcopy(CONFIG)
