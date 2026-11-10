@@ -109,6 +109,9 @@ after the old head is counted. An absent old head classifies the new graph as
 rewritten and old counts cannot enter it. UTC window rollover refreshes identity,
 inventory and PR pages for the new cutoff while retaining only incomplete
 repository scans whose ID and default branch still match that inventory.
+The private continuation binds the configured remote-name set; changing that
+set rechecks inventory and PR pages, keeps only compatible selected pinned
+progress, and cannot carry old broader day rows as stale scoped data.
 Completed pinned proofs remain cached. Neither a request budget nor a force
 push can turn an unscanned portion into a certified zero.
 

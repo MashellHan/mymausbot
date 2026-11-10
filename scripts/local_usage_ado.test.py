@@ -6,6 +6,7 @@ import urllib.parse
 from unittest.mock import patch
 
 import local_usage_ado as ado
+import local_usage_contributions as contributions
 
 
 AT = dt.datetime.fromisoformat("2026-11-10T00:30:00+00:00")
@@ -585,6 +586,7 @@ class AdoTests(unittest.TestCase):
         config = copy.deepcopy(CONFIG)
         config["adoRemotes"].append("https://dev.azure.com/example/project/_git/observed-commit")
         first = collect(api, config=config)
+        self.assertIs(contributions.envelope(first, "ado"), first)
         source = first["sources"][0]
         self.assertEqual(source["status"], "partial")
         self.assertEqual(source["provenance"]["selectedRepositoryCount"], 2)
@@ -612,6 +614,7 @@ class AdoTests(unittest.TestCase):
         no_remotes = copy.deepcopy(CONFIG)
         no_remotes["adoRemotes"] = []
         missing = collect(api, config=no_remotes)
+        self.assertIs(contributions.envelope(missing, "ado"), missing)
         self.assertEqual(missing["sources"][0]["status"], "partial")
         self.assertIn("ado-remotes-required", missing["sources"][0]["coverage"]["reasons"])
         self.assertIsNone(missing["sources"][0]["days"][-2]["prs"])
@@ -656,6 +659,31 @@ class AdoTests(unittest.TestCase):
         self.assertTrue(set(work["repoDone"]).issubset({REPO}))
         self.assertTrue(all(not any(repo_id in args[5] for repo_id in ids[1:]) for args in api.calls))
         self.assertIn("configured-repository-scope", current["sources"][0]["coverage"]["reasons"])
+
+    def test_narrowed_allowlist_cannot_retain_old_broad_ready_days_as_stale(self):
+        api = Api()
+        other_id, other_head = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff", "4" * 40
+        api.repos.append({"id": other_id, "name": "other", "defaultBranch": "refs/heads/main", "isDisabled": False})
+        api.heads[other_id] = other_head
+        api.histories[other_head] = [commit(other_head, "2026-11-09T12:00:00Z")]
+        api.details[other_head] = api.histories[other_head][0]
+        broad = copy.deepcopy(CONFIG)
+        broad["adoRemotes"].append("https://dev.azure.com/example/project/_git/other")
+        previous = collect(api, config=broad)
+        self.assertEqual(previous["sources"][0]["status"], "ready")
+        self.assertEqual(previous["sources"][0]["days"][-2]["commits"], 3)
+        narrow = copy.deepcopy(CONFIG)
+        api.calls.clear()
+        current = collect(api, previous=previous, at=AT + dt.timedelta(minutes=5), config=narrow)
+        day = current["sources"][0]["days"][-2]
+        self.assertEqual(current["sources"][0]["status"], "partial")
+        self.assertEqual(day["status"], "partial")
+        self.assertIsNone(day["commits"])
+        self.assertEqual(day["knownCommits"], 2)
+        state = current["state"]["projects"]["example/project"]
+        self.assertEqual(set(state["cache"]), {REPO})
+        self.assertNotEqual(state["remoteScopeHash"], previous["state"]["projects"]["example/project"]["remoteScopeHash"])
+        self.assertTrue(any("/_apis/git/repositories?" in args[5] for args in api.calls))
 
     def test_utc_rollover_keeps_compatible_pinned_progress_after_fresh_inventory_and_prs(self):
         api = Api()

@@ -501,6 +501,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
     for org, project, configured_names in configured:
         account = principal(config, org)
         scope = org.casefold() + "/" + project.casefold()
+        scope_hash = digest("ado-remotes", scope, configured_names)
         source_id = digest("ado", "dev.azure.com", scope, account["stableId"])
         source_ids.append(source_id)
         prior = copy.deepcopy(old_state.get(scope, {}))
@@ -511,19 +512,22 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             raise ValueError("Invalid ADO continuation cache")
         if prior.get("emailHash") != email_hash:
             prior = {}
+        same_scope = prior.get("remoteScopeHash") == scope_hash
         cache = prior.get("cache", {})
         expected_ids.update(cache)
         if isinstance(prior.get("work"), dict):
             expected_ids.update(repo["id"] for repo in prior["work"].get("inventory") or [])
         work = prior.get("work")
         rollover_progress = {}
+        new_first = (at.date() - dt.timedelta(days=59)).isoformat()
         if (isinstance(work, dict) and not work.get("scanComplete")
                 and isinstance(work.get("firstDay"), str)
-                and work["firstDay"] < (at.date() - dt.timedelta(days=59)).isoformat()):
+                and work["firstDay"] <= new_first
+                and (work["firstDay"] < new_first or not same_scope)):
             rollover_progress = work["progress"]
             active_cursor = work["activeCursor"]
-        if (not isinstance(work, dict) or work.get("firstDay") != (at.date() - dt.timedelta(days=59)).isoformat()
-                or work.get("scanComplete")):
+        if (not isinstance(work, dict) or work.get("firstDay") != new_first
+                or work.get("scanComplete") or not same_scope):
             work = new_work(at)
         reader.source_calls = 0
         reader.source_end = min(reader.end, time.monotonic() + SECONDS_PER_PROJECT)
@@ -566,10 +570,10 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 work["scanComplete"] = False
             work["selectedRepoIds"] = selected
             selected_ids = set(selected)
-            if work["prComplete"]:
-                work["progress"] = {key: value for key, value in work["progress"].items() if key in selected_ids}
-                work["repoDone"] = {key: value for key, value in work["repoDone"].items() if key in selected_ids}
-                work["repoErrors"] = {key: value for key, value in work["repoErrors"].items() if key in selected_ids}
+            cache = {key: value for key, value in cache.items() if key in selected_ids}
+            work["progress"] = {key: value for key, value in work["progress"].items() if key in selected_ids}
+            work["repoDone"] = {key: value for key, value in work["repoDone"].items() if key in selected_ids}
+            work["repoErrors"] = {key: value for key, value in work["repoErrors"].items() if key in selected_ids}
             work["reasons"] = [reason for reason in work["reasons"] if reason != "configured-repository-scope"]
             if any(repo["id"] not in selected_ids for repo in work["inventory"]):
                 work["reasons"].append("configured-repository-scope")
@@ -625,7 +629,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                       "completedRepositories": len(work["repoDone"]), "prPages": (work["prOffset"] + PAGE - 1) // PAGE,
                       "pinnedHeads": {key: value["head"] for key, value in work["repoDone"].items()},
                       "sourceCutoffAt": work["cutoff"]}}
-        if not complete and emails is not None and prior:
+        if not complete and emails is not None and prior and same_scope:
             old_days = {day["day"]: day for day in old_sources.get(source_id, {}).get("days", [])
                         if day.get("status") in ("ready", "stale")}
             source["days"] = [{**old_days[day["day"]], "status": "stale"} if day["day"] in old_days else day
@@ -634,6 +638,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 source["status"] = "stale"
         sources.append(source)
         states[scope] = {"account": account, "emailHash": email_hash,
+                         "remoteScopeHash": scope_hash,
                          "expectedRepositoryIds": sorted(expected_ids), "cache": cache, "work": work}
     captured = stamp(dt.datetime.now(dt.timezone.utc))
     return {"version": 2, "metricDefinition": DEFINITION, "provider": "ado",
