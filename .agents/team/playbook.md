@@ -146,6 +146,13 @@ source review and CI can start while those checks finish. Do not wait for all
 screenshots or a package to begin source review. Pending acceptance still blocks
 the corresponding delivery. Batch corrections and review only their delta.
 
+Freeze operational callers before their focused review as well. A caller or
+fixture correction does not reopen unchanged product source or require another
+App build. If the reviewer's filesystem is read-only, Lead saves its final reply
+as the canonical verdict immediately; do not wait for a duplicate receipt file.
+Resume only the failed stage under the local runbook's current-state rules,
+retaining the original failure and elapsed time in the existing handoff.
+
 ## Development and verification
 
 Local Accessibility, Screen Recording and CUA driver readiness are prerequisites
