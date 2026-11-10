@@ -64,10 +64,57 @@ describe("canonical source-qualified contributions", () => {
     const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
     expect(result.windows?.["1"]).toMatchObject({ prs: null, knownPrs: 5, commits: null, knownCommits: 9, coverage: "partial" });
     expect(result.windows?.["1"].comparison.prs).toBeNull();
+    expect(result.windows?.["1"].comparison.known).toEqual({ prs: "new", commits: "new" });
     expect(result.accounts[1]!.windows["1"]).toMatchObject({ prs: null, knownPrs: 2 });
     value.ado.sources[0]!.days.pop();
     expect(aggregateContributionSnapshot(parse(value), cutoff + 60_000).history?.at(-1)?.coverage).toBe("partial");
   });
+
+  it("compares known counts across complete source dates without promoting private coverage", () => {
+    const value = snapshot();
+    for (const source of [...value.github.sources, ...value.ado.sources]) {
+      source.coverage.visibilityComplete = false;
+      source.status = "partial";
+      for (const day of source.days) {
+        day.status = "partial";
+        day.prs = null as never;
+        day.commits = null as never;
+        day.knownPrs = 0;
+        day.knownCommits = day.day === date(59) ? 4 : 2;
+        day.repositories = [];
+      }
+    }
+    const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    for (const period of ["1", "7", "30"] as const) {
+      const current = result.windows![period];
+      expect(current.prs).toBeNull();
+      expect(current.comparison.prs).toBeNull();
+      expect(current.comparison.commits).toBeNull();
+      expect(current.comparison.known?.prs).toBe(0);
+      expect(current.comparison.known?.commits).toBeCloseTo(100 / Number(period));
+    }
+  });
+
+  it.each(["identity", "pagination", "missing-day", "unavailable", "missing-count"])(
+    "withholds known comparisons when one source has %s gaps", (gap) => {
+      const value = snapshot();
+      const source = value.ado.sources[0]!;
+      source.coverage.visibilityComplete = false;
+      source.status = "partial";
+      if (gap === "identity") source.coverage.identityVerified = false;
+      if (gap === "pagination") source.coverage.paginationComplete = false;
+      if (gap === "missing-day") source.days.splice(58, 1);
+      if (gap === "unavailable") source.days[58]!.status = "unavailable";
+      if (gap === "missing-count") {
+        source.days[58]!.status = "partial";
+        source.days[58]!.prs = null as never;
+        source.days[58]!.knownPrs = null as never;
+      }
+      const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+      expect(result.windows!["1"].comparison.known?.prs).toBeNull();
+      expect(result.windows!["7"].comparison.known?.prs).toBeNull();
+      expect(result.windows!["30"].comparison.known?.prs).toBeNull();
+    });
 
   it("preserves a verified account's exact subtotal when another account is partial", () => {
     const value = snapshot();

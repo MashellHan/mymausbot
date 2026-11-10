@@ -191,9 +191,9 @@ def profile_records(config, profile, budget, first, at, repository_category):
                     raise ValueError("incomplete_commit_buckets")
                 dates = set()
                 for node in nodes:
-                    occurred = instant(node["occurredAt"])
+                    instant(node["occurredAt"])
                     day = node["occurredAt"][:10]
-                    if day in dates or occurred < start or occurred > at:
+                    if day in dates or day < start.date().isoformat() or day > at.date().isoformat():
                         raise ValueError("invalid_commit_bucket")
                     dates.add(day)
                     commits.append({"day": day, "repository": repo, "count": count(node["commitCount"])})

@@ -134,7 +134,7 @@ describe("local Usage panel", () => {
       const partial = host.querySelector<HTMLButtonElement>('[data-usage-trend="totalTokens"] [data-usage-day="2026-09-20"]')!;
       expect(partial.getAttribute("aria-label")).toContain("Partial coverage");
       await act(async () => partial.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-      expect(host.querySelector('[data-usage-trend="totalTokens"] [role=tooltip]')?.textContent).toContain("Some sources or dates are incomplete");
+      expect(host.querySelector('[data-usage-trend="totalTokens"] [role=tooltip]')?.textContent).not.toContain("Some sources or dates are incomplete");
       expect(host.querySelector('[data-usage-trend="totalTokens"] [data-usage-day="2026-09-21"]')?.getAttribute("aria-label")).toContain("Unavailable");
       const zero = host.querySelector('[data-usage-trend="totalTokens"] [data-usage-day="2026-09-22"]')!;
       expect(zero.getAttribute("aria-label")).toContain("Tokens 0");
@@ -279,7 +279,10 @@ describe("local Usage panel", () => {
     expect(bars[2]!.getAttribute("aria-label")).toContain("PRs 0");
     expect(bars[2]!.getAttribute("aria-label")).not.toContain("Known subtotal");
     await act(async () => bars[1]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/2026-10-06.*PRs.*2.*Enterprise.*Verified subtotal/s);
+    const tooltip = host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')!;
+    expect(tooltip.textContent).toMatch(/2026-10-06.*PRs: 2.*Enterprise: 2.*Personal:/s);
+    expect(tooltip.textContent).not.toMatch(/Verified subtotal|incomplete/);
+    expect(tooltip.querySelector("p, [title], [aria-description]")).toBeNull();
     await act(async () => bars[2]!.focus());
     expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toContain("2026-10-07");
     await act(async () => bars[0]!.click());
@@ -289,6 +292,34 @@ describe("local Usage panel", () => {
     await act(async () => bars[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')).toBeNull();
     expect(text()).not.toContain("Shaded columns: unavailable. Pale PR segments");
+  });
+
+  it("restores known PR and commit period changes while keeping exact totals unknown", async () => {
+    const contributions = primaryUsageFixture("2026-11-03", true);
+    await renderRaw({ ...sample, contributions });
+    for (const [index, period] of ["DoD", "WoW", "30d"].entries()) {
+      const changes = [...host.querySelectorAll("section")][index]!.querySelectorAll("dl > div > dd > [data-usage-change]");
+      for (const change of [...changes].slice(0, 2)) {
+        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("New");
+        expect(change.getAttribute("title")).toContain(period);
+        expect(change.getAttribute("title")).toContain("Known subtotal");
+        expect(change.getAttribute("data-usage-provisional")).toBe("true");
+      }
+    }
+    expect(contributions.windows!["1"].prs).toBeNull();
+    expect(contributions.windows!["1"].comparison.prs).toBeNull();
+  });
+
+  it("shows a dash for missing hover values and numeric zero for observed zero", async () => {
+    const contributions = primaryUsageFixture();
+    const missing = contributions.trend[0]!;
+    missing.coverage = "unavailable";
+    await renderRaw({ ...sample, contributions });
+    const bars = [...host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="prs"] [data-usage-day]')];
+    await act(async () => bars[0]!.focus());
+    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/PRs: —.*Enterprise: —.*Personal: —/s);
+    await act(async () => bars[1]!.focus());
+    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/PRs: 0.*Enterprise: 0.*Personal: 0/s);
   });
 
   it("separates calendar weeks without weekend columns and preserves localized hover values", async () => {

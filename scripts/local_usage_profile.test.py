@@ -37,6 +37,7 @@ class Api:
         self.duplicate_private = False
         self.metadata_reads = 0
         self.commit_dates = ("2026-09-11T08:00:00Z", "2026-11-09T11:00:00Z")
+        self.profile_commit_at = "2026-11-09T08:00:00Z"
         self.private_pr_date = "2026-11-09T10:00:00Z"
         self.repo_name = PRIVATE["nameWithOwner"]
         self.owner_id = ACCOUNT["stableId"]
@@ -76,7 +77,7 @@ class Api:
                 "totalPullRequestContributions": 2,
                 "commitContributionsByRepository": [{"repository": PUBLIC, "contributions": {
                     "totalCount": 2, "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [{"occurredAt": "2026-11-09T08:00:00Z", "commitCount": 2}]}}],
+                    "nodes": [{"occurredAt": self.profile_commit_at, "commitCount": 2}]}}],
                 "pullRequestContributions": {"totalCount": 2, "nodes": page_nodes,
                     "pageInfo": {"hasNextPage": more, "endCursor": "profile-next" if more else None}}}
             data = {"viewer": viewer}
@@ -117,6 +118,26 @@ def collect(api=None, account=None, at=AT):
 
 
 class ProfileV2Tests(unittest.TestCase):
+    def test_profile_commit_bucket_uses_source_day_with_bounded_current_cutoff(self):
+        api = Api()
+        api.profile_commit_at = "2026-11-09T15:00:00Z"
+        source = collect(api)["sources"][0]
+        self.assertEqual(source["status"], "partial")
+        self.assertEqual(source["days"][-1]["knownCommits"], 3)
+
+        api = Api()
+        api.profile_commit_at = "2026-11-10T00:00:00Z"
+        source = collect(api)["sources"][0]
+        self.assertEqual(source["status"], "unavailable")
+        self.assertIsNone(source["days"][-1]["knownCommits"])
+
+        api = Api()
+        api.profile_commit_at = "2026-09-10T08:00:00Z"
+        source = collect(api, {**ACCOUNT, "privateRepositories": []})["sources"][0]
+        self.assertEqual(source["status"], "partial")
+        self.assertEqual(sum(day["knownCommits"] for day in source["days"]), 0)
+        self.assertEqual(source["provenance"]["typedProfileTotals"]["commits"], 2)
+
     def test_profile_pages_private_history_and_reconciliation(self):
         api = Api()
         result = collect(api, {**ACCOUNT, "visibilityProof": proof()})

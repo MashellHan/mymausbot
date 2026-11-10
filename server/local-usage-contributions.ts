@@ -333,6 +333,12 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
   const windows = Object.fromEntries(([1, 7, 30] as const).map((period) => {
     const current = aggregatePeriod(period, end), previous = aggregatePeriod(period, shift(current.startDay, -1));
     const previousStart = previous.startDay, previousEnd = previous.endDay;
+    const observations = Array.from({ length: period * 2 }, (_, index) => on(shift(previousStart, index))).flat();
+    const knownChange = (metric: "knownPrs" | "knownCommits") => observations.length > 0 && observations.every(({ source, day }) =>
+      source.coverage.identityVerified && source.coverage.paginationComplete &&
+      (source.status === "ready" || source.status === "partial") && day &&
+      (day.status === "ready" || day.status === "partial") && day[metric] !== null)
+      ? percentage(current[metric], previous[metric]) : null;
     const compare = (value: LocalContributionCounts, prior: LocalContributionCounts) => ({
       prs: percentage(value.prs, prior.prs), commits: percentage(value.commits, prior.commits),
     });
@@ -343,6 +349,7 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
           knownPrs: null, commits: previous.coverage === "ready" ? 0 : null, knownCommits: null }) })) },
       comparison: { startDay: previousStart, endDay: previousEnd, missingDays: previous.missingDays,
         ...compare(current, previous),
+        known: { prs: knownChange("knownPrs"), commits: knownChange("knownCommits") },
         categories: Object.fromEntries(CATEGORIES.map((category) => [category,
           compare(current.categories[category], previous.categories[category])])) as
           Record<LocalUsageCategory, { prs: LocalUsagePeriodChange; commits: LocalUsagePeriodChange }> },

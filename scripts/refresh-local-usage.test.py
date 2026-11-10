@@ -1,4 +1,5 @@
 import datetime as dt
+from contextlib import nullcontext
 import importlib.util
 import http.client
 import http.server
@@ -7,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import types
@@ -295,7 +297,7 @@ class MemoryAuthTests(unittest.TestCase):
                 self.session.run(command(), 7)
             self.assertEqual(str(error.exception), "The Azure DevOps response could not be read")
 
-    def test_refresh_reuses_collector_and_never_executes_its_azure_cli(self):
+    def test_refresh_reuses_collector_without_azure_cli_or_direct_gh(self):
         collector = self.root / "collector.py"
         output = self.root / "result.json"
         collector.write_text('''import json
@@ -315,11 +317,13 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
             calls.append((args, timeout))
             return "memory-auth-result"
         with patch.object(usage.AzureMemorySession, "run", get):
-            usage.refresh(collector, config, self.root, publish=True, skip_api=False, reuse_sources=True)
-        self.assertEqual(json.loads(output.read_text()), {"azure": "memory-auth-result",
-            "github": "existing-github-result", "publish": True, "skipApi": False, "reuseSources": True})
+            with self.assertRaisesRegex(ValueError, "Direct GitHub CLI"):
+                usage.refresh(collector, config, self.root, publish=False, skip_api=False, reuse_sources=True)
+        self.assertFalse(output.exists())
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1], 20)
+        with self.assertRaisesRegex(ValueError, "publication requires"):
+            usage.refresh(collector, config, self.root, publish=True)
 
     def test_refresh_requests_private_history_only_from_a_capable_collector(self):
         collector = self.root / "collector-history.py"
@@ -469,23 +473,24 @@ def repositories(config):
     return [{"path": config["repoRoots"][0], "cwd": os.getcwd(),
              "home": os.environ["HOME"], "pythonPath": os.environ.get("PYTHONPATH")}]
 ''')
-        environment = os.environ.copy()
-        environment.pop("PYTHONPATH", None)
-        environment["HOME"] = str(home)
         spawn = subprocess.Popen
 
         def isolated_spawn(command, **kwargs):
             self.assertTrue(kwargs["start_new_session"])
-            return spawn(command, cwd=unrelated, env=environment, **kwargs)
+            self.assertEqual(kwargs["env"]["HOME"], str(home))
+            self.assertEqual(kwargs["env"]["GIT_CONFIG_GLOBAL"], "/dev/null")
+            self.assertEqual(kwargs["env"]["GIT_ASKPASS"], "/usr/bin/false")
+            return spawn(command, cwd=unrelated, **kwargs)
 
         request = {"stage": "repositories", "collector": str(collector),
                    "config": {"repoRoots": [str(repository)]}}
-        with patch.object(usage.subprocess, "Popen", side_effect=isolated_spawn):
+        with patch.dict(os.environ, {"HOME": str(home), "PYTHONPATH": "/unsafe/python-path"}), \
+             patch.object(usage.subprocess, "Popen", side_effect=isolated_spawn):
             result = usage._run_worker(request, 5)
         self.assertEqual(result, [{"path": str(repository), "cwd": str(unrelated.resolve()),
                                    "home": str(home), "pythonPath": None}])
 
-    def test_detached_child_keeps_refresh_lock_after_collection_timeout(self):
+    def test_unknown_collector_child_is_refused_before_it_can_run(self):
         collector = self.root / "collector.py"
         collector.write_text('''import subprocess
 import sys
@@ -516,22 +521,218 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         config = {"azureCli": "/fixture/az", "authorEmails": [OWNER],
                   "storageDir": str(self.root), "home": str(self.root), "repoRoots": [],
                   "githubProfiles": [{"host": "github.com"}]}
-        try:
-            with patch.object(usage, "LOCAL_COLLECT_TIMEOUT", 6), patch.object(usage.local_usage_merged, "refresh") as remote:
-                with self.assertRaises(OSError):
-                    usage.refresh(collector, config, self.root, skip_api=True)
-                remote.assert_called_once()
-            self.assertTrue((lock / ".detached-child-unverified").is_dir())
-            pid = int(pid_file.read_text())
-            self.assertEqual(os.getpgid(pid), pid)
-        finally:
-            if pid_file.exists():
-                pid = int(pid_file.read_text())
-                try:
-                    if os.getpgid(pid) == pid:
-                        os.killpg(pid, usage.signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+        with patch.object(usage.local_usage_merged, "refresh") as remote:
+            with self.assertRaisesRegex(ValueError, "Local activity collection failed"):
+                usage.refresh(collector, config, self.root, skip_api=True)
+            remote.assert_called_once()
+        self.assertFalse(pid_file.exists())
+        self.assertFalse(lock.exists())
+
+
+class FileAuthAndChildBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.root.chmod(0o700)
+        self.profiles = [
+            {"profile": "personal", "host": "github.com", "login": "SamplePersonal", "stableId": "sample-personal-id"},
+            {"profile": "work", "host": "github.com", "login": "SampleWork", "stableId": "sample-work-id"},
+        ]
+        self.config = {"githubHelper": str(Path(usage.__file__).resolve()), "githubProfiles": self.profiles}
+        for directory, profile, token in zip(usage.GitHubFileSession.AUTH_DIRECTORIES, self.profiles,
+                                              ("synthetic-personal-token", "synthetic-work-token")):
+            folder = self.root / directory
+            folder.mkdir(mode=0o700)
+            path = folder / "credential.json"
+            path.write_text(json.dumps({"host": profile["host"], "login": profile["login"],
+                                        "stableId": profile["stableId"], "token": token}))
+            path.chmod(0o600)
+        self.session = usage.GitHubFileSession(self.config, self.root)
+        self.calls = []
+
+        def open_request(request, timeout):
+            self.calls.append((request, timeout))
+            profile = self.profiles[0] if "personal-token" in request.get_header("Authorization") else self.profiles[1]
+            if request.full_url == "https://api.github.com/user":
+                result = {"node_id": profile["stableId"], "login": profile["login"],
+                          "html_url": "https://github.com/" + profile["login"]}
+            elif request.full_url == "https://api.github.com/graphql":
+                result = {"data": {"viewer": {"id": profile["stableId"], "login": profile["login"],
+                                               "url": "https://github.com/" + profile["login"]}}}
+            elif "/search/issues?" in request.full_url:
+                result = {"items": [], "total_count": 0, "incomplete_results": False}
+            elif "/compare/" in request.full_url:
+                result = {"commits": [], "total_commits": 0}
+            else:
+                raise AssertionError("Unexpected provider path")
+            return io.BytesIO(json.dumps(result).encode())
+
+        self.session.http = types.SimpleNamespace(open=open_request)
+
+    def command(self, name, *operation):
+        return [sys.executable, self.config["githubHelper"], "gh", name, "api", *operation]
+
+    def test_explicit_files_reach_only_fixed_https_and_verify_identity(self):
+        opener = usage.GitHubFileSession(self.config, self.root).http
+        self.assertTrue(any(isinstance(handler, usage.NoRedirect) for handler in opener.handlers))
+        self.assertFalse(any(isinstance(handler, usage.urllib.request.ProxyHandler) and handler.proxies
+                             for handler in opener.handlers))
+        first = self.command("personal", "graphql", "-f", "query=query{viewer{id login url}}")
+        second = self.command("work", "graphql", "-f", "query=query{viewer{id login url}}")
+        for command in (first, second):
+            result = json.loads(self.session.run(command, 7))
+            self.assertEqual(result["data"]["viewer"]["url"].split("/")[2], "github.com")
+        self.assertEqual([call[0].full_url for call in self.calls],
+                         ["https://api.github.com/user", "https://api.github.com/graphql"] * 2)
+        self.assertEqual([call[1] for call in self.calls], [7] * 4)
+        self.assertFalse(any("github_account.py" in call[0].full_url for call in self.calls))
+
+    def test_token_identity_mismatch_stops_before_graphql(self):
+        def wrong_user(request, timeout):
+            self.calls.append((request, timeout))
+            self.assertEqual(request.full_url, "https://api.github.com/user")
+            return io.BytesIO(json.dumps({"node_id": "wrong-id", "login": "SamplePersonal",
+                                          "html_url": "https://github.com/SamplePersonal"}).encode())
+        self.session.http = types.SimpleNamespace(open=wrong_user)
+        with self.assertRaisesRegex(ValueError, "token identity"):
+            self.session.run(self.command("personal", "graphql", "-f", "query=query{viewer{id}}"), 7)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_legacy_user_search_compare_are_bounded_and_unknown_route_is_denied(self):
+        self.assertEqual(self.session.run(self.command("personal", "user", "--jq", ".login"), 7), "SamplePersonal")
+        query = "is:pr author:SamplePersonal created:>=2026-11-01T00:00:00Z"
+        self.session.run(self.command("personal", "--method", "GET", "search/issues", "-f", "q=" + query,
+                                      "-F", "per_page=100", "-F", "page=1"), 7)
+        endpoint = "repos/owner/repo/compare/" + "a" * 40 + "..." + "b" * 40 + "?per_page=100&page=1"
+        self.session.run(self.command("personal", endpoint), 7)
+        count = len(self.calls)
+        for operation in (("auth", "token"), ("graphql", "-f", "query=x", "-f", "query=y"),
+                          ("repos/owner/repo/hooks",), ("--method", "POST", "search/issues")):
+            with self.subTest(operation=operation), self.assertRaises(ValueError):
+                self.session.run(self.command("personal", *operation), 7)
+        self.assertEqual(len(self.calls), count)
+
+    def test_missing_unsafe_or_mismatched_file_has_no_auth_fallback(self):
+        path = self.root / "github-personal/credential.json"
+        path.chmod(0o644)
+        with self.assertRaises(ValueError):
+            self.session.run(self.command("personal", "user", "--jq", ".login"), 7)
+        path.chmod(0o600)
+        value = json.loads(path.read_text())
+        value["stableId"] = "wrong-id"
+        path.write_text(json.dumps(value))
+        with self.assertRaises(ValueError):
+            usage.GitHubFileSession(self.config, self.root).run(self.command("personal", "user", "--jq", ".login"), 7)
+        path.unlink()
+        with self.assertRaises(ValueError):
+            usage.GitHubFileSession(self.config, self.root).run(self.command("personal", "user", "--jq", ".login"), 7)
+        value["stableId"] = self.profiles[0]["stableId"]
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+        (self.root / "github-personal").chmod(0o755)
+        with self.assertRaises(ValueError):
+            usage.GitHubFileSession(self.config, self.root).run(self.command("personal", "user", "--jq", ".login"), 7)
+        self.config["githubHelper"] = "/unsafe/github_account.py"
+        with self.assertRaises(ValueError):
+            usage.GitHubFileSession(self.config, self.root).run(self.command("personal", "user", "--jq", ".login"), 7)
+        self.assertEqual(self.calls, [])
+
+    def test_all_collector_children_deny_network_and_inherited_helpers(self):
+        with patch.dict(os.environ, {"GH_TOKEN": "synthetic-inherited", "GIT_ASKPASS": "/unsafe/askpass"}):
+            environment = usage.child_environment()
+        self.assertNotIn("GH_TOKEN", environment)
+        self.assertEqual(environment["GIT_ASKPASS"], "/usr/bin/false")
+        self.assertEqual(environment["GIT_CONFIG_GLOBAL"], "/dev/null")
+        proxy = usage.LocalGitOnly()
+        with patch.object(usage.subprocess, "run", return_value=types.SimpleNamespace(stdout="local")) as run:
+            result = proxy.run(["git", "-C", "/fixture/repo", "log", "--all", "--no-merges",
+                                "--since=2026-11-01T00:00:00Z", "--format=%H%x1f%aE%x1f%aI"], timeout=5)
+            self.assertEqual(result.stdout, "local")
+            self.assertEqual(run.call_args.kwargs["env"]["GIT_ALLOW_PROTOCOL"], "file")
+            for command in (["git", "-C", "/fixture/repo", "fetch", "origin"],
+                            ["ssh", "example"], ["gh", "auth", "token"], ["node", "publisher"]):
+                with self.assertRaises(ValueError):
+                    proxy.run(command, timeout=5)
+            self.assertEqual(run.call_count, 1)
+        with self.assertRaises(ValueError):
+            proxy.Popen(["git", "fetch", "origin"])
+
+    def test_allowed_log_never_invokes_configured_signature_program(self):
+        repository = self.root / "signed-repository"
+        repository.mkdir()
+        environment = usage.child_environment()
+
+        def git(*args, input=None):
+            return subprocess.run(["git", "-C", str(repository), *args], input=input,
+                                  capture_output=True, text=True, check=True, env=environment)
+
+        git("-c", "init.templateDir=/dev/null", "init", "-q")
+        tree = git("mktree", input="").stdout.strip()
+        commit_text = (f"tree {tree}\nauthor Fixture <fixture@example.test> 1760000000 +0000\n"
+                       "committer Fixture <fixture@example.test> 1760000000 +0000\n"
+                       "gpgsig -----BEGIN PGP SIGNATURE-----\n fixture\n -----END PGP SIGNATURE-----\n\nfixture\n")
+        commit = git("hash-object", "-t", "commit", "-w", "--stdin", input=commit_text).stdout.strip()
+        git("update-ref", "refs/heads/main", commit)
+        marker = self.root / "gpg-invoked"
+        sentinel = self.root / "gpg-sentinel.py"
+        sentinel.write_text("#!/usr/bin/python3\nfrom pathlib import Path\nPath(" + repr(str(marker))
+                            + ").write_text('invoked')\nraise SystemExit(1)\n")
+        sentinel.chmod(0o700)
+        git("config", "log.showSignature", "true")
+        git("config", "gpg.program", str(sentinel))
+        git("log", "--show-signature", "--all", "--no-merges", "--since=2025-01-01T00:00:00Z",
+            "--format=%H%x1f%aE%x1f%aI")
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        result = usage.LocalGitOnly().run(["git", "-C", str(repository), "log", "--all", "--no-merges",
+                                           "--since=2025-01-01T00:00:00Z", "--format=%H%x1f%aE%x1f%aI"],
+                                          capture_output=True, text=True, timeout=5, check=True)
+        self.assertIn(commit, result.stdout)
+        self.assertEqual(result.args[4], "--no-show-signature")
+        self.assertFalse(marker.exists())
+
+    def test_loaded_collector_and_all_primary_workers_keep_the_child_boundary(self):
+        collector = self.root / "collector.py"
+        collector.write_text('''import subprocess
+def fetch_origins(repos):
+    raise AssertionError("Network fetch must be replaced")
+def collect(config):
+    return {"tokens": [{"value": 7}], "errors": fetch_origins([{"remote": "https://github.com/example/repo"}])}
+''')
+        loaded = usage.load_collector(collector)
+        self.assertEqual(loaded.fetch_origins([{"remote": "https://github.com/example/repo"}]),
+                         [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}])
+        self.assertEqual(loaded.collect({})["tokens"], [{"value": 7}])
+        with self.assertRaises(ValueError):
+            loaded.subprocess.run(["ssh", "example"], timeout=5)
+
+        workers = []
+
+        class Worker:
+            returncode = 1
+            def __init__(self):
+                self.stdin = io.BytesIO()
+            def wait(self, timeout):
+                return 1
+            def poll(self):
+                return 1
+
+        def spawn(command, **kwargs):
+            workers.append(kwargs)
+            return Worker()
+
+        with patch.object(usage, "primary_config"), \
+             patch.object(usage.local_usage_contributions, "target_lock", return_value=nullcontext()), \
+             patch.object(usage.local_usage_contributions, "load_previous", return_value=None), \
+             patch.object(usage.subprocess, "Popen", side_effect=spawn):
+            with self.assertRaisesRegex(ValueError, "capture is incomplete"):
+                usage.refresh_primary(collector, {"home": str(self.root)}, self.root,
+                                      file=self.root / "candidate.json")
+        self.assertEqual(len(workers), 3)
+        self.assertTrue(all(worker["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
+                            and worker["env"]["GIT_ASKPASS"] == "/usr/bin/false"
+                            and "GH_TOKEN" not in worker["env"] for worker in workers))
 
 
 if __name__ == "__main__":

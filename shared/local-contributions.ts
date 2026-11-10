@@ -91,6 +91,8 @@ export interface LocalContributionWindow extends LocalContributionCounts {
   repositories: LocalContributionRepositories;
   comparison: { startDay: string; endDay: string; missingDays: string[];
     prs: LocalUsagePeriodChange; commits: LocalUsagePeriodChange;
+    /** Known subtotals are comparable only with verified, paginated observations for every source-day in both periods. */
+    known?: LocalUsageCountComparison;
     categories: Record<LocalUsageCategory, LocalUsageCountComparison> };
 }
 

@@ -43,8 +43,8 @@ function tokenComparisonUnavailableHint(window: UsageWindow) {
 function WindowCard({ window }: { window: UsageWindow }) {
   const usageMetricHint = useUsageMetricHint();
   const rows = [
-    ["prs", countText(window.prs, window.knownPrs), window.comparison.prs],
-    ["commits", countText(window.commits, window.knownCommits), window.comparison.commits],
+    ["prs", countText(window.prs, window.knownPrs), window.comparison.prs ?? window.comparison.known?.prs ?? null],
+    ["commits", countText(window.commits, window.knownCommits), window.comparison.commits ?? window.comparison.known?.commits ?? null],
     ["totalTokens", window.totalTokens !== null && window.totalTokens >= 1_000_000
       ? new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(window.totalTokens) : metricText(window.totalTokens), window.comparison.totalTokens],
   ] as const;
@@ -69,7 +69,7 @@ function WindowCard({ window }: { window: UsageWindow }) {
             <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
               <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
               <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric}
-                periodDays={metric === "totalTokens" ? window.days : undefined}
+                periodDays={window.days} known={metric !== "totalTokens" && window.comparison[metric] === null && comparison !== null}
                 unavailableHint={metric === "totalTokens" && comparison === null ? tokenComparisonUnavailableHint(window) : undefined} />
             </dd>
           </div>
@@ -92,6 +92,8 @@ function WindowCard({ window }: { window: UsageWindow }) {
 function trendValue(day: UsageTrendDay, metric: Metric): number | null {
   return metric === "prs" ? day.prs ?? day.knownPrs : metric === "commits" ? day.commits ?? day.knownCommits : day.totalTokens;
 }
+
+const tooltipCount = (value: number | null) => value === null ? "—" : metricText(value);
 
 const categoryOrder = ["work", "personal", "unclassified"] as const;
 const categoryTone: Record<LocalUsageCategory, string> = {
@@ -184,19 +186,13 @@ function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric
         className="pointer-events-none absolute bottom-2 right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2 py-1.5 text-[12px] text-ink shadow-lg">
         <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
           <time dateTime={active.day} className="font-medium">{active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}</time>
-          <span>{t(`computer.usage.metric.${metric}`)}: {metric === "prs" ? <UsageCount value={active.prs} known={active.knownPrs} /> : metric === "commits" ? <UsageCount value={active.commits} known={active.knownCommits} /> : metricText(active.totalTokens)}</span>
+          <span>{t(`computer.usage.metric.${metric}`)}: {tooltipCount(trendValue(active, metric))}</span>
         </div>
         {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
           {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category}>
-            {t(`computer.usage.category.${category}`)}: {metric === "prs"
-              ? <UsageCount value={active.categories[category].prs} known={active.categories[category].knownPrs} />
-              : <UsageCount value={active.categories[category].commits} known={active.categories[category].knownCommits} />}
+            {t(`computer.usage.category.${category}`)}: {tooltipCount(categoryValue(active, metric, category))}
           </span>)}
         </div>}
-        {metric !== "totalTokens" && active[metric] === null && trendValue(active, metric) !== null
-          && <p className="mt-1 text-ink-secondary">{t("computer.usage.primaryKnownCountHint")}</p>}
-        {(metric === "totalTokens" ? active.tokenStatus : active.coverage) === "partial"
-          && <p className="mt-1 text-ink-secondary">{t("computer.usage.partial")}</p>}
       </div>}
     </div>
   );
