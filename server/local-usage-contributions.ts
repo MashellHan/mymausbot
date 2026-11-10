@@ -237,6 +237,15 @@ function qualified(entry: Entry): LocalContributionCounts {
     commits: exactDay ? value.commits : null, knownCommits: value.knownCommits };
 }
 
+function accountedKnown(entry: Entry, metric: "knownPrs" | "knownCommits"): boolean {
+  const value = entry.day;
+  return !!value && entry.source.coverage.identityVerified && entry.source.coverage.paginationComplete &&
+    (entry.source.status === "ready" || entry.source.status === "partial") &&
+    (value.status === "ready" || value.status === "partial") && value[metric] !== null &&
+    value.repositories.every((row) => (row.status === "ready" || row.status === "partial") && row[metric] !== null) &&
+    sum(value.repositories.map((row) => row[metric]!)) === value[metric];
+}
+
 function aggregate(entries: Entry[]): Aggregate {
   const totals = combine(entries.map(qualified));
   const observed = entries.filter((entry) => entry.day && entry.source.coverage.identityVerified);
@@ -280,8 +289,10 @@ function aggregate(entries: Entry[]): Aggregate {
       ? sum(categories[category].map((row) => row.prs!)) : null,
     commits: repositoryComplete && categories[category].every((row) => row.commits !== null)
       ? sum(categories[category].map((row) => row.commits!)) : null,
-    knownPrs: complete && !categories[category].length ? 0 : known(categories[category].map((row) => row.knownPrs)),
-    knownCommits: complete && !categories[category].length ? 0 : known(categories[category].map((row) => row.knownCommits)),
+    knownPrs: !categories[category].length && entries.length > 0 && entries.every((entry) => accountedKnown(entry, "knownPrs"))
+      ? 0 : known(categories[category].map((row) => row.knownPrs)),
+    knownCommits: !categories[category].length && entries.length > 0 && entries.every((entry) => accountedKnown(entry, "knownCommits"))
+      ? 0 : known(categories[category].map((row) => row.knownCommits)),
   }])) as Record<LocalUsageCategory, LocalContributionCounts>;
   const rows = [...repositories.values()].sort((a, b) => (b.knownPrs ?? 0) - (a.knownPrs ?? 0) || a.name.localeCompare(b.name));
   const coverage: LocalUsageCoverage = !observed.length ? "unavailable" : complete ? "ready" : "partial";
@@ -339,6 +350,9 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
       (source.status === "ready" || source.status === "partial") && day &&
       (day.status === "ready" || day.status === "partial") && day[metric] !== null)
       ? percentage(current[metric], previous[metric]) : null;
+    const knownCategoryChange = (category: LocalUsageCategory, metric: "knownPrs" | "knownCommits") =>
+      observations.length > 0 && observations.every((entry) => accountedKnown(entry, metric))
+        ? percentage(current.categories[category][metric], previous.categories[category][metric]) : null;
     const compare = (value: LocalContributionCounts, prior: LocalContributionCounts) => ({
       prs: percentage(value.prs, prior.prs), commits: percentage(value.commits, prior.commits),
     });
@@ -350,6 +364,9 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
       comparison: { startDay: previousStart, endDay: previousEnd, missingDays: previous.missingDays,
         ...compare(current, previous),
         known: { prs: knownChange("knownPrs"), commits: knownChange("knownCommits") },
+        knownCategories: Object.fromEntries(CATEGORIES.map((category) => [category, {
+          prs: knownCategoryChange(category, "knownPrs"), commits: knownCategoryChange(category, "knownCommits"),
+        }])) as Record<LocalUsageCategory, { prs: LocalUsagePeriodChange; commits: LocalUsagePeriodChange }>,
         categories: Object.fromEntries(CATEGORIES.map((category) => [category,
           compare(current.categories[category], previous.categories[category])])) as
           Record<LocalUsageCategory, { prs: LocalUsagePeriodChange; commits: LocalUsagePeriodChange }> },

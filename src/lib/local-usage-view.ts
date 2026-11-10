@@ -1,5 +1,5 @@
 import type {
-  LocalUsageCategory, LocalUsageCounts, LocalUsageMergedCounts, LocalUsageResponse,
+  LocalUsageCategory, LocalUsageCountComparison, LocalUsageCounts, LocalUsageMergedCounts, LocalUsageResponse,
   LocalUsageTrendDay, LocalUsageWindow, LocalUsageMergedResponse, LocalUsageRepositories,
 } from "../../shared/local-dashboard.ts";
 import type { LocalContributionCounts, LocalContributionsResponse } from "../../shared/local-contributions.ts";
@@ -8,7 +8,10 @@ import { usageTrendRange, type UsageTrendRange } from "../../shared/local-usage-
 type UsageCounts = LocalUsageCounts & { knownCommits: number | null };
 type Categories = Record<LocalUsageCategory, UsageCounts>;
 export type UsageWindow = Omit<LocalUsageWindow, "categories" | "repositories"> & UsageCounts & {
-  comparison: LocalUsageWindow["comparison"] & { known?: { prs: LocalUsageWindow["comparison"]["prs"]; commits: LocalUsageWindow["comparison"]["commits"] } };
+  comparison: LocalUsageWindow["comparison"] & {
+    known?: { prs: LocalUsageWindow["comparison"]["prs"]; commits: LocalUsageWindow["comparison"]["commits"] };
+    knownCategories?: Record<LocalUsageCategory, LocalUsageCountComparison>;
+  };
   categories: Categories;
   repositories: Omit<LocalUsageWindow["repositories"], "rows"> & { rows: (LocalUsageWindow["repositories"]["rows"][number] & UsageCounts)[] };
 };
@@ -68,6 +71,7 @@ function remoteUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange, g
         unavailableTokenDays: localMatches ? local.comparison.unavailableTokenDays : previousTokens.unavailableTokenDays,
         prs: observed?.comparison.prs ?? null, commits: observed?.comparison.commits ?? null,
         known: observed && "known" in observed.comparison ? observed.comparison.known : undefined,
+        knownCategories: observed && "knownCategories" in observed.comparison ? observed.comparison.knownCategories : undefined,
         totalTokens: tokenChange(snapshot, window), categories: observed?.comparison.categories ?? emptyComparisons() },
     } satisfies UsageWindow];
   })) as Record<typeof periods[number], UsageWindow> | null;
