@@ -43,8 +43,10 @@ For each visible enabled repository with a default branch, the collector pins
 the remote ref object ID and pages history reachable from that exact head.
 Candidate commits use **author UTC date**, not committer date. Full details
 verify the author date, parentage, untruncated message and recognized
-`Co-authored-by: Name <email>` trailers. A commit qualifies when its author or
-coauthor email belongs to the confirmed alias set. Merge commits remain in
+`Co-authored-by: Name <email>` trailers and the single literal
+`&lt;email&gt;` delimiter form returned by ADO. Other encoded or mixed forms
+remain incomplete. A commit qualifies when its author or coauthor email belongs
+to the confirmed alias set. Merge commits remain in
 the count. A candidate authored after an earlier cutoff stays in the pinned
 cache and is admitted only once a later cutoff reaches it. A missing or
 malformed detail does not become zero.
