@@ -8,6 +8,7 @@ import { resolveClaudeConfigDir } from "./drivers/claude.ts";
 import { codexHome } from "./drivers/codex-identity.ts";
 import { harnessHome, sealedFixture } from "./env-path.ts";
 import { openCodeAuthText } from "./plan-usage-opencode-auth.ts";
+import { appLoginKeychainForbidden } from "./app-session-credentials.ts";
 
 export type PlanDriver = "claude" | "codex" | "grok" | "opencode";
 
@@ -287,7 +288,7 @@ export function defaultCredentialReader(env: NodeJS.ProcessEnv = process.env): C
         return null;
       }
     },
-    ...(process.platform === "darwin" && !sealedFixture() ? { readClaudeKeychain: readDarwinClaudeKeychain } : {}),
+    ...(process.platform === "darwin" && !sealedFixture() && !appLoginKeychainForbidden(env) ? { readClaudeKeychain: readDarwinClaudeKeychain } : {}),
   });
 }
 

@@ -36,7 +36,7 @@ export interface DesktopPrefs {
   analytics(): boolean | null;
   setAnalytics(enabled: boolean): void;
   /** Opt-in nonsecret choice in desktop-prefs.json; absent or invalid is the OS-backed default. */
-  credentialMode(): "system" | "session";
+  credentialMode(): "system" | "session" | "private-file";
   language(): string | null;
   /** False for anything that is not a locale code or "". */
   setLanguage(language: unknown): boolean;

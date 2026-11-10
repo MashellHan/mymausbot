@@ -62,6 +62,11 @@ test("credential mode is a nonsecret opt-in in the existing desktop preference r
   prefs.setAnalytics(false);
   assert.deepEqual(saved, { credentialMode: "session", seen: [], analytics: false });
   assert.equal(createDesktopPrefs({ read: () => saved, write: () => {} }).credentialMode(), "session");
+  let privatePrefs = { credentialMode: "private-file", seen: [] };
+  const privateMode = createDesktopPrefs({ read: () => privatePrefs, write: value => { privatePrefs = value; } });
+  privateMode.setAnalytics(false);
+  assert.equal(privateMode.credentialMode(), "private-file");
+  assert.deepEqual(privatePrefs, { credentialMode: "private-file", seen: [], analytics: false });
   for (const raw of [null, {}, { credentialMode: "system" }, { credentialMode: "SESSION" }, { credentialMode: true }]) {
     assert.equal(createDesktopPrefs({ read: () => raw, write: () => {} }).credentialMode(), "system");
   }

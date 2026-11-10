@@ -7,6 +7,8 @@ import { claudeAuthStatus } from "./drivers/claude-auth-status.ts";
 import { LOGINS_FILE, LOGINS_KEY_FILE, VaultStore as LoginStore } from "./vault-store.ts";
 import { McpOAuthStore } from "./mcp-oauth-store.ts";
 import { SecretVault } from "./secret-vault.ts";
+import { appLoginKeychainForbidden, appSessionCredentials } from "./app-session-credentials.ts";
+import { claudeAuthStatus } from "./drivers/claude-auth-status.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -21,6 +23,25 @@ function fixture() {
   vi.stubEnv("OMB_CREDENTIAL_MODE", "session");
   return root;
 }
+
+it("private file mode keeps server persistence available while refusing implicit Claude CLI auth probes", async () => {
+  const root = fixture();
+  vi.stubEnv("OMB_CREDENTIAL_MODE", "private-file");
+  expect(appSessionCredentials()).toBe(false);
+  expect(appLoginKeychainForbidden()).toBe(true);
+  const run = vi.fn();
+  expect(await claudeAuthStatus("claude", process.env, run as never)).toEqual({});
+  expect(run).not.toHaveBeenCalled();
+  expect(appLoginKeychainForbidden({ OMB_DESKTOP_PARENT: "1", OMB_CREDENTIAL_MODE: "system" })).toBe(false);
+  expect(appLoginKeychainForbidden({ OMB_CREDENTIAL_MODE: "private-file" })).toBe(false);
+  const oauth = new McpOAuthStore(join(root, "mcp-oauth.json"));
+  oauth.put("docs", { url: "https://example.test/mcp", state: "signed-in", tokens: { access: "synthetic-private" } });
+  expect(new McpOAuthStore(join(root, "mcp-oauth.json")).get("docs", "https://example.test/mcp")?.tokens?.access).toBe("synthetic-private");
+  const logins = new LoginStore({ dataDir: root });
+  logins.create({ site: "example.test", hosts: ["example.test"], exactHost: false,
+    username: "synthetic", password: "synthetic-private", source: "settings", bots: "all" });
+  expect(new LoginStore({ dataDir: root }).list()).toHaveLength(1);
+});
 
 it("keeps pre-existing MCP OAuth and saved-login files untouched and refuses persistence-only saves", () => {
   const root = fixture();

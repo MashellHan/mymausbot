@@ -9,6 +9,8 @@ afterEach(() => { vi.unstubAllGlobals(); setLocale("en"); });
 it("shows the App-run lifetime only in session mode, in either supported language", () => {
   vi.stubGlobal("window", { ogb: { credentialMode: () => "system" } });
   expect(renderToStaticMarkup(createElement(SessionCredentialNotice))).toBe("");
+  vi.stubGlobal("window", { ogb: { credentialMode: () => "private-file" } });
+  expect(renderToStaticMarkup(createElement(SessionCredentialNotice))).toBe("");
   vi.stubGlobal("window", { ogb: { credentialMode: () => "session" } });
   const english = renderToStaticMarkup(createElement(SessionCredentialNotice));
   expect(english).toContain("only until you quit mymausbot");

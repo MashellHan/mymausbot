@@ -5,7 +5,7 @@
 // A switch writes in the order that loses nothing: at every step each token is in at least one file. An account found in
 // both files after a crash is the active one.
 //
-// Security: tokens are read and written here and in cloud-account.mjs only, both files encrypted by the OS. What leaves this
+// Security: tokens are read and written here and in cloud-account.mjs only, using the selected protected store. What leaves this
 // module for a page is an id and an address.
 import { unreadableRecord } from "./managed-desktop.mjs";
 
