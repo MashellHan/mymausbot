@@ -97,12 +97,16 @@ async function connect(url: string) {
       env: { PATH: process.env.PATH, HOME: fixture.info.dataDir, USERPROFILE: fixture.info.dataDir, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) }, stdio: "ignore",
     });
     const portFile = join(profile, "DevToolsActivePort");
+    let devtoolsUrl: string | null = null;
     await expect.poll(() => {
       if (chrome!.exitCode !== null || chrome!.signalCode !== null) throw new Error("Fixture Chrome exited before startup");
-      return existsSync(portFile);
-    }, { timeout: 30_000 }).toBe(true);
-    const [port, endpoint] = readFileSync(portFile, "utf8").trim().split("\n");
-    cdp = await connect(`ws://127.0.0.1:${port}${endpoint}`);
+      if (!existsSync(portFile)) return null;
+      const [port, endpoint] = readFileSync(portFile, "utf8").trim().split(/\r?\n/);
+      devtoolsUrl = /^\d{1,5}$/.test(port ?? "") && /^\/devtools\/browser\/[0-9a-f-]+$/i.test(endpoint ?? "")
+        ? `ws://127.0.0.1:${port}${endpoint}` : null;
+      return devtoolsUrl;
+    }, { timeout: 30_000 }).not.toBeNull();
+    cdp = await connect(devtoolsUrl!);
     const target = await cdp.request("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await cdp.request("Target.attachToTarget", { targetId: target.targetId, flatten: true });
     const request = (method: string, params: unknown = {}) => cdp!.request(method, params, sessionId);
@@ -162,7 +166,7 @@ async function connect(url: string) {
       const wrapItem = `document.querySelector('[role="menu"] [data-menu-key="wrap"]')`;
       let point: { x: number; y: number } | null = null;
       await expect.poll(async () => {
-        point = await evaluate(`(() => { const item=${wrapItem}; if(!item) return null; const r=item.getBoundingClientRect(); const x=r.left+r.width/2,y=r.top+r.height/2; return item.contains(document.elementFromPoint(x,y)) ? {x,y} : null; })()`);
+        point = await evaluate(`(() => { const item=${wrapItem}; if(!item || item.closest('[role="menu"]')?.getAnimations().some(animation => animation.playState === 'running')) return null; const r=item.getBoundingClientRect(); const x=r.left+r.width/2,y=r.top+r.height/2; return item.contains(document.elementFromPoint(x,y)) ? {x,y} : null; })()`);
         return point !== null;
       }, { timeout: 10_000 }).toBe(true);
       await tapAt(point!, true);
