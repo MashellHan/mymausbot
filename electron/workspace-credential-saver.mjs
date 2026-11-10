@@ -5,7 +5,7 @@ export function createWorkspaceCredentialSaver({ packaged, sessionOnly, encrypti
   let writes = 0;
   return {
     busy: () => writes > 0,
-    async save(name, value) {
+    async save(name, value, options) {
       const patchFor = CREDENTIAL_PATCH[name];
       if (!patchFor || typeof value !== "string") throw new Error("Unsupported credential");
       if (packaged() && !sessionOnly && !(await encryptionAvailable())) throw new Error("The desktop credential store is unavailable");
@@ -16,7 +16,7 @@ export function createWorkspaceCredentialSaver({ packaged, sessionOnly, encrypti
         if (packaged() && (!ready() || (sessionOnly && dataDir() !== targetDataDir))) throw new Error("The embedded bot server is unavailable");
         const suffix = packaged() ? "?secretStorage=external" : "";
         const response = await send(`http://127.0.0.1:${port()}/api/config${suffix}`, {
-          method: "PUT", headers: headers(), body: JSON.stringify(patchFor(secret)),
+          method: "PUT", headers: headers(), body: JSON.stringify(patchFor(secret, options)),
         });
         const body = await response.json().catch(() => null);
         if (!response.ok) throw credentialSaveError(response.status, body, t);

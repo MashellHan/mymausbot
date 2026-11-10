@@ -4,6 +4,7 @@ import { confirmSessionConfig, loadConfig, sessionCredentialsEnabled } from "../
 import { runsElsewhere, type McpConfig, type McpConfigDeps, type McpConfigResult } from "../host/mcp-config.ts";
 import { McpOAuthError, McpSignInError, mcpCallbackOrigin } from "../mcp-oauth.ts";
 import { isRemoteMcpServer, mcpServerBody, mcpServerNotFound, mcpServerServes, parseMcpServerMutation, parseMcpServersImport, parseStoredMcpServer, type StoredMcpServer } from "../mcp-registry.ts";
+import type { McpProbeResult } from "../mcp-probe.ts";
 import { personKey } from "../person-key.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { toolBudgetOf } from "../tool-budgets.ts";
@@ -34,6 +35,12 @@ export interface McpServerRouteDeps extends Pick<McpConfigDeps, "cfg" | "session
   lender?(auth: RequestAuth): string | null;
   /** A server the person adds that needs their own computer, marked as running on the one of theirs lent now. */
   place?(server: StoredMcpServer, auth: RequestAuth): Promise<{ ok: true; server: StoredMcpServer } | { ok: false; error: string }>;
+  /** Who added a server and what Test found, for the team's connections (server/host/connection-health-host.ts). */
+  connectionHealth?: {
+    added(kind: "mcp", name: string, email: string | null): void;
+    removed(kind: "mcp", name: string): void;
+    tested(name: string, result: McpProbeResult): Promise<void>;
+  };
 }
 
 export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
@@ -102,6 +109,7 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
           },
           lender: deps.lender?.(auth) ?? null,
         });
+        if ("body" in result && result.status === 200) void deps.connectionHealth?.tested(name, result.body as McpProbeResult).catch(() => {});
         return answer(res, json, result);
       } finally {
         res.off("close", disconnect);
@@ -173,7 +181,10 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
       if (!parsed.ok) return json(res, 400, { error: parsed.error });
       const placed = deps.place ? await deps.place(parsed.server, auth) : { ok: true as const, server: parsed.server };
       if (!placed.ok) return json(res, 409, { error: placed.error });
-      return committed(res, json, config.add(name, placed.server));
+      const added = config.add(name, placed.server);
+      const sent = await committed(res, json, added);
+      if (added.status < 300) deps.connectionHealth?.added("mcp", name, auth.kind === "session" ? auth.session.email ?? null : null);
+      return sent;
     }
 
     // The {"mcpServers": {...}} block other agent tools write; imported servers stay disabled until enabled.
@@ -206,7 +217,12 @@ export function createMcpServerRoutes(deps: McpServerRouteDeps): RouteHandler {
         return json(res, 415, { error: "content-type must be application/json" });
       }
       const name = mcpServerRoute[1]!;
-      if (method === "DELETE") return committed(res, json, config.remove(name));
+      if (method === "DELETE") {
+        const removed = config.remove(name);
+        const sent = await committed(res, json, removed);
+        if (removed.status < 300) deps.connectionHealth?.removed("mcp", name);
+        return sent;
+      }
       const body = await readBody(req);
       const current = cfg.mcpServers ?? {};
       if (!Object.hasOwn(current, name)) return json(res, 404, { error: mcpServerNotFound(name) });

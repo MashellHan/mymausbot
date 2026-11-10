@@ -70,14 +70,24 @@ describe("Settings search in Simple mode", () => {
     expect(search().value).toBe("f");
   });
 
-  it("keeps Advanced search and finds Automatic recovery under More settings", () => {
+  it("lists a builder control as Advanced and, when chosen, opens General at the Advanced mode row", () => {
     type("font");
-    const advanced = host.querySelector<HTMLButtonElement>('[data-settings-advanced-only="settings.font.title"]')!;
-    expect(advanced.textContent).toBe("Interface font · Advanced");
-    flushSync(() => advanced.click());
+    const result = host.querySelector<HTMLButtonElement>('[data-settings-advanced-only="settings.font.title"]')!;
+    expect(result.textContent).toBe("Interface font · Advanced");
+    flushSync(() => result.click());
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "toggleAppSettings", open: true, section: "general" });
     expect(scrolled.map((element) => element.getAttribute("data-settings-block"))).toContain("advanced-mode");
+    expect(search().value).toBe("");
+  });
+
+  it("finds other builder controls as Advanced and Automatic recovery under More settings", () => {
+    for (const [words, key] of [["chat width", "settings.chatWidth.title"], ["circles", "settings.pinnedCircles.title"],
+      ["universal", "settings.universalPins.title"], ["this run", "settings.runCard.title"]]) {
+      type(words);
+      expect(host.querySelector(`[data-settings-advanced-only="${key}"]`)?.textContent, words).toMatch(/ · Advanced$/);
+    }
     type("recovery");
+    expect(host.querySelector("[data-settings-advanced-only]")).toBeNull();
     const result = host.querySelector<HTMLButtonElement>('[data-settings-more-result="settings.recovery.title"]')!;
     expect(result.textContent).toBe("Automatic recovery · More settings");
     flushSync(() => result.click());

@@ -50,6 +50,18 @@ describe("with Simple the only mode", () => {
     expect((await vi.importActual<typeof import("./simple-only")>("./simple-only")).SIMPLE_ONLY).toBe(false);
     expect((await import("./interface-mode")).readAdvancedMode()).toBe(true);
   });
+
+  it("ships with the switch off: Advanced mode can be turned on, and stays on", async () => {
+    vi.resetModules();
+    expect((await vi.importActual<typeof import("./simple-only")>("./simple-only")).SIMPLE_ONLY).toBe(false);
+    const { readAdvancedMode, setAdvancedMode } = await import("./interface-mode");
+    expect(readAdvancedMode()).toBe(false);
+    setAdvancedMode(true);
+    expect(readAdvancedMode()).toBe(true);
+    expect(local.getItem("omb-advanced-mode")).toBe("1");
+    vi.resetModules();
+    expect((await import("./interface-mode")).readAdvancedMode(), "after a relaunch").toBe(true);
+  });
 });
 
 describe("with the switch back", () => {
