@@ -3030,6 +3030,8 @@ async function botOverview(bot: BotRecord, shown: { routine(routine: Routine): b
       cwd: bot.cwd,
       autoApprove: bot.autoApprove,
       approvalMode: approvalModeForTurn(bot),
+      approvePeerComms: bot.approvePeerComms,
+      peers: bot.peers,
       composio: bot.composio,
       connectorTools: bot.connectorTools,
       browser: bot.browser,

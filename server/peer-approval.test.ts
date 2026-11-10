@@ -13,6 +13,8 @@ import {
   type ApprovalBus,
 } from "./peer-approval.ts";
 import { closeMessageDb } from "./message-db.ts";
+import "./server-line-packs.ts";
+import { setConversationLanguage } from "./server-lines.ts";
 import type { Notification } from "./notify.ts";
 import { Store, type BotRecord } from "./store.ts";
 
@@ -38,10 +40,24 @@ describe("peer approval card lifecycle", () => {
   });
 
   afterEach(() => {
+    setConversationLanguage(() => undefined);
     cancelPeerApprovalsFor(from.id);
     vi.useRealTimers();
     closeMessageDb();
     rmSync(DATA_DIR, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["ask_bot", "@Asker möchte @Helper kontaktieren"],
+    ["delegate_bot", "@Asker möchte Arbeit an @Helper delegieren"],
+    ["post_to_room", "@Asker möchte in „Helper“ posten"],
+  ] as const)("uses the conversation language for %s without changing protocol actions", async (action, title) => {
+    setConversationLanguage(() => "de");
+    const verdict = requestPeerApproval(bus, from, target, "ping", action);
+    const card = pendingCard(store, from)!;
+    expect(card.card).toMatchObject({ title, tool: action, options: ["Allow", "Deny", "Always allow"] });
+    resolvePeerComms(bus, card.card!.requestId!, "deny");
+    expect(await verdict).toBe("deny");
   });
 
   it("settles the card when the user allows, so the composer unblocks", async () => {

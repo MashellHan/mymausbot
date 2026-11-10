@@ -110,6 +110,21 @@ it("an Owner or Admin's paired session (as the Admin holds one) sets a team key 
     return activity.body.entries.some((entry: { type: string; who: string; action: string }) => entry.type === "admin" && entry.who.includes("admin@acme.test") && entry.action === "config.update");
   }, { timeout: 5_000, interval: 100 }).toBe(true);
   expect(JSON.stringify(activity!.body)).not.toContain("never-shown");
+  const created = await admin("POST", "/api/bots", { name: "Peer audit" });
+  expect(created.status).toBe(201);
+  const peerBotId = created.body.bot.id as string;
+  try {
+    expect((await admin("PATCH", `/api/bots/${peerBotId}`, { peers: [], approvePeerComms: true })).status).toBe(200);
+    expect((await admin("PATCH", `/api/bots/${peerBotId}`, { peers: null, acknowledgePeerScope: true, approvePeerComms: false })).status).toBe(200);
+    const changes = async () => (await admin("GET", "/api/admin-activity?what=all")).body.entries
+      .filter((entry: { action: string; target?: { id: string } }) => entry.action === "bot.update" && entry.target?.id === peerBotId);
+    await expect.poll(async () => (await changes()).length, { timeout: 5_000, interval: 100 }).toBe(2);
+    const rows = await changes();
+    const restricted = rows.find((entry: { after?: { approvePeerComms?: boolean } }) => entry.after?.approvePeerComms === true);
+    const widened = rows.find((entry: { after?: { approvePeerComms?: boolean } }) => entry.after?.approvePeerComms === false);
+    expect(restricted).toMatchObject({ who: expect.stringContaining("admin@acme.test"), changed: ["peers", "approvePeerComms"], after: { approvePeerComms: true, peers: [] } });
+    expect(widened).toMatchObject({ who: expect.stringContaining("admin@acme.test"), changed: ["peers", "approvePeerComms"], before: { approvePeerComms: true, peers: [] }, after: { approvePeerComms: false, peers: null } });
+  } finally { await admin("DELETE", `/api/bots/${peerBotId}`); }
   const user = await session("member");
   expect((await user("PATCH", "/api/config", { openai: { key: "sk-user-never-saved" } })).status).toBe(403);
   expect((await user("DELETE", "/api/mcp/servers/linear")).status).toBe(403);

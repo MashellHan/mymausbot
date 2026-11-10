@@ -3183,13 +3183,15 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("takes a bot PATCH from an older computer that still sends a peers list or a peer-approval switch, and keeps neither", async () => {
+  it("retains a bot PATCH from an older computer that sets a peers list or peer approval", async () => {
     const bot = (await api("POST", "/api/bots")).body.bot;
-    const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "From an older computer", peers: ["nobody"], approvePeerComms: true });
-    expect(patched.status).toBe(200);
-    expect(patched.body.bot.name).toBe("From an older computer");
-    expect(patched.body.bot).not.toHaveProperty("peers");
-    expect(patched.body.bot).not.toHaveProperty("approvePeerComms");
+    try {
+      const patched = await api("PATCH", `/api/bots/${bot.id}`, { name: "From an older computer", peers: ["nobody"], approvePeerComms: true });
+      expect(patched.status).toBe(200);
+      expect(patched.body.bot).toMatchObject({ name: "From an older computer", peers: ["nobody"], approvePeerComms: true });
+      const listed = (await api("GET", "/api/bots?messages=0")).body.bots.find((item: { id: string }) => item.id === bot.id);
+      expect(listed).toMatchObject({ peers: ["nobody"], approvePeerComms: true });
+    } finally { await api("DELETE", `/api/bots/${bot.id}`); }
   });
 
   it("creates, patches, and deletes a bot", async () => {
@@ -13875,6 +13877,14 @@ describe("bot memory API", () => {
         "Won't act on a schedule.",
       ]);
       expect(fresh.body.recent).toEqual([]);
+
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { peers: [], approvePeerComms: true, approvalMode: "ask" })).status).toBe(200);
+      const peerless = await api("GET", `/api/bots/${bot.id}/overview`);
+      expect(peerless.body.wont).toContain("Cannot initiate contact with other bots.");
+      expect(peerless.body.wont).not.toContain("Asks before contacting other bots.");
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { peers: null, acknowledgePeerScope: true })).status).toBe(200);
+      const approval = await api("GET", `/api/bots/${bot.id}/overview`);
+      expect(approval.body.wont).toContain("Asks before contacting other bots.");
 
       await api("PATCH", `/api/bots/${bot.id}`, { soul: "Never file noise.\n\nSecond paragraph." });
       const after = await api("GET", `/api/bots/${bot.id}/overview`);

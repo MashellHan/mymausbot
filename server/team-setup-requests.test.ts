@@ -67,6 +67,47 @@ const specialist = (key: string, section: string, modelSelection = { instanceId:
   fields: { name: key, title: "Specialist", soul: "Finish the assigned work.", section, modelSelection } });
 
 describe("reviewed Chief team setup", () => {
+  it("keeps saved peer limits on update and deletion, including Full access, while allowing self and listed peers", async () => {
+    const h = harness(); h.chief.peers = [];
+    const update = [{ action: "update", botId: h.peer.id, fields: { title: "Researcher" } }];
+    const deletion = { botId: h.chief.id, threadId: h.chief.threadId, targetBotId: h.peer.id, reason: "Remove Ada" };
+    expect(() => h.propose(update)).toThrow(/peer scope/);
+    expect(() => h.service.proposeDeletion(deletion)).toThrow(/authorized teammate/);
+    h.autoApply.mockReturnValue("full-access");
+    await expect(h.submit(update)).rejects.toThrow(/peer scope/);
+    await expect(h.service.submitDeletion(deletion)).rejects.toThrow(/authorized teammate/);
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(h.deleteBot).not.toHaveBeenCalled();
+    expect(() => h.propose([{ action: "update", botId: h.chief.id, fields: { title: "Own title" } }])).not.toThrow();
+    h.chief.peers = [h.peer.id];
+    expect(() => h.propose(update)).not.toThrow();
+    expect(() => h.service.proposeDeletion(deletion)).not.toThrow();
+  });
+
+  it("cancels a pending update or deletion after the Chief's peer scope narrows", async () => {
+    const update = harness();
+    const card = update.propose([{ action: "update", botId: update.peer.id, fields: { title: "Researcher" } }]);
+    update.chief.peers = [];
+    expect((await update.resolve(card.requestId))?.result.state).toBe("cancelled");
+    expect(update.apply).not.toHaveBeenCalled();
+
+    const deletion = harness();
+    const request = deletion.service.proposeDeletion({ botId: deletion.chief.id, threadId: deletion.chief.threadId,
+      targetBotId: deletion.peer.id, reason: "Remove Ada" });
+    deletion.chief.peers = [];
+    expect((await deletion.resolve(request.requestId))?.result.state).toBe("cancelled");
+    expect(deletion.deleteBot).not.toHaveBeenCalled();
+  });
+
+  it("binds a pending deletion to the target's peer settings", async () => {
+    const h = harness();
+    const request = h.service.proposeDeletion({ botId: h.chief.id, threadId: h.chief.threadId,
+      targetBotId: h.peer.id, reason: "Remove Ada" });
+    h.peer.peers = [];
+    expect((await h.resolve(request.requestId))?.result.state).toBe("cancelled");
+    expect(h.deleteBot).not.toHaveBeenCalled();
+  });
+
   it("reviews promotion in an authorized team without changing anything on denial", async () => {
     const h = harness(); h.peer.section = "Engineering";
     const before = structuredClone(h.store.bots);
