@@ -41,6 +41,7 @@ class Api:
         self.inventory_continuation = None
         self.repos = [{"id": REPO, "name": "repository", "defaultBranch": "refs/heads/main",
                        "isDisabled": False}]
+        self.hidden_repos = []
         self.heads = {REPO: HEAD}
         self.prs = [pr(3, "2026-11-10T00:01:00Z", "abandoned"),
                     pr(2, "2026-11-09T23:59:00Z", "completed"),
@@ -70,7 +71,8 @@ class Api:
             result = {"authenticatedUser": {"id": self.owner,
                 "properties": {"Account": {"$value": EMAIL}}}}
         elif path.endswith("/_apis/git/repositories"):
-            result = {"value": self.repos, "count": len(self.repos)}
+            repositories = self.repos + self.hidden_repos if query.get("includeHidden") == ["true"] else self.repos
+            result = {"value": repositories, "count": len(repositories)}
             if self.inventory_continuation:
                 result["continuationToken"] = self.inventory_continuation
         elif path.endswith("/_apis/git/pullrequests"):
@@ -80,9 +82,10 @@ class Api:
             page = self.prs[start:start + int(query["$top"][0])]
             result = {"value": page, "count": len(page)}
         elif path.endswith("/refs"):
-            assert query["filter"] == ["heads/main"]
             repo = path.split("/")[-2]
-            result = {"value": [{"name": "refs/heads/main", "objectId": self.heads[repo]}], "count": 1}
+            branch = next(row["defaultBranch"] for row in self.repos + self.hidden_repos if row["id"] == repo)
+            assert query["filter"] == [branch[len("refs/"):]]
+            result = {"value": [{"name": branch, "objectId": self.heads[repo]}], "count": 1}
         elif path.endswith("/commits"):
             head = query["searchCriteria.itemVersion.version"][0]
             assert query["searchCriteria.itemVersion.versionType"] == ["commit"]
@@ -359,6 +362,25 @@ class AdoTests(unittest.TestCase):
         self.assertFalse(partial["sources"][0]["coverage"]["paginationComplete"])
         self.assertIsNone(partial["sources"][0]["days"][-2]["commits"])
         self.assertIn("Invalid or unpaged ADO response", partial["collection"]["reasons"])
+
+    def test_hidden_default_head_repository_is_discovered_and_counted(self):
+        api = Api()
+        hidden_id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        hidden_head = "5" * 40
+        api.hidden_repos = [{"id": hidden_id, "name": "fixture.wiki",
+                             "defaultBranch": "refs/heads/wikiMaster", "isDisabled": False}]
+        api.heads[hidden_id] = hidden_head
+        api.histories[hidden_head] = [commit(hidden_head, "2026-11-09T10:00:00Z")]
+        api.details[hidden_head] = api.histories[hidden_head][0]
+        result = collect(api)
+        source = result["sources"][0]
+        self.assertEqual(source["status"], "ready")
+        self.assertEqual(source["provenance"]["inventoryCount"], 2)
+        self.assertEqual(source["days"][-2]["commits"], 3)
+        self.assertEqual(len(source["days"][-2]["repositories"]), 2)
+        inventory_urls = [args[5] for args in api.calls if urllib.parse.urlsplit(args[5]).path.endswith("/_apis/git/repositories")]
+        self.assertEqual(len(inventory_urls), 1)
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(inventory_urls[0]).query)["includeHidden"], ["true"])
 
     def test_incomplete_refresh_retains_old_rows_only_as_stale_with_original_capture(self):
         api = Api()

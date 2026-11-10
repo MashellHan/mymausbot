@@ -160,7 +160,7 @@ def identity(reader, org, expected):
 
 
 def inventory(reader, org, project):
-    data = reader.get(url(org, project, "/_apis/git/repositories"))
+    data = reader.get(url(org, project, "/_apis/git/repositories", includeHidden="true"))
     repos = rows(data, MAX_REPOSITORIES)
     result = {}
     for row in repos:
