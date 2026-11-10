@@ -32,9 +32,9 @@ let lentId = "";
 let folderId = "";
 const proxies: ChildProcess[] = [];
 
-async function api(method: string, path: string, options: { body?: unknown; token?: string } = {}) {
+async function api(method: string, path: string, options: { body?: unknown; token?: string; signal?: AbortSignal } = {}) {
   const response = await fetch(`${base}${path}`, {
-    method,
+    method, ...(options.signal ? { signal: options.signal } : {}),
     headers: {
       host: HOST, "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https", origin: `https://${HOST}`,
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
@@ -111,11 +111,34 @@ async function leftBehind(of: { threadIds?: string[]; routineIds?: string[] }, s
   macAway = true;
 }
 /** A turn a restart cuts reruns at the next start, beside this test's next turn, and could be the one toolsFor connects to. */
-async function stopRunningTurns() {
-  const running = async () => ((await api("GET", "/api/bots?messages=0", { token: owner })).body.bots as Array<{ id: string; tasks?: Array<{ threadId: string; busy?: boolean }> }>)
-    .flatMap((bot) => (bot.tasks ?? []).filter((task) => task.busy).map((task) => ({ bot, threadId: task.threadId })));
-  for (const { bot, threadId } of await running()) await stop(bot, threadId);
-  await expect.poll(async () => (await running()).length, { timeout: 10_000 }).toBe(0);
+async function stopRunningTurns(
+  running: () => Promise<Array<{ bot: { id: string }; threadId: string; turnStartedAt?: number }>> = async () =>
+    ((await api("GET", "/api/bots?messages=0", { token: owner })).body.bots as Array<{ id: string; tasks?: Array<{ threadId: string; busy?: boolean; turnStartedAt?: number }> }>)
+      .flatMap((bot) => (bot.tasks ?? []).filter((task) => task.busy).map((task) => ({ bot, threadId: task.threadId, turnStartedAt: task.turnStartedAt }))),
+  stopTurn: (bot: { id: string }, threadId: string) => Promise<void> = stop,
+) {
+  const stopped = new Set<string>();
+  const stopFailure: { seen: boolean; error: unknown } = { seen: false, error: undefined };
+  try {
+    await expect.poll(async () => {
+      for (const { bot, threadId, turnStartedAt } of await running()) {
+        const generation = `${bot.id}:${threadId}:${turnStartedAt ?? "unknown"}`;
+        if (stopped.has(generation)) continue;
+        stopped.add(generation);
+        try { await stopTurn(bot, threadId); }
+        catch (error) {
+          if (!stopFailure.seen) { stopFailure.seen = true; stopFailure.error = error; }
+          throw error;
+        }
+      }
+      return (await running()).length;
+    }, { timeout: 10_000 }).toBe(0);
+  } catch (error) {
+    if (stopFailure.seen) throw stopFailure.error;
+    throw error;
+  }
+  if (stopFailure.seen) throw stopFailure.error;
+  return [...stopped];
 }
 /** After a restart, wait for the lent Mac's connector, so what a turn is offered is never just the Mac being offline. */
 async function macOnline() {
@@ -262,6 +285,40 @@ afterAll(async () => {
   for (const proxy of proxies) proxy.kill();
   if (child) await waitForExit(child, { signal: "SIGTERM" });
   if (home) await removeTempDir(home);
+});
+
+it("cleanup stops a later turn generation without repeating Stop on the first", async () => {
+  const first = { bot: { id: "first" }, threadId: "thread-a", turnStartedAt: 1 };
+  const later = { bot: { id: "second" }, threadId: "thread-b", turnStartedAt: 2 };
+  let reads = 0;
+  const stopped: string[] = [];
+  await stopRunningTurns(async () => {
+    reads++;
+    return reads === 1 ? [first] : reads <= 3 ? [first, later] : [];
+  }, async (_bot, threadId) => { stopped.push(threadId); });
+  expect(stopped).toEqual(["thread-a", "thread-b"]);
+});
+
+it("cleanup preserves a failed Stop even if the next busy list is empty", async () => {
+  const first = { bot: { id: "first" }, threadId: "thread-a", turnStartedAt: 1 };
+  const failure = new Error("synthetic Stop failure");
+  let reads = 0;
+  await expect(stopRunningTurns(async () => ++reads === 1 ? [first] : [], async () => { throw failure; })).rejects.toBe(failure);
+  expect(reads).toBeGreaterThan(1);
+});
+
+it("failure trace returns unavailable when the request or its body stalls", async () => {
+  const sender = { id: "sender", threadId: "thread" }, receiver = { id: "receiver" };
+  for (const stage of ["request", "body"]) {
+    const observed: { signal?: AbortSignal } = {};
+    const read = (next: AbortSignal): Promise<{ body: { bots: any[] } }> => {
+      observed.signal = next;
+      return stage === "request" ? new Promise<never>(() => {})
+        : Promise.resolve({ json: () => new Promise<never>(() => {}) }).then(async (response) => ({ body: await response.json() }));
+    };
+    expect(await handoffFailureTrace(sender, receiver, [], read, 20)).toBe("handoff trace unavailable");
+    expect(observed.signal?.aborted).toBe(true);
+  }
 });
 
 it("a conversation a guest left behind is never captured into the bot's memory; the owner's own chat is", async () => {
@@ -934,6 +991,26 @@ async function handedThread(sender: { id: string; threadId: string }, receiver: 
   });
   return { thread, tools };
 }
+async function handoffFailureTrace(sender: { id: string; threadId: string }, receiver: { id: string }, cleanup: string[] = [],
+  readBots: (signal: AbortSignal) => Promise<{ body: { bots: any[] } }> = signal => api("GET", "/api/bots?messages=0", { token: owner, signal }), deadlineMs = 1_500) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new Error("handoff trace deadline")); }, deadlineMs);
+    });
+    const bots = (await Promise.race([readBots(controller.signal), deadline])).body.bots;
+    const tasks = (id: string) => (bots.find((bot) => bot.id === id)?.tasks ?? []).map((task: any) => ({
+      threadId: task.threadId, busy: task.busy, activity: task.activity, turnStartedAt: task.turnStartedAt,
+      archivedAt: task.archivedAt, outside: task.outside,
+      openedBy: task.openedBy && { botId: task.openedBy.botId, threadId: task.openedBy.threadId, kind: task.openedBy.kind, forOwner: task.openedBy.forOwner },
+    }));
+    const handoffs = readHandoffs(join(home, ".openmausbot")).filter((node) => node.botId === receiver.id)
+      .map(({ id, rootId, parentId, threadId, status, createdAt, startedAt, restarts }) => ({ id, rootId, parentId, threadId, status, createdAt, startedAt, restarts })).slice(-8);
+    return JSON.stringify({ cleanup, sender: { id: sender.id, threadId: sender.threadId, tasks: tasks(sender.id) }, receiver: { id: receiver.id, tasks: tasks(receiver.id) }, handoffs });
+  } catch { return "handoff trace unavailable"; }
+  finally { clearTimeout(timer); }
+}
 /** A webhook that posts into the bot's Updates conversation, with no turn of its own. */
 async function postedThread(bot: { id: string }): Promise<string> {
   const created = await api("POST", "/api/webhooks", { token: owner, body: { name: "Inbox", prompt: "Handle the event.", botId: bot.id, delivery: "post" } });
@@ -1009,9 +1086,9 @@ it("work handed in by a turn that can't use the Mac ends it for that thread, for
   appendFileSync(ws(sender, "MEMORY.md"), "\n- Written in a conversation a guest left behind.\n");
   await stop(sender, guests);
   await expect.poll(() => lendingRecord(sender)?.flagged).toBe(true);
-  await stopRunningTurns();
+  const cleanup = await stopRunningTurns();
   const again = await handedThread(sender, receiver);
-  expect(again.thread).toBe(thread);
+  expect(again.thread, again.thread === thread ? undefined : await handoffFailureTrace(sender, receiver, cleanup)).toBe(thread);
   const after = await sees(again.tools);
   expect(after.computers).toEqual([]);
   await stopRunningTurns();
@@ -1044,7 +1121,8 @@ it("an answer from a turn that can use the Mac leaves parked handed-on work hold
   const sender = await newBot("Proven answerer", "held");
   const receiver = await newBot("Parked keeps", "parks");
   await review(receiver);
-  expect((await parkedThenAnswered(sender, receiver, async (own) => own)).computers).toHaveLength(1);
+  const observed = await parkedThenAnswered(sender, receiver, async (own) => own);
+  expect(observed.computers, observed.computers?.length === 1 ? undefined : await handoffFailureTrace(sender, receiver)).toHaveLength(1);
   await stopRunningTurns();
 }, 90_000);
 it("an answer from a turn that can't use the Mac ends it for parked handed-on work, through the real route", async () => {
