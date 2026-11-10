@@ -52,7 +52,7 @@ const oldHashes = Object.fromEntries(oldNames.map(name => {
 const sandbox = join(fixture, "fixture.sb"), canary = join(fixture, "denied-canary");
 writeFileSync(canary, "Synthetic file-denial canary");
 const blocked = [".openmausbot", ".codex", ".copilot", ".claude", ".agents", ".ssh", ".config",
-  "Library/Application Support/openmausbot", "Library/Keychains"].map(name => join(homedir(), name));
+  ".local/share/mymausbot-auth", "Library/Application Support/openmausbot", "Library/Keychains"].map(name => join(homedir(), name));
 writeFileSync(sandbox, ["(version 1)", "(allow default)",
   '(deny network-bind (local ip "*:8799"))',
   '(deny network-outbound)', '(allow network-outbound (remote ip "localhost:*"))',
@@ -102,12 +102,19 @@ async function phase(name, before, assertion) {
   const child = spawn("/usr/bin/sandbox-exec", appArgs, { env, cwd: fixture, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   record.pid = child.pid;
   let output = "";
+  child.on("error", error => { record.spawnError = error.message; });
   for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { output = (output + String(chunk)).slice(-16000); });
+  const groupAlive = () => {
+    if (!child.pid) return false;
+    try { process.kill(-child.pid, 0); return true; }
+    catch (error) { if (error.code === "ESRCH") return false; throw error; }
+  };
   async function until(check, label, timeoutMs = 45_000) {
     const deadline = Math.min(Date.now() + timeoutMs, deadlineMs);
     while (Date.now() < deadline) {
       const value = await check();
       if (value) return value;
+      if (record.spawnError) throw new Error("Owned fixture could not start");
       if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Fixture exited while waiting for ${label}`);
       await delay(250);
     }
@@ -127,8 +134,14 @@ async function phase(name, before, assertion) {
     const browserOrigin = new URL(socket);
     assert(["127.0.0.1", "localhost"].includes(browserOrigin.hostname));
     const pageSocket = await until(async () => {
-      const pages = await (await fetch(`http://${browserOrigin.host}/json/list`)).json();
-      return pages.find(item => item.type === "page" && item.url.startsWith(new URL(smoke.location).origin + "/"))?.webSocketDebuggerUrl;
+      try {
+        const signal = AbortSignal.timeout(Math.min(5_000, remaining()));
+        const pages = await (await fetch(`http://${browserOrigin.host}/json/list`, { signal })).json();
+        return pages.find(item => item.type === "page" && item.url.startsWith(new URL(smoke.location).origin + "/"))?.webSocketDebuggerUrl;
+      } catch (error) {
+        if (error?.name === "TimeoutError" || error?.name === "AbortError") return null;
+        throw error;
+      }
     }, "fixture page", 20_000);
     async function evaluate(expression) {
       const answer = await cdp(pageSocket, "Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
@@ -142,13 +155,27 @@ async function phase(name, before, assertion) {
     record.passed = true;
   } finally {
     child.kill("SIGTERM");
-    const deadline = Date.now() + Math.min(10_000, remaining());
-    while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) await delay(100);
-    if (child.exitCode === null && child.signalCode === null) try { process.kill(-child.pid, "SIGKILL"); } catch {}
-    record.exitedGracefully = child.exitCode !== null || child.signalCode !== null;
+    const gracefulDeadline = Date.now() + 10_000;
+    while ((child.exitCode === null && child.signalCode === null || groupAlive()) && Date.now() < gracefulDeadline) await delay(100);
+    let forced = false;
+    if (child.exitCode === null && child.signalCode === null || groupAlive()) {
+      forced = true;
+      try { process.kill(-child.pid, "SIGTERM"); } catch {}
+      const terminateDeadline = Date.now() + 2_000;
+      while ((child.exitCode === null && child.signalCode === null || groupAlive()) && Date.now() < terminateDeadline) await delay(100);
+    }
+    if (child.exitCode === null && child.signalCode === null || groupAlive()) {
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      const killDeadline = Date.now() + 5_000;
+      while ((child.exitCode === null && child.signalCode === null || groupAlive()) && Date.now() < killDeadline) await delay(100);
+    }
+    record.cleanupComplete = (child.exitCode !== null || child.signalCode !== null) && !groupAlive();
+    record.exitedGracefully = record.cleanupComplete && !forced;
+    if (!record.cleanupComplete || forced) record.passed = false;
     record.finishedAt = now();
     record.elapsedMs = Date.parse(record.finishedAt) - Date.parse(record.startedAt);
     writeFileSync(join(evidence, `attempt-${attempt}-${name}.log`), output, { mode: 0o600 });
+    assert(record.cleanupComplete && !forced, "Owned fixture did not finish graceful cleanup");
   }
 }
 

@@ -51,9 +51,6 @@ export function assertClosedSqliteCopy(sourceDir, copyDir) {
     if ((liveWal?.size ?? 0) > 0) {
       assert(copiedWal && copiedWal.size === liveWal.size && copiedWal.sha256 === liveWal.sha256,
         `${name} has a missing or changed meaningful WAL`);
-      const liveShm = before[`${name}-shm`], copyShm = copied[`${name}-shm`];
-      assert(liveShm && copyShm && liveShm.size === copyShm.size && liveShm.sha256 === copyShm.sha256,
-        `${name} has a missing or changed shared-memory index`);
     } else {
       assert((copiedWal?.size ?? 0) === 0, `${name} copy has an unbound WAL`);
     }

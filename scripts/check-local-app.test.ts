@@ -178,6 +178,17 @@ it("keeps a real nonempty SQLite WAL in a stable closed copy and rejects missing
     writeFileSync(join(source, "routines.json"), '{"runs":[]}');
     copyFileSync(join(source, "routines.json"), join(copy, "routines.json"));
     expect(statSync(join(source, "runtime.db-wal")).size).toBeGreaterThan(0);
+    const closedSource = join(root, "closed-source"), ownedCopy = join(root, "owned-copy");
+    mkdirSync(closedSource, { mode: 0o700 }); mkdirSync(ownedCopy, { mode: 0o700 });
+    for (const name of ["messages.db", "runtime.db"]) for (const suffix of ["", "-wal"]) {
+      copyFileSync(join(source, name + suffix), join(closedSource, name + suffix));
+      copyFileSync(join(source, name + suffix), join(ownedCopy, name + suffix));
+    }
+    for (const directory of [closedSource, ownedCopy]) copyFileSync(join(source, "routines.json"), join(directory, "routines.json"));
+    expect(assertClosedSqliteCopy(closedSource, ownedCopy).complete).toBe(true);
+    const rebuilt = new DatabaseSync(join(ownedCopy, "runtime.db"), { readOnly: true });
+    try { expect(rebuilt.prepare("SELECT value FROM fixture").get()).toEqual({ value: "in WAL" }); }
+    finally { rebuilt.close(); }
     const checked = assertClosedSqliteCopy(source, copy);
     expect(checked.files["runtime.db-wal"]?.source?.size).toBeGreaterThan(0);
     expect(spawnSync(process.execPath, [fileURLToPath(new URL("./check-local-app.mjs", import.meta.url)),
@@ -223,7 +234,9 @@ it("checks private records once postlaunch while leaving the active browser cont
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omb-private-file-e2e-")));
   const profile = join(root, "profile"), privateRoot = join(profile, "private-credentials");
   const browser = join(privateRoot, "browser-session");
-  mkdirSync(profile, { mode: 0o700 }); mkdirSync(privateRoot, { mode: 0o700 }); mkdirSync(browser, { mode: 0o700 });
+  mkdirSync(profile, { mode: 0o700 });
+  expect(() => inspectPrivateCredentialStorage(root, { phase: "postlaunch" })).toThrow(/missing after launch/);
+  mkdirSync(privateRoot, { mode: 0o700 }); mkdirSync(browser, { mode: 0o700 });
   const marker = join(profile, "private-credentials.ready");
   const credential = join(privateRoot, "credentials.json");
   const cookie = join(browser, "Cookies");

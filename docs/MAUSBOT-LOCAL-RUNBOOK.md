@@ -91,7 +91,9 @@ Run the signed package check in a disposable profile with
 It records one attempt per run and the elapsed time since the first attempt.
 For a closed data copy, use `pnpm check:delivery closed-sqlite <canonical-source-dir> <canonical-owned-copy-dir>`;
 `pnpm check:delivery private-storage <canonical-temp-fixture-root> postlaunch`
-checks the private root without comparing changing browser content.
+checks the private root without comparing changing browser content. That command
+accepts only canonical, owner-only `omb-private-file-e2e-*` temporary roots;
+it does not inspect an installed live profile.
 
 ## Resume an existing package
 

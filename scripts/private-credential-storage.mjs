@@ -46,6 +46,7 @@ export function inspectPrivateCredentialStorage(fixtureRoot, { phase, expected }
   const markerExists = (() => { try { lstatSync(marker); return true; } catch (error) { if (error.code === "ENOENT") return false; throw error; } })();
   assert.equal(privateExists, markerExists);
   if (!privateExists) {
+    assert.equal(phase, "prelaunch", "Private credential root is missing after launch");
     const result = { state: "absent" };
     if (expected !== undefined) assert.deepEqual(result, expected);
     return result;
