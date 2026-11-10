@@ -146,7 +146,7 @@ try {
         else if (scenario === "legacy-only") res.end(JSON.stringify(snapshot("ready")));
         else res.end(JSON.stringify({ ...value, contributions: scenario === "unavailable"
           ? { ...primaryUsageFixture(), status: "unavailable", windows: null, accounts: [], trend: [], history: [] }
-          : primaryUsageFixture() }));
+          : primaryUsageFixture("2026-11-03", scenario === "known-counts") }));
       } },
     ],
   });
