@@ -6062,6 +6062,7 @@
   "mcp.headersHint": "For example Authorization, with Bearer and your key as its value. Values stay hidden; leave a saved one blank to keep it.",
   "mcp.headersSaved": "Headers saved: {keys}",
   "mcp.keyOff": "Its key was deleted from the Vault, so it is off. Give it a new key here, or ask your bot to add it again.",
+  "mcp.loadAppsFailed": "Couldn't load MCP apps: {reason}",
   "mcp.loading": "Loading MCP servers…",
   "mcp.oauth.clientId": "Client ID",
   "mcp.oauth.clientSecret": "Client secret",
