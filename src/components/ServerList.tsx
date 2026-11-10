@@ -2,6 +2,7 @@
 // with the one thing to do when it needs the person; My Cloud and teams are the Admin's. This app never stops a server:
 // Remove only forgets it here and signs this app out.
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, Cloud, Copy, Laptop, Plus, Trash2, X } from "lucide-react";
 import { serverTransport } from "../../electron/server-address.mjs";
 import type { ServerInstall, ServerStatus } from "../../electron/server-status.mjs";
@@ -131,8 +132,8 @@ export function ServerList({ saved, busy, sharingOffered, ownServers = [], appVe
     </ul>
     <button type="button" data-server-connect disabled={busy} onClick={() => setSheet({ address: "", locked: false, title: t("connect.title") })}
       className="mt-3 flex w-fit items-center gap-2 rounded-lg bg-accent px-3 py-2 text-[13px] font-medium text-accent-ink disabled:opacity-50"><Plus size={14} />{t("connect.title")}</button>
-    {sheet && <RailSheet focusKey={sheet.locked ? "pair-again" : "connect"} onClose={() => setSheet(null)}>
+    {sheet && createPortal(<RailSheet focusKey={sheet.locked ? "pair-again" : "connect"} onClose={() => setSheet(null)}>
       <OwnServerLink onBack={null} onConnected={() => setSheet(null)} start={sheet} />
-    </RailSheet>}
+    </RailSheet>, document.body)}
   </>;
 }
