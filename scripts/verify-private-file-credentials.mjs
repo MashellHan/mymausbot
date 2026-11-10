@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { verifyPrivateBrowserFuse } from "../electron/private-cookie-fuse.mjs";
-import { inspectPrivateCredentialStorage } from "./private-credential-storage.mjs";
+import { finishOwnedPrivateFixture, inspectPrivateCredentialStorage } from "./private-credential-storage.mjs";
 
 const root = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const { values } = parseArgs({ options: { app: { type: "string" }, evidence: { type: "string" } } });
@@ -238,10 +238,8 @@ try {
   receipt.finishedAt = now();
   receipt.attemptElapsedMs = Date.now() - attemptStartedAtMs;
   receipt.totalElapsedMs = Date.now() - attempts.firstStartedAtMs;
-  assert(basename(fixture).startsWith("omb-private-file-e2e-") && realpathSync(fixture) === fixture);
-  receipt.fixtureRemoved = receipt.phases.every(phase => phase.cleanupComplete === true);
-  if (receipt.fixtureRemoved) rmSync(fixture, { recursive: true, force: true });
-  else receipt.fixturePreservedForCleanup = fixture;
+  Object.assign(receipt, finishOwnedPrivateFixture(fixture, receipt.phases));
+  if (!receipt.fixtureRemoved) receipt.passed = false;
   attempts.attempts.push({ attempt, startedAt, finishedAt: receipt.finishedAt,
     attemptElapsedMs: receipt.attemptElapsedMs, totalElapsedMs: receipt.totalElapsedMs, passed: receipt.passed });
   writeFileSync(attemptsPath, JSON.stringify(attempts, null, 2) + "\n", { mode: 0o600 });

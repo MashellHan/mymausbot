@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,7 @@ import { resolveRoutineResultsThread, routineRunDefinition } from "../server/rou
 import type { Routine } from "../server/routines.ts";
 import { assertInventorySame, assertRoutinesSame, validateBuildRequest } from "./check-local-app.mjs";
 import { assertClosedSqliteCopy } from "./closed-sqlite-snapshot.mjs";
-import { inspectPrivateCredentialStorage } from "./private-credential-storage.mjs";
+import { finishOwnedPrivateFixture, inspectPrivateCredentialStorage } from "./private-credential-storage.mjs";
 
 const routine = { id: "routine-1", prompt: "Synthetic task", enabled: true, schedule: { type: "daily", time: "05:00" } };
 const run = { id: "run-1", routineId: routine.id, botId: "bot-1", target: "bot", runOn: "maus", createdAt: 1,
@@ -260,5 +260,19 @@ it("checks private records once postlaunch while leaving the active browser cont
     chmodSync(credential, 0o600);
     writeFileSync(marker, "broken marker");
     expect(() => inspectPrivateCredentialStorage(root, { phase: "postlaunch" })).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("keeps the exact owned fixture when process cleanup is unconfirmed", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omb-private-file-e2e-")));
+  const sentinel = join(root, "synthetic-only");
+  writeFileSync(sentinel, "fixture remains for recovery");
+  try {
+    expect(finishOwnedPrivateFixture(root, [{ cleanupComplete: false }])).toEqual({
+      fixtureRemoved: false, fixturePreservedForCleanup: root,
+    });
+    expect(existsSync(sentinel)).toBe(true);
+    expect(finishOwnedPrivateFixture(root, [{ cleanupComplete: true }])).toEqual({ fixtureRemoved: true });
+    expect(existsSync(root)).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

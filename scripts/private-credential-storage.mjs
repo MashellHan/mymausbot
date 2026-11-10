@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, readdirSync, readlinkSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -87,4 +87,16 @@ export function inspectPrivateCredentialStorage(fixtureRoot, { phase, expected }
     assert.deepEqual(result, expected);
   }
   return result;
+}
+
+export function finishOwnedPrivateFixture(fixtureRoot, phases) {
+  const temporary = realpathSync(tmpdir());
+  const root = realpathSync(fixtureRoot);
+  assert.equal(root, fixtureRoot);
+  assert(basename(root).startsWith("omb-private-file-e2e-") && inside(temporary, root));
+  owned(root, true);
+  assert(Array.isArray(phases));
+  const removed = phases.every(phase => phase.cleanupComplete === true);
+  if (removed) rmSync(root, { recursive: true, force: true });
+  return removed ? { fixtureRemoved: true } : { fixtureRemoved: false, fixturePreservedForCleanup: root };
 }
