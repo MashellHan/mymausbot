@@ -77,6 +77,10 @@ const heldStamps = () => new Map(readdirSync(heldDir()).filter((name) => name.en
   try { const stat = statSync(join(heldDir(), name), { bigint: true }); return [[name, `${stat.ino}:${stat.mtimeNs}`] as const]; } catch { return []; }
 }));
 type HeldTurn = { bot?: string; thread?: string };
+const matchesHeldTurn = (dump: any, wanted: HeldTurn): boolean => {
+  const env = dump.mcpConfig?.mcpServers?.agents?.env;
+  return Boolean(env) && (!wanted.bot || env.OMB_BOT_ID === wanted.bot) && (!wanted.thread || env.OMB_THREAD_ID === wanted.thread);
+};
 /** The dump of a `held` turn that started after `since` was taken, the newest one `wanted` accepts. */
 const heldTurn = (since: ReadonlyMap<string, string>, wanted: (dump: any) => boolean, what: string): Promise<any> => within(15_000, () => `a held turn's dump (${what})`, () => {
   const fresh = [...heldStamps()].filter(([name, stamp]) => since.get(name) !== stamp).flatMap(([name]) => {
@@ -94,10 +98,7 @@ async function toolsFor(start: () => Promise<void>, turn?: () => HeldTurn) {
   said = undefined;
   await start();
   const want = turn?.() ?? said ?? {};
-  const dump = await heldTurn(since, (candidate) => {
-    const env = candidate.mcpConfig?.mcpServers?.agents?.env;
-    return Boolean(env) && (!want.bot || env.OMB_BOT_ID === want.bot) && (!want.thread || env.OMB_THREAD_ID === want.thread);
-  }, JSON.stringify(want));
+  const dump = await heldTurn(since, (candidate) => matchesHeldTurn(candidate, want), JSON.stringify(want));
   writeFileSync(dumpOf("held"), JSON.stringify(dump));
   const agents = dump.mcpConfig.mcpServers.agents;
   const proxy = spawn(agents.command, agents.args, { env: { PATH: process.env.PATH, HOME: home, ...agents.env }, stdio: ["pipe", "pipe", "pipe"] });
@@ -327,6 +328,22 @@ afterAll(async () => {
   for (const proxy of proxies) proxy.kill();
   if (child) await waitForExit(child, { signal: "SIGTERM" });
   if (home) await removeTempDir(home);
+});
+
+it("binds a fresh held turn by bot and thread despite earlier unrelated dumps", async () => {
+  const paths = Array.from({ length: 4 }, () => join(heldDir(), `identity-${randomUUID()}.json`));
+  const dump = (bot: string, thread: string, marker: string) => ({ marker, mcpConfig: { mcpServers: { agents: { env: { OMB_BOT_ID: bot, OMB_THREAD_ID: thread } } } } });
+  try {
+    writeFileSync(paths[0]!, JSON.stringify(dump("target", "thread", "stale")));
+    const since = heldStamps();
+    writeFileSync(paths[1]!, JSON.stringify(dump("other", "thread", "wrong-bot")));
+    writeFileSync(paths[2]!, JSON.stringify(dump("target", "other-thread", "wrong-thread")));
+    const chosen = heldTurn(since, (candidate) => matchesHeldTurn(candidate, { bot: "target", thread: "thread" }), "target thread");
+    writeFileSync(paths[3]!, JSON.stringify(dump("target", "thread", "new")));
+    expect((await chosen).marker).toBe("new");
+  } finally {
+    for (const path of paths) rmSync(path, { force: true });
+  }
 });
 
 it("cleanup stops a later turn generation without repeating Stop on the first", async () => {
