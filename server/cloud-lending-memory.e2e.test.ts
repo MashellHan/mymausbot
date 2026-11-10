@@ -32,9 +32,9 @@ let lentId = "";
 let folderId = "";
 const proxies: ChildProcess[] = [];
 
-async function api(method: string, path: string, options: { body?: unknown; token?: string } = {}) {
+async function api(method: string, path: string, options: { body?: unknown; token?: string; signal?: AbortSignal } = {}) {
   const response = await fetch(`${base}${path}`, {
-    method,
+    method, ...(options.signal ? { signal: options.signal } : {}),
     headers: {
       host: HOST, "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https", origin: `https://${HOST}`,
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
@@ -305,6 +305,20 @@ it("cleanup preserves a failed Stop even if the next busy list is empty", async 
   let reads = 0;
   await expect(stopRunningTurns(async () => ++reads === 1 ? [first] : [], async () => { throw failure; })).rejects.toBe(failure);
   expect(reads).toBeGreaterThan(1);
+});
+
+it("failure trace returns unavailable when the request or its body stalls", async () => {
+  const sender = { id: "sender", threadId: "thread" }, receiver = { id: "receiver" };
+  for (const stage of ["request", "body"]) {
+    const observed: { signal?: AbortSignal } = {};
+    const read = (next: AbortSignal): Promise<{ body: { bots: any[] } }> => {
+      observed.signal = next;
+      return stage === "request" ? new Promise<never>(() => {})
+        : Promise.resolve({ json: () => new Promise<never>(() => {}) }).then(async (response) => ({ body: await response.json() }));
+    };
+    expect(await handoffFailureTrace(sender, receiver, [], read, 20)).toBe("handoff trace unavailable");
+    expect(observed.signal?.aborted).toBe(true);
+  }
 });
 
 it("a conversation a guest left behind is never captured into the bot's memory; the owner's own chat is", async () => {
@@ -977,9 +991,15 @@ async function handedThread(sender: { id: string; threadId: string }, receiver: 
   });
   return { thread, tools };
 }
-async function handoffFailureTrace(sender: { id: string; threadId: string }, receiver: { id: string }, cleanup: string[] = []) {
+async function handoffFailureTrace(sender: { id: string; threadId: string }, receiver: { id: string }, cleanup: string[] = [],
+  readBots: (signal: AbortSignal) => Promise<{ body: { bots: any[] } }> = signal => api("GET", "/api/bots?messages=0", { token: owner, signal }), deadlineMs = 1_500) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const bots = (await api("GET", "/api/bots?messages=0", { token: owner })).body.bots as any[];
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new Error("handoff trace deadline")); }, deadlineMs);
+    });
+    const bots = (await Promise.race([readBots(controller.signal), deadline])).body.bots;
     const tasks = (id: string) => (bots.find((bot) => bot.id === id)?.tasks ?? []).map((task: any) => ({
       threadId: task.threadId, busy: task.busy, activity: task.activity, turnStartedAt: task.turnStartedAt,
       archivedAt: task.archivedAt, outside: task.outside,
@@ -989,6 +1009,7 @@ async function handoffFailureTrace(sender: { id: string; threadId: string }, rec
       .map(({ id, rootId, parentId, threadId, status, createdAt, startedAt, restarts }) => ({ id, rootId, parentId, threadId, status, createdAt, startedAt, restarts })).slice(-8);
     return JSON.stringify({ cleanup, sender: { id: sender.id, threadId: sender.threadId, tasks: tasks(sender.id) }, receiver: { id: receiver.id, tasks: tasks(receiver.id) }, handoffs });
   } catch { return "handoff trace unavailable"; }
+  finally { clearTimeout(timer); }
 }
 /** A webhook that posts into the bot's Updates conversation, with no turn of its own. */
 async function postedThread(bot: { id: string }): Promise<string> {
