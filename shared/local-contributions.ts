@@ -93,6 +93,7 @@ export interface LocalContributionWindow extends LocalContributionCounts {
     prs: LocalUsagePeriodChange; commits: LocalUsagePeriodChange;
     /** Known subtotals are comparable only with verified, paginated observations for every source-day in both periods. */
     known?: LocalUsageCountComparison;
+    knownCategories?: Record<LocalUsageCategory, LocalUsageCountComparison>;
     categories: Record<LocalUsageCategory, LocalUsageCountComparison> };
 }
 

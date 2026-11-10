@@ -34,6 +34,27 @@ function envelope(provider: "github" | "ado") {
 }
 
 function snapshot() { return { version: 2, github: envelope("github"), ado: envelope("ado") }; }
+function partialAccountedSnapshot() {
+  const value = snapshot();
+  for (const source of [...value.github.sources, ...value.ado.sources]) {
+    const repository = source.days[59]!.repositories[0]!;
+    source.status = "partial";
+    source.coverage.visibilityComplete = false;
+    for (const [index, day] of source.days.entries()) {
+      const current = index === 59, previous = index === 58;
+      const prs = source === value.ado.sources[0] ? current ? 3 : previous ? 10 : 0 : 0;
+      const commits = source === value.github.sources[0] ? current ? 53 : previous ? 76 : 0 : 0;
+      day.status = "partial";
+      day.prs = null as never;
+      day.commits = null as never;
+      day.knownPrs = prs;
+      day.knownCommits = commits;
+      day.repositories = prs || commits ? [{ ...repository, status: "partial", prs: null as never,
+        commits: null as never, knownPrs: prs, knownCommits: commits }] : [];
+    }
+  }
+  return value;
+}
 const parse = (value: unknown) => parseContributionSnapshot(value, cutoff + 60_000);
 
 describe("canonical source-qualified contributions", () => {
@@ -92,7 +113,74 @@ describe("canonical source-qualified contributions", () => {
       expect(current.comparison.commits).toBeNull();
       expect(current.comparison.known?.prs).toBe(0);
       expect(current.comparison.known?.commits).toBeCloseTo(100 / Number(period));
+      expect(current.comparison.knownCategories?.personal.commits).toBeNull();
     }
+  });
+
+  it("compares accounted partial categories and proves quiet ready source-days as known zero", () => {
+    for (const period of ["1", "7", "30"] as const) {
+      const value = partialAccountedSnapshot();
+      if (period !== "1") for (const source of [...value.github.sources, ...value.ado.sources]) {
+        const previous = source.days[58]!;
+        const target = source.days[59 - Number(period)]!;
+        target.knownPrs = previous.knownPrs;
+        target.knownCommits = previous.knownCommits;
+        target.repositories = previous.repositories;
+        previous.knownPrs = 0;
+        previous.knownCommits = 0;
+        previous.repositories = [];
+      }
+      const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+      const window = result.windows![period];
+      expect(window.comparison.categories.personal.commits).toBeNull();
+      expect(window.comparison.categories.work.prs).toBeNull();
+      expect(window.comparison.knownCategories?.personal.commits).toBeCloseTo((53 - 76) / 76 * 100);
+      expect(window.comparison.knownCategories?.work.prs).toBe(-70);
+      expect(window.comparison.knownCategories?.unclassified).toEqual({ prs: 0, commits: 0 });
+      expect(window.categories.unclassified).toMatchObject({ prs: null, knownPrs: 0, commits: null, knownCommits: 0 });
+      expect(window.comparison.startDay).toBe(date(59 - 2 * Number(period) + 1));
+      expect(window.comparison.endDay).toBe(date(59 - Number(period)));
+    }
+  });
+
+  it.each(["identity", "pagination", "missing-day", "unavailable-day", "stale", "unknown-row", "unavailable-row", "residual"])(
+    "withholds category comparison for %s while retaining valid metric-specific values", (gap) => {
+      const value = partialAccountedSnapshot(), source = value.ado.sources[0]!, baseline = source.days[58]!;
+      if (gap === "identity") source.coverage.identityVerified = false;
+      if (gap === "pagination") source.coverage.paginationComplete = false;
+      if (gap === "missing-day") source.days.splice(58, 1);
+      if (gap === "unavailable-day") baseline.status = "unavailable";
+      if (gap === "stale") source.status = "stale";
+      if (gap === "unknown-row") baseline.repositories[0]!.knownPrs = null as never;
+      if (gap === "unavailable-row") {
+        baseline.repositories[0]!.status = "unavailable";
+        baseline.repositories[0]!.knownPrs = null as never;
+      }
+      if (gap === "residual") baseline.knownPrs = 11;
+      const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+      expect(result.windows!["1"].comparison.knownCategories?.work.prs).toBeNull();
+      expect(result.windows!["7"].comparison.knownCategories?.work.prs).toBeNull();
+      expect(result.windows!["30"].comparison.knownCategories?.work.prs).toBeNull();
+      if (["unknown-row", "residual"].includes(gap)) {
+        expect(result.windows!["1"].comparison.knownCategories?.personal.commits).toBeCloseTo((53 - 76) / 76 * 100);
+      }
+    });
+
+  it("keeps positive, zero and new category changes distinct", () => {
+    const value = partialAccountedSnapshot(), source = value.ado.sources[0]!;
+    const previous = source.days[58]!, current = source.days[59]!;
+    const repository = current.repositories[0]!;
+    previous.knownPrs = 0;
+    previous.repositories = [];
+    expect(aggregateContributionSnapshot(parse(value), cutoff + 60_000).windows!["1"].comparison.knownCategories?.work.prs).toBe("new");
+    current.knownPrs = 0;
+    current.repositories = [];
+    expect(aggregateContributionSnapshot(parse(value), cutoff + 60_000).windows!["1"].comparison.knownCategories?.work.prs).toBe(0);
+    previous.knownPrs = 10;
+    previous.repositories = [{ ...repository, knownPrs: 10, knownCommits: 0 }];
+    current.knownPrs = 15;
+    current.repositories = [{ ...previous.repositories[0]!, knownPrs: 15 }];
+    expect(aggregateContributionSnapshot(parse(value), cutoff + 60_000).windows!["1"].comparison.knownCategories?.work.prs).toBe(50);
   });
 
   it.each(["identity", "pagination", "missing-day", "unavailable", "missing-count"])(

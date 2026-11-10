@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { LocalUsageResponse, LocalUsageWindow } from "../../shared/local-dashboard";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
-import { localUsageView, profileUsageView, mergedUsageView, retainUsageSnapshot } from "./local-usage-view";
+import { primaryUsageFixture } from "../../scripts/testing/primary-usage-fixture";
+import { localUsageView, primaryUsageView, profileUsageView, mergedUsageView, retainUsageSnapshot } from "./local-usage-view";
 import { weeklyUsageTrend } from "./local-usage-trends";
 
 const shift = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
   sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
+
+it("forwards qualified category comparisons without borrowing legacy category changes", () => {
+  const contributions = primaryUsageFixture("2026-11-03", true);
+  const snapshot = { ...unavailable, contributions };
+  const view = primaryUsageView(snapshot);
+  for (const period of ["1", "7", "30"] as const) {
+    expect(view.windows![period].comparison.knownCategories).toEqual(contributions.windows![period].comparison.knownCategories);
+    expect(view.windows![period].comparison.categories.personal.prs).toBeNull();
+  }
+  contributions.windows!["1"].comparison.knownCategories!.personal.prs = null;
+  expect(primaryUsageView(snapshot).windows!["1"].comparison.knownCategories?.personal.prs).toBeNull();
+});
 function fixture(endDay = "2026-11-06"): LocalUsageResponse {
   const asOf = Date.parse(`${endDay}T08:00:00Z`);
   const counts = { prs: 1, knownPrs: 1, commits: 5 }, zero = { prs: 0, knownPrs: 0, commits: 0 };
