@@ -149,7 +149,8 @@ def rows(body, limit=PAGE):
 
 
 def identity(reader, org, expected):
-    body = reader.get(url(org, None, "/_apis/connectionData", connectOptions=0))
+    target = "https://dev.azure.com/" + urllib.parse.quote(org, safe="") + "/_apis/connectionData?connectOptions=0"
+    body = reader.get(target)
     actual = body["authenticatedUser"]
     stable_id = actual.get("id", "")
     alias = actual.get("properties", {}).get("Account", {}).get("$value", "")

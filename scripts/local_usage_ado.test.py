@@ -63,6 +63,10 @@ class Api:
         query = urllib.parse.parse_qs(target.query)
         path = target.path
         if path.endswith("/_apis/connectionData"):
+            assert target.query == "connectOptions=0"
+        else:
+            assert query["api-version"] == ["7.1"]
+        if path.endswith("/_apis/connectionData"):
             result = {"authenticatedUser": {"id": self.owner,
                 "properties": {"Account": {"$value": EMAIL}}}}
         elif path.endswith("/_apis/git/repositories"):
@@ -97,6 +101,14 @@ def collect(api, *, previous=None, at=AT, config=CONFIG):
 
 
 class AdoTests(unittest.TestCase):
+    def test_connection_data_uses_verified_versionless_url_only_for_identity(self):
+        api = Api()
+        collect(api)
+        targets = [args[5] for args in api.calls]
+        self.assertEqual(targets[0], "https://dev.azure.com/example/_apis/connectionData?connectOptions=0")
+        self.assertTrue(all(urllib.parse.parse_qs(urllib.parse.urlsplit(target).query)["api-version"] == ["7.1"]
+                            for target in targets[1:]))
+
     def test_all_pr_states_utc_author_dates_merge_coauthor_and_one_repository(self):
         api = Api()
         result = collect(api)
