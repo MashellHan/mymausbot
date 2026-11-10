@@ -239,8 +239,9 @@ try {
   receipt.attemptElapsedMs = Date.now() - attemptStartedAtMs;
   receipt.totalElapsedMs = Date.now() - attempts.firstStartedAtMs;
   assert(basename(fixture).startsWith("omb-private-file-e2e-") && realpathSync(fixture) === fixture);
-  rmSync(fixture, { recursive: true, force: true });
-  receipt.fixtureRemoved = true;
+  receipt.fixtureRemoved = receipt.phases.every(phase => phase.cleanupComplete === true);
+  if (receipt.fixtureRemoved) rmSync(fixture, { recursive: true, force: true });
+  else receipt.fixturePreservedForCleanup = fixture;
   attempts.attempts.push({ attempt, startedAt, finishedAt: receipt.finishedAt,
     attemptElapsedMs: receipt.attemptElapsedMs, totalElapsedMs: receipt.totalElapsedMs, passed: receipt.passed });
   writeFileSync(attemptsPath, JSON.stringify(attempts, null, 2) + "\n", { mode: 0o600 });
