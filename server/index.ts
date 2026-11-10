@@ -301,7 +301,7 @@ import { outsideRoomNote, sentRow, teammateResultRow, WAIT_CARD_CLOSED_REASON } 
 import { createWebhookRoomPost } from "./host/webhook-room-deps.ts";
 import { createRoomJobs, parallelRoomJobsEnabled, type RoomRoundLine } from "./host/room-jobs.ts";
 import { createDelegatedLevel } from "./host/delegated-level.ts";
-import { createLiveApprovalMode } from "./host/live-approval.ts";
+import { createLiveApprovalMode, createRecipientApprovalLevel } from "./host/live-approval.ts";
 import { CONSENT_RULE, continuedOrigin, escapeNotes, labelledLine, OUTSIDE, peerLineText, peerProvenanceNote, reportNote, requestWorkOrigin, type WorkOrigin } from "./peer-provenance.ts"; import { lineNote, PROVENANCE_PROMPT } from "./provenance-label.ts"; import { openRoomThread } from "./host/room-new-thread.ts"; import { createLineLabels } from "./host/line-labels.ts";
 import { decideRoomPost, emptyRoomPostBudget, type RoomPostAttempt, type RoomPostBudget } from "./room-post-budget.ts";
 import { messagePages, pageSize, slimMessage } from "./host/message-pages.ts";
@@ -3900,16 +3900,8 @@ const askCards = createAskCards({ store, node: (id) => coordinator.node(id), del
   answeredIn: (threadId, requestId) => automationReports.answeredIn(teamMessages.inbox.answeredIn(threadId, requestId), requestId), live: (threadId, requestId) => askMessageByRequest.has(`${threadId}:${requestId}`),
   copiedInto: (inboxThreadId, botId, threadId) => Boolean(CLOUD_TEAM) && teamMessages.inbox.isHomeOf(inboxThreadId, teamOwners.routing.askedPerson(botId, threadId)) });
 const questionRouting = createQuestionRouting({ store, handedInUnproven, active: () => coordinator.active(), node: (id) => coordinator.node(id), parkedFor: (botId) => coordinator.parkedFor(botId), answerNode: (id, text, by) => coordinator.answerNode(id, text, by), live: (threadId, requestId) => askMessageByRequest.has(`${threadId}:${requestId}`),
-  recipientLevel: (botId, threadId, nodeId) => {
-    if (!store.taskByThread(botId, threadId)) return null;
-    if (nodeId) {
-      const current = coordinator.status(nodeId)?.assignment;
-      return current?.assignee.botId === botId && current.assignee.destination.threadId === threadId
-        && (current.status === "running" || current.status === "needs_input") ? current.level : null;
-    }
-    const bot = store.projectBotForTask(botId, threadId) ?? store.bot(botId);
-    return bot ? approvalModeForTurn(bot, false, threadId) : null;
-  },
+  recipientLevel: createRecipientApprovalLevel({ store, assignment: (id) => coordinator.status(id)?.assignment,
+    botForThread, internal: isInternalTurn, liveMode: liveApprovalMode }),
   unattended: (botId, threadId) => teammatePrompts.unattendedWork(botId, threadId),
   answerLive: async (threadId, requestId, text) => await answerRequest(threadId, botForThread(store.botByThread(threadId)?.id ?? "", threadId)?.modelSelection.instanceId ?? "", requestId, "answer", text) === "answered", settleSignIns: (node) => signInSettle.answeredElsewhere(node),
   keptPrivate: (node, requester) => keptPrivate({ child: teamHost.privateTo(node.threadId), parent: teamHost.privateTo(requester.threadId) }),
