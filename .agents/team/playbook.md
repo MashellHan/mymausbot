@@ -17,6 +17,7 @@ PR, issue, review and CI records. Preserve upstream license and notices.
 | mausbot-back | Backend | gpt-6-sol | xhigh | 1,000,000 |
 | mausbot-upstream | Upstream integration | gpt-6-sol | xhigh | 1,000,000 |
 | mausbot-review | Reviewer | gpt-6-astra | max | provider default |
+| mausbot-review2 | Reviewer | gpt-6-astra | max | provider default |
 
 Launch arguments are in each role file; verify live session settings before
 claiming the model is active. A requested context ceiling is not proof the
@@ -84,6 +85,15 @@ job is already running: adopt its outputs, do not launch a duplicate build.
 Job files live under the current conversation's `mausbot-local-build-20261103`.
 
 ## Engineering and review
+
+Lead assigns each independent PR or coherent batch to the available reviewer
+with the shorter queue: `mausbot-review` or `mausbot-review2`. Record one review
+owner with the exact source handoff. Either reviewer's acceptance satisfies the
+independent review requirement; two approvals are not required. Keep correction
+deltas with that owner, or explicitly transfer the existing findings and accepted
+evidence if the other reviewer can unblock the work. Do not send an already
+assigned change to both reviewers or repeat accepted review merely to balance
+their queues. Historical QA triage remains separate from the source review.
 
 Follow `CONTRIBUTING-FORK.md`. Keep a factual, short project runbook for build
 commands and incident recovery. No secrets in commits, prompts or artifacts.
