@@ -8,7 +8,6 @@ import { LOGINS_FILE, LOGINS_KEY_FILE, VaultStore as LoginStore } from "./vault-
 import { McpOAuthStore } from "./mcp-oauth-store.ts";
 import { SecretVault } from "./secret-vault.ts";
 import { appLoginKeychainForbidden, appSessionCredentials } from "./app-session-credentials.ts";
-import { claudeAuthStatus } from "./drivers/claude-auth-status.ts";
 
 const roots: string[] = [];
 afterEach(() => {
