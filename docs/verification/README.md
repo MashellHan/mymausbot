@@ -119,6 +119,9 @@ The [local Usage and Agent Team fixtures](local-dashboard.md) check dashboard
 data, owner access, responsive tables and live session updates using synthetic
 snapshots, without reading or mutating the person's live app data.
 
+The [remote ADO contribution source recipe](local-usage-ado.md) checks verified
+organization identity, pinned default-branch history and incomplete coverage.
+
 The [bounded GitHub contribution repair recipe](local-usage-github-repair.md)
 covers the default seven-day or explicitly admitted 60-day dry-run, apply and recovery gates.
 
