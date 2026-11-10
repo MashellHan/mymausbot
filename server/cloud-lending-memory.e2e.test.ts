@@ -138,6 +138,7 @@ async function stopRunningTurns(
     throw error;
   }
   if (stopFailure.seen) throw stopFailure.error;
+  return [...stopped];
 }
 /** After a restart, wait for the lent Mac's connector, so what a turn is offered is never just the Mac being offline. */
 async function macOnline() {
@@ -976,6 +977,19 @@ async function handedThread(sender: { id: string; threadId: string }, receiver: 
   });
   return { thread, tools };
 }
+async function handoffFailureTrace(sender: { id: string; threadId: string }, receiver: { id: string }, cleanup: string[] = []) {
+  try {
+    const bots = (await api("GET", "/api/bots?messages=0", { token: owner })).body.bots as any[];
+    const tasks = (id: string) => (bots.find((bot) => bot.id === id)?.tasks ?? []).map((task: any) => ({
+      threadId: task.threadId, busy: task.busy, activity: task.activity, turnStartedAt: task.turnStartedAt,
+      archivedAt: task.archivedAt, outside: task.outside,
+      openedBy: task.openedBy && { botId: task.openedBy.botId, threadId: task.openedBy.threadId, kind: task.openedBy.kind, forOwner: task.openedBy.forOwner },
+    }));
+    const handoffs = readHandoffs(join(home, ".openmausbot")).filter((node) => node.botId === receiver.id)
+      .map(({ id, rootId, parentId, threadId, status, createdAt, startedAt, restarts }) => ({ id, rootId, parentId, threadId, status, createdAt, startedAt, restarts })).slice(-8);
+    return JSON.stringify({ cleanup, sender: { id: sender.id, threadId: sender.threadId, tasks: tasks(sender.id) }, receiver: { id: receiver.id, tasks: tasks(receiver.id) }, handoffs });
+  } catch { return "handoff trace unavailable"; }
+}
 /** A webhook that posts into the bot's Updates conversation, with no turn of its own. */
 async function postedThread(bot: { id: string }): Promise<string> {
   const created = await api("POST", "/api/webhooks", { token: owner, body: { name: "Inbox", prompt: "Handle the event.", botId: bot.id, delivery: "post" } });
@@ -1051,9 +1065,9 @@ it("work handed in by a turn that can't use the Mac ends it for that thread, for
   appendFileSync(ws(sender, "MEMORY.md"), "\n- Written in a conversation a guest left behind.\n");
   await stop(sender, guests);
   await expect.poll(() => lendingRecord(sender)?.flagged).toBe(true);
-  await stopRunningTurns();
+  const cleanup = await stopRunningTurns();
   const again = await handedThread(sender, receiver);
-  expect(again.thread).toBe(thread);
+  expect(again.thread, again.thread === thread ? undefined : await handoffFailureTrace(sender, receiver, cleanup)).toBe(thread);
   const after = await sees(again.tools);
   expect(after.computers).toEqual([]);
   await stopRunningTurns();
@@ -1086,7 +1100,8 @@ it("an answer from a turn that can use the Mac leaves parked handed-on work hold
   const sender = await newBot("Proven answerer", "held");
   const receiver = await newBot("Parked keeps", "parks");
   await review(receiver);
-  expect((await parkedThenAnswered(sender, receiver, async (own) => own)).computers).toHaveLength(1);
+  const observed = await parkedThenAnswered(sender, receiver, async (own) => own);
+  expect(observed.computers, observed.computers?.length === 1 ? undefined : await handoffFailureTrace(sender, receiver)).toHaveLength(1);
   await stopRunningTurns();
 }, 90_000);
 it("an answer from a turn that can't use the Mac ends it for parked handed-on work, through the real route", async () => {
