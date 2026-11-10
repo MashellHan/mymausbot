@@ -26,8 +26,12 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function hasControl(value: string): boolean {
+  return [...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
+}
+
 function text(value: unknown, length = 256): string {
-  if (typeof value !== "string" || !value || value.length > length || /[\x00-\x1f\x7f]/.test(value)) {
+  if (typeof value !== "string" || !value || value.length > length || hasControl(value)) {
     throw new Error("Invalid contribution text");
   }
   return value;
@@ -35,7 +39,7 @@ function text(value: unknown, length = 256): string {
 
 function reasons(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 32 || value.some((reason) =>
-    typeof reason !== "string" || !reason || reason.length > 256 || /[\x00-\x1f\x7f]/.test(reason))) {
+    typeof reason !== "string" || !reason || reason.length > 256 || hasControl(reason))) {
     throw new Error("Invalid contribution reasons");
   }
   return value.map((reason) => /^[a-z][a-z0-9._:-]{0,79}$/i.test(reason) ? reason : "provider-read-failure");
