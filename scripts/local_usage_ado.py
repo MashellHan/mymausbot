@@ -293,15 +293,18 @@ def advance_prs(reader, org, project, account, work):
 def advance_repository(reader, org, project, repo, work, cache, emails):
     repo_id = repo["id"]
     progress = work["progress"].get(repo_id)
+    prior = cache.get(repo_id)
+    prior_checked = set(prior.get("checked", [])) if prior else set()
+    prior_items = {item["id"]: item for item in prior["items"]} if prior else {}
     if progress is None:
         head = default_head(reader, org, project, repo)
-        prior = cache.get(repo_id)
         if prior and prior.get("head") == head and prior.get("branch") == repo["defaultBranch"]:
             work["repoDone"][repo_id] = {**prior, "items": [item for item in prior["items"]
                 if work["firstDay"] <= item["day"]]}
             return
         progress = {"branch": repo["defaultBranch"], "head": head,
-                    "offset": 0, "seen": [], "pending": [], "items": [], "endPage": False}
+                    "offset": 0, "seen": [], "pending": [], "items": [], "checked": [],
+                    "endPage": False, "pinnedAt": stamp(dt.datetime.now(dt.timezone.utc))}
         work["progress"][repo_id] = progress
     if progress["branch"] != repo["defaultBranch"]:
         work["progress"].pop(repo_id)
@@ -325,20 +328,32 @@ def advance_repository(reader, org, project, repo, work, cache, emails):
             progress["endPage"] = len(page) < PAGE
         while progress["pending"]:
             item = progress["pending"][0]
-            credited = credited_commit(reader, org, project, repo_id, item, emails, work["firstDay"])
+            oid = item["commitId"]
+            candidate = instant(item["author"]["date"]).date().isoformat() >= work["firstDay"]
+            if candidate and oid in prior_checked:
+                credited = prior_items.get(oid)
+            else:
+                credited = credited_commit(reader, org, project, repo_id, item, emails, work["firstDay"])
             if credited:
                 progress["items"].append(credited)
+            if candidate:
+                progress["checked"].append(oid)
             progress["pending"].pop(0)
         if progress["endPage"]:
-            if default_head(reader, org, project, repo) != progress["head"]:
-                work["progress"].pop(repo_id)
-                work["repoErrors"][repo_id] = "head-changed-during-scan"
-                return
             items = progress["items"]
             if len({item["id"] for item in items}) != len(items):
                 raise ValueError("Duplicate ADO commit attribution")
-            work["repoDone"][repo_id] = {"head": progress["head"],
-                                         "branch": repo["defaultBranch"], "items": items}
+            relation = ("descendant" if prior["head"] in progress["seen"] else "rewritten") if prior else "initial"
+            proof = {"head": progress["head"], "branch": repo["defaultBranch"],
+                     "items": items, "checked": sorted(set(progress["checked"])),
+                     "pinnedAt": progress["pinnedAt"], "relation": relation}
+            cache[repo_id] = proof
+            current_head = default_head(reader, org, project, repo)
+            if current_head != progress["head"]:
+                work["progress"].pop(repo_id)
+                work["repoErrors"][repo_id] = "head-changed-during-scan"
+                return
+            work["repoDone"][repo_id] = proof
             work["progress"].pop(repo_id)
             return
 
@@ -390,7 +405,7 @@ def advance_repos(reader, org, project, work, cache, emails):
         work["repoIndex"] = 0
 
 
-def source_days(work, org, project, categories, captured_at, complete, verified):
+def source_days(work, org, project, categories, captured_at, complete, verified, visibility_complete):
     repos = {row["id"]: row for row in work["inventory"] or []}
     prs = work["prs"]
     commits = [(repo_id, item) for repo_id, result in work["repoDone"].items()
@@ -399,6 +414,7 @@ def source_days(work, org, project, categories, captured_at, complete, verified)
         raise ValueError("Duplicate repository commit key")
     output = []
     first = dt.date.fromisoformat(work["firstDay"])
+    pr_exact = verified and visibility_complete and work["prComplete"]
     for offset in range(60):
         day = (first + dt.timedelta(days=offset)).isoformat()
         pr_rows = [item for item in prs if item["day"] == day]
@@ -408,10 +424,10 @@ def source_days(work, org, project, categories, captured_at, complete, verified)
             repo = repos[repo_id]
             p = sum(item["repo"] == repo_id for item in pr_rows)
             c = sum(key == repo_id for key, _ in commit_rows)
-            repo_complete = verified and work["prComplete"] and repo_id in work["repoDone"] and not repo["isDisabled"]
+            repo_complete = pr_exact and repo_id in work["repoDone"] and not repo["isDisabled"]
             repository_days.append({"id": digest("ado-repo", org.casefold(), repo_id),
                 "name": org + "/" + project + "/" + repo["name"], "category": categories[repo_id],
-                "prs": p if verified and work["prComplete"] else None, "knownPrs": p if verified else None,
+                "prs": p if pr_exact else None, "knownPrs": p if verified else None,
                 "commits": c if repo_complete else None,
                 "knownCommits": c if verified and repo_id in work["repoDone"] else None,
                 "status": "ready" if repo_complete else "partial" if verified else "unavailable"})
@@ -419,7 +435,7 @@ def source_days(work, org, project, categories, captured_at, complete, verified)
         c = len(commit_rows)
         output.append({"day": day, "capturedAt": captured_at,
             "status": "ready" if complete else "partial" if verified else "unavailable",
-            "prs": p if verified and work["prComplete"] else None,
+            "prs": p if pr_exact else None,
             "knownPrs": p if verified and (work["prComplete"] or work["prSeen"]) else None,
             "commits": c if complete else None,
             "knownCommits": c if verified and (work["repoDone"] or work["scanComplete"]) else None,
@@ -442,9 +458,9 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 or previous.get("metricDefinition") != DEFINITION or previous.get("provider") != "ado"):
             raise ValueError("Cannot resume a different ADO metric")
         state = previous.get("state", {})
-        if not isinstance(state, dict) or state.get("schema") not in (1, 2):
+        if not isinstance(state, dict) or state.get("schema") not in (1, 2, 3):
             raise ValueError("Invalid ADO continuation schema")
-        compatible_state = state["schema"] == 2
+        compatible_state = state["schema"] == 3
         old_state = state.get("projects", {}) if compatible_state else {}
         if not isinstance(old_state, dict):
             raise ValueError("Invalid ADO continuation")
@@ -515,7 +531,11 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         pagination_complete = (work["prComplete"] and work["scanComplete"] and not work["repoErrors"]
             and all(repo["isDisabled"] or repo["id"] in work["repoDone"]
                     for repo in work["inventory"] or []))
-        complete = verified and pagination_complete and not reasons
+        visibility_complete = (verified and bool(work["inventory"])
+            and not any(repo["isDisabled"] for repo in work["inventory"])
+            and not (expected_ids - {repo["id"] for repo in work["inventory"]})
+            and not (set(configured_names) - {repo["name"].casefold() for repo in work["inventory"]}))
+        complete = verified and pagination_complete and visibility_complete and not reasons
         captured_at = stamp(dt.datetime.now(dt.timezone.utc))
         categories = {}
         for repo in work["inventory"] or []:
@@ -529,13 +549,10 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                   "status": "ready" if complete else "partial" if verified else "unavailable",
                   "coverage": {"identityVerified": verified,
                                "paginationComplete": pagination_complete,
-                               "visibilityComplete": verified and work["inventory"] is not None
-                                   and bool(work["inventory"])
-                                   and not any(repo["isDisabled"] for repo in work["inventory"])
-                                   and not (expected_ids - {repo["id"] for repo in work["inventory"]})
-                                   and not (set(configured_names) - {repo["name"].casefold() for repo in work["inventory"]}),
+                               "visibilityComplete": visibility_complete,
                                "reasons": reasons},
-                  "days": source_days(work, org, project, categories, captured_at, complete, verified),
+                  "days": source_days(work, org, project, categories, captured_at,
+                                      complete, verified, visibility_complete),
                   "provenance": {"inventoryCount": len(work["inventory"] or []),
                       "expectedRepositoryCount": len(expected_ids),
                       "missingRepositoryCount": len(expected_ids - {repo["id"] for repo in work["inventory"] or []}),
@@ -567,4 +584,4 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                            "complete": all(source["status"] == "ready" for source in sources),
                            "reasons": sorted({reason for source in sources
                                               for reason in source["coverage"]["reasons"]})},
-            "state": {"schema": 2, "projects": states}}
+            "state": {"schema": 3, "projects": states}}

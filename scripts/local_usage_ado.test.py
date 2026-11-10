@@ -225,10 +225,60 @@ class AdoTests(unittest.TestCase):
         self.assertFalse(mismatch["collection"]["complete"])
         self.assertIn("head-changed-during-scan", mismatch["sources"][0]["coverage"]["reasons"])
         self.assertEqual(mismatch["sources"][0]["days"][-2]["status"], "stale")
+        retained = mismatch["state"]["projects"]["example/project"]["cache"][REPO]
+        self.assertEqual(retained["head"], intermediate)
+        self.assertIn(intermediate, retained["checked"])
         result = collect(api, previous=mismatch, at=AT + dt.timedelta(minutes=15))
         self.assertEqual(result["sources"][0]["status"], "ready")
         self.assertEqual(result["sources"][0]["days"][-2]["commits"], 1)
-        self.assertEqual(result["state"]["projects"]["example/project"]["cache"][REPO]["head"], replacement)
+        rewritten = result["state"]["projects"]["example/project"]["cache"][REPO]
+        self.assertEqual(rewritten["head"], replacement)
+        self.assertEqual(rewritten["relation"], "rewritten")
+
+    def test_repeated_fast_forward_keeps_complete_pinned_proofs_until_head_settles(self):
+        api = Api()
+        initial = collect(api)
+        first_head, second_head, third_head = ("d" * 40, "e" * 40, "6" * 40)
+
+        def advance(new_head, prior_head):
+            api.heads[REPO] = new_head
+            row = commit(new_head, "2026-11-09T08:00:00Z")
+            api.histories[new_head] = [row, *api.histories[prior_head]]
+            api.details[new_head] = row
+
+        def finish_moved(previous, at):
+            for _ in range(12):
+                result = collect(api, previous=previous, at=at)
+                if "head-changed-during-scan" in result["sources"][0]["coverage"]["reasons"]:
+                    return result
+                previous = result
+            self.fail("Pinned traversal did not finish under bounded continuation")
+
+        advance(first_head, HEAD)
+        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 3):
+            first_partial = collect(api, previous=initial, at=AT + dt.timedelta(minutes=5))
+            advance(second_head, first_head)
+            first_moved = finish_moved(first_partial, AT + dt.timedelta(minutes=5))
+            first_proof = first_moved["state"]["projects"]["example/project"]["cache"][REPO]
+            self.assertEqual((first_proof["head"], first_proof["relation"]), (first_head, "descendant"))
+            api.calls.clear()
+            second_partial = collect(api, previous=first_moved, at=AT + dt.timedelta(minutes=10))
+            self.assertIn(REPO, second_partial["state"]["projects"]["example/project"]["work"]["progress"])
+            advance(third_head, second_head)
+            second_moved = finish_moved(second_partial, AT + dt.timedelta(minutes=10))
+            second_proof = second_moved["state"]["projects"]["example/project"]["cache"][REPO]
+            self.assertEqual((second_proof["head"], second_proof["relation"]), (second_head, "descendant"))
+            settled = second_moved
+            for _ in range(12):
+                settled = collect(api, previous=settled, at=AT + dt.timedelta(minutes=15))
+                if settled["sources"][0]["status"] == "ready":
+                    break
+        self.assertEqual(settled["sources"][0]["status"], "ready")
+        self.assertEqual(settled["sources"][0]["days"][-2]["commits"], 5)
+        self.assertEqual(settled["state"]["projects"]["example/project"]["cache"][REPO]["relation"], "descendant")
+        detail_urls = [args[5] for args in api.calls if "/commits/" in args[5]]
+        detail_ids = {urllib.parse.urlsplit(target).path.split("/")[-1] for target in detail_urls}
+        self.assertEqual(detail_ids, {second_head, third_head})
 
     def test_identity_mismatch_disabled_and_missing_head_keep_coverage_explicit(self):
         api = Api()
@@ -242,7 +292,8 @@ class AdoTests(unittest.TestCase):
         disabled = collect(api)
         self.assertEqual(disabled["sources"][0]["status"], "partial")
         self.assertIn("disabled-repository", disabled["sources"][0]["coverage"]["reasons"])
-        self.assertEqual(disabled["sources"][0]["days"][-2]["prs"], 2)
+        self.assertIsNone(disabled["sources"][0]["days"][-2]["prs"])
+        self.assertEqual(disabled["sources"][0]["days"][-2]["knownPrs"], 2)
         self.assertIsNone(disabled["sources"][0]["days"][-2]["commits"])
         api.repos[0]["isDisabled"] = False
         api.heads[REPO] = "bad"
@@ -262,12 +313,15 @@ class AdoTests(unittest.TestCase):
         self.assertFalse(source["coverage"]["visibilityComplete"])
         self.assertIn("repository-visibility-gap", source["coverage"]["reasons"])
         self.assertEqual(source["days"][-2]["status"], "stale")
+        self.assertEqual(source["days"][-2]["prs"], 2)
         self.assertEqual(source["days"][-2]["commits"], 2)
         again = collect(api, previous=missing, at=AT + dt.timedelta(minutes=10))
         self.assertIn("repository-visibility-gap", again["sources"][0]["coverage"]["reasons"])
         self.assertFalse(again["collection"]["complete"])
         first = collect(api)
         self.assertIn("repository-visibility-gap", first["sources"][0]["coverage"]["reasons"])
+        self.assertIsNone(first["sources"][0]["days"][-2]["prs"])
+        self.assertEqual(first["sources"][0]["days"][-2]["knownPrs"], 0)
         self.assertIsNone(first["sources"][0]["days"][-2]["commits"])
         api.repos = original_repos
         restored = collect(api, previous=again, at=AT + dt.timedelta(minutes=15))

@@ -64,8 +64,11 @@ configured remotes remain expected scope: disappearance from a later inventory
 or an unexplained empty first inventory stays partial or stale, not zero.
 Missing refs, incomplete pages, expired authentication,
 budget exhaustion and malformed coauthor evidence keep exact totals null.
-Known typed subtotals contain only observed PR pages and completely reconciled
-repositories. A new incomplete scan may retain the prior exact rows as `stale`
+Exact PR totals also require verified repository visibility; a complete PR
+page scan against an unverified empty inventory yields a known zero prefix,
+not an exact zero. Known typed subtotals contain only observed PR pages and
+completely reconciled repositories. A new incomplete scan may retain the prior
+exact rows as `stale`
 with their original day capture times. Source and collection coverage disclose
 the incomplete reason; a stale row is not a current pass.
 
@@ -86,10 +89,14 @@ after it in the API's commit sequence. The changed-head result replaces the
 old result only after the full traversal finishes. This catches late merges,
 old author dates and force pushes without relying on `fromDate`/`toDate`
 server filtering. A resumed scan finishes its immutable pin even if the branch
-advances; a final ref mismatch invalidates that result for current coverage and
-forces another reconciliation. Window rollover starts a fresh 60-day scan. Neither a
-request budget nor a force push can turn an unscanned portion into a certified
-zero.
+advances. A final ref mismatch keeps the complete pinned DAG proof privately,
+marks current coverage incomplete, and starts a full traversal of the new head.
+Only previously checked immutable commit details are reused during that full
+traversal; every reachable commit ID is still enumerated, so a side branch
+after the old head is counted. An absent old head classifies the new graph as
+rewritten and old counts cannot enter it. Window rollover starts a fresh
+60-day scan. Neither a request budget nor a force push can turn an unscanned
+portion into a certified zero.
 
 The private state, account identities and repository names stay in the local
 usage snapshot. Public PR text and logs must not include the user's private
