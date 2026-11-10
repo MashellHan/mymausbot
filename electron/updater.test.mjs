@@ -33,7 +33,7 @@ function page(origin) {
   return { webContents, event: { sender: webContents, senderFrame: mainFrame } };
 }
 
-function mainRule({ sessionOnly = false } = {}) {
+function mainRule({ sessionOnly = false, privateFile = false } = {}) {
   const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const start = source.indexOf("function myCloud() {"), end = source.indexOf("const savedWorkspace = id =>", start);
   expect(start).toBeGreaterThanOrEqual(0);
@@ -51,6 +51,7 @@ function mainRule({ sessionOnly = false } = {}) {
   const listeners = new Map();
   const signIn = { options: null, storeOptions: null, state: { status: "signed-out", message: "restoring" } };
   let ringOptions = null, placeFileCalls = 0;
+  const privateStores = [];
   const context = vm.createContext({
     ipcMain: { handle: () => {}, on: (channel, listener) => listeners.set(channel, listener) },
     senderIsLocal: localOriginModule.isLocalSender, workspaceSenderAllowed: environments.workspaceSenderAllowed, cloudPageSenderAllowed, myCloudOrigin, otherOwnClouds,
@@ -62,9 +63,11 @@ function mainRule({ sessionOnly = false } = {}) {
     rememberedHome: null, savedCloudHomeOrigin, cloudSignInRestored: true,
     // ensureCloudAccount's world: a packaged app, and a sign-in client whose state the test sets.
     app: { isPackaged: true, getPath: () => "/unused", getVersion: () => "1.0.0" }, process: { platform: "darwin", env: {} }, cloudTarget,
-    SESSION_CREDENTIALS: sessionOnly,
+    SESSION_CREDENTIALS: sessionOnly, PRIVATE_FILE_CREDENTIALS: privateFile,
     path: { join: (...parts) => parts.join("/") }, os: { hostname: () => "mac" }, shell: {}, safeStorage: {},
-    createCloudAccountStore: (options) => { signIn.storeOptions = options; return {}; }, cloudSync: { accountChanged: () => {} }, accounts: { tell: () => {} }, rememberCloudHome: () => {}, rememberedCloudHome, computerSharing: null, updatesConsent: null,
+    createManagedDesktopStore: (options) => { signIn.storeOptions = options; return {}; },
+    privateCredentialStore: (name) => { privateStores.push(name); return { name }; },
+    cloudSync: { accountChanged: () => {} }, accounts: { tell: () => {} }, rememberCloudHome: () => {}, rememberedCloudHome, computerSharing: null, updatesConsent: null,
     createDesktopRing: (options) => { ringOptions = options; return () => null; },
     jsonFile: () => { placeFileCalls++; return { read: () => null, write: () => {} }; },
     sendUpdaterState: () => {}, refreshCloudMenus: () => {}, announceCloudReady: () => {}, installCloudPlanIpc: () => {},
@@ -102,7 +105,7 @@ function mainRule({ sessionOnly = false } = {}) {
     context.cloudSignInRestored = true;
     signIn.options.onState(state);
   };
-  return { context, window, show, offered, launching, signedIn, signIn, ringOptions, placeFileCalls: () => placeFileCalls,
+  return { context, window, show, offered, launching, signedIn, signIn, ringOptions, privateStores, placeFileCalls: () => placeFileCalls,
     pageAllowed: vm.runInContext("updaterPageAllowed", context) };
 }
 
@@ -123,6 +126,11 @@ it("keeps Cloud account store mode tied to the App's selected credential lifetim
   stash.write({ account: "session only" });
   expect(stash.read()).toEqual({ account: "session only" });
   expect(ephemeral.placeFileCalls()).toBe(0);
+  const privateMode = mainRule({ privateFile: true });
+  privateMode.launching();
+  privateMode.ringOptions.savedStore();
+  expect(privateMode.privateStores).toEqual(["cloud-account.json", "cloud-accounts.json"]);
+  expect(privateMode.signIn.storeOptions).toBeNull();
 });
 
 async function load(pageAllowed) {
