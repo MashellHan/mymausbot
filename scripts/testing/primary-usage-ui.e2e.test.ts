@@ -71,7 +71,7 @@ const enabled = process.env.OMB_PRIMARY_USAGE_UI === "1";
       const shot = await page.session.send<{ data: string }>("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       writeFileSync(join(evidence, `primary-${width}-${locale}.png`), Buffer.from(shot.data, "base64"));
     }
-    console.info(JSON.stringify({ primaryUsageUi: "passed", evidence, widths: [360, 960], locales: ["en", "zh"] }));
+    console.info(JSON.stringify({ primaryUsageUi: "passed", evidence, widths: [360, 960], languages: ["en", "zh"] }));
   } finally {
     await browser?.close().catch(() => {});
     await chrome?.close(3000);
