@@ -62,17 +62,21 @@ def segment(value):
 
 def projects(config):
     found = {}
-    for raw in config.get("mergedAdoProjects", []) + config.get("adoRemotes", []):
+    scopes = ([(raw, False) for raw in config.get("mergedAdoProjects", [])]
+              + [(raw, True) for raw in config.get("adoRemotes", [])])
+    for raw, is_remote in scopes:
         parsed = urllib.parse.urlsplit(raw)
         if (parsed.scheme != "https" or parsed.hostname != "dev.azure.com" or parsed.port not in (None, 443)
                 or parsed.username or parsed.password or parsed.query or parsed.fragment):
             raise ValueError("Invalid configured ADO scope")
         parts = parsed.path.strip("/").split("/")
         repository = None
-        if len(parts) == 4 and parts[2] == "_git":
+        if is_remote:
+            if len(parts) != 4 or parts[2] != "_git":
+                raise ValueError("Invalid configured ADO remote")
             repository = segment(parts[3]).casefold()
             parts = parts[:2]
-        if len(parts) != 2:
+        elif len(parts) != 2:
             raise ValueError("Invalid configured ADO scope")
         org, project = map(segment, parts)
         key = (org.casefold(), project.casefold())
@@ -513,8 +517,9 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         if prior.get("emailHash") != email_hash:
             prior = {}
         same_scope = prior.get("remoteScopeHash") == scope_hash
-        cache = prior.get("cache", {})
-        expected_ids.update(cache)
+        old_cache = prior.get("cache", {})
+        cache = old_cache if same_scope else {}
+        expected_ids.update(old_cache)
         if isinstance(prior.get("work"), dict):
             expected_ids.update(repo["id"] for repo in prior["work"].get("inventory") or [])
         work = prior.get("work")
@@ -560,7 +565,6 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 work = new_work(at)
                 raise ValueError("Overlapping ADO project discovery")
             discovered_repositories.update(inventory_keys)
-            advance_prs(reader, org, project, account, work)
             by_name = {}
             for repo in work["inventory"]:
                 by_name.setdefault(repo["name"].casefold(), []).append(repo["id"])
@@ -570,7 +574,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 work["scanComplete"] = False
             work["selectedRepoIds"] = selected
             selected_ids = set(selected)
-            cache = {key: value for key, value in cache.items() if key in selected_ids}
+            cache = {key: value for key, value in old_cache.items() if key in selected_ids}
             work["progress"] = {key: value for key, value in work["progress"].items() if key in selected_ids}
             work["repoDone"] = {key: value for key, value in work["repoDone"].items() if key in selected_ids}
             work["repoErrors"] = {key: value for key, value in work["repoErrors"].items() if key in selected_ids}
@@ -584,6 +588,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 work["reasons"].append("ambiguous-configured-repository")
             if any(repo["isDisabled"] for repo in work["inventory"]) and "disabled-repository" not in work["reasons"]:
                 work["reasons"].append("disabled-repository")
+            advance_prs(reader, org, project, account, work)
             advance_repos(reader, org, project, work, cache, emails)
         except (BudgetExceeded, OSError, KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
             reasons.append("request-budget" if isinstance(error, BudgetExceeded)

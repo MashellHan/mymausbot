@@ -7,8 +7,9 @@ clones, writes a cache, changes authentication, or starts a scheduler.
 
 ## Scope and identity
 
-`mergedAdoProjects` and `adoRemotes` select project URLs. The collector
-canonicalizes organization/project pairs and rejects malformed or duplicate
+`mergedAdoProjects` accepts project URLs only; `adoRemotes` accepts repository
+URLs and alone supplies the history allowlist. The collector canonicalizes
+organization/project pairs and rejects malformed or duplicate
 repository discovery. Each organization must have an explicit
 `adoPrincipals[organization.lower()] = {"stableId": "<verified GUID>",
 "alias": "<verified lowercase account email>"}`. The authenticated

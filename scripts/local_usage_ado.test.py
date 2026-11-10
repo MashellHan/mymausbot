@@ -39,6 +39,9 @@ class Api:
     def __init__(self):
         self.calls = []
         self.owner = OWNER
+        self.fail_identity = False
+        self.fail_inventory = False
+        self.fail_pr = False
         self.inventory_continuation = None
         self.repos = [{"id": REPO, "name": "repository", "defaultBranch": "refs/heads/main",
                        "isDisabled": False}]
@@ -64,6 +67,10 @@ class Api:
         assert target.scheme == "https" and target.hostname == "dev.azure.com"
         query = urllib.parse.parse_qs(target.query)
         path = target.path
+        if (path.endswith("/_apis/connectionData") and self.fail_identity
+                or path.endswith("/_apis/git/repositories") and self.fail_inventory
+                or path.endswith("/_apis/git/pullrequests") and self.fail_pr):
+            raise ValueError("private transport failure")
         if path.endswith("/_apis/connectionData"):
             assert target.query == "connectOptions=0"
         else:
@@ -631,6 +638,15 @@ class AdoTests(unittest.TestCase):
         self.assertIn("ambiguous-configured-repository", ambiguous["sources"][0]["coverage"]["reasons"])
         self.assertFalse(any("/commits?" in args[5] or "/refs?" in args[5] for args in duplicate.calls))
 
+    def test_project_scope_repository_url_cannot_supply_history_allowlist(self):
+        api = Api()
+        config = copy.deepcopy(CONFIG)
+        config["mergedAdoProjects"] = ["https://dev.azure.com/example/project/_git/repository"]
+        config["adoRemotes"] = []
+        with self.assertRaisesRegex(ValueError, "Invalid configured ADO scope"):
+            collect(api, config=config)
+        self.assertEqual(api.calls, [])
+
     def test_narrowed_allowlist_drops_old_broad_progress_before_any_history_read(self):
         api = Api()
         ids = [REPO, "bbbbbbbb-cccc-dddd-eeee-ffffffffffff", "cccccccc-dddd-eeee-ffff-000000000000"]
@@ -684,6 +700,60 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(set(state["cache"]), {REPO})
         self.assertNotEqual(state["remoteScopeHash"], previous["state"]["projects"]["example/project"]["remoteScopeHash"])
         self.assertTrue(any("/_apis/git/repositories?" in args[5] for args in api.calls))
+
+    def test_narrowing_filters_old_cache_and_progress_before_failed_pr_page(self):
+        api = Api()
+        other_id, other_head, next_head = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff", "4" * 40, "5" * 40
+        api.repos.append({"id": other_id, "name": "other", "defaultBranch": "refs/heads/main", "isDisabled": False})
+        api.heads[other_id] = other_head
+        api.histories[other_head] = [commit(other_head, "2026-11-09T12:00:00Z")]
+        api.details[other_head] = api.histories[other_head][0]
+        broad = copy.deepcopy(CONFIG)
+        broad["adoRemotes"].append("https://dev.azure.com/example/project/_git/other")
+        complete = collect(api, config=broad)
+        api.heads[other_id] = next_head
+        api.histories[next_head] = [commit(next_head, "2026-11-09T12:00:00Z")] + [
+            commit(f"{index:040x}", "2026-11-09T12:00:00Z") for index in range(1, 25)]
+        api.details.update({row["commitId"]: row for row in api.histories[next_head]})
+        with patch.object(ado, "REQUESTS_PER_PROJECT", 12):
+            pending = collect(api, config=broad, previous=complete, at=AT + dt.timedelta(minutes=5))
+        state = pending["state"]["projects"]["example/project"]
+        self.assertIn(other_id, state["cache"])
+        self.assertIn(other_id, state["work"]["progress"])
+        api.fail_pr = True
+        api.calls.clear()
+        narrowed = collect(api, config=CONFIG, previous=pending, at=AT + dt.timedelta(minutes=10))
+        state = narrowed["state"]["projects"]["example/project"]
+        self.assertEqual(state["work"]["selectedRepoIds"], [REPO])
+        self.assertEqual(set(state["cache"]), {REPO})
+        self.assertNotIn(other_id, state["work"]["progress"])
+        self.assertNotIn(other_id, state["work"]["repoDone"])
+        self.assertFalse(state["work"]["prComplete"])
+        self.assertIn("ADO authenticated read unavailable", narrowed["sources"][0]["coverage"]["reasons"])
+        self.assertFalse(any(other_id in args[5] for args in api.calls))
+
+    def test_narrowing_identity_or_inventory_failure_cannot_stamp_broad_proofs_as_new_scope(self):
+        api = Api()
+        other_id, other_head = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff", "4" * 40
+        api.repos.append({"id": other_id, "name": "other", "defaultBranch": "refs/heads/main", "isDisabled": False})
+        api.heads[other_id] = other_head
+        api.histories[other_head] = [commit(other_head, "2026-11-09T12:00:00Z")]
+        api.details[other_head] = api.histories[other_head][0]
+        broad = copy.deepcopy(CONFIG)
+        broad["adoRemotes"].append("https://dev.azure.com/example/project/_git/other")
+        previous = collect(api, config=broad)
+        self.assertEqual(previous["sources"][0]["status"], "ready")
+        for failure in ("fail_identity", "fail_inventory"):
+            with self.subTest(failure=failure):
+                setattr(api, failure, True)
+                narrowed = collect(api, config=CONFIG, previous=previous, at=AT + dt.timedelta(minutes=5))
+                setattr(api, failure, False)
+                state = narrowed["state"]["projects"]["example/project"]
+                self.assertEqual(state["cache"], {})
+                self.assertEqual(state["work"]["progress"], {})
+                self.assertNotEqual(state["remoteScopeHash"], previous["state"]["projects"]["example/project"]["remoteScopeHash"])
+                self.assertNotEqual(narrowed["sources"][0]["days"][-2]["status"], "stale")
+                self.assertIsNone(narrowed["sources"][0]["days"][-2]["commits"])
 
     def test_utc_rollover_keeps_compatible_pinned_progress_after_fresh_inventory_and_prs(self):
         api = Api()
