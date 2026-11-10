@@ -40,8 +40,8 @@ export interface QuestionRoutingDeps {
   mayReach(fromThreadId: string, toThreadId: string): boolean;
   /** Words from a turn that could not use the lent computer are about to reach work in this thread: it stops keeping it. */
   handedInUnproven(threadId: string): void;
-  /** The actual approval level of the selected receiving conversation, or null when it no longer exists. */
-  recipientLevel(botId: string, threadId: string, peerInitiated: boolean): ApprovalMode | null;
+  /** The selected assignment's recorded level, or the direct conversation's level when no assignment was selected. */
+  recipientLevel(botId: string, threadId: string, nodeId?: string): ApprovalMode | null;
 }
 
 const ENDED: ReadonlySet<HandoffView["status"]> = new Set(["completed", "failed", "cancelled"]);
@@ -56,8 +56,8 @@ interface Waiting {
 
 export function createQuestionRouting(deps: QuestionRoutingDeps) {
   const { store } = deps;
-  const permissionRefusal = (target: BotRecord, threadId: string, sourceLevel: ApprovalMode, peerInitiated: boolean) => {
-    const level = deps.recipientLevel(target.id, threadId, peerInitiated);
+  const permissionRefusal = (target: BotRecord, threadId: string, sourceLevel: ApprovalMode, nodeId?: string) => {
+    const level = deps.recipientLevel(target.id, threadId, nodeId);
     return level !== null && levelWithin(level, sourceLevel) ? null
       : peerDeliveryReceipt({ botId: target.id, botName: target.name, outcome: "failed", threadId,
         detail: "that conversation has more permission than this turn, or is no longer available; nothing was sent" });
@@ -120,7 +120,9 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
         detail: `only the person can answer "${pick.question}": it waits on them where it was asked, and a teammate's answer doesn't settle it. Tell them where it is if they ask` });
     }
     if (!pick) return refused() ?? await handOn(input, deps.active().find((node) => node.botId === target.id && node.status === "running" && ownWork(node)));
-    const denied = permissionRefusal(target, pick.threadId, input.sourceLevel, true);
+    if (!pick.node) return peerDeliveryReceipt({ botId: target.id, botName: target.name, outcome: "failed", threadId: pick.threadId,
+      detail: "that receiving turn is no longer available; nothing was sent" });
+    const denied = permissionRefusal(target, pick.threadId, input.sourceLevel, pick.node.id);
     if (denied) return denied;
     const by: Answerer = { kind: "bot", botId: sender.id };
     // Security invariant: first, so what this sender says can never reach a turn still holding the lent computer.
@@ -149,7 +151,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
   async function handOn(input: { sender: BotRecord; senderThreadId: string; target: BotRecord; message: string; lends?: boolean; sourceLevel: ApprovalMode }, running: HandoffView | undefined): Promise<PeerDeliveryReceipt | undefined> {
     const { sender, target, message } = input;
     if (!running) return undefined;
-    const denied = permissionRefusal(target, running.threadId, input.sourceLevel, true);
+    const denied = permissionRefusal(target, running.threadId, input.sourceLevel, running.id);
     if (denied) return denied;
     if (!input.lends) deps.handedInUnproven(running.threadId);
     if (!(await deps.steer(running.threadId, composeAddition(running.id, sender.name, message, running.origin?.kind === "outside" ? AUTHORITY.info : AUTHORITY.behalf)))) return undefined;
@@ -193,7 +195,8 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
     const asked = forPerson(target.id, threadId);
     if (!asked) return undefined;
     const { row, question } = asked, card = row.card!;
-    const denied = permissionRefusal(target, threadId, input.sourceLevel, false);
+    const running = deps.active().find((node) => node.botId === target.id && node.threadId === threadId && node.status === "running");
+    const denied = permissionRefusal(target, threadId, input.sourceLevel, running?.id);
     if (denied) return denied;
     if (!input.lends) deps.handedInUnproven(threadId);
     if (!(await deps.answerLive(threadId, card.requestId!, `@${sender.name} answered for the person: ${message}`))) {

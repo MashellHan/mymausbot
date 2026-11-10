@@ -3900,9 +3900,15 @@ const askCards = createAskCards({ store, node: (id) => coordinator.node(id), del
   answeredIn: (threadId, requestId) => automationReports.answeredIn(teamMessages.inbox.answeredIn(threadId, requestId), requestId), live: (threadId, requestId) => askMessageByRequest.has(`${threadId}:${requestId}`),
   copiedInto: (inboxThreadId, botId, threadId) => Boolean(CLOUD_TEAM) && teamMessages.inbox.isHomeOf(inboxThreadId, teamOwners.routing.askedPerson(botId, threadId)) });
 const questionRouting = createQuestionRouting({ store, handedInUnproven, active: () => coordinator.active(), node: (id) => coordinator.node(id), parkedFor: (botId) => coordinator.parkedFor(botId), answerNode: (id, text, by) => coordinator.answerNode(id, text, by), live: (threadId, requestId) => askMessageByRequest.has(`${threadId}:${requestId}`),
-  recipientLevel: (botId, threadId, peerInitiated) => {
+  recipientLevel: (botId, threadId, nodeId) => {
+    if (!store.taskByThread(botId, threadId)) return null;
+    if (nodeId) {
+      const current = coordinator.status(nodeId)?.assignment;
+      return current?.assignee.botId === botId && current.assignee.destination.threadId === threadId
+        && (current.status === "running" || current.status === "needs_input") ? current.level : null;
+    }
     const bot = store.projectBotForTask(botId, threadId) ?? store.bot(botId);
-    return bot && store.taskByThread(botId, threadId) ? approvalModeForTurn(bot, peerInitiated, threadId) : null;
+    return bot ? approvalModeForTurn(bot, false, threadId) : null;
   },
   unattended: (botId, threadId) => teammatePrompts.unattendedWork(botId, threadId),
   answerLive: async (threadId, requestId, text) => await answerRequest(threadId, botForThread(store.botByThread(threadId)?.id ?? "", threadId)?.modelSelection.instanceId ?? "", requestId, "answer", text) === "answered", settleSignIns: (node) => signInSettle.answeredElsewhere(node),

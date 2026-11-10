@@ -12,7 +12,8 @@ const DACHS = bot("dachs", "Dachs");
 const OTTER = bot("otter", "Otter");
 
 function world(options: { live?: string[]; privateTo?: string; steers?: boolean; takesAnswers?: boolean; unattended?: string[]; confined?: string[];
-  levels?: Partial<Record<string, ApprovalMode>>; peerLevels?: Partial<Record<string, ApprovalMode>> } = {}) {
+  levels?: Partial<Record<string, ApprovalMode>>; peerLevels?: Partial<Record<string, ApprovalMode>>;
+  recordedLevels?: Partial<Record<string, ApprovalMode>> } = {}) {
   const threads = new Map<string, Message[]>();
   let ids = 0;
   const rows = (threadId: string) => threads.get(threadId) ?? [];
@@ -53,8 +54,13 @@ function world(options: { live?: string[]; privateTo?: string; steers?: boolean;
   const revoked: string[] = [];
   const deps: QuestionRoutingDeps = {
     handedInUnproven: (threadId) => { revoked.push(threadId); }, store: store as unknown as QuestionRoutingDeps["store"],
-    recipientLevel: (botId, threadId, peerInitiated) => store.taskByThread(botId, threadId)
-      ? (peerInitiated ? options.peerLevels?.[threadId] : undefined) ?? options.levels?.[threadId] ?? "full" : null,
+    recipientLevel: (botId, threadId, nodeId) => {
+      if (!store.taskByThread(botId, threadId)) return null;
+      if (!nodeId) return options.levels?.[threadId] ?? "full";
+      const selected = nodes.get(nodeId);
+      return selected?.botId === botId && selected.threadId === threadId && ["running", "waiting"].includes(selected.status)
+        ? options.recordedLevels?.[nodeId] ?? options.peerLevels?.[threadId] ?? options.levels?.[threadId] ?? "full" : null;
+    },
     active: () => [...nodes.values()],
     node: (id) => nodes.get(id),
     parkedFor: (botId) => [...nodes.values()].filter((one) => one.botId === botId && one.status === "waiting" && one.question !== undefined),
@@ -141,6 +147,27 @@ describe("an answer passed on by another bot", () => {
     const node = parked(w);
     expect(await w.routing.relay({ sourceLevel: "auto", sender: FUCHS, senderThreadId: "inbox", target: DACHS,
       message: "Ja", answers: node.id })).toMatchObject({ outcome: "injected" });
+  });
+
+  it("rejects Auto into a selected direct Custom root, while admitting Auto into recorded Auto work", async () => {
+    const direct = world({ live: ["req-custom"], levels: { work: "custom" }, peerLevels: { work: "auto" },
+      recordedLevels: { "direct-root": "custom" } });
+    direct.node({ id: "direct-root", parentId: undefined, status: "running" });
+    direct.store.appendMessage("work", { role: "bot", kind: "options", text: "Which file?", card: {
+      title: "Which file?", subtitle: "Which file?", options: ["README", "Guide"], requestId: "req-custom", requestType: "question" } });
+    expect(await direct.routing.relay({ sourceLevel: "auto", lends: true, sender: FUCHS, senderThreadId: "inbox", target: DACHS,
+      message: "README", answers: "direct-root" })).toMatchObject({ outcome: "failed", threadId: "work" });
+    expect(direct.answeredLive).toEqual([]);
+    expect(direct.rows("work")[0]!.card!.answered).toBeUndefined();
+    expect(direct.revoked).toEqual([]);
+
+    const peer = world({ live: ["req-auto"], levels: { work: "custom" }, recordedLevels: { "peer-work": "auto" } });
+    peer.node({ id: "peer-work", status: "running" });
+    peer.store.appendMessage("work", { role: "bot", kind: "options", text: "Which file?", card: {
+      title: "Which file?", subtitle: "Which file?", options: ["README", "Guide"], requestId: "req-auto", requestType: "question" } });
+    expect(await peer.routing.relay({ sourceLevel: "auto", sender: FUCHS, senderThreadId: "inbox", target: DACHS,
+      message: "README", answers: "peer-work" })).toMatchObject({ outcome: "injected", threadId: "work" });
+    expect(peer.answeredLive).toHaveLength(1);
   });
 
   it("answers the question the sender's own turn was resumed with, without naming it", async () => {
