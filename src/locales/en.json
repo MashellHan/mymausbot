@@ -10300,6 +10300,7 @@
   "computer.usage.primaryCommitHint": "Credited GitHub Profile commits and verified ADO default-branch authored commits, each on its source date. Local branches do not add to this total.",
   "computer.usage.primaryKnownCountHint": "Verified subtotal. At least one account or date is incomplete; the exact total is unknown.",
   "computer.usage.primaryKnownLabel": "Known subtotal",
+  "computer.usage.primaryChangeDescription": "Compared with source dates {previous}: {change}.",
   "computer.usage.primarySources": "Accounts and source coverage",
   "computer.usage.primaryUnavailable": "The new contribution snapshots are not available or did not pass validation.",
   "computer.usage.primarySourceCutoff": "Source cutoff: {time} China time",

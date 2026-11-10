@@ -98,6 +98,50 @@ describe("canonical source-qualified contributions", () => {
     });
   });
 
+  it("excludes every numeric projection from an identity-unverified source", () => {
+    const value = snapshot();
+    const source = value.github.sources[0]!;
+    source.status = "partial";
+    source.coverage.identityVerified = false;
+    const latest = source.days[59]!;
+    (latest as { status: string }).status = "partial";
+    latest.prs = null as never;
+    latest.commits = null as never;
+    (latest.repositories[0]! as { status: string }).status = "partial";
+    latest.repositories[0]!.prs = null as never;
+    latest.repositories[0]!.commits = null as never;
+    const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    expect(result.windows?.["1"]).toMatchObject({ prs: null, knownPrs: 2, commits: null, knownCommits: 5 });
+    expect(result.accounts.find((account) => account.provider === "github")?.windows["1"])
+      .toMatchObject({ prs: null, knownPrs: null, commits: null, knownCommits: null });
+    expect(result.windows?.["1"].repositories.rows.map((row) => row.name)).toEqual(["ado/fixture"]);
+    expect(result.windows?.["1"].categories.personal).toMatchObject({ prs: null, knownPrs: null, commits: null, knownCommits: null });
+  });
+
+  it("keeps a partial repository category unknown when its account total is exact", () => {
+    const value = snapshot();
+    const row = value.github.sources[0]!.days[59]!.repositories[0]!;
+    (row as { status: string }).status = "partial";
+    row.prs = null as never;
+    row.commits = null as never;
+    const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    expect(result.windows?.["1"]).toMatchObject({ prs: 5, commits: 9,
+      categories: { personal: { prs: null, knownPrs: 3, commits: null, knownCommits: 4 } },
+      repositories: { coverage: "partial" } });
+    expect(result.windows?.["1"].repositories.rows.find((item) => item.category === "personal"))
+      .toMatchObject({ prs: null, knownPrs: 3, commits: null, knownCommits: 4 });
+  });
+
+  it("rejects case aliases of one authenticated account before aggregation", () => {
+    const value = snapshot();
+    const duplicate = structuredClone(value.github.sources[0]!);
+    duplicate.id = "fixture:github:case-alias";
+    duplicate.account.host = duplicate.account.host.toUpperCase();
+    value.github.activeSourceIds.push(duplicate.id);
+    value.github.sources.push(duplicate);
+    expect(() => parse(value)).toThrow("Duplicate contribution account scope");
+  });
+
   it("reconciles one ADO principal across distinct verified project scopes", () => {
     const value = snapshot();
     const second = structuredClone(value.ado.sources[0]!);

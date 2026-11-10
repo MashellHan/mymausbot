@@ -5,8 +5,11 @@ import importlib.util
 import json
 from pathlib import Path
 import plistlib
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("migrate-local-contributions.py")
@@ -49,9 +52,20 @@ class MigrationTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="contribution-migration-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        patcher = patch.object(migration, "user_home", return_value=self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.plan = self.root / "plan"
-        self.config = self.root / "activity.json"
-        self.cache = self.root / "usage/contributions-v2.json"
+        self.config = self.root / ".config/agent-town/activity.json"
+        self.config.parent.mkdir(parents=True)
+        self.cache = self.root / ".local/share/mymausbot/usage/contributions-v2.json"
+        self.azure = self.root / ".azure"
+        self.azure.mkdir()
+        self.python = self.root / "azure-venv/bin/python"
+        self.python.parent.mkdir(parents=True)
+        self.python.symlink_to(sys.executable)
+        self.collector = self.root / "collector.py"
+        self.collector.write_text("# synthetic collector entry\n")
         self.helpers = self.root / "installed-helpers"
         self.helpers.mkdir()
         self.app = self.root / "candidate.app"
@@ -63,7 +77,9 @@ class MigrationTests(unittest.TestCase):
         self.plist = self.root / "scheduled.plist"
         with self.plist.open("wb") as stream:
             plistlib.dump({"Label": "fixture.usage", "StartInterval": 300,
-                "ProgramArguments": ["/usr/bin/python3", str(self.helpers / "refresh-local-usage.py"), "--collector", "fixture"]}, stream)
+                "ProgramArguments": [str(self.python), str(self.helpers / "refresh-local-usage.py"), "--collector", str(self.collector)],
+                "EnvironmentVariables": {"PATH": "/usr/bin:/bin", "PYTHONUNBUFFERED": "1"},
+                "WorkingDirectory": str(self.root)}, stream)
         self.evidence = self.root / "evidence"
         self.evidence.mkdir()
         accounts = [{"profile": "fixture", "result": {"data": {"viewer": {
@@ -91,7 +107,7 @@ class MigrationTests(unittest.TestCase):
             helpers_dir=str(self.helpers), app=str(self.app), launch_agent=str(self.plist), evidence_dir=str(self.evidence),
             ado_author_proof=str(self.proof), ado_author_email=["corporate@example.test"],
             private_profile_candidate=str(self.private_candidate), expected_private_profile_sha256=sha(self.private_candidate),
-            collector=str(self.root / "collector.py"), azure_config_dir=str(self.root / "azure"))
+            collector=str(self.collector), azure_config_dir=str(self.azure), python=str(self.python))
 
     def prepared(self):
         migration.prepare(self.args)
@@ -121,6 +137,68 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(json.loads((self.plan / "sealed-plan.json").read_text())["candidateCacheSha256"],
                          sha(self.plan / "candidate-cache.json"))
         self.assertEqual(args.expected_plan_sha256, sha(self.plan / "sealed-plan.json"))
+
+    def test_capture_uses_the_scheduled_venv_executable_and_clean_runtime(self):
+        self.prepared()
+        captured = {}
+        value = {"version": 2, "github": envelope("github", "fixture-stable-id", "Fixture"),
+                 "ado": envelope("ado", "11111111-2222-3333-4444-555555555555", "corporate@example.test")}
+
+        def fake_run(command, **options):
+            captured.update(command=command, options=options)
+            Path(command[command.index("--output") + 1]).write_text(json.dumps(value))
+            return subprocess.CompletedProcess(command, 0, stdout='{"primary":"published"}\n', stderr="")
+
+        with patch.object(migration.subprocess, "run", side_effect=fake_run):
+            migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
+        self.assertEqual(captured["command"][0], str(self.python))
+        self.assertEqual(captured["command"][1], str(self.app / "Contents/Resources/usage-helpers/refresh-local-usage.py"))
+        self.assertEqual(captured["command"][captured["command"].index("--config") + 1], str(self.plan / "candidate-config.json"))
+        self.assertEqual(captured["options"]["cwd"], str(self.root))
+        self.assertEqual(captured["options"]["env"]["PATH"], "/usr/bin:/bin")
+        self.assertEqual(captured["options"]["env"]["HOME"], str(self.root))
+        self.assertNotIn("AZURE_CONFIG_DIR", captured["options"]["env"])
+        self.assertNotIn("GH_TOKEN", captured["options"]["env"])
+        migration.seal(argparse.Namespace(plan_dir=str(self.plan)))
+
+    def test_prepare_rejects_mismatched_scheduled_targets_or_base_python(self):
+        for field, wrong in (("config", str(self.root / "wrong-config.json")),
+                             ("collector", str(self.root / "wrong-collector.py")),
+                             ("cache", str(self.root / "wrong-contributions-v2.json")),
+                             ("azure_config_dir", str(self.root / "wrong-azure")),
+                             ("python", sys.executable)):
+            with self.subTest(field=field):
+                original = getattr(self.args, field)
+                setattr(self.args, field, wrong)
+                try:
+                    with self.assertRaisesRegex(ValueError, "scheduled helper"):
+                        migration.prepare(self.args)
+                    self.assertFalse(self.plan.exists())
+                finally:
+                    setattr(self.args, field, original)
+
+    def test_skip_api_or_changed_schedule_fails_before_seal_or_apply(self):
+        with self.plist.open("rb") as stream:
+            scheduled = plistlib.load(stream)
+        scheduled["ProgramArguments"].append("--skip-api")
+        with self.plist.open("wb") as stream:
+            plistlib.dump(scheduled, stream)
+        with self.assertRaisesRegex(ValueError, "scheduled helper"):
+            migration.prepare(self.args)
+        self.assertFalse(self.plan.exists())
+        scheduled["ProgramArguments"].pop()
+        with self.plist.open("wb") as stream:
+            plistlib.dump(scheduled, stream)
+        self.prepared()
+        value = {"version": 2, "github": envelope("github", "fixture-stable-id", "Fixture"),
+                 "ado": envelope("ado", "11111111-2222-3333-4444-555555555555", "corporate@example.test")}
+        (self.plan / "candidate-cache.json").write_text(json.dumps(value))
+        scheduled["ProgramArguments"].append("--skip-api")
+        with self.plist.open("wb") as stream:
+            plistlib.dump(scheduled, stream)
+        with self.assertRaisesRegex(ValueError, "Scheduled command changed"):
+            migration.seal(argparse.Namespace(plan_dir=str(self.plan)))
+        self.assertEqual(json.loads(self.config.read_text()), self.original)
 
     def test_apply_resume_idempotency_and_rollback_preserve_unrelated_config(self):
         args = self.sealed()

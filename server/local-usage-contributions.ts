@@ -195,7 +195,8 @@ export function parseContributionEnvelope(value: unknown, provider: "github" | "
     throw new Error("Too many contribution repository rows");
   }
   const accountKeys = sources.map((item) => [item.account.host, item.account.stableId,
-    item.scope?.organization ?? "", item.scope?.project ?? ""].join("\0"));
+    item.scope?.organization ?? "", item.scope?.project ?? ""].map((part, index) =>
+    index === 0 || index >= 2 || provider === "ado" ? part.toLowerCase() : part).join("\0"));
   if (new Set(accountKeys).size !== accountKeys.length) throw new Error("Duplicate contribution account scope");
   if (raw.state !== undefined) record(raw.state);
   return { version: 2, metricDefinition: raw.metricDefinition as LocalContributionEnvelope["metricDefinition"], provider,
@@ -229,7 +230,7 @@ function combine(values: LocalContributionCounts[]): LocalContributionCounts {
 
 function qualified(entry: Entry): LocalContributionCounts {
   const value = entry.day;
-  if (!value) return { prs: null, knownPrs: null, commits: null, knownCommits: null };
+  if (!value || !entry.source.coverage.identityVerified) return { prs: null, knownPrs: null, commits: null, knownCommits: null };
   const exactDay = entry.source.coverage.identityVerified && entry.source.coverage.paginationComplete &&
     entry.source.coverage.visibilityComplete && value.status === "ready";
   return { prs: exactDay ? value.prs : null, knownPrs: value.knownPrs,
@@ -238,8 +239,10 @@ function qualified(entry: Entry): LocalContributionCounts {
 
 function aggregate(entries: Entry[]): Aggregate {
   const totals = combine(entries.map(qualified));
-  const observed = entries.filter((entry) => entry.day);
+  const observed = entries.filter((entry) => entry.day && entry.source.coverage.identityVerified);
   const complete = entries.length > 0 && entries.every((entry) => qualified(entry).prs !== null && qualified(entry).commits !== null);
+  const repositoryComplete = complete && observed.every((entry) => entry.day!.repositories.every((row) =>
+    row.status === "ready" && row.prs !== null && row.commits !== null));
   const categories = Object.fromEntries(CATEGORIES.map((category) => [category, [] as LocalContributionCounts[]])) as
     Record<LocalUsageCategory, LocalContributionCounts[]>;
   const repositories = new Map<string, LocalContributionRepositories["rows"][number]>();
@@ -248,7 +251,7 @@ function aggregate(entries: Entry[]): Aggregate {
     const sourceDay = entry.day!;
     const rows = sourceDay.repositories;
     for (const row of rows) {
-      const key = JSON.stringify([entry.provider, entry.source.account.host, row.id]);
+      const key = JSON.stringify([entry.provider, entry.source.account.host.toLowerCase(), row.id]);
       const prior = repositories.get(key);
       if (prior && (prior.category !== row.category || prior.name !== row.name)) throw new Error("Repository identity changed within capture");
       const value = qualified(entry);
@@ -273,8 +276,10 @@ function aggregate(entries: Entry[]): Aggregate {
   });
   const categoryTotals = Object.fromEntries(CATEGORIES.map((category) => [category, {
     ...combine(categories[category]),
-    prs: complete ? sum(categories[category].map((row) => row.prs ?? 0)) : null,
-    commits: complete ? sum(categories[category].map((row) => row.commits ?? 0)) : null,
+    prs: repositoryComplete && categories[category].every((row) => row.prs !== null)
+      ? sum(categories[category].map((row) => row.prs!)) : null,
+    commits: repositoryComplete && categories[category].every((row) => row.commits !== null)
+      ? sum(categories[category].map((row) => row.commits!)) : null,
     knownPrs: complete && !categories[category].length ? 0 : known(categories[category].map((row) => row.knownPrs)),
     knownCommits: complete && !categories[category].length ? 0 : known(categories[category].map((row) => row.knownCommits)),
   }])) as Record<LocalUsageCategory, LocalContributionCounts>;
@@ -282,7 +287,8 @@ function aggregate(entries: Entry[]): Aggregate {
   const coverage: LocalUsageCoverage = !observed.length ? "unavailable" : complete ? "ready" : "partial";
   return { ...totals, coverage, missingDays: entries.filter((entry) => !entry.day).map((entry) => entry.source.id),
     categories: categoryTotals,
-    repositories: { coverage, rows, unattributedPrs: totals.knownPrs === null ? null : unattributedPrs,
+    repositories: { coverage: !observed.length ? "unavailable" : repositoryComplete ? "ready" : "partial", rows,
+      unattributedPrs: totals.knownPrs === null ? null : unattributedPrs,
       unattributedCommits: totals.knownCommits === null ? null : unattributedCommits, sharedCommits: 0 } };
 }
 

@@ -20,10 +20,12 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
   metric: "prs" | "commits" | "totalTokens"; daily?: boolean; periodDays?: 1 | 7 | 30; unavailableHint?: string; className?: string;
 }) {
   const usageMetricHint = useUsageMetricHint();
+  const source = useContext(UsageSourceContext);
   const shown = changeText(value);
   const period = periodDays ? t(`computer.usage.changePeriod.${periodDays}`) : null;
   const previous = startDay === endDay ? startDay : `${startDay}–${endDay}`;
-  const description = `${t("computer.usage.changeDescription", { change: shown, previous })}`
+  const description = `${t(source === "primary" && metric !== "totalTokens"
+    ? "computer.usage.primaryChangeDescription" : "computer.usage.changeDescription", { change: shown, previous })}`
     + `${daily ? ` ${t("computer.usage.dailyComparisonHint")}` : ""}`
     + `${period ? ` ${t("computer.usage.periodComparisonHint", { period, days: periodDays! })}` : ""}`
     + ` ${usageMetricHint(metric)}`

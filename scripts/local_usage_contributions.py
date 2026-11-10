@@ -118,7 +118,9 @@ def envelope(raw, provider):
             scope = obj(scope)
             word(scope.get("organization"), 128)
             word(scope.get("project"), 128)
-        account_key = (host, stable_id, scope.get("organization") if scope else None, scope.get("project") if scope else None)
+        account_key = (host.casefold(), stable_id.casefold() if provider == "ado" else stable_id,
+                       scope["organization"].casefold() if scope else None,
+                       scope["project"].casefold() if scope else None)
         if account_key in accounts:
             raise ValueError("Duplicate contribution account scope")
         accounts.add(account_key)
@@ -194,7 +196,8 @@ def validate_bindings(value, config):
                        for row in profiles}
     observed_github = {(row["account"]["host"].casefold(), row["account"]["login"].casefold(), row["account"]["stableId"])
                        for row in value["github"]["sources"]}
-    if len(expected_github) != len(profiles) or observed_github != expected_github:
+    if (len(expected_github) != len(profiles) or len(observed_github) != len(value["github"]["sources"])
+            or observed_github != expected_github):
         raise ValueError("Profile snapshot omits or changes a configured account")
     projects = set()
     for raw in config.get("mergedAdoProjects", []) + config.get("adoRemotes", []):

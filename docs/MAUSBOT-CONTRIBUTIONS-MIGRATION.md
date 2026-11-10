@@ -18,7 +18,14 @@ and ADO principal evidence, the frozen private repository candidate, the
 statically parsed pinned ADO author proof, the signed
 App's helper resources and the existing launchd plist. It writes a private
 candidate config, exact pre-state backups and a hash-bound prepared plan. The
-new config adds `stableId` to each configured GitHub Profile and adds
+plan binds the scheduled Azure virtual environment Python by its invocation
+path, the existing wrapper and collector arguments, its environment and working
+directory, and the default config, Azure cache and primary snapshot paths.
+`capture` uses that same interpreter and runtime with only a private candidate
+config and output path; a base Python with the same resolved binary is not a
+substitute for the virtual environment.
+
+The new config adds `stableId` to each configured GitHub Profile and adds
 the exact candidate `privateRepositories` values and account helper. The
 signed helper set includes `local_usage_profile_private.py`. No stale
 `visibilityProof` field is carried forward. The same candidate adds

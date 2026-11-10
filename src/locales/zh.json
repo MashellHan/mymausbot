@@ -8041,6 +8041,7 @@
   "computer.usage.primaryCommitHint": "GitHub Profile 认可的提交与已核实 ADO 默认分支作者提交，各自保留来源日期。本地分支不会额外计入。",
   "computer.usage.primaryKnownCountHint": "已核实的小计；至少一个账号或日期不完整，精确总数未知。",
   "computer.usage.primaryKnownLabel": "已知小计",
+  "computer.usage.primaryChangeDescription": "与来源日期 {previous} 比较：{change}。",
   "computer.usage.primarySources": "账号与来源覆盖",
   "computer.usage.primaryUnavailable": "新贡献快照不可用或未通过校验。",
   "computer.usage.primarySourceCutoff": "来源截止时间：北京时间 {time}",

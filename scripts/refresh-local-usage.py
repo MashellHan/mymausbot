@@ -573,9 +573,18 @@ def main():
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--skip-api", action="store_true")
     parser.add_argument("--reuse-sources", action="store_true")
+    parser.add_argument("--capture-only", action="store_true")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     config = json.loads(args.config.expanduser().read_text())
     azure_dir = Path(os.environ.get("AZURE_CONFIG_DIR", str(Path.home() / ".azure"))).expanduser()
+    if args.capture_only:
+        if args.output is None or args.publish or args.skip_api or args.reuse_sources:
+            parser.error("Private capture requires --output and no publication or skip flags")
+        return refresh_primary(args.collector.expanduser(), config, azure_dir,
+                               file=args.output.expanduser(), include_legacy=False)
+    if args.output is not None:
+        parser.error("--output is only available for private capture")
     refresh(args.collector.expanduser(), config, azure_dir, publish=args.publish,
             skip_api=args.skip_api, reuse_sources=args.reuse_sources)
 

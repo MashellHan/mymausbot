@@ -6,15 +6,14 @@ import ast
 from contextlib import contextmanager
 import datetime as dt
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import plistlib
+import pwd
 import re
 import shutil
-import stat
-import sys
+import subprocess
 import tempfile
 import urllib.parse
 
@@ -156,18 +155,52 @@ def migrated_config(config, evidence, ado_authors, private_candidate):
     return updated
 
 
-def launch_agent(path, helpers_dir):
+def user_home():
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
+def primary_cache():
+    return user_home() / ".local/share/mymausbot/usage/contributions-v2.json"
+
+
+def launch_agent(path, helpers_dir, config_path, collector_path, azure_dir, python_path, cache_path):
     with Path(path).open("rb") as stream:
         value = plistlib.load(stream)
-    if (value.get("StartInterval") != 300 or not isinstance(value.get("ProgramArguments"), list)
-            or str(helpers_dir / "refresh-local-usage.py") not in value["ProgramArguments"]):
+    arguments = value.get("ProgramArguments")
+    defaults = {"config": user_home() / ".config/agent-town/activity.json",
+                "azure": user_home() / ".azure", "cache": primary_cache()}
+    expected = [str(python_path), str(helpers_dir / "refresh-local-usage.py"), "--collector", str(collector_path)]
+    if (value.get("StartInterval") != 300 or not isinstance(arguments, list)
+            or arguments not in (expected, [*expected, "--config", str(config_path)])
+            or arguments == expected and config_path != defaults["config"]
+            or str(python_path) != arguments[0] or not python_path.is_file()
+            or azure_dir != defaults["azure"] or cache_path != defaults["cache"]):
         raise ValueError("Existing five-minute scheduled helper is not the selected installation")
-    return value["Label"]
+    environment = value.get("EnvironmentVariables") or {}
+    if (not isinstance(environment, dict) or set(environment) != {"PATH", "PYTHONUNBUFFERED"}
+            or not isinstance(environment.get("PATH"), str) or not environment["PATH"]
+            or environment.get("PYTHONUNBUFFERED") != "1"):
+        raise ValueError("Scheduled runtime overrides the reviewed default identity or auth directory")
+    working = value.get("WorkingDirectory")
+    if working is not None and (not isinstance(working, str) or not Path(working).is_absolute() or not Path(working).is_dir()):
+        raise ValueError("Scheduled working directory is unavailable")
+    return {"label": value["Label"], "python": arguments[0], "arguments": arguments,
+            "environment": environment, "workingDirectory": working, "defaults": {key: str(path) for key, path in defaults.items()}}
 
 
 def paths(plan):
     manifest = read(plan / "prepared-plan.json")
     return manifest, Path(manifest["config"]), Path(manifest["cache"]), Path(manifest["helpersDir"]), Path(manifest["sourceHelpers"])
+
+
+def scheduled_runtime(manifest):
+    if sha(manifest["launchAgent"]) != manifest["launchAgentSha256"]:
+        raise ValueError("Scheduled command changed after plan preparation")
+    runtime = launch_agent(manifest["launchAgent"], Path(manifest["helpersDir"]), Path(manifest["config"]),
+                           Path(manifest["collector"]), Path(manifest["azureConfigDir"]), Path(manifest["python"]), Path(manifest["cache"]))
+    if runtime != manifest["launchRuntime"]:
+        raise ValueError("Scheduled runtime changed after plan preparation")
+    return runtime
 
 
 def prepare(args):
@@ -176,7 +209,8 @@ def prepare(args):
         raise ValueError("A migration plan already exists")
     config_path, target, helpers = Path(args.config), Path(args.cache), Path(args.helpers_dir)
     source = Path(args.app) / "Contents/Resources/usage-helpers"
-    label = launch_agent(args.launch_agent, helpers)
+    runtime = launch_agent(args.launch_agent, helpers, config_path, Path(args.collector), Path(args.azure_config_dir),
+                           Path(args.python), target)
     evidence = verified_inputs(Path(args.evidence_dir))
     candidate_path = Path(args.private_profile_candidate)
     if sha(candidate_path) != args.expected_private_profile_sha256:
@@ -204,13 +238,13 @@ def prepare(args):
     manifest = {"version": 1, "preparedAtUtc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "sourceApp": str(args.app), "sourceHelpers": str(source), "sourceHelperHashes": {name: sha(source / name) for name in HELPERS},
         "config": str(config_path), "cache": str(target), "helpersDir": str(helpers),
-        "launchAgent": str(args.launch_agent), "launchAgentSha256": sha(args.launch_agent), "launchAgentLabel": label,
+        "launchAgent": str(args.launch_agent), "launchAgentSha256": sha(args.launch_agent), "launchRuntime": runtime,
         "identityEvidence": str(args.evidence_dir), "identityEvidenceSha256": {
             name: sha(Path(args.evidence_dir) / name) for name in ("account-api-verification.json", "ado-remote-inventory.json")},
         "adoAuthorProof": str(args.ado_author_proof), "adoAuthorProofSha256": sha(args.ado_author_proof),
         "privateProfileCandidate": str(candidate_path), "privateProfileCandidateSha256": sha(candidate_path),
         "old": old, "candidateConfigSha256": sha(plan / "candidate-config.json"),
-        "collector": str(args.collector), "azureConfigDir": str(args.azure_config_dir)}
+        "collector": str(args.collector), "azureConfigDir": str(args.azure_config_dir), "python": str(args.python)}
     write_json(plan / "prepared-plan.json", manifest)
     print(json.dumps({"status": "PREPARED_PRIVATE_ONLY", "plan": str(plan / "prepared-plan.json"),
                       "candidateConfigSha256": manifest["candidateConfigSha256"]}))
@@ -224,21 +258,26 @@ def capture(args):
     if sha(plan / "candidate-config.json") != manifest["candidateConfigSha256"] or any(
             sha(source / name) != expected for name, expected in manifest["sourceHelperHashes"].items()):
         raise ValueError("Migration source or candidate configuration changed")
-    sys.path.insert(0, str(source))
-    try:
-        spec = importlib.util.spec_from_file_location("migration_refresh", source / "refresh-local-usage.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.refresh_primary(manifest["collector"], read(plan / "candidate-config.json"),
-            manifest["azureConfigDir"], file=plan / "candidate-cache.json", include_legacy=False)
-    finally:
-        sys.path.remove(str(source))
+    runtime = scheduled_runtime(manifest)
+    person = pwd.getpwuid(os.getuid())
+    environment = {"HOME": str(user_home()), "USER": person.pw_name, "LOGNAME": person.pw_name,
+                   **runtime["environment"]}
+    command = [runtime["python"], str(source / "refresh-local-usage.py"), "--collector", manifest["collector"],
+               "--config", str(plan / "candidate-config.json"), "--capture-only", "--output", str(plan / "candidate-cache.json")]
+    result = subprocess.run(command, cwd=runtime["workingDirectory"] or str(user_home()),
+                            env=environment, capture_output=True, text=True, timeout=300)
+    log = plan / "capture.log"
+    log.write_text(result.stdout + result.stderr)
+    os.chmod(log, 0o600)
+    if result.returncode:
+        raise ValueError("Private capture failed under the scheduled Python/runtime; inspect private log")
     print(json.dumps({"status": "CAPTURED_PRIVATE_ONLY", "cacheSha256": sha(plan / "candidate-cache.json")}))
 
 
 def seal(args):
     plan = Path(args.plan_dir)
     manifest, _, _, _, source = paths(plan)
+    scheduled_runtime(manifest)
     if (plan / "sealed-plan.json").exists():
         raise ValueError("Migration plan is already sealed")
     candidate = read(plan / "candidate-config.json")
@@ -268,12 +307,10 @@ def seal(args):
 
 
 def validate_live(plan, sealed):
-    if sha(sealed["launchAgent"]) != sealed["launchAgentSha256"]:
-        raise ValueError("The scheduled job changed after plan review")
+    scheduled_runtime(sealed)
     if (sha(sealed["privateProfileCandidate"]) != sealed["privateProfileCandidateSha256"] or
             sha(sealed["adoAuthorProof"]) != sealed["adoAuthorProofSha256"]):
         raise ValueError("Frozen attribution or private repository evidence changed")
-    launch_agent(sealed["launchAgent"], Path(sealed["helpersDir"]))
     source = Path(sealed["sourceHelpers"])
     if any(sha(source / name) != expected for name, expected in sealed["sourceHelperHashes"].items()):
         raise ValueError("Signed helper source changed after plan review")
@@ -354,7 +391,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     first = sub.add_parser("prepare")
-    for key in ("plan-dir", "config", "cache", "helpers-dir", "app", "launch-agent", "evidence-dir", "ado-author-proof", "private-profile-candidate", "expected-private-profile-sha256", "collector", "azure-config-dir"):
+    for key in ("plan-dir", "config", "cache", "helpers-dir", "app", "launch-agent", "evidence-dir", "ado-author-proof", "private-profile-candidate", "expected-private-profile-sha256", "collector", "azure-config-dir", "python"):
         first.add_argument("--" + key, required=True)
     first.add_argument("--ado-author-email", action="append", required=True)
     for command in ("capture", "seal", "apply", "rollback"):

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -104,6 +105,17 @@ def refresh(config, **options):
             self.assertEqual(lock.stat().st_ino, inode)
             self.assertEqual(json.loads(self.target.read_text())["github"]["sources"][0]["days"][-1]["prs"], 2)
 
+    def test_private_capture_cli_uses_only_remote_workers_and_private_output(self):
+        candidate = self.root / "candidate-config.json"
+        candidate.write_text(json.dumps(self.config))
+        result = subprocess.run([sys.executable, str(self.fixture / "refresh-local-usage.py"),
+            "--collector", str(self.collector), "--config", str(candidate),
+            "--capture-only", "--output", str(self.target)], capture_output=True, text=True,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.target.read_text())["version"], 2)
+        self.assertFalse((self.root / "tokens.txt").exists())
+
     def test_missing_scoped_ado_alias_blocks_capture_without_mutation(self):
         self.config.pop("adoAuthorEmails")
         with self.assertRaisesRegex(ValueError, "scoped author aliases"):
@@ -115,6 +127,22 @@ def refresh(config, **options):
         with self.assertRaises(ValueError):
             self.wrapper.refresh_primary(self.collector, self.config, self.root, file=self.target, whole_cycle_seconds=10)
         self.assertEqual(self.target.read_text(), '{"version":1}')
+
+    def test_account_host_case_alias_cannot_double_a_configured_profile(self):
+        with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
+            self.wrapper.refresh_primary(self.collector, self.config, self.root, file=self.target, whole_cycle_seconds=10)
+        original = self.target.read_bytes()
+        value = json.loads(original)
+        duplicate = json.loads(json.dumps(value["github"]["sources"][0]))
+        duplicate["id"] = "github:case-alias"
+        duplicate["account"]["host"] = duplicate["account"]["host"].upper()
+        value["github"]["sources"].append(duplicate)
+        value["github"]["activeSourceIds"].append(duplicate["id"])
+        with self.assertRaisesRegex(ValueError, "Duplicate contribution account scope"):
+            contributions.snapshot(value)
+        with self.assertRaises(ValueError):
+            contributions.validate_bindings(value, self.config)
+        self.assertEqual(self.target.read_bytes(), original)
 
     def test_one_provider_failure_retains_the_previous_generation(self):
         with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
