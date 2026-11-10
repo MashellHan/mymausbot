@@ -75,8 +75,8 @@ test("main keeps each Admin's sign-in, saved servers, Files state and Cloud name
   for (const name of ['"environments.json"', '"cloud-home-look.json"']) assert.equal(main.includes(name), false, `no fixed ${name}`);
   const ensure = main.slice(main.indexOf("function ensureCloudAccount() {"), main.indexOf("\n}\n", main.indexOf("function ensureCloudAccount() {")));
   assert.match(ensure, /store: cloudAccountStore\(\),/);
-  assert.match(main, /const cloudAccountStore = \(\) => \(activeSignIn \?\?= createCloudAccountStore\(\{ file: path\.join\(app\.getPath\("userData"\), cloudTarget\(process\.env\)\.file\)/);
-  assert.match(main, /createCloudAccountStore\(\{ file: path\.join\(app\.getPath\("userData"\), cloudTarget\(process\.env\)\.saved\)/);
+  assert.match(main, /const cloudAccountStore = \(\) => \(activeSignIn \?\?= credentialRecordStore\(cloudTarget\(process\.env\)\.file, cloudEncryption\)\);/);
+  assert.match(main, /savedStore: \(\) => credentialRecordStore\(cloudTarget\(process\.env\)\.saved, cloudEncryption\)/);
   assert.match(ensure, /origin: cloudTarget\(process\.env\)\.origin,/);
   assert.equal(main.includes('"cloud-account.bin"'), false, "no second, fixed token file");
 });

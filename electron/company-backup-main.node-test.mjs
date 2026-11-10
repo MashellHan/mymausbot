@@ -19,6 +19,7 @@ function section(start, end) {
 }
 const functions = section("function ensureManagedDesktop()", "function syncDesktopMutationToken(");
 const registrations = section("const workspaceOnly =", "const savedWorkspace =");
+const credentialStore = section("const credentialRecordStore =", "let activeSignIn =");
 const ORIGIN = "http://127.0.0.1:48799";
 const STAGE = "11111111-1111-4111-8111-111111111111";
 const DEVICE = "22222222-2222-4222-8222-222222222222";
@@ -28,7 +29,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-function fixture({ sessionOnly = false } = {}) {
+function fixture({ sessionOnly = false, privateFile = false } = {}) {
   const handlers = new Map(), sent = [], requests = [];
   const frame = { url: `${ORIGIN}/` };
   const contents = { mainFrame: frame, send: (...args) => sent.push(args) };
@@ -41,7 +42,7 @@ function fixture({ sessionOnly = false } = {}) {
     restoreResponse: async () => Response.json({ restoreId: STAGE }),
     onState: null, requests, sent, event, generation: 0, savedSchedule: null, scheduleOptions: null,
     now: Date.now(), scheduleTimer: null, statusResponse: null,
-    stores: [], clientOptions: null, libraryOptions: null, libraryFetches: [], librarySent: [],
+    stores: [], managedStores: [], privateStores: [], clientOptions: null, libraryOptions: null, libraryFetches: [], librarySent: [],
     library: { runtimeReady: () => {}, receive: () => false, close: () => {} },
   };
   const client = { connection: () => f.connection, state: () => f.state, backupGeneration: () => f.generation,
@@ -51,11 +52,16 @@ function fixture({ sessionOnly = false } = {}) {
   const context = vm.createContext({
     AbortController, AbortSignal, Date, Headers, setTimeout, clearTimeout, path, randomUUID, Buffer,
     app: { isPackaged: true, getPath: () => "/unused-synthetic-backup-fixture", getVersion: () => "fixture" },
-    SESSION_CREDENTIALS: sessionOnly,
+    SESSION_CREDENTIALS: sessionOnly, PRIVATE_FILE_CREDENTIALS: privateFile,
     os: { hostname: () => "Fixture computer" }, process: { platform: "fixture" },
     createManagedDesktopStore: options => {
       const store = { file: options.file, sessionOnly: options.sessionOnly, read: async () => f.savedSchedule, write: async value => { f.savedSchedule = structuredClone(value); } };
-      f.stores.push(store);
+      f.stores.push(store); f.managedStores.push(store);
+      return store;
+    },
+    privateCredentialStore: name => {
+      const store = { file: path.join("/unused-synthetic-backup-fixture/private-credentials", name), read: async () => f.savedSchedule, write: async value => { f.savedSchedule = structuredClone(value); } };
+      f.stores.push(store); f.privateStores.push(store);
       return store;
     },
     createManagedDesktopClient: options => { f.onState = options.onState; f.clientOptions = options; return client; },
@@ -85,7 +91,7 @@ function fixture({ sessionOnly = false } = {}) {
       return f.restoreResponse();
     },
   });
-  vm.runInContext(`${functions}\n${registrations}`, context, { filename: "main.mjs (company backup boundary fixture)" });
+  vm.runInContext(`${credentialStore}\n${functions}\n${registrations}`, context, { filename: "main.mjs (company backup boundary fixture)" });
   context.ensureManagedDesktop();
   return Object.assign(f, {
     context,
@@ -115,6 +121,15 @@ test("ensureManagedDesktop gives the organization library its own record, the fi
 test("session mode selects memory-only stores for all three company records", () => {
   const f = fixture({ sessionOnly: true });
   assert.deepEqual(f.stores.map(store => store.sessionOnly), [true, true, true]);
+  assert.equal(f.libraryOptions.store, f.stores[1]);
+  assert.equal(f.clientOptions.store, f.stores[0]);
+});
+
+test("private-file mode keeps all three company records in separate private stores", () => {
+  const f = fixture({ privateFile: true });
+  assert.deepEqual(f.stores.map(store => path.basename(store.file)), ["company-connection.json", "company-library.json", "company-backup-schedule.json"]);
+  assert.equal(f.managedStores.length, 0);
+  assert.equal(f.privateStores.length, 3);
   assert.equal(f.libraryOptions.store, f.stores[1]);
   assert.equal(f.clientOptions.store, f.stores[0]);
 });
