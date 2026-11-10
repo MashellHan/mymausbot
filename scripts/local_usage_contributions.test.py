@@ -154,11 +154,19 @@ def refresh(config, **options):
                     "&searchCriteria.itemVersion.versionType=commit&%24top=100&%24skip=0"):
             self.assertEqual(session.request(url, 5)[0], '{"value":[]}')
         self.assertEqual(len(calls), 3)
+        hidden = base + "?api-version=7.1&includeHidden=true"
+        self.assertEqual(json.loads(session.run(["/fixture/az", "rest", "--method", "get", "--url", hidden,
+            "--resource", self.wrapper.ADO_RESOURCE, "-o", "json"], 5)), {"value": []})
+        self.assertEqual(len(calls), 4)
         for url in (base + f"/{guid}/commits?api-version=7.1&%24top=100",
                     base + f"/{guid}/refs?api-version=7.1&filter=tags%2Ftest",
-                    base.replace("fixture/Fixture", "other/Fixture") + "?api-version=7.1"):
+                    base.replace("fixture/Fixture", "other/Fixture") + "?api-version=7.1",
+                    base + "?api-version=7.1&includeHidden=false",
+                    base + "?api-version=7.1&includeHidden=True",
+                    base + "?api-version=7.1&includeHidden=true&includeHidden=true",
+                    base + f"/{guid}/refs?api-version=7.1&filter=heads%2Fmain&includeHidden=true"):
             with self.assertRaises(ValueError): session.request(url, 5)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
 
     def test_header_only_ado_inventory_page_cannot_become_complete(self):
         provider_dir = Path(os.environ.get("OMB_ADO_MODULE_DIR", str(SCRIPT.parent)))

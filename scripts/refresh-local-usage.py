@@ -337,7 +337,9 @@ class AzureMemorySession:
                 raise ValueError("Invalid ADO request parameters")
             suffix = parts[-1]
             if suffix == "repositories":
-                allowed = {"api-version"}
+                allowed = {"api-version", "includeHidden"} if "includeHidden" in query else {"api-version"}
+                if "includeHidden" in query and query["includeHidden"] != ["true"]:
+                    raise ValueError("Invalid hidden repository inventory request")
             elif suffix == "refs":
                 allowed = {"api-version", "filter"}
                 if not query.get("filter", [""])[0].startswith("heads/"):
