@@ -310,6 +310,34 @@ describe("local Usage panel", () => {
     expect(contributions.windows!["1"].comparison.prs).toBeNull();
   });
 
+  it("shows qualified work and personal category DoD/WoW/MoM with exact-null honesty in both locales", async () => {
+    const contributions = primaryUsageFixture("2026-11-03", true);
+    await renderRaw({ ...sample, contributions });
+    for (const [index, period] of ["DoD", "WoW", "30d"].entries()) {
+      const card = host.querySelectorAll("section")[index]!;
+      const personal = card.querySelector('[data-usage-category-row="personal"]')!;
+      const changes = personal.querySelectorAll('[data-usage-change]');
+      expect(changes).toHaveLength(2);
+      for (const change of changes) {
+        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("New");
+        expect(change.getAttribute("title")).toContain(period);
+        expect(change.getAttribute("title")).toContain("Known subtotal");
+        expect(change.getAttribute("data-usage-provisional")).toBe("true");
+      }
+      expect(card.querySelector('[data-usage-category-row="work"] [data-usage-change]')?.getAttribute("title")).toContain(period);
+    }
+    contributions.windows!["1"].comparison.knownCategories!.personal.prs = null;
+    await renderRaw({ ...sample, contributions });
+    expect(host.querySelector('section [data-usage-category-row="personal"] [data-usage-change] [aria-hidden="true"]')?.textContent).toBe("—");
+    setLocale("zh");
+    await renderRaw({ ...sample, contributions: primaryUsageFixture("2026-11-03", true) });
+    for (const [index, period] of ["日环比", "周环比", "30 日环比"].entries()) {
+      const change = host.querySelectorAll("section")[index]!.querySelector('[data-usage-category-row="personal"] [data-usage-change]')!;
+      expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("新增");
+      expect(change.getAttribute("title")).toContain(period);
+    }
+  });
+
   it("shows a dash for missing hover values and numeric zero for observed zero", async () => {
     const contributions = primaryUsageFixture();
     const missing = contributions.trend[0]!;
