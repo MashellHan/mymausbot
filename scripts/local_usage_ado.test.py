@@ -316,7 +316,7 @@ class AdoTests(unittest.TestCase):
             self.fail("Pinned traversal did not finish under bounded continuation")
 
         advance(first_head, HEAD)
-        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 3):
+        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 3), patch.object(ado, "REQUESTS_PER_PROJECT", 7):
             first_partial = collect(api, previous=initial, at=AT + dt.timedelta(minutes=5))
             advance(second_head, first_head)
             first_moved = finish_moved(first_partial, AT + dt.timedelta(minutes=5))
@@ -406,7 +406,12 @@ class AdoTests(unittest.TestCase):
         api.heads[hidden_id] = hidden_head
         api.histories[hidden_head] = [commit(hidden_head, "2026-11-09T10:00:00Z")]
         api.details[hidden_head] = api.histories[hidden_head][0]
-        result = collect(api)
+        hidden_pr = pr(4, "2026-11-09T11:00:00Z")
+        hidden_pr["repository"]["id"] = hidden_id
+        api.prs.append(hidden_pr)
+        config = copy.deepcopy(CONFIG)
+        config["adoRemotes"].append("https://dev.azure.com/example/project/_git/fixture.wiki")
+        result = collect(api, config=config)
         source = result["sources"][0]
         self.assertEqual(source["status"], "ready")
         self.assertEqual(source["provenance"]["inventoryCount"], 2)
@@ -530,7 +535,7 @@ class AdoTests(unittest.TestCase):
         self.assertIn("ADO authenticated read unavailable", result["collection"]["reasons"])
         self.assertNotIn("private-token", json.dumps(result))
 
-    def test_large_remote_inventory_is_bounded_and_resumable_without_local_clones(self):
+    def test_large_remote_inventory_does_not_trigger_unverified_commit_history_scans(self):
         api = Api()
         api.prs = []
         api.histories[HEAD] = []
@@ -548,12 +553,186 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(source["provenance"]["inventoryCount"], 1100)
         self.assertEqual(source["provenance"]["disabledCount"], 477)
         self.assertEqual(source["provenance"]["withoutDefaultCount"], 13)
-        self.assertEqual(partial["collection"]["requestCount"], 20)
-        self.assertEqual(later["collection"]["requestCount"], 20)
-        self.assertGreater(later["state"]["projects"]["example/project"]["work"]["repoIndex"],
-                           partial["state"]["projects"]["example/project"]["work"]["repoIndex"])
+        self.assertEqual(source["provenance"]["selectedRepositoryCount"], 0)
+        self.assertEqual(partial["collection"]["requestCount"], 4)
+        self.assertEqual(later["collection"]["requestCount"], 4)
+        self.assertFalse(any("/commits?" in args[5] or "/refs?" in args[5] for args in api.calls))
         self.assertIsNone(source["days"][-1]["commits"])
-        self.assertIn("request-budget", source["coverage"]["reasons"])
+        self.assertEqual(source["days"][-1]["knownCommits"], 0)
+        self.assertIn("configured-repository-scope", source["coverage"]["reasons"])
+        self.assertIn("repository-visibility-gap", source["coverage"]["reasons"])
+
+    def test_explicit_remote_scope_keeps_sixty_day_rows_without_scanning_other_repos(self):
+        api = Api()
+        unknown_id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        observed_id = "cccccccc-dddd-eeee-ffff-000000000000"
+        unknown_head, observed_head, older = "4" * 40, "5" * 40, "3" * 40
+        for repo_id, name, head in [(unknown_id, "commit-only-unknown", unknown_head),
+                                    (observed_id, "observed-commit", observed_head)]:
+            api.repos.append({"id": repo_id, "name": name, "defaultBranch": "refs/heads/main", "isDisabled": False})
+            api.heads[repo_id] = head
+            api.histories[head] = [commit(head, "2026-11-09T12:00:00Z")]
+            api.details[head] = api.histories[head][0]
+        api.histories[HEAD].append(commit(older, "2026-09-20T12:00:00Z"))
+        api.details[older] = api.histories[HEAD][-1]
+        api.prs.append(pr(4, "2026-09-15T12:00:00Z"))
+        unknown_pr = pr(6, "2026-11-09T12:00:00Z")
+        unknown_pr["repository"]["id"] = unknown_id
+        api.prs.append(unknown_pr)
+        observed_pr = pr(5, "2026-11-09T12:00:00Z")
+        observed_pr["repository"]["id"] = observed_id
+        api.prs.append(observed_pr)
+        config = copy.deepcopy(CONFIG)
+        config["adoRemotes"].append("https://dev.azure.com/example/project/_git/observed-commit")
+        first = collect(api, config=config)
+        source = first["sources"][0]
+        self.assertEqual(source["status"], "partial")
+        self.assertEqual(source["provenance"]["selectedRepositoryCount"], 2)
+        self.assertEqual(source["provenance"]["configuredRepositoryCount"], 2)
+        self.assertIn("configured-repository-scope", source["coverage"]["reasons"])
+        self.assertEqual(source["days"][-2]["knownPrs"], 3)
+        self.assertIsNone(source["days"][-2]["prs"])
+        self.assertIsNone(next(day for day in source["days"] if day["day"] == "2026-09-15")["prs"])
+        self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownPrs"], 1)
+        older_day = next(day for day in source["days"] if day["day"] == "2026-09-20")
+        self.assertIsNone(older_day["commits"])
+        self.assertEqual(older_day["knownCommits"], 1)
+        self.assertEqual(older_day["repositories"][0]["commits"], 1)
+        self.assertFalse(any(unknown_id in args[5] for args in api.calls))
+        self.assertNotIn(unknown_id, first["state"]["projects"]["example/project"]["work"]["selectedRepoIds"])
+
+        api.prs.remove(observed_pr)
+        second = collect(api, previous=first, at=AT + dt.timedelta(minutes=5), config=config)
+        self.assertIn(observed_id, second["state"]["projects"]["example/project"]["work"]["selectedRepoIds"])
+        self.assertNotIn(unknown_id, second["state"]["projects"]["example/project"]["work"]["selectedRepoIds"])
+        self.assertEqual(second["sources"][0]["provenance"]["selectedRepositoryCount"], 2)
+
+    def test_missing_or_ambiguous_remote_allowlist_never_starts_history(self):
+        api = Api()
+        no_remotes = copy.deepcopy(CONFIG)
+        no_remotes["adoRemotes"] = []
+        missing = collect(api, config=no_remotes)
+        self.assertEqual(missing["sources"][0]["status"], "partial")
+        self.assertIn("ado-remotes-required", missing["sources"][0]["coverage"]["reasons"])
+        self.assertIsNone(missing["sources"][0]["days"][-2]["prs"])
+        self.assertFalse(any("/commits?" in args[5] or "/refs?" in args[5] for args in api.calls))
+
+        duplicate = Api()
+        other_id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        duplicate.repos.append({"id": other_id, "name": "Repository", "defaultBranch": "refs/heads/main",
+                                "isDisabled": False})
+        duplicate.heads[other_id] = "4" * 40
+        duplicate.histories["4" * 40] = [commit("4" * 40, "2026-11-09T12:00:00Z")]
+        ambiguous = collect(duplicate)
+        self.assertEqual(ambiguous["sources"][0]["provenance"]["selectedRepositoryCount"], 0)
+        self.assertIn("ambiguous-configured-repository", ambiguous["sources"][0]["coverage"]["reasons"])
+        self.assertFalse(any("/commits?" in args[5] or "/refs?" in args[5] for args in duplicate.calls))
+
+    def test_narrowed_allowlist_drops_old_broad_progress_before_any_history_read(self):
+        api = Api()
+        ids = [REPO, "bbbbbbbb-cccc-dddd-eeee-ffffffffffff", "cccccccc-dddd-eeee-ffff-000000000000"]
+        api.repos = []
+        api.heads = {}
+        api.histories = {}
+        for index, repo_id in enumerate(ids):
+            name, head = f"repository-{index}", f"{index + 10:040x}"
+            api.repos.append({"id": repo_id, "name": name, "defaultBranch": "refs/heads/main", "isDisabled": False})
+            api.heads[repo_id] = head
+            api.histories[head] = [commit(head, "2026-11-09T12:00:00Z")] + [
+                commit(f"{index * 1000 + item:040x}", "2026-11-09T12:00:00Z") for item in range(1, 25)]
+        api.details = {row["commitId"]: row for rows in api.histories.values() for row in rows}
+        broad = copy.deepcopy(CONFIG)
+        broad["adoRemotes"] = [f"https://dev.azure.com/example/project/_git/repository-{index}" for index in range(3)]
+        narrow = copy.deepcopy(broad)
+        narrow["adoRemotes"] = broad["adoRemotes"][:1]
+        with patch.object(ado, "REQUESTS_PER_PROJECT", 20):
+            previous = collect(api, config=broad)
+            self.assertGreater(len(previous["state"]["projects"]["example/project"]["work"]["progress"]), 1)
+            api.calls.clear()
+            current = collect(api, config=narrow, previous=previous)
+        work = current["state"]["projects"]["example/project"]["work"]
+        self.assertEqual(work["selectedRepoIds"], [REPO])
+        self.assertTrue(set(work["progress"]).issubset({REPO}))
+        self.assertTrue(set(work["repoDone"]).issubset({REPO}))
+        self.assertTrue(all(not any(repo_id in args[5] for repo_id in ids[1:]) for args in api.calls))
+        self.assertIn("configured-repository-scope", current["sources"][0]["coverage"]["reasons"])
+
+    def test_utc_rollover_keeps_compatible_pinned_progress_after_fresh_inventory_and_prs(self):
+        api = Api()
+        api.prs = [pr(1, "2026-11-10T12:00:00Z")]
+        api.histories[HEAD] = [commit(HEAD, "2026-11-09T12:00:00Z")] + [
+            commit(f"{index:040x}", "2026-11-09T12:00:00Z") for index in range(1, 30)]
+        api.details = {row["commitId"]: row for row in api.histories[HEAD]}
+        before = dt.datetime.fromisoformat("2026-11-10T23:59:00+00:00")
+        after = dt.datetime.fromisoformat("2026-11-11T00:01:00+00:00")
+        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 4), patch.object(ado, "REQUESTS_PER_PROJECT", 10):
+            first = collect(api, at=before)
+            old_progress = first["state"]["projects"]["example/project"]["work"]["progress"][REPO]
+            self.assertEqual(len(old_progress["pending"]), 26)
+            api.calls.clear()
+            resumed = collect(api, previous=first, at=after)
+            work = resumed["state"]["projects"]["example/project"]["work"]
+            progress = work["progress"][REPO]
+            self.assertEqual(work["firstDay"], "2026-09-13")
+            self.assertEqual(progress["pinnedAt"], old_progress["pinnedAt"])
+            self.assertLess(len(progress["pending"]), len(old_progress["pending"]))
+            self.assertTrue(any("/_apis/git/repositories?" in args[5] for args in api.calls))
+            self.assertTrue(any("/_apis/git/pullrequests?" in args[5] for args in api.calls))
+            self.assertFalse(any("/commits?" in args[5] for args in api.calls))
+            for _ in range(12):
+                if resumed["sources"][0]["status"] == "ready":
+                    break
+                resumed = collect(api, previous=resumed, at=after)
+        self.assertEqual(resumed["sources"][0]["status"], "ready")
+        self.assertEqual(next(day for day in resumed["sources"][0]["days"] if day["day"] == "2026-11-09")["commits"], 30)
+
+    def test_utc_rollover_drops_progress_for_changed_default_branch(self):
+        api = Api()
+        api.prs = [pr(1, "2026-11-10T12:00:00Z")]
+        api.histories[HEAD] = [commit(HEAD, "2026-11-09T12:00:00Z")] + [
+            commit(f"{index:040x}", "2026-11-09T12:00:00Z") for index in range(1, 20)]
+        api.details = {row["commitId"]: row for row in api.histories[HEAD]}
+        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 4), patch.object(ado, "REQUESTS_PER_PROJECT", 10):
+            first = collect(api, at=dt.datetime.fromisoformat("2026-11-10T23:59:00+00:00"))
+            api.repos[0]["defaultBranch"] = "refs/heads/other"
+            later = collect(api, previous=first, at=dt.datetime.fromisoformat("2026-11-11T00:01:00+00:00"))
+        progress = later["state"]["projects"]["example/project"]["work"]["progress"][REPO]
+        self.assertEqual(progress["branch"], "refs/heads/other")
+        self.assertNotEqual(progress["pinnedAt"], first["state"]["projects"]["example/project"]["work"]["progress"][REPO]["pinnedAt"])
+
+    def test_existing_active_repositories_all_advance_before_new_discovery(self):
+        api = Api()
+        api.prs = []
+        api.repos = []
+        api.heads = {}
+        api.histories = {}
+        for index in range(24):
+            repo_id = f"{index:08x}-bbbb-cccc-dddd-eeeeeeeeeeee"
+            head = f"{index + 100:040x}"
+            api.repos.append({"id": repo_id, "name": f"repository-{index}",
+                              "defaultBranch": "refs/heads/main", "isDisabled": False})
+            api.heads[repo_id] = head
+            api.histories[head] = ([commit(head, "2026-11-09T12:00:00Z")] + [
+                commit(f"{index * 1000 + item:040x}", "2026-11-09T12:00:00Z") for item in range(1, 20)]
+                if index < 4 else [])
+            if index < 6:
+                recent = pr(index + 1, "2026-11-09T12:00:00Z")
+                recent["repository"]["id"] = repo_id
+                api.prs.append(recent)
+        api.details = {row["commitId"]: row for rows in api.histories.values() for row in rows}
+        config = copy.deepcopy(CONFIG)
+        config["adoRemotes"] = [f"https://dev.azure.com/example/project/_git/repository-{index}" for index in range(6)]
+        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 3), patch.object(ado, "REQUESTS_PER_PROJECT", 20):
+            first = collect(api, config=config)
+            before = first["state"]["projects"]["example/project"]["work"]
+            active = sorted(before["progress"])
+            self.assertEqual(len(active), 5)
+            self.assertGreater(before["repoIndex"], 4)
+            later = collect(api, previous=first, config=config)
+        after = later["state"]["projects"]["example/project"]["work"]
+        self.assertTrue(all(len(after["progress"][repo]["pending"]) < len(before["progress"][repo]["pending"])
+                            for repo in active[:4]))
+        self.assertLessEqual(later["collection"]["requestCount"], 20)
 
     def test_advancing_head_keeps_pinned_progress_and_later_repo_gets_fair_slice(self):
         api = Api()
@@ -562,19 +741,24 @@ class AdoTests(unittest.TestCase):
         api.repos.append({"id": second_repo, "name": "second", "defaultBranch": "refs/heads/main",
                           "isDisabled": False})
         api.heads[second_repo] = second_head
-        api.prs = []
+        api.prs = [pr(1, "2026-11-09T12:00:00Z")]
+        second_pr = pr(2, "2026-11-09T12:00:00Z")
+        second_pr["repository"]["id"] = second_repo
+        api.prs.append(second_pr)
         api.histories[HEAD] = [commit(HEAD, "2026-11-09T12:00:00Z")] + [
             commit(f"{index:040x}", "2026-11-09T12:00:00Z") for index in range(1, 25)]
         api.histories[second_head] = [commit(second_head, "2026-11-09T12:00:00Z")]
         api.details = {row["commitId"]: row for rows in api.histories.values() for row in rows}
-        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 4), patch.object(ado, "REQUESTS_PER_PROJECT", 20):
-            first = collect(api)
+        config = copy.deepcopy(CONFIG)
+        config["adoRemotes"].append("https://dev.azure.com/example/project/_git/second")
+        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 4), patch.object(ado, "REQUESTS_PER_PROJECT", 12):
+            first = collect(api, config=config)
             work = first["state"]["projects"]["example/project"]["work"]
             self.assertIn(REPO, work["progress"])
             self.assertIn(second_repo, work["repoDone"])
             pending_before = len(work["progress"][REPO]["pending"])
             api.heads[REPO] = "6" * 40
-            later = collect(api, previous=first, at=AT + dt.timedelta(minutes=5))
+            later = collect(api, previous=first, at=AT + dt.timedelta(minutes=5), config=config)
         continued = later["state"]["projects"]["example/project"]["work"]
         self.assertEqual(continued["progress"][REPO]["head"], HEAD)
         self.assertLess(len(continued["progress"][REPO]["pending"]), pending_before)

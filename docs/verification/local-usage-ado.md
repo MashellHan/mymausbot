@@ -39,8 +39,13 @@ repository, status and UTC creation date, then rechecks the first page before
 certifying pagination. A failed page admits no prefix; duplicate or drifting
 pagination restarts before any exact PR count is published.
 
-For each visible enabled repository with a default branch, the collector pins
-the remote ref object ID and pages history reachable from that exact head.
+The temporary repository scope is the explicit `adoRemotes` allowlist, bound
+by name to the authenticated project inventory. The configured remotes come
+from separately verified recent activity; the collector does not infer a
+complete active-repository list from PRs or scan every project repository.
+For each selected enabled repository with a default branch, it pins the remote
+ref object ID and pages history reachable from that exact head. It counts the
+full 60-day window inside each selected repository, including earlier activity.
 Candidate commits use **author UTC date**, not committer date. Full details
 verify the author date, parentage, untruncated message and recognized
 `Co-authored-by: Name <email>` trailers and the single literal
@@ -64,6 +69,10 @@ zero commits. A verified repository with no default branch has no reachable
 default-head commits. Previously observed repository IDs and explicitly
 configured remotes remain expected scope: disappearance from a later inventory
 or an unexplained empty first inventory stays partial or stale, not zero.
+Unselected repositories may contain commit-only activity that the allowlist did
+not observe. Provider-wide totals remain partial with known selected subtotals;
+selected repository rows may become exact only after their own pinned history
+is complete. A missing or ambiguous configured name never selects a substitute.
 Missing refs, incomplete pages, expired authentication,
 budget exhaustion and malformed coauthor evidence keep exact totals null.
 Exact PR totals also require verified repository visibility; a complete PR
@@ -77,12 +86,13 @@ the incomplete reason; a stale row is not a current pass.
 ## Bounded continuation
 
 Each refresh uses at most 180 seconds overall, 42 seconds and 50 GETs per
-project, 8 GETs per repository slice, and 20 seconds per request. Large
-repositories retain pinned progress while later repositories receive their own
-slice. A project continues in the next envelope's
+project, 8 GETs per repository slice, and 20 seconds per request. Existing
+pinned scans receive rotating slices before a newly selected repository opens;
+remaining project budget can give them further slices in the same call. A
+project continues in the next envelope's
 private `state`; only the collector consumes it. Each commit page is at most
-100 records, and a repository scan stops after at most 1,000 pages. A source
-cannot claim complete coverage until every eligible repository is reconciled.
+100 records, and a repository scan stops after at most 1,000 pages. Complete
+selected-repository proof does not certify activity in unselected repositories.
 
 Once a repository has a complete pinned-head result, an unchanged head reuses
 it. **Any changed head gets a complete new pinned-history traversal.** The
@@ -96,14 +106,19 @@ marks current coverage incomplete, and starts a full traversal of the new head.
 Only previously checked immutable commit details are reused during that full
 traversal; every reachable commit ID is still enumerated, so a side branch
 after the old head is counted. An absent old head classifies the new graph as
-rewritten and old counts cannot enter it. Window rollover starts a fresh
-60-day scan. Neither a request budget nor a force push can turn an unscanned
-portion into a certified zero.
+rewritten and old counts cannot enter it. UTC window rollover refreshes identity,
+inventory and PR pages for the new cutoff while retaining only incomplete
+repository scans whose ID and default branch still match that inventory.
+Completed pinned proofs remain cached. Neither a request budget nor a force
+push can turn an unscanned portion into a certified zero.
 
 The private state, account identities and repository names stay in the local
 usage snapshot. Public PR text and logs must not include the user's private
 organization data. The separate canonical Activities reader validates the
 version, identities, dates, counts and coverage before showing totals.
+The existing 300-second refresh cadence stays serialized. A warm refresh under
+60 seconds is an advisory target, requiring measured cold, unchanged-head and
+small-new-commit runs on the reviewed scoped source.
 
 ## Verification
 
