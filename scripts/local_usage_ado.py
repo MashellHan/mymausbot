@@ -62,17 +62,21 @@ def segment(value):
 
 def projects(config):
     found = {}
-    for raw in config.get("mergedAdoProjects", []) + config.get("adoRemotes", []):
+    scopes = ([(raw, False) for raw in config.get("mergedAdoProjects", [])]
+              + [(raw, True) for raw in config.get("adoRemotes", [])])
+    for raw, is_remote in scopes:
         parsed = urllib.parse.urlsplit(raw)
         if (parsed.scheme != "https" or parsed.hostname != "dev.azure.com" or parsed.port not in (None, 443)
                 or parsed.username or parsed.password or parsed.query or parsed.fragment):
             raise ValueError("Invalid configured ADO scope")
         parts = parsed.path.strip("/").split("/")
         repository = None
-        if len(parts) == 4 and parts[2] == "_git":
+        if is_remote:
+            if len(parts) != 4 or parts[2] != "_git":
+                raise ValueError("Invalid configured ADO remote")
             repository = segment(parts[3]).casefold()
             parts = parts[:2]
-        if len(parts) != 2:
+        elif len(parts) != 2:
             raise ValueError("Invalid configured ADO scope")
         org, project = map(segment, parts)
         key = (org.casefold(), project.casefold())
@@ -267,7 +271,7 @@ def new_work(at):
             "lastDay": end.isoformat(), "inventory": None, "prOffset": 0, "prSeen": [],
             "prFirst": None, "prs": [], "prComplete": False, "repoIndex": 0,
             "repoDone": {}, "progress": {}, "repoErrors": {}, "activeCursor": 0,
-            "scanComplete": False, "reasons": []}
+            "scanComplete": False, "selectedRepoIds": [], "reasons": []}
 
 
 def advance_prs(reader, org, project, account, work):
@@ -369,7 +373,8 @@ def advance_repository(reader, org, project, repo, work, cache, emails):
 def advance_repos(reader, org, project, work, cache, emails):
     if not work["prComplete"]:
         return
-    repos = work["inventory"]
+    selected = set(work.get("selectedRepoIds", []))
+    repos = [repo for repo in work["inventory"] if repo["id"] in selected]
     indexed = {repo["id"]: repo for repo in repos}
     processed = set()
 
@@ -399,15 +404,27 @@ def advance_repos(reader, org, project, work, cache, emails):
 
     active = sorted(work["progress"])
     if active:
-        repo_id = active[work["activeCursor"] % len(active)]
-        work["activeCursor"] += 1
-        process(indexed[repo_id])
-        processed.add(repo_id)
+        start = work["activeCursor"] % len(active)
+        for offset in range(len(active)):
+            repo_id = active[(start + offset) % len(active)]
+            work["activeCursor"] += 1
+            process(indexed[repo_id])
+            processed.add(repo_id)
     while work["repoIndex"] < len(repos):
         repo = repos[work["repoIndex"]]
         if repo["id"] not in processed:
             process(repo)
         work["repoIndex"] += 1
+    while work["progress"] and reader.source_calls < REQUESTS_PER_PROJECT:
+        active = sorted(work["progress"])
+        start = work["activeCursor"] % len(active)
+        before = reader.source_calls
+        for offset in range(len(active)):
+            repo_id = active[(start + offset) % len(active)]
+            work["activeCursor"] += 1
+            process(indexed[repo_id])
+        if reader.source_calls == before:
+            break
     work["scanComplete"] = not work["progress"]
     if not work["scanComplete"]:
         work["repoIndex"] = 0
@@ -415,9 +432,10 @@ def advance_repos(reader, org, project, work, cache, emails):
 
 def source_days(work, org, project, categories, captured_at, complete, verified, visibility_complete):
     repos = {row["id"]: row for row in work["inventory"] or []}
-    prs = work["prs"]
+    selected = set(work.get("selectedRepoIds", []))
+    prs = [item for item in work["prs"] if item["repo"] in selected]
     commits = [(repo_id, item) for repo_id, result in work["repoDone"].items()
-               for item in result["items"] if instant(item["authoredAt"]) <= instant(work["cutoff"])]
+               for item in result["items"] if repo_id in selected and instant(item["authoredAt"]) <= instant(work["cutoff"])]
     if len({(repo_id, item["id"]) for repo_id, item in commits}) != len(commits):
         raise ValueError("Duplicate repository commit key")
     output = []
@@ -432,11 +450,13 @@ def source_days(work, org, project, categories, captured_at, complete, verified,
             repo = repos[repo_id]
             p = sum(item["repo"] == repo_id for item in pr_rows)
             c = sum(key == repo_id for key, _ in commit_rows)
-            repo_complete = pr_exact and repo_id in work["repoDone"] and not repo["isDisabled"]
+            repo_pr_exact = verified and work["prComplete"]
+            repo_commit_exact = verified and repo_id in work["repoDone"] and not repo["isDisabled"]
+            repo_complete = repo_pr_exact and repo_commit_exact
             repository_days.append({"id": digest("ado-repo", org.casefold(), repo_id),
                 "name": org + "/" + project + "/" + repo["name"], "category": categories[repo_id],
-                "prs": p if pr_exact else None, "knownPrs": p if verified else None,
-                "commits": c if repo_complete else None,
+                "prs": p if repo_pr_exact else None, "knownPrs": p if verified else None,
+                "commits": c if repo_commit_exact else None,
                 "knownCommits": c if verified and repo_id in work["repoDone"] else None,
                 "status": "ready" if repo_complete else "partial" if verified else "unavailable"})
         p = len(pr_rows)
@@ -485,6 +505,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
     for org, project, configured_names in configured:
         account = principal(config, org)
         scope = org.casefold() + "/" + project.casefold()
+        scope_hash = digest("ado-remotes", scope, configured_names)
         source_id = digest("ado", "dev.azure.com", scope, account["stableId"])
         source_ids.append(source_id)
         prior = copy.deepcopy(old_state.get(scope, {}))
@@ -495,13 +516,23 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             raise ValueError("Invalid ADO continuation cache")
         if prior.get("emailHash") != email_hash:
             prior = {}
-        cache = prior.get("cache", {})
-        expected_ids.update(cache)
+        same_scope = prior.get("remoteScopeHash") == scope_hash
+        old_cache = prior.get("cache", {})
+        cache = old_cache if same_scope else {}
+        expected_ids.update(old_cache)
         if isinstance(prior.get("work"), dict):
             expected_ids.update(repo["id"] for repo in prior["work"].get("inventory") or [])
         work = prior.get("work")
-        if (not isinstance(work, dict) or work.get("firstDay") != (at.date() - dt.timedelta(days=59)).isoformat()
-                or work.get("scanComplete")):
+        rollover_progress = {}
+        new_first = (at.date() - dt.timedelta(days=59)).isoformat()
+        if (isinstance(work, dict) and not work.get("scanComplete")
+                and isinstance(work.get("firstDay"), str)
+                and work["firstDay"] <= new_first
+                and (work["firstDay"] < new_first or not same_scope)):
+            rollover_progress = work["progress"]
+            active_cursor = work["activeCursor"]
+        if (not isinstance(work, dict) or work.get("firstDay") != new_first
+                or work.get("scanComplete") or not same_scope):
             work = new_work(at)
         reader.source_calls = 0
         reader.source_end = min(reader.end, time.monotonic() + SECONDS_PER_PROJECT)
@@ -514,6 +545,12 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             verified = True
             if work["inventory"] is None:
                 work["inventory"] = inventory(reader, org, project)
+            if rollover_progress:
+                indexed = {repo["id"]: repo for repo in work["inventory"]}
+                work["progress"] = {repo_id: progress for repo_id, progress in rollover_progress.items()
+                    if (repo_id in indexed and not indexed[repo_id]["isDisabled"]
+                        and indexed[repo_id]["defaultBranch"] == progress["branch"])}
+                work["activeCursor"] = active_cursor
             observed_ids = {repo["id"] for repo in work["inventory"]}
             observed_names = {repo["name"].casefold() for repo in work["inventory"]}
             if expected_ids - observed_ids or set(configured_names) - observed_names:
@@ -528,6 +565,29 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 work = new_work(at)
                 raise ValueError("Overlapping ADO project discovery")
             discovered_repositories.update(inventory_keys)
+            by_name = {}
+            for repo in work["inventory"]:
+                by_name.setdefault(repo["name"].casefold(), []).append(repo["id"])
+            selected = sorted(by_name[name][0] for name in configured_names if len(by_name.get(name, [])) == 1)
+            if selected != work.get("selectedRepoIds", []):
+                work["repoIndex"] = 0
+                work["scanComplete"] = False
+            work["selectedRepoIds"] = selected
+            selected_ids = set(selected)
+            cache = {key: value for key, value in old_cache.items() if key in selected_ids}
+            work["progress"] = {key: value for key, value in work["progress"].items() if key in selected_ids}
+            work["repoDone"] = {key: value for key, value in work["repoDone"].items() if key in selected_ids}
+            work["repoErrors"] = {key: value for key, value in work["repoErrors"].items() if key in selected_ids}
+            work["reasons"] = [reason for reason in work["reasons"] if reason != "configured-repository-scope"]
+            if any(repo["id"] not in selected_ids for repo in work["inventory"]):
+                work["reasons"].append("configured-repository-scope")
+            if not configured_names and "ado-remotes-required" not in work["reasons"]:
+                work["reasons"].append("ado-remotes-required")
+            if (any(len(by_name.get(name, [])) > 1 for name in configured_names)
+                    and "ambiguous-configured-repository" not in work["reasons"]):
+                work["reasons"].append("ambiguous-configured-repository")
+            if any(repo["isDisabled"] for repo in work["inventory"]) and "disabled-repository" not in work["reasons"]:
+                work["reasons"].append("disabled-repository")
             advance_prs(reader, org, project, account, work)
             advance_repos(reader, org, project, work, cache, emails)
         except (BudgetExceeded, OSError, KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
@@ -540,6 +600,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             and all(repo["isDisabled"] or repo["id"] in work["repoDone"]
                     for repo in work["inventory"] or []))
         visibility_complete = (verified and bool(work["inventory"])
+            and len(work.get("selectedRepoIds", [])) == len(work["inventory"])
             and not any(repo["isDisabled"] for repo in work["inventory"])
             and not (expected_ids - {repo["id"] for repo in work["inventory"]})
             and not (set(configured_names) - {repo["name"].casefold() for repo in work["inventory"]}))
@@ -562,6 +623,8 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                   "days": source_days(work, org, project, categories, captured_at,
                                       complete, verified, visibility_complete),
                   "provenance": {"inventoryCount": len(work["inventory"] or []),
+                      "configuredRepositoryCount": len(configured_names),
+                      "selectedRepositoryCount": len(work.get("selectedRepoIds", [])),
                       "expectedRepositoryCount": len(expected_ids),
                       "missingRepositoryCount": len(expected_ids - {repo["id"] for repo in work["inventory"] or []}),
                       "missingConfiguredCount": len(set(configured_names) -
@@ -571,7 +634,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                       "completedRepositories": len(work["repoDone"]), "prPages": (work["prOffset"] + PAGE - 1) // PAGE,
                       "pinnedHeads": {key: value["head"] for key, value in work["repoDone"].items()},
                       "sourceCutoffAt": work["cutoff"]}}
-        if not complete and emails is not None and prior:
+        if not complete and emails is not None and prior and same_scope:
             old_days = {day["day"]: day for day in old_sources.get(source_id, {}).get("days", [])
                         if day.get("status") in ("ready", "stale")}
             source["days"] = [{**old_days[day["day"]], "status": "stale"} if day["day"] in old_days else day
@@ -580,6 +643,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 source["status"] = "stale"
         sources.append(source)
         states[scope] = {"account": account, "emailHash": email_hash,
+                         "remoteScopeHash": scope_hash,
                          "expectedRepositoryIds": sorted(expected_ids), "cache": cache, "work": work}
     captured = stamp(dt.datetime.now(dt.timezone.utc))
     return {"version": 2, "metricDefinition": DEFINITION, "provider": "ado",
