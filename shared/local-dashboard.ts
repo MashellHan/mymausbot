@@ -302,4 +302,6 @@ export interface LocalUsageResponse {
   history?: LocalUsageTrendDay[];
   merged?: LocalUsageMergedResponse;
   github?: LocalUsageGithubResponse;
+  /** Primary source-qualified contribution contract; legacy views remain explicit diagnostics. */
+  contributions?: import("./local-contributions.ts").LocalContributionsResponse;
 }

@@ -2,6 +2,7 @@ import type {
   LocalUsageCategory, LocalUsageCounts, LocalUsageMergedCounts, LocalUsageResponse,
   LocalUsageTrendDay, LocalUsageWindow, LocalUsageMergedResponse, LocalUsageRepositories,
 } from "../../shared/local-dashboard.ts";
+import type { LocalContributionCounts, LocalContributionsResponse } from "../../shared/local-contributions.ts";
 import { usageTrendRange, type UsageTrendRange } from "../../shared/local-usage-range.ts";
 
 type UsageCounts = LocalUsageCounts & { knownCommits: number | null };
@@ -14,9 +15,9 @@ export type UsageTrendDay = Omit<LocalUsageTrendDay, "categories" | "repositorie
 export type UsageRepositoryWindow = Pick<UsageWindow, "startDay" | "endDay" | "repositories"> & { comparison: Pick<UsageWindow["comparison"], "startDay" | "endDay"> };
 const periods = ["1", "7", "30"] as const;
 const shiftDay = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
-const counts = (value?: LocalUsageMergedCounts): UsageCounts => value ?? { prs: null, knownPrs: null, commits: null, knownCommits: null };
+const counts = (value?: LocalUsageMergedCounts | LocalContributionCounts): UsageCounts => value ?? { prs: null, knownPrs: null, commits: null, knownCommits: null };
 const emptyComparisons = () => ({ work: { prs: null, commits: null }, personal: { prs: null, commits: null }, unclassified: { prs: null, commits: null } });
-const categoryCounts = (value?: Record<LocalUsageCategory, LocalUsageMergedCounts>): Categories => ({
+const categoryCounts = (value?: Record<LocalUsageCategory, LocalUsageMergedCounts | LocalContributionCounts>): Categories => ({
   work: counts(value?.work), personal: counts(value?.personal), unclassified: counts(value?.unclassified),
 });
 
@@ -44,7 +45,8 @@ function tokenChange(snapshot: LocalUsageResponse, window: Pick<LocalUsageWindow
   return previous.totalTokens === 0 ? current.totalTokens === 0 ? 0 : "new" as const : (current.totalTokens - previous.totalTokens) / previous.totalTokens * 100;
 }
 
-function remoteUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange, github: Omit<LocalUsageMergedResponse, "overlaps"> | undefined) {
+type RemoteUsage = Pick<LocalUsageMergedResponse, "windows" | "trend" | "history" | "status" | "asOf" | "sixtyDayRepositories"> | LocalContributionsResponse;
+function remoteUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange, github: RemoteUsage | undefined) {
   const basis = github?.windows ?? snapshot.windows;
   const windows = basis && Object.fromEntries(periods.map((key) => {
     const window = basis[key], remote = github?.windows?.[key];
@@ -93,6 +95,10 @@ function remoteUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange, g
     : statuses.includes("stale") ? "stale" : statuses.every((status) => status === "ready") ? "ready" : "partial";
   return { windows, trend, period, status, asOf: github?.asOf ?? snapshot.asOf,
     sixtyDayRepositories: period ? repositoryHistoryWindow(period.endDay, github?.sixtyDayRepositories) : null };
+}
+
+export function primaryUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange = "30") {
+  return remoteUsageView(snapshot, range, snapshot.contributions);
 }
 
 export function profileUsageView(snapshot: LocalUsageResponse, range: UsageTrendRange = "30") {
@@ -151,9 +157,12 @@ export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRa
     sixtyDayRepositories: period ? repositoryHistoryWindow(period.endDay, repositoryHistory) : null };
 }
 
-export function retainUsageSnapshot(previous: LocalUsageResponse | null, next: LocalUsageResponse): LocalUsageResponse {
+export function retainUsageSnapshot(previous: LocalUsageResponse | null, next: LocalUsageResponse,
+  transportFailure = false): LocalUsageResponse {
   const local = !next.windows && previous?.windows ? { ...previous, status: "stale" as const } : next;
   const merged = !next.merged?.windows && previous?.merged?.windows ? { ...previous.merged, status: "stale" as const } : next.merged;
   const github = !next.github?.windows && previous?.github?.windows ? { ...previous.github, status: "stale" as const } : next.github;
-  return { ...local, merged, github };
+  const contributions = transportFailure && !next.contributions && previous?.contributions?.windows
+    ? { ...previous.contributions, status: "stale" as const } : next.contributions;
+  return { ...local, merged, github, contributions };
 }

@@ -6,11 +6,11 @@ export const usageMetrics = ["prs", "commits", "totalTokens"] as const;
 export type UsageMetric = typeof usageMetrics[number];
 export const metricText = (value: number | null) => value === null ? t("computer.usage.unavailable") : value.toLocaleString(activeLocale());
 export const countText = (value: number | null, known: number | null) => metricText(value ?? known);
-export const UsageSourceContext = createContext<"repositories" | "profile" | "merged">("repositories");
+export const UsageSourceContext = createContext<"primary" | "repositories" | "profile" | "merged">("primary");
 export function useUsageMetricHint() {
   const source = useContext(UsageSourceContext);
-  return (metric: UsageMetric) => t(metric === "prs" ? source === "profile" ? "computer.usage.githubPrHint" : source === "merged" ? "computer.usage.mergedPrHint" : "computer.usage.repositoryPrHint"
-    : metric === "commits" ? source === "profile" ? "computer.usage.githubCommitHint" : source === "merged" ? "computer.usage.mergedCommitHint" : "computer.usage.repositoryCommitHint" : "computer.usage.activityScopeHint");
+  return (metric: UsageMetric) => t(metric === "prs" ? source === "primary" ? "computer.usage.primaryPrHint" : source === "profile" ? "computer.usage.githubPrHint" : source === "merged" ? "computer.usage.mergedPrHint" : "computer.usage.repositoryPrHint"
+    : metric === "commits" ? source === "primary" ? "computer.usage.primaryCommitHint" : source === "profile" ? "computer.usage.githubCommitHint" : source === "merged" ? "computer.usage.mergedCommitHint" : "computer.usage.repositoryCommitHint" : "computer.usage.activityScopeHint");
 }
 export const changeText = (value: LocalUsageWeekChange) => value === null ? "—" : value === "new" ? t("computer.usage.newActivity")
   : new Intl.NumberFormat(activeLocale(), { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 1 }).format(value / 100);
@@ -36,6 +36,6 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
 export function UsageCount({ value, known }: { value: number | null; known: number | null }) {
   const source = useContext(UsageSourceContext);
   const partial = value === null && known !== null;
-  const description = partial ? t(source === "profile" ? "computer.usage.syncedCountHint" : "computer.usage.observedCountHint") : undefined;
+  const description = partial ? t(source === "primary" ? "computer.usage.primaryKnownCountHint" : source === "profile" ? "computer.usage.syncedCountHint" : "computer.usage.observedCountHint") : undefined;
   return <span data-usage-provisional={partial || undefined} title={description} aria-description={description}>{countText(value, known)}</span>;
 }

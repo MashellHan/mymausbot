@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { createLocalUsageProvider } from "./local-usage.ts";
 import { withGithubUsageFixture } from "../scripts/testing/merged-usage-fixture.ts";
+import { primaryUsageSnapshotFixture } from "../scripts/testing/primary-usage-fixture.ts";
 import { localUsageView, profileUsageView, mergedUsageView } from "../src/lib/local-usage-view.ts";
 import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 
@@ -592,9 +593,25 @@ describe("local Usage projection", () => {
   });
 
   it("has no fabricated windows before any valid aggregate", async () => {
-    const provider = createLocalUsageProvider({ file: join(tmpdir(), "no-such-usage-aggregate.json") });
-    expect(await provider.get()).toEqual({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
-      sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] });
+    const root = await mkdtemp(join(tmpdir(), "no-such-usage-aggregate-"));
+    folders.push(root);
+    const provider = createLocalUsageProvider({ file: join(root, "latest.json"),
+      mergedFile: join(root, "merged.json"), githubFile: join(root, "github.json"), contributionsFile: join(root, "contributions.json") });
+    expect(await provider.get()).toMatchObject({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
+      sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [],
+      contributions: { status: "unavailable", windows: null, accounts: [] } });
+  });
+
+  it("serves the versioned primary definition beside separate legacy observations", async () => {
+    const asOf = Date.parse("2026-11-03T08:31:00Z");
+    const { file } = await fixture(asOf);
+    const contributionsFile = join(dirname(file), "contributions-v2.json");
+    await writeFile(contributionsFile, JSON.stringify(primaryUsageSnapshotFixture()));
+    const response = await createLocalUsageProvider({ file, contributionsFile, now: () => asOf }).get();
+    expect(response.contributions).toMatchObject({ metricDefinition: "contributions-v2", status: "ready",
+      timeZone: "provider-days", windows: { "1": { prs: 5, commits: 9 } } });
+    expect(response.windows?.["1"].prs).toBe(1);
+    expect(response.contributions?.accounts.map((account) => account.windows["1"].prs)).toEqual([3, 2]);
   });
 
   it("does not turn a verified PR count into a lower bound for an unused unclassified category", async () => {

@@ -3,9 +3,11 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
+import type { LocalContributionsResponse } from "../../shared/local-contributions";
 import { UsageChange } from "./LocalUsageValues";
 import { setLocale } from "@/lib/i18n";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
+import { primaryUsageFixture } from "../../scripts/testing/primary-usage-fixture";
 
 const calls = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => ({
@@ -69,10 +71,20 @@ const rolled = (offset: number): LocalUsageResponse => ({ ...sample, asOf: asOf 
   trend: trend.map((day) => ({ ...day, day: shiftDay(day.day, offset) })),
 });
 
+const withPrimaryFixture = (snapshot: LocalUsageResponse): LocalUsageResponse => {
+  if (snapshot.contributions) return snapshot;
+  const remote = withMergedUsageFixture(snapshot).merged!;
+  const contributions: LocalContributionsResponse = { ...remote, timeZone: "provider-days", metricDefinition: "contributions-v2",
+    dateBasis: { github: { prs: "github-profile-day", commits: "github-profile-day" },
+      ado: { prs: "created-at/UTC", commits: "author-at/UTC" }, tokens: "Asia/Shanghai" },
+    cutoffAt: snapshot.asOf, capturedAt: snapshot.asOf, currentDayPartial: true, accounts: [], sourceDays: null };
+  return { ...snapshot, contributions };
+};
+
 let host: HTMLDivElement;
 let root: Root;
 const renderRaw = async (snapshot: LocalUsageResponse | null, panel = false) => {
-  await act(async () => root.render(panel ? createElement(LocalUsagePanel) : createElement(LocalUsageView, { snapshot })));
+  await act(async () => root.render(panel ? createElement(LocalUsagePanel) : createElement(LocalUsageView, { snapshot: snapshot && withPrimaryFixture(snapshot) })));
 };
 const render = (snapshot: LocalUsageResponse | null, panel = false) => renderRaw(snapshot && withGithubUsageFixture(snapshot), panel);
 const text = () => host.textContent ?? "";
@@ -163,7 +175,7 @@ describe("local Usage panel", () => {
     expect(text()).toContain("2026-11-03 – 2026-11-03");
     expect(text()).toContain("2026-10-28 – 2026-11-03");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
-    expect(host.querySelector("[data-usage-metric-definition]")?.textContent).toContain("Separate from GitHub Profile");
+    expect(host.querySelector("[data-usage-metric-definition]")?.textContent).toContain("Profile dates");
     expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9")).toBe(true);
     expect(text()).not.toContain("≥");
     expect(host.querySelector<HTMLDetailsElement>("[data-usage-daily]")?.open).toBe(false);
@@ -190,7 +202,7 @@ describe("local Usage panel", () => {
     }
     expect(firstCard.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-11-02 (China time): +10%.");
     expect(firstCard.querySelector('[data-usage-change] .sr-only')?.textContent).toContain("Compared with 2026-11-02");
-    expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("Observed non-merge Git commits across local branches");
+    expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("Credited GitHub Profile commits and verified ADO default-branch authored commits");
     expect([...firstCard.querySelectorAll('[data-usage-change]')][2]?.getAttribute("title")).toContain("Based on synced devices; devices not yet synced are excluded.");
     expect(host.querySelector('section [data-usage-category-row="work"]')?.textContent).toContain("—");
     expect(host.querySelector('section [data-usage-category-row="personal"]')?.textContent).toContain("+10%");
@@ -260,12 +272,12 @@ describe("local Usage panel", () => {
       ...trend.slice(3),
     ] });
     const bars = [...host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="prs"] [data-usage-day]')];
-    expect(bars[0]!.getAttribute("aria-label")).toContain("0 · Reference");
+    expect(bars[0]!.getAttribute("aria-label")).toContain("0 · Known subtotal");
     expect(bars[1]!.querySelector('[data-usage-category="work"]')?.className).toContain("bg-accent/35");
     expect(bars[2]!.getAttribute("aria-label")).toContain("PRs 0");
-    expect(bars[2]!.getAttribute("aria-label")).not.toContain("Reference");
+    expect(bars[2]!.getAttribute("aria-label")).not.toContain("Known subtotal");
     await act(async () => bars[1]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/2026-10-06.*PRs.*2.*Enterprise.*Observed count/s);
+    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/2026-10-06.*PRs.*2.*Enterprise.*Verified subtotal/s);
     await act(async () => bars[2]!.focus());
     expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toContain("2026-10-07");
     await act(async () => bars[0]!.click());
@@ -436,7 +448,7 @@ describe("local Usage panel", () => {
 
   it("refreshes the local summary every five minutes and keeps the last good response on failure", async () => {
     vi.useFakeTimers();
-    calls.api.mockResolvedValueOnce(withGithubUsageFixture(sample)).mockRejectedValueOnce(new Error("offline"));
+    calls.api.mockResolvedValueOnce(withPrimaryFixture(withGithubUsageFixture(sample))).mockRejectedValueOnce(new Error("offline"));
     await render(null, true);
     expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/usage", expect.objectContaining({ background: true, signal: expect.any(AbortSignal) }));
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 - 1); });
@@ -455,7 +467,7 @@ describe("local Usage panel", () => {
     daily.open = true;
     expect(daily.querySelector("summary")?.textContent).not.toContain("WoW");
     expect([...daily.querySelectorAll('thead th[scope="col"]')].map((header) => header.textContent))
-      .toEqual(["Date", "PRs", "Commits", "Tokens", "Change", "Repository activity"]);
+      .toEqual(["Date", "PRs", "Commits", "Tokens", "Change", "Repository contributions"]);
     expect(daily.querySelector('[data-usage-change] > [aria-hidden="true"]')?.textContent).toMatch(/^(?:\+20%|New|—)$/);
     expect(daily.querySelector('p')?.textContent).not.toMatch(/DoD|WoW|MoM/);
     expect(daily.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-10-27 (China time)");
@@ -494,57 +506,64 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("2026-10-05 – 2026-11-03");
   });
 
-  it("keeps all repository observations distinct from partial Profile counts through source and range changes", async () => {
-    const snapshot = structuredClone(withGithubUsageFixture(sample));
-    snapshot.github!.accounts = [{ id: "a".repeat(64), host: "work.ghe.com", apiStatus: "ready", startAt: asOf - 7 * 86400000,
-      endAt: asOf, contributions: 0, commits: 0, rawPrs: 0, restricted: 0, outsideWindowPrs: 0 }];
-    const work = snapshot.windows!["1"].repositories.rows[0]!;
-    snapshot.windows!["1"].repositories.rows.push({ ...work, id: "personal-apps", name: "personal/private-apps", category: "personal", commits: 9 });
-    await renderRaw(snapshot);
-    expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("personal/private-apps");
-    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("2");
-    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("Repository activity");
-    const references = () => host.querySelector('[data-usage-profile-reference]')!;
-    expect(references().textContent).toContain("Total contributions 0 · Commit contributions 0");
-    expect(references().textContent).toContain("API complete · coverage unknown");
-    expect(references().textContent).toContain("not exact historical-instant totals");
-    const source = host.querySelector<HTMLSelectElement>('select[aria-label="Activity source"]')!;
-    const range = host.querySelector<HTMLSelectElement>('select[aria-label="Trend range"]')!;
-    await act(async () => { range.value = "6m"; range.dispatchEvent(new Event("change", { bubbles: true })); });
-    await act(async () => { source.value = "profile"; source.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(range.value).toBe("6m");
-    expect(host.querySelector('[data-usage-trend="commits"]')?.getAttribute("data-usage-granularity")).toBe("week");
-    expect(host.querySelector('[data-usage-repositories]')?.textContent).not.toContain("personal/private-apps");
-    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("exact China-day counts are unknown");
-    expect([...host.querySelectorAll("section dd")][1]?.querySelector('[data-usage-provisional]')?.textContent).toBe("2");
-    expect(host.querySelector('section [data-usage-change] > [aria-hidden=true]')?.textContent).toBe("—");
-    await act(async () => { source.value = "repositories"; source.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("personal/private-apps");
-    expect(range.value).toBe("6m");
-    setLocale("zh");
-    await renderRaw(snapshot);
-    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("与 GitHub Profile 贡献分开统计");
+  it("never admits large legacy observations into missing primary cards, trends or repository totals", async () => {
+    const legacy = structuredClone(withGithubUsageFixture(sample));
+    for (const window of Object.values(legacy.windows!)) {
+      window.prs = 900_000; window.knownPrs = 900_000; window.commits = 900_000;
+      window.repositories.rows.push({ ...window.repositories.rows[0]!, id: "legacy-only", name: "legacy/large-count", prs: 900_000, commits: 900_000 });
+    }
+    await act(async () => root.render(createElement(LocalUsageView, { snapshot: legacy })));
+    expect(text()).toContain("Contribution sources are unavailable");
+    expect([...host.querySelectorAll("section dd")].slice(0, 3).map((value) => value.firstElementChild?.textContent))
+      .toEqual(["Unavailable", "Unavailable", "150"]);
+    expect(host.querySelectorAll('[data-usage-trend="prs"] [data-usage-day]')).toHaveLength(30);
+    expect(host.querySelector('[data-usage-trend="prs"] [data-usage-day]')?.getAttribute("aria-label")).toContain("Unavailable");
+    expect(host.querySelector('[data-usage-repositories]')).toBeNull();
+    expect(text()).not.toContain("900,000");
+    expect(text()).not.toContain("legacy/large-count");
+    expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
   });
 
-  it("keeps remote-only activity through refresh failure and clears it when access is revoked", async () => {
+  it("clears the primary view when a successful refresh omits the versioned snapshot", async () => {
     vi.useFakeTimers();
-    const remoteOnly: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
-      prSourceCoverage: null, prCoverage: null, windows: null, trend: [], github: withGithubUsageFixture(sample).github };
-    calls.api.mockResolvedValueOnce(remoteOnly).mockRejectedValueOnce(new Error("offline"))
+    calls.api.mockResolvedValueOnce(withPrimaryFixture(sample)).mockResolvedValueOnce(sample);
+    await renderRaw(null, true);
+    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("1");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
+    expect(text()).toContain("Contribution sources are unavailable");
+    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("Unavailable");
+    expect([...host.querySelectorAll("section dd")][2]?.firstElementChild?.textContent).toBe("150");
+  });
+
+  it("keeps primary unknown through legacy-only refresh failure and clears on revoked access", async () => {
+    vi.useFakeTimers();
+    const legacyOnly: LocalUsageResponse = { ...sample, github: withGithubUsageFixture(sample).github };
+    calls.api.mockResolvedValueOnce(legacyOnly).mockRejectedValueOnce(new Error("offline"))
       .mockRejectedValueOnce(new ApiError("forbidden", 403));
     await renderRaw(null, true);
-    expect(host.querySelectorAll("section dd")).toHaveLength(0);
-    expect(host.querySelector('[data-usage-profile-reference]')?.textContent).toContain("2026-11-03");
-    const source = host.querySelector<HTMLSelectElement>('select[aria-label="Activity source"]')!;
-    await act(async () => { source.value = "profile"; source.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("2");
+    expect(text()).toContain("Contribution sources are unavailable");
+    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("Unavailable");
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
-    await showSummaryInfo();
-    expect(infoText()).toContain("Showing the last captured snapshot");
-    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("2");
+    expect(text()).toContain("Contribution sources are unavailable");
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
     expect(text()).toContain("Activity summary unavailable");
     expect(host.querySelectorAll("section dd")).toHaveLength(0);
+  });
+
+  it("shows source-qualified contributions and per-account details on the main surface", async () => {
+    await renderRaw({ ...sample, contributions: primaryUsageFixture() });
+    expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
+    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("Profile dates");
+    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("5");
+    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("9");
+    expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("fixture/github-repo");
+    expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("fixture/ado-repo");
+    const detail = host.querySelector<HTMLDetailsElement>('[data-usage-primary-sources]')!;
+    await act(async () => { detail.open = true; detail.dispatchEvent(new Event("toggle", { bubbles: true })); });
+    expect(detail.textContent).toContain("fixture-gh");
+    expect(detail.textContent).toContain("fixture-ado");
+    expect(detail.textContent).toContain("fixture-org/fixture-project");
+    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("5");
   });
 });
 
@@ -579,23 +598,6 @@ it("selects sixty-day repository detail with the trend and preserves source iden
   expect(oldest.textContent).toContain("Personal");
   await act(async () => tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
   expect(host.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe("1d");
-  const source = host.querySelector<HTMLSelectElement>('select[aria-label="Activity source"]')!;
-  await act(async () => { source.value = "merged"; source.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("Commits are those attached to these PRs");
-  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("dated by merge/completion in China time");
-  expect(host.querySelector('section dt')!.getAttribute("title")).toBe("Your PRs merged remotely, counted on their merge date in China time.");
-  expect(host.querySelectorAll('section dt')[1]!.getAttribute("title")).toContain("Original non-merge commits in your remotely merged PRs, counted on the PR merge date.");
-  expect(host.querySelector('section [data-usage-change] .sr-only')!.textContent).toContain("counted on their merge date in China time.");
-  expect(host.querySelector('[data-usage-repositories]')!.textContent).toContain("fixture/remote-pr-records");
-  expect(host.querySelector('[data-usage-repositories]')!.textContent).not.toContain("fixture/retained-personal");
-  await act(async () => { source.value = "profile"; source.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect(host.querySelector('[data-usage-daily] tbody tr:last-child')!.textContent).toContain("Repository details are not available in this snapshot.");
-  setLocale("zh");
-  await act(async () => { source.value = "merged"; source.dispatchEvent(new Event("change", { bubbles: true })); });
-  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("PR 的关联提交");
-  expect(host.querySelector('[data-usage-metric-definition]')!.textContent).toContain("按北京时间的合并／完成日期计数");
-  expect(host.querySelector('section dt')!.getAttribute("title")).toBe("你创建且已在远端合并的 PR，按北京时间的合并日期计数。");
-  expect(host.querySelectorAll('section dt')[1]!.getAttribute("title")).toContain("你已合并 PR 中的原始非 merge 提交，归到 PR 合并当天。");
-  expect(host.querySelector('section [data-usage-change] .sr-only')!.textContent).toContain("按北京时间的合并日期计数。");
+  expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
   expect(range.value).toBe("60");
 });
