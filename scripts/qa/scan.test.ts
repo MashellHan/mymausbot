@@ -131,6 +131,41 @@ describe("advisory process scan", () => {
     expect(f.issues).toHaveLength(1);
   });
 
+  it.each(["qa-triage", "qa-repair"])("keeps %s on its original QA issue across renewed deadlines", async (rule) => {
+    const f = fixture();
+    const overdue = "2026-11-08T01:00:00Z", renewed = "2026-11-09T00:00:00Z";
+    const qa = {
+      number: 5, created_at: overdue, html_url: "https://github.com/example/mausbot/issues/5",
+      labels: rule === "qa-triage" ? ["qa", "qa:untriaged"]
+        : ["qa", "qa:triaged", "qa:p2", "qa:kind:flake", "qa:scope:global", "owner:back"],
+      body: `{"triageEpoch":"${overdue}"}\nQA-Owner: mausbot-back\nQA-Due: ${overdue}\nQA-Next: reproduce`,
+    };
+    const original = queueCases([qa], [], now)[0];
+    qa.body = qa.body.replaceAll(overdue, renewed);
+    const updated = queueCases([qa], [], now)[0];
+    expect(updated).toMatchObject({ rule, subject: "issue:5", key: original.key });
+    expect(updated.text).toContain(renewed);
+    expect(updated.text).not.toContain(overdue);
+    f.issues.push({ number: 6, title: `[Process] ${rule}: issue:5:${overdue}`, state: "open", labels: ["qa:process"],
+      html_url: "https://github.com/example/mausbot/issues/6", body: `Process-Rule: ${rule}\nProcess-Subject: issue:5:${overdue}\n` });
+    const api = async (path: string, options?: Parameters<typeof f.api>[1]) => {
+      if (path.includes("/ci.yml/runs?")) return { workflow_runs: [] };
+      if (path.startsWith("/issues?") && !path.includes("labels=qa:process")) return [qa];
+      return f.api(path, options);
+    };
+    const send = vi.fn(async (_message: string) => ({ submittedAt: new Date(now).toISOString() }));
+    const result = await drainQueue({}, { api, recover: async () => ({ healthy: true }), send, now });
+    expect(result.sent).toBe(true);
+    expect(result.state.lastProcessScan).toMatchObject({ outcome: "optimization_needed", handoffs: [], findings: [updated] });
+    expect(send.mock.calls[0][0]).toContain(`${qa.html_url}: overdue`);
+    expect(send.mock.calls[0][0]).not.toContain("/issues/6");
+    expect(f.issues).toHaveLength(1);
+    expect(f.api.mock.calls.every(([, options]) => !options?.method || options.method === "GET")).toBe(true);
+    expect(holdsFor([qa], ["global"])).toEqual([]);
+    expect((await drainQueue(result.state, { api, recover: async () => ({ healthy: true }), send, now })).sent).toBe(false);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("retains scan observations for a safe retry when issue delivery fails", async () => {
     const f = fixture(), state = {};
     const unavailable = async (path: string, options?: Parameters<typeof f.api>[1]) => {
