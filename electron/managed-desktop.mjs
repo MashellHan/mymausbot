@@ -461,7 +461,7 @@ export function createManagedDesktopClient({ store, applyConnection, applyPolicy
   }
   /** A record that may only be locked in the keychain is kept, never removed, and read again shortly. */
   async function restoreFailed(stamp, unreadable) {
-    if (unreadable) {
+    if (unreadable && !store.preserveInvalid) {
       const removed = await store.write(null).then(() => true, () => false);
       if (!current(stamp)) return snapshot();
       if (removed) { restoreFailures = 0; return publish({ status: "signed-out", ...said("removed") }); }

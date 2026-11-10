@@ -17,12 +17,20 @@ test("private file mode selects protected persistent browser data before the bro
   t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
   const preference = path.join(userData, "desktop-prefs.json");
   fs.writeFileSync(preference, JSON.stringify({ credentialMode: "private-file" }), { mode: 0o600 });
+  const contents = path.join(userData, "Fixture.app", "Contents");
+  const executable = path.join(contents, "MacOS", "Fixture");
+  const framework = path.join(contents, "Frameworks", "Electron Framework.framework", "Versions", "A", "Electron Framework");
+  fs.mkdirSync(path.dirname(executable), { recursive: true });
+  fs.mkdirSync(path.dirname(framework), { recursive: true });
+  fs.writeFileSync(executable, "fixture");
+  fs.writeFileSync(framework, Buffer.concat([Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX"), Buffer.from([1, 9]), Buffer.from("101100011")]));
   const calls = [];
   const existing = { id: "persistent" };
   const launch = () => {
     const context = vm.createContext({ fs, path, configureDesktopCredentialMode,
       createAppBrowserSession, createSessionConfigMemory: () => ({}),
-      process: { umask: mode => calls.push(["umask", mode]) },
+      process: { platform: "darwin", versions: { electron: "43.7.9" }, execPath: executable,
+        umask: mode => calls.push(["umask", mode]) },
       app: { getPath: name => { assert.equal(name, "userData"); return userData; },
         setPath: (name, value) => calls.push([name, value]) },
       session: { defaultSession: existing, fromPartition: () => { throw new Error("unexpected session partition"); } } });
@@ -34,6 +42,10 @@ test("private file mode selects protected persistent browser data before the bro
   assert.equal(chosen.browserSession(), existing);
   assert.deepEqual(calls, [["umask", 0o077], ["sessionData", path.join(userData, "private-credentials", "browser-session")]]);
   assert.equal(fs.statSync(calls[1][1]).mode & 0o777, 0o700);
+
+  fs.writeFileSync(framework, Buffer.concat([Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX"), Buffer.from([1, 9]), Buffer.from("111100011")]));
+  assert.throws(launch, /Private browser storage is unavailable/);
+  assert.equal(calls.length, 2);
 
   fs.writeFileSync(preference, "invalid JSON");
   assert.throws(launch, /Private credential mode must be selected/);

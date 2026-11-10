@@ -29,15 +29,21 @@ They are outside repositories and separate from earlier `credentials.bin`,
 Cloud and company ciphertext. The App never reads or converts those earlier
 encrypted records in this mode. Sign in or enter a key once in the new mode to
 save it there. A previously created record that is missing, corrupt or unsafe
-stays unavailable;
-the App does not treat it as an empty sign-in or switch to `system` storage.
+stays unavailable; the App does not treat it as an empty sign-in or switch to
+`system` storage.
+Malformed Cloud grants, saved account lists, company grants and backup schedules
+are kept for explicit recovery rather than silently deleted. Resetting an
+unreadable private workspace record preserves its old bytes and marker aside.
 
 The App also places its persistent browser session in
 `userData/private-credentials/browser-session/` before opening a page and uses
 a `077` process umask. It does not import cookies from the earlier browser
 profile. Electron 43.7.9 has cookie encryption disabled in this build; the
 isolated native platform probe showed cookie persistence without the login
-Keychain. A two-process packaged App check in a disposable profile must confirm
+Keychain. Before selecting persistent browser storage, the App checks the
+running Electron 43.7.9 Framework's actual cookie-encryption fuse. An unknown,
+enabled or unsupported fuse refuses file mode without falling back to system
+storage. A two-process packaged App check in a disposable profile must confirm
 this build and its sign-in flow before the live preference is changed.
 
 The embedded server is no longer in session-only mode, so its existing

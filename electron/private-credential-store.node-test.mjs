@@ -56,6 +56,25 @@ test("corruption and a missing previously created file stay unavailable until an
   assert.equal(fs.existsSync(file), false);
 });
 
+test("explicit reset preserves a malformed marker and its credential before replacing both", async t => {
+  const { userData } = fixture(t);
+  const { directory } = preparePrivateCredentialStorage(userData);
+  const store = createPrivateCredentialStore(directory, "credentials.json");
+  await store.write({ token: "synthetic-original" });
+  const file = path.join(directory, "credentials.json"), marker = `${file}.seen`;
+  const original = fs.readFileSync(file);
+  fs.writeFileSync(marker, "malformed marker");
+  await assert.rejects(store.read(), /unsafe or unreadable/);
+  store.moveAside();
+  assert.equal(await createPrivateCredentialStore(directory, "credentials.json").read(), null);
+  const movedFile = fs.readdirSync(directory).find(name => name.startsWith("credentials.json.unreadable-"));
+  const movedMarker = fs.readdirSync(directory).find(name => name.startsWith("credentials.json.seen.unreadable-"));
+  assert.deepEqual(fs.readFileSync(path.join(directory, movedFile)), original);
+  assert.equal(fs.readFileSync(path.join(directory, movedMarker), "utf8"), "malformed marker");
+  await store.write({ token: "synthetic-new" });
+  assert.deepEqual(await createPrivateCredentialStore(directory, "credentials.json").read(), { token: "synthetic-new" });
+});
+
 test("symlinks, broad permissions, missing browser storage and unsafe parent paths fail closed", async t => {
   const { root, userData } = fixture(t);
   const { directory, browserSessionData } = preparePrivateCredentialStorage(userData);

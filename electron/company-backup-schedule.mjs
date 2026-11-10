@@ -43,7 +43,7 @@ export function createCompanyBackupSchedule({ store, scope, run, onState = () =>
       if (current(stamp)) { needsClear = false; publish("off"); }
     }
     catch {
-      if (current(stamp)) publish("error", "The saved schedule could not be cleared. Unlock your system keychain and turn daily backups off again before restarting.");
+      if (current(stamp)) publish("error", "The saved schedule could not be cleared. Check credential storage and turn daily backups off again before restarting.");
       throw new Error("The saved daily backup schedule could not be cleared.");
     }
     return snapshot();
@@ -56,7 +56,7 @@ export function createCompanyBackupSchedule({ store, scope, run, onState = () =>
   async function tick() {
     if (closed || !started || !record || operation) return;
     const currentScope = scope(), authority = currentScope ? { ...currentScope } : null;
-    if (legacyScope(record, authority)) { try { await adopt(authority); } catch { publish("error", "Daily backups could not be updated. Unlock your system keychain; they will retry in an hour."); arm(); return; } }
+    if (legacyScope(record, authority)) { try { await adopt(authority); } catch { publish("error", "Daily backups could not be updated. Check credential storage; they will retry in an hour."); arm(); return; } }
     if (authority && authority.key !== record.scope) { await forget(); return; }
     if (!authority) { awaitingAuthority = true; publish("paused", "Daily backups will resume when this installation and the company connection are available."); arm(); return; }
     if (record.nextBackupAt > now() || awaitingAuthority) { publish("waiting"); arm(); return; }
@@ -83,7 +83,7 @@ export function createCompanyBackupSchedule({ store, scope, run, onState = () =>
         publish(abort.signal.aborted || error?.code === "workspace_busy" ? "paused" : "error",
           abort.signal.aborted || error?.code === "workspace_busy"
             ? "Daily backup postponed. It will retry when this installation is available."
-            : "The daily backup did not complete. Check your connection, system keychain and free disk space; it will retry in an hour.");
+            : "The daily backup did not complete. Check your connection, credential storage and free disk space; it will retry in an hour.");
       }
     })();
     operation = work;
@@ -102,7 +102,7 @@ export function createCompanyBackupSchedule({ store, scope, run, onState = () =>
     try { saved = await store.read(); } catch (error) { failed = true; unreadable = unreadableRecord(error); }
     if (!current(stamp)) return snapshot();
     if (!failed && saved !== null && !usableSchedule(saved)) failed = unreadable = true;
-    if (unreadable) {
+    if (unreadable && !store.preserveInvalid) {
       const removed = await store.write(null).then(() => true, () => false);
       if (!current(stamp)) return snapshot();
       if (removed) { restoreFailures = 0; restorePending = false; return publish("off", "The saved daily backup schedule couldn't be read, so it was turned off. Turn daily backups on again."); }
@@ -129,7 +129,7 @@ export function createCompanyBackupSchedule({ store, scope, run, onState = () =>
       publish(record ? "waiting" : "off");
       await tick();
     } catch {
-      if (current(stamp)) { record = null; publish("error", "Daily backups could not be restored. Unlock your system keychain and enable them again."); }
+      if (current(stamp)) { record = null; publish("error", "Daily backups could not be restored. Check credential storage and enable them again."); }
     }
     return snapshot();
   }
@@ -157,7 +157,7 @@ export function createCompanyBackupSchedule({ store, scope, run, onState = () =>
         if (!sameScope(authority, scope())) { await forget(); throw new Error("Your organization connection changed."); }
         started = true; publish("waiting"); arm(); return snapshot();
       } catch (error) {
-        if (current(stamp)) { record = null; publish("error", "Daily backups were not enabled. Unlock your system keychain and try again."); }
+        if (current(stamp)) { record = null; publish("error", "Daily backups were not enabled. Check credential storage and try again."); }
         throw error;
       }
     },

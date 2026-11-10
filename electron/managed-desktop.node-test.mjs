@@ -106,6 +106,19 @@ test("private company grant restores with its policy after a new client, then di
   assert.equal(await store().read(), null);
   assert.deepEqual(await fs.readFile(path.join(userData, "company-connection.bin")), old);
 });
+
+test("malformed private company grant stays unavailable and preserves the raw record", async t => {
+  const userData = await fs.mkdtemp(path.join(os.tmpdir(), "omb-company-private-invalid-"));
+  t.after(() => fs.rm(userData, { recursive: true, force: true }));
+  const { directory } = preparePrivateCredentialStorage(userData);
+  const store = createPrivateCredentialStore(directory, "company-connection.json");
+  await store.write({ token });
+  const file = path.join(directory, "company-connection.json"), before = await fs.readFile(file);
+  const f = fixture(t, { store });
+  assert.equal((await f.client.start()).status, "unavailable");
+  assert.deepEqual(await fs.readFile(file), before);
+  assert.equal(f.requests.length, 0);
+});
 test("disconnect removes only company access and revokes its own portal device", async t => {
   const f = fixture(t, { saved: grant() }); await f.client.start();
   await f.client.disconnect();

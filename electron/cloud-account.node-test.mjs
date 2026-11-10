@@ -48,6 +48,19 @@ test("private Cloud sign-in survives a new client and explicit sign-out keeps ol
   assert.deepEqual(await readFile(join(userData, "cloud-account.bin")), old);
 });
 
+test("malformed private Cloud grant remains unavailable without an automatic destructive sign-out", async t => {
+  const userData = await mkdtemp(join(tmpdir(), "omb-cloud-private-invalid-"));
+  t.after(() => rm(userData, { recursive: true, force: true }));
+  const { directory } = preparePrivateCredentialStorage(userData);
+  const store = createPrivateCredentialStore(directory, "cloud-account.json");
+  await store.write({ token: accessToken });
+  const file = join(directory, "cloud-account.json"), before = await readFile(file);
+  const f = await fixture(t, { store });
+  assert.equal((await f.client.start()).status, "unavailable");
+  assert.deepEqual(await readFile(file), before);
+  assert.equal(f.requests.length, 0);
+});
+
 
 test("Cloud origin is fixed; only explicit fixtures can use loopback", () => {
   assert.equal(cloudOrigin(), CLOUD_ORIGIN);

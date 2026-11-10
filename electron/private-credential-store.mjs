@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createDesktopPrefs, jsonFile } from "./desktop-prefs.mjs";
+import { verifyPrivateBrowserFuse } from "./private-cookie-fuse.mjs";
 
 const MAX_BYTES = 1024 * 1024;
 const MARK = "openmausbot-private-credentials-v1\n";
@@ -92,6 +93,7 @@ export function configureDesktopCredentialMode(app, files = fs, processState = p
   }
   let paths = null;
   if (mode === "private-file") {
+    verifyPrivateBrowserFuse(processState, files);
     processState.umask(0o077);
     paths = preparePrivateCredentialStorage(userData, files);
     app.setPath("sessionData", paths.browserSessionData);
@@ -129,6 +131,7 @@ export function createPrivateCredentialStore(privateDir, name, files = fs) {
   };
   let tail = Promise.resolve();
   return {
+    preserveInvalid: true,
     async read() { await tail.catch(() => {}); return read(); },
     write(value) {
       const operation = tail.catch(() => {}).then(() => write(value));
@@ -138,9 +141,10 @@ export function createPrivateCredentialStore(privateDir, name, files = fs) {
     async available() { try { read(); return true; } catch { return false; } },
     moveAside() {
       checkParent();
-      const bytes = readFile(files, file);
+      const seen = readFile(files, mark), bytes = readFile(files, file);
       if (bytes) files.renameSync(file, `${file}.unreadable-${Date.now()}-${randomUUID()}`);
-      if (!readFile(files, mark)) writeAtomic(files, mark, Buffer.from(MARK));
+      if (seen && !seen.equals(Buffer.from(MARK))) files.renameSync(mark, `${mark}.unreadable-${Date.now()}-${randomUUID()}`);
+      if (!seen || !seen.equals(Buffer.from(MARK))) writeAtomic(files, mark, Buffer.from(MARK));
       writeAtomic(files, file, Buffer.from(JSON.stringify({ version: 1, value: null })));
     },
   };

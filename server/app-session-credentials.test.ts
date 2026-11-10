@@ -29,10 +29,11 @@ it("private file mode keeps server persistence available while refusing implicit
   expect(appSessionCredentials()).toBe(false);
   expect(appLoginKeychainForbidden()).toBe(true);
   const run = vi.fn();
-  expect(await claudeAuthStatus("claude", process.env, run as never)).toEqual({});
+  const providerEnv = { ...process.env, OMB_DESKTOP_PARENT: "0", OMB_CREDENTIAL_MODE: "system" };
+  expect(appLoginKeychainForbidden(providerEnv)).toBe(true);
+  expect(await claudeAuthStatus("claude", providerEnv, run as never)).toEqual({});
   expect(run).not.toHaveBeenCalled();
-  expect(appLoginKeychainForbidden({ OMB_DESKTOP_PARENT: "1", OMB_CREDENTIAL_MODE: "system" })).toBe(false);
-  expect(appLoginKeychainForbidden({ OMB_CREDENTIAL_MODE: "private-file" })).toBe(false);
+  expect(appLoginKeychainForbidden({ OMB_DESKTOP_PARENT: "1", OMB_CREDENTIAL_MODE: "system" })).toBe(true);
   const oauth = new McpOAuthStore(join(root, "mcp-oauth.json"));
   oauth.put("docs", { url: "https://example.test/mcp", state: "signed-in", tokens: { access: "synthetic-private" } });
   expect(new McpOAuthStore(join(root, "mcp-oauth.json")).get("docs", "https://example.test/mcp")?.tokens?.access).toBe("synthetic-private");
@@ -40,6 +41,9 @@ it("private file mode keeps server persistence available while refusing implicit
   logins.create({ site: "example.test", hosts: ["example.test"], exactHost: false,
     username: "synthetic", password: "synthetic-private", source: "settings", bots: "all" });
   expect(new LoginStore({ dataDir: root }).list()).toHaveLength(1);
+  vi.stubEnv("OMB_DESKTOP_PARENT", "0");
+  vi.stubEnv("OMB_CREDENTIAL_MODE", "system");
+  expect(appLoginKeychainForbidden({ OMB_DESKTOP_PARENT: "1", OMB_CREDENTIAL_MODE: "private-file" })).toBe(true);
 });
 
 it("keeps pre-existing MCP OAuth and saved-login files untouched and refuses persistence-only saves", () => {
