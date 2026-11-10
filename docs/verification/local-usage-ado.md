@@ -113,6 +113,8 @@ repository scans whose ID and default branch still match that inventory.
 The private continuation binds the configured remote-name set; changing that
 set rechecks inventory and PR pages, keeps only compatible selected pinned
 progress, and cannot carry old broader day rows as stale scoped data.
+Older schema-3 inventory expectations migrate once from the verified selected
+repository IDs; the selected GUID expectations then survive failed refreshes.
 Completed pinned proofs remain cached. Neither a request budget nor a force
 push can turn an unscanned portion into a certified zero.
 

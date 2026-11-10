@@ -515,11 +515,18 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             raise ValueError("Invalid ADO continuation cache")
         if prior.get("emailHash") != email_hash:
             prior = {}
+        if prior.get("expectedRepositoryScope") not in (None, "selected"):
+            raise ValueError("Invalid ADO expected repository scope")
         same_scope = prior.get("remoteScopeHash") == scope_hash
         old_cache = prior.get("cache", {})
         cache = old_cache if same_scope else {}
         prior_work = prior.get("work")
-        expected_ids = set(prior_work.get("selectedRepoIds", [])) if same_scope and isinstance(prior_work, dict) else set()
+        expected_ids = set()
+        if same_scope:
+            if prior.get("expectedRepositoryScope") == "selected":
+                expected_ids = set(prior.get("expectedRepositoryIds", []))
+            elif isinstance(prior_work, dict):
+                expected_ids = set(prior_work.get("selectedRepoIds", []))
         expected_ids.update(cache)
         work = prior_work
         rollover_progress = {}
@@ -648,6 +655,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         sources.append(source)
         states[scope] = {"account": account, "emailHash": email_hash,
                          "remoteScopeHash": scope_hash,
+                         "expectedRepositoryScope": "selected",
                          "expectedRepositoryIds": sorted(expected_ids), "cache": cache, "work": work}
     captured = stamp(dt.datetime.now(dt.timezone.utc))
     return {"version": 2, "metricDefinition": DEFINITION, "provider": "ado",
