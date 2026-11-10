@@ -1,12 +1,11 @@
-// What an earlier version saved about bots asking before they contact each other: the fields load as if absent and
-// reach is everyone's, a card left open is settled, and an old Team escalations conversation is an ordinary one.
+// Saved peer limits and approval choices still govern work after the team update.
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { DATA_DIR } from "./config.ts";
 import type { ModelSelection } from "./contracts.ts";
-import { dismissLeftoverPeerCards } from "./host/leftover-peer-cards.ts";
+import { dismissStalePeerCards } from "./peer-approval.ts";
 import { canReach, reachablePeers } from "./peer-roster.ts";
 import { Store, type BotRecord } from "./store.ts";
 
@@ -17,7 +16,7 @@ describe("data saved with a peers list, a peer-approval switch or an escalations
     rmSync(DATA_DIR, { recursive: true, force: true });
   });
 
-  it("load without them, and the bot reaches every other bot", () => {
+  it("loads both saved restrictions and keeps the unlisted bot out of reach", () => {
     const store = new Store(selection);
     const narrow = store.createBot({ name: "Narrow" });
     const other = store.createBot({ name: "Other" });
@@ -30,14 +29,13 @@ describe("data saved with a peers list, a peer-approval switch or an escalations
 
     const reloaded = new Store(selection);
     const bot = reloaded.bot(narrow.id)!;
-    expect("peers" in bot).toBe(false);
-    expect("approvePeerComms" in bot).toBe(false);
-    expect(canReach(bot, reloaded.bot(other.id)!)).toBe(true);
-    expect(reachablePeers(reloaded.bots, bot).map((peer) => peer.id)).toEqual([other.id]);
-    expect(JSON.stringify(bot)).not.toMatch(/peers|approvePeerComms/);
+    expect(bot.peers).toEqual(["nobody"]);
+    expect(bot.approvePeerComms).toBe(true);
+    expect(canReach(bot, reloaded.bot(other.id)!)).toBe(false);
+    expect(reachablePeers(reloaded.bots, bot)).toEqual([]);
   });
 
-  it("leave the saved file on the next load, even when that load has nothing else to rewrite", () => {
+  it("keeps both restrictions in the saved file after a fresh load", () => {
     const narrow = new Store(selection).createBot({ name: "Narrow" });
     new Store(selection);
     const file = join(DATA_DIR, "bots.json");
@@ -49,8 +47,18 @@ describe("data saved with a peers list, a peer-approval switch or an escalations
 
     new Store(selection);
     const persisted: Array<Record<string, unknown>> = JSON.parse(readFileSync(file, "utf8"));
-    expect(persisted.find((entry) => entry.id === narrow.id)).not.toHaveProperty("peers");
-    expect(persisted.find((entry) => entry.id === narrow.id)).not.toHaveProperty("approvePeerComms");
+    expect(persisted.find((entry) => entry.id === narrow.id)).toMatchObject({ peers: ["nobody"], approvePeerComms: true });
+  });
+
+  it("keeps a corrupt saved peers value restrictive", () => {
+    const narrow = new Store(selection).createBot({ name: "Narrow" });
+    const file = join(DATA_DIR, "bots.json");
+    const saved: Array<Record<string, unknown>> = JSON.parse(readFileSync(file, "utf8"));
+    saved.find((bot) => bot.id === narrow.id)!.peers = "bad";
+    writeFileSync(file, JSON.stringify(saved));
+    const reloaded = new Store(selection);
+    expect(reloaded.bot(narrow.id)?.peers).toEqual([]);
+    expect(JSON.parse(readFileSync(file, "utf8")).find((bot: BotRecord) => bot.id === narrow.id).peers).toEqual([]);
   });
 
   it("settle a peer card left open, so it cannot lock the composer, and leave every other card alone", () => {
@@ -60,11 +68,12 @@ describe("data saved with a peers list, a peer-approval switch or an escalations
       card: { title: "A question", subtitle: "", options: ["Allow", "Deny"], requestId, tool } });
     const left = card("delegate_bot", "left-open");
     const other = card("Bash", "still-live");
-    expect(dismissLeftoverPeerCards(store)).toBe(1);
+    const bus = { store, broadcast: () => {} };
+    expect(dismissStalePeerCards(bus)).toBe(1);
     const cardOf = (id: string) => store.messagesFor(bot.threadId).find((message) => message.id === id)?.card;
     expect(cardOf(left.id)).toMatchObject({ answered: "deny", dismissed: true });
     expect(cardOf(other.id)?.answered).toBeUndefined();
-    expect(dismissLeftoverPeerCards(store)).toBe(0);
+    expect(dismissStalePeerCards(bus)).toBe(0);
   });
 
   it("keep an old Team escalations conversation readable", () => {

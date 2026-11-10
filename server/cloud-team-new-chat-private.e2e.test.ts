@@ -12,6 +12,7 @@ const ADA = { email: "ada@acme.test", role: "admin" as const };
 const CLEO = { email: "cleo@acme.test", role: "member" as const };
 const MIRA = { email: "mira@acme.test", role: "member" as const };
 const BEN = { email: "ben@acme.test", role: "member" as const };
+const DANA = { email: "dana@acme.test", role: "member" as const };
 const TITLE = "Kumquat salary talks";
 
 type Task = { threadId: string; title: string; sharedChat?: true; private?: true };
@@ -79,6 +80,38 @@ it("never shows another member or an admin a conversation someone opens, from it
     expect(JSON.stringify((await team.as(token, "GET", "/api/bots")).body), `${who}: /api/bots`).not.toContain(TITLE);
   }
   for (const stream of [...Object.values(streams), own]) await stream.close();
+}, hostTimeout(90_000));
+
+it("keeps a new Just me routine chat private from its first published frame", async () => {
+  const dana = (await team.pair(DANA)).token!;
+  const before = { ada: view(await scoutOf(ada)), ben: view(await scoutOf(ben)) };
+  const streams = { ada: await listen(ada), ben: await listen(ben) };
+  const own = await listen(dana);
+  const title = "Dana's private routine";
+  try {
+    const made = await team.as(dana, "POST", "/api/routines", {
+      name: title, prompt: "Draft private notes", botId: scout.id,
+      schedule: { type: "interval", everyMinutes: 1440, anchorAt: Date.now() + 86_400_000 }, resultsThreadId: "just-me",
+    });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    const threadId = made.body.routine.resultsThreadId as string;
+    expect(threadId).toBeTruthy();
+    await expect.poll(() => own.text().includes(threadId), { timeout: 10_000 }).toBe(true);
+    expect((await scoutOf(dana)).tasks!.find((task) => task.threadId === threadId)?.title).toBe(title);
+    for (const [who, token] of [["ada", ada], ["ben", ben]] as const) {
+      expect(streams[who].text(), `${who}: live stream`).not.toContain(threadId);
+      expect(streams[who].text(), `${who}: live stream`).not.toContain(title);
+      const replayed = await listen(token, { "last-event-id": streams[who].cursor });
+      try {
+        expect(replayed.text(), `${who}: replayed stream`).not.toContain(threadId);
+        expect(replayed.text(), `${who}: replayed stream`).not.toContain(title);
+      } finally { await replayed.close(); }
+      expect(view(await scoutOf(token)), `${who}: their copy of Scout`).toEqual(before[who]);
+      expect((await team.as(token, "GET", `/api/threads/${threadId}/messages`)).status).toBe(404);
+    }
+  } finally {
+    for (const stream of [...Object.values(streams), own]) await stream.close();
+  }
 }, hostTimeout(90_000));
 
 it("never sends anyone else a new member's own MausBot's main chat, from its first frame on", async () => {

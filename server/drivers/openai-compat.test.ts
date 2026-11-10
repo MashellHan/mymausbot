@@ -238,6 +238,38 @@ describe("OpenAICompatDriver", () => {
     await inst.dispose();
   });
 
+  it.each(["OMB_GROQ_API_KEY", "OMB_GREENFERENCE_API_KEY", "OMB_META_API_KEY", "OMB_DEEPSEEK_API_KEY", "OMB_ANTHROPIC_API_KEY", "omb_groq_api_key"])(
+    "does not send the desktop workspace key %s to a custom endpoint, but accepts an explicit instance key", async (name) => {
+      const previous = process.env[name];
+      const previousDesktop = process.env.OMB_DESKTOP_PARENT;
+      process.env.OMB_DESKTOP_PARENT = "1";
+      process.env[name] = "sk-fixture-store";
+      const requests: Array<{ url: string; headers: string }> = [];
+      vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        requests.push({ url: String(url), headers: JSON.stringify(init?.headers ?? {}) });
+        return Response.json({ data: [] });
+      }));
+      try {
+        const config = { url: "https://custom.example.test/v1", apiKeyEnv: name };
+        const unavailable = await OpenAICompatDriver.create({ instanceId: "no-key", displayName: "Custom", enabled: true,
+          config: OpenAICompatDriver.decodeConfig(config), environment: {} });
+        try { expect((await unavailable.snapshot()).state).toBe("unavailable"); }
+        finally { await unavailable.dispose(); }
+        expect(JSON.stringify(requests)).not.toContain("sk-fixture-store");
+
+        const explicit = await OpenAICompatDriver.create({ instanceId: "explicit", displayName: "Custom", enabled: true,
+          config: OpenAICompatDriver.decodeConfig({ ...config, key: "sk-fixture-instance" }), environment: {} });
+        try {
+          await explicit.refreshModels?.();
+          expect(requests.some((request) => request.url.startsWith(config.url) && request.headers.includes("sk-fixture-instance"))).toBe(true);
+          expect(JSON.stringify(requests)).not.toContain("sk-fixture-store");
+        } finally { await explicit.dispose(); }
+      } finally {
+        if (previous === undefined) delete process.env[name]; else process.env[name] = previous;
+        if (previousDesktop === undefined) delete process.env.OMB_DESKTOP_PARENT; else process.env.OMB_DESKTOP_PARENT = previousDesktop;
+      }
+    });
+
   it("rejects remote HTTP computer use before starting tools or a completion request", async () => {
     const request = vi.fn(async (_url: string | URL | Request) => new Response('{"data":[]}', { headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", request);

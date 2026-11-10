@@ -74,6 +74,7 @@ export const USER_ERROR = {
   "serverError.chat.missingConversation": "no such conversation",
   "serverError.department.chiefResponsibility": "Only a Chief of Staff can be made responsible for additional departments",
   "serverError.department.confirmResponsibility": "Confirm which additional departments this Chief is responsible for (acknowledgePeerScope)",
+  "serverError.department.confirmPeers": "Letting a bot talk to more bots requires confirming it first (acknowledgePeerScope)",
   "serverError.owner.teamOnly": "Only a team's bots report to someone.",
   "serverError.owner.choose": "Choose someone in {team}.",
   "serverError.owner.chiefConflict": "{name} already has a Chief of Staff. Take the crown off one of them first.",

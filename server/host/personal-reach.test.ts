@@ -34,6 +34,13 @@ describe("a person's own MausBot reaching the team's bots", () => {
     expect(world().reaches(sales, archive, "mine"), "any other bot keeps the audience rule").toBe(false);
   });
 
+  it("does not use the person's wider audience to bypass a saved peers list", () => {
+    const narrow = { ...mausbot, peers: [] };
+    expect(world().peers(bots, narrow, "mine")).toEqual([]);
+    expect(world().reaches(narrow, sales, "mine")).toBe(false);
+    expect(world().carries(narrow, sales, "mine", { id: "as_1", threadId: "mine", origin: { kind: "user", request: "ask Sales" } })).toBe(false);
+  });
+
   it("lists nothing, and hands nothing on, when its person's own request is not behind the turn", () => {
     expect(world(key(MIRA), false).peers(bots, mausbot, "mine")).toEqual([]);
     expect(world(null).handOnProblem(mausbot, sales, "mine", "turn")).toMatch(/routine, an event or a line another app passed on/);

@@ -542,21 +542,20 @@ the team's notes, another member or an admin, in lists, counts, search, notifica
 person could do: a bot they cannot see is never named to their MausBot (by name or id it is refused exactly like a bot that
 does not exist, and it is never counted), and a bot they can only view is refused. A routine, a relayed line, an event, a
 guest and another person's words can't use this, and it can answer a waiting question only in that person's own chats.
-The same holds for an Owner's or Admin's MausBot, which reaches every bot but other people's MausBots. Nothing reaches a
+The same holds for an Owner's or Admin's MausBot, subject to its saved peers list; it never reaches other people's MausBots. Nothing reaches a
 person's MausBot from outside it: no other bot is told of it.
 
-**Every bot reaches every bot.** Departments are folders, not walls. Any bot can ask, hand work to or @mention any
-other bot on the team, in any department, someone's Chief included, with nothing to set up (`canReach` in
-`server/peer-roster.ts`). Each bot's roster lists them all, its own department first; a Chief's lists its own team
-first and everyone else as reachable. Reaching a bot gives no authority over it: supervision, incidents, the inbox,
-setup changes and automations follow ownership and departments as above (`hasAuthority`, `canManage`). Only two
-things narrow reach: archived bots, and the audience rule below (a bot shared with different people; a person's own MausBot is the
-one exception, above). A turn in someone's
-private chat may ask any bot, and the work it hands on stays in that person's audience; it never hands work into a room
+**Bots reach their permitted peers across departments.** Departments are folders, not walls. A saved peers list narrows
+which bots one bot can contact; an empty list permits none. A bot set to ask before contacting a peer waits for the person's
+approval unless its turn has Full access. Archived bots and the audience rule also limit reach (`canReach` in
+`server/peer-roster.ts`). Each bot's roster lists only reachable bots, its own department first. Reaching a bot gives no
+authority over it: supervision, incidents, the inbox, setup changes and automations follow ownership and departments
+as above (`hasAuthority`, `canManage`). A person's own MausBot is the audience exception described above. A turn in someone's
+private chat may ask a permitted bot, and the work it hands on stays in that person's audience; it never hands work into a room
 or posts in one.
 
 On a My Cloud and on a desktop no bot has an owner: nothing is routed, and one Chief per department holds as before.
-Every bot still reaches every bot there.
+Saved peers lists and approval choices still apply there.
 
 ## Bringing a bot in from My Cloud
 

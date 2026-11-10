@@ -372,6 +372,10 @@ export interface WireBot extends DefaultBotFields, BotAccessFields {
   /** Team Cloud only: the lowercased email of the member the bot reports to, whose inbox its questions, approvals,
    * failures and routine results reach. Absent: it reports to `createdBy`. */
   reportsTo?: string;
+  /** Pause for human approval before this bot talks to a peer. */
+  approvePeerComms?: boolean;
+  /** Bot ids this bot is allowed to contact. */
+  peers?: string[];
   /** Whether this bot may use the workspace's connected apps. */
   composio?: boolean;
   /** Which connected-app tools this bot may call, by service slug. Absent

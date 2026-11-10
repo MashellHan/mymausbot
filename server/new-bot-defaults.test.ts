@@ -3,6 +3,12 @@ import { newBotDefaultsSchema, resolveBotCreationDefaults } from "./new-bot-defa
 import { parseConfigPatch } from "./config.ts";
 
 describe("new-bot templates", () => {
+  it("retains saved peer limits and approval defaults unless creation explicitly changes them", () => {
+    const defaults = newBotDefaultsSchema.parse({ profile: { name: "Sky", approvePeerComms: true, peers: ["x"] } });
+    expect(defaults.profile).toEqual({ name: "Sky", approvePeerComms: true, peers: ["x"] });
+    expect(resolveBotCreationDefaults(defaults, {}).profile).toEqual(defaults.profile);
+    expect(resolveBotCreationDefaults(defaults, { settings: { peers: null } }).profile).toEqual({ name: "Sky", approvePeerComms: true, peers: null });
+  });
   it("preserves restricted and empty tool defaults while allowing an explicit owner reset", () => {
     const defaults = newBotDefaultsSchema.parse({ profile: { toolScope: { allow: ["native:read", "native:read"] } } });
     expect(defaults.profile).toEqual({ toolScope: { allow: ["native:read"] } });
@@ -19,12 +25,6 @@ describe("new-bot templates", () => {
     for (const field of ["id", "threadId", "approvalGrant", "acknowledgeLocalAuto", "acknowledgePeerScope", "busy"]) {
       expect(newBotDefaultsSchema.safeParse({ profile: { [field]: true } }).success, field).toBe(false);
     }
-  });
-
-  it("reads saved defaults that still carry a peers list or a peer-approval switch as if they never had them", () => {
-    const defaults = newBotDefaultsSchema.parse({ profile: { name: "Sky", approvePeerComms: true, peers: ["x"] } });
-    expect(defaults.profile).toEqual({ name: "Sky" });
-    expect(resolveBotCreationDefaults(defaults, { settings: { peers: null } }).profile).toEqual({ name: "Sky" });
   });
 
   it("takes the helper-model switch in the request that creates a bot, as a boolean and nothing else", () => {

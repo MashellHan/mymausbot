@@ -1,7 +1,7 @@
 // A routine's run that tried to hand work to a bot it may not reach. coordinate_bots refuses while the turn runs, and the
 // model may say anything after, so the run keeps who it was refused and ends saying so plainly, instead of "completed":
 // nothing arrived. The person who wrote the routine reads it in their inbox, whoever else the bot's failures reach.
-import { namesTeammate, unreachableTeammate, type RosterMember } from "../peer-roster.ts";
+import { namesTeammate, reachesInAudience, unreachableTeammate, type RosterMember } from "../peer-roster.ts";
 import { serverLine } from "../server-lines.ts";
 import type { Delivery } from "./person-inbox.ts";
 
@@ -32,7 +32,12 @@ export function createRefusedHandoffs(deps: RefusedHandoffDeps) {
   function words(threadId: string, seen: readonly Refused[]): string {
     const language = deps.language(threadId), bot = seen[0]!.from.name;
     const named = (some: readonly Refused[]) => some.map(({ target }) => target.name).join(", ");
-    return serverLine(language, "server.runs.handoffApart", { bot, target: named(seen) });
+    const apart = seen.filter(({ from, target }) => !reachesInAudience(from, target));
+    const listed = seen.filter(({ from, target }) => reachesInAudience(from, target));
+    return [
+      ...(apart.length ? [serverLine(language, "server.runs.handoffApart", { bot, target: named(apart) })] : []),
+      ...(listed.length ? [serverLine(language, "server.runs.handoffNotListed", { bot, target: named(listed) })] : []),
+    ].join(" ");
   }
 
   return {

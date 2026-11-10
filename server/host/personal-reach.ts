@@ -6,7 +6,7 @@
 import { atLeast, type BotAccessLevel } from "../../shared/bot-access.ts";
 import { defaultBotPerson } from "../../shared/default-bot.ts";
 import type { HandoffView } from "../coordinator.ts";
-import { canReach, peerName, reachablePeers, type RosterMember } from "../peer-roster.ts";
+import { canReach, peerAllowed, peerName, reachablePeers, type RosterMember } from "../peer-roster.ts";
 
 export interface PersonalReachDeps {
   /** The person key a conversation is private to; null for a shared chat, a room and anywhere off a team. */
@@ -32,7 +32,8 @@ export function createPersonalReach(deps: PersonalReachDeps) {
     return email && deps.privateTo(threadId) === deps.personKey(email) ? email : null;
   };
   const usable = (from: RosterMember, target: RosterMember, email: string): boolean =>
-    from.id !== target.id && !target.hidden && !target.defaultBot && atLeast(deps.level(target, email), "chat");
+    from.id !== target.id && !target.hidden && !target.defaultBot &&
+    peerAllowed(from, target.id) && atLeast(deps.level(target, email), "chat");
 
   /** A bot this MausBot's person cannot see, or another person's MausBot: never named to it, in any of its chats. */
   const hides = (from: RosterMember, target: RosterMember): boolean => {

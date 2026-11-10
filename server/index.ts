@@ -241,7 +241,7 @@ import { openCodeProviderKeysAllowed, setOpenCodeProviderKeyPolicy } from "./dri
 import { forgetNotificationReader, liveAppRows, openCardRows, readMessageText, recallMessages, recentMessages, closeMessageSearch, closeMessageDb, chatFollowups, cancelledChatFollowup, settleChatFollowups, threadsReferencing, logNotification, lastRowAt, threadsWithCardsSince } from "./message-db.ts";
 import { briefCrossingLabel, claimRecallCrossings, recallCrossingLabel } from "./recall-disclosure.ts";
 import { parseSince, parseUntil, recentWork, recentWorkPrompt, turnOutcomeLine } from "./recent-work.ts";
-import { createChiefNotices } from "./host/chief-notices.ts"; import { dismissLeftoverPeerCards } from "./host/leftover-peer-cards.ts";
+import { createChiefNotices } from "./host/chief-notices.ts";
 import { createHandoffTicks } from "./handoff-ticks.ts"; import { IDLE_HTTP_SERVER } from "./due-timer.ts";
 
 const SESSION_READ_MAX_CHARS = 8_000;
@@ -303,6 +303,7 @@ import { CONSENT_RULE, continuedOrigin, escapeNotes, labelledLine, OUTSIDE, peer
 import { decideRoomPost, emptyRoomPostBudget, type RoomPostAttempt, type RoomPostBudget } from "./room-post-budget.ts";
 import { messagePages, pageSize, slimMessage } from "./host/message-pages.ts";
 import { coordinateResultMessage, createAsksActingPerson, createTeammatePrompts } from "./host/teammate-prompts.ts"; import { createPersonalReach } from "./host/personal-reach.ts"; import { createMausBotOwnChat } from "./host/mausbot-own-chat.ts"; import { moveMemoryLayer } from "./memory-move.ts";
+import { cancelPeerApprovalsFor, cancelPeerApprovalsForThread, dismissStalePeerCards, peerApprovalFailure, requestPeerApproval, resolvePeerComms, type ApprovalBus } from "./peer-approval.ts";
 import { createQueuedReason } from "./host/queued-reason.ts";
 import { ReplayBuffer } from "./host/sse-replay.ts";
 import {
@@ -959,7 +960,8 @@ let cloudHome: ReturnType<typeof settleCloudHome> | null = null; const teamHost 
   serverProfile: { read: () => cfg.profile, clear: () => { adminActorScope.exit(() => saveConfig({ profile: { name: "", email: "", aboutMe: "", avatarUrl: "" } })); Object.assign(cfg, loadConfig()); } } });
 const teamOwners = createTeamOwners({ team: CLOUD_TEAM, dataDir: DATA_DIR, sessions, store: () => store, audienceOf: (threadId) => teamHost.audienceOf(threadId), starters: threadStarters }); const mausbotOwnChat = createMausBotOwnChat({ bots: () => store.bots, starters: threadStarters, personKey: (email) => personKey({ id: "", email }), moveNotes: (from, to, person) => moveMemoryLayer(from, to, personLanguages.forLine(person)) });
 const personRooms = createPersonRooms({ reads: CLOUD_TEAM ? createRoomReads(DATA_DIR, (person) => { botOrders?.forgetPerson(person); forgetNotificationReader(person); }) : null, store: () => store, newestMessageId: (threadId) => readCursor(threadId).lastReadMessageId, publicGroupState, broadcast, shared: (threadId) => teamHost.privateTo(threadId) === null, wireBot: (botId) => { const bot = store.bot(botId); return bot ? wireBot(bot) : null; } });
-const botOrders = CLOUD_TEAM ? createPersonBotOrder(DATA_DIR) : null; const teamRoutines = createTeamRoutines({ team: Boolean(CLOUD_TEAM), privateTo: teamHost.privateTo, task: (botId, threadId) => store.taskByThread(botId, threadId), routines: () => routines, authors: cloudRoutineAuthors, withWriter: withRoutineWriter, ownBot: (botId) => { const person = store.bot(botId)?.defaultBot?.person; return person ? personKey({ id: "", email: person }) : null; }, tasks: (botId) => store.tasks(botId), threadRefusal: cloudThreadRefusal, openChat: (botId, title, person) => { const threadId = store.createTask(botId, title, false)?.threadId; if (threadId) threadStarters.set(threadId, person); return threadId; } });
+const botOrders = CLOUD_TEAM ? createPersonBotOrder(DATA_DIR) : null; const teamRoutines = createTeamRoutines({ team: Boolean(CLOUD_TEAM), privateTo: teamHost.privateTo, task: (botId, threadId) => store.taskByThread(botId, threadId), routines: () => routines, authors: cloudRoutineAuthors, withWriter: withRoutineWriter, ownBot: (botId) => { const person = store.bot(botId)?.defaultBot?.person; return person ? personKey({ id: "", email: person }) : null; }, tasks: (botId) => store.tasks(botId), threadRefusal: cloudThreadRefusal, openChat: (botId, title, person) => store.createTask(botId, title, false, undefined, undefined, undefined, undefined, undefined,
+  (created) => threadStarters.set(created.threadId, person))?.threadId });
 
 function actorKey(auth: RequestAuth & { kind: "session" }): string {
   return CLOUD_OWNER_KEY && auth.scopes.includes("admin") ? CLOUD_OWNER_KEY : personKey(auth.session);
@@ -3092,6 +3094,10 @@ function fullAccessForSource(botId: string, threadId: string): boolean {
   return sourceApprovalMode(botId, threadId) === "full";
 }
 
+function peerReviewRequired(bot: BotRecord, threadId: string): boolean {
+  return Boolean(bot.approvePeerComms && !fullAccessForSource(bot.id, threadId));
+}
+
 function appliesDirectly(botId: string, threadId: string): DirectApply | null {
   return appliesNow({ fullAccess: fullAccessForSource(botId, threadId), ownerMustConfirm: cloudGuestDriven(threadId) || !connectorThread(botId, threadId) });
 }
@@ -3909,7 +3915,8 @@ const handoffTicks = createHandoffTicks(), coordinator: Coordinator = createCoor
   host: { holdReason: (node) => queuedStatus(node), statusReply: (requester, prompt, signal) => sideJobs.text("status-reply", requester)?.generateText(prompt, { signal, timeoutMs: STATUS_REPLY_TIMEOUT_MS }) ?? Promise.resolve(undefined),
     validate: (node, parent) => node.mode === "notify" && node.status !== "queued" ? undefined
       : !node.parentId && node.groupId ? roomRootProblem(node)
-      : roomHandoffProblem(node, parent),
+      : roomHandoffProblem(node, parent) ??
+      (parent && !ownThreads.own(parent, node) && store.bot(parent.botId)?.approvePeerComms && !fullAccessForSource(parent.botId, parent.threadId) && !node.approvalGranted ? "Sender now requires peer approval; submit a new approved request" : undefined),
     busy: n => {
       const seat = parkedSeats.get(n.id);
       if (seat && !turnResources.free(seat)) return true;
@@ -4891,6 +4898,7 @@ async function respondToCard(input: {
   if (refused) return { ok: false, status: 409, error: refused };
   let result: CardRespondResult = { ok: true };
   await answeringCardAs(auth, threadId, requestId, async () => {
+    if (card && resolvePeerComms(approvalBus, requestId, behavior)) return;
     const outcome = await answerRequest(
       threadId, botForThread(bot.id, threadId)?.modelSelection.instanceId ?? "", requestId, behavior, message,
       { id: bot.id, name: bot.name },
@@ -4919,7 +4927,7 @@ async function respondToCard(input: {
 
 function closeOpenApprovals(threadId: string): void {
   for (const key of pendingCommandRules.keys()) if (key.startsWith(`${threadId}:`)) pendingCommandRules.delete(key);
-  cancelYourComputerAsks(threadId); computerAsks?.asks.cancel(threadId);
+  cancelPeerApprovalsForThread(threadId); cancelYourComputerAsks(threadId); computerAsks?.asks.cancel(threadId);
   for (const message of store.messagesFor(threadId)) {
     const card = message.card;
     if (!card?.requestId || card.answered || card.dismissed) continue;
@@ -9130,6 +9138,7 @@ async function deleteBotWithLifecycle(botId: string, revalidate: () => void = ()
           stopScreenPoller(bot.id);
           activeVpsThreads.delete(bot.id);
           lastReply.delete(bot.threadId);
+          cancelPeerApprovalsFor(bot.id);
           computerControl.forget(bot.id);
           computerControlRevision.delete(bot.id);
           const target = perBotLocalVmTarget(bot.id);
@@ -9592,13 +9601,13 @@ const roomTranscript = createRoomTranscript({ store, teammateReportContext });
 const roomPostBudgets = new Map<string, RoomPostBudget>();
 const ROOM_POST_MAX_CHARS = 4_000;
 
-const approvalBus: YourComputerBus = { store, notify };
+const approvalBus: ApprovalBus & YourComputerBus = { store, broadcast, notify, autoApply: fullAccessForSource };
 
-const { quotaSwitch, harnessCardOutcome } = createQuotaSwitchHost({ store, coordinator, registry, turnStops, hostedModels, providerConfigs, policyModelRefusal, checkedTaskModelSwitch, threadBusy, directRequestOwners, startOrQueueDirectMessage, takeover: limitTakeover, ownCards: (requestId, behavior) => computerAsks?.asks.answer(requestId, behavior) ?? false });
+const { quotaSwitch, harnessCardOutcome } = createQuotaSwitchHost({ store, coordinator, registry, turnStops, approvalBus, hostedModels, providerConfigs, policyModelRefusal, checkedTaskModelSwitch, threadBusy, directRequestOwners, startOrQueueDirectMessage, takeover: limitTakeover, ownCards: (requestId, behavior) => computerAsks?.asks.answer(requestId, behavior) ?? false });
 
 // Consent cards live only in memory: settle every card still open on disk, or it locks the composer forever.
 {
-  const stale = dismissLeftoverPeerCards(store) + dismissStaleYourComputerCards(store) + (computerAsks?.asks.dismissStale() ?? 0);
+  const stale = dismissStalePeerCards(approvalBus) + dismissStaleYourComputerCards(store) + (computerAsks?.asks.dismissStale() ?? 0);
   if (stale) console.log(`approvals: dismissed ${stale} card(s) left by a previous run`);
 }
 
@@ -12155,7 +12164,7 @@ ROUTES.push(createBotOrderRoutes({ store, visibleFor: (auth) => visibleTo(viewer
 ROUTES.push(createBotPatchRoutes({
   store, cfg, registry, sessions, browserRuntime, browserLive, memoryUpkeep, cacheKeepWarm, hostedModels, supportsApprovalMode,
   routines: () => routines, activeVpsThreads,
-  hostedWorkspace: HOSTED_WORKSPACE, hostedFullAccessRefusal: HOSTED_FULL_ACCESS_REFUSAL, desktopManaged: DESKTOP_MANAGED,
+  hostedWorkspace: HOSTED_WORKSPACE, hostedFullAccessRefusal: HOSTED_FULL_ACCESS_REFUSAL, desktopManaged: DESKTOP_MANAGED, maxWorkspaceBots: MAX_WORKSPACE_BOTS,
   broadcast, wireBot, publicGroupState, audienceChanged, storedAvatarExists, requestedTaskBot, threadBusy, activeGroupTurnForBot,
   checkedModelSelection, engineSwitchNeedsAsk, currentBrowserSession, interruptAllDirectThreads, cancelGroupTurnOperations,
   revokeInternalCapabilitiesForThread, runningTurnInstance, closeOpenApprovals, assertTeamComputerChangeIdle, forgetTemporaryBrowser, levelOf, team: Boolean(CLOUD_TEAM), mainThreadTasks, ...(personRooms.personMarkThread ? { personMarkThread: personRooms.personMarkThread, shownThread: (auth: RequestAuth, bot: BotRecord) => memberBot(wireBot(bot), visibleTo(viewerFor(auth))).threadId } : {}),
@@ -13754,6 +13763,20 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
             : roomHandoffProblem(target, address) ?? personalReach.handOnProblem(internalSender, addressed, address.threadId, internalCapability.generation);
           if (eligibility) return refuse(403, eligibility);
         }
+        let approvalGranted = false;
+        if (!toSelf && peerReviewRequired(internalSender, address.threadId)) {
+          const verdicts = await Promise.all(targets.map(target =>
+            requestPeerApproval(approvalBus, internalSender, store.bot(target.botId)!, call.message, call.consult ? "ask_bot" : "delegate_bot", address.threadId)));
+          requireActiveInternalCapability();
+          const blocked = verdicts.flatMap((verdict, index) => verdict === "allow" ? []
+            : [{ botId: targets[index]!.botId, ...peerApprovalFailure(verdict) }]);
+          if (blocked.length) return refuse(403,
+            blocked.every(failure => failure.approvalOutcome === "deny")
+              ? "Denied by user; no work sent."
+              : `${blocked.map(failure => failure.error).join("; ")}; no work sent.`,
+            { approvals: blocked });
+          approvalGranted = true;
+        }
         const requestBatchKey = destination ? randomUUID() : undefined, handOnFor = CLOUD_TEAM ? teamConnections.handOnFor(internalCapability.threadId, internalCapability.generation) : null;
         const generation = EXTERNAL ? randomUUID() : internalCapability.generation;
         if (EXTERNAL) {
@@ -13804,7 +13827,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
             const routed = lane ? { botId: target.botId, threadId: lane.threadId } : target;
             outsideLineage.carry(address.threadId, routed.threadId);
             const { node, duplicate } = coordinator.enqueue(address, generation, internalCapability.roomHandoffId, routed, call.message, {
-              mode, reply, thread: lane || fresh ? "new" : "standing", rework: call.rework, ...(lane ? {} : { requestBatchKey }), ...(call.ownThread ? { ownThread: true } : {}),
+              mode, reply, thread: lane || fresh ? "new" : "standing", approvalGranted, rework: call.rework, ...(lane ? {} : { requestBatchKey }), ...(call.ownThread ? { ownThread: true } : {}),
               ...(call.doneWhen ? { doneWhen: call.doneWhen } : {}),
             });
             usageTrace.link(node.id, node.parentId, { threadId: internalCapability.threadId, turnId: liveTurnByThread.get(internalCapability.threadId) ?? "" }); if (!duplicate) { actingPeople.handOn(internalCapability, node, lends); if (!lends && !room && !lane) handedInUnproven(routed.threadId); }
@@ -14000,7 +14023,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
             error: `a room post is at most ${ROOM_POST_MAX_CHARS} characters — post the short version and keep the detail in your own reply`,
           });
         }
-        const room = store.group(groupId);
+        let room = store.group(groupId);
         if (!room) return json(res, 404, { error: "no such room — call list_rooms and copy the exact id from the result" });
         if (!outsideLineage.mayReach(fromThreadId, room.threadId)) return json(res, 403, { error: OUTSIDE_STAYS_HERE });
         if (room.id === owner.group?.id) {
@@ -14028,7 +14051,19 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
           roomPostBudgets.set(room.id, preflight.budget);
           return json(res, 429, { error: preflight.message });
         }
-        const poster = from;
+        let poster = from;
+        if (peerReviewRequired(from, fromThreadId)) {
+          const verdict = await requestPeerApproval(approvalBus, from, { id: room.id, name: room.name }, message, "post_to_room", fromThreadId);
+          requireActiveInternalCapability();
+          if (verdict !== "allow") return json(res, 200, peerApprovalFailure(verdict));
+          const freshFrom = store.bot(internalSender.id);
+          const freshRoom = store.group(groupId);
+          if (!freshFrom || !freshRoom) return json(res, 404, { error: "that bot or room no longer exists" });
+          const stillEligible = roomPostEligibility(freshFrom, freshRoom, fromThreadId);
+          if (!stillEligible.ok) return json(res, stillEligible.status, { error: stillEligible.error });
+          poster = freshFrom;
+          room = freshRoom;
+        }
         const decision = askBudget(poster, room);
         roomPostBudgets.set(room.id, decision.budget);
         if (!decision.allowed) return json(res, 429, { error: decision.message });
@@ -14264,6 +14299,9 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
         }
         if (!body || typeof body !== "object" || Array.isArray(body)) {
           return json(res, 400, { error: "room request must be a JSON object" });
+        }
+        if (peerReviewRequired(chief, internalCapability.threadId)) {
+          return json(res, 403, { error: "peer approval is required; ask the user to make this room change" });
         }
         // A Chief gathers only bots it can reach; which department a room is filed in is the person's choice.
         const allowedIds = new Set([chief.id, ...reachablePeers(store.bots, chief).map((bot) => bot.id)]);
