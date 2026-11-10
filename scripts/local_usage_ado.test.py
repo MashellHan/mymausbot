@@ -101,6 +101,18 @@ def collect(api, *, previous=None, at=AT, config=CONFIG):
 
 
 class AdoTests(unittest.TestCase):
+    def test_full_commit_detail_may_omit_optional_truncation_flag(self):
+        api = Api()
+        api.details[HEAD].pop("commentTruncated")
+        accepted = collect(api)
+        self.assertEqual(accepted["sources"][0]["days"][-2]["commits"], 2)
+        for invalid in [True, None, "false"]:
+            failing = Api()
+            failing.details[HEAD]["commentTruncated"] = invalid
+            partial = collect(failing)
+            self.assertIsNone(partial["sources"][0]["days"][-2]["commits"])
+            self.assertIn("Incomplete ADO commit detail", partial["collection"]["reasons"])
+
     def test_connection_data_uses_verified_versionless_url_only_for_identity(self):
         api = Api()
         collect(api)

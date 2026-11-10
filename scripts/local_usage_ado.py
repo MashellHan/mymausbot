@@ -234,8 +234,9 @@ def credited_commit(reader, org, project, repo_id, item, emails, first):
     commit_id = item["commitId"].lower()
     path = "/_apis/git/repositories/" + repo_id + "/commits/" + commit_id
     detail = reader.get(url(org, project, path))
+    truncated = detail.get("commentTruncated", False)
     if (detail.get("commitId", "").lower() != commit_id
-            or type(detail.get("commentTruncated")) is not bool or detail["commentTruncated"]):
+            or type(truncated) is not bool or truncated):
         raise ValueError("Incomplete ADO commit detail")
     if instant(detail["author"]["date"]) != authored:
         raise ValueError("ADO author date changed during scan")
