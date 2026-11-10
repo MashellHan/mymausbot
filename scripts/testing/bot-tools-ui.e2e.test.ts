@@ -203,8 +203,34 @@ describe("bot setup and tools in the real renderer", () => {
     if ((await mcpFilter()) !== "true") await click("MCP servers");
     await expect.poll(mcpFilter, { timeout: 10_000 }).toBe("true");
     await expect.poll(() => evaluate("[...document.querySelectorAll('[data-mcp-servers] button')].some(b => b.textContent.trim() === 'Add MCP server' && !b.disabled)"), { timeout: 10_000 }).toBe(true);
-    await click("Add MCP server");
-    await expect.poll(() => evaluate("Boolean(document.querySelector('textarea[aria-label=\"Server link or setup command\"]'))"), { timeout: 10_000 }).toBe(true);
+    let addClick: Record<string, unknown> | null = null;
+    try {
+      addClick = await click("Add MCP server");
+      await expect.poll(() => evaluate("Boolean(document.querySelector('textarea[aria-label=\"Server link or setup command\"]'))"), { timeout: 10_000 }).toBe(true);
+    } catch (original) {
+      try {
+        const state = await diagnosticEval(`(() => {
+          const visible = (node) => node.getClientRects().length > 0;
+          const panels = [...document.querySelectorAll('[data-mcp-servers]')];
+          const editors = [...document.querySelectorAll('[data-mcp-editor]')];
+          const textarea = document.querySelector('textarea[aria-label="Server link or setup command"]');
+          let selectedBotId = null;
+          try { selectedBotId = localStorage.getItem(${JSON.stringify(LAST_CONVERSATION_KEY)}); } catch {}
+          return { selectedBotId, filter: document.querySelector('[data-apps-filter=mcp]')?.getAttribute('aria-pressed') ?? null,
+            panels: { total: panels.length, visible: panels.filter(visible).length },
+            addButtons: panels.flatMap((panel, index) => [...panel.querySelectorAll('button')]
+              .filter((button) => button.textContent.trim() === 'Add MCP server')
+              .map((button) => ({ panel: index, visible: visible(button), disabled: button.disabled }))).slice(0, 3),
+            editors: { total: editors.length, visible: editors.filter(visible).length },
+            textarea: { exists: !!textarea, visible: textarea ? visible(textarea) : false } };
+        })()`).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
+        console.error("MCP add failure diagnostic", JSON.stringify({
+          click: addClick ? { ok: addClick.ok === true, target: typeof addClick.target === "string" ? addClick.target : null, name: typeof addClick.name === "string" ? addClick.name : null } : null,
+          clickErrorCode: original instanceof Error ? original.name : "UnknownError", state,
+        }));
+      } catch {}
+      throw original;
+    }
     const pasted = await ui("snapshot", "--interactive");
     const textarea = Object.entries(pasted.refs as Record<string, { role: string; name: string }>)
       .find(([, entry]) => entry.role === "textbox" && entry.name === "Server link or setup command");
