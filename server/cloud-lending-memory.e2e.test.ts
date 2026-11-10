@@ -118,15 +118,21 @@ async function stopRunningTurns(
   stopTurn: (bot: { id: string }, threadId: string) => Promise<void> = stop,
 ) {
   const stopped = new Set<string>();
-  await expect.poll(async () => {
-    for (const { bot, threadId, turnStartedAt } of await running()) {
-      const generation = `${bot.id}:${threadId}:${turnStartedAt ?? "unknown"}`;
-      if (stopped.has(generation)) continue;
-      stopped.add(generation);
-      await stopTurn(bot, threadId);
-    }
-    return (await running()).length;
-  }, { timeout: 10_000 }).toBe(0);
+  let stopFailure: { error: unknown } | null = null;
+  try {
+    await expect.poll(async () => {
+      for (const { bot, threadId, turnStartedAt } of await running()) {
+        const generation = `${bot.id}:${threadId}:${turnStartedAt ?? "unknown"}`;
+        if (stopped.has(generation)) continue;
+        stopped.add(generation);
+        try { await stopTurn(bot, threadId); }
+        catch (error) { stopFailure ??= { error }; throw error; }
+      }
+      return (await running()).length;
+    }, { timeout: 10_000 }).toBe(0);
+  } finally {
+    if (stopFailure) throw stopFailure.error;
+  }
 }
 /** After a restart, wait for the lent Mac's connector, so what a turn is offered is never just the Mac being offline. */
 async function macOnline() {
@@ -285,6 +291,14 @@ it("cleanup stops a later turn generation without repeating Stop on the first", 
     return reads === 1 ? [first] : reads <= 3 ? [first, later] : [];
   }, async (_bot, threadId) => { stopped.push(threadId); });
   expect(stopped).toEqual(["thread-a", "thread-b"]);
+});
+
+it("cleanup preserves a failed Stop even if the next busy list is empty", async () => {
+  const first = { bot: { id: "first" }, threadId: "thread-a", turnStartedAt: 1 };
+  const failure = new Error("synthetic Stop failure");
+  let reads = 0;
+  await expect(stopRunningTurns(async () => ++reads === 1 ? [first] : [], async () => { throw failure; })).rejects.toBe(failure);
+  expect(reads).toBeGreaterThan(1);
 });
 
 it("a conversation a guest left behind is never captured into the bot's memory; the owner's own chat is", async () => {
