@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import http.client
 import importlib.util
+import importlib
 import inspect
 import json
 import os
@@ -13,6 +14,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -20,6 +22,7 @@ import urllib.request
 
 import local_usage_merged
 import local_usage_github
+import local_usage_contributions
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
@@ -219,13 +222,14 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class AzureMemorySession:
-    def __init__(self, config_dir, author_emails):
+    def __init__(self, config_dir, author_emails, projects=None):
         self.config_dir = config_dir
         self.author_emails = {email.lower() for email in author_emails}
         self.lock = threading.Lock()
         self.client = None
         self.account = None
         self.http = urllib.request.build_opener(NoRedirect())
+        self.projects = projects
 
     def token(self):
         with self.lock:
@@ -295,10 +299,23 @@ class AzureMemorySession:
             or list(args[6:]) != ["--resource", ADO_RESOURCE, "-o", "json"]
         ):
             raise ValueError("Usage permits only the existing Azure DevOps GET requests")
-        return self.request(str(args[5]), timeout)[0]
+        body, continuation = self.request(str(args[5]), timeout)
+        if continuation:
+            data = json.loads(body)
+            if not isinstance(data, dict) or data.get("continuationToken") not in (None, continuation):
+                raise ValueError("Conflicting ADO continuation metadata")
+            data["continuationToken"] = continuation
+            return json.dumps(data, separators=(",", ":"))
+        return body
 
     def request(self, url, timeout):
         target = urllib.parse.urlsplit(url)
+        old_path = re.fullmatch(
+            r"/[^/]+/_apis/connectionData|/[^/]+/[^/]+/_apis/git/(?:pullrequests|repositories/[^/]+/(?:pullrequests|pullrequests/\d+/commits|commits/[0-9a-f]{40}(?:[0-9a-f]{24})?))",
+            target.path, re.I)
+        new_path = re.fullmatch(
+            r"/[^/]+/[^/]+/_apis/git/(?:repositories|repositories/[0-9a-f-]{36}/(?:refs|commits))",
+            target.path, re.I)
         if (
             target.scheme != "https"
             or target.hostname != "dev.azure.com"
@@ -306,13 +323,34 @@ class AzureMemorySession:
             or target.username is not None
             or target.password is not None
             or target.fragment
-            or not re.fullmatch(
-                r"/[^/]+/_apis/connectionData|/[^/]+/[^/]+/_apis/git/(?:pullrequests|repositories/[^/]+/(?:pullrequests|pullrequests/\d+/commits|commits/[0-9a-f]{40}(?:[0-9a-f]{24})?))",
-                target.path,
-                re.I,
-            )
+            or not (old_path or new_path)
         ):
             raise ValueError("Usage permits only Azure DevOps identity and PR endpoints")
+        parts = target.path.strip("/").split("/")
+        scope = tuple(urllib.parse.unquote(part).casefold() for part in parts[:2])
+        if self.projects is not None and (scope[0] not in {org for org, _ in self.projects} or
+                len(parts) > 3 and scope not in self.projects):
+            raise ValueError("ADO request is outside configured projects")
+        if new_path:
+            query = urllib.parse.parse_qs(target.query, keep_blank_values=True, strict_parsing=True)
+            if any(len(values) != 1 for values in query.values()) or query.get("api-version") != ["7.1"]:
+                raise ValueError("Invalid ADO request parameters")
+            suffix = parts[-1]
+            if suffix == "repositories":
+                allowed = {"api-version"}
+            elif suffix == "refs":
+                allowed = {"api-version", "filter"}
+                if not query.get("filter", [""])[0].startswith("heads/"):
+                    raise ValueError("Invalid ADO branch filter")
+            else:
+                allowed = {"api-version", "searchCriteria.itemVersion.version", "searchCriteria.itemVersion.versionType", "$top", "$skip"}
+                if (not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", query.get("searchCriteria.itemVersion.version", [""])[0], re.I)
+                        or query.get("searchCriteria.itemVersion.versionType") != ["commit"]
+                        or not query.get("$top", [""])[0].isdigit() or not 1 <= int(query["$top"][0]) <= 100
+                        or not query.get("$skip", [""])[0].isdigit() or int(query["$skip"][0]) > 1_000_000):
+                    raise ValueError("Invalid pinned ADO commit page")
+            if set(query) != allowed:
+                raise ValueError("Unexpected ADO request parameters")
         request = urllib.request.Request(
             target.geturl(),
             headers={"Authorization": "Bearer " + self.token(), "Accept": "application/json"},
@@ -327,10 +365,154 @@ class AzureMemorySession:
             raise ValueError("The Azure DevOps response could not be read") from None
 
 
-def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False):
+def ado_project_scopes(config):
+    scopes = set()
+    for raw in config.get("mergedAdoProjects", []) + config.get("adoRemotes", []):
+        parsed = urllib.parse.urlsplit(raw)
+        parts = parsed.path.strip("/").split("/")
+        if (parsed.scheme != "https" or parsed.hostname != "dev.azure.com" or parsed.port not in (None, 443)
+                or parsed.username or parsed.password or parsed.query or parsed.fragment or len(parts) not in (2, 4)
+                or len(parts) == 4 and parts[2] != "_git"):
+            raise ValueError("Invalid configured ADO project")
+        org, project = (urllib.parse.unquote(part).casefold() for part in parts[:2])
+        if not org or not project or any(part in (".", "..") or "/" in part or "\\" in part for part in (org, project)):
+            raise ValueError("Invalid configured ADO project")
+        scopes.add((org, project))
+    return scopes
+
+
+def primary_config(config):
+    profiles = config.get("githubProfiles")
+    if not isinstance(profiles, list) or not profiles or any(not isinstance(row, dict) or
+            not all(isinstance(row.get(key), str) and row[key] for key in ("host", "login", "stableId", "profile"))
+            for row in profiles):
+        raise ValueError("Verified GitHub Profile identities are required")
+    scopes = ado_project_scopes(config)
+    principals = config.get("adoPrincipals")
+    aliases = config.get("adoAuthorEmails")
+    if (not scopes or not isinstance(principals, dict) or set(principals) != {org for org, _ in scopes}
+            or not isinstance(aliases, list) or not aliases or len(set(aliases)) != len(aliases)
+            or any(not isinstance(alias, str) or alias != alias.lower() or "@" not in alias for alias in aliases)):
+        raise ValueError("Verified ADO principals and scoped author aliases are required")
+    historical = {value.casefold() for value in config.get("authorEmails", [])}
+    for org, principal in principals.items():
+        if (not isinstance(principal, dict) or not isinstance(principal.get("stableId"), str)
+                or not re.fullmatch(r"[0-9a-fA-F-]{36}", principal["stableId"])
+                or principal.get("alias") not in aliases or principal["alias"] not in historical):
+            raise ValueError("ADO principal does not match scoped author aliases")
+    return scopes
+
+
+def _primary_worker():
+    try:
+        request = json.load(sys.stdin)
+        config = request["config"]
+        stage = request["stage"]
+        collector_path = Path(request["collector"])
+        azure_dir = Path(request["azureDir"])
+        if stage == "legacy":
+            refresh(collector_path, config, azure_dir, publish=request["publish"],
+                    skip_api=request["skipApi"], reuse_sources=request["reuseSources"], force_legacy=True,
+                    legacy_diagnostics=False)
+            return
+        if stage not in ("github", "ado"):
+            raise ValueError("Unknown contribution worker")
+        collector = load_collector(collector_path)
+        module = importlib.import_module("local_usage_profile" if stage == "github" else "local_usage_ado")
+        azure = AzureMemorySession(azure_dir, config["adoAuthorEmails"], projects=ado_project_scopes(config))
+
+        def run(args, timeout=35):
+            if str(args[0]) == config["azureCli"]:
+                return azure.run(args, timeout)
+            return collector.run(args, timeout)
+
+        at = dt.datetime.fromisoformat(request["at"])
+        result = module.collect(config, run, collector.remote_category, at=at, days=60, previous=request["previous"])
+        local_usage_contributions.envelope(result, stage)
+        output = Path(request["output"])
+        data = (json.dumps(result, separators=(",", ":")) + "\n").encode()
+        if len(data) > local_usage_contributions.MAX_BYTES:
+            raise ValueError("Contribution worker output exceeds limit")
+        fd = os.open(output, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception as error:
+        print(f"usage stage=primary-worker status=unavailable type={type(error).__name__}", file=sys.stderr, flush=True)
+        raise SystemExit(1) from None
+
+
+def _stop_worker(process):
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait(timeout=5)
+
+
+def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, reuse_sources=False,
+                    file=None, whole_cycle_seconds=285, include_legacy=True):
+    primary_config(config)
+    target = Path(file or Path.home() / ".local/share/mymausbot/usage/contributions-v2.json")
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not 0 < whole_cycle_seconds <= 285:
+        raise ValueError("Contribution cycle must stay within the existing five-minute job")
+    with local_usage_contributions.target_lock(target):
+        previous = local_usage_contributions.load_previous(target)
+        at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        deadline = time.monotonic() + whole_cycle_seconds
+        processes = {}
+        with tempfile.TemporaryDirectory(prefix="contributions-capture-", dir=target.parent) as temporary:
+            try:
+                for stage in (("github", "ado", "legacy") if include_legacy else ("github", "ado")):
+                    request = {"stage": stage, "collector": str(collector_path), "config": config,
+                               "azureDir": str(azure_config_dir), "at": at.isoformat(),
+                               "previous": previous.get(stage) if previous and stage != "legacy" else None,
+                               "output": str(Path(temporary) / (stage + ".json")),
+                               "publish": publish, "skipApi": False, "reuseSources": reuse_sources}
+                    process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--worker"],
+                        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True)
+                    processes[stage] = process
+                    process.stdin.write(json.dumps(request).encode())
+                    process.stdin.close()
+                results = {}
+                for stage, process in processes.items():
+                    try:
+                        process.wait(timeout=max(0.01, deadline - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        _stop_worker(process)
+                        results[stage] = "timeout"
+                    else:
+                        results[stage] = "ready" if process.returncode == 0 else "unavailable"
+                if results["github"] != "ready" or results["ado"] != "ready":
+                    raise ValueError("Remote contribution capture is incomplete; previous generation retained")
+                current = {"version": 2, **{stage: json.loads((Path(temporary) / (stage + ".json")).read_text())
+                    for stage in ("github", "ado")}}
+                local_usage_contributions.validate_bindings(current, config)
+                local_usage_contributions.write_private(target, current)
+                print(json.dumps({"primary": "published", "legacy": results.get("legacy", "not-run"),
+                    "asOfAt": current["github"]["asOfAt"], "sources": len(current["github"]["sources"]) + len(current["ado"]["sources"]),
+                    "elapsedSeconds": round(whole_cycle_seconds - max(0, deadline - time.monotonic()), 1)}))
+                return current
+            finally:
+                for process in processes.values():
+                    if process.poll() is None:
+                        _stop_worker(process)
+
+
+def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False,
+            force_legacy=False, legacy_diagnostics=True):
+    if config.get("primaryContributionSource") == "contributions-v2" and not force_legacy:
+        if skip_api:
+            return refresh(collector_path, config, azure_config_dir, publish=publish,
+                           skip_api=True, reuse_sources=reuse_sources, force_legacy=True, legacy_diagnostics=False)
+        return refresh_primary(collector_path, config, azure_config_dir, publish=publish, reuse_sources=reuse_sources)
     collector = load_collector(collector_path)
     original_run = collector.run
-    azure = AzureMemorySession(azure_config_dir, config["authorEmails"])
+    azure = AzureMemorySession(azure_config_dir, config["authorEmails"], projects=ado_project_scopes(config) or None)
 
     original_aggregate = getattr(collector, "aggregate", None)
     if original_aggregate is not None:
@@ -368,12 +550,12 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
     try:
         collector.refresh(config, **options)
     finally:
-        if config.get("githubProfiles") or config.get("mergedAdoProjects") or config.get("adoRemotes"):
+        if legacy_diagnostics and (config.get("githubProfiles") or config.get("mergedAdoProjects") or config.get("adoRemotes")):
             try:
                 local_usage_merged.refresh(config, collector, collector.run, ado_request=azure.request, skip_api=skip_api)
             except Exception as error:
                 print("Remote merged Usage unavailable: " + type(error).__name__, file=sys.stderr)
-        if config.get("githubContributionSource") == local_usage_github.DEFINITION:
+        if legacy_diagnostics and config.get("githubContributionSource") == local_usage_github.DEFINITION:
             try:
                 local_usage_github.refresh(config, collector.run, collector.remote_category, skip_api=skip_api)
             except Exception as error:
@@ -381,6 +563,8 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
 
 
 def main():
+    if sys.argv[1:] == ["--worker"]:
+        return _primary_worker()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--collector", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=Path.home() / ".config/agent-town/activity.json")
