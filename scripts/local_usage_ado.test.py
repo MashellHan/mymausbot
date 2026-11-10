@@ -116,6 +116,40 @@ class AdoTests(unittest.TestCase):
             self.assertIsNone(partial["sources"][0]["days"][-2]["commits"])
             self.assertIn("Incomplete ADO commit detail", partial["collection"]["reasons"])
 
+    def test_single_escaped_angle_coauthors_use_only_confirmed_ado_aliases(self):
+        api = Api()
+        api.details[OLDER]["comment"] = ("Co-authored-by: Owner &lt;alias@example.test&gt;\n"
+                                         "Co-authored-by: Visitor &lt;visitor@example.test&gt;")
+        credited = collect(api)
+        self.assertEqual(credited["sources"][0]["days"][-2]["commits"], 2)
+        item = next(row for row in credited["state"]["projects"]["example/project"]["cache"][REPO]["items"]
+                    if row["id"] == OLDER)
+        self.assertTrue(item["coauthor"])
+
+        unknown = Api()
+        unknown.details[OLDER]["comment"] = ("Co-authored-by: Visitor &lt;visitor@example.test&gt;\n"
+                                             "Co-authored-by: Other &lt;other@example.test&gt;")
+        result = collect(unknown)
+        self.assertEqual(result["sources"][0]["days"][-2]["commits"], 1)
+        self.assertNotIn(OLDER, {row["id"] for row in result["state"]["projects"]["example/project"]["cache"][REPO]["items"]})
+
+    def test_mixed_double_encoded_and_ambiguous_coauthor_delimiters_fail_closed(self):
+        malformed = [
+            "Co-authored-by: Owner &amp;lt;alias@example.test&amp;gt;",
+            "Co-authored-by: Owner <alias@example.test&gt;",
+            "Co-authored-by: Owner &lt;alias@example.test>",
+            "Co-authored-by: Owner &lt;alias@example.test&gt; &lt;other@example.test&gt;",
+            "Co-authored-by: Owner &#60;alias@example.test&#62;",
+            "Co-authored-by:  &lt;alias@example.test&gt;",
+        ]
+        for line in malformed:
+            with self.subTest(line=line):
+                api = Api()
+                api.details[OLDER]["comment"] = line
+                result = collect(api)
+                self.assertIsNone(result["sources"][0]["days"][-2]["commits"])
+                self.assertIn("Invalid ADO commit comment", result["collection"]["reasons"])
+
     def test_connection_data_uses_verified_versionless_url_only_for_identity(self):
         api = Api()
         collect(api)
