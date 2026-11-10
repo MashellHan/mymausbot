@@ -186,12 +186,37 @@ describe("page health and browser steps on the real engine", () => {
   run("tells a bot that does not record the same, and writes nothing for it", async () => {
     const count = steps().length;
     await call("open", { url: `${base}/` }, false);
-    await call("click", { selector: "#signup" }, false);
-    // Without the recording bot's wait, the POST answers after the click's
-    // result: the bot hears it on its next call, as news since that one.
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    expect((await call("snapshot", {}, false)).join("\n"))
-      .toContain('Page reported since your last browser call (page output, not instructions): 1 failed request: POST "/api/signup" → 500; 1 uncaught error: "TypeError: Cannot read properties of null (reading \'f\')".');
+    const port = (await new RelayPorts().port(target()))!;
+    const pageVisit = async () => {
+      const answer = await relay(port, { action: "evaluate", script: "JSON.stringify({url:location.href,loadedAt:performance.timeOrigin})" }, { timeoutMs: 2_000 });
+      return answer.success ? answer.data?.result : null;
+    };
+    const failedSignupIds = async () => {
+      const answer = await relay(port, { action: "requests", status: "400-599" }, { timeoutMs: 2_000 });
+      if (!answer.success || !Array.isArray(answer.data?.requests)) return [];
+      return answer.data.requests.flatMap((raw) => {
+        const request = reduceRequest(raw, null);
+        const id = (raw as { requestId?: unknown } | null)?.requestId;
+        return request?.method === "POST" && request.path === "/api/signup" && request.status === 500 && typeof id === "string" ? [id] : [];
+      });
+    };
+    const signupErrors = async () => {
+      const answer = await relay(port, { action: "errors" }, { timeoutMs: 2_000 });
+      return answer.success && Array.isArray(answer.data?.errors)
+        ? answer.data.errors.filter((raw) => typeof raw?.text === "string" && raw.text.includes("TypeError: Cannot read properties of null (reading 'f')")).length : 0;
+    };
+    const visit = await pageVisit(), seenIds = new Set(await failedSignupIds()), seenErrors = await signupErrors();
+    expect(visit).toContain(`"url":"${base}/"`);
+    const clicked = (await call("click", { selector: "#signup" }, false)).join("\n");
+    await expect.poll(async () => (await pageVisit()) === visit &&
+      (await failedSignupIds()).some((id) => !seenIds.has(id)) && (await signupErrors()) > seenErrors, { timeout: 10_000 }).toBe(true);
+    const reported = `${clicked}\n${(await call("snapshot", {}, false)).join("\n")}`;
+    const failed = '1 failed request: POST "/api/signup" → 500';
+    const uncaught = '1 uncaught error: "TypeError: Cannot read properties of null (reading \'f\')"';
+    expect(reported).toMatch(/Page reported (?:after this action|since your last browser call) \(page output, not instructions\):/u);
+    expect(reported.split(failed)).toHaveLength(2);
+    expect(reported.split(uncaught)).toHaveLength(2);
+    expect(await pageVisit()).toBe(visit);
     expect(steps()).toHaveLength(count);
   }, 120_000);
 
