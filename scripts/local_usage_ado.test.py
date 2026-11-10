@@ -726,6 +726,41 @@ class AdoTests(unittest.TestCase):
         self.assertNotIn(unknown_id, second["state"]["projects"]["example/project"]["work"]["selectedRepoIds"])
         self.assertEqual(second["sources"][0]["provenance"]["selectedRepositoryCount"], 2)
 
+    def test_legacy_inventory_expected_ids_migrate_only_verified_selected_ids(self):
+        api = Api()
+        unselected = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        replacement = "cccccccc-dddd-eeee-ffff-000000000000"
+        other = {"id": unselected, "name": "unselected", "defaultBranch": "refs/heads/main",
+                 "isDisabled": False}
+        api.repos.append(other)
+        previous = collect(api)
+        self.assertEqual(previous["sources"][0]["status"], "ready")
+        state = previous["state"]["projects"]["example/project"]
+        self.assertEqual(state["work"]["selectedRepoIds"], [REPO])
+        state["expectedRepositoryIds"] = sorted([REPO, unselected])
+
+        api.calls.clear()
+        warm = collect(api, previous=previous, at=AT + dt.timedelta(minutes=5))
+        self.assertEqual(warm["sources"][0]["status"], "ready")
+        self.assertEqual(warm["state"]["projects"]["example/project"]["expectedRepositoryIds"], [REPO])
+        self.assertFalse(any(unselected in args[5] for args in api.calls))
+
+        api.repos = [other]
+        api.prs = []
+        missing = collect(api, previous=previous, at=AT + dt.timedelta(minutes=10))
+        self.assertFalse(missing["sources"][0]["coverage"]["visibilityComplete"])
+        self.assertIn("repository-visibility-gap", missing["sources"][0]["coverage"]["reasons"])
+        self.assertEqual(missing["state"]["projects"]["example/project"]["expectedRepositoryIds"], [REPO])
+
+        api.repos.append({"id": replacement, "name": "repository", "defaultBranch": "refs/heads/main",
+                          "isDisabled": False})
+        api.calls.clear()
+        replaced = collect(api, previous=previous, at=AT + dt.timedelta(minutes=15))
+        self.assertFalse(replaced["sources"][0]["coverage"]["visibilityComplete"])
+        self.assertIn("configured-repository-identity-changed", replaced["sources"][0]["coverage"]["reasons"])
+        self.assertEqual(replaced["state"]["projects"]["example/project"]["expectedRepositoryIds"], [REPO])
+        self.assertFalse(any(replacement in args[5] for args in api.calls))
+
     def test_missing_or_ambiguous_remote_allowlist_never_starts_history(self):
         api = Api()
         no_remotes = copy.deepcopy(CONFIG)

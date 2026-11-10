@@ -67,7 +67,7 @@ independently of the authenticated account.
 
 Selected disabled repositories remain explicit visibility gaps; they are not assigned
 zero commits. A verified selected repository with no default branch has no reachable
-default-head commits. Previously observed repository IDs and explicitly
+default-head commits. Previously selected repository IDs and explicitly
 configured remotes remain expected scope: disappearance from a later inventory
 or an unexplained empty first inventory stays partial or stale, not zero.
 Unselected repositories may contain commit-only activity that the allowlist did

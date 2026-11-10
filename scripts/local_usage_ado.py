@@ -518,9 +518,10 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         same_scope = prior.get("remoteScopeHash") == scope_hash
         old_cache = prior.get("cache", {})
         cache = old_cache if same_scope else {}
-        expected_ids = set(prior.get("expectedRepositoryIds", [])) if same_scope else set()
+        prior_work = prior.get("work")
+        expected_ids = set(prior_work.get("selectedRepoIds", [])) if same_scope and isinstance(prior_work, dict) else set()
         expected_ids.update(cache)
-        work = prior.get("work")
+        work = prior_work
         rollover_progress = {}
         new_first = (at.date() - dt.timedelta(days=59)).isoformat()
         if (isinstance(work, dict) and not work.get("scanComplete")
