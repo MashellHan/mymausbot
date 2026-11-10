@@ -436,8 +436,11 @@ export class Store {
       delete b.managedSections;
       botsMigrated = true;
     }
-    // A legacy ask_bot:@Name grant converts only when the name is unique; an ambiguous one stays inert.
     for (const b of this.bots) {
+      const savedPeers: unknown = b.peers;
+      if (savedPeers === null) { delete b.peers; botsMigrated = true; } else if (savedPeers !== undefined && (!Array.isArray(savedPeers) || savedPeers.some((id) => typeof id !== "string"))) {
+        b.peers = []; botsMigrated = true;
+      }
       if (!b.alwaysAllow?.length) continue;
       let changed = false;
       const migrated = b.alwaysAllow.map((key) => {
@@ -448,10 +451,7 @@ export class Store {
         changed = true;
         return peerAllowKey(match[1] as PeerAction, candidates[0]!.id);
       });
-      if (changed) {
-        b.alwaysAllow = [...new Set(migrated)];
-        botsMigrated = true;
-      }
+      if (changed) { b.alwaysAllow = [...new Set(migrated)]; botsMigrated = true; }
     }
     // Recover only app-issued provider-tool grants into bot defaults, never task/session grants such as shell commands.
     for (const b of this.bots) {
@@ -1309,7 +1309,7 @@ export class Store {
       >
     > = {},
     opts: {
-      seedMessages?: boolean; id?: string; threadId?: string;
+      seedMessages?: boolean; id?: string; threadId?: string; beforeShown?: (bot: BotRecord) => void;
     } = {},
   ): BotRecord {
     const toolScope = parseToolScope(profile.toolScope);
@@ -1360,7 +1360,7 @@ export class Store {
       console.warn(`[bot-folder] could not write SOUL.md mirror for ${bot.id}: ${(e as Error).message}`);
     }
     // Before its transcript: clients need the bot/thread mapping to place either message.
-    this.emit({ type: "bot", botId: bot.id });
+    opts.beforeShown?.(bot); this.emit({ type: "bot", botId: bot.id });
     if (opts.seedMessages !== false) {
       this.appendMessage(bot.threadId, initialGreetingMessage(name, this.initialLanguage, !bot.soul?.trim() && !bot.description.trim(), this.personName()));
     }
@@ -2168,7 +2168,7 @@ export class Store {
   }
 
   createTask(botId: string, title?: string, activate = true, projectId?: string, openedBy?: TaskOpenedBy, approvalMode?: "ask" | "full",
-    modelSelection?: ModelSelection, cwd?: string): TaskRecord | null {
+    modelSelection?: ModelSelection, cwd?: string, beforeShown?: (task: TaskRecord) => void): TaskRecord | null {
     const bot = this.bot(botId);
     if (!bot) return null;
     if (projectId !== undefined && !this.project(botId, projectId)) return null;
@@ -2177,7 +2177,7 @@ export class Store {
       bot.tasks = [task, ...(bot.tasks ?? [])];
       if (activate) this.mirrorActiveTask(bot, task);
     });
-    this.emit({ type: "bot", botId });
+    beforeShown?.(task); this.emit({ type: "bot", botId });
     return task;
   }
 

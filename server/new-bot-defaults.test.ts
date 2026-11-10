@@ -3,6 +3,12 @@ import { newBotDefaultsSchema, resolveBotCreationDefaults } from "./new-bot-defa
 import { parseConfigPatch } from "./config.ts";
 
 describe("new-bot templates", () => {
+  it("retains saved peer limits and approval defaults unless creation explicitly changes them", () => {
+    const defaults = newBotDefaultsSchema.parse({ profile: { name: "Sky", approvePeerComms: true, peers: ["x"] } });
+    expect(defaults.profile).toEqual({ name: "Sky", approvePeerComms: true, peers: ["x"] });
+    expect(resolveBotCreationDefaults(defaults, {}).profile).toEqual(defaults.profile);
+    expect(resolveBotCreationDefaults(defaults, { settings: { peers: null } }).profile).toEqual({ name: "Sky", approvePeerComms: true, peers: null });
+  });
   it("preserves restricted and empty tool defaults while allowing an explicit owner reset", () => {
     const defaults = newBotDefaultsSchema.parse({ profile: { toolScope: { allow: ["native:read", "native:read"] } } });
     expect(defaults.profile).toEqual({ toolScope: { allow: ["native:read"] } });

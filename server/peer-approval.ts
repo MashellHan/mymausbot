@@ -4,6 +4,7 @@ import { newId } from "./contracts.ts";
 import { optionCardsForTools } from "./message-db.ts";
 import { buildNotification, type Notification } from "./notify.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
+import { conversationLanguage, serverLine, type ServerLineKey } from "./server-lines.ts";
 import type { BotRecord, Message, Store } from "./store.ts";
 import { turnWaitedOnPerson } from "./waiting-on-person.ts";
 
@@ -73,10 +74,10 @@ export interface PeerApprovalTarget {
   name: string;
 }
 
-const ACTION_VERB: Record<PeerAction, string> = {
-  ask_bot: "contact",
-  delegate_bot: "delegate to",
-  post_to_room: "post in",
+const ACTION_TITLE: Record<PeerAction, ServerLineKey> = {
+  ask_bot: "server.peerApproval.contact",
+  delegate_bot: "server.peerApproval.delegate",
+  post_to_room: "server.peerApproval.postIn",
 };
 
 function pushApprovalCard(
@@ -93,7 +94,7 @@ function pushApprovalCard(
     role: "bot",
     kind: "options",
     card: {
-      title: `@${from.name} wants to ${ACTION_VERB[action]} ${action === "post_to_room" ? `“${target.name}”` : `@${target.name}`}`,
+      title: serverLine(conversationLanguage(sourceThreadId), ACTION_TITLE[action], { from: from.name, target: target.name }),
       subtitle,
       options: ["Allow", "Deny", "Always allow"],
       requestId,
@@ -200,7 +201,7 @@ function peerCardThreads(bus: ApprovalBus): Set<string> {
 export function dismissStalePeerCards(bus: ApprovalBus): number {
   let dismissed = 0;
   const threads = peerCardThreads(bus);
-  for (const { threadId, messageId } of optionCardsForTools(Object.keys(ACTION_VERB))) {
+  for (const { threadId, messageId } of optionCardsForTools(Object.keys(ACTION_TITLE))) {
     if (!threads.has(threadId)) continue;
     const card = bus.store.messagesFor(threadId).find((message) => message.id === messageId)?.card;
     if (!card?.requestId || card.answered || card.dismissed) continue;

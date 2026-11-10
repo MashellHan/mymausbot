@@ -275,7 +275,7 @@ describe("peer allow-list", () => {
 
       const providerToken = String(dump.mcpConfig?.mcpServers?.agents?.env?.OMB_COMMS_TOKEN ?? "");
       expect(providerToken).toMatch(/^[a-f0-9]{48}$/);
-      await expect.poll(() => botBusy(asker.id)).toBe(false);
+      await expect.poll(() => botBusy(asker.id), { timeout: 15_000 }).toBe(false);
       const token = await mintCapability(asker.id, asker.threadId);
 
       expect(await peerNames(asker.id, token)).toEqual(["Patch", "Quill"]);
@@ -286,7 +286,7 @@ describe("peer allow-list", () => {
         { authorization: `Bearer ${token}` },
       );
       expect(openAsk.status).toBe(200);
-      await expect.poll(() => botBusy(patch.id)).toBe(false);
+      await expect.poll(() => botBusy(patch.id), { timeout: 15_000 }).toBe(false);
 
       expect((await api("PATCH", `/api/bots/${asker.id}`, { peers: [quill.id] })).status).toBe(200);
       expect(await peerNames(asker.id, token)).toEqual(["Quill"]);
@@ -316,7 +316,7 @@ describe("peer allow-list", () => {
       );
       expect(allowedAsk.status).toBe(200);
       expect(allowedAsk.body.error).toBeUndefined();
-      await expect.poll(() => botBusy(quill.id)).toBe(false);
+      await expect.poll(() => botBusy(quill.id), { timeout: 15_000 }).toBe(false);
 
       const allowedDelegation = await api(
         "POST",

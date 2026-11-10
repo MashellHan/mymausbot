@@ -78,10 +78,9 @@ describe("peerAllowed", () => {
     expect(peerAllowed({ peers: [] }, "writer")).toBe(false);
   });
 
-  it("degrades a corrupt list to the unset rule rather than failing the turn", () => {
-    // SAFETY: models a hand-edited record TypeScript would never produce, to pin the fallback.
+  it("fails closed for a corrupt saved list", () => {
     const corrupt = { peers: "writer" } as unknown as { peers?: string[] };
-    expect(peerAllowed(corrupt, "coder")).toBe(true);
+    expect(peerAllowed(corrupt, "coder")).toBe(false);
   });
 });
 
@@ -145,6 +144,7 @@ describe("reach across departments", () => {
     const narrowed = { ...self, peers: ["writer"] };
     expect(reachRefusal(narrowed, fleet[4]!)).toBe(`Scout is not one of the bots Ada is set to talk to, so nothing was sent. ${peerAccessHelp(narrowed)}`);
     expect(peerAccessHelp(narrowed)).toContain("they can let Ada talk to every bot in Ada's settings, under Permissions");
+    expect(reachRefusal(narrowed, { ...fleet[4]!, visibility: "admins" })).toContain("shared with different people");
     expect(reachRefusal(self, { ...fleet[4]!, visibility: "admins" })).toBe("Scout is shared with different people from Ada, so nothing was sent. Tell the person in one plain sentence: \"Scout isn't shared here; ask an admin.\" Never use computer control to get around this.");
   });
 

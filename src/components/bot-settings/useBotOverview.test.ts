@@ -51,6 +51,17 @@ afterEach(() => {
 });
 
 describe("reading a bot's overview", () => {
+  it("re-reads after either saved peer restriction or approval choice changes", async () => {
+    render(bot({ peers: ["quill"], approvePeerComms: true }), { overview: true, prompt: false });
+    await settle();
+    render(bot({ peers: [], approvePeerComms: true }), { overview: true, prompt: false });
+    await settle();
+    render(bot({ peers: [], approvePeerComms: false }), { overview: true, prompt: false });
+    await settle();
+    expect(fixture.flush).toHaveBeenCalledTimes(3);
+    expect(reads()).toEqual(Array(3).fill("/api/bots/scout/overview"));
+  });
+
   it("re-reads after each edit by default, as the Advanced accordion's Overview always has", async () => {
     render(bot(), { overview: true, prompt: false });
     await settle();

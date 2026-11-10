@@ -6,9 +6,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AppState, Bot, InstanceInfo, Message } from "@/state/store";
 import { replyDraft } from "@/lib/drafts";
 
-// Its cases switch between Simple and Advanced mode, whose code stays until it goes: they run with the switch put back.
-vi.mock("@/lib/simple-only", () => ({ SIMPLE_ONLY: false }));
-
 vi.mock("./ChatMarkdown", async (importOriginal) => ({
   ...await importOriginal<typeof import("./ChatMarkdown")>(),
   ChatMarkdown: ({ text }: { text: string }) => createElement("p", { "data-md": "" }, text),

@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { CREDENTIAL_PATCH } from "./credential-patch.mjs";
+import { createWorkspaceCredentialSaver } from "./workspace-credential-saver.mjs";
 import { WORKSPACE_CREDENTIALS } from "./workspace-credentials.mjs";
 
 const configRoutes = readFileSync(new URL("../server/routes/config.ts", import.meta.url), "utf8");
@@ -26,4 +27,21 @@ test("the external secret save never leaves a migrated secret in config.json", (
       `${section}.${field} has no tombstone in the secretStorage=external save`,
     );
   }
+});
+
+test("a first Anthropic key leaves bots signed in to Claude on their sign-in, and only that option crosses", () => {
+  assert.deepEqual(CREDENTIAL_PATCH.anthropicApiKey("secret", { everyClaudeBot: false }), { anthropic: { key: "secret", everyClaudeBot: false } });
+  assert.deepEqual(CREDENTIAL_PATCH.anthropicApiKey("secret", { everyClaudeBot: true, url: "https://elsewhere.example.test" }), { anthropic: { key: "secret" } });
+});
+
+test("the guarded desktop save carries only the Anthropic billing choice into the server patch", async () => {
+  let patch;
+  const saver = createWorkspaceCredentialSaver({ packaged: () => true, sessionOnly: false,
+    encryptionAvailable: async () => true, dataDir: () => "/synthetic", switching: () => false, ready: () => true,
+    port: () => 43210, headers: () => ({}), sessionState: () => { throw new Error("session store used"); },
+    secureUpdate: async (derive, apply) => { derive({}); return apply(); },
+    fetch: async (_url, options) => { patch = JSON.parse(options.body); return { ok: true, json: async () => ({}) }; },
+  });
+  await saver.save("anthropicApiKey", " secret ", { everyClaudeBot: false, url: "https://ignored.example.test" });
+  assert.deepEqual(patch, { anthropic: { key: "secret", everyClaudeBot: false } });
 });

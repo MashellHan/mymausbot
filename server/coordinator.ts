@@ -47,7 +47,7 @@ export interface HandoffView {
   executions: number;
   startedAt?: number;
   lastProgressAt?: number;
-  approvalGranted: boolean;
+  approvalGranted?: boolean;
   kind: "work" | "assignment";
   origin?: WorkOrigin;
   restarts: number;

@@ -421,7 +421,7 @@ const bridge = {
     set: on => on !== true || isLocalPage || navigator.userActivation?.isActive === true
       ? ipcRenderer.invoke("open-at-login:set", on === true) : Promise.reject(new Error("Turn on the switch to open mymausbot at login.")),
   },
-  setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
+  setCredential: (name, value, options) => ipcRenderer.invoke("credential:set", name, value, options),
   credentialMode: () => ipcRenderer.sendSync("credential-mode:read"),
   // Saved keys this launch could not read, and "Reset saved keys" (main asks the person first, then restarts).
   credentialStore: {

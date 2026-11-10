@@ -79,6 +79,10 @@ export interface BotPatchRouteDeps {
   team: boolean;
   /** The bot's conversations the main-thread resolver may pick: a Team Cloud keeps only team-visible ones. */
   mainThreadTasks(botId: string): readonly TaskRecord[];
+  /** A Team Cloud: marks a bot's shared conversation read or unread for this person alone; false for a private chat. */
+  personMarkThread?(auth: RequestAuth, threadId: string, unread: boolean): boolean;
+  /** The conversation this session sees the bot on (on a Team Cloud never someone else's private chat). */
+  shownThread?(auth: RequestAuth, bot: BotRecord): string;
 }
 
 export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
@@ -127,6 +131,10 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       }
       const existingBot = store.bot(m[1]); const defaultBotRefused = defaultBotPatchRefusal(existingBot, body);
       if (defaultBotRefused) return json(res, 400, { error: defaultBotRefused });
+      if (existingBot && typeof body.unread === "boolean" && deps.shownThread && deps.personMarkThread?.(auth, deps.shownThread(auth, existingBot), body.unread)) {
+        delete body.unread;
+        if (!Object.keys(body).length) return json(res, 200, { bot: wireBot(existingBot) });
+      }
       const rawSelection = (body as Record<string, unknown>).modelSelection;
       if (body.threadId !== undefined && rawSelection === undefined) {
         return json(res, 400, { error: "threadId goes with modelSelection" });
@@ -538,27 +546,17 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         });
       }
       if (body.approvePeerComms !== undefined) {
-        if (typeof body.approvePeerComms !== "boolean") {
-          return json(res, 400, { error: "approvePeerComms must be true or false" });
-        }
+        if (typeof body.approvePeerComms !== "boolean") return json(res, 400, { error: "approvePeerComms must be true or false" });
         patch.approvePeerComms = body.approvePeerComms;
       }
-      // null: every visible bot; an array (even empty) is the explicit wiring. Narrowing is free;
-      // widening needs acknowledgePeerScope, since any loopback caller (a bot with Bash) gets admin.
       if (body.peers !== undefined) {
         let nextPeers: string[] | undefined;
         if (body.peers === null) nextPeers = undefined;
-        else if (
-          !Array.isArray(body.peers) ||
-          body.peers.some((peerId: unknown) => typeof peerId !== "string")
-        ) {
+        else if (!Array.isArray(body.peers) || body.peers.some((peerId: unknown) => typeof peerId !== "string")) {
           return json(res, 400, { error: "peers must be a list of bot ids, or null for every bot" });
-        } else {
-          nextPeers = [...new Set<string>(body.peers)].slice(0, MAX_WORKSPACE_BOTS);
-        }
+        } else nextPeers = [...new Set<string>(body.peers)].slice(0, MAX_WORKSPACE_BOTS);
         const currentPeers = existingBot?.peers;
-        const widensReach =
-          Array.isArray(currentPeers) &&
+        const widensReach = Array.isArray(currentPeers) &&
           (nextPeers === undefined || nextPeers.some((peerId) => !currentPeers.includes(peerId)));
         if (widensReach && body.acknowledgePeerScope !== true) {
           return json(res, 400, userError("serverError.department.confirmPeers"));

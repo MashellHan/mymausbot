@@ -1,17 +1,17 @@
 import type { ResolvedSender } from "../../shared/wire.ts";
 import type { InstanceConfigMap } from "../contracts.ts";
+import { resolvePeerComms, type ApprovalBus } from "../peer-approval.ts";
 import type { DataContext } from "../data-context.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
 import type { hostedModelPolicy } from "../hosted-models.ts";
-import { resolvePeerComms, type ApprovalBus } from "../peer-approval.ts";
 import { createQuotaSwitch, type QuotaRequest, type QuotaSwitchDeps } from "../quota-switch.ts";
 import type { BotRecord, Message } from "../store.ts";
 import type { UsageTrigger } from "../usage-ledger.ts";
 import { resolveYourComputerAsk } from "../your-computer-consent.ts";
 
 export interface QuotaSwitchHostDeps extends Pick<QuotaSwitchDeps, "store" | "coordinator" | "turnStops" | "takeover"> {
-  registry: Pick<ProviderRegistry, "instances" | "access">;
   approvalBus: ApprovalBus;
+  registry: Pick<ProviderRegistry, "instances" | "access">;
   hostedModels: ReturnType<typeof hostedModelPolicy>;
   providerConfigs(): InstanceConfigMap;
   policyModelRefusal(instance: { instanceId: string; driverKind: string }): string | undefined;
@@ -45,7 +45,7 @@ export function createQuotaSwitchHost(deps: QuotaSwitchHostDeps) {
     resend: (botId, threadId, message, replyTo, spoken) => startOrQueueDirectMessage(botId, threadId, message.text ?? "", replyTo, undefined, message.sender, undefined, spoken.via, spoken.callId, message.dataContext),
   });
 
-  /** Settles a card the harness raised itself (a peer approval, a use-your-computer ask or a quota-switch offer); undefined for any other card. */
+  /** Settles a card the harness raised itself (a use-your-computer ask or a quota-switch offer); undefined for any other card. */
   async function harnessCardOutcome(threadId: string, requestId: string, behavior: "allow" | "deny" | "answer", message: unknown): Promise<string | undefined> {
     if (!store.messagesFor(threadId).some(candidate => candidate.card?.requestId === requestId)) return undefined;
     if (resolvePeerComms(approvalBus, requestId, behavior) || resolveYourComputerAsk(requestId, behavior) || deps.ownCards?.(requestId, behavior)) return behavior === "allow" ? "allowed-once" : "rejected";

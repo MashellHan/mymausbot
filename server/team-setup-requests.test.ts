@@ -67,6 +67,47 @@ const specialist = (key: string, section: string, modelSelection = { instanceId:
   fields: { name: key, title: "Specialist", soul: "Finish the assigned work.", section, modelSelection } });
 
 describe("reviewed Chief team setup", () => {
+  it("keeps saved peer limits on update and deletion, including Full access, while allowing self and listed peers", async () => {
+    const h = harness(); h.chief.peers = [];
+    const update = [{ action: "update", botId: h.peer.id, fields: { title: "Researcher" } }];
+    const deletion = { botId: h.chief.id, threadId: h.chief.threadId, targetBotId: h.peer.id, reason: "Remove Ada" };
+    expect(() => h.propose(update)).toThrow(/peer scope/);
+    expect(() => h.service.proposeDeletion(deletion)).toThrow(/authorized teammate/);
+    h.autoApply.mockReturnValue("full-access");
+    await expect(h.submit(update)).rejects.toThrow(/peer scope/);
+    await expect(h.service.submitDeletion(deletion)).rejects.toThrow(/authorized teammate/);
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(h.deleteBot).not.toHaveBeenCalled();
+    expect(() => h.propose([{ action: "update", botId: h.chief.id, fields: { title: "Own title" } }])).not.toThrow();
+    h.chief.peers = [h.peer.id];
+    expect(() => h.propose(update)).not.toThrow();
+    expect(() => h.service.proposeDeletion(deletion)).not.toThrow();
+  });
+
+  it("cancels a pending update or deletion after the Chief's peer scope narrows", async () => {
+    const update = harness();
+    const card = update.propose([{ action: "update", botId: update.peer.id, fields: { title: "Researcher" } }]);
+    update.chief.peers = [];
+    expect((await update.resolve(card.requestId))?.result.state).toBe("cancelled");
+    expect(update.apply).not.toHaveBeenCalled();
+
+    const deletion = harness();
+    const request = deletion.service.proposeDeletion({ botId: deletion.chief.id, threadId: deletion.chief.threadId,
+      targetBotId: deletion.peer.id, reason: "Remove Ada" });
+    deletion.chief.peers = [];
+    expect((await deletion.resolve(request.requestId))?.result.state).toBe("cancelled");
+    expect(deletion.deleteBot).not.toHaveBeenCalled();
+  });
+
+  it("binds a pending deletion to the target's peer settings", async () => {
+    const h = harness();
+    const request = h.service.proposeDeletion({ botId: h.chief.id, threadId: h.chief.threadId,
+      targetBotId: h.peer.id, reason: "Remove Ada" });
+    h.peer.peers = [];
+    expect((await h.resolve(request.requestId))?.result.state).toBe("cancelled");
+    expect(h.deleteBot).not.toHaveBeenCalled();
+  });
+
   it("reviews promotion in an authorized team without changing anything on denial", async () => {
     const h = harness(); h.peer.section = "Engineering";
     const before = structuredClone(h.store.bots);
@@ -113,26 +154,24 @@ describe("reviewed Chief team setup", () => {
     expect(h.peer.chiefOfStaff).toBe(true);
     expect((await h.resolve(replace.requestId))?.duplicate).toBe(true);
   });
-  it.each(["conflict", "scope", "busy", "peer", "revision"])("cancels promotion after a %s change without partial mutation", async change => {
+  it.each(["conflict", "scope", "busy", "revision"])("cancels promotion after a %s change without partial mutation", async change => {
     const h = harness(); h.peer.section = "Engineering";
     const card = h.propose([{ action: "update", botId: h.peer.id, fields: { chiefOfStaff: true } }]);
     if (change === "conflict") h.bot("New Chief", { section: "Engineering", chiefOfStaff: true });
     if (change === "scope") h.chief.managedSections = [];
     if (change === "busy") h.peer.busy = true;
-    if (change === "peer") h.chief.peers = [];
     if (change === "revision") h.peer.chiefOfStaff = true;
     const before = structuredClone(h.store.bots);
     expect((await h.resolve(card.requestId))?.result.state).toBe("cancelled");
     expect(h.store.bots).toEqual(before);
     expect(h.apply).not.toHaveBeenCalled();
   });
-  it("rejects malformed leadership and promotion outside team or peer scope", () => {
+  it("rejects malformed leadership and promotion outside the team", () => {
     const h = harness();
     expect(() => h.propose([{ action: "update", botId: h.peer.id, fields: { chiefOfStaff: "true" } }])).toThrow();
     h.peer.section = "Private";
     expect(() => h.propose([{ action: "update", botId: h.peer.id, fields: { chiefOfStaff: true } }])).toThrow(/authorized/);
-    h.peer.section = "Engineering"; h.chief.peers = [];
-    expect(() => h.propose([{ action: "update", botId: h.peer.id, fields: { chiefOfStaff: true } }])).toThrow(/peer scope/);
+    h.peer.section = "Engineering";
     h.chief.chiefOfStaff = false;
     expect(() => h.propose([{ action: "update", botId: h.chief.id, fields: { chiefOfStaff: true } }])).toThrow(/Only an active Chief/);
     expect(h.messages).toHaveLength(0);
@@ -269,11 +308,9 @@ describe("reviewed Chief team setup", () => {
     expect((await h.resolve(card.requestId))?.result).toMatchObject({ state: "cancelled", error: "@Ada changed. This setup was cancelled; review a new proposal." });
     expect(h.apply).not.toHaveBeenCalled();
   });
-  it("preserves existing elevated permissions and peer allowlists", () => {
+  it("preserves existing elevated permissions", () => {
     const h = harness(); h.peer.approvalMode = "full";
     expect(() => h.propose([{ action: "update", botId: h.peer.id, fields: { modelSelection: { instanceId: "codex", model: "gpt-fixture" } } }])).toThrow(/incompatible/);
-    h.chief.peers = [];
-    expect(() => h.propose([{ action: "update", botId: h.peer.id, fields: { title: "X" } }])).toThrow(/peer scope/);
   });
   it("routes separately confirmed deletion through lifecycle guards once and never permits self-deletion", async () => {
     const h = harness();

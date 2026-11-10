@@ -24,14 +24,13 @@ const sectionKey = (section?: string): string => section?.trim() || "";
 
 export const PEER_ACCESS_HELP = "Every bot can reach every other bot, in any department, and list_bots shows each one with its exact id. A bot it does not show is archived or shared with different people, so it cannot be reached. Never use computer control to get around this.";
 
-/** The sender's own peers list is the one reach limit a person sets, so only then does the help name a setting. */
 export function peerAccessHelp(from: Pick<RosterMember, "name" | "peers">): string {
   if (!Array.isArray(from.peers)) return PEER_ACCESS_HELP;
   const name = peerName(from.name) || "This bot";
   return `${name} is set to talk only to certain bots, so list_bots shows just those. Tell the person in one plain sentence; they can let ${name} talk to every bot in ${name}'s settings, under Permissions. Never use computer control to get around this.`;
 }
 
-// Authority (supervising, incidents, escalations, setup changes, automations, a person's brief) follows departments,
+// Authority (supervising, incidents, setup changes, automations, a person's brief) follows departments,
 // a Chief's managedSections and Team Cloud ownership. Reach below never widens it.
 
 /** A title, peer id, imported persona or room membership is not a grant; invalid saved grants fail closed. */
@@ -92,19 +91,18 @@ export function peerStatusWords(status: PeerStatus): string {
   return PEER_STATUS_WORDS[status];
 }
 
-/** Only the sender's list counts: reading the target's would let a bot refuse work from its own Chief. */
+/** Same audience only: a teammate others can see would carry this bot's words to people who cannot see it. */
 export const peerAllowed = (
   from: { peers?: string[]; visibility?: unknown },
   target: string | { id: string; visibility?: unknown },
 ): boolean => {
   const targetId = typeof target === "string" ? target : target.id;
-  if (Array.isArray(from.peers) && !from.peers.includes(targetId)) return false;
-  // Same audience too: a teammate others can see would carry this bot's words to people who cannot see it.
+  if (from.peers != null && (!Array.isArray(from.peers) || !from.peers.includes(targetId))) return false;
   return typeof target === "string" || sameAudience(from.visibility, target.visibility);
 };
 
 /** Departments are folders, not walls: any bot reaches any other visible bot, a Chief someone owns included. Only the
- * sender's own peers list and the bots' audiences narrow it, and reaching a bot grants no authority over it. */
+ * bots' audiences narrow it, and reaching a bot grants no authority over it. */
 export function canReach(from: RosterMember, target: RosterMember): boolean {
   return from.id !== target.id && !target.hidden && peerAllowed(from, target);
 }
@@ -115,24 +113,24 @@ export type LookedAfterBy = (bot: RosterMember) => string | null;
 /** Why `from` cannot reach `target`, in words for the bot: null when it can. */
 export function reachRefusal(from: RosterMember, target: RosterMember, lookedAfterBy?: LookedAfterBy): string | null {
   if (canReach(from, target)) return null;
-  if (Array.isArray(from.peers) && !from.peers.includes(target.id)) {
-    return `${peerName(target.name)} is not one of the bots ${peerName(from.name)} is set to talk to, so nothing was sent. ${peerAccessHelp(from)}`;
-  }
   if (!target.hidden && !sameAudience(from.visibility, target.visibility)) {
     const name = peerName(target.name);
     const who = lookedAfterBy?.(target);
     const ask = who ? `ask ${peerName(who)}, who looks after it` : "ask an admin";
     return `${name} is shared with different people from ${peerName(from.name)}, so nothing was sent. Tell the person in one plain sentence: "${name} isn't shared here; ${ask}." Never use computer control to get around this.`;
   }
+  if (Array.isArray(from.peers) && !from.peers.includes(target.id)) {
+    return `${peerName(target.name)} is not one of the bots ${peerName(from.name)} is set to talk to, so nothing was sent. ${peerAccessHelp(from)}`;
+  }
   return `${peerName(target.name)} cannot be reached from ${peerName(from.name)}. ${PEER_ACCESS_HELP}`;
 }
 
 /** What a bot is told about its team can never be wider than what the comms endpoints allow. Its own department comes
  * first, then the others by name, so a capped roster keeps the nearest teammates. */
-export function reachablePeers<T extends RosterMember>(bots: readonly T[], from: RosterMember): T[] {
+export function reachablePeers<T extends RosterMember>(bots: readonly T[], from: RosterMember, also?: (bot: T) => boolean): T[] {
   const own = sectionKey(from.section);
   const department = (bot: T) => (sectionKey(bot.section) === own ? "" : ` ${sectionKey(bot.section).toLowerCase()}`);
-  return bots.filter(bot => canReach(from, bot)).sort((a, b) => {
+  return bots.filter(bot => canReach(from, bot) || peerAllowed(from, bot.id) && also?.(bot)).sort((a, b) => {
     const [left, right] = [department(a), department(b)];
     return left < right ? -1 : left > right ? 1 : 0;
   });
@@ -151,10 +149,19 @@ export function namesTeammate(target: Pick<RosterMember, "id" | "name">, raw: st
 /** Their audiences alone would let `from` reach `target`, whatever its own list of peers says. */
 export const reachesInAudience = (from: RosterMember, target: RosterMember): boolean => sameAudience(from.visibility, target.visibility);
 
-/** The teammate `raw` names when `from` may not reach it. A person's own MausBot is never named to anyone else. */
-export function unreachableTeammate<T extends RosterMember>(bots: readonly T[], from: RosterMember, raw: string): T | null {
+/** The teammate `raw` names when `from` may not reach it. A person's own MausBot is never named to anyone else, nor a bot
+ * `hides` keeps from `from`. */
+export function unreachableTeammate<T extends RosterMember>(bots: readonly T[], from: RosterMember, raw: string, hides?: (bot: T) => boolean): T | null {
   const target = bots.find((bot) => bot.id === raw.trim()) ?? bots.find((bot) => namesTeammate(bot, raw));
-  return target && target.id !== from.id && !target.hidden && !target.defaultBot && !canReach(from, target) ? target : null;
+  return target && target.id !== from.id && !target.hidden && !target.defaultBot && !canReach(from, target) && !hides?.(target) ? target : null;
+}
+
+/** Reach past `from`'s audience that someone else decides (server/host/personal-reach.ts): the bots it adds, the bots
+ * `from` may never be told of, and its own words for a refusal. */
+export interface WiderReach<T extends RosterMember> {
+  reaches(bot: T): boolean;
+  hides(bot: T): boolean;
+  refusal(bot: T): string | null;
 }
 
 /** A name resolves only inside reachablePeers, so it can never reach a bot its id could not. `elsewhere(name)`: why no bot
@@ -165,14 +172,15 @@ export function resolveTeammate<T extends RosterMember>(
   raw: string,
   elsewhere: (name: string) => { where: string } | { hint: string } | null = () => null,
   lookedAfterBy?: LookedAfterBy,
+  wider?: WiderReach<T>,
 ): { id: string; byName: boolean } | { error: string } {
   const wanted = raw.trim();
-  if (bots.some(bot => bot.id === wanted)) return { id: wanted, byName: false };
+  if (bots.some(bot => bot.id === wanted && !wider?.hides(bot))) return { id: wanted, byName: false };
   const fold = foldedName, loose = looseName;
   const name = fold(wanted);
   const shown = peerName(wanted) || wanted;
   if (!name) return { error: `No bot with id "${shown}" — call list_bots and copy the exact id from the result` };
-  const reachable = reachablePeers(bots, from);
+  const reachable = reachablePeers(bots, from, wider?.reaches);
   const matches = reachable.filter(bot => fold(bot.name) === name);
   if (matches.length === 1) return { id: matches[0]!.id, byName: true };
   if (matches.length > 1) {
@@ -180,12 +188,12 @@ export function resolveTeammate<T extends RosterMember>(
   }
   const near = reachable.filter(bot => loose(bot.name) === loose(wanted));
   if (near.length === 1) return { id: near[0]!.id, byName: true };
-  const offList = Array.isArray(from.peers) ? bots.find(bot => bot.id !== from.id && !bot.hidden && !from.peers!.includes(bot.id) &&
+  const offList = Array.isArray(from.peers) ? bots.find(bot => bot.id !== from.id && !bot.hidden && !wider?.hides(bot) && !from.peers!.includes(bot.id) &&
     sameAudience(from.visibility, bot.visibility) && (fold(bot.name) === name || loose(bot.name) === loose(wanted))) : undefined;
   if (offList) return { error: reachRefusal(from, offList)! };
-  const apart = bots.find(bot => bot.id !== from.id && !bot.hidden && !bot.defaultBot && !sameAudience(from.visibility, bot.visibility) && (fold(bot.name) === name || loose(bot.name) === loose(wanted)));
-  if (apart) return { error: reachRefusal(from, apart, lookedAfterBy)! };
-  const away = bots.some(bot => fold(bot.name) === name || loose(bot.name) === loose(wanted)) ? null : elsewhere(wanted);
+  const apart = bots.find(bot => bot.id !== from.id && !bot.hidden && !bot.defaultBot && !wider?.hides(bot) && !sameAudience(from.visibility, bot.visibility) && (fold(bot.name) === name || loose(bot.name) === loose(wanted)));
+  if (apart) return { error: wider?.refusal(apart) ?? reachRefusal(from, apart, lookedAfterBy)! };
+  const away = bots.some(bot => !wider?.hides(bot) && (fold(bot.name) === name || loose(bot.name) === loose(wanted))) ? null : elsewhere(wanted);
   if (away && "where" in away) return { error: away.where };
   return { error: `No bot with id or name "${shown}" — call list_bots and copy the exact id from the result.${teammateChoices(reachable)}${away ? ` ${away.hint}` : ""} ${peerAccessHelp(from)}` };
 }
