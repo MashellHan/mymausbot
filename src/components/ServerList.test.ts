@@ -80,17 +80,67 @@ it("the update note shows only for a server behind this app, with the command th
 
 it("Pair again opens the Connect sheet with the address locked and the code field ready; Remove only asks main", async () => {
   await mount();
-  await click(buttonIn(row("mac").querySelector("[data-server-state]")!, "Pair again"));
+  const pairAgain = buttonIn(row("mac").querySelector("[data-server-state]")!, "Pair again")!;
+  pairAgain.focus();
+  await click(pairAgain);
   const form = document.querySelector('[data-place-add="own-server"]')!;
+  expect(form.closest("[data-place-add-sheet]")?.parentElement?.parentElement).toBe(document.body);
+  expect(host.contains(form)).toBe(false);
   expect(form.textContent).toContain("Pair again with Mac at home");
   const address = form.querySelector("[data-own-server-link]") as HTMLInputElement;
   expect([address.value, address.readOnly]).toEqual(["https://mac.tail1234.ts.net", true]);
   expect(document.activeElement).toBe(form.querySelector("[data-own-server-code]"));
   await click(document.querySelector('[aria-label="Close"]'));
+  expect(document.activeElement).toBe(pairAgain);
   await click(buttonIn(row("vps"), "Remove hetzner-1"));
   expect(props.onForget).toHaveBeenCalledWith("vps");
   await click(host.querySelector("[data-server-connect]"));
   expect((document.querySelector("[data-own-server-link]") as HTMLInputElement).readOnly).toBe(false);
+});
+
+it("Escape, backdrop and Close dismiss only the portaled Connect sheet and return focus to Settings", async () => {
+  const closeSettings = vi.fn();
+  const onSettingsKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented) closeSettings(); };
+  window.addEventListener("keydown", onSettingsKey);
+  try {
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(createElement("div", {
+        "data-settings-sheet": "",
+        onMouseDown: (event: { target: EventTarget | null; currentTarget: EventTarget | null }) => {
+          if (event.target === event.currentTarget) closeSettings();
+        },
+      }, createElement(ServerList, props)));
+    });
+    const opener = host.querySelector("[data-server-connect]") as HTMLButtonElement;
+    const open = async () => {
+      opener.focus();
+      await click(opener);
+      expect(document.querySelector("[data-place-add-sheet]")).toBeTruthy();
+      expect(host.contains(document.querySelector("[data-place-add-sheet]"))).toBe(false);
+    };
+    const closed = () => {
+      expect(document.querySelector("[data-place-add-sheet]")).toBeNull();
+      expect(host.querySelector("[data-settings-sheet]")).toBeTruthy();
+      expect(document.activeElement).toBe(opener);
+      expect(closeSettings).not.toHaveBeenCalled();
+    };
+
+    await open();
+    await act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+    closed();
+
+    await open();
+    const backdrop = document.querySelector("[data-place-add-sheet]")!.parentElement!;
+    await act(async () => { backdrop.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true })); });
+    closed();
+
+    await open();
+    await click(document.querySelector('[data-place-add-sheet] [aria-label="Close"]'));
+    closed();
+  } finally {
+    window.removeEventListener("keydown", onSettingsKey);
+  }
 });
 
 it("main's word that a status changed is read at once", async () => {
