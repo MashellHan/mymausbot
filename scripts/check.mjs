@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { availableParallelism, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { changedCodeLines, readCheckPolicy, SAFE_TEST_PATH, selectCheckPlan } from "./ci-scope.mjs";
@@ -8,6 +9,10 @@ import { changedCodeLines, readCheckPolicy, SAFE_TEST_PATH, selectCheckPlan } fr
 const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const nul = (value) => value ? value.replace(/\0$/, "").split("\0") : [];
+
+export function localVitestWorkers(action, parallelism = availableParallelism(), memory = totalmem()) {
+  return action === "ready" ? Math.min(4, Math.max(1, Math.floor(parallelism / 2)), Math.max(1, Math.floor(memory / (4 * 1024 ** 3)))) : 1;
+}
 
 export function localChange(base = "origin/main", cwd = process.cwd()) {
   if (!base || base.startsWith("-")) throw new Error("Invalid base revision");
@@ -50,7 +55,7 @@ function main() {
   mkdirSync(directory, { recursive: true });
   const resultFile = join(directory, "vitest.json");
   const command = ["node_modules/vitest/vitest.mjs", "run", ...files, "--reporter=default", "--reporter=json", `--outputFile.json=${resultFile}`];
-  const env = { OMB_VITEST_WORKERS: "1", OMB_VITEST_E2E: "all", OMB_DASHBOARD_UI: files.includes("scripts/testing/local-dashboard-ui.e2e.test.ts") ? "1" : "0" };
+  const env = { OMB_VITEST_WORKERS: String(localVitestWorkers(action)), OMB_VITEST_E2E: "all", OMB_DASHBOARD_UI: files.includes("scripts/testing/local-dashboard-ui.e2e.test.ts") ? "1" : "0" };
   const result = files.length ? spawnSync(process.execPath, command, { stdio: "inherit", env: { ...process.env, ...env } }) : null;
   const nativeCommand = nativeRelay ? ["pnpm", "--dir", "relay", "test"] : null;
   const nativeResult = nativeCommand ? spawnSync(nativeCommand[0], nativeCommand.slice(1), { encoding: "utf8", env: process.env }) : null;

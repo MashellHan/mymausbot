@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { ciOutputs, FULL_SCOPE, readCheckPolicy, selectCheckPlan, selectCiScope } from "./ci-scope.mjs";
-import { localChange } from "./check.mjs";
+import { localChange, localVitestWorkers } from "./check.mjs";
 import { holdsFor } from "./qa/contracts.mjs";
 
 const policy = JSON.parse(readFileSync("scripts/testing/check-policy.json", "utf8"));
@@ -15,6 +15,14 @@ afterEach(() => { for (const dir of temporary.splice(0)) rmSync(dir, { recursive
 const plan = (files: string[], options: object = {}) => selectCheckPlan({ files, policy: admitted, mode: "tiered", qa: { healthy: true, blockedAreas: [] }, ...options });
 
 describe("shared local and CI check policy", () => {
+  it("bounds local ready workers by CPU and memory while edit stays serial", () => {
+    const gib = 1024 ** 3;
+    expect(localVitestWorkers("edit", 10, 24 * gib)).toBe(1);
+    expect(localVitestWorkers("ready", 10, 24 * gib)).toBe(4);
+    expect(localVitestWorkers("ready", 4, 8 * gib)).toBe(2);
+    expect(localVitestWorkers("ready", 2, 4 * gib)).toBe(1);
+  });
+
   it("keeps pilot areas in shadow until admitted and health permits reduction", () => {
     expect(readCheckPolicy()).toEqual(policy);
     const files = ["src/components/LocalUsagePanel.tsx"];
@@ -145,16 +153,21 @@ describe("shared local and CI check policy", () => {
     writeFileSync(join(directory, "scripts/testing/check-policy.json"), JSON.stringify({ version: 1, core: ["server/core.test.ts"], guards: ["scripts/guard.test.ts"], areas: [] }));
     writeFileSync(join(directory, "node_modules/vitest/vitest.mjs"), `import { writeFileSync } from "node:fs";
       const path = process.argv.find(arg => arg.startsWith("--outputFile.json=")).slice(18);
+      console.log("fixture-workers:" + process.env.OMB_VITEST_WORKERS);
       writeFileSync(path, JSON.stringify({ numTotalTests: 1, numPassedTests: 1, numFailedTests: 0, numPendingTests: 0 }));
       if (process.env.FIXTURE_CHANGE === "1") writeFileSync("server/core.test.ts", "changed");`);
     git("add", "."); git("commit", "-qm", "fixture");
     const script = fileURLToPath(new URL("./check.mjs", import.meta.url));
-    const run = (change: string) => spawnSync(process.execPath, [script, "edit", "--base", "HEAD", "--test", "server/core.test.ts"], { cwd: directory, encoding: "utf8", env: { ...process.env, FIXTURE_CHANGE: change } });
-    const stable = run("0");
+    const run = (action: string, change: string) => spawnSync(process.execPath, [script, action, "--base", "HEAD", "--test", "server/core.test.ts"], { cwd: directory, encoding: "utf8", env: { ...process.env, FIXTURE_CHANGE: change } });
+    const stable = run("edit", "0");
     expect(stable.status, stable.stderr).toBe(0);
+    expect(stable.stdout).toContain("fixture-workers:1");
     expect(stable.stdout).toContain("ordinary PR CI runs the Ubuntu core and bounded affected tests");
     expect(stable.stdout).not.toContain("full CI required");
-    const changed = run("1");
+    const ready = run("ready", "0");
+    expect(ready.status, ready.stderr).toBe(0);
+    expect(ready.stdout).toContain(`fixture-workers:${localVitestWorkers("ready")}`);
+    const changed = run("edit", "1");
     expect(changed.status, changed.stderr).toBe(1);
     expect(changed.stderr).toContain("Source inputs changed during validation");
   });
