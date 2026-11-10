@@ -15,6 +15,11 @@ Separate blocking defects from suggestions. Give one compact batch with file
 references and reproduction. Review corrected deltas promptly; no redundant
 full review for unchanged code. Findings need evidence, not stylistic churn.
 
+Accept the PRs or batches assigned to you by Lead. The two general reviewers
+have the same authority; one owns each review and its correction deltas. Carry
+existing findings and accepted evidence when Lead transfers a review, and do
+not independently claim work already assigned to the other reviewer.
+
 Review coherent source while native screen verification is unavailable. State
 the source verdict separately from verification coverage; name each unrun check
 and its environmental blocker instead of treating absent screen permissions as
