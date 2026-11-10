@@ -1,14 +1,16 @@
 // Full-app regression through the existing disposable browser harness. No
 // real provider, OAuth account, MCP package, or user data is used.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveAgentBrowserBinary } from "../../server/browser-engine.ts";
 import { waitForExit } from "../../server/testing/cleanup.ts";
 import { BOT_ROLES } from "../../src/lib/bot-roles.ts";
+import { LAST_CONVERSATION_KEY } from "../../src/lib/last-conversation.ts";
 import { runControlOmb } from "../control-omb.ts";
-import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
+import { agentBrowser, sessionEnv, UI_TOOLS_DIR, type UiHandle } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env });
@@ -19,6 +21,41 @@ const LAUNCH_TIMEOUT_MS = forced && !binary ? 600_000 : 180_000;
 
 interface FixtureInfo { ui: string; url: string; dataDir: string; logPath: string }
 interface SavedBot { id: string; name: string; soul?: string; mcpServers?: string[]; computer?: string; browser?: boolean }
+
+const DIAGNOSTIC_LIMIT = 64 * 1024;
+
+async function boundedFixtureJson(url: string): Promise<unknown> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+  if (!response.ok || !response.body) return { status: response.status };
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > DIAGNOSTIC_LIMIT) { void reader.cancel().catch(() => {}); return { unavailable: "too-large" }; }
+    chunks.push(value);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+}
+
+function boundedFixtureFile(path: string): unknown {
+  if (statSync(path).size > DIAGNOSTIC_LIMIT) return { unavailable: "too-large" };
+  return JSON.parse(readFileSync(path, "utf8")) as unknown;
+}
+
+function grantState(raw: unknown, botId: string) {
+  if (raw && typeof raw === "object" && ("status" in raw || "unavailable" in raw)) return raw;
+  const rows = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? (raw as { bots?: unknown }).bots : null;
+  const bot = Array.isArray(rows) ? rows.find((row) => row && typeof row === "object" && row.id === botId) as Record<string, unknown> | undefined : undefined;
+  if (!bot) return { found: false };
+  const grants = !Object.hasOwn(bot, "mcpServers") ? "inherit"
+    : bot.mcpServers === null ? "null"
+      : Array.isArray(bot.mcpServers) ? bot.mcpServers.filter((name): name is string => typeof name === "string").slice(0, 4)
+        : "invalid";
+  return { found: true, busy: bot.busy === true, grants };
+}
 
 describe("bot setup and tools in the real renderer", () => {
   let child: ChildProcess | undefined;
@@ -52,6 +89,10 @@ describe("bot setup and tools in the real renderer", () => {
     const click = (name: string) => ui("click", "--name", name);
     const press = (keys: string) => ui("press", "--keys", keys);
     const bots = async (): Promise<SavedBot[]> => (await fetch(`${info.url}/api/bots`).then((response) => response.json())).bots;
+    const diagnosticEval = async (js: string): Promise<unknown> => {
+      const handle = JSON.parse(readFileSync(info.ui, "utf8")) as UiHandle;
+      return (await agentBrowser(handle.binary, sessionEnv(handle), ["eval", js], 2_000)).result;
+    };
     const snapshot = async () => (await ui("snapshot")).snapshot as string;
     // The bot's panel opens from the chat header's pill; click it only while closed.
     const openPanel = () => expect.poll(() => evaluate(`(() => {
@@ -191,8 +232,65 @@ describe("bot setup and tools in the real renderer", () => {
     const fixtureSwitch = () => evaluate(`document.querySelector(${JSON.stringify(`[aria-label="${useFixture}"]`)})?.getAttribute('aria-checked') ?? null`);
     await openApps();
     await expect.poll(fixtureSwitch, { timeout: 10_000 }).toBe("true");
-    await click(useFixture);
-    await expect.poll(async () => (await bots()).find((bot) => bot.id === created[0].id)?.mcpServers, { timeout: 10_000 }).toEqual([]);
+    const tapInstalled = await diagnosticEval(`(() => {
+      const original = window.fetch;
+      const events = [];
+      const tap = (input, init) => {
+        const response = original.call(window, input, init);
+        try {
+          const path = input instanceof Request ? input.url : String(input);
+          const targetBotId = path.startsWith('/api/bots/') ? path.slice('/api/bots/'.length) : '';
+          if (targetBotId !== ${JSON.stringify(created[0].id)} || init?.method !== 'PATCH' || typeof init.body !== 'string' || init.body.length > 512 || events.length >= 2) return response;
+          const body = JSON.parse(init.body);
+          if (!Object.hasOwn(body, 'mcpServers')) return response;
+          const grants = Array.isArray(body.mcpServers) && body.mcpServers.length <= 4 && body.mcpServers.every((name) => typeof name === 'string' && name.length <= 64)
+            ? body.mcpServers : 'invalid';
+          const event = { targetBotId, grants, status: null, errorCode: null };
+          events.push(event);
+          void response.then((value) => {
+            event.status = value.status;
+            if (window.fetch === tap) window.fetch = original;
+          }, (error) => {
+            event.errorCode = typeof error?.name === 'string' ? error.name.slice(0, 40) : 'FetchError';
+            if (window.fetch === tap) window.fetch = original;
+          });
+        } catch {}
+        return response;
+      };
+      window.fetch = tap;
+      window.__qa507McpProbe = { events, restore: () => { if (window.fetch === tap) window.fetch = original; } };
+      return true;
+    })()`).then((value) => value === true, () => false);
+    let clicked: Record<string, unknown> | null = null;
+    try {
+      clicked = await click(useFixture);
+      await expect.poll(async () => (await bots()).find((bot) => bot.id === created[0].id)?.mcpServers, { timeout: 10_000 }).toEqual([]);
+    } catch (original) {
+      try {
+        const [uiState, apiState] = await Promise.all([
+          diagnosticEval(`(() => {
+            const node = document.querySelector(${JSON.stringify(`[aria-label="${useFixture}"]`)});
+            const events = window.__qa507McpProbe?.events ?? [];
+            let selectedBotId = null;
+            try { selectedBotId = localStorage.getItem(${JSON.stringify(LAST_CONVERSATION_KEY)}); } catch {}
+            return { selectedBotId,
+              selectedBot: document.querySelector('[data-chathead-pill]')?.getAttribute('aria-label') ?? null,
+              switch: { exists: !!node, checked: node?.getAttribute('aria-checked') ?? null, disabled: node instanceof HTMLButtonElement ? node.disabled : null },
+              patch: { attempted: events.length > 0, events: events.slice(0, 2) } };
+          })()`).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" })),
+          boundedFixtureJson(`${info.url}/api/bots?messages=0`).then((raw) => grantState(raw, created[0].id))
+            .catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "ApiReadError" })),
+        ]);
+        const disk = (() => { try { return grantState(boundedFixtureFile(join(info.dataDir, "bots.json")), created[0].id); } catch (error) { return { unavailable: error instanceof Error ? error.name : "DiskReadError" }; } })();
+        const config = (() => { try { const raw = boundedFixtureFile(join(info.dataDir, "config.json")) as { unavailable?: string; mcpServers?: { fixture?: { enabled?: unknown } } }; return raw.unavailable ? { unavailable: raw.unavailable } : { fixtureEnabled: raw.mcpServers?.fixture?.enabled === true ? true : raw.mcpServers?.fixture?.enabled === false ? false : null }; } catch (error) { return { unavailable: error instanceof Error ? error.name : "ConfigReadError" }; } })();
+        console.error("MCP grant failure diagnostic", JSON.stringify({ expectedBot: { id: created[0].id, name: created[0].name }, tapInstalled,
+          click: clicked ? { ok: clicked.ok === true, target: typeof clicked.target === "string" ? clicked.target : null, name: typeof clicked.name === "string" ? clicked.name : null } : null,
+          clickErrorCode: original instanceof Error ? original.name : "UnknownError", uiState, apiState, disk, config }));
+      } catch {}
+      throw original;
+    } finally {
+      await diagnosticEval("window.__qa507McpProbe?.restore(); true").catch(() => {});
+    }
     await press("Escape");
     await openApps();
     await expect.poll(fixtureSwitch, { timeout: 10_000 }).toBe("false");
