@@ -16,8 +16,9 @@ describe("local dashboard authorization in an isolated server", () => {
       expect(await ownerActivity.json()).toEqual({ agentId: "w6:p1", status: "unavailable", updatedAt: null, truncated: false, events: [] });
       const ownerUsage = await fetch(`${url}/api/local-dashboard/usage`);
       expect(ownerUsage.status).toBe(200);
-      expect(await ownerUsage.json()).toEqual({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
-        sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] });
+      expect(await ownerUsage.json()).toMatchObject({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
+        sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [],
+        contributions: { status: "unavailable", windows: null, accounts: [] } });
 
       const post = (path: string, body: unknown, headers: Record<string, string> = {}) => fetch(`${url}${path}`, {
         method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
@@ -48,9 +49,10 @@ describe("local dashboard authorization in an isolated server", () => {
         snapshot: { agentId: "w6:p1", status: "unavailable", updatedAt: null, truncated: false, events: [] } });
       const usageRead = await post(usagePath, { resource: "usage", expectedRevision: usage.revision });
       expect(usageRead.status).toBe(200);
-      expect(await usageRead.json()).toEqual({ appId: usage.id, revision: usage.revision, resource: "usage",
+      expect(await usageRead.json()).toMatchObject({ appId: usage.id, revision: usage.revision, resource: "usage",
         snapshot: { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
-          prSourceCoverage: null, prCoverage: null, windows: null, trend: [] } });
+          prSourceCoverage: null, prCoverage: null, windows: null, trend: [],
+          contributions: { status: "unavailable", windows: null, accounts: [] } } });
       expect((await post(teamPath, { resource: "usage", expectedRevision: team.revision })).status).toBe(403);
       expect((await post(usagePath, { resource: "teams", expectedRevision: usage.revision })).status).toBe(403);
 

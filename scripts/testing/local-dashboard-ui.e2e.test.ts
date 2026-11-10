@@ -53,11 +53,12 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
         const geometry = await read<{ overflow: number; width: number; cells: number; dateRight: number; regionRight: number; wow: { left: number; right: number; text: string }[] }>(`(() => {
           const panel = document.querySelector('[data-testid="local-usage-panel"]');
           const region = panel.querySelector('[data-usage-daily] [role=region]');
-          region.scrollLeft = region.scrollWidth;
           const row = region.querySelector('tbody tr');
+          const change = row.querySelector('td:nth-of-type(4)');
+          region.scrollLeft = change.offsetLeft + change.offsetWidth - region.clientWidth;
           return { overflow: panel.scrollWidth - panel.clientWidth, width: panel.getBoundingClientRect().width, cells: row.querySelectorAll('td').length,
             dateRight: row.querySelector('th').getBoundingClientRect().right, regionRight: region.getBoundingClientRect().right,
-            wow: Array.from(row.querySelectorAll('td:last-child > div > span:first-child, td:last-child > div > [data-usage-change] > span[aria-hidden="true"]'))
+            wow: Array.from(change.querySelectorAll(':scope > div > span:first-child, :scope > div > [data-usage-change] > span[aria-hidden="true"]'))
               .map(span => ({ left: span.getBoundingClientRect().left, right: span.getBoundingClientRect().right, text: span.textContent })) };
         })()`);
         expect(geometry.overflow).toBeLessThanOrEqual(1);

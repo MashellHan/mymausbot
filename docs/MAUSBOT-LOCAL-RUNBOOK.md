@@ -1,5 +1,10 @@
 # Local MausBot build and recovery
 
+The reviewed Activities `contributions-v2` source uses the existing scheduled
+helper installation. Follow [its finite migration and rollback recipe](MAUSBOT-CONTRIBUTIONS-MIGRATION.md)
+before calling the new reader/data operation delivered; source and App packaging
+alone do not establish recurring capture or account reconciliation.
+
 Keep the official `/Applications/OpenMausBot.app`, the user's data and paired
 devices intact. Build products and private handoff evidence stay outside Git.
 Follow [the current validation policy](MAUSBOT-VALIDATION.md) and assign one
