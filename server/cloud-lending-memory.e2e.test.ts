@@ -118,7 +118,7 @@ async function stopRunningTurns(
   stopTurn: (bot: { id: string }, threadId: string) => Promise<void> = stop,
 ) {
   const stopped = new Set<string>();
-  let stopFailure: { error: unknown } | null = null;
+  const stopFailure: { seen: boolean; error: unknown } = { seen: false, error: undefined };
   try {
     await expect.poll(async () => {
       for (const { bot, threadId, turnStartedAt } of await running()) {
@@ -126,15 +126,18 @@ async function stopRunningTurns(
         if (stopped.has(generation)) continue;
         stopped.add(generation);
         try { await stopTurn(bot, threadId); }
-        catch (error) { stopFailure ??= { error }; throw error; }
+        catch (error) {
+          if (!stopFailure.seen) { stopFailure.seen = true; stopFailure.error = error; }
+          throw error;
+        }
       }
       return (await running()).length;
     }, { timeout: 10_000 }).toBe(0);
   } catch (error) {
-    if (stopFailure) throw stopFailure.error;
+    if (stopFailure.seen) throw stopFailure.error;
     throw error;
   }
-  if (stopFailure) throw stopFailure.error;
+  if (stopFailure.seen) throw stopFailure.error;
 }
 /** After a restart, wait for the lent Mac's connector, so what a turn is offered is never just the Mac being offline. */
 async function macOnline() {
