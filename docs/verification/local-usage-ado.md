@@ -36,7 +36,8 @@ cutoff. Created PRs count in active, completed and abandoned states; PRs are
 bucketed by creation instant. The collector pages all creator-filtered PR
 states without trusting a server-side date filter. It locally verifies creator,
 repository, status and UTC creation date, then rechecks the first page before
-certifying pagination.
+certifying pagination. A failed page admits no prefix; duplicate or drifting
+pagination restarts before any exact PR count is published.
 
 For each visible enabled repository with a default branch, the collector pins
 the remote ref object ID and pages history reachable from that exact head.
@@ -44,7 +45,9 @@ Candidate commits use **author UTC date**, not committer date. Full details
 verify the author date, parentage, untruncated message and recognized
 `Co-authored-by: Name <email>` trailers. A commit qualifies when its author or
 coauthor email belongs to the confirmed alias set. Merge commits remain in
-the count. A missing or malformed detail does not become zero.
+the count. A candidate authored after an earlier cutoff stays in the pinned
+cache and is admitted only once a later cutoff reaches it. A missing or
+malformed detail does not become zero.
 
 The duplicate key is organization plus repository GUID plus commit ID. A
 shared commit ID in two genuinely different repositories is two repository
@@ -56,7 +59,10 @@ independently of the authenticated account.
 
 Disabled repositories remain explicit visibility gaps; they are not assigned
 zero commits. A verified repository with no default branch has no reachable
-default-head commits. Missing refs, incomplete pages, expired authentication,
+default-head commits. Previously observed repository IDs and explicitly
+configured remotes remain expected scope: disappearance from a later inventory
+or an unexplained empty first inventory stays partial or stale, not zero.
+Missing refs, incomplete pages, expired authentication,
 budget exhaustion and malformed coauthor evidence keep exact totals null.
 Known typed subtotals contain only observed PR pages and completely reconciled
 repositories. A new incomplete scan may retain the prior exact rows as `stale`
@@ -66,7 +72,9 @@ the incomplete reason; a stale row is not a current pass.
 ## Bounded continuation
 
 Each refresh uses at most 180 seconds overall, 42 seconds and 50 GETs per
-project, and 20 seconds per request. A project continues in the next envelope's
+project, 8 GETs per repository slice, and 20 seconds per request. Large
+repositories retain pinned progress while later repositories receive their own
+slice. A project continues in the next envelope's
 private `state`; only the collector consumes it. Each commit page is at most
 100 records, and a repository scan stops after at most 1,000 pages. A source
 cannot claim complete coverage until every eligible repository is reconciled.
@@ -77,8 +85,9 @@ previous head cannot bound reachability: a newly merged side branch may appear
 after it in the API's commit sequence. The changed-head result replaces the
 old result only after the full traversal finishes. This catches late merges,
 old author dates and force pushes without relying on `fromDate`/`toDate`
-server filtering. A resumed scan rechecks its pinned ref and discards progress
-if the head changed. Window rollover starts a fresh 60-day scan. Neither a
+server filtering. A resumed scan finishes its immutable pin even if the branch
+advances; a final ref mismatch invalidates that result for current coverage and
+forces another reconciliation. Window rollover starts a fresh 60-day scan. Neither a
 request budget nor a force push can turn an unscanned portion into a certified
 zero.
 

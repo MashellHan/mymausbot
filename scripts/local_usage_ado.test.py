@@ -38,6 +38,7 @@ class Api:
     def __init__(self):
         self.calls = []
         self.owner = OWNER
+        self.inventory_continuation = None
         self.repos = [{"id": REPO, "name": "repository", "defaultBranch": "refs/heads/main",
                        "isDisabled": False}]
         self.heads = {REPO: HEAD}
@@ -66,6 +67,8 @@ class Api:
                 "properties": {"Account": {"$value": EMAIL}}}}
         elif path.endswith("/_apis/git/repositories"):
             result = {"value": self.repos, "count": len(self.repos)}
+            if self.inventory_continuation:
+                result["continuationToken"] = self.inventory_continuation
         elif path.endswith("/_apis/git/pullrequests"):
             assert query["searchCriteria.status"] == ["all"]
             assert query["searchCriteria.creatorId"] == [OWNER]
@@ -149,6 +152,21 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(changed["state"]["projects"]["example/project"]["cache"][REPO]["head"], newer)
         self.assertEqual(first["sources"][0]["id"], changed["sources"][0]["id"])
 
+    def test_unchanged_head_cache_reconsiders_future_author_at_later_cutoff(self):
+        api = Api()
+        future = "8" * 40
+        api.histories[HEAD].insert(0, commit(future, "2026-11-10T00:31:00Z"))
+        api.details[future] = api.histories[HEAD][0]
+        first = collect(api)
+        self.assertEqual(first["sources"][0]["status"], "ready")
+        self.assertEqual(first["sources"][0]["days"][-1]["commits"], 0)
+        self.assertIn(future, {item["id"] for item in first["state"]["projects"]["example/project"]["cache"][REPO]["items"]})
+        api.calls.clear()
+        later = collect(api, previous=first, at=AT + dt.timedelta(minutes=5))
+        self.assertEqual(later["sources"][0]["status"], "ready")
+        self.assertEqual(later["sources"][0]["days"][-1]["commits"], 1)
+        self.assertFalse(any("/commits?" in args[5] for args in api.calls))
+
     def test_late_side_merge_after_old_head_reconciles_older_author_day(self):
         api = Api()
         initial = collect(api)
@@ -188,7 +206,7 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(sum(day["commits"] for day in changed["sources"][0]["days"]), 1)
         self.assertEqual(changed["sources"][0]["days"][0]["commits"], 1)
 
-    def test_head_change_during_incomplete_scan_discards_incompatible_progress(self):
+    def test_force_push_during_incomplete_scan_cannot_certify_old_pinned_history(self):
         api = Api()
         initial = collect(api)
         intermediate, replacement = "d" * 40, "e" * 40
@@ -197,13 +215,17 @@ class AdoTests(unittest.TestCase):
         api.details[intermediate] = api.histories[intermediate][0]
         with patch.object(ado, "REQUESTS_PER_PROJECT", 6):
             partial = collect(api, previous=initial, at=AT + dt.timedelta(minutes=5))
-        progress = partial["state"]["projects"]["example/project"]["work"]["progress"]
+        progress = partial["state"]["projects"]["example/project"]["work"]["progress"][REPO]
         self.assertEqual(progress["head"], intermediate)
         self.assertTrue(progress["pending"])
         api.heads[REPO] = replacement
         api.histories[replacement] = [commit(replacement, "2026-11-09T02:00:00Z")]
         api.details[replacement] = api.histories[replacement][0]
-        result = collect(api, previous=partial, at=AT + dt.timedelta(minutes=10))
+        mismatch = collect(api, previous=partial, at=AT + dt.timedelta(minutes=10))
+        self.assertFalse(mismatch["collection"]["complete"])
+        self.assertIn("head-changed-during-scan", mismatch["sources"][0]["coverage"]["reasons"])
+        self.assertEqual(mismatch["sources"][0]["days"][-2]["status"], "stale")
+        result = collect(api, previous=mismatch, at=AT + dt.timedelta(minutes=15))
         self.assertEqual(result["sources"][0]["status"], "ready")
         self.assertEqual(result["sources"][0]["days"][-2]["commits"], 1)
         self.assertEqual(result["state"]["projects"]["example/project"]["cache"][REPO]["head"], replacement)
@@ -227,6 +249,38 @@ class AdoTests(unittest.TestCase):
         missing = collect(api)
         self.assertIn("unavailable-default-head", missing["sources"][0]["coverage"]["reasons"])
         self.assertIsNone(missing["sources"][0]["days"][-2]["commits"])
+
+    def test_permission_filtered_inventory_cannot_erase_previously_seen_or_configured_repo(self):
+        api = Api()
+        complete = collect(api)
+        original_repos = api.repos
+        api.repos = []
+        api.prs = []
+        missing = collect(api, previous=complete, at=AT + dt.timedelta(minutes=5))
+        source = missing["sources"][0]
+        self.assertEqual(source["status"], "stale")
+        self.assertFalse(source["coverage"]["visibilityComplete"])
+        self.assertIn("repository-visibility-gap", source["coverage"]["reasons"])
+        self.assertEqual(source["days"][-2]["status"], "stale")
+        self.assertEqual(source["days"][-2]["commits"], 2)
+        again = collect(api, previous=missing, at=AT + dt.timedelta(minutes=10))
+        self.assertIn("repository-visibility-gap", again["sources"][0]["coverage"]["reasons"])
+        self.assertFalse(again["collection"]["complete"])
+        first = collect(api)
+        self.assertIn("repository-visibility-gap", first["sources"][0]["coverage"]["reasons"])
+        self.assertIsNone(first["sources"][0]["days"][-2]["commits"])
+        api.repos = original_repos
+        restored = collect(api, previous=again, at=AT + dt.timedelta(minutes=15))
+        self.assertEqual(restored["sources"][0]["status"], "ready")
+
+    def test_inventory_continuation_signal_cannot_certify_a_truncated_list(self):
+        api = Api()
+        api.inventory_continuation = "more-repositories"
+        partial = collect(api)
+        self.assertEqual(partial["sources"][0]["status"], "partial")
+        self.assertFalse(partial["sources"][0]["coverage"]["paginationComplete"])
+        self.assertIsNone(partial["sources"][0]["days"][-2]["commits"])
+        self.assertIn("Invalid or unpaged ADO response", partial["collection"]["reasons"])
 
     def test_incomplete_refresh_retains_old_rows_only_as_stale_with_original_capture(self):
         api = Api()
@@ -254,10 +308,15 @@ class AdoTests(unittest.TestCase):
                         self.prs.insert(0, pr(4, "2026-11-10T00:02:00Z"))
                 return super().__call__(args, timeout)
 
-        changed = collect(ChangingApi())
+        api = ChangingApi()
+        changed = collect(api)
         self.assertEqual(changed["sources"][0]["status"], "partial")
         self.assertIn("ADO PR pages changed during scan", changed["sources"][0]["coverage"]["reasons"])
         self.assertIsNone(changed["sources"][0]["days"][-1]["prs"])
+        state = changed["state"]["projects"]["example/project"]["work"]
+        self.assertEqual((state["prOffset"], state["prSeen"], state["prs"]), (0, [], []))
+        recovered = collect(api, previous=changed)
+        self.assertEqual(recovered["sources"][0]["days"][-1]["prs"], 2)
 
         config = copy.deepcopy(CONFIG)
         config["mergedAdoProjects"].append("https://dev.azure.com/example/other-project")
@@ -266,6 +325,32 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(overlap["sources"][1]["status"], "partial")
         self.assertIn("Overlapping ADO project discovery", overlap["sources"][1]["coverage"]["reasons"])
         self.assertIsNone(overlap["sources"][1]["days"][-2]["prs"])
+
+    def test_failed_pr_page_admits_no_prefix_and_corrected_retry_cannot_duplicate(self):
+        api = Api()
+        api.prs[1]["createdBy"]["id"] = "99999999-2222-3333-4444-555555555555"
+        partial = collect(api)
+        work = partial["state"]["projects"]["example/project"]["work"]
+        self.assertEqual((work["prs"], work["prSeen"], work["prOffset"], work["prFirst"]),
+                         ([], [], 0, None))
+        self.assertIsNone(partial["sources"][0]["days"][-2]["prs"])
+        api.prs[1]["createdBy"]["id"] = OWNER
+        recovered = collect(api, previous=partial)
+        self.assertEqual(recovered["sources"][0]["status"], "ready")
+        self.assertEqual(sum(row["prs"] for row in recovered["sources"][0]["days"]), 3)
+        self.assertEqual(len(recovered["state"]["projects"]["example/project"]["work"]["prSeen"]), 3)
+
+    def test_duplicate_pr_pagination_resets_before_clean_rescan(self):
+        api = Api()
+        api.prs = [pr(index, "2026-11-09T12:00:00Z") for index in range(1, 101)]
+        api.prs.append(pr(50, "2026-11-09T12:00:00Z"))
+        partial = collect(api)
+        work = partial["state"]["projects"]["example/project"]["work"]
+        self.assertIn("Duplicate ADO PR page", partial["sources"][0]["coverage"]["reasons"])
+        self.assertEqual((work["prOffset"], work["prSeen"], work["prs"]), (0, [], []))
+        api.prs[-1] = pr(101, "2026-11-09T12:00:00Z")
+        recovered = collect(api, previous=partial)
+        self.assertEqual(recovered["sources"][0]["days"][-2]["prs"], 101)
 
     def test_creator_mismatch_malformed_coauthor_and_bad_scope_fail_closed(self):
         api = Api()
@@ -335,6 +420,32 @@ class AdoTests(unittest.TestCase):
                            partial["state"]["projects"]["example/project"]["work"]["repoIndex"])
         self.assertIsNone(source["days"][-1]["commits"])
         self.assertIn("request-budget", source["coverage"]["reasons"])
+
+    def test_advancing_head_keeps_pinned_progress_and_later_repo_gets_fair_slice(self):
+        api = Api()
+        second_repo = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        second_head = "7" * 40
+        api.repos.append({"id": second_repo, "name": "second", "defaultBranch": "refs/heads/main",
+                          "isDisabled": False})
+        api.heads[second_repo] = second_head
+        api.prs = []
+        api.histories[HEAD] = [commit(HEAD, "2026-11-09T12:00:00Z")] + [
+            commit(f"{index:040x}", "2026-11-09T12:00:00Z") for index in range(1, 25)]
+        api.histories[second_head] = [commit(second_head, "2026-11-09T12:00:00Z")]
+        api.details = {row["commitId"]: row for rows in api.histories.values() for row in rows}
+        with patch.object(ado, "REQUESTS_PER_REPOSITORY", 4), patch.object(ado, "REQUESTS_PER_PROJECT", 20):
+            first = collect(api)
+            work = first["state"]["projects"]["example/project"]["work"]
+            self.assertIn(REPO, work["progress"])
+            self.assertIn(second_repo, work["repoDone"])
+            pending_before = len(work["progress"][REPO]["pending"])
+            api.heads[REPO] = "6" * 40
+            later = collect(api, previous=first, at=AT + dt.timedelta(minutes=5))
+        continued = later["state"]["projects"]["example/project"]["work"]
+        self.assertEqual(continued["progress"][REPO]["head"], HEAD)
+        self.assertLess(len(continued["progress"][REPO]["pending"]), pending_before)
+        self.assertIn(second_repo, continued["repoDone"])
+        self.assertFalse(later["sources"][0]["coverage"]["paginationComplete"])
 
 
 if __name__ == "__main__":
