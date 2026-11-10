@@ -438,12 +438,8 @@ export class Store {
     }
     for (const b of this.bots) {
       const savedPeers: unknown = b.peers;
-      if (savedPeers === null) {
-        delete b.peers;
-        botsMigrated = true;
-      } else if (savedPeers !== undefined && (!Array.isArray(savedPeers) || savedPeers.some((id) => typeof id !== "string"))) {
-        b.peers = [];
-        botsMigrated = true;
+      if (savedPeers === null) { delete b.peers; botsMigrated = true; } else if (savedPeers !== undefined && (!Array.isArray(savedPeers) || savedPeers.some((id) => typeof id !== "string"))) {
+        b.peers = []; botsMigrated = true;
       }
       if (!b.alwaysAllow?.length) continue;
       let changed = false;
@@ -455,10 +451,7 @@ export class Store {
         changed = true;
         return peerAllowKey(match[1] as PeerAction, candidates[0]!.id);
       });
-      if (changed) {
-        b.alwaysAllow = [...new Set(migrated)];
-        botsMigrated = true;
-      }
+      if (changed) { b.alwaysAllow = [...new Set(migrated)]; botsMigrated = true; }
     }
     // Recover only app-issued provider-tool grants into bot defaults, never task/session grants such as shell commands.
     for (const b of this.bots) {
