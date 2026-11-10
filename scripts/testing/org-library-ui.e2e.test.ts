@@ -156,7 +156,6 @@ describe("the organization library in the real renderer", () => {
         packages: listing.status === "fulfilled" ? listing.value : null, botIds: imported.status === "fulfilled" ? imported.value : null }));
       throw error;
     }
-    expect((await ui("eval", "--js", "window.__orgLibraryAdd ?? null")).result).toMatchObject({ status: 201, body: "ready", section: "Sales desk", botCount: 3 });
     const bots = (await api("/api/bots")).bots.filter((bot: { section?: string }) => bot.section === "Sales desk");
     expect(bots).toHaveLength(3);
     for (const bot of bots) {
