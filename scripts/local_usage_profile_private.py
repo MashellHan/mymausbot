@@ -1,6 +1,7 @@
 """Qualify private GitHub Profile supplements against pinned remote history."""
 
 import re
+import subprocess
 
 
 MAX_PRIVATE_REPOSITORIES = 20
@@ -12,13 +13,14 @@ PRIVATE_CODES = {
     "private_history_changed", "invalid_private_history_page", "invalid_private_commit",
     "incomplete_private_authors", "private_commit_eligibility_uncertain", "incomplete_private_history",
     "private_history_page_budget_exhausted", "duplicate_private_repository", "private_default_head_changed",
-    "private_pr_overlap", "private_commit_overlap", "invalid_private_cursor",
+    "private_pr_overlap", "private_commit_overlap", "invalid_private_cursor", "private_owner_unverified",
 }
 
 REPOSITORY_QUERY = """query($owner: String!, $name: String!) {
   viewer { id login url }
   repository(owner: $owner, name: $name) {
     id nameWithOwner isPrivate isFork createdAt
+    owner { login ... on User { id } }
     defaultBranchRef { name target { ... on Commit { oid } } }
   }
   rateLimit { cost remaining resetAt }
@@ -74,6 +76,11 @@ def _repository(budget, profile, owner, name, instant):
     if (not isinstance(repo, dict) or repo.get("nameWithOwner", "").casefold() != f"{owner}/{name}".casefold()
             or repo.get("isPrivate") is not True or repo.get("isFork") is not False):
         raise ValueError("private_repository_ineligible")
+    relationship = repo.get("owner")
+    if (not isinstance(relationship, dict) or relationship.get("id") != profile["stableId"]
+            or not isinstance(relationship.get("login"), str)
+            or relationship["login"].casefold() != profile["login"].casefold()):
+        raise ValueError("private_owner_unverified")
     created = instant(repo["createdAt"])
     branch = repo["defaultBranchRef"]
     if (not isinstance(branch, dict) or not isinstance(branch.get("name"), str) or not branch["name"]
@@ -214,7 +221,7 @@ def supplement_private(config, profile, budget, typed, first, at, repository_cat
             if str(error) == "account_identity_mismatch":
                 raise
             reasons.append("private_" + (str(error) if str(error) in PRIVATE_CODES else "invalid_response"))
-        except (OSError, TimeoutError, KeyError, TypeError, IndexError, AttributeError) as error:
+        except (OSError, subprocess.SubprocessError, TimeoutError, KeyError, TypeError, IndexError, AttributeError) as error:
             reasons.append("private_" + type(error).__name__)
     for events in result.values():
         for event in events:

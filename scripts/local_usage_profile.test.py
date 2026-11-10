@@ -2,6 +2,7 @@ import copy
 import datetime as dt
 import json
 import re
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -37,6 +38,13 @@ class Api:
         self.metadata_reads = 0
         self.commit_dates = ("2026-09-11T08:00:00Z", "2026-11-09T11:00:00Z")
         self.private_pr_date = "2026-11-09T10:00:00Z"
+        self.repo_name = PRIVATE["nameWithOwner"]
+        self.owner_id = ACCOUNT["stableId"]
+        self.owner_login = ACCOUNT["login"]
+        self.private_viewer_id = None
+        self.fail_private_owner = None
+        self.fail_private_error = None
+        self.fail_private_phase = None
 
     def __call__(self, args, timeout):
         self.calls.append(args)
@@ -46,8 +54,13 @@ class Api:
         values = {args[i+1].split("=", 1)[0]: args[i+1].split("=", 1)[1]
                   for i, value in enumerate(args[:-1]) if value == "-f"}
         document = values["query"]
+        if (self.fail_private_owner is not None and values.get("owner") == self.fail_private_owner
+                and (self.fail_private_phase is None or self.fail_private_phase in document)):
+            raise self.fail_private_error
         viewer = {"id": self.account["stableId"], "login": self.account["login"],
                   "url": f"https://{self.account['host']}/{self.account['login']}"}
+        if "contributionsCollection" not in document and self.private_viewer_id:
+            viewer["id"] = self.private_viewer_id
         if "contributionsCollection" in document:
             nodes = [{"occurredAt": f"2026-11-09T09:0{i}:00Z", "pullRequest": {
                 "id": f"public-pr-{i}", "createdAt": f"2026-11-09T09:0{i}:00Z",
@@ -70,7 +83,9 @@ class Api:
         elif "defaultBranchRef" in document:
             self.metadata_reads += 1
             head = "c" * 40 if self.changed_head and self.metadata_reads > 1 else HEAD
-            data = {"viewer": viewer, "repository": {**PRIVATE, "createdAt": "2026-09-10T00:00:00Z",
+            data = {"viewer": viewer, "repository": {**PRIVATE, "nameWithOwner": self.repo_name,
+                "owner": {"id": self.owner_id, "login": self.owner_login},
+                "createdAt": "2026-09-10T00:00:00Z",
                 "defaultBranchRef": {"name": "main", "target": {"oid": head}}}}
         elif "pullRequests(first:" in document:
             data = {"viewer": viewer, "repository": {"id": PRIVATE["id"],
@@ -251,6 +266,11 @@ class ProfileV2Tests(unittest.TestCase):
                 if not valid or direct_actor_id:
                     return json.dumps({"errors": [{"extensions": {
                         "code": "undefinedField", "typeName": "Actor", "fieldName": "id"}}]})
+            if "defaultBranchRef" in document:
+                valid_owner = re.search(r"\bowner\s*\{\s*login\s+\.\.\.\s+on\s+User\s*\{\s*id\s*\}\s*\}", document)
+                if not valid_owner:
+                    return json.dumps({"errors": [{"extensions": {
+                        "code": "undefinedField", "typeName": "RepositoryOwner", "fieldName": "id"}}]})
             return api(args, timeout)
         self.assertEqual(collect(schema_run, {**ACCOUNT, "visibilityProof": proof()})["sources"][0]["status"], "ready")
         self.assertEqual(len(checked), 3)
@@ -259,6 +279,11 @@ class ProfileV2Tests(unittest.TestCase):
             self.assertEqual(collect(schema_run)["sources"][0]["status"], "unavailable")
         with patch.object(private, "PULL_REQUESTS_QUERY", private.PULL_REQUESTS_QUERY.replace(
                 "author { login ... on User { id } }", "author { id login }")):
+            source = collect(schema_run)["sources"][0]
+            self.assertEqual(source["status"], "partial")
+            self.assertIn("private_invalid_response", source["coverage"]["reasons"])
+        with patch.object(private, "REPOSITORY_QUERY", private.REPOSITORY_QUERY.replace(
+                "owner { login ... on User { id } }", "owner { id login }")):
             source = collect(schema_run)["sources"][0]
             self.assertEqual(source["status"], "partial")
             self.assertIn("private_invalid_response", source["coverage"]["reasons"])
@@ -292,6 +317,55 @@ class ProfileV2Tests(unittest.TestCase):
         source = collect(api)["sources"][0]
         self.assertEqual(source["days"][0]["knownPrs"], 0)
         self.assertEqual(source["days"][-1]["knownPrs"], 2)
+
+    def test_readable_nonowner_candidate_has_no_known_supplement(self):
+        for owner_id, owner_login, candidate in (
+                ("other-stable-id", "fixture-owner", "fixture-owner/private-repo"),
+                ("other-stable-id", "other-owner", "other-owner/private-repo")):
+            with self.subTest(candidate=candidate, owner_id=owner_id):
+                api = Api()
+                api.repo_name = candidate
+                api.owner_id = owner_id
+                api.owner_login = owner_login
+                source = collect(api, {**ACCOUNT, "privateRepositories": [candidate]})["sources"][0]
+                self.assertEqual(source["status"], "partial")
+                self.assertIn("private_private_owner_unverified", source["coverage"]["reasons"])
+                self.assertEqual(source["days"][-1]["knownPrs"], 2)
+                self.assertEqual(source["days"][-1]["knownCommits"], 2)
+                self.assertEqual(source["provenance"]["supplementedTotals"], {"prs": 0, "commits": 0})
+                self.assertFalse(any("history(first:" in arg for call in api.calls for arg in call))
+
+    def test_subprocess_candidate_failure_retains_typed_and_continues(self):
+        api = Api()
+        api.fail_private_owner = "failure-owner"
+        api.fail_private_error = subprocess.CalledProcessError(1, ["synthetic-gh"])
+        candidates = ["failure-owner/private-repo", "fixture-owner/private-repo"]
+        source = collect(api, {**ACCOUNT, "privateRepositories": candidates})["sources"][0]
+        self.assertEqual(source["status"], "partial")
+        self.assertIn("private_CalledProcessError", source["coverage"]["reasons"])
+        self.assertEqual(source["days"][-1]["knownPrs"], 3)
+        self.assertEqual(source["days"][-1]["knownCommits"], 3)
+        self.assertEqual(source["provenance"]["supplementedTotals"], {"prs": 1, "commits": 2})
+        self.assertFalse(source["coverage"]["paginationComplete"])
+
+    def test_private_history_timeout_retains_typed_but_not_partial_candidate(self):
+        api = Api()
+        api.fail_private_owner = "fixture-owner"
+        api.fail_private_phase = "history(first:"
+        api.fail_private_error = subprocess.TimeoutExpired(["synthetic-gh"], 5)
+        source = collect(api)["sources"][0]
+        self.assertEqual(source["status"], "partial")
+        self.assertIn("private_TimeoutExpired", source["coverage"]["reasons"])
+        self.assertEqual(source["days"][-1]["knownPrs"], 2)
+        self.assertEqual(source["days"][-1]["knownCommits"], 2)
+        self.assertEqual(source["provenance"]["supplementedTotals"], {"prs": 0, "commits": 0})
+
+    def test_private_query_identity_mismatch_remains_hard_rejection(self):
+        api = Api()
+        api.private_viewer_id = "different-account-id"
+        source = collect(api)["sources"][0]
+        self.assertEqual(source["status"], "unavailable")
+        self.assertTrue(all(day["knownPrs"] is None for day in source["days"]))
 
 
 if __name__ == "__main__":
