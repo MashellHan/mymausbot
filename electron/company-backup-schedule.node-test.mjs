@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createCompanyBackupSchedule } from "./company-backup-schedule.mjs";
 import { createManagedDesktopStore } from "./managed-desktop.mjs";
+import { createPrivateCredentialStore, preparePrivateCredentialStorage } from "./private-credential-store.mjs";
 
 const DAY = 24 * 60 * 60_000, HOUR = DAY / 24;
 const ENABLE = { enabled: true, confirmation: "BACK UP THIS WORKSPACE DAILY" };
@@ -13,6 +14,23 @@ const WAITING = "The saved daily backup schedule can't be read right now. OpenMa
 const RESUME_DELAY = 15 * 60_000;
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; };
 const turn = () => new Promise(resolve => setImmediate(resolve));
+
+test("malformed private backup schedule stays paused and retains its saved bytes", async t => {
+  const userData = await fs.mkdtemp(path.join(os.tmpdir(), "omb-backup-private-invalid-"));
+  t.after(() => fs.rm(userData, { recursive: true, force: true }));
+  const { directory } = preparePrivateCredentialStorage(userData);
+  const store = createPrivateCredentialStore(directory, "company-backup-schedule.json");
+  await store.write({ version: 2, scope: "synthetic" });
+  const file = path.join(directory, "company-backup-schedule.json"), before = await fs.readFile(file);
+  const schedule = createCompanyBackupSchedule({ store, scope: () => null, run: () => { throw new Error("unexpected backup"); },
+    setTimer: () => 1, clearTimer: () => {} });
+  t.after(() => schedule.close());
+  const state = await schedule.start();
+  assert.equal(state.status, "paused");
+  assert.equal(state.message, WAITING);
+  assert.deepEqual(await fs.readFile(file), before);
+});
+
 function fixture(saved = null) {
   const f = { now: 1_800_000_000_000, scope: { key: "fixture-portal:org:email:device:workspace", generation: 1 },
     saved, calls: [], states: [], writes: [], timers: new Map(), failWrite: false, blockWrite: null,

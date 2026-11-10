@@ -5,7 +5,7 @@
 // A switch writes in the order that loses nothing: at every step each token is in at least one file. An account found in
 // both files after a crash is the active one.
 //
-// Security: tokens are read and written here and in cloud-account.mjs only, both files encrypted by the OS. What leaves this
+// Security: tokens are read and written here and in cloud-account.mjs only, using the selected protected store. What leaves this
 // module for a page is an id and an address.
 import { unreadableRecord } from "./managed-desktop.mjs";
 
@@ -54,10 +54,12 @@ export function createCloudAccounts({ active, saved, client, makeClient, origin,
       known = true;
       return [];
     }
-    known = true;
-    if (raw === null || raw === undefined) return [];
+    if (raw === null || raw === undefined) { known = true; return []; }
     if (raw.v !== VERSION || !Array.isArray(raw.accounts)) throw new Error("These saved sign-ins are from a newer version.");
-    return raw.accounts.filter((record) => usable(record, origin));
+    const accounts = raw.accounts.filter((record) => usable(record, origin));
+    if (saved.preserveInvalid && accounts.length !== raw.accounts.length) throw new Error("Saved Cloud sign-ins could not be read safely.");
+    known = true;
+    return accounts;
   }
   const activeId = () => { const state = client().state(); return ["signed-out", "connecting"].includes(state?.status) ? null : state?.account?.id ?? null; };
   const remember = (list, without = activeId()) => {

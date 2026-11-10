@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, normalize } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearPlanUsageCache,
+  defaultCredentialReader,
   fetchPlanUsage,
   fileCredentialReader,
   loadPlanUsage,
@@ -321,6 +323,16 @@ describe("plan usage fetcher", () => {
     expect(services).toEqual(["Claude Code-credentials"]);
     expect(fetchImpl.mock.calls[0]?.[1].headers.Authorization).toBe(`Bearer ${token}`);
     expect(JSON.stringify(report)).not.toContain(token);
+  });
+
+  it("keeps an explicitly selected private Claude credential file readable in desktop file mode", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "omb-plan-private-claude-"));
+    try {
+      writeFileSync(join(configDir, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: SECRET } }), { mode: 0o600 });
+      const reader = defaultCredentialReader({ HOME: configDir, CLAUDE_CONFIG_DIR: configDir,
+        OMB_DESKTOP_PARENT: "1", OMB_CREDENTIAL_MODE: "private-file" });
+      expect(await reader.read(account("claude", { configDir }))).toEqual({ token: SECRET, accountId: null, expired: false });
+    } finally { rmSync(configDir, { recursive: true, force: true }); }
   });
 
   it("asks the keychain only for the custom config dir service", async () => {

@@ -80,6 +80,7 @@ import {
 } from "./desktop-companion-client.mjs";
 import { isKnownSkin, skinChrome } from "./skin-overlay.cjs";
 import { installCredentialStoreIpc, readSecureCredentials } from "./secure-credentials.mjs";
+import { configureDesktopCredentialMode } from "./private-credential-store.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
 import {
   companionAccountCleanupPending,
@@ -97,11 +98,11 @@ import { createHostScreenLease } from "./host-screen-lease.mjs";
 import { acquireDataDirLease } from "./data-dir-lease.mjs";
 import { reviveAfterFailedSwitch, switchLocalEnvironment } from "./environment-switch.mjs";
 import { createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore, managedRemoteAccessRefusal as remoteAccessRefusal } from "./managed-desktop.mjs";
-import { CHECKOUT_SOURCES, cloudMenuSublabel, cloudTarget, createCloudAccountClient as cloudAccountClient, createCloudAccountStore } from "./cloud-account.mjs";
+import { CHECKOUT_SOURCES, cloudMenuSublabel, cloudTarget, createCloudAccountClient as cloudAccountClient } from "./cloud-account.mjs";
 import { installCloudPlanIpc } from "./cloud-plan-ipc.mjs";
 import { cloudLinkOpensSheet, colorDotIcons, createCloudLook, createCloudReadyNotice, installCloudBuy, lookFile } from "./cloud-buy.mjs";
 import { createTrialNotices } from "./cloud-trial-notice.mjs";
-import { createDesktopPrefs, createDesktopText, DESKTOP_PORTS, jsonFile, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
+import { createDesktopText, DESKTOP_PORTS, jsonFile, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
 import { createDesktopIncludedX } from "./included-x.mjs"; import { createDesktopIncludedPages } from "./included-pages.mjs";
 import { cloudPageSenderAllowed, cloudPlanDisk, cloudUnreachableText, createCloudPowerGate, isCloudHomeEntry, myCloudOrigin, rememberedCloudHome, savedCloudHomeOrigin, signInCloudSession, withCloudHome } from "./cloud-home.mjs";
 import { installCloudFiles } from "./cloud-sync-main.mjs";
@@ -367,8 +368,9 @@ let desktopRemoteAccess = null;
 let desktopCompanionRelay = null;
 
 const CREDENTIALS_FILE = path.join(app.getPath("userData"), "credentials.bin");
-const CREDENTIAL_MODE = createDesktopPrefs(jsonFile(path.join(app.getPath("userData"), "desktop-prefs.json"))).credentialMode();
+const { mode: CREDENTIAL_MODE, privateStore: privateCredentialStore, workspaceStore: privateWorkspaceCredentials } = configureDesktopCredentialMode(app, fs, process);
 const SESSION_CREDENTIALS = CREDENTIAL_MODE === "session";
+const PRIVATE_FILE_CREDENTIALS = CREDENTIAL_MODE === "private-file";
 const browserSession = createAppBrowserSession(session, CREDENTIAL_MODE);
 const sessionConfigMemory = SESSION_CREDENTIALS ? createSessionConfigMemory() : null;
 
@@ -378,6 +380,14 @@ let credentialStoreUnavailable = false;
 
 async function loadSecureCredentials() {
   if (SESSION_CREDENTIALS) return {};
+  if (PRIVATE_FILE_CREDENTIALS) {
+    try { return await privateWorkspaceCredentials.read() ?? {}; }
+    catch {
+      credentialStoreUnavailable = true;
+      slog("private credential file unreadable; saved keys are not loaded this launch");
+      return {};
+    }
+  }
   const result = await readSecureCredentials({
     exists: () => fs.existsSync(CREDENTIALS_FILE),
     isAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
@@ -395,9 +405,8 @@ async function loadSecureCredentials() {
 async function saveSecureCredentials(credentials) {
   if (SESSION_CREDENTIALS) return;
   // Writing from an unread store would drop the secrets it could not read.
-  if (credentialStoreUnavailable) {
-    throw new Error("The operating-system credential store could not be read this launch");
-  }
+  if (credentialStoreUnavailable) throw new Error("The desktop credential store could not be read this launch");
+  if (PRIVATE_FILE_CREDENTIALS) return privateWorkspaceCredentials.write(credentials);
   if (!(await safeStorage.isAsyncEncryptionAvailable())) {
     throw new Error("The operating-system credential store is unavailable");
   }
@@ -817,7 +826,12 @@ function syncPhoneSecretKey(proc) {
   }
 }
 
-const cloudEncryption = { available: async () => (await safeStorage.isAsyncEncryptionAvailable()) && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"), encrypt: value => safeStorage.encryptStringAsync(value), decrypt: value => safeStorage.decryptStringAsync(value) }; let activeSignIn = null; const cloudAccountStore = () => (activeSignIn ??= createCloudAccountStore({ file: path.join(app.getPath("userData"), cloudTarget(process.env).file), encryption: cloudEncryption, sessionOnly: SESSION_CREDENTIALS }));
+const cloudEncryption = { available: async () => (await safeStorage.isAsyncEncryptionAvailable()) && (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text"), encrypt: value => safeStorage.encryptStringAsync(value), decrypt: value => safeStorage.decryptStringAsync(value) };
+const credentialRecordStore = (name, encryption) => PRIVATE_FILE_CREDENTIALS
+  ? privateCredentialStore(name.replace(/\.bin$/, ".json"))
+  : createManagedDesktopStore({ file: path.join(app.getPath("userData"), name), encryption, sessionOnly: SESSION_CREDENTIALS });
+let activeSignIn = null;
+const cloudAccountStore = () => (activeSignIn ??= credentialRecordStore(cloudTarget(process.env).file, cloudEncryption));
 let sessionAccountPlaceState = null; const sessionAccountPlaceStore = { read: () => sessionAccountPlaceState, write: value => { sessionAccountPlaceState = value; } };
 function ensureCloudAccount() {
   if (cloudAccount) return cloudAccount;
@@ -908,10 +922,10 @@ function ensureManagedDesktop() {
     encrypt: value => safeStorage.encryptStringAsync(value),
     decrypt: value => safeStorage.decryptStringAsync(value),
   };
-  const store = createManagedDesktopStore({ file: path.join(app.getPath("userData"), "company-connection.bin"), encryption, sessionOnly: SESSION_CREDENTIALS });
+  const store = credentialRecordStore("company-connection.bin", encryption);
   orgLibrary = createOrgLibrary({
     dataDir: path.join(desktopDataDir(), "org-library"),
-    store: createManagedDesktopStore({ file: path.join(app.getPath("userData"), "company-library.bin"), encryption, sessionOnly: SESSION_CREDENTIALS }),
+    store: credentialRecordStore("company-library.bin", encryption),
     fetchBytes: (route, maxBytes, options) => managedDesktop.fetchLibraryBytes(route, maxBytes, options),
     relay: library => managedDesktopRelay.sendLibrary(serverProc, library),
     appVersion: app.getVersion(),
@@ -944,7 +958,7 @@ function ensureManagedDesktop() {
     },
   });
   companyBackupSchedule = createCompanyBackupSchedule({
-    store: createManagedDesktopStore({ file: path.join(app.getPath("userData"), "company-backup-schedule.bin"), encryption, sessionOnly: SESSION_CREDENTIALS }),
+    store: credentialRecordStore("company-backup-schedule.bin", encryption),
     scope: companyBackupScope,
     run: async (signal, scope) => {
       if (companyBackupController || preparedCompanyRestore || companyRestoreCommitting || desktopShutdownStarted) throw companyBackupDeferred();
@@ -2648,7 +2662,7 @@ const chromeRail = createChromeRail({ createView: options => new WebContentsView
 chromeRail.install(ipcMain);
 function railChanged() { chromeRail.refresh(); rail.changed(); }
 const accountPages = [() => (mainWindow && !mainWindow.isDestroyed() && senderIsLocal({ sender: mainWindow.webContents }) ? mainWindow.webContents : null), () => ({ send: channel => chromeRail.send(channel) })];
-const accountRing = createDesktopRing({ allowed: () => app.isPackaged && !desktopRemoteAccess, active: cloudAccountStore, savedStore: () => createCloudAccountStore({ file: path.join(app.getPath("userData"), cloudTarget(process.env).saved), encryption: cloudEncryption, sessionOnly: SESSION_CREDENTIALS }), stash: () => SESSION_CREDENTIALS ? sessionAccountPlaceStore : jsonFile(path.join(app.getPath("userData"), cloudTarget(process.env).places)), client: ensureCloudAccount, origin: cloudTarget(process.env).origin, makeClient: ({ store, onState }) => createCloudAccountClient({ store, onState, platform: process.platform, deviceName: os.hostname().slice(0, 100) || nativeT("native.accounts.myComputer"), appVersion: app.getVersion(), origin: cloudTarget(process.env).origin, openBrowser: url => shell.openExternal(url) }), saved: () => environmentsState, persist: persistEnvironments, session: () => browserSession(), mine: () => myCloud(), leaveWindow: () => (mainWindow && !mainWindow.isDestroyed() && !senderIsLocal({ sender: mainWindow.webContents }) ? navigateMainWindow(rendererOrigin()) : null), rows: () => railList(), holding: () => oneHome.holding(), letGo: id => { homeWindow.accountLeaving(); homePlaces.remember(null); computerSharing?.leaveAccount(id); }, lendingDone: () => computerSharing?.goodbyesDone(), settled: () => showHome(), forgetLending: env => sharingController().forget(env), tell: () => { accounts.tell(); railChanged(); }, log: slog }); const accounts = installAccounts({ ipcMain, ownPage: event => chromeRail.owns(event) || cloudPageAsking(event) === "local", placePage: event => cloudPageAsking(event) !== null || ownCloudPage(event) !== null || homeWindow.homePage(event) || (Boolean(ownHome?.home()) && activeEnvironment(environmentsState)?.origin === ownHome.home().origin && workspaceSenderAllowed(event, mainWindow?.webContents, environmentsState, rendererOrigin())), account: () => (app.isPackaged && !desktopRemoteAccess ? cloudAccount : null), client: ensureCloudAccount, ring: accountRing, t: nativeT, holdSheet: open => chromeRail.holdOpen(open), tellSheet: () => chromeRail.send("accounts:open-sheet"), tell: () => { for (const page of accountPages) page()?.send("accounts:changed"); } });
+const accountRing = createDesktopRing({ allowed: () => app.isPackaged && !desktopRemoteAccess, active: cloudAccountStore, savedStore: () => credentialRecordStore(cloudTarget(process.env).saved, cloudEncryption), stash: () => SESSION_CREDENTIALS ? sessionAccountPlaceStore : jsonFile(path.join(app.getPath("userData"), cloudTarget(process.env).places)), client: ensureCloudAccount, origin: cloudTarget(process.env).origin, makeClient: ({ store, onState }) => createCloudAccountClient({ store, onState, platform: process.platform, deviceName: os.hostname().slice(0, 100) || nativeT("native.accounts.myComputer"), appVersion: app.getVersion(), origin: cloudTarget(process.env).origin, openBrowser: url => shell.openExternal(url) }), saved: () => environmentsState, persist: persistEnvironments, session: () => browserSession(), mine: () => myCloud(), leaveWindow: () => (mainWindow && !mainWindow.isDestroyed() && !senderIsLocal({ sender: mainWindow.webContents }) ? navigateMainWindow(rendererOrigin()) : null), rows: () => railList(), holding: () => oneHome.holding(), letGo: id => { homeWindow.accountLeaving(); homePlaces.remember(null); computerSharing?.leaveAccount(id); }, lendingDone: () => computerSharing?.goodbyesDone(), settled: () => showHome(), forgetLending: env => sharingController().forget(env), tell: () => { accounts.tell(); railChanged(); }, log: slog }); const accounts = installAccounts({ ipcMain, ownPage: event => chromeRail.owns(event) || cloudPageAsking(event) === "local", placePage: event => cloudPageAsking(event) !== null || ownCloudPage(event) !== null || homeWindow.homePage(event) || (Boolean(ownHome?.home()) && activeEnvironment(environmentsState)?.origin === ownHome.home().origin && workspaceSenderAllowed(event, mainWindow?.webContents, environmentsState, rendererOrigin())), account: () => (app.isPackaged && !desktopRemoteAccess ? cloudAccount : null), client: ensureCloudAccount, ring: accountRing, t: nativeT, holdSheet: open => chromeRail.holdOpen(open), tellSheet: () => chromeRail.send("accounts:open-sheet"), tell: () => { for (const page of accountPages) page()?.send("accounts:changed"); } });
 const rail = installCloudRail({ t: nativeT, ipcMain, clipboard, openCloud: openOwnCloud, switchAccount: id => accountRing().switchTo(id), account: () => (app.isPackaged && !desktopRemoteAccess ? cloudAccount : null),
   guard: handler => (event, ...args) => (chromeRail.owns(event) ? handler(event, ...args) : workspaceOnly(handler)(event, ...args)),
   lists: event => chromeRail.owns(event), trusted: event => chromeRail.owns(event) || senderIsLocal(event), beside: () => chromeRail.shown(),
@@ -2751,14 +2765,14 @@ ipcMain.handle("desktop:capabilities", async (event) =>
 const workspaceCredentialSaver = createWorkspaceCredentialSaver({
   packaged: () => app.isPackaged, sessionOnly: SESSION_CREDENTIALS,
   t: nativeT,
-  encryptionAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
+  encryptionAvailable: () => PRIVATE_FILE_CREDENTIALS ? privateWorkspaceCredentials.available() : safeStorage.isAsyncEncryptionAvailable(),
   dataDir: () => runningDataDir, switching: () => localSwitchInFlight, ready: () => serverReady,
   port: () => SERVER_PORT,
   headers: () => desktopServerHeaders({ "content-type": "application/json" }, { packaged: app.isPackaged, token: desktopMutationToken }),
   fetch, sessionState: (dir) => sessionWorkspaceCredentials.state(dir), secureUpdate: updateSecureCredentialDocument,
 });
 
-installCredentialStoreIpc({ ipcMain, localOnly, dialog, windowFor: (sender) => BrowserWindow.fromWebContents(sender), t: nativeT, appName: () => app.name, unreadable: () => credentialStoreUnavailable, quitting: () => desktopShutdownStarted, moveAside: () => fs.renameSync(CREDENTIALS_FILE, `${CREDENTIALS_FILE}.unreadable-${Date.now()}`), log: slog, relaunch: relaunchAfterDesktopRemoteChange });
+installCredentialStoreIpc({ ipcMain, localOnly, dialog, windowFor: (sender) => BrowserWindow.fromWebContents(sender), t: nativeT, appName: () => app.name, unreadable: () => credentialStoreUnavailable, quitting: () => desktopShutdownStarted, moveAside: () => PRIVATE_FILE_CREDENTIALS ? privateWorkspaceCredentials.moveAside() : fs.renameSync(CREDENTIALS_FILE, `${CREDENTIALS_FILE}.unreadable-${Date.now()}`), log: slog, relaunch: relaunchAfterDesktopRemoteChange });
 ipcMain.handle("credential:set", localOnly("credential:set", (_event, name, value) =>
   workspaceCredentialSaver.save(name, value),
 ));

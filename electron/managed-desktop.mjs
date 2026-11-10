@@ -94,7 +94,7 @@ const unreadable = message => Object.assign(new Error(message), { code: "unreada
 export const retryDelay = attempt => [15_000, 30_000, 60_000][Math.min(attempt, 3) - 1];
 
 export const MANAGED_TEXT = Object.freeze({
-  clearFailed: "The saved company sign-in could not be cleared. Unlock your system keychain and Disconnect again before reconnecting.",
+  clearFailed: "The saved company sign-in could not be cleared. Check credential storage and Disconnect again before reconnecting.",
   disconnected: "Disconnected on this computer.",
   runtimeRunning: "The local runtime did not confirm stopping Company tasks. Quit and reopen OpenMausBot before using Company models again.",
   portalUnreachable: "The portal was unreachable; ask your administrator to revoke this device there too.",
@@ -111,7 +111,7 @@ export const MANAGED_TEXT = Object.freeze({
 });
 const said = (...codes) => ({ message: codes.map(code => MANAGED_TEXT[code]).join(" "), messageCodes: codes });
 
-/** OS-encrypted by default; session-only records stay in this App process. Company tokens never enter config, backups, renderer storage, environment variables or CLI homes. */
+/** OS-encrypted by default; explicit private-file records use owner-only files, and session records stay in this App process. Company tokens never enter config, backups, renderer storage, environment variables or CLI homes. */
 export function createManagedDesktopStore({ file, encryption, sessionOnly = false }) {
   if (sessionOnly) {
     let document = null;
@@ -461,7 +461,7 @@ export function createManagedDesktopClient({ store, applyConnection, applyPolicy
   }
   /** A record that may only be locked in the keychain is kept, never removed, and read again shortly. */
   async function restoreFailed(stamp, unreadable) {
-    if (unreadable) {
+    if (unreadable && !store.preserveInvalid) {
       const removed = await store.write(null).then(() => true, () => false);
       if (!current(stamp)) return snapshot();
       if (removed) { restoreFailures = 0; return publish({ status: "signed-out", ...said("removed") }); }

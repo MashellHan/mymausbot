@@ -465,7 +465,7 @@ const __APP_VERSION__: string;
         value: string,
       ): Promise<ConfigStatus>;
       /** This App run's credential lifetime; a remote page is never given it. */
-      credentialMode?(): "system" | "session";
+      credentialMode?(): "system" | "session" | "private-file";
       /** In-app auto-update (packaged app only; dormant in dev). Updates
        * download by themselves. On this computer's page and the person's own
        * Cloud page; any other server's page gets no state. onState fires

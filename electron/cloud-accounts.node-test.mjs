@@ -56,6 +56,24 @@ async function world(t, { active = null, saved = null } = {}) {
 }
 const ids = (w) => w.ring.others().map((row) => row.id);
 
+test("malformed private saved-account rows stay unavailable instead of being filtered and rewritten", async t => {
+  const origin = "https://cloud.example.test";
+  const valid = { origin, token: tokenOf("a"), account: person("a"), device: { id: "device-a" }, expiresAt: 1_900_000_000_000 };
+  const raw = { v: 1, accounts: [valid, { origin, token: "malformed" }] };
+  let writes = 0;
+  const saved = { preserveInvalid: true, read: async () => structuredClone(raw), write: async () => { writes++; } };
+  const ring = createCloudAccounts({ active: { read: async () => null, write: async () => {} }, saved,
+    client: () => ({ state: () => ({ status: "signed-out" }) }), makeClient: () => { throw new Error("unexpected sign-in"); },
+    origin, log: () => {} });
+  t.after(() => ring.close());
+  await ring.start();
+  assert.equal(ring.count(), 2);
+  assert.deepEqual(ring.others(), []);
+  await assert.rejects(ring.switchTo("acct-a"), /could not be read safely/);
+  assert.equal(writes, 0);
+  assert.deepEqual(raw.accounts, [valid, { origin, token: "malformed" }]);
+});
+
 test("an old saved sign-in upgrades as it is: no prompt, no sign-out, nothing written", async (t) => {
   const w = await world(t);
   w.activeFile = w.grant("a");

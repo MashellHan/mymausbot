@@ -460,7 +460,7 @@ export function createCloudAccountClient({ store, openBrowser, platform, deviceN
   /** A sign-in that may only be locked in the keychain is kept, never removed, and read again shortly. */
   async function restoreFailed(stamp, unreadable) {
     cleanupNeeded = true;
-    if (unreadable) {
+    if (unreadable && !store.preserveInvalid) {
       const removed = await store.write(null).then(() => true, () => false);
       if (!current(stamp)) return state();
       if (removed) { cleanupNeeded = false; failures = 0; return publish({ status: "signed-out", message: "restore-removed" }); }

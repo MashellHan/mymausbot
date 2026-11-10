@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import nativeText from "./native-text.cjs";
 import { accessToken, fixture, until } from "./fixtures/cloud-account.mjs";
-import { cancelSurvey, CHECKOUT_SOURCES, checkoutDestination, cloudMenuSublabel, createCloudAccountStore, cloudOrigin, cloudPlanSnapshot, CLOUD_ORIGIN } from "./cloud-account.mjs";
+import { cancelSurvey, CHECKOUT_SOURCES, checkoutDestination, cloudMenuSublabel, createCloudAccountClient, createCloudAccountStore, cloudOrigin, cloudPlanSnapshot, CLOUD_ORIGIN } from "./cloud-account.mjs";
+import { createPrivateCredentialStore, preparePrivateCredentialStorage } from "./private-credential-store.mjs";
 
 test("session-only Cloud account grants forget on a new App run without touching old encrypted bytes", async t => {
   const directory = await mkdtemp(join(tmpdir(), "omb-cloud-session-"));
@@ -26,6 +27,38 @@ test("session-only Cloud account grants forget on a new App run without touching
   assert.deepEqual(await readFile(file), oldBytes);
   assert.equal(encryptionCalls, 0);
   assert.equal(await createCloudAccountStore({ file, encryption, sessionOnly: true }).read(), null);
+});
+
+test("private Cloud sign-in survives a new client and explicit sign-out keeps old ciphertext", async t => {
+  const userData = await mkdtemp(join(tmpdir(), "omb-cloud-private-"));
+  t.after(() => rm(userData, { recursive: true, force: true }));
+  const old = Buffer.from("synthetic old Cloud ciphertext");
+  await writeFile(join(userData, "cloud-account.bin"), old);
+  const { directory } = preparePrivateCredentialStorage(userData);
+  const store = () => createPrivateCredentialStore(directory, "cloud-account.json");
+  const f = await fixture(t, { store: store() });
+  await f.connect();
+  assert.equal((await store().read()).token, accessToken);
+  const restarted = createCloudAccountClient({ origin: f.origin, fixture: true, deviceName: "Fixture computer", platform: "darwin",
+    appVersion: "0.1.fixture", now: () => f.now, store: store(), openBrowser: async () => {}, setTimer: () => 1, clearTimer: () => {} });
+  t.after(() => restarted.close());
+  assert.equal((await restarted.start()).status, "connected");
+  await restarted.signOut();
+  assert.equal(await store().read(), null);
+  assert.deepEqual(await readFile(join(userData, "cloud-account.bin")), old);
+});
+
+test("malformed private Cloud grant remains unavailable without an automatic destructive sign-out", async t => {
+  const userData = await mkdtemp(join(tmpdir(), "omb-cloud-private-invalid-"));
+  t.after(() => rm(userData, { recursive: true, force: true }));
+  const { directory } = preparePrivateCredentialStorage(userData);
+  const store = createPrivateCredentialStore(directory, "cloud-account.json");
+  await store.write({ token: accessToken });
+  const file = join(directory, "cloud-account.json"), before = await readFile(file);
+  const f = await fixture(t, { store });
+  assert.equal((await f.client.start()).status, "unavailable");
+  assert.deepEqual(await readFile(file), before);
+  assert.equal(f.requests.length, 0);
 });
 
 

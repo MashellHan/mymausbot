@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore, managedPortalOrigin, unreadableRecord } from "./managed-desktop.mjs";
+import { createPrivateCredentialStore, preparePrivateCredentialStorage } from "./private-credential-store.mjs";
 
 const origin = "https://company.example.test";
 const token = `omd_${"a".repeat(43)}`;
@@ -86,6 +87,37 @@ test("restores only the exact granted device and organisation", async t => {
   await f.client.start();
   assert.equal(f.client.state().status, "reauth-required");
   assert.deepEqual(f.applied, [null]);
+});
+
+test("private company grant restores with its policy after a new client, then disconnects without changing old ciphertext", async t => {
+  const userData = await fs.mkdtemp(path.join(os.tmpdir(), "omb-company-private-"));
+  t.after(() => fs.rm(userData, { recursive: true, force: true }));
+  const old = Buffer.from("synthetic old company ciphertext");
+  await fs.writeFile(path.join(userData, "company-connection.bin"), old);
+  const { directory } = preparePrivateCredentialStorage(userData);
+  const store = () => createPrivateCredentialStore(directory, "company-connection.json");
+  const saved = grant();
+  await store().write(saved);
+  const first = fixture(t, { saved, store: store() });
+  assert.equal((await first.client.start()).status, "connected");
+  const restarted = fixture(t, { saved, store: store() });
+  assert.equal((await restarted.client.start()).status, "connected");
+  await restarted.client.disconnect();
+  assert.equal(await store().read(), null);
+  assert.deepEqual(await fs.readFile(path.join(userData, "company-connection.bin")), old);
+});
+
+test("malformed private company grant stays unavailable and preserves the raw record", async t => {
+  const userData = await fs.mkdtemp(path.join(os.tmpdir(), "omb-company-private-invalid-"));
+  t.after(() => fs.rm(userData, { recursive: true, force: true }));
+  const { directory } = preparePrivateCredentialStorage(userData);
+  const store = createPrivateCredentialStore(directory, "company-connection.json");
+  await store.write({ token });
+  const file = path.join(directory, "company-connection.json"), before = await fs.readFile(file);
+  const f = fixture(t, { store });
+  assert.equal((await f.client.start()).status, "unavailable");
+  assert.deepEqual(await fs.readFile(file), before);
+  assert.equal(f.requests.length, 0);
 });
 test("disconnect removes only company access and revokes its own portal device", async t => {
   const f = fixture(t, { saved: grant() }); await f.client.start();

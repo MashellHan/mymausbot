@@ -20,4 +20,6 @@ test("the default mode keeps the existing persistent session", () => {
   const existing = { id: "default" };
   const selected = createAppBrowserSession({ defaultSession: existing, fromPartition: () => { throw new Error("unexpected"); } }, "system");
   assert.equal(selected(), existing);
+  const privateFile = createAppBrowserSession({ defaultSession: existing, fromPartition: () => { throw new Error("unexpected"); } }, "private-file");
+  assert.equal(privateFile(), existing);
 });

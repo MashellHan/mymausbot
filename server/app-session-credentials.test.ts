@@ -7,6 +7,7 @@ import { claudeAuthStatus } from "./drivers/claude-auth-status.ts";
 import { LOGINS_FILE, LOGINS_KEY_FILE, VaultStore as LoginStore } from "./vault-store.ts";
 import { McpOAuthStore } from "./mcp-oauth-store.ts";
 import { SecretVault } from "./secret-vault.ts";
+import { appLoginKeychainForbidden, appSessionCredentials } from "./app-session-credentials.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -21,6 +22,29 @@ function fixture() {
   vi.stubEnv("OMB_CREDENTIAL_MODE", "session");
   return root;
 }
+
+it("private file mode keeps server persistence available while refusing implicit Claude CLI auth probes", async () => {
+  const root = fixture();
+  vi.stubEnv("OMB_CREDENTIAL_MODE", "private-file");
+  expect(appSessionCredentials()).toBe(false);
+  expect(appLoginKeychainForbidden()).toBe(true);
+  const run = vi.fn();
+  const providerEnv = { ...process.env, OMB_DESKTOP_PARENT: "0", OMB_CREDENTIAL_MODE: "system" };
+  expect(appLoginKeychainForbidden(providerEnv)).toBe(true);
+  expect(await claudeAuthStatus("claude", providerEnv, run as never)).toEqual({});
+  expect(run).not.toHaveBeenCalled();
+  expect(appLoginKeychainForbidden({ OMB_DESKTOP_PARENT: "1", OMB_CREDENTIAL_MODE: "system" })).toBe(true);
+  const oauth = new McpOAuthStore(join(root, "mcp-oauth.json"));
+  oauth.put("docs", { url: "https://example.test/mcp", state: "signed-in", tokens: { access: "synthetic-private" } });
+  expect(new McpOAuthStore(join(root, "mcp-oauth.json")).get("docs", "https://example.test/mcp")?.tokens?.access).toBe("synthetic-private");
+  const logins = new LoginStore({ dataDir: root });
+  logins.create({ site: "example.test", hosts: ["example.test"], exactHost: false,
+    username: "synthetic", password: "synthetic-private", source: "settings", bots: "all" });
+  expect(new LoginStore({ dataDir: root }).list()).toHaveLength(1);
+  vi.stubEnv("OMB_DESKTOP_PARENT", "0");
+  vi.stubEnv("OMB_CREDENTIAL_MODE", "system");
+  expect(appLoginKeychainForbidden({ OMB_DESKTOP_PARENT: "1", OMB_CREDENTIAL_MODE: "private-file" })).toBe(true);
+});
 
 it("keeps pre-existing MCP OAuth and saved-login files untouched and refuses persistence-only saves", () => {
   const root = fixture();
