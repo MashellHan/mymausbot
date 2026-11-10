@@ -35,6 +35,12 @@ an empty-profile interaction, not only an already populated screenshot. Source
 rendering and actual packaged preload/startup evidence serve different checks;
 carry unchanged visual evidence instead of repeating its complete matrix.
 
+Canonicalize fixture directories with filesystem `realpath` before constructing
+sandbox rules; `/tmp` may name `/private/tmp` on macOS. Put sandbox canaries and
+startup inside the same cleanup boundary. If a collector parses Node test
+output, select `--test-reporter=tap` explicitly instead of assuming the default
+reporter. Record phase durations and retain failed attempts in the existing job.
+
 The guarded switch's read-only postflight uses these shared comparisons:
 
 ```text
@@ -61,6 +67,33 @@ an App mutation. Prepare rollback before an already authorized switch.
 Retain stage start/end, source and outcome in the existing job log. A stage
 failure resumes at the failed stage only if its inputs remain valid. Keep the
 original failure and the original request-to-delivery clock across corrections.
+
+A finite switch hold covers mutations and every new or recovery App launch.
+Check actual writer exclusion and expiry after any blocking probe, immediately
+before opening the intended binary. Once that launch succeeds inside the hold,
+read-only postflight does not require renewing its expiry. Keep actual writer
+and scheduler exclusion until the installer finishes preservation checks and
+explicitly becomes idle; the existing operator then restores the same job.
+Another write or launch still needs current admission. A readback failure does
+not authorize a restart, rollback or overwrite of newer user state.
+
+For a closed SQLite database, inspect an owned copy with its complete WAL,
+bound to unchanged source bytes before and after copying. Let SQLite create
+sidecars only in that copy. A read-only open of the closed original may fail
+when its WAL/SHM disappeared; `immutable=1` is not a substitute for reading
+pending WAL data. Never assume another database's WAL is empty. After launch,
+browser caches may change: check their safe paths, ownership and permissions
+once, while retaining exact static credential and prelaunch checks. Do not
+compare two mutable snapshots taken across an unrelated bundle hash.
+
+Run the signed package check in a disposable profile with
+`pnpm verify:private-file-credentials --app <absolute-signed-app> --evidence <absolute-private-evidence-dir>`.
+It records one attempt per run and the elapsed time since the first attempt.
+For a closed data copy, use `pnpm check:delivery closed-sqlite <canonical-source-dir> <canonical-owned-copy-dir>`;
+`pnpm check:delivery private-storage <canonical-temp-fixture-root> postlaunch`
+checks the private root without comparing changing browser content. That command
+accepts only canonical, owner-only `omb-private-file-e2e-*` temporary roots;
+it does not inspect an installed live profile.
 
 ## Resume an existing package
 
