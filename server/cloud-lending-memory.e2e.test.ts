@@ -130,9 +130,11 @@ async function stopRunningTurns(
       }
       return (await running()).length;
     }, { timeout: 10_000 }).toBe(0);
-  } finally {
+  } catch (error) {
     if (stopFailure) throw stopFailure.error;
+    throw error;
   }
+  if (stopFailure) throw stopFailure.error;
 }
 /** After a restart, wait for the lent Mac's connector, so what a turn is offered is never just the Mac being offline. */
 async function macOnline() {
