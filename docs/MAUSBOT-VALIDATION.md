@@ -3,7 +3,7 @@
 An ordinary PR targets five minutes from run creation, including queue and
 setup time. A rerun is measured from its current attempt start; the original
 run's age remains diagnostic. Timing, queue age, handoff and follow-up deadlines
-are advisory scan criteria. Missing a target creates an optimization case; it
+are advisory scan criteria. Missing a target records an optimization observation; it
 does not fail a quality gate, close a PR, cancel delivery or invalidate a pass. Local feedback and App
 delivery are measured separately; this is not a test-count reduction quota.
 `MAUSBOT_CI_MODE=shadow` and unadmitted areas remain available for the broader
@@ -168,6 +168,16 @@ due dates are optimization targets. GitHub's update timestamp is an inactivity
 indicator; Lead inspects substantive progress rather than treating comments,
 labels or empty commits as progress. Local edit/ready receipts already record
 over-budget work without failing successful checks.
+
+QA triage and repair deadlines stay in the scan report and the original QA
+issue's hourly Lead handoff; they never create separate process issues.
+Their observation identity is the rule and original issue number, independent
+of renewed deadlines or failure epochs. Historical deadline reminders are
+excluded from process handoffs. Lead updates the original issue's blocker,
+owner and next action. A demonstrated shared pipeline or fixture defect gets
+one improvement record with its affected issues, not one reminder per issue,
+file or missed deadline. Consolidating reminders does not resolve the original
+QA defects or change their quality holds.
 
 Lead records the blocker, current owner and next useful action, then assigns
 pipeline or fixture improvements to an existing member during available

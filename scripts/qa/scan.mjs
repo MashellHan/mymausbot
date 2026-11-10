@@ -7,6 +7,7 @@ import { sanitize, signature } from "./report.mjs";
 
 export const FAST_PR_TARGET_MS = 5 * 60_000;
 const HOUR_MS = 60 * 60_000;
+const QA_DEADLINE_RULES = new Set(["qa-triage", "qa-repair"]);
 
 function finding(rule, subject, text) {
   return { key: signature(`${rule}:${subject}`, "process"), rule, subject, text };
@@ -23,8 +24,8 @@ export function queueCases(issues, prs, now = Date.now()) {
     if (issueLabels(issue).includes("qa:verified")) continue;
     const epoch = issue.body?.match(/"triageEpoch":"([^"]+)"/)?.[1] ?? issue.created_at;
     const triage = triageOf(issue);
-    if (!triage.complete && now - Date.parse(epoch) > 30 * 60_000) findings.push(finding("qa-triage", `issue:${issue.number}:${epoch}`, `QA #${issue.number} has incomplete triage after 30 minutes. Lead must assign priority, scope, owner and next action; this deadline adds no merge hold.`));
-    else if (triage.complete && Date.parse(triage.due) < now) findings.push(finding("qa-repair", `issue:${issue.number}:${triage.due}`, `QA #${issue.number} is past ${triage.due}, owned by ${triage.owner}. Record the blocker and revised action; a due date adds no merge hold.`));
+    if (!triage.complete && now - Date.parse(epoch) > 30 * 60_000) findings.push(finding("qa-triage", `issue:${issue.number}`, `QA #${issue.number} has incomplete triage after 30 minutes, since ${epoch}. Lead must assign priority, scope, owner and next action on the original issue; this deadline adds no merge hold.`));
+    else if (triage.complete && Date.parse(triage.due) < now) findings.push(finding("qa-repair", `issue:${issue.number}`, `QA #${issue.number} is past ${triage.due}, owned by ${triage.owner}. Record the blocker and revised action on the original issue; a due date adds no merge hold.`));
   }
   return findings;
 }
@@ -46,6 +47,7 @@ export function ciCase(run, jobs, fast, now = Date.now()) {
 export async function recordCases(findings, { api = github, now = Date.now() } = {}) {
   const issues = (await pages("/issues?state=all&labels=qa:process", null, api)).filter((issue) => !issue.pull_request);
   for (const item of findings) {
+    if (QA_DEADLINE_RULES.has(item.rule)) continue;
     const marker = `<!-- mausbot-process-case ${item.key} -->`;
     const existing = issues.find((issue) => issue.body?.includes(marker));
     if (existing) continue;
@@ -53,7 +55,8 @@ export async function recordCases(findings, { api = github, now = Date.now() } =
     const created = await api("/issues", { method: "POST", body: { title: `[Process] ${item.rule}: ${item.subject}`, body, labels: ["qa:process"] } });
     issues.push(created);
   }
-  return issues.filter((issue) => issue.state === "open").map((issue) => ({
+  return issues.filter((issue) => issue.state === "open"
+    && !QA_DEADLINE_RULES.has(issue.body?.match(/^Process-Rule: (\S+)\s*$/m)?.[1])).map((issue) => ({
     key: `process:${issue.body?.match(/<!-- mausbot-process-case ([a-f\d]+) -->/)?.[1] ?? issue.number}`,
     text: `${issue.html_url}: ${sanitize(issue.title)}. Lead: assign process improvements at available capacity and preserve any pending PR's recovery/adoption path.`,
   }));
@@ -116,7 +119,8 @@ export async function scanProcesses(state = {}, { api = github, now = Date.now()
     errors.push({ stage: "closed-pr-audit", message: sanitize(error.message) });
   }
   const handoffs = publish ? await recordCases(findings, { api, now }) : [];
-  const unresolved = publish ? findings.some((item) => handoffs.some((handoff) => handoff.key === `process:${item.key}`)) : findings.length > 0;
+  const unresolved = publish ? findings.some((item) => QA_DEADLINE_RULES.has(item.rule)
+    || handoffs.some((handoff) => handoff.key === `process:${item.key}`)) : findings.length > 0;
   state.completedRuns = Object.fromEntries(Object.entries({ ...state.completedRuns, ...completed }).filter(([, at]) => now - at < 7 * 24 * HOUR_MS));
   state.closedPrs = Object.fromEntries(Object.entries({ ...state.closedPrs, ...closures?.checked }).filter(([, at]) => now - at < 7 * 24 * HOUR_MS));
   return { at: new Date(now).toISOString(), outcome: errors.length ? "incomplete" : unresolved ? "optimization_needed" : "passed", findings, errors, handoffs };
