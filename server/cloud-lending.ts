@@ -11,7 +11,7 @@ import type { WorkOrigin } from "./peer-provenance.ts";
 import type { RoutineRunTrigger } from "./routines.ts";
 
 type Card = { requestId?: string; answered?: string; answeredText?: string; dismissed?: boolean; autoApplied?: boolean; answeredBy?: { kind: string; person?: string } };
-type Line = { id: string; role: string; peerAsk?: unknown; sender?: { id?: string }; card?: Card };
+type Line = { id: string; role: string; peerAsk?: unknown; sender?: { id?: string }; card?: Card; aside?: boolean; steered?: boolean; via?: string; relayed?: boolean };
 
 export interface CloudLendingTurn {
   request: { messageId?: string; generations: ReadonlySet<string>; stopped?: boolean; automation?: RoutineRunTrigger; origin?: WorkOrigin } | undefined;
@@ -119,8 +119,11 @@ function judgeCloudTurn(turn: CloudLendingTurn, handOffsCount: boolean): CloudLe
   // A conversation someone else opened (and named) is theirs, whoever writes in it.
   if (turn.starters?.some((person) => person !== undefined && !turn.ownerPerson(person))) return "someone-else";
   if ((turn.botOpened && !(handOffsCount && turn.openedForOwner)) || turn.reportsFromOthers) return "someone-else";
-  // No line (sent, queued, steered or handed in) and no card answer by anyone else, ever; a routine's own prompt names nobody.
-  const clean = ownerOnlyConversation(turn.thread, turn.ownerPerson, turn.cardAnswerer,
+  // Only a recorded owner handoff can disregard its server-steered peer followup for the lent computer.
+  const trustedFollowup = handOffsCount && handed && turn.openedForOwner;
+  const thread = trustedFollowup ? turn.thread.filter((line) => !(line.role === "user" && line.aside === true && line.steered === true
+    && line.peerAsk && !line.sender && !line.card && !line.via && !line.relayed)) : turn.thread;
+  const clean = ownerOnlyConversation(thread, turn.ownerPerson, turn.cardAnswerer,
     request.automation !== undefined ? request.messageId : undefined);
   return clean ? null : "someone-else";
 }

@@ -152,6 +152,20 @@ describe("work handed on inherits the lent computer only from an owner-started r
   it("a line a bot delivered is never vouched for, even in work that keeps the computer", () => {
     expect(cloudHomeLendingRefusal(handed({ thread: [said("m1", undefined, { peerAsk: { botId: "b2", forOwner: true } })] }))).toBe("someone-else");
   });
+  it("keeps only server-steered followups in a verified owner handoff eligible for the lent computer", () => {
+    const addition = said("m2", undefined, { peerAsk: { botId: "b2", name: "Teammate" }, aside: true, steered: true });
+    const trusted = handed({ botOpened: true, openedForOwner: true, thread: [reply("brief"), addition] });
+    expect(cloudHomeLendingRefusal(trusted)).toBeNull();
+    expect(cloudHomeOwnTurnRefusal(trusted)).toBe("unproven");
+    expect(cloudHomeOwnTurnRefusal(turn({ thread: [said("m1", OWNER), addition] }))).toBe("someone-else");
+    expect(cloudHomeLendingRefusal(handed({ botOpened: true, thread: [reply("brief"), addition] }))).toBe("someone-else");
+    expect(cloudHomeLendingRefusal(handed({ botOpened: true, openedForOwner: true,
+      thread: [reply("brief"), said("m2", undefined, { peerAsk: { botId: "b2" }, steered: true })] }))).toBe("someone-else");
+    expect(cloudHomeLendingRefusal(handed({ botOpened: true, openedForOwner: true,
+      thread: [reply("brief"), said("m2", GUEST, { peerAsk: { botId: "b2" }, aside: true, steered: true })] }))).toBe("someone-else");
+    expect(cloudHomeLendingRefusal(handed({ botOpened: true, openedForOwner: true,
+      thread: [reply("brief"), said("m2", undefined, { peerAsk: { botId: "b2" }, aside: true, steered: true, via: "api" })] }))).toBe("someone-else");
+  });
   it("counts for the lent computer alone: writing memory, phones and going unwatched take the owner's own conversation", () => {
     expect(cloudHomeOwnTurnRefusal(handed())).toBe("unproven");
     // Even the owner's own line, in a thread a hand-off opened.
