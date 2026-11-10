@@ -105,8 +105,57 @@ describe("the organization library in the real renderer", () => {
     await evidence("org-library-preview.png");
     await click("Back to templates");
 
-    await click("Add Sales desk");
-    await expect.poll(snapshot, { timeout: 20_000 }).toContain('button "Sales desk"');
+    await expect.poll(snapshot, { timeout: 10_000 }).toContain('button "Add Sales desk"');
+    const beforeAddRead = await ui("snapshot");
+    const beforeAdd = beforeAddRead.snapshot as string;
+    expect(beforeAdd).toContain('dialog "Templates"');
+    expect(beforeAdd).not.toContain('button "Back to templates"');
+    await ui("eval", "--js", `(() => {
+      const original = window.fetch.bind(window);
+      window.__orgLibraryAdd = null;
+      window.fetch = async (...args) => {
+        const url = typeof args[0] === 'string' ? args[0] : args[0].url;
+        if (new URL(url, location.href).pathname !== '/api/org-library/add') return original(...args);
+        try {
+          const response = await original(...args);
+          const result = { status: response.status, body: 'pending' };
+          window.__orgLibraryAdd = result;
+          const timer = setTimeout(() => { result.body = 'timeout'; }, 2_000);
+          void response.clone().json().then((body) => {
+            if (result.body !== 'pending') return;
+            clearTimeout(timer);
+            Object.assign(result, { body: 'ready', code: body.code ?? null, installId: body.installId ?? null,
+              section: body.section ?? null, botIds: body.bots?.map((bot) => bot.id) ?? null, botCount: body.bots?.length ?? null });
+          }, () => { clearTimeout(timer); result.body = 'unavailable'; });
+          return response;
+        } catch (error) {
+          window.__orgLibraryAdd = { error: String(error) };
+          throw error;
+        }
+      };
+      return true;
+    })()`);
+    let addClick: Record<string, unknown> | null = null;
+    let afterAdd = "";
+    try {
+      addClick = await click("Add Sales desk");
+      await expect.poll(async () => (afterAdd = await snapshot()), { timeout: 20_000 }).toContain('button "Sales desk"');
+    } catch (error) {
+      const page = Promise.race([
+        ui("eval", "--js", "({ href: location.href, dialog: document.querySelector('[role=dialog]')?.getAttribute('aria-labelledby') ?? null, addButton: [...document.querySelectorAll('button')].some(button => button.getAttribute('aria-label') === 'Add Sales desk'), add: window.__orgLibraryAdd ?? null })").catch(() => null),
+        new Promise<null>((resolve) => { const timer = setTimeout(() => resolve(null), 2_000); timer.unref?.(); }),
+      ]);
+      const [pageResult, listing, imported] = await Promise.allSettled([
+        page,
+        request("/api/org-library", { signal: AbortSignal.timeout(2_000) }, info.url).then((value) => value.packages.map((entry: { name: string; installed: unknown }) => ({ name: entry.name, installed: Boolean(entry.installed) }))),
+        request("/api/bots", { signal: AbortSignal.timeout(2_000) }, info.url).then((value) => value.bots.filter((bot: { section?: string }) => bot.section === "Sales desk").map((bot: { id: string }) => bot.id)),
+      ]);
+      const lines = (text: string) => text.split("\n").filter((line) => /dialog "Templates"|button "Back to templates"|button "Add Sales desk"|button "Sales desk"|alert/.test(line));
+      console.error("Organization library Add phase:", JSON.stringify({ beforeOrigin: beforeAddRead.origin, before: lines(beforeAdd), click: addClick && { target: addClick.target, clicked: addClick.clicked },
+        after: lines(afterAdd), page: pageResult.status === "fulfilled" ? pageResult.value?.result ?? null : null,
+        packages: listing.status === "fulfilled" ? listing.value : null, botIds: imported.status === "fulfilled" ? imported.value : null }));
+      throw error;
+    }
     const bots = (await api("/api/bots")).bots.filter((bot: { section?: string }) => bot.section === "Sales desk");
     expect(bots).toHaveLength(3);
     for (const bot of bots) {
