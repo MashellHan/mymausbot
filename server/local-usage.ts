@@ -1,6 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type {
   LocalUsageCategory, LocalUsageCoverage, LocalUsagePrSourceCoverage, LocalUsageResponse,
@@ -10,6 +10,7 @@ import type {
 import { redactSecretsInText } from "../shared/redact.ts";
 import { createLocalUsageMergedReader } from "./local-usage-merged.ts";
 import { createLocalUsageGithubReader } from "./local-usage-github.ts";
+import { createLocalContributionsReader } from "./local-usage-contributions.ts";
 import { MAX_USAGE_HISTORY_DAYS } from "../shared/local-usage-range.ts";
 
 const CATEGORIES: LocalUsageCategory[] = ["work", "personal", "unclassified"];
@@ -17,6 +18,8 @@ const WINDOWS = [1, 7, 30] as const;
 const DAY_MS = 86_400_000;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const STALE_AFTER_MS = 15 * 60 * 1000;
+const DEFAULT_LOCAL_FILE = join(homedir(), ".local", "share", "agent-town", "activity", "latest.json");
+const DEFAULT_CONTRIBUTIONS_FILE = join(homedir(), ".local", "share", "mymausbot", "usage", "contributions-v2.json");
 const CHINA_DATE = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
 
 interface DailyCategory {
@@ -493,14 +496,17 @@ function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[]
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
   sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
 
-export function createLocalUsageProvider({ file = join(homedir(), ".local", "share", "agent-town", "activity", "latest.json"),
+export function createLocalUsageProvider({ file = DEFAULT_LOCAL_FILE,
   mergedFile = join(homedir(), ".local", "share", "mymausbot", "usage", "merged-v1.json"),
-  githubFile = join(homedir(), ".local", "share", "mymausbot", "usage", "github-profile-v1.json"), now = Date.now }: {
-  file?: string; mergedFile?: string; githubFile?: string; now?: () => number;
+  githubFile = join(homedir(), ".local", "share", "mymausbot", "usage", "github-profile-v1.json"),
+  contributionsFile, now = Date.now }: {
+  file?: string; mergedFile?: string; githubFile?: string; contributionsFile?: string; now?: () => number;
 } = {}) {
   let lastGood: LocalUsageResponse | null = null;
   const readMerged = createLocalUsageMergedReader(mergedFile, now);
   const readGithub = createLocalUsageGithubReader(githubFile, now);
+  const readContributions = createLocalContributionsReader(contributionsFile ??
+    (file === DEFAULT_LOCAL_FILE ? DEFAULT_CONTRIBUTIONS_FILE : join(dirname(file), "contributions-v2.json")), now);
   return {
     async get(): Promise<LocalUsageResponse> {
       let local: LocalUsageResponse;
@@ -516,7 +522,8 @@ export function createLocalUsageProvider({ file = join(homedir(), ".local", "sha
       }
       const merged = await readMerged();
       const github = await readGithub();
-      return { ...local, ...(merged ? { merged } : {}), ...(github ? { github } : {}) };
+      const contributions = await readContributions();
+      return { ...local, ...(merged ? { merged } : {}), ...(github ? { github } : {}), contributions };
     },
   };
 }

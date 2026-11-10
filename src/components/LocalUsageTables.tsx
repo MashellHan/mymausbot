@@ -24,7 +24,7 @@ export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
           <th scope="col" className="sticky left-0 z-10 bg-inset px-3 py-2 text-left font-medium">{t("computer.usage.day")}</th>
           {usageMetrics.map((metric) => <th key={metric} title={usageMetricHint(metric)} scope="col" className="px-3 py-2 text-right font-medium">{t(`computer.usage.metric.${metric}`)}</th>)}
           <th scope="col" className="px-3 py-2 text-right font-medium">{t("computer.usage.changeHeading")}</th>
-          <th scope="col" className="px-3 py-2 text-left font-medium">{t("computer.usage.repositories")}</th>
+          <th scope="col" className="px-3 py-2 text-left font-medium">{t("computer.usage.primaryRepositories")}</th>
         </tr></thead>
         <tbody className="text-ink">
           {days.slice().reverse().map((day) => <tr key={day.day} className="border-t border-hairline/40">
@@ -39,7 +39,7 @@ export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
             <td className="px-3 py-2 align-top">
               {!day.repositories || day.repositories.coverage === "unavailable" ? <span className="text-ink-secondary">{t("computer.usage.repositoriesUnavailable")}</span>
                 : <details data-usage-day-repositories>
-                  <summary className="min-h-11 cursor-pointer rounded outline-none focus-visible:ring-2 focus-visible:ring-accent/60">{t("computer.usage.repositories")}</summary>
+                  <summary className="min-h-11 cursor-pointer rounded outline-none focus-visible:ring-2 focus-visible:ring-accent/60">{t("computer.usage.primaryRepositories")}</summary>
                   {day.repositories.coverage === "partial" && <p className="text-ink-secondary">{t("computer.usage.repositoriesPartial")}</p>}
                   <ul className="mt-1 space-y-2">
                     {day.repositories.rows.map(row => <li key={row.id} className="[overflow-wrap:anywhere]">
@@ -73,7 +73,7 @@ export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "
   return <section className="mt-6" aria-labelledby={`${id}-heading`}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <h3 id={`${id}-heading`} className="text-[16px] font-semibold text-ink">{t("computer.usage.repositories")}</h3>
+        <h3 id={`${id}-heading`} className="text-[16px] font-semibold text-ink">{t("computer.usage.primaryRepositories")}</h3>
         <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay} – {window.endDay}</span>
         {repositories.coverage === "partial" && <InfoHint label={t("computer.usage.coverage.partial")} warning>{t("computer.usage.repositoriesPartial")}</InfoHint>}
       </div>
@@ -94,7 +94,7 @@ export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "
     </div>
     <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-tab-${period}`} tabIndex={0} className="mt-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
       {repositories.coverage === "unavailable" ? <p className="text-[14px] text-ink-secondary">{t("computer.usage.repositoriesUnavailable")}</p> : <>
-        <div className={tableRegion} role="region" aria-label={t("computer.usage.repositories")} tabIndex={0}>
+        <div className={tableRegion} role="region" aria-label={t("computer.usage.primaryRepositories")} tabIndex={0}>
           <table className="w-full min-w-[560px] table-fixed text-[13px] tabular-nums" data-usage-repositories>
             <colgroup><col className="w-[43%]" /><col className="w-[17%]" /><col className="w-[22%]" /><col className="w-[18%]" /></colgroup>
             <thead className="bg-inset text-ink-secondary"><tr>

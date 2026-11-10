@@ -52,6 +52,17 @@ files:
 asar: true
 
 extraResources:
+  - from: scripts
+    to: usage-helpers
+    filter:
+      - refresh-local-usage.py
+      - local_usage_contributions.py
+      - local_usage_profile.py
+      - local_usage_profile_private.py
+      - local_usage_ado.py
+      - local_usage_merged.py
+      - local_usage_github.py
+      - migrate-local-contributions.py
   # Ship the app's own license terms in every desktop distribution.
   - from: LICENSE
     to: licenses/OpenMausBot-LICENSE.txt

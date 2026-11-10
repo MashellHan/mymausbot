@@ -9,21 +9,37 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
 
 ## Usage definitions
 
+- The main Activities surface always displays **Contributions** (`contributions-v2`). GitHub
+  PRs and commits retain GitHub Profile dates; ADO PRs use UTC creation dates and
+  default-head commits use UTC author dates. A source day can be complete through
+  its cutoff while the calendar day is still open. Tokens retain their own
+  China-day basis and capture time.
+- The canonical 60-day snapshot atomically replaces verified GitHub and ADO
+  envelopes. Cards, charts, categories, repositories and account details use
+  that one version. A missing account, date, pagination, visibility or attribution
+  leaves exact totals unknown; known typed subtotals stay separate. The older
+  90-day and six-month dates remain unavailable until this definition has real
+  observations for them. If the contribution cache is missing, PRs, commits and
+  repositories remain unknown while independently available Tokens use their
+  China-day dates. The old readers below remain explicit API diagnostics.
+
+### Legacy diagnostic definitions
+
 - The 1, 7 and 30 day windows include the capture date through the displayed
   timestamp in Asia/Shanghai. The trend uses the same 30 dates. Window changes
   compare the previous non-overlapping period; daily changes compare the same
   China-calendar date one week earlier. The capture day is still in progress.
-- The source selector defaults to **Repository activity** (`repository-observations-v1`)
-  and preserves all configured work, enterprise, ADO and personal repository
+- The legacy **Repository activity** reader (`repository-observations-v1`)
+  preserves all configured work, enterprise, ADO and personal repository
   observations, categories and same-definition comparisons. Created PR observations
   come from the configured GitHub/ADO collectors; repository commits are non-merge
   local Git observations across branches matched to configured author emails.
   Neither is relabeled as Profile-qualified activity. Missing devices, unreadable
   repositories and insufficient history remain incomplete; verified previous zero
   yields New (or zero when both periods are zero), never a fabricated percentage.
-- Selecting **GitHub Profile references** uses only `github-profile-v1`. Both
-  sources retain the 30/60/90-day and six-calendar-month controls, dated joins and
-  daily details. Changing source never adds or substitutes one metric into another.
+- The legacy **GitHub Profile references** reader uses only `github-profile-v1`.
+  It retains dated observations as a separate diagnostic contract. No legacy
+  source adds to or substitutes for the main contribution metric.
 - PR references come from the authenticated account's typed GitHub contribution
   connection, with both excludeFirst and excludePopular false. They count creations
   by PR createdAt in Asia/Shanghai, not merges. Repositories currently marked isFork
@@ -67,16 +83,16 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
   cannot be sliced to a historical instant. Older snapshots lacking query totals
   keep those fields unknown. Complete empty visible observations remain distinct from missing data;
   missing source dates are not filled with zero. Classification uses existing rules.
-- GitHub and Azure DevOps are separate sources. ADO alignment remains follow-up;
-  legacy merged ADO counts are not added as evidence of GitHub Profile parity.
+- The legacy Profile reference does not include the new ADO equivalent. Legacy
+  merged ADO counts are not added to Profile parity claims.
 - Tokens remain local, including cache reads. Their existing synced-device
   comparison scope is preserved. Remote and token captures have independent
   timestamps; open the information icon beside Usage to inspect both. If capture dates
   differ, tokens are joined by calendar date to the displayed remote windows.
   Missing token dates stay unavailable, and an unavailable comparison stays null.
-  Missing Profile data never falls back to repository observations within the
-  Profile view. Repository activity remains independently available when Profile
-  data is absent or partial.
+  Missing primary contributions never fall back to repository observations in
+  the main cards, chart or repository rows. Legacy observations remain available
+  to read separately for diagnosis.
 - The refresh wrapper records independent per-machine Token completeness. A
   partial machine whose only failures are Git fetches can compare complete
   observed Token periods; Git coverage stays partial. Unknown, log-read,
@@ -86,13 +102,19 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
   in titles and screen-reader descriptions; the 30-day change compares consecutive rolling
   periods, not calendar months. Missing baseline history has an explicit hint.
 
-The existing wrapper `scripts/refresh-local-usage.py` retains its local Token and
-legacy merged-source behavior. Deploy it with both adjacent modules,
-`local_usage_merged.py` and `local_usage_github.py`. The new private sidecar is
+The wrapper `scripts/refresh-local-usage.py` retains local Token collection and
+legacy diagnostics. After formal migration sets
+`primaryContributionSource: "contributions-v2"`, it runs GitHub and ADO source
+collectors concurrently with the independent local collector. One persistent
+writer lock and a 285-second whole-cycle bound protect the existing 300-second
+job. Both validated envelopes atomically replace one private
+`contributions-v2.json` generation; a failed provider retains the previous
+generation as stale. Local checkout failure does not suppress qualified remote
+metrics. No second scheduler is created. The old private sidecar is
 `~/.local/share/mymausbot/usage/github-profile-v1.json` (0600, atomic replace,
 independent OS file lock released on process exit). The persistent `.lock` file
 must not be unlinked while writers may run; an old directory lock requires
-verified owner exit before manual removal. Collection is **opt-in** with the existing private
+verified owner exit before manual removal. Legacy v1 collection is **opt-in** with the existing private
 configuration field `githubContributionSource: "github-profile-v1"`; --skip-api
 never collects it. Enabling this field is a separate data-admission operation,
 not part of source installation. No scheduler is added or enabled by the App.
@@ -119,8 +141,8 @@ The existing Agent Town latest.json, legacy merged-v1.json, public whitelist and
 nightly report keep their old definitions for compatibility. The new private
 source is not published to them. Credentials are never stored. API/read failures
 retain a last observed stream as stale, without shifting its dates. Installation,
-actual UI readback, independent daily reconciliation and the bounded seven-day
-production repair are separate acceptance steps. Single-writer admission must
+actual UI readback, independent daily reconciliation and formal 60-day
+production migration are separate acceptance steps. Single-writer admission must
 cover every refresh caller, including any enabled nightly publication task.
 
 Official definitions are pinned to github/docs commit
@@ -151,10 +173,10 @@ rewritten. The macOS authentication broker is disabled for this client.
 The collector path points to the existing Agent Town `activity-monitor.py`.
 Its source, overlap lock, identity checks, date filters, aggregation and private
 output files retain their existing behavior. Its Azure CLI REST calls and the merged-PR adapter use the same in-memory
-client. GitHub collection uses the existing account-pinned helper.
+  client. GitHub collection uses the existing account-pinned helper.
 The client supports existing AzureCloud user accounts whose identity matches
 the configured author emails. It accepts only HTTPS Azure DevOps identity and
-PR GET endpoints and refuses redirects carrying authentication. An unavailable
+PR, repository, branch-reference and pinned-commit GET endpoints and refuses redirects carrying authentication. An unavailable
 login leaves the corresponding source stale through the collector's normal
 failure handling; it does not open a login prompt or fall back to the CLI.
 
@@ -208,10 +230,11 @@ polls without overlap only while open and visible, and clears on 401/403.
 ## Isolated verification
 
 Activities shares a 30/60/90-day or six-month range across its three trends.
-The default 30-day projection and the 1/7/30-day cards, comparisons and repository
-tables retain their existing scope. Longer trends use one extended projection
-for the entire range, including dates also present in the default trend.
-Days in different source captures are joined by their actual China-calendar date.
+The primary 1/7/30-day cards, comparisons and repository tables use only the
+versioned GitHub Profile and ADO sources. Longer ranges expose unavailable
+source days rather than substituting legacy observations. Token dates are joined
+by their printed China date; GitHub Profile and ADO dates retain their separate
+source-day definitions.
 
 Six months means the interval after the clamped same date six calendar months
 earlier, through the data date, inclusive. For 2026-11-09 this is 2026-05-10 through
@@ -259,11 +282,12 @@ Use their printed URLs, never a live app URL. Check `width=360`, `400` and `960`
 `skin=midnight` and `atelier`, and `locale=en` and `zh`. Verify three stacked
 trends, initially collapsed daily details, all three WoW values, and keyboard
 navigation of repository period tabs. Check unavailable, stale and zero states.
-Use `scenario=remote-only` to verify Profile references without local logs and
-`scenario=legacy-only` to verify repository activity remains available without
-being relabeled as Profile contributions. Switch sources at 60/90 days and six
-calendar months; check missing/partial/true-zero states and same-source comparisons.
-Check the separate account query totals and their requested-span/cutoff limits. Faint full-height Monday separators mark each week.
+Use `scenario=ready` to verify the primary 60-day source, account details and
+the independent Token join. `scenario=remote-only` and `scenario=legacy-only`
+confirm that old observations cannot fill missing primary cards or trends.
+Change the trend range at 60/90 days and six calendar months; check unknown,
+partial and true-zero states and same-definition comparisons. Faint full-height
+Monday separators mark each week.
 In both locales at 360px, expand the daily table and scroll fully right. Each
 WoW metric name and value must remain visible beside the fixed date column.
 
@@ -309,8 +333,9 @@ snapshot. Missing per-day detail stays unavailable/partial; it is not reconstruc
 from category totals. Legacy snapshots without detail remain readable. The 1/7/30
 cards, comparisons and repository windows keep their definitions.
 
-The activity source selector keeps three independent definitions: local repository
-observations, remote PR records with their associated commits, and Profile references.
+The main Activities surface has one source-qualified definition. Legacy local
+repository observations, remote PR records and old Profile references remain
+independent API diagnostics and cannot fill a missing primary day.
 Remote history retains configured GitHub/enterprise/ADO repository identities;
 its PR-associated commit counts are neither all repository Git commits nor Profile
 commit contributions. Dates and source identities must match before reconciliation.
@@ -323,7 +348,8 @@ repository does not establish that its commits/PRs appear in those connections;
 untyped restricted contributions cannot supply either metric. Direct default-branch
 repository evidence must be reconciled separately by author identity, qualification,
 dates and sampling time, not silently added to Profile day buckets. The bounded
-[repair recipe](local-usage-github-repair.md) supports an explicitly admitted 60-day
-capture while keeping seven-day defaults, source pins, OS lock and recovery semantics.
+[legacy repair recipe](local-usage-github-repair.md) describes the old v1
+seven-day default and explicitly admitted 60-day captures. It does not configure
+or validate the new primary collector.
 Source changes alone neither capture nor admit production data. Actual-reader and
 rendered UI acceptance require their own recorded evidence.
