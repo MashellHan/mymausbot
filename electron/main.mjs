@@ -80,7 +80,7 @@ import {
 } from "./desktop-companion-client.mjs";
 import { isKnownSkin, skinChrome } from "./skin-overlay.cjs";
 import { installCredentialStoreIpc, readSecureCredentials } from "./secure-credentials.mjs";
-import { createPrivateCredentialStore, preparePrivateCredentialStorage } from "./private-credential-store.mjs";
+import { configureDesktopCredentialMode } from "./private-credential-store.mjs";
 import { createControlPlaneClient } from "./control-plane-client.mjs";
 import {
   companionAccountCleanupPending,
@@ -102,7 +102,7 @@ import { CHECKOUT_SOURCES, cloudMenuSublabel, cloudTarget, createCloudAccountCli
 import { installCloudPlanIpc } from "./cloud-plan-ipc.mjs";
 import { cloudLinkOpensSheet, colorDotIcons, createCloudLook, createCloudReadyNotice, installCloudBuy, lookFile } from "./cloud-buy.mjs";
 import { createTrialNotices } from "./cloud-trial-notice.mjs";
-import { createDesktopPrefs, createDesktopText, DESKTOP_PORTS, jsonFile, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
+import { createDesktopText, DESKTOP_PORTS, jsonFile, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
 import { createDesktopIncludedX } from "./included-x.mjs"; import { createDesktopIncludedPages } from "./included-pages.mjs";
 import { cloudPageSenderAllowed, cloudPlanDisk, cloudUnreachableText, createCloudPowerGate, isCloudHomeEntry, myCloudOrigin, rememberedCloudHome, savedCloudHomeOrigin, signInCloudSession, withCloudHome } from "./cloud-home.mjs";
 import { installCloudFiles } from "./cloud-sync-main.mjs";
@@ -368,24 +368,9 @@ let desktopRemoteAccess = null;
 let desktopCompanionRelay = null;
 
 const CREDENTIALS_FILE = path.join(app.getPath("userData"), "credentials.bin");
-const CREDENTIAL_MODE = createDesktopPrefs(jsonFile(path.join(app.getPath("userData"), "desktop-prefs.json"))).credentialMode();
-const PRIVATE_CREDENTIAL_ANCHOR = path.join(app.getPath("userData"), "private-credentials.ready");
-if (CREDENTIAL_MODE === "system") {
-  for (const target of [PRIVATE_CREDENTIAL_ANCHOR, path.join(app.getPath("userData"), "private-credentials")]) {
-    try { fs.lstatSync(target); throw new Error("Private credential mode must be selected before this App opens"); }
-    catch (error) { if (error?.code !== "ENOENT") throw error; }
-  }
-}
+const { mode: CREDENTIAL_MODE, privateStore: privateCredentialStore, workspaceStore: privateWorkspaceCredentials } = configureDesktopCredentialMode(app, fs, process);
 const SESSION_CREDENTIALS = CREDENTIAL_MODE === "session";
 const PRIVATE_FILE_CREDENTIALS = CREDENTIAL_MODE === "private-file";
-let privateCredentialPaths = null;
-if (PRIVATE_FILE_CREDENTIALS) {
-  process.umask(0o077);
-  privateCredentialPaths = preparePrivateCredentialStorage(app.getPath("userData"));
-  app.setPath("sessionData", privateCredentialPaths.browserSessionData);
-}
-const privateCredentialStore = name => createPrivateCredentialStore(privateCredentialPaths.directory, name);
-const privateWorkspaceCredentials = PRIVATE_FILE_CREDENTIALS ? privateCredentialStore("credentials.json") : null;
 const browserSession = createAppBrowserSession(session, CREDENTIAL_MODE);
 const sessionConfigMemory = SESSION_CREDENTIALS ? createSessionConfigMemory() : null;
 

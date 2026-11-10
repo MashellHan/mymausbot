@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { createDesktopPrefs, jsonFile } from "./desktop-prefs.mjs";
 
 const MAX_BYTES = 1024 * 1024;
 const MARK = "openmausbot-private-credentials-v1\n";
@@ -78,6 +79,25 @@ export function preparePrivateCredentialStorage(userData, files = fs) {
     directory(files, browserDir, false);
   }
   return { directory: privateDir, browserSessionData: browserDir };
+}
+
+export function configureDesktopCredentialMode(app, files = fs, processState = process) {
+  const userData = app.getPath("userData");
+  const mode = createDesktopPrefs(jsonFile(path.join(userData, "desktop-prefs.json"), files)).credentialMode();
+  if (mode === "system") {
+    for (const target of [path.join(userData, "private-credentials.ready"), path.join(userData, "private-credentials")]) {
+      try { files.lstatSync(target); throw new Error("Private credential mode must be selected before this App opens"); }
+      catch (error) { if (error?.code !== "ENOENT") throw error; }
+    }
+  }
+  let paths = null;
+  if (mode === "private-file") {
+    processState.umask(0o077);
+    paths = preparePrivateCredentialStorage(userData, files);
+    app.setPath("sessionData", paths.browserSessionData);
+  }
+  const privateStore = name => createPrivateCredentialStore(paths.directory, name, files);
+  return { mode, privateStore, workspaceStore: paths ? privateStore("credentials.json") : null };
 }
 
 export function createPrivateCredentialStore(privateDir, name, files = fs) {

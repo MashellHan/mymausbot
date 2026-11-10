@@ -5,8 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import vm from "node:vm";
 import { createAppBrowserSession } from "./browser-session.mjs";
-import { createDesktopPrefs, jsonFile } from "./desktop-prefs.mjs";
-import { createPrivateCredentialStore, preparePrivateCredentialStorage } from "./private-credential-store.mjs";
+import { configureDesktopCredentialMode } from "./private-credential-store.mjs";
 
 const main = fs.readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
 const start = main.indexOf("const CREDENTIALS_FILE ="), end = main.indexOf("\nconst nativeText =", start);
@@ -21,8 +20,8 @@ test("private file mode selects protected persistent browser data before the bro
   const calls = [];
   const existing = { id: "persistent" };
   const launch = () => {
-    const context = vm.createContext({ fs, path, createDesktopPrefs, jsonFile, createPrivateCredentialStore,
-      preparePrivateCredentialStorage, createAppBrowserSession, createSessionConfigMemory: () => ({}),
+    const context = vm.createContext({ fs, path, configureDesktopCredentialMode,
+      createAppBrowserSession, createSessionConfigMemory: () => ({}),
       process: { umask: mode => calls.push(["umask", mode]) },
       app: { getPath: name => { assert.equal(name, "userData"); return userData; },
         setPath: (name, value) => calls.push([name, value]) },

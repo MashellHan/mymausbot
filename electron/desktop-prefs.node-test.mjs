@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import { createDesktopPrefs, createDesktopText, DESKTOP_NOTICES, DESKTOP_PORTS, jsonFile, registerDesktopPrefs } from "./desktop-prefs.mjs";
+import { configureDesktopCredentialMode } from "./private-credential-store.mjs";
 import { ONBOARDING_CLOUD_HINT, onboardingHints, WELCOME_VERSION } from "./onboarding-record.mjs";
 
 const require = createRequire(import.meta.url);
@@ -74,16 +75,13 @@ test("credential mode is a nonsecret opt-in in the existing desktop preference r
 
 test("main binds desktop preferences before choosing its startup credential mode", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const imported = main.match(/^import \{([^}]+)\} from "\.\/desktop-prefs\.mjs";$/m)?.[1];
-  const startup = main.match(/^const CREDENTIAL_MODE = .+;$/m)?.[0];
-  assert.ok(imported && startup);
-  const names = imported.split(",").map((name) => name.trim());
-  const bindings = Object.fromEntries(Object.entries({ createDesktopPrefs, jsonFile }).filter(([name]) => names.includes(name)));
+  const startup = main.match(/^const \{ mode: CREDENTIAL_MODE, .+ \} = configureDesktopCredentialMode\(app, fs, process\);$/m)?.[0];
+  assert.ok(startup);
   const dir = mkdtempSync(path.join(tmpdir(), "desktop-prefs-startup-"));
   try {
     fs.writeFileSync(path.join(dir, "desktop-prefs.json"), JSON.stringify({ credentialMode: "session" }));
     const app = { getPath: (name) => { assert.equal(name, "userData"); return dir; } };
-    assert.equal(vm.runInNewContext(`${startup}\nCREDENTIAL_MODE`, { ...bindings, app, path }), "session");
+    assert.equal(vm.runInNewContext(`${startup}\nCREDENTIAL_MODE`, { configureDesktopCredentialMode, app, fs, process }), "session");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
