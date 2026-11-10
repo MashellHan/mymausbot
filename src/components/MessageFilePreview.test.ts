@@ -125,15 +125,15 @@ describe("generated files in the right panel", () => {
     list.scrollTop = 90;
     expect(fetch).not.toHaveBeenCalled();
     expect(list.textContent).toContain("Not shared");
-    expect(button("Preview file: unshared.md")).toBeUndefined();
-    const trigger = button("Preview file: report #1.md", list);
+    expect(button("Preview: unshared.md")).toBeUndefined();
+    const trigger = button("Preview: report #1.md", list);
     click(trigger);
     await vi.waitFor(() => expect(preview()?.textContent).toContain("Weekly review"));
     expect(list.hidden).toBe(true);
     click(button("Back to files"));
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(list.hidden).toBe(false); expect(list.scrollTop).toBe(90);
-    click(button("Preview file: attached.md"));
+    click(button("Preview: attached.md"));
     await vi.waitFor(() => expect(preview()?.querySelector("h2")?.textContent).toBe("attached.md"));
   });
 

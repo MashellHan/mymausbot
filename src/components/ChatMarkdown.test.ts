@@ -769,7 +769,7 @@ describe("ChatMarkdown attachments", () => {
       text: "[macOS](file:///Users/milind/report.md) [Windows](C:/Users/Maus/report.md)",
       message: { threadId: "thread-1", messageId: "message-1" },
     }));
-    expect(html).toContain('title="Preview file: report.md"');
+    expect(html).toContain('title="Preview: report.md"');
     expect(html).toContain('aria-label="Save a copy of report.md"');
     expect(html).not.toContain("/Users/milind/report.md");
     expect(html).not.toContain("C:/Users/Maus/report.md");
@@ -791,7 +791,7 @@ describe("ChatMarkdown attachments", () => {
     try {
       const html = renderToStaticMarkup(createElement(ChatMarkdown, { text: `[Report](${path})`, message }));
       expect(save).toHaveBeenCalledWith(path, "report #1%20.md", message);
-      expect(html).toContain('title="Preview file: report #1%20.md"');
+      expect(html).toContain('title="Preview: report #1%20.md"');
       expect(html).not.toContain('href="file:');
     } finally { save.mockRestore(); }
   });
@@ -824,7 +824,7 @@ describe("ChatMarkdown attachments", () => {
         text: "[Report](C:\\Users\\Maus\\.openmausbot\\report.md)\n\n![Chart](C:\\Users\\Maus\\.openmausbot\\chart.png)",
         message: { threadId: "thread-1", messageId: "message-1" },
       }));
-      expect(html).toContain('title="Preview file: report.md"');
+      expect(html).toContain('title="Preview: report.md"');
       expect(html).toContain('aria-label="Save a copy of report.md"');
       expect(html).not.toContain('href=""');
       expect(html).not.toContain("Image unavailable");

@@ -10,7 +10,12 @@ export function linuxDisablesGpu({ env = process.env, exists = fs.existsSync } =
 
 // GNOME groups the window with its desktop entry only when both identities match; set before ready.
 export function configureLinuxDesktop(app, { platform = process.platform, ...gpu } = {}) {
-  if (platform !== "linux") return;
-  if (linuxDisablesGpu(gpu)) app.disableHardwareAcceleration();
+  if (platform !== "linux") return false;
+  const softwareRendering = linuxDisablesGpu(gpu) || app.commandLine?.hasSwitch?.("disable-gpu") === true;
+  if (softwareRendering) app.disableHardwareAcceleration();
   app.setDesktopName("com.openmausbot.app.desktop");
+  return softwareRendering;
 }
+
+// The main window's page is told so its glass pop-ups drop the backdrop blur, which is redrawn on the CPU here.
+export const SOFTWARE_RENDERING_ARG = "--omb-software-rendering=1";
