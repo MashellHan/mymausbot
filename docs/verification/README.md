@@ -121,6 +121,7 @@ snapshots, without reading or mutating the person's live app data.
 
 The [bounded GitHub contribution repair recipe](local-usage-github-repair.md)
 covers the default seven-day or explicitly admitted 60-day dry-run, apply and recovery gates.
+The [GitHub Profile v2 source contract](local-usage-profile-v2.md) defines remote dates and coverage.
 
 The [switchable local environments recipe](local-environments.md) verifies
 creating, switching between and recovering named local environments by hand on
