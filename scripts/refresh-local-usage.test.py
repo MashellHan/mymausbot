@@ -658,6 +658,40 @@ class FileAuthAndChildBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             proxy.Popen(["git", "fetch", "origin"])
 
+    def test_allowed_log_never_invokes_configured_signature_program(self):
+        repository = self.root / "signed-repository"
+        repository.mkdir()
+        environment = usage.child_environment()
+
+        def git(*args, input=None):
+            return subprocess.run(["git", "-C", str(repository), *args], input=input,
+                                  capture_output=True, text=True, check=True, env=environment)
+
+        git("-c", "init.templateDir=/dev/null", "init", "-q")
+        tree = git("mktree", input="").stdout.strip()
+        commit_text = (f"tree {tree}\nauthor Fixture <fixture@example.test> 1760000000 +0000\n"
+                       "committer Fixture <fixture@example.test> 1760000000 +0000\n"
+                       "gpgsig -----BEGIN PGP SIGNATURE-----\n fixture\n -----END PGP SIGNATURE-----\n\nfixture\n")
+        commit = git("hash-object", "-t", "commit", "-w", "--stdin", input=commit_text).stdout.strip()
+        git("update-ref", "refs/heads/main", commit)
+        marker = self.root / "gpg-invoked"
+        sentinel = self.root / "gpg-sentinel.py"
+        sentinel.write_text("#!/usr/bin/python3\nfrom pathlib import Path\nPath(" + repr(str(marker))
+                            + ").write_text('invoked')\nraise SystemExit(1)\n")
+        sentinel.chmod(0o700)
+        git("config", "log.showSignature", "true")
+        git("config", "gpg.program", str(sentinel))
+        git("log", "--show-signature", "--all", "--no-merges", "--since=2025-01-01T00:00:00Z",
+            "--format=%H%x1f%aE%x1f%aI")
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        result = usage.LocalGitOnly().run(["git", "-C", str(repository), "log", "--all", "--no-merges",
+                                           "--since=2025-01-01T00:00:00Z", "--format=%H%x1f%aE%x1f%aI"],
+                                          capture_output=True, text=True, timeout=5, check=True)
+        self.assertIn(commit, result.stdout)
+        self.assertEqual(result.args[4], "--no-show-signature")
+        self.assertFalse(marker.exists())
+
     def test_loaded_collector_and_all_primary_workers_keep_the_child_boundary(self):
         collector = self.root / "collector.py"
         collector.write_text('''import subprocess

@@ -62,6 +62,8 @@ class LocalGitOnly:
                          and operation[3].startswith("--since=")
                          and operation[4] == "--format=%H%x1f%aE%x1f%aI")):
             raise ValueError("Unapproved local activity Git command")
+        if operation[0] == "log":
+            command.insert(4, "--no-show-signature")
         kwargs["env"] = child_environment()
         kwargs["stdin"] = subprocess.DEVNULL
         return subprocess.run(command, **kwargs)
