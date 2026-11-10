@@ -6,6 +6,7 @@ import type { LocalAgentTeamsResponse, LocalUsageResponse, LocalUsageTrendDay, L
 import type { MiniAppDashboardDeclaration, MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
 import { setLocale } from "@/lib/i18n";
 import { withGithubUsageFixture } from "../../../scripts/testing/merged-usage-fixture";
+import { primaryUsageFixture } from "../../../scripts/testing/primary-usage-fixture";
 
 const calls = vi.hoisted(() => ({ api: vi.fn(), visible: true }));
 vi.mock("@/state/store", () => ({
@@ -116,19 +117,20 @@ describe("installed native Mini App dashboards", () => {
     expect(JSON.parse(calls.api.mock.calls[2]![1].body)).toEqual({ resource: "activity", expectedRevision: 3, agentId: "w1:p1" });
   });
 
-  it("keeps repository observations and Profile references distinct in an app-scoped snapshot", async () => {
-    calls.api.mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot: withGithubUsageFixture(usage) });
+  it("keeps verified contributions distinct from repository observations and Profile references in an app-scoped snapshot", async () => {
+    const snapshot = { ...withGithubUsageFixture(usage), contributions: primaryUsageFixture("2026-11-07") };
+    expect(snapshot.windows!["1"].prs).toBe(1);
+    expect(snapshot.github!.windows!["1"].knownPrs).toBe(1);
+    calls.api.mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot });
     await render("usage");
     await vi.waitFor(() => expect(host.querySelectorAll("[data-usage-trend]")).toHaveLength(3));
     expect(host.textContent).toContain("1-day window");
     expect(host.textContent).toContain("2026-11-07");
-    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("Repository activity");
-    expect([...host.querySelectorAll("section dd > span:first-child")].slice(0, 2).map(value => value.textContent)).toEqual(["1", "2"]);
+    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("Profile dates");
+    expect([...host.querySelectorAll("section dd > span:first-child")].slice(0, 2).map(value => value.textContent)).toEqual(["5", "9"]);
     expect(host.querySelectorAll("section dd [data-usage-provisional]")).toHaveLength(0);
-    const source = host.querySelector<HTMLSelectElement>('select[aria-label="Activity source"]')!;
-    await act(async () => { source.value = "profile"; source.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("exact China-day counts are unknown");
-    expect([...host.querySelectorAll("section dd [data-usage-provisional]")].slice(0, 2).map(value => value.textContent)).toEqual(["1", "2"]);
+    expect(host.querySelector('[data-usage-primary-sources]')?.textContent).toContain("fixture-gh");
+    expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
     expect(host.querySelector('[data-usage-week-start="2026-11-02"]')).not.toBeNull();
     expect(host.querySelector('[data-usage-weekend-tick]')).toBeNull();
     expect(calls.api.mock.calls[0]![0]).toBe(`/api/mini-apps/${appId}/dashboard`);
