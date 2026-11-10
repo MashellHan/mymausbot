@@ -41,7 +41,7 @@ PROFILE_QUERY = """query($from: DateTime!, $to: DateTime!, $after: String) {
         nodes {
           occurredAt
           pullRequest {
-            id createdAt author { id login }
+            id createdAt author { login ... on User { id } }
             repository { id nameWithOwner isPrivate isFork }
           }
         }

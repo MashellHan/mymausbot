@@ -1,10 +1,12 @@
 import copy
 import datetime as dt
 import json
+import re
 import unittest
 from unittest.mock import patch
 
 import local_usage_profile as profile
+import local_usage_profile_private as private
 
 
 AT = dt.datetime.fromisoformat("2026-11-09T12:00:00+00:00")
@@ -74,7 +76,8 @@ class Api:
             data = {"viewer": viewer, "repository": {"id": PRIVATE["id"],
                 "pullRequests": {"totalCount": 1, "pageInfo": {"hasNextPage": False,
                     "endCursor": None}, "nodes": [{"id": "public-pr-1" if self.duplicate_private else "private-pr-1",
-                    "createdAt": self.private_pr_date, "author": {"id": viewer["id"]}}]}}}
+                    "createdAt": self.private_pr_date, "author": {"id": viewer["id"],
+                    "login": viewer["login"]}}]}}}
         elif "history(first:" in document:
             after = values.get("after")
             oid, authored = (("d" * 40, self.commit_dates[0]) if not after
@@ -235,6 +238,30 @@ class ProfileV2Tests(unittest.TestCase):
         self.assertEqual(source["status"], "partial")
         self.assertFalse(source["coverage"]["visibilityComplete"])
         self.assertIsNone(source["days"][-1]["prs"])
+
+    def test_actor_schema_requires_user_fragment_on_both_pr_queries(self):
+        api = Api()
+        checked = []
+        def schema_run(args, timeout):
+            document = next(value[6:] for value in args if value.startswith("query="))
+            if re.search(r"\bauthor\s*\{", document):
+                checked.append(document)
+                valid = re.search(r"\bauthor\s*\{\s*login\s+\.\.\.\s+on\s+User\s*\{\s*id\s*\}\s*\}", document)
+                direct_actor_id = re.search(r"\bauthor\s*\{\s*(?:id\b|login\s+id\b)", document)
+                if not valid or direct_actor_id:
+                    return json.dumps({"errors": [{"extensions": {
+                        "code": "undefinedField", "typeName": "Actor", "fieldName": "id"}}]})
+            return api(args, timeout)
+        self.assertEqual(collect(schema_run, {**ACCOUNT, "visibilityProof": proof()})["sources"][0]["status"], "ready")
+        self.assertEqual(len(checked), 3)
+        with patch.object(profile, "PROFILE_QUERY", profile.PROFILE_QUERY.replace(
+                "author { login ... on User { id } }", "author { id login }")):
+            self.assertEqual(collect(schema_run)["sources"][0]["status"], "unavailable")
+        with patch.object(private, "PULL_REQUESTS_QUERY", private.PULL_REQUESTS_QUERY.replace(
+                "author { login ... on User { id } }", "author { id login }")):
+            source = collect(schema_run)["sources"][0]
+            self.assertEqual(source["status"], "partial")
+            self.assertIn("private_invalid_response", source["coverage"]["reasons"])
 
     def test_private_profile_date_uses_original_git_timestamp_at_both_boundaries(self):
         cutoff = dt.datetime.fromisoformat("2026-11-09T23:59:59+00:00")

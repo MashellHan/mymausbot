@@ -30,7 +30,7 @@ PULL_REQUESTS_QUERY = """query($owner: String!, $name: String!, $after: String) 
     id
     pullRequests(first: 100, after: $after, states: [OPEN, CLOSED, MERGED], orderBy: {field: CREATED_AT, direction: DESC}) {
       totalCount pageInfo { hasNextPage endCursor }
-      nodes { id createdAt author { id } }
+      nodes { id createdAt author { login ... on User { id } } }
     }
   }
   rateLimit { cost remaining resetAt }
@@ -109,7 +109,11 @@ def _private_prs(budget, profile, owner, name, repo, created, at, first, info, i
                     continue
                 raise ValueError("invalid_private_pr")
             seen.add(key)
-            if node.get("author", {}).get("id") == profile["stableId"] and first.isoformat() <= day <= at.date().isoformat():
+            author = node.get("author")
+            if (isinstance(author, dict) and author.get("id") == profile["stableId"]
+                    and isinstance(author.get("login"), str)
+                    and author["login"].casefold() == profile["login"].casefold()
+                    and first.isoformat() <= day <= at.date().isoformat()):
                 events.append({"day": day, "repository": info,
                                "key": digest("github-pr", profile["host"], key)})
         after = _cursor(connection["pageInfo"], cursors)
