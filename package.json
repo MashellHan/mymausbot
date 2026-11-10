@@ -43,6 +43,7 @@
     "typecheck": "node scripts/typecheck.mjs",
     "check:fixtures": "node scripts/check-electron-entrypoints.mjs",
     "check:delivery": "node scripts/check-local-app.mjs",
+    "verify:private-file-credentials": "node scripts/verify-private-file-credentials.mjs",
     "test": "vitest run && pnpm broker:test && pnpm test:electron && pnpm test:packaged-server",
     "test:electron": "node --test \"electron/*.node-test.mjs\"",
     "bench:observation": "node --experimental-strip-types scripts/bench-observation.ts",

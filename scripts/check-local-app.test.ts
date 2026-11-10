@@ -1,13 +1,16 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { resolveRoutineResultsThread, routineRunDefinition } from "../server/routine-run-definition.ts";
 import type { Routine } from "../server/routines.ts";
 import { assertInventorySame, assertRoutinesSame, validateBuildRequest } from "./check-local-app.mjs";
+import { assertClosedSqliteCopy } from "./closed-sqlite-snapshot.mjs";
+import { finishOwnedPrivateFixture, inspectPrivateCredentialStorage } from "./private-credential-storage.mjs";
 
 const routine = { id: "routine-1", prompt: "Synthetic task", enabled: true, schedule: { type: "daily", time: "05:00" } };
 const run = { id: "run-1", routineId: routine.id, botId: "bot-1", target: "bot", runOn: "maus", createdAt: 1,
@@ -158,4 +161,118 @@ it("fails delivery preflight before a build for incomplete, dirty or mismatched 
     expect(dirty.status).toBe(1);
     expect(dirty.stderr).toContain("must be clean");
   } finally { rmSync(directory, { recursive: true, force: true }); rmSync(requestPath, { force: true }); }
+});
+
+it("keeps a real nonempty SQLite WAL in a stable closed copy and rejects missing or changed history", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omb-sqlite-copy-")));
+  const source = join(root, "source"), copy = join(root, "copy");
+  mkdirSync(source, { mode: 0o700 }); mkdirSync(copy, { mode: 0o700 });
+  const connections: DatabaseSync[] = [];
+  try {
+    for (const name of ["messages.db", "runtime.db"]) {
+      const db = new DatabaseSync(join(source, name));
+      connections.push(db);
+      db.exec("PRAGMA journal_mode=WAL; CREATE TABLE fixture (value TEXT); INSERT INTO fixture VALUES ('in WAL');");
+      for (const suffix of ["", "-wal", "-shm"]) copyFileSync(join(source, name + suffix), join(copy, name + suffix));
+    }
+    writeFileSync(join(source, "routines.json"), '{"runs":[]}');
+    copyFileSync(join(source, "routines.json"), join(copy, "routines.json"));
+    expect(statSync(join(source, "runtime.db-wal")).size).toBeGreaterThan(0);
+    const closedSource = join(root, "closed-source"), ownedCopy = join(root, "owned-copy");
+    mkdirSync(closedSource, { mode: 0o700 }); mkdirSync(ownedCopy, { mode: 0o700 });
+    for (const name of ["messages.db", "runtime.db"]) for (const suffix of ["", "-wal"]) {
+      copyFileSync(join(source, name + suffix), join(closedSource, name + suffix));
+      copyFileSync(join(source, name + suffix), join(ownedCopy, name + suffix));
+    }
+    for (const directory of [closedSource, ownedCopy]) copyFileSync(join(source, "routines.json"), join(directory, "routines.json"));
+    expect(assertClosedSqliteCopy(closedSource, ownedCopy).complete).toBe(true);
+    const rebuilt = new DatabaseSync(join(ownedCopy, "runtime.db"), { readOnly: true });
+    try { expect(rebuilt.prepare("SELECT value FROM fixture").get()).toEqual({ value: "in WAL" }); }
+    finally { rebuilt.close(); }
+    const checked = assertClosedSqliteCopy(source, copy);
+    expect(checked.files["runtime.db-wal"]?.source?.size).toBeGreaterThan(0);
+    expect(spawnSync(process.execPath, [fileURLToPath(new URL("./check-local-app.mjs", import.meta.url)),
+      "closed-sqlite", source, copy], { encoding: "utf8" }).status).toBe(0);
+    const copied = new DatabaseSync(join(copy, "runtime.db"), { readOnly: true });
+    try { expect(copied.prepare("SELECT value FROM fixture").get()).toEqual({ value: "in WAL" }); }
+    finally { copied.close(); }
+    writeFileSync(join(copy, "runtime.db-wal"), "changed WAL");
+    expect(() => assertClosedSqliteCopy(source, copy)).toThrow(/missing or changed meaningful WAL/);
+    copyFileSync(join(source, "runtime.db-wal"), join(copy, "runtime.db-wal"));
+    rmSync(join(copy, "runtime.db-wal"));
+    expect(() => assertClosedSqliteCopy(source, copy)).toThrow(/missing or changed meaningful WAL/);
+    copyFileSync(join(source, "runtime.db-wal"), join(copy, "runtime.db-wal"));
+    connections[1]!.exec("INSERT INTO fixture VALUES ('new source generation')");
+    expect(() => assertClosedSqliteCopy(source, copy)).toThrow(/missing or changed meaningful WAL/);
+  } finally {
+    for (const db of connections) db.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("allows only empty copied WAL when the closed source has none", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omb-sqlite-copy-")));
+  const source = join(root, "source"), copy = join(root, "copy");
+  mkdirSync(source, { mode: 0o700 }); mkdirSync(copy, { mode: 0o700 });
+  try {
+    for (const name of ["messages.db", "runtime.db"]) {
+      const db = new DatabaseSync(join(source, name));
+      db.exec("CREATE TABLE fixture (value INTEGER); INSERT INTO fixture VALUES (1)");
+      db.close();
+      copyFileSync(join(source, name), join(copy, name));
+    }
+    writeFileSync(join(source, "routines.json"), '{"runs":[]}');
+    copyFileSync(join(source, "routines.json"), join(copy, "routines.json"));
+    writeFileSync(join(copy, "messages.db-wal"), "");
+    expect(assertClosedSqliteCopy(source, copy).complete).toBe(true);
+    writeFileSync(join(copy, "messages.db-wal"), "unbound data");
+    expect(() => assertClosedSqliteCopy(source, copy)).toThrow(/unbound WAL/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("checks private records once postlaunch while leaving the active browser content mutable", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omb-private-file-e2e-")));
+  const profile = join(root, "profile"), privateRoot = join(profile, "private-credentials");
+  const browser = join(privateRoot, "browser-session");
+  mkdirSync(profile, { mode: 0o700 });
+  expect(() => inspectPrivateCredentialStorage(root, { phase: "postlaunch" })).toThrow(/missing after launch/);
+  mkdirSync(privateRoot, { mode: 0o700 }); mkdirSync(browser, { mode: 0o700 });
+  const marker = join(profile, "private-credentials.ready");
+  const credential = join(privateRoot, "credentials.json");
+  const cookie = join(browser, "Cookies");
+  try {
+    writeFileSync(marker, "openmausbot-private-credentials-v1\n", { mode: 0o600 });
+    writeFileSync(credential, '{"version":1,"value":{"xaiApiKey":"synthetic"}}', { mode: 0o600 });
+    writeFileSync(cookie, "first cookie generation", { mode: 0o600 });
+    const before = inspectPrivateCredentialStorage(root, { phase: "prelaunch" });
+    const expected = join(root, "expected-snapshot.json");
+    writeFileSync(expected, JSON.stringify(before));
+    const delivery = fileURLToPath(new URL("./check-local-app.mjs", import.meta.url));
+    expect(spawnSync(process.execPath, [delivery, "private-storage", root, "prelaunch"], { encoding: "utf8" }).status).toBe(1);
+    expect(spawnSync(process.execPath, [delivery, "private-storage", root, "prelaunch", expected], { encoding: "utf8" }).status).toBe(0);
+    expect(inspectPrivateCredentialStorage(root, { phase: "postlaunch" }).state).toBe("present");
+    expect(spawnSync(process.execPath, [delivery, "private-storage", root, "postlaunch"], { encoding: "utf8" }).status).toBe(0);
+    writeFileSync(cookie, "second cookie generation");
+    expect(() => inspectPrivateCredentialStorage(root, { phase: "prelaunch", expected: before })).toThrow();
+    expect(inspectPrivateCredentialStorage(root, { phase: "postlaunch" }).records["credentials.json"]).toBeDefined();
+    chmodSync(credential, 0o644);
+    expect(() => inspectPrivateCredentialStorage(root, { phase: "postlaunch" })).toThrow();
+    chmodSync(credential, 0o600);
+    writeFileSync(marker, "broken marker");
+    expect(() => inspectPrivateCredentialStorage(root, { phase: "postlaunch" })).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("keeps the exact owned fixture when process cleanup is unconfirmed", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omb-private-file-e2e-")));
+  const sentinel = join(root, "synthetic-only");
+  writeFileSync(sentinel, "fixture remains for recovery");
+  try {
+    expect(finishOwnedPrivateFixture(root, [{ cleanupComplete: false }])).toEqual({
+      fixtureRemoved: false, fixturePreservedForCleanup: root,
+    });
+    expect(existsSync(sentinel)).toBe(true);
+    expect(finishOwnedPrivateFixture(root, [{ cleanupComplete: true }])).toEqual({ fixtureRemoved: true });
+    expect(existsSync(root)).toBe(false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
