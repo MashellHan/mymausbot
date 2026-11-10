@@ -122,6 +122,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     else if (check === "routines" && files.length === 2) assertRoutinesSame(...files.map(read));
     else if (check === "closed-sqlite" && files.length === 2) assertClosedSqliteCopy(...files);
     else if (check === "private-storage" && files.length >= 2 && files.length <= 3) {
+      requireValue(files[1] !== "prelaunch" || files.length === 3, "Prelaunch storage check needs an exact expected snapshot");
       inspectPrivateCredentialStorage(files[0], { phase: files[1], ...(files[2] ? { expected: read(files[2]) } : {}) });
     } else throw new Error("Use check:delivery request <request.json> | inventory <before.json> <after.json> | routines <before.json> <after.json> | closed-sqlite <source-dir> <copy-dir> | private-storage <fixture-root> <prelaunch|postlaunch> [expected.json]");
     console.log(JSON.stringify({ passed: true, check, readOnly: true }));

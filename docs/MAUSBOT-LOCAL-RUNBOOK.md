@@ -86,6 +86,13 @@ browser caches may change: check their safe paths, ownership and permissions
 once, while retaining exact static credential and prelaunch checks. Do not
 compare two mutable snapshots taken across an unrelated bundle hash.
 
+Run the signed package check in a disposable profile with
+`pnpm verify:private-file-credentials --app <absolute-signed-app> --evidence <absolute-private-evidence-dir>`.
+It records one attempt per run and the elapsed time since the first attempt.
+For a closed data copy, use `pnpm check:delivery closed-sqlite <canonical-source-dir> <canonical-owned-copy-dir>`;
+`pnpm check:delivery private-storage <canonical-temp-fixture-root> postlaunch`
+checks the private root without comparing changing browser content.
+
 ## Resume an existing package
 
 Read the current job's `build.log`, `finished` and `exit-code` before doing

@@ -232,9 +232,13 @@ it("checks private records once postlaunch while leaving the active browser cont
     writeFileSync(credential, '{"version":1,"value":{"xaiApiKey":"synthetic"}}', { mode: 0o600 });
     writeFileSync(cookie, "first cookie generation", { mode: 0o600 });
     const before = inspectPrivateCredentialStorage(root, { phase: "prelaunch" });
+    const expected = join(root, "expected-snapshot.json");
+    writeFileSync(expected, JSON.stringify(before));
+    const delivery = fileURLToPath(new URL("./check-local-app.mjs", import.meta.url));
+    expect(spawnSync(process.execPath, [delivery, "private-storage", root, "prelaunch"], { encoding: "utf8" }).status).toBe(1);
+    expect(spawnSync(process.execPath, [delivery, "private-storage", root, "prelaunch", expected], { encoding: "utf8" }).status).toBe(0);
     expect(inspectPrivateCredentialStorage(root, { phase: "postlaunch" }).state).toBe("present");
-    expect(spawnSync(process.execPath, [fileURLToPath(new URL("./check-local-app.mjs", import.meta.url)),
-      "private-storage", root, "postlaunch"], { encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync(process.execPath, [delivery, "private-storage", root, "postlaunch"], { encoding: "utf8" }).status).toBe(0);
     writeFileSync(cookie, "second cookie generation");
     expect(() => inspectPrivateCredentialStorage(root, { phase: "prelaunch", expected: before })).toThrow();
     expect(inspectPrivateCredentialStorage(root, { phase: "postlaunch" }).records["credentials.json"]).toBeDefined();
