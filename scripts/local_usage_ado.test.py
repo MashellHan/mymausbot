@@ -112,6 +112,59 @@ def collect(api, *, previous=None, at=AT, config=CONFIG):
 
 
 class AdoTests(unittest.TestCase):
+    def test_beijing_midnight_year_rollover_uses_original_offset_instants(self):
+        api = Api()
+        edge = "6" * 40
+        api.prs = [pr(1, "2026-12-31T15:59:59Z"), pr(2, "2027-01-01T00:00:00+08:00")]
+        api.histories[HEAD] = [commit(HEAD, "2026-12-31T15:59:59Z"),
+                               commit(edge, "2027-01-01T00:00:00+08:00")]
+        api.details = {row["commitId"]: row for row in api.histories[HEAD]}
+        at = dt.datetime.fromisoformat("2026-12-31T16:00:00+00:00")
+        result = collect(api, at=at)
+        rows = {row["day"]: row for row in result["sources"][0]["days"]}
+        self.assertEqual(result["operationWindow"]["endDay"], "2027-01-01")
+        self.assertEqual((rows["2026-12-31"]["prs"], rows["2026-12-31"]["commits"]), (1, 1))
+        self.assertEqual((rows["2027-01-01"]["prs"], rows["2027-01-01"]["commits"]), (1, 1))
+
+    def test_old_utc_raw_proof_rechecks_missing_beijing_leading_hours_and_pr_instants(self):
+        api = Api()
+        edge = "6" * 40
+        api.histories[HEAD].append(commit(edge, "2026-09-12T16:30:00Z"))
+        api.details[edge] = api.histories[HEAD][-1]
+        at = dt.datetime.fromisoformat("2026-11-11T01:32:36+00:00")
+        old = collect(api, at=at)
+        old["metricDefinition"] = "ado-default-head-v1"
+        old["dateBasis"] = {"prs": "created-at/UTC", "commits": "author-at/UTC"}
+        state = old["state"]["projects"]["example/project"]
+        for proof in (state["cache"][REPO], state["work"]["repoDone"][REPO]):
+            proof.pop("coverageStartAt", None)
+            proof["items"] = [item for item in proof["items"] if item["id"] != edge]
+            proof["checked"] = [oid for oid in proof["checked"] if oid != edge]
+            for item in proof["items"]:
+                item["day"] = ado.instant(item["authoredAt"]).date().isoformat()
+        for row in state["work"]["prs"]:
+            row["day"] = ado.instant(row["createdAt"]).date().isoformat()
+            row.pop("createdAt")
+        api.prs.insert(0, pr(4, "2026-11-10T16:15:00Z"))
+        with patch.object(ado, "REQUESTS_PER_PROJECT", 7):
+            partial = collect(api, previous=old, at=at)
+        self.assertFalse(partial["collection"]["complete"])
+        self.assertIsNone(partial["sources"][0]["days"][0]["commits"])
+        self.assertNotEqual(partial["sources"][0]["days"][0]["status"], "stale")
+        self.assertEqual(next(row for row in partial["state"]["projects"]["example/project"]["work"]["prs"]
+                              if row["id"] == 4)["day"], "2026-11-11")
+        current = partial
+        for _ in range(10):
+            current = collect(api, previous=current, at=at)
+            if current["collection"]["complete"]:
+                break
+        self.assertTrue(current["collection"]["complete"])
+        self.assertEqual(next(row for row in current["sources"][0]["days"] if row["day"] == "2026-09-13")["commits"], 1)
+        self.assertEqual(current["sources"][0]["days"][-1]["prs"], 1)
+        proof = current["state"]["projects"]["example/project"]["cache"][REPO]
+        self.assertEqual(proof["coverageStartAt"], "2026-09-12T16:00:00Z")
+        self.assertIn(edge, proof["checked"])
+
     def saved_proof_fixture(self):
         api = Api()
         responses = {}
@@ -226,7 +279,7 @@ class AdoTests(unittest.TestCase):
         api = Api()
         api.details[HEAD].pop("commentTruncated")
         accepted = collect(api)
-        self.assertEqual(accepted["sources"][0]["days"][-2]["commits"], 2)
+        self.assertEqual(accepted["sources"][0]["days"][-2]["commits"], 1)
         for invalid in [True, None, "false"]:
             failing = Api()
             failing.details[HEAD]["commentTruncated"] = invalid
@@ -239,7 +292,7 @@ class AdoTests(unittest.TestCase):
         api.details[OLDER]["comment"] = ("Co-authored-by: Owner &lt;alias@example.test&gt;\n"
                                          "Co-authored-by: Visitor &lt;visitor@example.test&gt;")
         credited = collect(api)
-        self.assertEqual(credited["sources"][0]["days"][-2]["commits"], 2)
+        self.assertEqual(credited["sources"][0]["days"][-1]["commits"], 1)
         item = next(row for row in credited["state"]["projects"]["example/project"]["cache"][REPO]["items"]
                     if row["id"] == OLDER)
         self.assertTrue(item["coauthor"])
@@ -248,7 +301,7 @@ class AdoTests(unittest.TestCase):
         unknown.details[OLDER]["comment"] = ("Co-authored-by: Visitor &lt;visitor@example.test&gt;\n"
                                              "Co-authored-by: Other &lt;other@example.test&gt;")
         result = collect(unknown)
-        self.assertEqual(result["sources"][0]["days"][-2]["commits"], 1)
+        self.assertEqual(result["sources"][0]["days"][-1]["commits"], 0)
         self.assertNotIn(OLDER, {row["id"] for row in result["state"]["projects"]["example/project"]["cache"][REPO]["items"]})
 
     def test_mixed_double_encoded_and_ambiguous_coauthor_delimiters_fail_closed(self):
@@ -276,7 +329,7 @@ class AdoTests(unittest.TestCase):
         self.assertTrue(all(urllib.parse.parse_qs(urllib.parse.urlsplit(target).query)["api-version"] == ["7.1"]
                             for target in targets[1:]))
 
-    def test_all_pr_states_utc_author_dates_merge_coauthor_and_one_repository(self):
+    def test_all_pr_states_beijing_author_dates_merge_coauthor_and_one_repository(self):
         api = Api()
         result = collect(api)
         source = result["sources"][0]
@@ -286,9 +339,9 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(source["coverage"], {"identityVerified": True, "paginationComplete": True,
                                                 "visibilityComplete": True, "reasons": []})
         nov9, nov10 = source["days"][-2:]
-        self.assertEqual((nov9["prs"], nov9["commits"], nov10["prs"], nov10["commits"]), (2, 2, 1, 0))
-        self.assertEqual((nov9["knownPrs"], nov9["knownCommits"]), (2, 2))
-        self.assertEqual((nov9["repositories"][0]["prs"], nov9["repositories"][0]["commits"]), (2, 2))
+        self.assertEqual((nov9["prs"], nov9["commits"], nov10["prs"], nov10["commits"]), (1, 1, 2, 1))
+        self.assertEqual((nov9["knownPrs"], nov9["knownCommits"]), (1, 1))
+        self.assertEqual((nov9["repositories"][0]["prs"], nov9["repositories"][0]["commits"]), (1, 1))
         self.assertEqual(sum(row["prs"] for row in source["days"]), 3)
         self.assertEqual(sum(row["commits"] for row in source["days"]), 2)
         self.assertIn("personal@example.test", CONFIG["authorEmails"])
@@ -311,7 +364,7 @@ class AdoTests(unittest.TestCase):
                 if result["sources"][0]["status"] == "ready":
                     break
         self.assertEqual(result["sources"][0]["status"], "ready")
-        self.assertEqual(result["sources"][0]["days"][-2]["commits"], 2)
+        self.assertEqual(result["sources"][0]["days"][-2]["commits"], 1)
         details = [args[5] for args in api.calls if "/commits/" in args[5]]
         self.assertEqual(len(details), 4)
 
@@ -320,14 +373,14 @@ class AdoTests(unittest.TestCase):
         first = collect(api)
         api.calls.clear()
         same = collect(api, previous=first, at=AT + dt.timedelta(minutes=5))
-        self.assertEqual(same["sources"][0]["days"][-2]["commits"], 2)
+        self.assertEqual(same["sources"][0]["days"][-2]["commits"], 1)
         self.assertFalse(any("/commits?" in args[5] for args in api.calls))
         newer = "d" * 40
         api.heads[REPO] = newer
         api.histories[newer] = [commit(newer, "2026-11-09T10:00:00Z"), *api.histories[HEAD]]
         api.details[newer] = api.histories[newer][0]
         changed = collect(api, previous=same, at=AT + dt.timedelta(minutes=10))
-        self.assertEqual(changed["sources"][0]["days"][-2]["commits"], 3)
+        self.assertEqual(changed["sources"][0]["days"][-2]["commits"], 2)
         self.assertEqual(changed["state"]["projects"]["example/project"]["cache"][REPO]["head"], newer)
         self.assertEqual(first["sources"][0]["id"], changed["sources"][0]["id"])
 
@@ -338,12 +391,12 @@ class AdoTests(unittest.TestCase):
         api.details[future] = api.histories[HEAD][0]
         first = collect(api)
         self.assertEqual(first["sources"][0]["status"], "ready")
-        self.assertEqual(first["sources"][0]["days"][-1]["commits"], 0)
+        self.assertEqual(first["sources"][0]["days"][-1]["commits"], 1)
         self.assertIn(future, {item["id"] for item in first["state"]["projects"]["example/project"]["cache"][REPO]["items"]})
         api.calls.clear()
         later = collect(api, previous=first, at=AT + dt.timedelta(minutes=5))
         self.assertEqual(later["sources"][0]["status"], "ready")
-        self.assertEqual(later["sources"][0]["days"][-1]["commits"], 1)
+        self.assertEqual(later["sources"][0]["days"][-1]["commits"], 2)
         self.assertFalse(any("/commits?" in args[5] for args in api.calls))
 
     def test_late_side_merge_after_old_head_reconciles_older_author_day(self):
@@ -370,9 +423,9 @@ class AdoTests(unittest.TestCase):
                 break
             result = collect(api, previous=result, at=AT + dt.timedelta(minutes=5))
         self.assertEqual(result["sources"][0]["status"], "ready")
-        self.assertEqual(result["sources"][0]["days"][-2]["commits"], 3)
-        self.assertEqual(result["sources"][0]["days"][-1]["commits"], 1)
-        self.assertEqual(initial["sources"][0]["days"][-2]["commits"], 2)
+        self.assertEqual(result["sources"][0]["days"][-2]["commits"], 2)
+        self.assertEqual(result["sources"][0]["days"][-1]["commits"], 2)
+        self.assertEqual(initial["sources"][0]["days"][-2]["commits"], 1)
 
     def test_force_push_drops_incompatible_old_head_and_older_author_date_is_retained(self):
         api = Api()
@@ -453,7 +506,7 @@ class AdoTests(unittest.TestCase):
                 if settled["sources"][0]["status"] == "ready":
                     break
         self.assertEqual(settled["sources"][0]["status"], "ready")
-        self.assertEqual(settled["sources"][0]["days"][-2]["commits"], 5)
+        self.assertEqual(settled["sources"][0]["days"][-2]["commits"], 4)
         self.assertEqual(settled["state"]["projects"]["example/project"]["cache"][REPO]["relation"], "descendant")
         detail_urls = [args[5] for args in api.calls if "/commits/" in args[5]]
         detail_ids = {urllib.parse.urlsplit(target).path.split("/")[-1] for target in detail_urls}
@@ -472,7 +525,7 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(disabled["sources"][0]["status"], "partial")
         self.assertIn("disabled-repository", disabled["sources"][0]["coverage"]["reasons"])
         self.assertIsNone(disabled["sources"][0]["days"][-2]["prs"])
-        self.assertEqual(disabled["sources"][0]["days"][-2]["knownPrs"], 2)
+        self.assertEqual(disabled["sources"][0]["days"][-2]["knownPrs"], 1)
         self.assertIsNone(disabled["sources"][0]["days"][-2]["commits"])
         api.repos[0]["isDisabled"] = False
         api.heads[REPO] = "bad"
@@ -492,8 +545,8 @@ class AdoTests(unittest.TestCase):
         self.assertFalse(source["coverage"]["visibilityComplete"])
         self.assertIn("repository-visibility-gap", source["coverage"]["reasons"])
         self.assertEqual(source["days"][-2]["status"], "stale")
-        self.assertEqual(source["days"][-2]["prs"], 2)
-        self.assertEqual(source["days"][-2]["commits"], 2)
+        self.assertEqual(source["days"][-2]["prs"], 1)
+        self.assertEqual(source["days"][-2]["commits"], 1)
         again = collect(api, previous=missing, at=AT + dt.timedelta(minutes=10))
         self.assertIn("repository-visibility-gap", again["sources"][0]["coverage"]["reasons"])
         self.assertFalse(again["collection"]["complete"])
@@ -533,7 +586,7 @@ class AdoTests(unittest.TestCase):
         source = result["sources"][0]
         self.assertEqual(source["status"], "ready")
         self.assertEqual(source["provenance"]["inventoryCount"], 2)
-        self.assertEqual(source["days"][-2]["commits"], 3)
+        self.assertEqual(source["days"][-2]["commits"], 2)
         self.assertEqual(len(source["days"][-2]["repositories"]), 2)
         inventory_urls = [args[5] for args in api.calls if urllib.parse.urlsplit(args[5]).path.endswith("/_apis/git/repositories")]
         self.assertEqual(len(inventory_urls), 1)
@@ -549,7 +602,7 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(source["status"], "stale")
         self.assertEqual(source["days"][-2]["status"], "stale")
         self.assertEqual(source["days"][-2]["capturedAt"], old_capture)
-        self.assertEqual((source["days"][-2]["prs"], source["days"][-2]["commits"]), (2, 2))
+        self.assertEqual((source["days"][-2]["prs"], source["days"][-2]["commits"]), (1, 1))
         self.assertFalse(later["collection"]["complete"])
 
     def test_first_pr_page_change_and_overlapping_project_repositories_never_certify(self):
@@ -573,7 +626,7 @@ class AdoTests(unittest.TestCase):
         state = changed["state"]["projects"]["example/project"]["work"]
         self.assertEqual((state["prOffset"], state["prSeen"], state["prs"]), (0, [], []))
         recovered = collect(api, previous=changed)
-        self.assertEqual(recovered["sources"][0]["days"][-1]["prs"], 2)
+        self.assertEqual(recovered["sources"][0]["days"][-1]["prs"], 3)
 
         config = copy.deepcopy(CONFIG)
         config["mergedAdoProjects"].append("https://dev.azure.com/example/other-project")
@@ -709,8 +762,8 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(source["provenance"]["scopeDefinition"], "explicit-configured-repositories")
         self.assertEqual(source["provenance"]["selectedRepositoryCount"], 2)
         self.assertEqual(source["provenance"]["configuredRepositoryCount"], 2)
-        self.assertEqual(source["days"][-2]["knownPrs"], 3)
-        self.assertEqual(source["days"][-2]["prs"], 3)
+        self.assertEqual(source["days"][-2]["knownPrs"], 2)
+        self.assertEqual(source["days"][-2]["prs"], 2)
         self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["prs"], 1)
         self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownPrs"], 1)
         older_day = next(day for day in source["days"] if day["day"] == "2026-09-20")
@@ -857,15 +910,15 @@ class AdoTests(unittest.TestCase):
         broad["adoRemotes"].append("https://dev.azure.com/example/project/_git/other")
         previous = collect(api, config=broad)
         self.assertEqual(previous["sources"][0]["status"], "ready")
-        self.assertEqual(previous["sources"][0]["days"][-2]["commits"], 3)
+        self.assertEqual(previous["sources"][0]["days"][-2]["commits"], 2)
         narrow = copy.deepcopy(CONFIG)
         api.calls.clear()
         current = collect(api, previous=previous, at=AT + dt.timedelta(minutes=5), config=narrow)
         day = current["sources"][0]["days"][-2]
         self.assertEqual(current["sources"][0]["status"], "ready")
         self.assertEqual(day["status"], "ready")
-        self.assertEqual(day["commits"], 2)
-        self.assertEqual(day["knownCommits"], 2)
+        self.assertEqual(day["commits"], 1)
+        self.assertEqual(day["knownCommits"], 1)
         state = current["state"]["projects"]["example/project"]
         self.assertEqual(set(state["cache"]), {REPO})
         self.assertNotEqual(state["remoteScopeHash"], previous["state"]["projects"]["example/project"]["remoteScopeHash"])
@@ -925,14 +978,14 @@ class AdoTests(unittest.TestCase):
                 self.assertNotEqual(narrowed["sources"][0]["days"][-2]["status"], "stale")
                 self.assertIsNone(narrowed["sources"][0]["days"][-2]["commits"])
 
-    def test_utc_rollover_keeps_compatible_pinned_progress_after_fresh_inventory_and_prs(self):
+    def test_beijing_rollover_keeps_compatible_pinned_progress_after_fresh_inventory_and_prs(self):
         api = Api()
         api.prs = [pr(1, "2026-11-10T12:00:00Z")]
         api.histories[HEAD] = [commit(HEAD, "2026-11-09T12:00:00Z")] + [
             commit(f"{index:040x}", "2026-11-09T12:00:00Z") for index in range(1, 30)]
         api.details = {row["commitId"]: row for row in api.histories[HEAD]}
-        before = dt.datetime.fromisoformat("2026-11-10T23:59:00+00:00")
-        after = dt.datetime.fromisoformat("2026-11-11T00:01:00+00:00")
+        before = dt.datetime.fromisoformat("2026-11-10T15:59:00+00:00")
+        after = dt.datetime.fromisoformat("2026-11-10T16:01:00+00:00")
         with patch.object(ado, "REQUESTS_PER_REPOSITORY", 4), patch.object(ado, "REQUESTS_PER_PROJECT", 10):
             first = collect(api, at=before)
             old_progress = first["state"]["projects"]["example/project"]["work"]["progress"][REPO]
@@ -954,16 +1007,16 @@ class AdoTests(unittest.TestCase):
         self.assertEqual(resumed["sources"][0]["status"], "ready")
         self.assertEqual(next(day for day in resumed["sources"][0]["days"] if day["day"] == "2026-11-09")["commits"], 30)
 
-    def test_utc_rollover_drops_progress_for_changed_default_branch(self):
+    def test_beijing_rollover_drops_progress_for_changed_default_branch(self):
         api = Api()
         api.prs = [pr(1, "2026-11-10T12:00:00Z")]
         api.histories[HEAD] = [commit(HEAD, "2026-11-09T12:00:00Z")] + [
             commit(f"{index:040x}", "2026-11-09T12:00:00Z") for index in range(1, 20)]
         api.details = {row["commitId"]: row for row in api.histories[HEAD]}
         with patch.object(ado, "REQUESTS_PER_REPOSITORY", 4), patch.object(ado, "REQUESTS_PER_PROJECT", 10):
-            first = collect(api, at=dt.datetime.fromisoformat("2026-11-10T23:59:00+00:00"))
+            first = collect(api, at=dt.datetime.fromisoformat("2026-11-10T15:59:00+00:00"))
             api.repos[0]["defaultBranch"] = "refs/heads/other"
-            later = collect(api, previous=first, at=dt.datetime.fromisoformat("2026-11-11T00:01:00+00:00"))
+            later = collect(api, previous=first, at=dt.datetime.fromisoformat("2026-11-10T16:01:00+00:00"))
         progress = later["state"]["projects"]["example/project"]["work"]["progress"][REPO]
         self.assertEqual(progress["branch"], "refs/heads/other")
         self.assertNotEqual(progress["pinnedAt"], first["state"]["projects"]["example/project"]["work"]["progress"][REPO]["pinnedAt"])

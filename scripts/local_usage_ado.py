@@ -8,11 +8,13 @@ import re
 import subprocess
 import time
 import urllib.parse
+from zoneinfo import ZoneInfo
 
 
-DEFINITION = "ado-default-head-v1"
+DEFINITION = "ado-default-head-beijing-v1"
 RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
-DATE_BASIS = {"prs": "created-at/UTC", "commits": "author-at/UTC"}
+DATE_BASIS = {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"}
+TZ = ZoneInfo("Asia/Shanghai")
 GUID = re.compile(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", re.I)
 SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", re.I)
 COAUTHOR_PREFIX = re.compile(r"^[ \t]*(?i:Co-authored-by):", re.M)
@@ -49,8 +51,33 @@ def instant(value):
     return parsed.astimezone(dt.timezone.utc)
 
 
+def china_day(value):
+    return value.astimezone(TZ).date().isoformat()
+
+
+def window_start(first):
+    return dt.datetime.combine(dt.date.fromisoformat(first), dt.time.min, TZ).astimezone(dt.timezone.utc)
+
+
 def digest(*parts):
     return hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
+
+
+def reday_proof(proof, previous_start=None):
+    if not isinstance(proof, dict) or not isinstance(proof.get("items"), list):
+        raise ValueError("Invalid ADO raw commit proof")
+    items = []
+    for item in proof["items"]:
+        if (not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                or not SHA.fullmatch(item["id"]) or type(item.get("merge")) is not bool
+                or type(item.get("coauthor")) is not bool):
+            raise ValueError("Invalid ADO raw commit proof")
+        authored = instant(item["authoredAt"])
+        items.append({**item, "day": china_day(authored)})
+    start = proof.get("coverageStartAt", previous_start)
+    if start is not None:
+        instant(start)
+    return {**proof, "items": items, **({"coverageStartAt": start} if start is not None else {})}
 
 
 def segment(value):
@@ -208,8 +235,8 @@ def add_prs(work, page, account, inventory_ids):
             raise ValueError("Duplicate ADO PR page")
         seen.add(pr_id)
         created = instant(row["creationDate"])
-        if work["firstDay"] <= created.date().isoformat() <= work["lastDay"] and created <= instant(work["cutoff"]):
-            pending.append({"id": pr_id, "repo": repo_id, "day": created.date().isoformat()})
+        if work["firstDay"] <= china_day(created) <= work["lastDay"] and created <= instant(work["cutoff"]):
+            pending.append({"id": pr_id, "repo": repo_id, "day": china_day(created), "createdAt": stamp(created)})
     work["prs"].extend(pending)
     work["prSeen"] = sorted(seen)
 
@@ -234,7 +261,7 @@ def commit_page(reader, org, project, repo_id, head, offset):
 
 def credited_commit(reader, org, project, repo_id, item, emails, first):
     authored = instant(item["author"]["date"])
-    day = authored.date().isoformat()
+    day = china_day(authored)
     if day < first:
         return None
     commit_id = item["commitId"].lower()
@@ -266,7 +293,7 @@ def credited_commit(reader, org, project, repo_id, item, emails, first):
 
 
 def new_work(at):
-    end = at.date()
+    end = at.astimezone(TZ).date()
     return {"cutoff": stamp(at), "firstDay": (end - dt.timedelta(days=59)).isoformat(),
             "lastDay": end.isoformat(), "inventory": None, "prOffset": 0, "prSeen": [],
             "prFirst": None, "prs": [], "prComplete": False, "repoIndex": 0,
@@ -310,7 +337,9 @@ def advance_repository(reader, org, project, repo, work, cache, emails):
     prior_items = {item["id"]: item for item in prior["items"]} if prior else {}
     if progress is None:
         head = default_head(reader, org, project, repo)
-        if prior and prior.get("head") == head and prior.get("branch") == repo["defaultBranch"]:
+        if (prior and prior.get("head") == head and prior.get("branch") == repo["defaultBranch"]
+                and prior.get("coverageStartAt") is not None
+                and instant(prior["coverageStartAt"]) <= window_start(work["firstDay"])):
             work["repoDone"][repo_id] = {**prior, "items": [item for item in prior["items"]
                 if work["firstDay"] <= item["day"]]}
             return
@@ -341,7 +370,7 @@ def advance_repository(reader, org, project, repo, work, cache, emails):
         while progress["pending"]:
             item = progress["pending"][0]
             oid = item["commitId"]
-            candidate = instant(item["author"]["date"]).date().isoformat() >= work["firstDay"]
+            candidate = china_day(instant(item["author"]["date"])) >= work["firstDay"]
             if candidate and oid in prior_checked:
                 credited = prior_items.get(oid)
             else:
@@ -358,7 +387,8 @@ def advance_repository(reader, org, project, repo, work, cache, emails):
             relation = ("descendant" if prior["head"] in progress["seen"] else "rewritten") if prior else "initial"
             proof = {"head": progress["head"], "branch": repo["defaultBranch"],
                      "items": items, "checked": sorted(set(progress["checked"])),
-                     "pinnedAt": progress["pinnedAt"], "relation": relation}
+                     "pinnedAt": progress["pinnedAt"], "relation": relation,
+                     "coverageStartAt": stamp(window_start(work["firstDay"]))}
             cache[repo_id] = proof
             current_head = default_head(reader, org, project, repo)
             if current_head != progress["head"]:
@@ -430,17 +460,23 @@ def advance_repos(reader, org, project, work, cache, emails):
         work["repoIndex"] = 0
 
 
-def source_days(work, org, project, categories, captured_at, complete, verified, visibility_complete):
+def source_days(work, cache, org, project, categories, captured_at, complete, verified, visibility_complete):
     repos = {row["id"]: row for row in work["inventory"] or []}
     selected = set(work.get("selectedRepoIds", []))
     prs = [item for item in work["prs"] if item["repo"] in selected]
-    commits = [(repo_id, item) for repo_id, result in work["repoDone"].items()
+    known_proofs = dict(work["repoDone"])
+    for repo_id, progress in work["progress"].items():
+        prior = cache.get(repo_id)
+        known_proofs[repo_id] = (prior if prior and prior.get("head") == progress.get("head")
+                                else progress)
+    commits = [(repo_id, item) for repo_id, result in known_proofs.items()
                for item in result["items"] if repo_id in selected and instant(item["authoredAt"]) <= instant(work["cutoff"])]
     if len({(repo_id, item["id"]) for repo_id, item in commits}) != len(commits):
         raise ValueError("Duplicate repository commit key")
     output = []
     first = dt.date.fromisoformat(work["firstDay"])
     pr_exact = verified and visibility_complete and work["prComplete"]
+    commit_proven = verified and work["scanComplete"] and selected.issubset(work["repoDone"])
     for offset in range(60):
         day = (first + dt.timedelta(days=offset)).isoformat()
         pr_rows = [item for item in prs if item["day"] == day]
@@ -455,25 +491,25 @@ def source_days(work, org, project, categories, captured_at, complete, verified,
             repo_complete = repo_pr_exact and repo_commit_exact
             repository_days.append({"id": digest("ado-repo", org.casefold(), repo_id),
                 "name": org + "/" + project + "/" + repo["name"], "category": categories[repo_id],
-                "prs": p if repo_pr_exact else None, "knownPrs": p if verified else None,
+                "prs": p if repo_pr_exact else None, "knownPrs": p if verified and (p or work["prComplete"]) else None,
                 "commits": c if repo_commit_exact else None,
-                "knownCommits": c if verified and repo_id in work["repoDone"] else None,
+                "knownCommits": c if verified and (c or repo_id in work["repoDone"]) else None,
                 "status": "ready" if repo_complete else "partial" if verified else "unavailable"})
         p = len(pr_rows)
         c = len(commit_rows)
         output.append({"day": day, "capturedAt": captured_at,
             "status": "ready" if complete else "partial" if verified else "unavailable",
             "prs": p if pr_exact else None,
-            "knownPrs": p if verified and (work["prComplete"] or work["prSeen"]) else None,
+            "knownPrs": p if verified and (p or work["prComplete"]) else None,
             "commits": c if complete else None,
-            "knownCommits": c if verified and (work["repoDone"] or work["scanComplete"]) else None,
+            "knownCommits": c if verified and (c or commit_proven) else None,
             "repositories": repository_days})
     return output
 
 
 def collect(config, run, repository_category, *, at=None, days=60, previous=None):
     if type(days) is not int or days != 60:
-        raise ValueError("ADO collection requires exactly 60 UTC dates")
+        raise ValueError("ADO collection requires exactly 60 Beijing dates")
     at = at or dt.datetime.now(dt.timezone.utc)
     if at.tzinfo is None:
         raise ValueError("ADO capture time requires an offset")
@@ -481,10 +517,20 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
     configured = projects(config)
     old_state = {}
     compatible_state = False
+    legacy_basis = False
+    previous_start = None
     if previous is not None:
         if (not isinstance(previous, dict) or previous.get("version") != 2
-                or previous.get("metricDefinition") != DEFINITION or previous.get("provider") != "ado"):
+                or previous.get("provider") != "ado"):
             raise ValueError("Cannot resume a different ADO metric")
+        legacy_basis = (previous.get("metricDefinition") == "ado-default-head-v1"
+                        and previous.get("dateBasis") == {"prs": "created-at/UTC", "commits": "author-at/UTC"})
+        if not legacy_basis and (previous.get("metricDefinition") != DEFINITION
+                                 or previous.get("dateBasis") != DATE_BASIS):
+            raise ValueError("Cannot resume a different ADO date basis")
+        if legacy_basis:
+            previous_start = stamp(dt.datetime.combine(
+                dt.date.fromisoformat(previous["operationWindow"]["startDay"]), dt.time.min, dt.timezone.utc))
         state = previous.get("state", {})
         if not isinstance(state, dict) or state.get("schema") not in (1, 2, 3):
             raise ValueError("Invalid ADO continuation schema")
@@ -497,8 +543,8 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
     sources, states, source_ids = [], {}, []
     discovered_repositories = set()
     old_sources = ({source["id"]: source for source in previous.get("sources", [])}
-                   if compatible_state and isinstance(previous.get("sources"), list) else {})
-    if compatible_state and len(old_sources) != len(previous.get("sources", [])):
+                   if compatible_state and not legacy_basis and isinstance(previous.get("sources"), list) else {})
+    if old_sources and len(old_sources) != len(previous.get("sources", [])):
         raise ValueError("Duplicate retained ADO source")
     emails = author_aliases(config)
     email_hash = digest("ado-author-aliases", sorted(emails)) if emails else None
@@ -519,7 +565,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         if prior_scope not in (None, "selected", "legacy-unresolved"):
             raise ValueError("Invalid ADO expected repository scope")
         same_scope = prior.get("remoteScopeHash") == scope_hash
-        old_cache = prior.get("cache", {})
+        old_cache = {key: reday_proof(value, previous_start) for key, value in prior.get("cache", {}).items()}
         cache = old_cache if same_scope else {}
         prior_work = prior.get("work")
         expected_ids = set()
@@ -537,9 +583,9 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 else:
                     expected_ids = set(prior.get("expectedRepositoryIds", []))
                     unresolved_scope = bool(expected_ids)
-        work = prior_work
+        work = None if legacy_basis else prior_work
         rollover_progress = {}
-        new_first = (at.date() - dt.timedelta(days=59)).isoformat()
+        new_first = (at.astimezone(TZ).date() - dt.timedelta(days=59)).isoformat()
         if (isinstance(work, dict) and not work.get("scanComplete")
                 and isinstance(work.get("firstDay"), str)
                 and work["firstDay"] <= new_first
@@ -613,6 +659,13 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                            else str(error) if isinstance(error, ValueError) else "read-failure")
         cache = {**cache, **work["repoDone"]}
         reasons += work["reasons"] + list(work["repoErrors"].values())
+        if any(repo_id not in work["repoDone"] and repo_id in work["progress"]
+               and repo_id in cache and (cache[repo_id].get("coverageStartAt") is None
+                   or instant(cache[repo_id]["coverageStartAt"]) > window_start(work["firstDay"]))
+               for repo_id in work.get("selectedRepoIds", [])):
+            reasons.append("history-start-unverified")
+        if work["progress"]:
+            reasons.append("history-incomplete")
         reasons = sorted(set(reasons))
         selected_ids = set(work.get("selectedRepoIds", []))
         pagination_complete = (work["prComplete"] and work["scanComplete"] and not work["repoErrors"]
@@ -638,7 +691,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                                "paginationComplete": pagination_complete,
                                "visibilityComplete": visibility_complete,
                                "reasons": reasons},
-                  "days": source_days(work, org, project, categories, captured_at,
+                  "days": source_days(work, cache, org, project, categories, captured_at,
                                       complete, verified, visibility_complete),
                   "provenance": {"scopeDefinition": "explicit-configured-repositories",
                       "inventoryCount": len(work["inventory"] or []),
@@ -670,8 +723,8 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
     return {"version": 2, "metricDefinition": DEFINITION, "provider": "ado",
             "asOfAt": min(source["provenance"]["sourceCutoffAt"] for source in sources),
             "capturedAt": captured, "dateBasis": DATE_BASIS,
-            "operationWindow": {"startDay": (at.date() - dt.timedelta(days=59)).isoformat(),
-                                "endDay": at.date().isoformat(), "todayPartial": True},
+            "operationWindow": {"startDay": (at.astimezone(TZ).date() - dt.timedelta(days=59)).isoformat(),
+                                "endDay": at.astimezone(TZ).date().isoformat(), "todayPartial": True},
             "activeSourceIds": source_ids, "sources": sources,
             "collection": {"requestCount": reader.calls, "elapsedSeconds": round(time.monotonic() - started, 3),
                            "complete": all(source["status"] == "ready" for source in sources),
@@ -766,7 +819,7 @@ def adopt_saved_proofs(config, envelope, proofs, responses, repository_category)
         if (not isinstance(checked, list) or not isinstance(items, list)
                 or len(checked) != len(set(checked)) or any(not isinstance(oid, str) or not SHA.fullmatch(oid) for oid in checked)
                 or len(items) != len({item["id"] for item in items})
-                or any(item["id"] not in checked or item["day"] != instant(item["authoredAt"]).date().isoformat()
+                or any(item["id"] not in checked or item["day"] != china_day(instant(item["authoredAt"]))
                        or type(item["merge"]) is not bool or type(item["coauthor"]) is not bool for item in items)
                 or instant(proof["pinnedAt"]) > instant(envelope["capturedAt"])):
             raise ValueError("Invalid ADO credited commit proof")
@@ -775,7 +828,8 @@ def adopt_saved_proofs(config, envelope, proofs, responses, repository_category)
         if (not isinstance(seen_prs, list) or not isinstance(prs, list)
                 or len(seen_prs) != len(set(seen_prs)) or any(type(value) is not int or value < 1 for value in seen_prs)
                 or len(prs) != len({row["id"] for row in prs})
-                or any(row["id"] not in seen_prs or row["repo"] != repo_id for row in prs)
+                or any(row["id"] not in seen_prs or row["repo"] != repo_id
+                       or row["day"] != china_day(instant(row["createdAt"])) for row in prs)
                 or type(work.get("prOffset")) is not int or work["prOffset"] < len(seen_prs)):
             raise ValueError("Invalid ADO PR proof")
         replay_source = replay_sources[source_id]

@@ -41,8 +41,10 @@ const enabled = process.env.OMB_PRIMARY_USAGE_UI === "1";
     for (const [width, locale, skin] of [[360, "en", "midnight"], [960, "zh", "atelier"]] as const) {
       await page.navigate(`${url.split("?")[0]}?width=${width}&locale=${locale}&skin=${skin}&scenario=known-counts`,
         { readiness: "domcontentloaded", timeoutMs: 45_000 });
-      await expect.poll(() => read<string>("document.querySelector('[data-usage-metric-definition]')?.textContent ?? ''"),
-        { timeout: 30_000 }).toContain(locale === "en" ? "Profile dates" : "Profile 日期");
+      const explanation = () => read<string>("document.querySelector('[data-usage-metric-definition]')?.textContent ?? ''");
+      await expect.poll(explanation, { timeout: 30_000 }).toContain(locale === "en" ? "PRs use creation time" : "PR 按创建时刻");
+      expect(await explanation()).toContain(locale === "en" ? "Beijing time (UTC+8)" : "北京时间（UTC+8）");
+      expect(await explanation()).toContain(locale === "en" ? "including merge commits" : "包括合并提交");
       await expect.poll(() => read<number>("document.querySelectorAll('[data-testid=local-usage-panel] section dd').length"),
         { timeout: 30_000 }).toBeGreaterThanOrEqual(3);
       const state = await read<{ sourceSelector: boolean; overflow: number; width: number; cards: string[]; rows: string }>(`(() => {
@@ -83,6 +85,30 @@ const enabled = process.env.OMB_PRIMARY_USAGE_UI === "1";
       const shot = await page.session.send<{ data: string }>("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       writeFileSync(join(evidence, `primary-${width}-${locale}.png`), Buffer.from(shot.data, "base64"));
     }
+    await page.navigate(`${url.split("?")[0]}?width=360&locale=en&skin=midnight&scenario=beijing-partial`,
+      { readiness: "domcontentloaded", timeoutMs: 45_000 });
+    await expect.poll(() => read<string>("document.querySelector('[data-usage-metric-definition]')?.textContent ?? ''"),
+      { timeout: 30_000 }).toContain("Today is partial through the shown cutoff");
+    const boundary = await read<{ dates: string[]; counts: string[][]; changes: string[][]; trend: string; sources: string; overflow: number }>(`(() => {
+      const panel = document.querySelector('[data-testid="local-usage-panel"]');
+      const cards = [...panel.querySelectorAll('section')].slice(0, 3);
+      return { dates: cards.map(card => card.querySelector('h3')?.parentElement?.textContent ?? ''),
+        counts: cards.map(card => [...card.querySelectorAll('dl > div > dd > span:first-child')].slice(0, 2).map(node => node.textContent.trim())),
+        changes: cards.map(card => [...card.querySelectorAll('dl > div > dd > [data-usage-change]')].slice(0, 2).map(node => node.getAttribute('data-usage-provisional') + ':' + node.querySelector('[aria-hidden="true"]')?.textContent)),
+        trend: panel.querySelector('[data-usage-trend="prs"] [data-usage-day="2026-11-03"]')?.getAttribute('aria-label') ?? '',
+        sources: panel.querySelector('[data-usage-primary-sources]')?.textContent ?? '',
+        overflow: panel.scrollWidth - panel.clientWidth };
+    })()`);
+    expect(boundary.dates.every(date => date.includes("2026-11-03"))).toBe(true);
+    expect(boundary.counts).toEqual([["3", "5"], ["3", "5"], ["3", "5"]]);
+    expect(boundary.changes).toEqual([["true:New", "true:New"], ["true:New", "true:New"], ["true:New", "true:New"]]);
+    expect(boundary.trend).toContain("Known subtotal");
+    expect(boundary.sources).toContain("60d");
+    expect(boundary.overflow).toBeLessThanOrEqual(1);
+    await read("document.querySelector('[data-testid=local-usage-panel] select[aria-label=\"Trend range\"]').value = '60'; document.querySelector('[data-testid=local-usage-panel] select[aria-label=\"Trend range\"]').dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('[data-usage-daily]').open = true");
+    await expect.poll(() => read<number>("document.querySelectorAll('[data-usage-daily] tbody tr').length")).toBe(60);
+    const boundaryShot = await page.session.send<{ data: string }>("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    writeFileSync(join(evidence, "primary-beijing-partial-360-en.png"), Buffer.from(boundaryShot.data, "base64"));
     console.info(JSON.stringify({ primaryUsageUi: "passed", evidence, widths: [360, 960], languages: ["en", "zh"] }));
   } finally {
     await browser?.close().catch(() => {});

@@ -609,7 +609,7 @@ describe("local Usage projection", () => {
     await writeFile(contributionsFile, JSON.stringify(primaryUsageSnapshotFixture()));
     const response = await createLocalUsageProvider({ file, contributionsFile, now: () => asOf }).get();
     expect(response.contributions).toMatchObject({ metricDefinition: "contributions-v2", status: "ready",
-      timeZone: "provider-days", windows: { "1": { prs: 5, commits: 9 } } });
+      timeZone: "Asia/Shanghai", windows: { "1": { prs: 5, commits: 9 } } });
     expect(response.windows?.["1"].prs).toBe(1);
     expect(response.contributions?.accounts.map((account) => account.windows["1"].prs)).toEqual([3, 2]);
   });

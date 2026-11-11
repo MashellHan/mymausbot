@@ -13,6 +13,7 @@ import plistlib
 import pwd
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import urllib.parse
@@ -219,6 +220,8 @@ def prepare(args):
         raise ValueError("Scoped ADO aliases differ from the operator's proof")
     current = read(config_path)
     candidate = migrated_config(current, evidence, args.ado_author_email, read(candidate_path))
+    if candidate["githubHelper"] != str((helpers / "refresh-local-usage.py").resolve(strict=True)):
+        raise ValueError("Candidate GitHub helper differs from the scheduled installed helper")
     if not source.is_dir() or any(sha(source / name) is None for name in HELPERS):
         raise ValueError("Reviewed App lacks a required contribution helper")
     if any(path.is_symlink() for path in (config_path, target, helpers, source)):
@@ -250,20 +253,50 @@ def prepare(args):
                       "candidateConfigSha256": manifest["candidateConfigSha256"]}))
 
 
+def private_continuation(path, candidate):
+    value = contributions.validate_bindings(contributions.load_previous(path), candidate)
+    github, ado = value["github"].get("state"), value["ado"].get("state")
+    if (not isinstance(github, dict) or github.get("schema") != 1 or not isinstance(github.get("sources"), dict)
+            or not isinstance(ado, dict) or ado.get("schema") != 3 or not isinstance(ado.get("projects"), dict)):
+        raise ValueError("Private contribution continuation is unavailable")
+    return value
+
+
 def capture(args):
     plan = Path(args.plan_dir)
-    manifest, _, _, _, source = paths(plan)
+    manifest, _, _, helpers, source = paths(plan)
     if (plan / "sealed-plan.json").exists():
         raise ValueError("Sealed migration capture is immutable")
     if sha(plan / "candidate-config.json") != manifest["candidateConfigSha256"] or any(
             sha(source / name) != expected for name, expected in manifest["sourceHelperHashes"].items()):
         raise ValueError("Migration source or candidate configuration changed")
     runtime = scheduled_runtime(manifest)
+    candidate = read(plan / "candidate-config.json")
+    if candidate["githubHelper"] != str((helpers / "refresh-local-usage.py").resolve(strict=True)):
+        raise ValueError("Candidate GitHub helper differs from the scheduled installed helper")
+    raw_source_helper = source / "refresh-local-usage.py"
+    if raw_source_helper.is_symlink():
+        raise ValueError("Packaged GitHub helper path is not exact")
+    source_helper = raw_source_helper.resolve(strict=True)
+    capture_config = plan / "capture-config.json"
+    write_json(capture_config, {**candidate, "githubHelper": str(source_helper)})
+    capture_config_hash = sha(capture_config)
+    before_cache = plan / "before/contributions-v2.json"
+    if manifest["old"]["cache"] is not None:
+        if sha(before_cache) != manifest["old"]["cache"]:
+            raise ValueError("Read-only contribution seed changed")
+        contributions.validate_seed_bindings(contributions.load_previous(before_cache), candidate)
+    private_cache = plan / "candidate-cache.json"
+    if private_cache.exists() or private_cache.is_symlink():
+        private_continuation(private_cache, candidate)
     person = pwd.getpwuid(os.getuid())
     environment = {"HOME": str(user_home()), "USER": person.pw_name, "LOGNAME": person.pw_name,
+                   "PYTHONDONTWRITEBYTECODE": "1",
                    **runtime["environment"]}
-    command = [runtime["python"], str(source / "refresh-local-usage.py"), "--collector", manifest["collector"],
-               "--config", str(plan / "candidate-config.json"), "--capture-only", "--output", str(plan / "candidate-cache.json")]
+    command = [runtime["python"], str(source_helper), "--collector", manifest["collector"],
+               "--config", str(capture_config), "--capture-only", "--output", str(private_cache)]
+    if manifest["old"]["cache"] is not None:
+        command.extend(("--previous", str(before_cache)))
     result = subprocess.run(command, cwd=runtime["workingDirectory"] or str(user_home()),
                             env=environment, capture_output=True, text=True, timeout=300)
     log = plan / "capture.log"
@@ -271,7 +304,45 @@ def capture(args):
     os.chmod(log, 0o600)
     if result.returncode:
         raise ValueError("Private capture failed under the scheduled Python/runtime; inspect private log")
-    print(json.dumps({"status": "CAPTURED_PRIVATE_ONLY", "cacheSha256": sha(plan / "candidate-cache.json")}))
+    if sha(capture_config) != capture_config_hash:
+        raise ValueError("Private capture helper binding changed")
+    private_continuation(private_cache, candidate)
+    print(json.dumps({"status": "CAPTURED_PRIVATE_ONLY", "cacheSha256": sha(private_cache)}))
+
+
+def adopt_staged(args):
+    plan, staged_plan = Path(args.plan_dir), Path(args.staged_plan_dir)
+    if plan == staged_plan or (plan / "sealed-plan.json").exists():
+        raise ValueError("Final staging plan must be separate and unsealed")
+    staged_seal = staged_plan / "sealed-plan.json"
+    if sha(staged_seal) != args.expected_staged_plan_sha256:
+        raise ValueError("Staged plan hash does not match")
+    staged = read(staged_seal)
+    validate_live(staged_plan, staged)
+    final = read(plan / "prepared-plan.json")
+    scheduled_runtime(final)
+    if (sha(plan / "candidate-config.json") != final["candidateConfigSha256"]
+            or final["candidateConfigSha256"] != staged["candidateConfigSha256"]
+            or final["sourceHelperHashes"] != staged["sourceHelperHashes"]
+            or any(final[key] != staged[key] for key in ("collector", "python", "azureConfigDir", "helpersDir"))):
+        raise ValueError("Staged and final source or configuration differs")
+    staged_cache = staged_plan / "candidate-cache.json"
+    private_continuation(staged_cache, read(plan / "candidate-config.json"))
+    target = plan / "candidate-cache.json"
+    if target.exists() or target.is_symlink():
+        raise ValueError("Final private candidate already exists")
+    fd = os.open(staged_cache, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError("Staged private candidate is unsafe")
+        data = stream.read(contributions.MAX_BYTES + 1)
+    if len(data) > contributions.MAX_BYTES or hashlib.sha256(data).hexdigest() != staged["candidateCacheSha256"]:
+        raise ValueError("Staged private candidate changed during adoption")
+    atomic(target, data, 0o600)
+    if sha(target) != staged["candidateCacheSha256"]:
+        raise ValueError("Staged private candidate changed during adoption")
+    print(json.dumps({"status": "STAGED_CONTINUATION_ADOPTED_PRIVATE_ONLY", "cacheSha256": sha(target)}))
 
 
 def seal(args):
@@ -281,7 +352,11 @@ def seal(args):
     if (plan / "sealed-plan.json").exists():
         raise ValueError("Migration plan is already sealed")
     candidate = read(plan / "candidate-config.json")
-    contribution = contributions.validate_bindings(read(plan / "candidate-cache.json"), candidate)
+    capture_config = plan / "capture-config.json"
+    if (read(capture_config) != {**candidate, "githubHelper": str((source / "refresh-local-usage.py").resolve(strict=True))}
+            or sha(capture_config) is None):
+        raise ValueError("Private capture helper binding changed before sealing")
+    contribution = private_continuation(plan / "candidate-cache.json", candidate)
     profiles = {(row["host"].casefold(), row["login"].casefold(), row["stableId"]) for row in candidate["githubProfiles"]}
     principals = candidate["adoPrincipals"]
     for row in contribution["github"]["sources"]:
@@ -297,6 +372,7 @@ def seal(args):
             sha(source / name) != expected for name, expected in manifest["sourceHelperHashes"].items()):
         raise ValueError("Migration source changed before sealing")
     sealed = {**manifest, "sealedAtUtc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "captureConfigSha256": sha(capture_config),
         "candidateCacheSha256": sha(plan / "candidate-cache.json"),
         "sourceCoverage": {provider: [{"status": row["status"], "coverage": row["coverage"]}
             for row in contribution[provider]["sources"]] for provider in ("github", "ado")},
@@ -316,6 +392,8 @@ def validate_live(plan, sealed):
         raise ValueError("Signed helper source changed after plan review")
     if sha(plan / "candidate-config.json") != sealed["candidateConfigSha256"] or sha(plan / "candidate-cache.json") != sealed["candidateCacheSha256"]:
         raise ValueError("Migration candidate changed after plan review")
+    if sha(plan / "capture-config.json") != sealed["captureConfigSha256"]:
+        raise ValueError("Private capture helper binding changed after plan review")
 
 
 def compare_state(path, old, new):
@@ -364,8 +442,9 @@ def transition(args, rollback=False):
             if old_hash is not None and sha(old_file) != old_hash or sha(new_file) != new_hash:
                 raise ValueError("Migration backup or signed source changed")
         selected = list(reversed(candidates)) if rollback else candidates
-        if not rollback and sha(config) == sealed["candidateConfigSha256"] and any(
-                sha(path) != new_hash for path, _, _, _, new_hash in candidates):
+        if (not rollback and sealed["old"]["config"] != sealed["candidateConfigSha256"]
+                and sha(config) == sealed["candidateConfigSha256"] and any(
+                    sha(path) != new_hash for path, _, _, _, new_hash in candidates)):
             raise ValueError("Enabled configuration has incomplete installed source")
         for path, old_file, new_file, old_hash, new_hash in selected:
             desired = old_hash if rollback else new_hash
@@ -394,14 +473,18 @@ def main():
     for key in ("plan-dir", "config", "cache", "helpers-dir", "app", "launch-agent", "evidence-dir", "ado-author-proof", "private-profile-candidate", "expected-private-profile-sha256", "collector", "azure-config-dir", "python"):
         first.add_argument("--" + key, required=True)
     first.add_argument("--ado-author-email", action="append", required=True)
-    for command in ("capture", "seal", "apply", "rollback"):
+    for command in ("capture", "seal", "apply", "rollback", "adopt-staged"):
         item = sub.add_parser(command)
         item.add_argument("--plan-dir", required=True)
         if command in ("apply", "rollback"):
             item.add_argument("--expected-plan-sha256", required=True)
+        if command == "adopt-staged":
+            item.add_argument("--staged-plan-dir", required=True)
+            item.add_argument("--expected-staged-plan-sha256", required=True)
     args = parser.parse_args()
     if args.command == "prepare": prepare(args)
     elif args.command == "capture": capture(args)
+    elif args.command == "adopt-staged": adopt_staged(args)
     elif args.command == "seal": seal(args)
     else: transition(args, rollback=args.command == "rollback")
 

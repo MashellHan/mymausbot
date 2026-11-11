@@ -126,7 +126,8 @@ describe("installed native Mini App dashboards", () => {
     await vi.waitFor(() => expect(host.querySelectorAll("[data-usage-trend]")).toHaveLength(3));
     expect(host.textContent).toContain("1-day window");
     expect(host.textContent).toContain("2026-11-07");
-    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("Profile dates");
+    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("Beijing time (UTC+8)");
+    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("PRs use creation time; commits use author time, including merge commits");
     expect([...host.querySelectorAll("section dd > span:first-child")].slice(0, 2).map(value => value.textContent)).toEqual(["5", "9"]);
     expect(host.querySelectorAll("section dd [data-usage-provisional]")).toHaveLength(0);
     expect(host.querySelector('[data-usage-primary-sources]')?.textContent).toContain("fixture-gh");

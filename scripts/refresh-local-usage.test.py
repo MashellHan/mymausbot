@@ -469,9 +469,11 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
             directory.mkdir()
         collector = self.root / "collector.py"
         collector.write_text('''import os
+import sys
 def repositories(config):
     return [{"path": config["repoRoots"][0], "cwd": os.getcwd(),
-             "home": os.environ["HOME"], "pythonPath": os.environ.get("PYTHONPATH")}]
+             "home": os.environ["HOME"], "pythonPath": os.environ.get("PYTHONPATH"),
+             "noBytecode": sys.dont_write_bytecode}]
 ''')
         spawn = subprocess.Popen
 
@@ -480,6 +482,7 @@ def repositories(config):
             self.assertEqual(kwargs["env"]["HOME"], str(home))
             self.assertEqual(kwargs["env"]["GIT_CONFIG_GLOBAL"], "/dev/null")
             self.assertEqual(kwargs["env"]["GIT_ASKPASS"], "/usr/bin/false")
+            self.assertEqual(kwargs["env"]["PYTHONDONTWRITEBYTECODE"], "1")
             return spawn(command, cwd=unrelated, **kwargs)
 
         request = {"stage": "repositories", "collector": str(collector),
@@ -488,7 +491,8 @@ def repositories(config):
              patch.object(usage.subprocess, "Popen", side_effect=isolated_spawn):
             result = usage._run_worker(request, 5)
         self.assertEqual(result, [{"path": str(repository), "cwd": str(unrelated.resolve()),
-                                   "home": str(home), "pythonPath": None}])
+                                   "home": str(home), "pythonPath": None, "noBytecode": True}])
+        self.assertFalse((self.root / "__pycache__").exists())
 
     def test_unknown_collector_child_is_refused_before_it_can_run(self):
         collector = self.root / "collector.py"
@@ -733,6 +737,82 @@ def collect(config):
         self.assertTrue(all(worker["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
                             and worker["env"]["GIT_ASKPASS"] == "/usr/bin/false"
                             and "GH_TOKEN" not in worker["env"] for worker in workers))
+
+    def test_private_capture_prefers_valid_candidate_progress_over_immutable_seed(self):
+        zone = dt.timezone(dt.timedelta(hours=8))
+        cutoff = dt.datetime.fromisoformat("2026-11-11T01:32:36+00:00")
+        config = {"githubProfiles": [{"host": "github.com", "login": "Fixture", "stableId": "fixture-id", "profile": "fixture"}],
+                  "mergedAdoProjects": ["https://dev.azure.com/example/project"],
+                  "adoPrincipals": {"example": {"stableId": TENANT, "alias": OWNER}},
+                  "adoAuthorEmails": [OWNER], "authorEmails": [OWNER]}
+        def envelope(provider, at, progress, legacy=False):
+            end = at.astimezone(dt.timezone.utc if legacy else zone).date()
+            first = (end - dt.timedelta(days=59)).isoformat()
+            account = {"host": "github.com" if provider == "github" else "dev.azure.com",
+                       "login": "Fixture" if provider == "github" else OWNER,
+                       "stableId": "fixture-id" if provider == "github" else TENANT}
+            source = {"id": provider + "-source", "account": account, "status": "partial",
+                      "coverage": {"identityVerified": True, "paginationComplete": False,
+                                   "visibilityComplete": False, "reasons": ["history-incomplete"]}, "days": []}
+            if provider == "ado": source["scope"] = {"organization": "example", "project": "project"}
+            state = ({"schema": 1, "sources": {source["id"]: {"progress": progress}}} if provider == "github"
+                     else {"schema": 3, "projects": {"example/project": {"cache": {"verified": {"items": [
+                         {"id": "a" * 40, "authoredAt": "2026-11-10T16:30:00Z", "merge": True, "coauthor": False}]}}}}})
+            return {"version": 2, "provider": provider,
+                    "metricDefinition": ("github-profile-v2" if provider == "github" else "ado-default-head-v1") if legacy
+                        else ("github-profile-beijing-v1" if provider == "github" else "ado-default-head-beijing-v1"),
+                    "dateBasis": ({"prs": "github-profile-day", "commits": "github-profile-day"} if provider == "github"
+                                  else {"prs": "created-at/UTC", "commits": "author-at/UTC"}) if legacy
+                        else {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"},
+                    "asOfAt": at.isoformat().replace("+00:00", "Z"), "capturedAt": at.isoformat().replace("+00:00", "Z"),
+                    "operationWindow": {"startDay": first, "endDay": end.isoformat(), "todayPartial": True},
+                    "activeSourceIds": [source["id"]], "sources": [source],
+                    "collection": {"requestCount": 1, "elapsedSeconds": 0.1, "complete": False,
+                                   "reasons": ["history-incomplete"]}, "state": state}
+        seed = {"version": 2, "github": envelope("github", cutoff, 0, legacy=True),
+                "ado": envelope("ado", cutoff, 0, legacy=True)}
+        seed_path = self.root / "seed.json"
+        seed_path.write_text(json.dumps(seed)); seed_path.chmod(0o600)
+        live = self.root / "live.json"
+        live.write_text(json.dumps(seed))
+        target = self.root / "candidate.json"
+        seen = []
+
+        class Worker:
+            returncode = 0
+            def __init__(self):
+                self.stdin = self.Input(self)
+            class Input(io.BytesIO):
+                def __init__(self, process):
+                    super().__init__(); self.process = process
+                def close(self):
+                    request = json.loads(self.getvalue())
+                    seen.append((request["stage"], request["previous"]))
+                    old = request["previous"]
+                    previous_progress = old.get("state", {}).get("sources", {}).get("github-source", {}).get("progress", 0)
+                    result = envelope(request["stage"], dt.datetime.fromisoformat(request["at"]),
+                                      previous_progress + 1 if request["stage"] == "github" else 0)
+                    Path(request["output"]).write_text(json.dumps(result))
+                    super().close()
+            def wait(self, timeout): return 0
+            def poll(self): return 0
+
+        with patch.object(usage, "primary_config", return_value=None), patch.object(usage.subprocess, "Popen", side_effect=lambda *a, **k: Worker()):
+            first = usage.refresh_primary(self.root / "collector.py", config, self.root,
+                                          file=target, previous_file=seed_path, include_legacy=False)
+            live.write_text('{"new":"ordinary scheduled generation"}')
+            second = usage.refresh_primary(self.root / "collector.py", config, self.root,
+                                           file=target, previous_file=seed_path, include_legacy=False)
+        self.assertEqual(first["github"]["state"]["sources"]["github-source"]["progress"], 1)
+        self.assertEqual(second["github"]["state"]["sources"]["github-source"]["progress"], 2)
+        self.assertEqual(seen[0][1]["metricDefinition"], "github-profile-v2")
+        self.assertEqual(seen[2][1]["metricDefinition"], "github-profile-beijing-v1")
+        self.assertEqual(second["ado"]["state"]["projects"], first["ado"]["state"]["projects"])
+        self.assertEqual(json.loads(seed_path.read_text()), seed)
+        target.write_text("{broken"); target.chmod(0o600)
+        with self.assertRaises((ValueError, json.JSONDecodeError)):
+            usage.refresh_primary(self.root / "collector.py", config, self.root,
+                                  file=target, previous_file=seed_path, include_legacy=False)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import { rm } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import { aggregateContributionSnapshot, createLocalContributionsReader, parseContributionSnapshot } from "./local-usage-contributions.ts";
+import { primaryUsageSnapshotFixture } from "../scripts/testing/primary-usage-fixture.ts";
 
 const cutoff = Date.parse("2026-11-10T12:00:00Z");
 const date = (index: number) => new Date(Date.UTC(2026, 8, 12 + index)).toISOString().slice(0, 10);
@@ -21,10 +22,9 @@ function envelope(provider: "github" | "ado") {
         category: provider === "github" ? "personal" : "work", status: "ready",
         prs, knownPrs: prs, commits, knownCommits: commits }] : [] };
   });
-  return { version: 2, metricDefinition: provider === "github" ? "github-profile-v2" : "ado-default-head-v1", provider,
+  return { version: 2, metricDefinition: provider === "github" ? "github-profile-beijing-v1" : "ado-default-head-beijing-v1", provider,
     asOfAt: "2026-11-10T12:00:00Z", capturedAt: "2026-11-10T12:00:00Z",
-    dateBasis: provider === "github" ? { prs: "github-profile-day", commits: "github-profile-day" }
-      : { prs: "created-at/UTC", commits: "author-at/UTC" },
+    dateBasis: { prs: "created-at/Asia-Shanghai", commits: "author-at/Asia-Shanghai" },
     operationWindow: { startDay: date(0), endDay: date(59), todayPartial: true },
     activeSourceIds: [sourceId], sources: [{ id: sourceId,
       account: { host: provider === "github" ? "github.example" : "dev.azure.com", login: "fixture-owner", stableId: "fixture-stable-id" },
@@ -58,11 +58,33 @@ function partialAccountedSnapshot() {
 const parse = (value: unknown) => parseContributionSnapshot(value, cutoff + 60_000);
 
 describe("canonical source-qualified contributions", () => {
-  it("keeps Profile and ADO source days, accounts, categories, repositories and comparisons on one version", () => {
+  it("includes the first eight Beijing hours in the partial day and its comparison windows", () => {
+    const asOfAt = "2026-11-02T16:05:00Z";
+    const now = Date.parse(asOfAt) + 60_000;
+    const value = primaryUsageSnapshotFixture("2026-11-03", asOfAt,
+      { github: { prs: 2, commits: 3 }, ado: { prs: 1, commits: 2 } });
+    const result = aggregateContributionSnapshot(parseContributionSnapshot(value, now), now);
+    expect(result.currentDayPartial).toBe(true);
+    expect(result.windows?.["1"]).toMatchObject({ startDay: "2026-11-03", endDay: "2026-11-03",
+      prs: 3, commits: 5, comparison: { prs: "new", commits: "new" } });
+    expect(result.windows?.["7"]).toMatchObject({ prs: 3, commits: 5 });
+    expect(result.windows?.["30"]).toMatchObject({ prs: 3, commits: 5 });
+    expect(result.history?.at(-1)).toMatchObject({ day: "2026-11-03", prs: 3, commits: 5 });
+  });
+
+  it("retains independent source cutoffs during a bounded ADO continuation", () => {
+    const value = snapshot();
+    value.ado.asOfAt = "2026-11-10T11:59:59Z";
+    const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    expect(result.cutoffAt).toBe(Date.parse(value.ado.asOfAt));
+    expect(result.sourceDays?.ado.endDay).toBe("2026-11-10");
+  });
+
+  it("keeps Beijing source days, accounts, categories, repositories and comparisons on one version", () => {
     const result = aggregateContributionSnapshot(parse(snapshot()), cutoff + 60_000);
     expect(result.metricDefinition).toBe("contributions-v2");
-    expect(result.timeZone).toBe("provider-days");
-    expect(result.dateBasis).toMatchObject({ github: { prs: "github-profile-day" }, ado: { commits: "author-at/UTC" } });
+    expect(result.timeZone).toBe("Asia/Shanghai");
+    expect(result.dateBasis).toMatchObject({ github: { prs: "created-at/Asia-Shanghai" }, ado: { commits: "author-at/Asia-Shanghai" } });
     expect(result.currentDayPartial).toBe(true);
     expect(result.windows?.["1"]).toMatchObject({ prs: 5, knownPrs: 5, commits: 9, knownCommits: 9,
       categories: { personal: { prs: 3, commits: 4 }, work: { prs: 2, commits: 5 } },
@@ -297,6 +319,7 @@ describe("canonical source-qualified contributions", () => {
   it("rejects incompatible versions, source identities, dates, duplicates and unreconciled rows", () => {
     const cases: ((value: ReturnType<typeof snapshot>) => void)[] = [
       (value) => { value.github.version = 1; },
+      (value) => { value.github.metricDefinition = "github-profile-v2"; },
       (value) => { value.github.activeSourceIds = ["wrong"]; },
       (value) => { (value.github.dateBasis as { prs: string }).prs = "created-at/UTC"; },
       (value) => { value.ado.operationWindow.endDay = "2026-11-09"; },
