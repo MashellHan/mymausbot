@@ -14,13 +14,13 @@ vi.mock("./DesktopCapabilities", async (importOriginal) => ({
 vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
 vi.mock("@/lib/cloud-guest", () => ({ useCanWriteIn: () => true }));
 
-// What the one-time cleanup left: the record that this browser was on Advanced, no mode key, no threads choice.
 const stored = new Map<string, string>([["omb-new-look", "seen"], ["omb-skin", "midnight"]]);
 vi.stubGlobal("localStorage", { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => void stored.set(key, String(value)),
   removeItem: (key: string) => void stored.delete(key) });
+const { INTERFACE_MODE_KEY, readAdvancedMode, setAdvancedMode } = await import("@/lib/interface-mode");
+stored.set(INTERFACE_MODE_KEY, "advanced");
 const { settleInterfaceMode } = await import("@/lib/new-look");
 settleInterfaceMode();
-const { readAdvancedMode, setAdvancedMode } = await import("@/lib/interface-mode");
 const { Sidebar } = await import("./Sidebar");
 const { BotEditorStore, initialState } = await import("@/state/store");
 const { setLocale, t } = await import("@/lib/i18n");
@@ -72,6 +72,11 @@ describe("thread folders after Advanced mode comes back", () => {
   });
 
   it("hides them in Simple mode and shows them again when switched back", async () => {
+    await draw();
+    const expandButton = expand();
+    if (expandButton) flushSync(() => expandButton.click());
+    await settle();
+    expect(folder()?.textContent).toContain("Taxes");
     flushSync(() => setAdvancedMode(false));
     await draw();
     expect(folder()).toBeNull();
