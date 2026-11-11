@@ -349,6 +349,8 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assertEqual(source["status"], "partial")
         self.assertTrue(source["coverage"]["paginationComplete"])
         self.assertEqual(source["coverage"]["eligibilityUncertainDays"], ["2026-09-15"])
+        self.assertEqual(source["coverage"]["eligibilityUncertainDaysByCategory"],
+                         {"work": [], "personal": ["2026-09-15"], "unclassified": []})
         self.assertIn("history-commit-eligibility-uncertain", source["coverage"]["reasons"])
         self.assertEqual(sum(day["knownCommits"] or 0 for day in source["days"]), 3)
         self.assertIsNone(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"])
@@ -359,7 +361,21 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assertIn(imported, proof["checked"])
         self.assertNotIn(imported, [item["oid"] for item in proof["items"]])
         self.assertEqual(repeated["sources"][0]["days"], source["days"])
+        self.assertEqual(repeated["sources"][0]["coverage"]["eligibilityUncertainDaysByCategory"],
+                         source["coverage"]["eligibilityUncertainDaysByCategory"])
         self.assertEqual(sum("history(first:" in arg for call in api.calls for arg in call), history_calls)
+
+    def test_precreation_day_keeps_unaffected_category_zero(self):
+        day = "2026-09-15"
+        typed = {"prs": [{"day": day, "repository": {"id": category, "name": category,
+                    "category": category}} for category in ("work", "personal")], "commits": []}
+        rows = profile.measured_days(dt.date.fromisoformat("2026-09-11"), AT, typed,
+                                     {"prs": [], "commits": []}, False, "2026-11-09T12:00:00Z",
+                                     True, True, {day}, {"work": set(), "personal": {day}, "unclassified": set()})
+        affected = next(row for row in rows if row["day"] == day)
+        self.assertIsNone(affected["knownCommits"])
+        self.assertEqual({row["category"]: row["knownCommits"] for row in affected["repositories"]},
+                         {"work": 0, "personal": None})
 
     def test_precreation_delta_commit_does_not_hide_later_newer_parent(self):
         api = Api()

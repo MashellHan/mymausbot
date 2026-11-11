@@ -143,6 +143,15 @@ function sourceDay(value: unknown, first: string, last: string, capturedAt: numb
   return { day: date, capturedAt: raw.capturedAt as string, status: state, ...totals, repositories };
 }
 
+function eligibilityDays(value: unknown, first: string, last: string): string[] {
+  if (!Array.isArray(value) || value.length > 60) throw new Error("Invalid eligibility days");
+  const days = value.map((item) => day(item));
+  if (new Set(days).size !== days.length || days.some((value) => value < first || value > last)) {
+    throw new Error("Invalid eligibility days");
+  }
+  return days;
+}
+
 function source(value: unknown, first: string, last: string, capturedAt: number, now: number,
   provider: "github" | "ado"): LocalContributionSource {
   const raw = record(value);
@@ -159,10 +168,16 @@ function source(value: unknown, first: string, last: string, capturedAt: number,
   const days = raw.days.map((row) => sourceDay(row, first, last, capturedAt, now));
   if (new Set(days.map((row) => row.day)).size !== days.length) throw new Error("Duplicate contribution source day");
   const uncertain = coverage.eligibilityUncertainDays;
-  if (uncertain !== undefined && (!Array.isArray(uncertain) || uncertain.length > 60)) throw new Error("Invalid eligibility days");
-  const eligibilityUncertainDays = uncertain === undefined ? undefined : uncertain.map((value) => day(value));
-  if (eligibilityUncertainDays && (new Set(eligibilityUncertainDays).size !== eligibilityUncertainDays.length ||
-      eligibilityUncertainDays.some((value) => value < first || value > last))) throw new Error("Invalid eligibility days");
+  const eligibilityUncertainDays = uncertain === undefined ? undefined : eligibilityDays(uncertain, first, last);
+  const scopedRaw = coverage.eligibilityUncertainDaysByCategory;
+  const scoped = scopedRaw === undefined ? undefined : record(scopedRaw);
+  if (scoped && (Object.keys(scoped).length !== CATEGORIES.length || CATEGORIES.some((category) => !Object.hasOwn(scoped, category)))) {
+    throw new Error("Invalid eligibility categories");
+  }
+  const eligibilityUncertainDaysByCategory = scoped && Object.fromEntries(CATEGORIES.map((category) =>
+    [category, eligibilityDays(scoped[category], first, last)])) as Record<LocalUsageCategory, string[]> | undefined;
+  if (eligibilityUncertainDaysByCategory && JSON.stringify([...new Set(Object.values(eligibilityUncertainDaysByCategory).flat())].sort()) !==
+      JSON.stringify([...(eligibilityUncertainDays ?? [])].sort())) throw new Error("Invalid eligibility categories");
   if (state === "ready" && eligibilityUncertainDays?.length) throw new Error("Ready source has uncertain eligibility");
   if (state === "ready" && days.length !== 60) throw new Error("Ready source lacks full 60-day window");
   if (raw.provenance !== undefined) record(raw.provenance);
@@ -174,7 +189,9 @@ function source(value: unknown, first: string, last: string, capturedAt: number,
     status: state,
     coverage: { identityVerified: coverage.identityVerified as boolean, paginationComplete: coverage.paginationComplete as boolean,
       visibilityComplete: coverage.visibilityComplete as boolean,
-      ...(eligibilityUncertainDays === undefined ? {} : { eligibilityUncertainDays }), reasons: reasons(coverage.reasons) },
+      ...(eligibilityUncertainDays === undefined ? {} : { eligibilityUncertainDays }),
+      ...(eligibilityUncertainDaysByCategory === undefined ? {} : { eligibilityUncertainDaysByCategory }),
+      reasons: reasons(coverage.reasons) },
     days,
   };
 }
@@ -246,14 +263,20 @@ function qualified(entry: Entry): LocalContributionCounts {
     commits: exactDay ? value.commits : null, knownCommits: value.knownCommits };
 }
 
-function accountedKnown(entry: Entry, metric: "knownPrs" | "knownCommits"): boolean {
-  const value = entry.day;
-  return !!value && entry.source.coverage.identityVerified && entry.source.coverage.paginationComplete &&
-    (metric === "knownPrs" || !entry.source.coverage.eligibilityUncertainDays?.includes(value.day)) &&
-    (entry.source.status === "ready" || entry.source.status === "partial") &&
-    (value.status === "ready" || value.status === "partial") && value[metric] !== null &&
-    value.repositories.every((row) => (row.status === "ready" || row.status === "partial") && row[metric] !== null) &&
-    sum(value.repositories.map((row) => row[metric]!)) === value[metric];
+function accountedCategory(entry: Entry, category: LocalUsageCategory, metric: "knownPrs" | "knownCommits"): boolean {
+  const value = entry.day, coverage = entry.source.coverage;
+  if (!value || !coverage.identityVerified || !coverage.paginationComplete ||
+      (entry.source.status !== "ready" && entry.source.status !== "partial") ||
+      (value.status !== "ready" && value.status !== "partial")) return false;
+  const uncertain = metric === "knownCommits" && coverage.eligibilityUncertainDays?.includes(value.day);
+  const scoped = coverage.eligibilityUncertainDaysByCategory;
+  if (uncertain && (!scoped || scoped[category].includes(value.day))) return false;
+  const categoryRows = value.repositories.filter((row) => row.category === category);
+  if (categoryRows.some((row) => (row.status !== "ready" && row.status !== "partial") || row[metric] === null)) return false;
+  if (value[metric] === null) return Boolean(uncertain && scoped);
+  return value.repositories.every((row) => (row.status === "ready" || row.status === "partial") &&
+    (row[metric] !== null || (uncertain && scoped?.[row.category].includes(value.day)))) &&
+    sum(value.repositories.filter((row) => row[metric] !== null).map((row) => row[metric]!)) === value[metric];
 }
 
 function aggregate(entries: Entry[]): Aggregate {
@@ -299,9 +322,9 @@ function aggregate(entries: Entry[]): Aggregate {
       ? sum(categories[category].map((row) => row.prs!)) : null,
     commits: repositoryComplete && categories[category].every((row) => row.commits !== null)
       ? sum(categories[category].map((row) => row.commits!)) : null,
-    knownPrs: !categories[category].length && entries.length > 0 && entries.every((entry) => accountedKnown(entry, "knownPrs"))
+    knownPrs: !categories[category].length && entries.length > 0 && entries.every((entry) => accountedCategory(entry, category, "knownPrs"))
       ? 0 : known(categories[category].map((row) => row.knownPrs)),
-    knownCommits: !categories[category].length && entries.length > 0 && entries.every((entry) => accountedKnown(entry, "knownCommits"))
+    knownCommits: !categories[category].length && entries.length > 0 && entries.every((entry) => accountedCategory(entry, category, "knownCommits"))
       ? 0 : known(categories[category].map((row) => row.knownCommits)),
   }])) as Record<LocalUsageCategory, LocalContributionCounts>;
   const rows = [...repositories.values()].sort((a, b) => (b.knownPrs ?? 0) - (a.knownPrs ?? 0) || a.name.localeCompare(b.name));
@@ -362,16 +385,24 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
       (day.status === "ready" || day.status === "partial") && day[metric] !== null)
       ? percentage(current[metric], previous[metric]) : null;
     const knownCategoryChange = (category: LocalUsageCategory, metric: "knownPrs" | "knownCommits") =>
-      observations.length > 0 && observations.every((entry) => accountedKnown(entry, metric))
+      observations.length > 0 && observations.every((entry) => accountedCategory(entry, category, metric))
         ? percentage(current.categories[category][metric], previous.categories[category][metric]) : null;
     const compare = (value: LocalContributionCounts, prior: LocalContributionCounts) => ({
       prs: percentage(value.prs, prior.prs), commits: percentage(value.commits, prior.commits),
     });
     const priorRepos = new Map(previous.repositories.rows.map((row) => [row.id, row]));
     return [String(period), { ...current, days: period, asOf,
-      repositories: { ...current.repositories, rows: current.repositories.rows.map((row) => ({ ...row,
-        comparison: compare(row, priorRepos.get(row.id) ?? { prs: previous.coverage === "ready" ? 0 : null,
-          knownPrs: null, commits: previous.coverage === "ready" ? 0 : null, knownCommits: null }) })) },
+      repositories: { ...current.repositories, rows: current.repositories.rows.map((row) => {
+        const prior = priorRepos.get(row.id);
+        const knownRepoChange = (metric: "knownPrs" | "knownCommits") =>
+          observations.length > 0 && (!prior || prior.category === row.category) &&
+          observations.every((entry) => accountedCategory(entry, row.category, metric))
+            ? percentage(row[metric], prior ? prior[metric] : 0) : null;
+        return { ...row,
+          comparison: compare(row, prior ?? { prs: previous.coverage === "ready" ? 0 : null,
+            knownPrs: null, commits: previous.coverage === "ready" ? 0 : null, knownCommits: null }),
+          knownComparison: { prs: knownRepoChange("knownPrs"), commits: knownRepoChange("knownCommits") } };
+      }) },
       comparison: { startDay: previousStart, endDay: previousEnd, missingDays: previous.missingDays,
         ...compare(current, previous),
         known: { prs: knownChange("knownPrs"), commits: knownChange("knownCommits") },

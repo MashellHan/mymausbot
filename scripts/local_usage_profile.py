@@ -490,7 +490,8 @@ def empty_days(first, at, status, captured):
              "knownCommits": None, "repositories": []} for offset in range(60)]
 
 
-def measured_days(first, at, typed, supplement, exact, captured, prs_complete, commits_complete, uncertain_commit_days):
+def measured_days(first, at, typed, supplement, exact, captured, prs_complete, commits_complete,
+                  uncertain_commit_days, uncertain_by_category):
     days = {row["day"]: row for row in empty_days(first, at, "ready" if exact else "partial", captured)}
     repositories = {day: {} for day in days}
     for metric, events in (("prs", typed["prs"] + supplement["prs"]),
@@ -516,7 +517,8 @@ def measured_days(first, at, typed, supplement, exact, captured, prs_complete, c
             uncertain = metric == "commits" and day in uncertain_commit_days
             row[known] = observed if observed or complete and not uncertain else None
             for repo in row["repositories"]:
-                if not repo[known] and (not complete or uncertain):
+                repo_uncertain = metric == "commits" and day in uncertain_by_category[repo["category"]]
+                if not repo[known] and (not complete or repo_uncertain):
                     repo[known] = None
             if exact:
                 row[metric] = row[known]
@@ -587,6 +589,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                     raise ValueError("conflicting_profile_repository_head")
                 candidates[repo_id] = item
             history_reasons, drifted, eligibility_days = [], set(), set()
+            eligibility_by_category = {category: set() for category in ("work", "personal", "unclassified")}
             for candidate in candidates.values():
                 repo_id = candidate["repository"]["id"]
                 try:
@@ -611,7 +614,9 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                     uncertain = history_state.get("eligibilityUncertainDays", [])
                     if not isinstance(uncertain, list) or any(not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) for day in uncertain):
                         raise ValueError("invalid_history_eligibility_days")
-                    eligibility_days.update(day for day in uncertain if first.isoformat() <= day <= china_day(at))
+                    active_uncertain = {day for day in uncertain if first.isoformat() <= day <= china_day(at)}
+                    eligibility_days.update(active_uncertain)
+                    eligibility_by_category[candidate["repository"]["category"]].update(active_uncertain)
             raw_commits = {}
             for candidate in candidates.values():
                 repo_id = candidate["repository"]["id"]
@@ -640,10 +645,12 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             source = {"id": identity, "account": account, "status": "ready" if exact else "partial",
                       "coverage": {"identityVerified": True, "paginationComplete": not supplement_reasons and not history_reasons,
                                    "visibilityComplete": proof, "eligibilityUncertainDays": sorted(eligibility_days),
+                                   **({"eligibilityUncertainDaysByCategory": {category: sorted(days)
+                                       for category, days in eligibility_by_category.items()}} if eligibility_days else {}),
                                    "reasons": sorted(set(source_reasons))},
                       "days": measured_days(first, at, typed, supplemental, exact, captured,
                                             not supplement_reasons, not supplement_reasons and not history_reasons,
-                                            eligibility_days),
+                                            eligibility_days, eligibility_by_category),
                       "provenance": {"typedProfileTotals": typed["typedTotals"],
                                      "restrictedContributions": typed["restricted"],
                                      "supplementedTotals": {metric: len(supplemental[metric]) for metric in ("prs", "commits")},
