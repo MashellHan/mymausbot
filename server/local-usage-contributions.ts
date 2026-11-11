@@ -158,6 +158,12 @@ function source(value: unknown, first: string, last: string, capturedAt: number,
   if (!Array.isArray(raw.days) || raw.days.length > 60) throw new Error("Invalid contribution source days");
   const days = raw.days.map((row) => sourceDay(row, first, last, capturedAt, now));
   if (new Set(days.map((row) => row.day)).size !== days.length) throw new Error("Duplicate contribution source day");
+  const uncertain = coverage.eligibilityUncertainDays;
+  if (uncertain !== undefined && (!Array.isArray(uncertain) || uncertain.length > 60)) throw new Error("Invalid eligibility days");
+  const eligibilityUncertainDays = uncertain === undefined ? undefined : uncertain.map((value) => day(value));
+  if (eligibilityUncertainDays && (new Set(eligibilityUncertainDays).size !== eligibilityUncertainDays.length ||
+      eligibilityUncertainDays.some((value) => value < first || value > last))) throw new Error("Invalid eligibility days");
+  if (state === "ready" && eligibilityUncertainDays?.length) throw new Error("Ready source has uncertain eligibility");
   if (state === "ready" && days.length !== 60) throw new Error("Ready source lacks full 60-day window");
   if (raw.provenance !== undefined) record(raw.provenance);
   const scope = raw.scope === undefined ? undefined : record(raw.scope);
@@ -167,7 +173,8 @@ function source(value: unknown, first: string, last: string, capturedAt: number,
     ...(scope ? { scope: { organization: text(scope.organization, 128), project: text(scope.project, 128) } } : {}),
     status: state,
     coverage: { identityVerified: coverage.identityVerified as boolean, paginationComplete: coverage.paginationComplete as boolean,
-      visibilityComplete: coverage.visibilityComplete as boolean, reasons: reasons(coverage.reasons) },
+      visibilityComplete: coverage.visibilityComplete as boolean,
+      ...(eligibilityUncertainDays === undefined ? {} : { eligibilityUncertainDays }), reasons: reasons(coverage.reasons) },
     days,
   };
 }
@@ -242,6 +249,7 @@ function qualified(entry: Entry): LocalContributionCounts {
 function accountedKnown(entry: Entry, metric: "knownPrs" | "knownCommits"): boolean {
   const value = entry.day;
   return !!value && entry.source.coverage.identityVerified && entry.source.coverage.paginationComplete &&
+    (metric === "knownPrs" || !entry.source.coverage.eligibilityUncertainDays?.includes(value.day)) &&
     (entry.source.status === "ready" || entry.source.status === "partial") &&
     (value.status === "ready" || value.status === "partial") && value[metric] !== null &&
     value.repositories.every((row) => (row.status === "ready" || row.status === "partial") && row[metric] !== null) &&
@@ -350,6 +358,7 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
     const knownChange = (metric: "knownPrs" | "knownCommits") => observations.length > 0 && observations.every(({ source, day }) =>
       source.coverage.identityVerified && source.coverage.paginationComplete &&
       (source.status === "ready" || source.status === "partial") && day &&
+      (metric === "knownPrs" || !source.coverage.eligibilityUncertainDays?.includes(day.day)) &&
       (day.status === "ready" || day.status === "partial") && day[metric] !== null)
       ? percentage(current[metric], previous[metric]) : null;
     const knownCategoryChange = (category: LocalUsageCategory, metric: "knownPrs" | "knownCommits") =>
