@@ -7,6 +7,9 @@ most four portable affected test files. `qa-plan.json` and the log list
 additional affected files deferred to full validation, including browser,
 Electron and expensive E2E tests. QA holds and independent review still apply.
 
+Static also validates the announcement cards and bundled pictures with
+`scripts/check-announcements.mjs` before installs can download them from main.
+
 The first attempt targets five minutes from run creation, including queue and
 setup. A rerun uses its current attempt start and retains the original age as
 diagnostic. An overrun is an advisory process-scan case: successful checks stay
@@ -34,6 +37,7 @@ of their checks; explicit full requests use `FULL_SCOPE`.
 | desktop | `electron/`, `build/`, `electron-builder.yml`, `index.html` | server contracts, including computer-control modules |
 | control plane | `cloudflare/control-plane/` | control-plane checks, workerd tests, broker typecheck/tests and dry run |
 | broker | `cloudflare/composio-broker/` | build and control-plane job with broker typecheck/tests |
+| announcements | `announcements/`: cards, JSON Schema and pictures | static announcement validation |
 | relay | `relay/` | Relay typecheck, tests, fuzz and dependency audit |
 | shared E2E vectors | `companion/src/e2e/vectors/` | server and Relay contracts |
 | everything | workflows, dependency/toolchain configuration, scripts and unknown paths | full selection |
@@ -43,6 +47,9 @@ The ordinary PR retains applicable static checks and defers the production
 build. English copy is a web change because every renderer test reads it;
 other catalogs retain their mapped locale subset. Relay has its own lockfile.
 The selector tests preserve the renderer/server import and locale boundaries.
+
+Static validates the model manifest with `scripts/check-model-manifest.mjs`;
+installs read that manifest from main.
 
 ## Lanes: pull requests, main and the full lane
 
