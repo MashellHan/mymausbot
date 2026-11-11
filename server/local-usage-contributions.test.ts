@@ -205,7 +205,7 @@ describe("canonical source-qualified contributions", () => {
     expect(() => parse(value)).toThrow("Repository subtotal exceeds account day");
     github.days[54]!.knownCommits = 1;
     github.days[54]!.repositories[1]!.knownCommits = 1;
-    github.coverage.eligibilityUncertainDays = [];
+    Object.assign(github.coverage, { eligibilityUncertainDays: [] });
     const repaired = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
     for (const period of ["7", "30"] as const) {
       const window = repaired.windows![period];
