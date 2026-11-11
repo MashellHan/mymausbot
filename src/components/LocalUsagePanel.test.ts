@@ -176,7 +176,7 @@ describe("local Usage panel", () => {
     expect(text()).toContain("2026-10-28 – 2026-11-03");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
     expect(host.querySelector("[data-usage-metric-definition]")?.textContent).toContain("Beijing time (UTC+8)");
-    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "≥9")).toBe(true);
+    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9")).toBe(true);
     expect(host.querySelector<HTMLDetailsElement>("[data-usage-daily]")?.open).toBe(false);
     expect(text()).toContain("4,000");
     const firstCard = host.querySelector<HTMLElement>("section")!;
@@ -541,7 +541,7 @@ describe("local Usage panel", () => {
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false"]);
     const values = () => [...host.querySelectorAll("[data-usage-repositories] tbody tr:first-child td")].map((cell) => cell.textContent);
     expect(values()[0]).toBe("Enterprise");
-    expect(values()[1]).toMatch(/^≥1/);
+    expect(values()[1]).toMatch(/^1/);
     expect(values()[2]).toContain("2");
     const repositoryChanges = () => [...host.querySelectorAll('[data-usage-repositories] tbody tr:first-child [data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
     expect(repositoryChanges()).toEqual(["—", "+10%"]);
@@ -552,7 +552,7 @@ describe("local Usage panel", () => {
     expect(host.querySelector('[role="tabpanel"]')?.textContent).toContain("Repository details are not available in this snapshot.");
     await act(async () => tabs[3]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
     expect(document.activeElement).toBe(tabs[2]);
-    expect(values()[1]).toMatch(/^≥30/);
+    expect(values()[1]).toMatch(/^30/);
     expect(values()[2]).toContain("60");
     expect(repositoryChanges()).toEqual(["—", "+30%"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-09-05–2026-10-04");
