@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -255,12 +255,67 @@ it("checks private records once postlaunch while leaving the active browser cont
     writeFileSync(cookie, "second cookie generation");
     expect(() => inspectPrivateCredentialStorage(root, { phase: "prelaunch", expected: before })).toThrow();
     expect(inspectPrivateCredentialStorage(root, { phase: "postlaunch" }).records["credentials.json"]).toBeDefined();
+    const closed = inspectPrivateCredentialStorage(root, { phase: "postquit", expected: before });
+    expect(closed.browserEntries).not.toEqual(before.browserEntries);
+    expect(inspectPrivateCredentialStorage(root, { phase: "prelaunch", expected: closed })).toEqual(closed);
+    expect(() => inspectPrivateCredentialStorage(root, { phase: "postquit" })).toThrow();
+    expect(spawnSync(process.execPath, [delivery, "private-storage", root, "postquit", expected], { encoding: "utf8" }).status).toBe(0);
+    const credentialBytes = '{"version":1,"value":{"xaiApiKey":"synthetic"}}';
+    writeFileSync(credential, "changed credential");
+    expect(() => inspectPrivateCredentialStorage(root, { phase: "postquit", expected: before })).toThrow(/credentials changed/);
+    rmSync(credential);
+    expect(() => inspectPrivateCredentialStorage(root, { phase: "postquit", expected: before })).toThrow(/credentials changed/);
+    symlinkSync(cookie, credential);
+    expect(() => inspectPrivateCredentialStorage(root, { phase: "postquit", expected: before })).toThrow();
+    rmSync(credential);
+    writeFileSync(credential, credentialBytes, { mode: 0o600 });
     chmodSync(credential, 0o644);
+    expect(() => inspectPrivateCredentialStorage(root, { phase: "postquit", expected: before })).toThrow();
     expect(() => inspectPrivateCredentialStorage(root, { phase: "postlaunch" })).toThrow();
     chmodSync(credential, 0o600);
     writeFileSync(marker, "broken marker");
     expect(() => inspectPrivateCredentialStorage(root, { phase: "postlaunch" })).toThrow();
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it("accepts only bound installed Python caches and keeps signed helpers cache-free", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "omb-installed-helpers-")));
+  const helpers = join(root, "helpers"), cache = join(helpers, "__pycache__");
+  const delivery = fileURLToPath(new URL("./check-local-app.mjs", import.meta.url));
+  const hashes = join(root, "hashes.json");
+  const source = "synthetic helper bytes";
+  mkdirSync(helpers, { mode: 0o700 });
+  writeFileSync(join(helpers, "refresh-local-usage.py"), source, { mode: 0o600 });
+  writeFileSync(hashes, JSON.stringify({ "refresh-local-usage.py": createHash("sha256").update(source).digest("hex") }));
+  const check = (kind = "installed-helpers") => spawnSync(process.execPath, [delivery, kind, helpers, hashes], { encoding: "utf8" }).status;
+  try {
+    expect(check()).toBe(0);
+    mkdirSync(cache, { mode: 0o700 });
+    const bytecode = join(cache, "refresh-local-usage.cpython-312.pyc");
+    writeFileSync(bytecode, Buffer.alloc(32), { mode: 0o600 });
+    expect(check()).toBe(0);
+    chmodSync(helpers, 0o555);
+    expect(check("signed-helpers")).toBe(1);
+    chmodSync(helpers, 0o700);
+    const unknown = join(cache, "unknown.cpython-312.pyc");
+    writeFileSync(unknown, Buffer.alloc(32), { mode: 0o600 });
+    expect(check()).toBe(1);
+    rmSync(unknown);
+    chmodSync(bytecode, 0o666);
+    expect(check()).toBe(1);
+    rmSync(bytecode);
+    symlinkSync(join(helpers, "refresh-local-usage.py"), bytecode);
+    expect(check()).toBe(1);
+    rmSync(bytecode);
+    linkSync(join(helpers, "refresh-local-usage.py"), bytecode);
+    expect(check()).toBe(1);
+    rmSync(cache, { recursive: true });
+    writeFileSync(join(helpers, "refresh-local-usage.py"), "tampered");
+    expect(check()).toBe(1);
+    writeFileSync(join(helpers, "refresh-local-usage.py"), source);
+    chmodSync(helpers, 0o555);
+    expect(check("signed-helpers")).toBe(0);
+  } finally { chmodSync(helpers, 0o700); rmSync(root, { recursive: true, force: true }); }
 });
 
 it("keeps the exact owned fixture when process cleanup is unconfirmed", () => {

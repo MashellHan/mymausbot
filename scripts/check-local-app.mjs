@@ -121,10 +121,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     else if (check === "inventory" && files.length === 2) assertInventorySame(...files.map(read));
     else if (check === "routines" && files.length === 2) assertRoutinesSame(...files.map(read));
     else if (check === "closed-sqlite" && files.length === 2) assertClosedSqliteCopy(...files);
+    else if (["installed-helpers", "signed-helpers"].includes(check) && files.length === 2) {
+      execFileSync("python3", ["-I", "-B", fileURLToPath(new URL("./installed_helpers.py", import.meta.url)), check, ...files],
+        { stdio: ["ignore", "pipe", "pipe"] });
+    }
     else if (check === "private-storage" && files.length >= 2 && files.length <= 3) {
-      requireValue(files[1] !== "prelaunch" || files.length === 3, "Prelaunch storage check needs an exact expected snapshot");
+      requireValue(!["prelaunch", "postquit"].includes(files[1]) || files.length === 3, "Closed storage check needs an expected snapshot");
       inspectPrivateCredentialStorage(files[0], { phase: files[1], ...(files[2] ? { expected: read(files[2]) } : {}) });
-    } else throw new Error("Use check:delivery request <request.json> | inventory <before.json> <after.json> | routines <before.json> <after.json> | closed-sqlite <source-dir> <copy-dir> | private-storage <fixture-root> <prelaunch|postlaunch> [expected.json]");
+    } else throw new Error("Use check:delivery request <request.json> | inventory <before.json> <after.json> | routines <before.json> <after.json> | closed-sqlite <source-dir> <copy-dir> | installed-helpers|signed-helpers <directory> <hashes.json> | private-storage <fixture-root> <prelaunch|postlaunch|postquit> [expected.json]");
     console.log(JSON.stringify({ passed: true, check, readOnly: true }));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

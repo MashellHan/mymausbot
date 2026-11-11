@@ -120,6 +120,7 @@ async function phase(name, before, assertion) {
     }
     throw new Error(`Timed out waiting for ${label}`);
   }
+  let beforeQuit;
   try {
     const smoke = await until(() => {
       const failed = output.match(/\[smoke\] renderer-failed ([^\n]*)/);
@@ -151,7 +152,8 @@ async function phase(name, before, assertion) {
     await until(async () => await evaluate("document.getElementById('root')?.childElementCount > 0 && window.ogb?.credentialMode?.()"), "React and preload", 20_000);
     assert.equal(await evaluate("window.ogb.credentialMode()"), "private-file");
     await assertion(evaluate, until);
-    record.privateStorage = inspectPrivateCredentialStorage(fixture, { phase: "postlaunch" }).state;
+    beforeQuit = inspectPrivateCredentialStorage(fixture, { phase: "postlaunch" });
+    record.privateStorage = beforeQuit.state;
     record.passed = true;
   } finally {
     child.kill("SIGTERM");
@@ -172,11 +174,22 @@ async function phase(name, before, assertion) {
     record.cleanupComplete = (child.exitCode !== null || child.signalCode !== null) && !groupAlive();
     record.exitedGracefully = record.cleanupComplete && !forced;
     if (!record.cleanupComplete || forced) record.passed = false;
-    record.finishedAt = now();
-    record.elapsedMs = Date.parse(record.finishedAt) - Date.parse(record.startedAt);
-    writeFileSync(join(evidence, `attempt-${attempt}-${name}.log`), output, { mode: 0o600 });
-    assert(record.cleanupComplete && !forced, "Owned fixture did not finish graceful cleanup");
+    try {
+      assert(record.cleanupComplete && !forced, "Owned fixture did not finish graceful cleanup");
+      if (beforeQuit) {
+        record.closedStorage = inspectPrivateCredentialStorage(fixture, { phase: "postquit", expected: beforeQuit });
+        record.credentialsPreservedOnQuit = true;
+      }
+    } catch (error) {
+      record.passed = false;
+      throw error;
+    } finally {
+      record.finishedAt = now();
+      record.elapsedMs = Date.parse(record.finishedAt) - Date.parse(record.startedAt);
+      writeFileSync(join(evidence, `attempt-${attempt}-${name}.log`), output, { mode: 0o600 });
+    }
   }
+  return record.closedStorage;
 }
 
 const slot = "xaiApiKey", syntheticKey = `synthetic-fixture-${randomBytes(12).toString("hex")}`;
@@ -202,14 +215,13 @@ try {
   await new Promise(resolve => probe.listen(0, "127.0.0.1", resolve));
   env.OMB_WEBHOOK_PORT = String(probe.address().port);
   await new Promise(resolve => probe.close(resolve));
-  await phase("write", { state: "absent" }, async evaluate => {
+  const saved = await phase("write", { state: "absent" }, async evaluate => {
     assert.equal(await evaluate(`window.ogb.setCredential(${JSON.stringify(slot)}, ${JSON.stringify(syntheticKey)}).then(() => true)`), true);
     await configured(evaluate);
     assert.equal(await evaluate("(() => { document.cookie = 'omb_private_fixture=synthetic-only; SameSite=Lax; Max-Age=3600'; return document.cookie.includes('omb_private_fixture=synthetic-only') })()"), true);
     assert.equal(JSON.parse(readFileSync(credentialFile, "utf8")).value[slot], syntheticKey);
   });
-  const saved = inspectPrivateCredentialStorage(fixture, { phase: "prelaunch" });
-  await phase("restore-and-clear", saved, async (evaluate, until) => {
+  const cleared = await phase("restore-and-clear", saved, async (evaluate, until) => {
     await until(async () => { const result = await evaluate(status); return result.status === 200 && result.configured && !result.leaked; },
       "fresh packaged server restored redacted configured status", 15_000);
     receipt.freshServerRestoredBeforeClear = true;
@@ -220,7 +232,6 @@ try {
     assert.equal(await evaluate("(() => { document.cookie = 'omb_private_fixture=; Max-Age=0'; return !document.cookie.includes('omb_private_fixture=') })()"), true);
     assert.equal(Object.hasOwn(JSON.parse(readFileSync(credentialFile, "utf8")).value, slot), false);
   });
-  const cleared = inspectPrivateCredentialStorage(fixture, { phase: "prelaunch" });
   await phase("verify-forgotten", cleared, async evaluate => {
     await unconfigured(evaluate);
     assert.equal(await evaluate("!document.cookie.includes('omb_private_fixture=')"), true);

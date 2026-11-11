@@ -28,6 +28,24 @@ and environment identity. It checks clean source and the pinned ref/lock against
 the request. Fetch the source ref before binding it. Supply the actual current
 request; do not copy a previous acceptance receipt as a build request.
 
+Check the selected scheduled interpreter, arguments and environment before
+building. Migration accepts the scheduled absolute `AZURE_CONFIG_DIR` only when
+it exactly matches the selected directory; without that variable it retains
+the default. Preserve `PYTHONDONTWRITEBYTECODE=1` when scheduled. Do not repair
+a mismatch by changing authentication routing or falling back to a Keychain.
+
+Use the shared helper checks in switch, recovery and installed postflight callers:
+
+```text
+pnpm check:delivery installed-helpers <canonical-installed-directory> <source-hashes.json>
+pnpm check:delivery signed-helpers <canonical-package-directory> <source-hashes.json>
+```
+
+The hashes document maps every bound Python source filename to its SHA-256.
+Installed helpers may contain CPython caches for those exact names, including
+hyphenated script names. Unknown caches, source changes, unsafe permissions,
+symlinks and hardlinks fail. Signed package helpers remain cache-free.
+
 Run one `pnpm build`; it includes `pnpm typecheck`. The compiler keeps separate
 UI/server incremental state in this worktree and revalidates changed inputs.
 Do not run raw `tsc -b` or a second full typecheck as an additional prerequisite.
@@ -73,6 +91,9 @@ an App mutation. Prepare rollback before an already authorized switch.
 Retain stage start/end, source and outcome in the existing job log. A stage
 failure resumes at the failed stage only if its inputs remain valid. Keep the
 original failure and the original request-to-delivery clock across corrections.
+The assigned installer completes the already authorized quit, copy, launch and
+postflight sequence without another role handoff between successful stages.
+Escalate actual findings; elapsed-time targets are advisory, not failure gates.
 
 A finite switch hold covers mutations and every new or recovery App launch.
 Check actual writer exclusion and expiry after any blocking probe, immediately
@@ -88,7 +109,7 @@ bound to unchanged source bytes before and after copying. Let SQLite create
 sidecars only in that copy. A read-only open of the closed original may fail
 when its WAL/SHM disappeared; `immutable=1` is not a substitute for reading
 pending WAL data. Never assume another database's WAL is empty. After launch,
-browser caches may change: check their safe paths, ownership and permissions
+browser caches may change, including during graceful quit: check their safe paths, ownership and permissions
 once, while retaining exact static credential and prelaunch checks. Do not
 compare two mutable snapshots taken across an unrelated bundle hash.
 
@@ -100,6 +121,15 @@ For a closed data copy, use `pnpm check:delivery closed-sqlite <canonical-source
 checks the private root without comparing changing browser content. That command
 accepts only canonical, owner-only `omb-private-file-e2e-*` temporary roots;
 it does not inspect an installed live profile.
+The packaged fixture takes a stable-credential snapshot immediately before
+quit, waits for its owned process group to exit, then uses `private-storage`
+with `postquit <before-quit.json>` to compare the marker and all non-browser
+records. A normal browser flush may change browser bytes; the resulting closed
+snapshot becomes the exact expectation for the next launch. Never reuse a
+running browser digest as a closed-profile expectation, or accept changed or
+missing stable credentials. The closed comparison alone does not prove process
+exit. Live switch and rollback callers must establish that boundary and bind
+their backup to the closed profile before copying or relaunching.
 
 ## Resume an existing package
 

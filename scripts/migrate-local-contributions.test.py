@@ -291,6 +291,46 @@ target.chmod(0o600)
                 finally:
                     setattr(self.args, field, original)
 
+    def test_private_scheduled_auth_directory_is_bound_and_preserved_in_capture(self):
+        azure = self.root / "private-auth/ado"
+        azure.mkdir(parents=True)
+        self.args.azure_config_dir = str(azure)
+        scheduled = plistlib.loads(self.plist.read_bytes())
+        scheduled["EnvironmentVariables"].update({"AZURE_CONFIG_DIR": str(azure), "PYTHONDONTWRITEBYTECODE": "1"})
+        self.plist.write_bytes(plistlib.dumps(scheduled))
+        migration.prepare(self.args)
+
+        def fake_run(command, **options):
+            for key, value in scheduled["EnvironmentVariables"].items():
+                self.assertEqual(options["env"][key], value)
+            target = Path(command[command.index("--output") + 1])
+            target.write_text(json.dumps(snapshot(progress=1)))
+            target.chmod(0o600)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch.object(migration.subprocess, "run", side_effect=fake_run) as runner:
+            migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
+        runner.assert_called_once()
+        scheduled["EnvironmentVariables"]["AZURE_CONFIG_DIR"] = str(self.azure)
+        self.plist.write_bytes(plistlib.dumps(scheduled))
+        with self.assertRaisesRegex(ValueError, "Scheduled command changed"):
+            migration.scheduled_runtime(json.loads((self.plan / "prepared-plan.json").read_text()))
+
+    def test_prepare_rejects_unsafe_scheduled_environment(self):
+        scheduled = plistlib.loads(self.plist.read_bytes())
+        original = dict(scheduled["EnvironmentVariables"])
+        for extra in ({"PYTHONDONTWRITEBYTECODE": "0"}, {"PYTHONPATH": "/tmp"},
+                      {"AZURE_CONFIG_DIR": ".azure"}, {"AZURE_CONFIG_DIR": None},
+                      {"AZURE_CONFIG_DIR": str(self.root / "other-auth")}):
+            with self.subTest(extra=extra):
+                scheduled["EnvironmentVariables"] = {**original, **extra}
+                if extra.get("AZURE_CONFIG_DIR", "valid") is None:
+                    scheduled["EnvironmentVariables"]["AZURE_CONFIG_DIR"] = 1
+                self.plist.write_bytes(plistlib.dumps(scheduled))
+                with self.assertRaises(ValueError):
+                    migration.prepare(self.args)
+                self.assertFalse(self.plan.exists())
+
     def test_skip_api_or_changed_schedule_fails_before_seal_or_apply(self):
         with self.plist.open("rb") as stream:
             scheduled = plistlib.load(stream)
