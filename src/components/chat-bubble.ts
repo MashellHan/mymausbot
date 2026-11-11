@@ -22,6 +22,13 @@ export const SIMPLE_USER_BUBBLE = `${SIMPLE_BUBBLE_SHAPE} bg-bubble-user font-no
 /** At most 560 wide, 80% of the column, and always 82px short of it, so a reply never meets the far edge. */
 export const SIMPLE_BUBBLE_MAX = "max-w-[min(var(--chat-bubble-max),var(--chat-bubble-pct),calc(100%-82px))]";
 
+const USER_COLLAPSE_CHARS = 600;
+const USER_COLLAPSE_LINES = 8;
+
+export function shouldCollapseUserMessage(text: string, expanded: boolean): boolean {
+  return !expanded && (text.length > USER_COLLAPSE_CHARS || text.split("\n").length > USER_COLLAPSE_LINES);
+}
+
 /** A plain-text bot bubble drawn outside the transcript's own Bubble: a widget's text fallback or a row that failed. */
 export function plainBotBubble(simple: boolean): string {
   return simple
