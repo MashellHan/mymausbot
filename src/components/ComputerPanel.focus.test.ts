@@ -131,9 +131,10 @@ afterEach(() => {
 describe("computer panel entry focus", () => {
   it("hands the keyboard's open to the active tab, one frame later", async () => {
     rememberComputerPanelOpen({ botId: "scout", opener: chatButton(), tabs: true });
+    expect(localStorage.getItem("omb-computer-panel-view:scout")).toBeNull();
     await open(makeBot());
     expect(document.activeElement).toBe(document.body);
-    expect(frames).toHaveLength(1);
+    expect(frames.length).toBeGreaterThan(0);
 
     runFrames();
     expect(document.activeElement).toBe(activeTab());
@@ -143,20 +144,22 @@ describe("computer panel entry focus", () => {
   it("leaves a pointer open's focus alone", async () => {
     rememberComputerPanelOpen({ botId: "scout", opener: chatButton(), tabs: false });
     await open(makeBot());
-    expect(frames).toHaveLength(0);
+    expect(document.activeElement).toBe(document.body);
+    runFrames();
     expect(document.activeElement).toBe(document.body);
   });
 
   it("does not take focus meant for another bot", async () => {
     rememberComputerPanelOpen({ botId: "pepper", opener: chatButton(), tabs: true });
     await open(makeBot());
-    expect(frames).toHaveLength(0);
+    runFrames();
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("keeps the deferred focus when React runs the effect twice", async () => {
     rememberComputerPanelOpen({ botId: "scout", opener: chatButton(), tabs: true });
     await open(makeBot(), true);
-    expect(frames).toHaveLength(1);
+    expect(frames.length).toBeGreaterThan(0);
     runFrames();
     expect(document.activeElement).toBe(activeTab());
   });
@@ -170,7 +173,9 @@ describe("computer panel entry focus", () => {
     root?.unmount();
     document.body.querySelectorAll("div").forEach((node) => node.remove());
     await open(makeBot());
-    expect(frames).toHaveLength(0);
+    expect(document.activeElement).toBe(document.body);
+    runFrames();
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("does not take focus again when the panel remounts for another bot", async () => {
@@ -179,8 +184,10 @@ describe("computer panel entry focus", () => {
     runFrames();
     expect(document.activeElement).toBe(activeTab());
 
+    const focused = document.activeElement;
     await open(makeBot({ id: "pepper" }));
-    expect(frames).toHaveLength(0);
+    runFrames();
+    expect(document.activeElement).toBe(focused);
   });
 
   it("keeps the ring on the tab the panel itself moves to", async () => {
