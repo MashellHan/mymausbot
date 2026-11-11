@@ -16,7 +16,7 @@ export function MessageFilePreview({ file, onBack }: { file: PreviewFile; onBack
   useEffect(() => { back.current?.focus(); }, []);
   const delimiter = tableDelimiter(file.name) ?? tableDelimiter(file.path);
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={t("file.preview", { name: file.name })}
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel text-ink" aria-label={t("file.preview", { name: file.name })}
       onKeyDown={(event) => {
         if (event.key === "Escape" && onBack && !event.defaultPrevented) {
           event.preventDefault(); event.stopPropagation(); onBack();
