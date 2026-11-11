@@ -139,7 +139,10 @@ it("fails delivery preflight before a build for incomplete, dirty or mismatched 
   const env = { ...process.env, PATH: `${tools}${delimiter}${process.env.PATH ?? ""}` };
   const pnpm = join(tools, process.platform === "win32" ? "pnpm.cmd" : "pnpm");
   const version = (value: string) => {
-    writeFileSync(pnpm, process.platform === "win32" ? `@echo off\r\necho ${value}\r\n` : `#!/bin/sh\nprintf '%s\\n' '${value}'\n`);
+    const script = process.platform === "win32"
+      ? `@echo off\r\nif not "%~1"=="--manage-package-manager-versions=false" exit /b 1\r\nif not "%COREPACK_ENABLE_NETWORK%"=="0" exit /b 1\r\necho ${value}\r\n`
+      : `#!/bin/sh\n[ "$1" = "--manage-package-manager-versions=false" ] || exit 1\n[ "$COREPACK_ENABLE_NETWORK" = "0" ] || exit 1\nprintf '%s\\n' '${value}'\n`;
+    writeFileSync(pnpm, script);
     chmodSync(pnpm, 0o755);
   };
   const requestPath = join(tmpdir(), `mausbot-request-${process.pid}-${Date.now()}.json`);

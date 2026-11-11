@@ -107,7 +107,7 @@ export function checkPackageManager(cwd, env = process.env) {
   const manager = read(join(cwd, "package.json")).packageManager;
   requireValue(typeof manager === "string" && /^pnpm@\d+\.\d+\.\d+(?:\+.+)?$/.test(manager), "Build source must pin pnpm in package.json");
   const expected = manager.slice("pnpm@".length).split("+")[0];
-  const result = spawnSync("pnpm", ["--version"], { cwd, env: { ...env, COREPACK_ENABLE_NETWORK: "0" },
+  const result = spawnSync("pnpm", ["--manage-package-manager-versions=false", "--version"], { cwd, env: { ...env, COREPACK_ENABLE_NETWORK: "0" },
     encoding: "utf8", timeout: 10_000, shell: process.platform === "win32", windowsHide: true });
   requireValue(result.status === 0, `Packaging subprocess cannot run ${manager}; put the pinned pnpm on PATH before building and retain that PATH for packaging.`);
   same(result.stdout.trim(), expected, "Packaging pnpm version");
