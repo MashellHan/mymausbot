@@ -176,16 +176,15 @@ describe("local Usage panel", () => {
     expect(text()).toContain("2026-10-28 – 2026-11-03");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
     expect(host.querySelector("[data-usage-metric-definition]")?.textContent).toContain("Beijing time (UTC+8)");
-    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9")).toBe(true);
-    expect(text()).not.toContain("≥");
+    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "≥9")).toBe(true);
     expect(host.querySelector<HTMLDetailsElement>("[data-usage-daily]")?.open).toBe(false);
     expect(text()).toContain("4,000");
     const firstCard = host.querySelector<HTMLElement>("section")!;
     const visibleChanges = [...firstCard.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
-    expect(visibleChanges.slice(0, 3)).toEqual(["+10%", "+50%", "+10%"]);
+    expect(visibleChanges.slice(0, 3)).toEqual(["DoD +10%", "DoD +50%", "DoD +10%"]);
     const tokenChanges = [...host.querySelectorAll("section")].slice(0, 3)
       .map((card) => card.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')[2]?.textContent);
-    expect(tokenChanges).toEqual(["+10%", "New", "—"]);
+    expect(tokenChanges).toEqual(["DoD +10%", "WoW New", "30d —"]);
     for (const change of host.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')) {
       expect(change.textContent).not.toMatch(/[()]/);
     }
@@ -243,7 +242,7 @@ describe("local Usage panel", () => {
     await render(snapshot);
     const visibleLabels = [...host.querySelectorAll("section")].slice(0, 3)
       .map((card) => card.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')[2]?.textContent);
-    expect(visibleLabels).toEqual(["+10%", "新增", "—"]);
+    expect(visibleLabels).toEqual(["日环比 +10%", "周环比 新增", "30 日环比 —"]);
     for (const [index, period] of ["日环比", "周环比", "30 日环比"].entries()) {
       const change = host.querySelectorAll("section")[index]!.querySelectorAll('[data-usage-change]')[2]!;
       expect(change.getAttribute("title")).toContain(period);
@@ -252,11 +251,11 @@ describe("local Usage panel", () => {
     expect(tokenChange().getAttribute("title")).toContain("对比周期缺少 2 天的 Token 历史记录");
   });
 
-  it.each([[-25, "-25%"], [0, "0%"]] as const)("preserves a %s change without visible wrappers or period prefixes", async (value, label) => {
+  it.each([[-25, "-25%"], [0, "0%"]] as const)("shows the period beside a %s change", async (value, label) => {
     await act(async () => root.render(createElement("div", {}, ...(["prs", "commits", "totalTokens"] as const).map((metric) =>
       createElement(UsageChange, { key: metric, value, metric, startDay: "2026-11-02", endDay: "2026-11-02", periodDays: 1 })))));
     const changes = [...host.querySelectorAll('[data-usage-change]')];
-    expect(changes.map((change) => change.querySelector('[aria-hidden="true"]')?.textContent)).toEqual([label, label, label]);
+    expect(changes.map((change) => change.querySelector('[aria-hidden="true"]')?.textContent)).toEqual([`DoD ${label}`, `DoD ${label}`, `DoD ${label}`]);
     for (const [index, change] of changes.entries()) {
       expect(change.getAttribute("title")).toContain(index === 2
         ? `Compared with 2026-11-02 (China time): ${label}.`
@@ -305,7 +304,7 @@ describe("local Usage panel", () => {
     for (const [index, period] of ["DoD", "WoW", "30d"].entries()) {
       const changes = [...host.querySelectorAll("section")][index]!.querySelectorAll("dl > div > dd > [data-usage-change]");
       for (const change of [...changes].slice(0, 2)) {
-        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("New");
+        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${period} New`);
         expect(change.getAttribute("title")).toContain(period);
         expect(change.getAttribute("title")).toContain("Known subtotal");
         expect(change.getAttribute("data-usage-provisional")).toBe("true");
@@ -324,7 +323,7 @@ describe("local Usage panel", () => {
       const changes = personal.querySelectorAll('[data-usage-change]');
       expect(changes).toHaveLength(2);
       for (const change of changes) {
-        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("New");
+        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${period} New`);
         expect(change.getAttribute("title")).toContain(period);
         expect(change.getAttribute("title")).toContain("Known subtotal");
         expect(change.getAttribute("data-usage-provisional")).toBe("true");
@@ -333,12 +332,12 @@ describe("local Usage panel", () => {
     }
     contributions.windows!["1"].comparison.knownCategories!.personal.prs = null;
     await renderRaw({ ...sample, contributions });
-    expect(host.querySelector('section [data-usage-category-row="personal"] [data-usage-change] [aria-hidden="true"]')?.textContent).toBe("—");
+    expect(host.querySelector('section [data-usage-category-row="personal"] [data-usage-change] [aria-hidden="true"]')?.textContent).toBe("DoD —");
     setLocale("zh");
     await renderRaw({ ...sample, contributions: primaryUsageFixture("2026-11-03", true) });
     for (const [index, period] of ["日环比", "周环比", "30 日环比"].entries()) {
       const change = host.querySelectorAll("section")[index]!.querySelector('[data-usage-category-row="personal"] [data-usage-change]')!;
-      expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("新增");
+      expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${period} 新增`);
       expect(change.getAttribute("title")).toContain(period);
     }
   });
@@ -542,7 +541,7 @@ describe("local Usage panel", () => {
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false"]);
     const values = () => [...host.querySelectorAll("[data-usage-repositories] tbody tr:first-child td")].map((cell) => cell.textContent);
     expect(values()[0]).toBe("Enterprise");
-    expect(values()[1]).toMatch(/^1/);
+    expect(values()[1]).toMatch(/^≥1/);
     expect(values()[2]).toContain("2");
     const repositoryChanges = () => [...host.querySelectorAll('[data-usage-repositories] tbody tr:first-child [data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
     expect(repositoryChanges()).toEqual(["—", "+10%"]);
@@ -553,7 +552,7 @@ describe("local Usage panel", () => {
     expect(host.querySelector('[role="tabpanel"]')?.textContent).toContain("Repository details are not available in this snapshot.");
     await act(async () => tabs[3]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
     expect(document.activeElement).toBe(tabs[2]);
-    expect(values()[1]).toMatch(/^30/);
+    expect(values()[1]).toMatch(/^≥30/);
     expect(values()[2]).toContain("60");
     expect(repositoryChanges()).toEqual(["—", "+30%"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-09-05–2026-10-04");
