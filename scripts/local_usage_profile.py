@@ -583,6 +583,8 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                         history_reasons.append("history-incomplete")
                 except (OSError, subprocess.SubprocessError, TimeoutError, KeyError, TypeError,
                         ValueError, IndexError, AttributeError) as error:
+                    if isinstance(error, ValueError) and str(error) == "account_identity_mismatch":
+                        raise
                     code = str(error) if isinstance(error, ValueError) and re.fullmatch(r"[a-z][a-z0-9_]{0,80}", str(error)) else type(error).__name__
                     history_reasons.append("history-" + code)
                     if code.startswith("head_drift_"):
@@ -618,7 +620,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                       "coverage": {"identityVerified": True, "paginationComplete": not supplement_reasons and not history_reasons,
                                    "visibilityComplete": proof, "reasons": sorted(set(source_reasons))},
                       "days": measured_days(first, at, typed, supplemental, exact, captured,
-                                            not supplement_reasons, not history_reasons),
+                                            not supplement_reasons, not supplement_reasons and not history_reasons),
                       "provenance": {"typedProfileTotals": typed["typedTotals"],
                                      "restrictedContributions": typed["restricted"],
                                      "supplementedTotals": {metric: len(supplemental[metric]) for metric in ("prs", "commits")},

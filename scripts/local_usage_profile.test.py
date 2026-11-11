@@ -138,10 +138,10 @@ class Api:
         return json.dumps({"data": data})
 
 
-def collect(api=None, account=None, at=AT):
+def collect(api=None, account=None, at=AT, previous=None):
     configured = copy.deepcopy(account or ACCOUNT)
     return profile.collect({**CONFIG, "githubProfiles": [configured]}, api or Api(),
-                           lambda remote, config: "personal", at=at)
+                           lambda remote, config: "personal", at=at, previous=previous)
 
 
 class ProfileBeijingTests(unittest.TestCase):
@@ -496,6 +496,60 @@ class ProfileBeijingTests(unittest.TestCase):
         source = collect(api)["sources"][0]
         self.assertEqual(source["status"], "unavailable")
         self.assertTrue(all(day["knownPrs"] is None for day in source["days"]))
+
+    def test_history_delta_and_final_head_identity_mismatch_reject_account(self):
+        account = {**ACCOUNT, "privateRepositories": []}
+        for phase in ("history", "delta", "final-head"):
+            with self.subTest(phase=phase):
+                api = Api()
+                previous = collect(api, account) if phase == "delta" else None
+                if phase == "delta":
+                    advanced = "b" * 40
+                    api.public_head = advanced
+                    api.commit_details[advanced] = ("2026-11-09T10:00:00Z", [HEAD])
+
+                def mismatched(args, timeout):
+                    result = json.loads(api(args, timeout))
+                    document = next(value[6:] for value in args if value.startswith("query="))
+                    target = (phase == "history" and "history(first:" in document
+                              or phase == "delta" and "parents(first: 100)" in document
+                              or phase == "final-head" and "defaultBranchRef" in document
+                                  and "contributionsCollection" not in document)
+                    if target:
+                        result["data"]["viewer"]["id"] = "different-account-id"
+                    return json.dumps(result)
+
+                source = collect(mismatched, account, previous=previous)["sources"][0]
+                self.assertEqual(source["status"], "unavailable")
+                self.assertFalse(source["coverage"]["identityVerified"])
+                self.assertNotIn("provenance", source)
+                self.assertTrue(all(day["knownPrs"] is None and day["knownCommits"] is None
+                                    for day in source["days"]))
+
+    def test_failed_private_discovery_without_public_history_keeps_commit_zero_unknown(self):
+        api = Api()
+        api.fail_private_owner = "fixture-owner"
+        api.fail_private_phase = "defaultBranchRef"
+        api.fail_private_error = OSError("synthetic private discovery failure")
+
+        def empty_public(args, timeout):
+            result = json.loads(api(args, timeout))
+            document = next(value[6:] for value in args if value.startswith("query="))
+            if "contributionsCollection" in document:
+                collection = result["data"]["viewer"]["contributionsCollection"]
+                collection.update({"totalCommitContributions": 0, "totalRepositoriesWithContributedCommits": 0,
+                                   "commitContributionsByRepository": [], "totalPullRequestContributions": 0,
+                                   "pullRequestContributions": {"totalCount": 0, "nodes": [],
+                                                                "pageInfo": {"hasNextPage": False, "endCursor": None}}})
+            return json.dumps(result)
+
+        source = collect(empty_public)["sources"][0]
+        self.assertEqual(source["status"], "partial")
+        self.assertTrue(source["coverage"]["identityVerified"])
+        self.assertFalse(source["coverage"]["paginationComplete"])
+        self.assertIn("private_OSError", source["coverage"]["reasons"])
+        self.assertEqual(source["provenance"]["historyRepositories"], 0)
+        self.assertTrue(all(day["knownCommits"] is None for day in source["days"]))
 
 
 if __name__ == "__main__":
