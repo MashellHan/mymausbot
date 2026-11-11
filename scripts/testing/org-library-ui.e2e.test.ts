@@ -183,9 +183,33 @@ describe("the organization library in the real renderer", () => {
     // The bot's panel: where it came from on Bot settings, the organization's skills on Library → Skills.
     await click("Bot settings");
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("From Sales desk 1.3.0 · Acme Partners");
-    await click("Details");
-    await click("Library");
-    await ui("eval", "--js", "document.querySelector('[data-panel-page=\"skills\"]').click(); true");
+    const detailsClick = await click("Details");
+    const libraryClick = await click("Library");
+    try {
+      await ui("eval", "--js", "document.querySelector('[data-panel-page=\"skills\"]').click(); true");
+    } catch (error) {
+      const page = await Promise.race([
+        ui("eval", "--js", `(() => {
+          const library = document.querySelector('[data-panel-tab="library"]');
+          return {
+            href: location.href,
+            dialogs: [...document.querySelectorAll('[role="dialog"]')].map((node) => node.getAttribute('aria-label') ?? node.getAttribute('aria-labelledby')),
+            tabs: [...document.querySelectorAll('[role="tab"]')].map((node) => ({ name: node.textContent?.trim(), selected: node.getAttribute('aria-selected') })),
+            back: [...document.querySelectorAll('button')].filter((node) => /Back/.test(node.textContent ?? '')).map((node) => node.textContent?.trim()),
+            panelPages: [...document.querySelectorAll('[data-panel-page-view]')].map((node) => node.getAttribute('data-panel-page-view')),
+            libraryTab: library ? { selected: library.getAttribute('aria-selected'), visible: library.getClientRects().length > 0 } : null,
+            skillsRow: Boolean(document.querySelector('[data-panel-page="skills"]')),
+          };
+        })()`).then((value) => value.result).catch(() => null),
+        new Promise<null>((resolve) => { const timer = setTimeout(() => resolve(null), 2_000); timer.unref?.(); }),
+      ]);
+      console.error("Organization library Skills phase:", JSON.stringify({
+        detailsClick: { target: detailsClick.target, clicked: detailsClick.clicked },
+        libraryClick: { target: libraryClick.target, clicked: libraryClick.clicked },
+        page,
+      }));
+      throw error;
+    }
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("Skills your organization shares");
     await evidence("org-library-bot-skills.png");
     await click("Add follow-up to this bot");
