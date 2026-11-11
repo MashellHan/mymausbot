@@ -94,7 +94,7 @@ const refresh = () => host.querySelector<HTMLButtonElement>('[aria-label="Check 
 const selected = () => host.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
 const settle = async () => { await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-apps-panel"]')).not.toBeNull()); };
 const render = async (requestedApp?: { id: string; nonce: number }) => {
-  await act(async () => { root.render(createElement(MiniAppsPanel, { requestedApp })); });
+  await act(async () => { root.render(createElement<NonNullable<Parameters<typeof MiniAppsPanel>[0]>>(MiniAppsPanel, { requestedApp })); });
   await settle();
 };
 
