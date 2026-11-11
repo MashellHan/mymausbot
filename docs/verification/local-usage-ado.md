@@ -1,7 +1,7 @@
 # Remote Azure DevOps contribution source
 
 `scripts/local_usage_ado.py` exports `collect(config, run, repository_category,
-*, at=None, days=60, previous=None)`. It returns an `ado-default-head-v1`
+*, at=None, days=60, previous=None)`. It returns an `ado-default-head-beijing-v1`
 version 2 envelope. It reads remote Azure DevOps data only. It never uses local
 clones, writes a cache, changes authentication, or starts a scheduler.
 
@@ -31,12 +31,12 @@ JSON with the existing Azure DevOps resource ID, and stores no bearer token.
 
 ## Counting and coverage
 
-The window contains exactly 60 UTC dates ending on the UTC capture date.
+The window contains exactly 60 Beijing dates ending on the Beijing date of the UTC cutoff.
 `todayPartial` marks the current day as observed only through the source
 cutoff. Created PRs count in active, completed and abandoned states; PRs are
 bucketed by creation instant. The collector pages all creator-filtered PR
 states without trusting a server-side date filter. It locally verifies creator,
-repository, status and UTC creation date, then rechecks the first page before
+repository, status and Beijing creation date, then rechecks the first page before
 certifying pagination. A failed page admits no prefix; duplicate or drifting
 pagination restarts before any exact PR count is published.
 
@@ -47,7 +47,7 @@ complete active-repository list from PRs or scan every project repository.
 For each selected enabled repository with a default branch, it pins the remote
 ref object ID and pages history reachable from that exact head. It counts the
 full 60-day window inside each selected repository, including earlier activity.
-Candidate commits use **author UTC date**, not committer date. Full details
+Candidate commits use **author instant on the Beijing calendar**, not committer date. Full details
 verify the author date, parentage, untruncated message and recognized
 `Co-authored-by: Name <email>` trailers and the single literal
 `&lt;email&gt;` delimiter form returned by ADO. Other encoded or mixed forms
@@ -96,7 +96,8 @@ private `state`; only the collector consumes it. Each commit page is at most
 selected-repository proof does not certify activity in unselected repositories.
 
 Once a repository has a complete pinned-head result, an unchanged head reuses
-it. **Any changed head gets a complete new pinned-history traversal.** The
+it only if its raw proof covers the exact Beijing window start. A changed head
+gets a complete new pinned-history traversal. The
 previous head cannot bound reachability: a newly merged side branch may appear
 after it in the API's commit sequence. The changed-head result replaces the
 old result only after the full traversal finishes. This catches late merges,
@@ -107,13 +108,17 @@ marks current coverage incomplete, and starts a full traversal of the new head.
 Only previously checked immutable commit details are reused during that full
 traversal; every reachable commit ID is still enumerated, so a side branch
 after the old head is counted. An absent old head classifies the new graph as
-rewritten and old counts cannot enter it. UTC window rollover refreshes identity,
+rewritten and old counts cannot enter it. Beijing window rollover refreshes identity,
 inventory and PR pages for the new cutoff while retaining only incomplete
 repository scans whose ID and default branch still match that inventory.
 The private continuation binds the configured remote-name set; changing that
 set rechecks inventory and PR pages, keeps only compatible selected pinned
 progress, and cannot carry old broader day rows as stale scoped data.
-Older schema-3 inventory expectations migrate once from the verified selected
+An old UTC schema-3 cache can supply raw `authoredAt` commit events and pinned
+proof. Those events are rebucketed by Beijing author date, while old PR rows
+without creation instants are rescanned. A proof whose original UTC coverage
+misses the first eight hours of the Beijing window is not exact until one
+bounded traversal extends it. Missing events do not prove zero. Older schema-3 inventory expectations migrate once from the verified selected
 repository IDs; the selected GUID expectations then survive failed refreshes.
 If an older failed checkpoint has lost both its selected IDs and pinned cache,
 its remaining inventory expectations stay bound and coverage remains incomplete
@@ -125,7 +130,7 @@ push can turn an unscanned portion into a certified zero.
 two-source ADO envelope from the same configured remotes. It requires the
 original per-repository pinned proof and work plus saved authenticated response
 bodies. A network-free collector replay must reproduce both selected heads,
-checked commit IDs, credited item fields, PR rows and all 60 UTC day totals.
+checked commit IDs, credited item fields, PR rows and all 60 Beijing day totals.
 Identity, author aliases, repository GUIDs, cutoff and selected-scope provenance
 must also match. Missing or divergent evidence rejects adoption; a state-less
 envelope cannot be passed directly as `previous` or replaced with `None` for a
@@ -145,7 +150,7 @@ small-new-commit runs on the reviewed scoped source.
 `scripts/local_usage_ado.py.test.ts` invokes the Python suite through normal
 Vitest selection; `python3 scripts/local_usage_ado.test.py` runs it directly.
 The suite uses a pure synthetic argv transport.
-It covers all PR states, UTC boundary, author and coauthor attribution, merge
+It covers all PR states, Beijing boundary, author and coauthor attribution, merge
 commits, budget resumption, pinned-head reuse, force push, identity mismatch,
 disabled/missing repositories and malformed creator/trailer evidence. The
 frozen private ADO reference proves one pinned repository's 23 target-day

@@ -35,8 +35,10 @@ function snapshot(scenario: string | null): LocalUsageResponse {
   const zero = scenario === "zero";
   const noPrior = scenario === "no-prior";
   const unclassified = scenario === "unclassified";
+  const beijingPartial = scenario === "beijing-partial";
   const asOf = midnight ? Date.UTC(2025, 11, 31, 16, 5)
-    : stale ? Date.UTC(2026, 10, 2, 15, 50) : Date.UTC(2026, 10, 3, 8, 30);
+    : beijingPartial ? Date.UTC(2026, 10, 2, 16, 5)
+      : stale ? Date.UTC(2026, 10, 2, 15, 50) : Date.UTC(2026, 10, 3, 8, 30);
   const days = dates(midnight ? "2025-12-03" : stale ? "2026-10-04" : "2026-10-05");
   const trend: LocalUsageTrendDay[] = days.map((day, index) => {
     if (noMetrics) return { day, coverage: "unavailable", tokenStatus: "unavailable",
@@ -146,7 +148,9 @@ try {
         else if (scenario === "legacy-only") res.end(JSON.stringify(snapshot("ready")));
         else res.end(JSON.stringify({ ...value, contributions: scenario === "unavailable"
           ? { ...primaryUsageFixture(), status: "unavailable", windows: null, accounts: [], trend: [], history: [] }
-          : primaryUsageFixture("2026-11-03", scenario === "known-counts") }));
+          : primaryUsageFixture("2026-11-03", scenario === "known-counts" || scenario === "beijing-partial",
+            scenario === "beijing-partial" ? "2026-11-02T16:05:00Z" : "2026-11-03T08:30:00Z",
+            scenario === "beijing-partial" ? { github: { prs: 1, commits: 2 }, ado: { prs: 2, commits: 3 } } : undefined) }));
       } },
     ],
   });

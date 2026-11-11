@@ -9,14 +9,18 @@ from pathlib import Path
 import stat
 import tempfile
 import urllib.parse
+from zoneinfo import ZoneInfo
 
 MAX_BYTES = 32 * 1024 * 1024
 MAX_SOURCES = 32
 MAX_REPOSITORY_ROWS = 100_000
 STATUS = {"ready", "partial", "stale", "unavailable"}
 CATEGORY = {"work", "personal", "unclassified"}
-DEFINITIONS = {"github": ("github-profile-v2", {"prs": "github-profile-day", "commits": "github-profile-day"}),
-               "ado": ("ado-default-head-v1", {"prs": "created-at/UTC", "commits": "author-at/UTC"})}
+DEFINITIONS = {"github": ("github-profile-beijing-v1", {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"}),
+               "ado": ("ado-default-head-beijing-v1", {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"})}
+LEGACY_DEFINITIONS = {"github": ("github-profile-v2", {"prs": "github-profile-day", "commits": "github-profile-day"}),
+                      "ado": ("ado-default-head-v1", {"prs": "created-at/UTC", "commits": "author-at/UTC"})}
+TZ = ZoneInfo("Asia/Shanghai")
 
 
 def obj(value):
@@ -73,9 +77,9 @@ def counts(row):
     return values
 
 
-def envelope(raw, provider):
+def envelope(raw, provider, legacy=False):
     raw = obj(raw)
-    definition, basis = DEFINITIONS[provider]
+    definition, basis = (LEGACY_DEFINITIONS if legacy else DEFINITIONS)[provider]
     if (raw.get("version") != 2 or raw.get("provider") != provider or raw.get("metricDefinition") != definition
             or raw.get("dateBasis") != basis):
         raise ValueError("Invalid contribution definition")
@@ -86,6 +90,8 @@ def envelope(raw, provider):
     first, last = day(window.get("startDay")), day(window.get("endDay"))
     if last - first != dt.timedelta(days=59) or window.get("todayPartial") is not True:
         raise ValueError("Invalid 60-day contribution window")
+    if not legacy and last != cutoff.astimezone(TZ).date():
+        raise ValueError("Contribution window does not match cutoff date basis")
     collection = obj(raw.get("collection"))
     if (type(collection.get("complete")) is not bool or type(collection.get("requestCount")) is not int
             or number(collection["requestCount"]) < 0 or type(collection.get("elapsedSeconds")) not in (int, float)
@@ -177,18 +183,17 @@ def envelope(raw, provider):
     return raw
 
 
-def snapshot(value):
+def snapshot(value, legacy=False):
     value = obj(value)
     if value.get("version") != 2:
         raise ValueError("Invalid contribution snapshot version")
-    github, ado = envelope(value.get("github"), "github"), envelope(value.get("ado"), "ado")
+    github, ado = envelope(value.get("github"), "github", legacy), envelope(value.get("ado"), "ado", legacy)
     if github["operationWindow"] != ado["operationWindow"]:
         raise ValueError("Contribution source windows do not align")
     return value
 
 
-def validate_bindings(value, config):
-    value = snapshot(value)
+def _bindings(value, config):
     profiles = config.get("githubProfiles")
     if not isinstance(profiles, list) or not profiles:
         raise ValueError("Configured Profile source set is missing")
@@ -219,6 +224,21 @@ def validate_bindings(value, config):
     return value
 
 
+def validate_bindings(value, config):
+    return _bindings(snapshot(value), config)
+
+
+def validate_seed_bindings(value, config):
+    if not isinstance(value, dict):
+        raise ValueError("Read-only contribution seed is missing")
+    legacy = value.get("ado", {}).get("metricDefinition") == "ado-default-head-v1"
+    checked = _bindings(snapshot(value, legacy=legacy), config)
+    state = checked["ado"].get("state")
+    if not isinstance(state, dict) or state.get("schema") != 3 or not isinstance(state.get("projects"), dict):
+        raise ValueError("Read-only ADO raw continuation is unavailable")
+    return checked
+
+
 @contextmanager
 def target_lock(file):
     file = Path(file)
@@ -237,11 +257,24 @@ def target_lock(file):
 
 def load_previous(file):
     file = Path(file)
-    if not file.exists():
+    try:
+        file.lstat()
+    except FileNotFoundError:
         return None
-    if file.is_symlink() or not file.is_file() or file.stat().st_size > MAX_BYTES:
-        raise ValueError("Existing contribution cache is unsafe")
-    return snapshot(json.loads(file.read_text()))
+    fd = os.open(file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_size > MAX_BYTES):
+            raise ValueError("Existing contribution cache is unsafe")
+        data = stream.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        raise ValueError("Existing contribution cache exceeds limit")
+    value = json.loads(data)
+    try:
+        return snapshot(value)
+    except ValueError:
+        return snapshot(value, legacy=True)
 
 
 def write_private(file, value):

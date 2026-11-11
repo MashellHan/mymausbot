@@ -2,10 +2,12 @@
 
 import re
 import subprocess
+from zoneinfo import ZoneInfo
 
 
 MAX_PRIVATE_REPOSITORIES = 20
 MAX_PRIVATE_PAGES = 100
+TZ = ZoneInfo("Asia/Shanghai")
 PRIVATE_CODES = {
     "private_repository_ineligible", "private_default_head_unavailable", "private_repository_changed",
     "private_pr_total_changed", "invalid_private_pr_page", "invalid_private_pr",
@@ -47,7 +49,7 @@ HISTORY_QUERY = """query($owner: String!, $name: String!, $head: GitObjectID!, $
       history(first: 100, after: $after) {
         totalCount pageInfo { hasNextPage endCursor }
         nodes {
-          oid authoredDate
+          oid authoredDate parents(first: 2) { totalCount }
           authors(first: 100) {
             totalCount pageInfo { hasNextPage }
             nodes { user { id } }
@@ -88,7 +90,7 @@ def _repository(budget, profile, owner, name, instant):
             or not isinstance(branch["target"].get("oid"), str)
             or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", branch["target"]["oid"], re.I)):
         raise ValueError("private_default_head_unavailable")
-    return repo, created, branch["target"]["oid"].lower()
+    return repo, created, branch["target"]["oid"].lower(), branch["name"]
 
 
 def _private_prs(budget, profile, owner, name, repo, created, at, first, info, instant, digest):
@@ -109,7 +111,7 @@ def _private_prs(budget, profile, owner, name, repo, created, at, first, info, i
         for node in nodes:
             key = node["id"]
             when = instant(node["createdAt"])
-            day = node["createdAt"][:10]
+            day = when.astimezone(TZ).date().isoformat()
             if not isinstance(key, str) or not key or key in seen or when < created or when > at:
                 if when > at:
                     seen.add(key)
@@ -120,8 +122,8 @@ def _private_prs(budget, profile, owner, name, repo, created, at, first, info, i
             if (isinstance(author, dict) and author.get("id") == profile["stableId"]
                     and isinstance(author.get("login"), str)
                     and author["login"].casefold() == profile["login"].casefold()
-                    and first.isoformat() <= day <= at.date().isoformat()):
-                events.append({"day": day, "repository": info,
+                    and first.isoformat() <= day <= at.astimezone(TZ).date().isoformat()):
+                events.append({"day": day, "createdAt": when.isoformat().replace("+00:00", "Z"), "repository": info,
                                "key": digest("github-pr", profile["host"], key)})
         after = _cursor(connection["pageInfo"], cursors)
         if after is None:
@@ -131,99 +133,44 @@ def _private_prs(budget, profile, owner, name, repo, created, at, first, info, i
     raise ValueError("private_pr_page_budget_exhausted")
 
 
-def _private_commits(budget, profile, owner, name, repo, created, head, at, first, info, instant, count, digest):
-    events, seen, cursors, after, total = [], set(), set(), None, None
-    for _ in range(MAX_PRIVATE_PAGES):
-        data = budget.query(profile, HISTORY_QUERY, {"owner": owner, "name": name, "head": head, "after": after})
-        response_repo = data["repository"]
-        if not isinstance(response_repo, dict) or response_repo.get("id") != repo["id"]:
-            raise ValueError("private_repository_changed")
-        commit = response_repo["object"]
-        if not isinstance(commit, dict) or commit.get("oid", "").lower() != head:
-            raise ValueError("private_head_changed")
-        history = commit["history"]
-        value = count(history["totalCount"])
-        if total is not None and total != value:
-            raise ValueError("private_history_changed")
-        total = value
-        nodes = history["nodes"]
-        if not isinstance(nodes, list) or len(nodes) > 100:
-            raise ValueError("invalid_private_history_page")
-        for node in nodes:
-            oid = node["oid"].lower()
-            authored = instant(node["authoredDate"])
-            day = node["authoredDate"][:10]
-            if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", oid, re.I) or oid in seen:
-                raise ValueError("invalid_private_commit")
-            seen.add(oid)
-            authors = node["authors"]
-            actors = authors["nodes"]
-            if (not isinstance(actors, list) or len(actors) > 100
-                    or authors["pageInfo"]["hasNextPage"] is not False
-                    or count(authors["totalCount"]) != len(actors)):
-                raise ValueError("incomplete_private_authors")
-            if (any(isinstance(actor, dict) and isinstance(actor.get("user"), dict)
-                    and actor["user"].get("id") == profile["stableId"] for actor in actors)
-                    and first.isoformat() <= day <= at.date().isoformat()):
-                if authored > at:
-                    continue
-                if authored < created:
-                    raise ValueError("private_commit_eligibility_uncertain")
-                events.append({"day": day, "repository": info, "count": 1,
-                               "key": digest("github-private-commit", profile["host"], repo["id"], oid),
-                               "oid": oid})
-        after = _cursor(history["pageInfo"], cursors)
-        if after is None:
-            if len(seen) != total:
-                raise ValueError("incomplete_private_history")
-            return events
-    raise ValueError("private_history_page_budget_exhausted")
-
-
 def supplement_private(config, profile, budget, typed, first, at, repository_category,
                        repository_info, instant, count, digest):
-    candidates = profile["privateRepositories"]
-    if not isinstance(candidates, list) or len(candidates) > MAX_PRIVATE_REPOSITORIES:
+    configured_candidates = profile["privateRepositories"]
+    if not isinstance(configured_candidates, list) or len(configured_candidates) > MAX_PRIVATE_REPOSITORIES:
         raise ValueError("invalid_private_repository_config")
     names = set()
-    for candidate in candidates:
+    for candidate in configured_candidates:
         if (not isinstance(candidate, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate)
                 or any(part in (".", "..") for part in candidate.split("/"))
                 or candidate.casefold() in names):
             raise ValueError("invalid_private_repository_config")
         names.add(candidate.casefold())
-    result, reasons, heads, seen_repositories, seen_oids = {"prs": [], "commits": []}, [], [], set(), set()
-    for candidate in candidates:
+    result, reasons, heads, history_candidates, seen_repositories = {"prs": [], "commits": []}, [], [], [], set()
+    for candidate in configured_candidates:
         owner, name = candidate.split("/")
         try:
-            repo, created, head = _repository(budget, profile, owner, name, instant)
+            repo, created, head, branch = _repository(budget, profile, owner, name, instant)
             info = repository_info(repo, profile, config, repository_category)
             if info["id"] in seen_repositories:
                 raise ValueError("duplicate_private_repository")
             seen_repositories.add(info["id"])
             pending_prs = [] if info["id"] in typed["prRepositoryIds"] else _private_prs(
                 budget, profile, owner, name, repo, created, at, first, info, instant, digest)
-            pending_commits = [] if info["id"] in typed["commitRepositoryIds"] else _private_commits(
-                budget, profile, owner, name, repo, created, head, at, first, info, instant, count, digest)
-            latest, _, latest_head = _repository(budget, profile, owner, name, instant)
+            latest, _, latest_head, _ = _repository(budget, profile, owner, name, instant)
             if latest["id"] != repo["id"] or latest_head != head:
                 raise ValueError("private_default_head_changed")
             if any(event["key"] in typed["prKeys"] for event in pending_prs):
                 raise ValueError("private_pr_overlap")
-            if any(event["oid"] in seen_oids for event in pending_commits):
-                raise ValueError("private_commit_overlap")
-            seen_oids.update(event["oid"] for event in pending_commits)
             result["prs"].extend(pending_prs)
-            result["commits"].extend(pending_commits)
+            history_candidates.append({"repository": info, "owner": owner, "name": name,
+                               "createdAt": created.isoformat().replace("+00:00", "Z"),
+                               "branch": branch, "head": head})
             heads.append({"repositoryId": info["id"], "head": head,
-                          "prs": len(pending_prs), "commits": len(pending_commits)})
+                          "prs": len(pending_prs), "commits": None})
         except ValueError as error:
             if str(error) == "account_identity_mismatch":
                 raise
             reasons.append("private_" + (str(error) if str(error) in PRIVATE_CODES else "invalid_response"))
         except (OSError, subprocess.SubprocessError, TimeoutError, KeyError, TypeError, IndexError, AttributeError) as error:
             reasons.append("private_" + type(error).__name__)
-    for events in result.values():
-        for event in events:
-            event.pop("oid", None)
-    return result, reasons, heads
+    return result, reasons, heads, history_candidates

@@ -35,9 +35,10 @@ class ContributionWriterTests(unittest.TestCase):
         (self.fixture / "local_usage_merged.py").write_text("MAX_HISTORY_DAYS = 191\nTZ = None\n")
         (self.fixture / "local_usage_github.py").write_text('DEFINITION = "github-profile-v1"\n')
         (self.fixture / "local_usage_profile.py").write_text('''from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 def collect(config, run, repository_category, *, at, days, previous):
     assert days == 60 and config["githubProfiles"][0]["stableId"] == "fixture-stable-id"
-    end = at.date()
+    end = at.astimezone(ZoneInfo("Asia/Shanghai")).date()
     rows = []
     for offset in range(59, -1, -1):
         day = (end - timedelta(days=offset)).isoformat()
@@ -48,9 +49,9 @@ def collect(config, run, repository_category, *, at, days, previous):
                 "status": "ready", "prs": value, "knownPrs": value, "commits": value, "knownCommits": value}] if value else []})
     source = {"id": "github:fixture", "account": {"host": "github.com", "login": "fixture", "stableId": "fixture-stable-id"},
         "status": "ready", "coverage": {"identityVerified": True, "paginationComplete": True, "visibilityComplete": True, "reasons": []}, "days": rows}
-    return {"version": 2, "metricDefinition": "github-profile-v2", "provider": "github",
+    return {"version": 2, "metricDefinition": "github-profile-beijing-v1", "provider": "github",
         "asOfAt": at.isoformat().replace("+00:00", "Z"), "capturedAt": at.isoformat().replace("+00:00", "Z"),
-        "dateBasis": {"prs": "github-profile-day", "commits": "github-profile-day"},
+        "dateBasis": {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"},
         "operationWindow": {"startDay": rows[0]["day"], "endDay": rows[-1]["day"], "todayPartial": True},
         "activeSourceIds": ["github:fixture"], "sources": [source],
         "collection": {"requestCount": 1, "elapsedSeconds": 0.1, "complete": True, "reasons": []}}
@@ -60,8 +61,8 @@ def collect(config, run, repository_category, *, at, days, previous):
     assert config["adoAuthorEmails"] == ["corporate@example.test"]
     result = github(config, run, repository_category, at=at, days=days, previous=None)
     result["provider"] = "ado"
-    result["metricDefinition"] = "ado-default-head-v1"
-    result["dateBasis"] = {"prs": "created-at/UTC", "commits": "author-at/UTC"}
+    result["metricDefinition"] = "ado-default-head-beijing-v1"
+    result["dateBasis"] = {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"}
     result["activeSourceIds"] = ["ado:fixture"]
     result["sources"][0]["id"] = "ado:fixture"
     result["sources"][0]["account"] = {"host": "dev.azure.com", "login": "corporate@example.test", "stableId": "11111111-2222-3333-4444-555555555555"}

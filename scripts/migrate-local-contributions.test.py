@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,7 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def envelope(provider, stable, login):
+def envelope(provider, stable, login, legacy=False):
     end = dt.date(2026, 11, 10)
     days = []
     for offset in range(59, -1, -1):
@@ -38,13 +39,24 @@ def envelope(provider, stable, login):
     if provider == "ado":
         source["scope"] = {"organization": "example", "project": "Project"}
     return {"version": 2, "provider": provider,
-        "metricDefinition": "github-profile-v2" if provider == "github" else "ado-default-head-v1",
-        "dateBasis": {"prs": "github-profile-day", "commits": "github-profile-day"} if provider == "github"
-            else {"prs": "created-at/UTC", "commits": "author-at/UTC"},
+        "metricDefinition": ("github-profile-v2" if provider == "github" else "ado-default-head-v1") if legacy
+            else ("github-profile-beijing-v1" if provider == "github" else "ado-default-head-beijing-v1"),
+        "dateBasis": ({"prs": "github-profile-day", "commits": "github-profile-day"} if provider == "github"
+                      else {"prs": "created-at/UTC", "commits": "author-at/UTC"}) if legacy
+            else {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"},
         "asOfAt": "2026-11-10T12:00:00Z", "capturedAt": "2026-11-10T12:00:00Z",
         "operationWindow": {"startDay": days[0]["day"], "endDay": days[-1]["day"], "todayPartial": True},
         "activeSourceIds": [source["id"]], "sources": [source],
         "collection": {"requestCount": 1, "elapsedSeconds": 0.1, "complete": True, "reasons": []}}
+
+
+def snapshot(legacy=False, progress=0):
+    github = envelope("github", "fixture-stable-id", "Fixture", legacy)
+    ado = envelope("ado", "11111111-2222-3333-4444-555555555555", "corporate@example.test", legacy)
+    if not legacy:
+        github["state"] = {"schema": 1, "sources": {"fixture-source": {"progress": {"fixture-repo": {"pages": progress}}}}}
+    ado["state"] = {"schema": 3, "projects": {}}
+    return {"version": 2, "github": github, "ado": ado}
 
 
 class MigrationTests(unittest.TestCase):
@@ -94,7 +106,7 @@ class MigrationTests(unittest.TestCase):
         self.proof = self.root / "ado-author-proof.txt"
         self.proof.write_text("EMAILS = {'corporate@example.test'}\n")
         self.private_candidate = self.root / "private-profile-candidate.json"
-        self.private_candidate.write_text(json.dumps({"githubHelper": "/fixture/gh", "githubProfiles": [{
+        self.private_candidate.write_text(json.dumps({"githubHelper": str((self.helpers / "refresh-local-usage.py").resolve()), "githubProfiles": [{
             "profile": "fixture", "host": "github.com", "login": "Fixture", "stableId": "fixture-stable-id",
             "privateRepositories": ["fixture/private-repo"]}]}))
         self.original = {"githubProfiles": [{"host": "github.com", "login": "Fixture", "profile": "fixture",
@@ -123,12 +135,25 @@ class MigrationTests(unittest.TestCase):
         return candidate
 
     def sealed(self):
-        self.prepared()
-        snapshot = {"version": 2, "github": envelope("github", "fixture-stable-id", "Fixture"),
-            "ado": envelope("ado", "11111111-2222-3333-4444-555555555555", "corporate@example.test")}
-        (self.plan / "candidate-cache.json").write_text(json.dumps(snapshot))
+        if self.cache.exists():
+            migration.prepare(self.args)
+        else:
+            self.prepared()
+        value = snapshot(progress=1)
+        def fake_run(command, **options):
+            path = Path(command[command.index("--output") + 1])
+            path.write_text(json.dumps(value))
+            path.chmod(0o600)
+            return subprocess.CompletedProcess(command, 0, stdout='{"primary":"published"}\n', stderr="")
+        with patch.object(migration.subprocess, "run", side_effect=fake_run):
+            migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
         migration.seal(argparse.Namespace(plan_dir=str(self.plan)))
         return argparse.Namespace(plan_dir=str(self.plan), expected_plan_sha256=sha(self.plan / "sealed-plan.json"))
+
+    def seed(self):
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        self.cache.write_text(json.dumps(snapshot(legacy=True)))
+        self.cache.chmod(0o600)
 
     def test_prepare_config_and_seal_are_private_and_reconcile_identities(self):
         args = self.sealed()
@@ -141,25 +166,114 @@ class MigrationTests(unittest.TestCase):
     def test_capture_uses_the_scheduled_venv_executable_and_clean_runtime(self):
         self.prepared()
         captured = {}
-        value = {"version": 2, "github": envelope("github", "fixture-stable-id", "Fixture"),
-                 "ado": envelope("ado", "11111111-2222-3333-4444-555555555555", "corporate@example.test")}
+        value = snapshot(progress=1)
 
         def fake_run(command, **options):
             captured.update(command=command, options=options)
-            Path(command[command.index("--output") + 1]).write_text(json.dumps(value))
+            path = Path(command[command.index("--output") + 1])
+            path.write_text(json.dumps(value))
+            path.chmod(0o600)
             return subprocess.CompletedProcess(command, 0, stdout='{"primary":"published"}\n', stderr="")
 
         with patch.object(migration.subprocess, "run", side_effect=fake_run):
             migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
         self.assertEqual(captured["command"][0], str(self.python))
-        self.assertEqual(captured["command"][1], str(self.app / "Contents/Resources/usage-helpers/refresh-local-usage.py"))
-        self.assertEqual(captured["command"][captured["command"].index("--config") + 1], str(self.plan / "candidate-config.json"))
+        self.assertEqual(captured["command"][1], str((self.app / "Contents/Resources/usage-helpers/refresh-local-usage.py").resolve()))
+        self.assertEqual(captured["command"][captured["command"].index("--config") + 1], str(self.plan / "capture-config.json"))
+        self.assertEqual(json.loads((self.plan / "capture-config.json").read_text())["githubHelper"], captured["command"][1])
+        self.assertEqual(json.loads((self.plan / "candidate-config.json").read_text())["githubHelper"], str((self.helpers / "refresh-local-usage.py").resolve()))
         self.assertEqual(captured["options"]["cwd"], str(self.root))
         self.assertEqual(captured["options"]["env"]["PATH"], "/usr/bin:/bin")
         self.assertEqual(captured["options"]["env"]["HOME"], str(self.root))
+        self.assertEqual(captured["options"]["env"]["PYTHONDONTWRITEBYTECODE"], "1")
         self.assertNotIn("AZURE_CONFIG_DIR", captured["options"]["env"])
         self.assertNotIn("GH_TOKEN", captured["options"]["env"])
         migration.seal(argparse.Namespace(plan_dir=str(self.plan)))
+
+    def test_packaged_executable_requires_its_exact_capture_config_binding(self):
+        source = self.app / "Contents/Resources/usage-helpers/refresh-local-usage.py"
+        sibling = source.with_name("local_usage_profile.py")
+        sibling.write_text("PROOF = 'signed-resource-import'\n")
+        fixture = self.root / "synthetic-result.json"
+        fixture.write_text(json.dumps(snapshot(progress=1)))
+        source.write_text('''import argparse
+import json
+import sys
+from pathlib import Path
+import local_usage_profile
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", required=True)
+parser.add_argument("--output", required=True)
+args, _ = parser.parse_known_args()
+if not sys.dont_write_bytecode or local_usage_profile.PROOF != "signed-resource-import":
+    raise SystemExit(18)
+if json.loads(Path(args.config).read_text())["githubHelper"] != str(Path(__file__).resolve()):
+    raise SystemExit(17)
+target = Path(args.output)
+target.write_bytes(Path(%r).read_bytes())
+target.chmod(0o600)
+''' % str(fixture))
+        migration.prepare(self.args)
+        migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
+        self.assertEqual(json.loads((self.plan / "candidate-cache.json").read_text())["github"]["state"]["schema"], 1)
+        self.assertFalse((source.parent / "__pycache__").exists())
+        self.assertEqual(list(source.parent.rglob("*.pyc")), [])
+        capture_config = self.plan / "capture-config.json"
+        wrong = json.loads(capture_config.read_text())
+        wrong["githubHelper"] = str((self.helpers / "refresh-local-usage.py").resolve())
+        capture_config.write_text(json.dumps(wrong))
+        failed = subprocess.run([str(self.python), "-B", str(source), "--config", str(capture_config),
+                                 "--output", str(self.root / "rejected.json")], capture_output=True, text=True,
+                                 env={"HOME": str(self.root), "PATH": "/usr/bin:/bin"})
+        self.assertEqual(failed.returncode, 17)
+        self.assertFalse((self.root / "rejected.json").exists())
+
+    def test_two_private_captures_resume_candidate_despite_live_writer_advance(self):
+        self.seed()
+        original_seed = sha(self.cache)
+        migration.prepare(self.args)
+        observed = []
+
+        def fake_run(command, **options):
+            output = Path(command[command.index("--output") + 1])
+            seed_path = Path(command[command.index("--previous") + 1])
+            observed.append((sha(seed_path), json.loads(output.read_text())["github"]["state"]["sources"]["fixture-source"]["progress"]["fixture-repo"]["pages"]
+                             if output.exists() else 0))
+            output.write_text(json.dumps(snapshot(progress=observed[-1][1] + 1)))
+            output.chmod(0o600)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch.object(migration.subprocess, "run", side_effect=fake_run):
+            migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
+            live = snapshot(legacy=True)
+            live["github"]["collection"]["requestCount"] = 2
+            self.cache.write_text(json.dumps(live))
+            self.assertNotEqual(sha(self.cache), original_seed)
+            migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
+        self.assertEqual(observed, [(original_seed, 0), (original_seed, 1)])
+        self.assertEqual(json.loads((self.plan / "candidate-cache.json").read_text())["github"]["state"]["sources"]["fixture-source"]["progress"]["fixture-repo"]["pages"], 2)
+        self.assertEqual(sha(self.plan / "before/contributions-v2.json"), original_seed)
+
+    def test_invalid_seed_or_candidate_stops_before_capture(self):
+        self.seed()
+        legacy = json.loads(self.cache.read_text())
+        legacy["ado"].pop("state")
+        self.cache.write_text(json.dumps(legacy))
+        migration.prepare(self.args)
+        with patch.object(migration.subprocess, "run") as runner, self.assertRaisesRegex(ValueError, "ADO raw continuation"):
+            migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
+        runner.assert_not_called()
+        shutil.rmtree(self.plan)
+        self.seed()
+        migration.prepare(self.args)
+        candidate = snapshot(progress=1)
+        candidate["github"]["metricDefinition"] = "github-profile-v2"
+        private_cache = self.plan / "candidate-cache.json"
+        private_cache.write_text(json.dumps(candidate))
+        private_cache.chmod(0o600)
+        with patch.object(migration.subprocess, "run") as runner, self.assertRaisesRegex(ValueError, "definition"):
+            migration.capture(argparse.Namespace(plan_dir=str(self.plan)))
+        runner.assert_not_called()
 
     def test_prepare_rejects_mismatched_scheduled_targets_or_base_python(self):
         for field, wrong in (("config", str(self.root / "wrong-config.json")),
@@ -215,6 +329,81 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(self.cache.exists())
         self.assertEqual((self.helpers / "refresh-local-usage.py").read_bytes(), original_helper)
         self.assertEqual(sha(self.plist), json.loads((self.plan / "prepared-plan.json").read_text())["launchAgentSha256"])
+
+    def test_already_enabled_unchanged_config_upgrades_and_resumes_partial_install(self):
+        enabled = migration.migrated_config(self.original, migration.verified_inputs(self.evidence),
+            ["corporate@example.test"], json.loads(self.private_candidate.read_text()))
+        self.config.write_text(json.dumps(enabled, indent=2, ensure_ascii=False) + "\n")
+        self.seed()
+        old_cache = sha(self.cache)
+        args = self.sealed()
+        self.assertEqual(sha(self.config), json.loads((self.plan / "sealed-plan.json").read_text())["candidateConfigSha256"])
+        original_atomic = migration.atomic
+        writes = []
+
+        def interrupted(path, content, mode):
+            if writes:
+                raise RuntimeError("synthetic interruption after first helper write")
+            original_atomic(path, content, mode)
+            writes.append(str(path))
+
+        with patch.object(migration, "atomic", side_effect=interrupted), self.assertRaisesRegex(RuntimeError, "interruption"):
+            migration.transition(args)
+        self.assertEqual(sha(self.config), sha(self.plan / "candidate-config.json"))
+        self.assertEqual(sha(self.cache), old_cache)
+        self.assertEqual(sha(self.helpers / "refresh-local-usage.py"),
+                         sha(self.app / "Contents/Resources/usage-helpers/refresh-local-usage.py"))
+        migration.transition(args)
+        migration.transition(args)
+        self.assertEqual(sha(self.cache), sha(self.plan / "candidate-cache.json"))
+        self.assertEqual(sha(self.config), sha(self.plan / "before/config.json"))
+        self.assertEqual(json.loads((self.plan / "apply-result.json").read_text())["configSha256"], sha(self.config))
+        migration.transition(args, rollback=True)
+        self.assertEqual(sha(self.cache), old_cache)
+        self.assertEqual(sha(self.config), sha(self.plan / "candidate-config.json"))
+
+    def test_distinct_config_premature_enable_is_rejected(self):
+        args = self.sealed()
+        self.config.write_bytes((self.plan / "candidate-config.json").read_bytes())
+        with self.assertRaisesRegex(ValueError, "incomplete installed source"):
+            migration.transition(args)
+        self.assertFalse(self.cache.exists())
+        self.assertEqual((self.helpers / "refresh-local-usage.py").read_text(), "old wrapper")
+
+    def test_staged_progress_enters_fresh_final_plan_and_late_external_change_blocks_apply(self):
+        self.sealed()
+        staged_hash = sha(self.plan / "sealed-plan.json")
+        staged_cache_hash = sha(self.plan / "candidate-cache.json")
+        self.seed()
+        final = self.root / "final-plan"
+        final_args = argparse.Namespace(**{**vars(self.args), "plan_dir": str(final)})
+        migration.prepare(final_args)
+        migration.adopt_staged(argparse.Namespace(plan_dir=str(final), staged_plan_dir=str(self.plan),
+            expected_staged_plan_sha256=staged_hash))
+        self.assertEqual(sha(final / "candidate-cache.json"), staged_cache_hash)
+        observed = []
+
+        def fake_run(command, **options):
+            output = Path(command[command.index("--output") + 1])
+            previous = json.loads(output.read_text())
+            pages = previous["github"]["state"]["sources"]["fixture-source"]["progress"]["fixture-repo"]["pages"]
+            observed.append(pages)
+            output.write_text(json.dumps(snapshot(progress=pages + 1)))
+            output.chmod(0o600)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch.object(migration.subprocess, "run", side_effect=fake_run):
+            migration.capture(argparse.Namespace(plan_dir=str(final)))
+        self.assertEqual(observed, [1])
+        migration.seal(argparse.Namespace(plan_dir=str(final)))
+        changed = snapshot(legacy=True)
+        changed["github"]["collection"]["requestCount"] = 3
+        self.cache.write_text(json.dumps(changed))
+        advanced_hash = sha(self.cache)
+        with self.assertRaisesRegex(ValueError, "changed outside"):
+            migration.transition(argparse.Namespace(plan_dir=str(final), expected_plan_sha256=sha(final / "sealed-plan.json")))
+        self.assertEqual(sha(self.cache), advanced_hash)
+        self.assertEqual(self.config.read_text(), json.dumps(self.original))
 
     def test_new_collection_after_apply_blocks_destructive_rollback(self):
         args = self.sealed()

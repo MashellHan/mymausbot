@@ -20,6 +20,7 @@ const MAX_SOURCES = 32;
 const MAX_REPOSITORIES_PER_DAY = 5_000;
 const MAX_REPOSITORY_ROWS = 100_000;
 const MAX_SAFE = Number.MAX_SAFE_INTEGER;
+const CHINA_DATE = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid contribution object");
@@ -174,15 +175,16 @@ function source(value: unknown, first: string, last: string, capturedAt: number,
 export function parseContributionEnvelope(value: unknown, provider: "github" | "ado", now = Date.now()): LocalContributionEnvelope {
   const raw = record(value);
   if (raw.version !== 2 || raw.provider !== provider || raw.metricDefinition !==
-      (provider === "github" ? "github-profile-v2" : "ado-default-head-v1")) throw new Error("Invalid contribution contract version");
+      (provider === "github" ? "github-profile-beijing-v1" : "ado-default-head-beijing-v1")) throw new Error("Invalid contribution contract version");
   const basis = record(raw.dateBasis);
-  const expected = provider === "github" ? { prs: "github-profile-day", commits: "github-profile-day" }
-    : { prs: "created-at/UTC", commits: "author-at/UTC" };
+  const expected = { prs: "created-at/Asia-Shanghai", commits: "author-at/Asia-Shanghai" } as const;
   if (basis.prs !== expected.prs || basis.commits !== expected.commits) throw new Error("Invalid contribution date basis");
   const cutoff = instant(raw.asOfAt, now), capture = instant(raw.capturedAt, now);
   if (cutoff > capture) throw new Error("Contribution capture precedes cutoff");
   const operation = record(raw.operationWindow), first = day(operation.startDay), last = day(operation.endDay);
-  if (first !== shift(last, -59) || operation.todayPartial !== true) throw new Error("Invalid 60-day operation window");
+  if (first !== shift(last, -59) || last !== CHINA_DATE.format(cutoff) || operation.todayPartial !== true) {
+    throw new Error("Invalid 60-day operation window");
+  }
   const collection = record(raw.collection);
   if (typeof collection.complete !== "boolean") throw new Error("Invalid collection completeness");
   if (!Array.isArray(raw.sources) || !raw.sources.length || raw.sources.length > MAX_SOURCES ||
@@ -310,8 +312,8 @@ function percentage(current: number | null, previous: number | null): LocalUsage
 
 function unavailable(): LocalContributionsResponse {
   return { metricDefinition: "contributions-v2", status: "unavailable", asOf: null, cutoffAt: null, capturedAt: null,
-    timeZone: "provider-days", dateBasis: { github: { prs: "github-profile-day", commits: "github-profile-day" },
-      ado: { prs: "created-at/UTC", commits: "author-at/UTC" }, tokens: "Asia/Shanghai" },
+    timeZone: "Asia/Shanghai", dateBasis: { github: { prs: "created-at/Asia-Shanghai", commits: "author-at/Asia-Shanghai" },
+      ado: { prs: "created-at/Asia-Shanghai", commits: "author-at/Asia-Shanghai" }, tokens: "Asia/Shanghai" },
     sourceCoverage: null, currentDayPartial: false, sourceDays: null, accounts: [], windows: null, trend: [], history: [] };
 }
 
@@ -423,7 +425,7 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
     : now - Math.min(Date.parse(snapshot.github.capturedAt), Date.parse(snapshot.ado.capturedAt)) > STALE_MS || sourceCoverage.stale > 0 ? "stale"
       : allReady ? "ready" : "partial";
   const sixty = aggregatePeriod(60, end);
-  return { metricDefinition: "contributions-v2", timeZone: "provider-days", dateBasis: {
+  return { metricDefinition: "contributions-v2", timeZone: "Asia/Shanghai", dateBasis: {
     github: snapshot.github.dateBasis, ado: snapshot.ado.dateBasis, tokens: "Asia/Shanghai" },
     status: resultStatus, asOf, cutoffAt: asOf, capturedAt,
     sourceCoverage, currentDayPartial: true,

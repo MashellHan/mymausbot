@@ -68,8 +68,8 @@ const usageFor = (value: number): LocalUsageResponse => {
     prCoverage: { work: "ready", personal: "ready", unclassified: "ready" },
     windows: { "1": window(1), "7": window(7), "30": window(30) }, trend: [] });
   return { ...snapshot, contributions: { ...withMergedUsageFixture(snapshot).merged!, metricDefinition: "contributions-v2",
-    timeZone: "provider-days", dateBasis: { github: { prs: "github-profile-day", commits: "github-profile-day" },
-      ado: { prs: "created-at/UTC", commits: "author-at/UTC" }, tokens: "Asia/Shanghai" },
+    timeZone: "Asia/Shanghai", dateBasis: { github: { prs: "created-at/Asia-Shanghai", commits: "author-at/Asia-Shanghai" },
+      ado: { prs: "created-at/Asia-Shanghai", commits: "author-at/Asia-Shanghai" }, tokens: "Asia/Shanghai" },
     cutoffAt: snapshot.asOf, capturedAt: snapshot.asOf, currentDayPartial: true, accounts: [], sourceDays: null } };
 };
 

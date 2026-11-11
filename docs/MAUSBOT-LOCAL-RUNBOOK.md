@@ -4,6 +4,12 @@ The reviewed Activities `contributions-v2` source uses the existing scheduled
 helper installation. Follow [its finite migration and rollback recipe](MAUSBOT-CONTRIBUTIONS-MIGRATION.md)
 before calling the new reader/data operation delivered; source and App packaging
 alone do not establish recurring capture or account reconciliation.
+The Beijing-day reader requires a new signed App from reviewed, merged source.
+After isolated package acceptance, the data operator stages a private capture,
+binds a fresh final plan to current live bytes, and coordinates a serial App
+switch and data apply under the existing finite writer exclusion. Restore that
+same 300-second writer only after the package owner is idle and the data apply
+and readback have completed.
 
 Keep the official `/Applications/OpenMausBot.app`, the user's data and paired
 devices intact. Build products and private handoff evidence stay outside Git.

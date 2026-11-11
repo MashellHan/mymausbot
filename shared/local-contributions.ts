@@ -9,14 +9,14 @@ export interface LocalContributionCounts {
   knownCommits: number | null;
 }
 
-/** Versioned provider observations. GitHub Profile and ADO retain their own source-day bases. */
+/** Versioned provider observations on the Asia/Shanghai calendar. */
 export interface LocalContributionEnvelope {
   version: 2;
-  metricDefinition: "github-profile-v2" | "ado-default-head-v1";
+  metricDefinition: "github-profile-beijing-v1" | "ado-default-head-beijing-v1";
   provider: "github" | "ado";
   asOfAt: string;
   capturedAt: string;
-  dateBasis: { prs: "github-profile-day"; commits: "github-profile-day" } | { prs: "created-at/UTC"; commits: "author-at/UTC" };
+  dateBasis: { prs: "created-at/Asia-Shanghai"; commits: "author-at/Asia-Shanghai" };
   operationWindow: { startDay: string; endDay: string; todayPartial: true };
   activeSourceIds: string[];
   sources: LocalContributionSource[];
@@ -105,12 +105,12 @@ export interface LocalContributionTrendDay extends LocalContributionCounts {
   wow: LocalUsageCountComparison;
 }
 
-/** Source-day contribution totals; token dates remain on the existing China-day basis. */
+/** Contribution and token dates share the Asia/Shanghai calendar. */
 export interface LocalContributionsResponse {
   metricDefinition: "contributions-v2";
   status: LocalUsageStatus;
   asOf: number | null;
-  timeZone: "provider-days";
+  timeZone: "Asia/Shanghai";
   dateBasis: { github: LocalContributionEnvelope["dateBasis"]; ado: LocalContributionEnvelope["dateBasis"]; tokens: "Asia/Shanghai" };
   cutoffAt: number | null;
   capturedAt: number | null;

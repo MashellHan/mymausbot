@@ -37,7 +37,7 @@ def child_environment():
     if not home.is_absolute():
         raise ValueError("An absolute home directory is required")
     return {"HOME": str(home), "USER": user.pw_name, "LOGNAME": user.pw_name,
-        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "PYTHONUNBUFFERED": "1",
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "PYTHONUNBUFFERED": "1", "PYTHONDONTWRITEBYTECODE": "1",
         "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
         "GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "file", "GIT_TERMINAL_PROMPT": "0",
@@ -679,14 +679,23 @@ def _stop_worker(process):
 
 
 def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, reuse_sources=False,
-                    file=None, whole_cycle_seconds=285, include_legacy=True):
+                    file=None, previous_file=None, whole_cycle_seconds=285, include_legacy=True):
     primary_config(config)
     target = Path(file or Path.home() / ".local/share/mymausbot/usage/contributions-v2.json")
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not 0 < whole_cycle_seconds <= 285:
         raise ValueError("Contribution cycle must stay within the existing five-minute job")
     with local_usage_contributions.target_lock(target):
-        previous = local_usage_contributions.load_previous(target)
+        if previous_file is not None and Path(previous_file).resolve() == target.resolve():
+            raise ValueError("Private contribution seed must be separate from the candidate target")
+        if target.exists() or target.is_symlink():
+            previous = local_usage_contributions.validate_bindings(
+                local_usage_contributions.load_previous(target), config)
+        elif previous_file is not None:
+            previous = local_usage_contributions.validate_seed_bindings(
+                local_usage_contributions.load_previous(previous_file), config)
+        else:
+            previous = None
         at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
         deadline = time.monotonic() + whole_cycle_seconds
         processes = {}
@@ -806,6 +815,7 @@ def main():
     parser.add_argument("--reuse-sources", action="store_true")
     parser.add_argument("--capture-only", action="store_true")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--previous", type=Path)
     args = parser.parse_args()
     config = json.loads(args.config.expanduser().read_text())
     azure_dir = Path(os.environ.get("AZURE_CONFIG_DIR", str(Path.home() / ".azure"))).expanduser()
@@ -813,9 +823,10 @@ def main():
         if args.output is None or args.publish or args.skip_api or args.reuse_sources:
             parser.error("Private capture requires --output and no publication or skip flags")
         return refresh_primary(args.collector.expanduser(), config, azure_dir,
-                               file=args.output.expanduser(), include_legacy=False)
-    if args.output is not None:
-        parser.error("--output is only available for private capture")
+                               file=args.output.expanduser(), previous_file=args.previous,
+                               include_legacy=False)
+    if args.output is not None or args.previous is not None:
+        parser.error("--output and --previous are only available for private capture")
     refresh(args.collector.expanduser(), config, azure_dir, publish=args.publish,
             skip_api=args.skip_api, reuse_sources=args.reuse_sources)
 

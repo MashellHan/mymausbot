@@ -9,11 +9,11 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
 
 ## Usage definitions
 
-- The main Activities surface always displays **Contributions** (`contributions-v2`). GitHub
-  PRs and commits retain GitHub Profile dates; ADO PRs use UTC creation dates and
-  default-head commits use UTC author dates. A source day can be complete through
-  its cutoff while the calendar day is still open. Tokens retain their own
-  China-day basis and capture time.
+- The main Activities surface always displays **Contributions** (`contributions-v2`).
+  GitHub and ADO PRs use creation instants on Beijing dates; verified reachable
+  default-head commits use author instants on the same dates, including merges.
+  A source day can be complete through its cutoff while the calendar day is
+  still open. Tokens use the same calendar dates with an independent capture time.
 - The canonical 60-day snapshot atomically replaces verified GitHub and ADO
   envelopes. Cards, charts, categories, repositories and account details use
   that one version. A missing account, date, pagination, visibility or attribution
