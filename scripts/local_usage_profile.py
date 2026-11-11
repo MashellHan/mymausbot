@@ -299,7 +299,8 @@ def full_progress(candidate, first):
     return {"mode": "full", "head": candidate["head"], "branch": candidate["branch"],
             "repositoryId": candidate["repository"]["providerId"],
             "coverageStartAt": stamp(window_start(first)), "cursor": None,
-            "cursors": [], "seen": [], "items": [], "total": None, "pages": 0}
+            "cursors": [], "seen": [], "items": [], "total": None, "pages": 0,
+            "eligibilityUncertainDays": []}
 
 
 def delta_events(config, profile, budget, candidate, first, cache, progress, current, repository_category):
@@ -330,7 +331,9 @@ def delta_events(config, profile, budget, candidate, first, cache, progress, cur
                 items[item["oid"]] = item
             cache[repo_id] = {"head": current["head"], "branch": current["branch"],
                               "repositoryId": repo["providerId"], "coverageStartAt": base["coverageStartAt"],
-                              "items": list(items.values()), "checked": sorted(known | seen)}
+                              "items": list(items.values()), "checked": sorted(known | seen),
+                              "eligibilityUncertainDays": sorted(set(base.get("eligibilityUncertainDays", [])
+                                  + current.get("eligibilityUncertainDays", [])))}
             progress.pop(repo_id, None)
             if observed != current["head"]:
                 raise ValueError("head_drift_after_delta")
@@ -362,10 +365,13 @@ def delta_events(config, profile, budget, candidate, first, cache, progress, cur
             day = china_day(authored)
             if day >= first.isoformat():
                 if authored < instant(candidate["createdAt"]):
-                    raise ValueError("history_commit_eligibility_uncertain")
-                item = {"day": day, "authoredAt": stamp(authored), "repository": repo,
-                        "key": digest("github-commit", profile["host"], repo["providerId"], oid),
-                        "oid": oid, "count": 1, "merge": len(parent_ids) > 1}
+                    days = current.setdefault("eligibilityUncertainDays", [])
+                    if day not in days:
+                        days.append(day)
+                else:
+                    item = {"day": day, "authoredAt": stamp(authored), "repository": repo,
+                            "key": digest("github-commit", profile["host"], repo["providerId"], oid),
+                            "oid": oid, "count": 1, "merge": len(parent_ids) > 1}
         current["frontier"].pop()
         current["frontier"].extend(parent_ids)
         current["seen"].append(oid)
@@ -397,7 +403,8 @@ def history_events(config, profile, budget, candidate, first, at, cache, progres
             current = {"mode": "delta", "head": head, "baseHead": proof["head"],
                        "branch": branch, "repositoryId": repo["providerId"],
                        "coverageStartAt": proof["coverageStartAt"], "frontier": [head],
-                       "seen": [], "items": [], "reachedBase": False}
+                       "seen": [], "items": [], "reachedBase": False,
+                       "eligibilityUncertainDays": list(proof.get("eligibilityUncertainDays", []))}
         else:
             current = full_progress(candidate, first)
         progress[repo_id] = current
@@ -440,10 +447,13 @@ def history_events(config, profile, budget, candidate, first, at, cache, progres
                 day = china_day(authored)
                 if day >= first.isoformat():
                     if authored < instant(candidate["createdAt"]):
-                        raise ValueError("history_commit_eligibility_uncertain")
-                    pending.append({"day": day, "authoredAt": stamp(authored), "repository": repo,
-                                    "key": digest("github-commit", profile["host"], repo["providerId"], oid),
-                                    "oid": oid, "count": 1, "merge": parents["totalCount"] > 1})
+                        days = current.setdefault("eligibilityUncertainDays", [])
+                        if day not in days:
+                            days.append(day)
+                    else:
+                        pending.append({"day": day, "authoredAt": stamp(authored), "repository": repo,
+                                        "key": digest("github-commit", profile["host"], repo["providerId"], oid),
+                                        "oid": oid, "count": 1, "merge": parents["totalCount"] > 1})
         has_next = page["hasNextPage"]
         cursor = page.get("endCursor")
         if has_next is True:
@@ -465,7 +475,8 @@ def history_events(config, profile, budget, candidate, first, at, cache, progres
         if not has_next:
             cache[repo_id] = {"head": head, "branch": branch, "repositoryId": repo["providerId"],
                               "coverageStartAt": current["coverageStartAt"], "items": current["items"],
-                              "checked": current["seen"]}
+                              "checked": current["seen"],
+                              "eligibilityUncertainDays": sorted(set(current.get("eligibilityUncertainDays", [])))}
             progress.pop(repo_id, None)
             if observed != head:
                 raise ValueError("head_drift_after_history")
@@ -479,7 +490,7 @@ def empty_days(first, at, status, captured):
              "knownCommits": None, "repositories": []} for offset in range(60)]
 
 
-def measured_days(first, at, typed, supplement, exact, captured, prs_complete, commits_complete):
+def measured_days(first, at, typed, supplement, exact, captured, prs_complete, commits_complete, uncertain_commit_days):
     days = {row["day"]: row for row in empty_days(first, at, "ready" if exact else "partial", captured)}
     repositories = {day: {} for day in days}
     for metric, events in (("prs", typed["prs"] + supplement["prs"]),
@@ -502,9 +513,10 @@ def measured_days(first, at, typed, supplement, exact, captured, prs_complete, c
             known = "known" + metric.capitalize()
             observed = sum(repo[known] for repo in row["repositories"])
             complete = prs_complete if metric == "prs" else commits_complete
-            row[known] = observed if observed or complete else None
+            uncertain = metric == "commits" and day in uncertain_commit_days
+            row[known] = observed if observed or complete and not uncertain else None
             for repo in row["repositories"]:
-                if not repo[known] and not complete:
+                if not repo[known] and (not complete or uncertain):
                     repo[known] = None
             if exact:
                 row[metric] = row[known]
@@ -574,8 +586,9 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 if repo_id in candidates and candidates[repo_id] != item:
                     raise ValueError("conflicting_profile_repository_head")
                 candidates[repo_id] = item
-            history_reasons, drifted = [], set()
+            history_reasons, drifted, eligibility_days = [], set(), set()
             for candidate in candidates.values():
+                repo_id = candidate["repository"]["id"]
                 try:
                     _, complete = history_events(config, profile, budget, candidate, first, at,
                                                  cache, progress, repository_category)
@@ -591,6 +604,14 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                         drifted.add(candidate["repository"]["id"])
                     if isinstance(error, TimeoutError):
                         break
+                history_state = cache.get(repo_id)
+                if not isinstance(history_state, dict) or history_state.get("head") != candidate["head"]:
+                    history_state = progress.get(repo_id)
+                if isinstance(history_state, dict):
+                    uncertain = history_state.get("eligibilityUncertainDays", [])
+                    if not isinstance(uncertain, list) or any(not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) for day in uncertain):
+                        raise ValueError("invalid_history_eligibility_days")
+                    eligibility_days.update(day for day in uncertain if first.isoformat() <= day <= china_day(at))
             raw_commits = {}
             for candidate in candidates.values():
                 repo_id = candidate["repository"]["id"]
@@ -614,13 +635,15 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                                    if first.isoformat() <= event["day"] <= china_day(at))
                       for metric in ("prs", "commits")}
             proof = visibility_proven(profile, first, at, totals)
-            source_reasons = supplement_reasons + history_reasons + ([] if proof else ["profile_visibility_unverified"])
+            source_reasons = supplement_reasons + history_reasons + (["history-commit-eligibility-uncertain"] if eligibility_days else []) + ([] if proof else ["profile_visibility_unverified"])
             exact = proof and not source_reasons
             source = {"id": identity, "account": account, "status": "ready" if exact else "partial",
                       "coverage": {"identityVerified": True, "paginationComplete": not supplement_reasons and not history_reasons,
-                                   "visibilityComplete": proof, "reasons": sorted(set(source_reasons))},
+                                   "visibilityComplete": proof, "eligibilityUncertainDays": sorted(eligibility_days),
+                                   "reasons": sorted(set(source_reasons))},
                       "days": measured_days(first, at, typed, supplemental, exact, captured,
-                                            not supplement_reasons, not supplement_reasons and not history_reasons),
+                                            not supplement_reasons, not supplement_reasons and not history_reasons,
+                                            eligibility_days),
                       "provenance": {"typedProfileTotals": typed["typedTotals"],
                                      "restrictedContributions": typed["restricted"],
                                      "supplementedTotals": {metric: len(supplemental[metric]) for metric in ("prs", "commits")},
