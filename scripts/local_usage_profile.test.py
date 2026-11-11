@@ -147,6 +147,15 @@ def collect(api=None, account=None, at=AT, previous=None):
 
 
 class ProfileBeijingTests(unittest.TestCase):
+    def assert_same_days_except_capture_time(self, first, second):
+        for days in (first, second):
+            captured = {day["capturedAt"] for day in days}
+            self.assertEqual(len(captured), 1)
+            self.assertIsNotNone(profile.instant(captured.pop()).tzinfo)
+        self.assertEqual(
+            [{key: value for key, value in day.items() if key != "capturedAt"} for day in first],
+            [{key: value for key, value in day.items() if key != "capturedAt"} for day in second])
+
     def test_frozen_current_day_events_share_one_beijing_boundary(self):
         prs = ["2026-11-10T23:49:54Z", "2026-11-10T23:40:48Z", "2026-11-10T19:41:40Z",
                "2026-11-10T17:27:35Z", "2026-11-10T16:54:36Z"]
@@ -278,7 +287,7 @@ class ProfileBeijingTests(unittest.TestCase):
         first = collect(api, {**ACCOUNT, "visibilityProof": proof()})
         second = profile.collect({**CONFIG, "githubProfiles": [{**ACCOUNT, "visibilityProof": proof()}]},
                                  api, lambda remote, config: "personal", at=AT, previous=first)
-        self.assertEqual(first["sources"][0]["days"], second["sources"][0]["days"])
+        self.assert_same_days_except_capture_time(first["sources"][0]["days"], second["sources"][0]["days"])
         self.assertEqual(first["activeSourceIds"], second["activeSourceIds"])
 
     def test_partial_pinned_history_survives_head_advance_then_reconciles_older_side_merge(self):
@@ -357,7 +366,7 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assertEqual(proof["eligibilityUncertainDays"], [])
         self.assertIn(imported, proof["checked"])
         self.assertIn(imported, [item["oid"] for item in proof["items"]])
-        self.assertEqual(repeated["sources"][0]["days"], source["days"])
+        self.assert_same_days_except_capture_time(repeated["sources"][0]["days"], source["days"])
         self.assertEqual(sum("history(first:" in arg for call in api.calls for arg in call), history_calls)
 
     def test_legacy_uncertain_cache_repairs_only_affected_history_with_persisted_progress(self):
@@ -402,7 +411,7 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assertFalse(source["coverage"]["visibilityComplete"])
         self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"], 1)
         self.assertEqual(sum("history(first:" in arg for call in api.calls for arg in call), history_calls)
-        self.assertEqual(repeated["sources"][0]["days"], source["days"])
+        self.assert_same_days_except_capture_time(repeated["sources"][0]["days"], source["days"])
         legacy_progress = copy.deepcopy(first)
         old_state = legacy_progress["state"]["sources"][source_id]
         old_state["cache"].pop(repo_id)
