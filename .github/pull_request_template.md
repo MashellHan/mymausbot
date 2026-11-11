@@ -7,6 +7,10 @@ Keep one focused outcome per PR; record pending checks without claiming success.
 
 ## Why
 
+Acceptance scope:
+Data/migration dependencies (or not applicable):
+Deferred work, owner and next action (or none):
+
 ## How it was verified
 
 <!-- commands run, platforms tested on, what you clicked through -->
@@ -15,6 +19,8 @@ QA-Handoff: <40-character current head SHA>
 
 Local checks and duration:
 Pending UI/package evidence and owner:
+Original task start / first coherent candidate / review request (with timezone):
+Implementation, check/build and waiting time (note overlap; retain retry time):
 
 ## Screenshots (UI changes)
 

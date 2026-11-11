@@ -11,6 +11,15 @@ validation rollout; neither is a prerequisite for the ordinary fast PR gate.
 
 ## Developer loop
 
+Use the [playbook's engineering rules](../.agents/team/playbook.md#engineering-and-review)
+to define the first candidate and data/migration dependencies before editing.
+Keep the original task start, first coherent candidate, review request and
+completion times in the existing handoff, with an explicit timezone. Separate
+implementation elapsed time, check/build execution and waiting; do not label
+the entire pre-commit interval as coding or testing. Record overlap rather
+than adding parallel durations. Corrections and retries retain the original
+task clock. These records guide optimization and never fail a passing check.
+
 | Entry point | Boundary |
 | --- | --- |
 | `pnpm check:plan` | Explain the complete merge-base diff, including staged, unstaged, untracked, deleted and renamed paths; execute no checks |

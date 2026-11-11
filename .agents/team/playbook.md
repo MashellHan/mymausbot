@@ -86,6 +86,41 @@ Job files live under the current conversation's `mausbot-local-build-20261103`.
 
 ## Engineering and review
 
+Before implementation, put three short entries in the existing assignment or
+draft PR. Reuse that record; do not create another plan or approval stage:
+
+- Acceptance: the requested observable result, existing sources and callers,
+  and what must work for this delivery to be complete.
+- Evidence and dependencies: input facts already checked, design uncertainty,
+  and reader, writer, cache or migration dependencies; use "not applicable"
+  when the task has no data or migration change.
+- First candidate: the smallest coherent implementation to review, focused
+  checks, and deferred work with an existing owner and next action.
+
+For date conversions, check whether inputs contain raw timestamps or only daily
+aggregates. For collector or migration changes, bind the actual configured scope
+and old/new reader, producer and cache formats. Where applicable, use existing
+evidence or a small isolated fixture to establish that collection advances
+across upstream head changes, retries retain progress, and migration calls the candidate producer.
+Do not relabel old aggregates, restart proven history on every refresh, or
+test migration against live data. Reuse passing evidence for unchanged behavior;
+add focused cases for changed or uncovered contracts.
+
+Amend the same brief when a necessary dependency emerges; tell Lead its impact
+and continue independent work. Routine design choices do not wait for another
+acknowledgement. Lead reports material scope or estimate changes to the user
+early. Keep unrelated improvements in the existing backlog. A small plan never
+waives correctness, safe migration or a requested outcome.
+Missing brief or timing fields call for completing the existing record; they
+do not fail CI, close a PR or add an approval requirement.
+
+Historical backfill may continue through the existing collector after delivery
+only where the accepted contract permits partial coverage. Prove forward
+progress and honest missing-data behavior before handoff; unknown history is
+not zero. Record remaining coverage, owner and completion condition. An explicit
+request for complete history remains pending until verified. Do not add a
+collector or schedule just to separate backfill from source acceptance.
+
 Lead assigns each independent PR or coherent batch to the available reviewer
 with the shorter queue: `mausbot-review` or `mausbot-review2`. Record one review
 owner with the exact source handoff. Either reviewer's acceptance satisfies the
@@ -145,6 +180,15 @@ commit, available evidence and explicitly pending UI/package checks immediately;
 source review and CI can start while those checks finish. Do not wait for all
 screenshots or a package to begin source review. Pending acceptance still blocks
 the corresponding delivery. Batch corrections and review only their delta.
+
+Dev sends the ready head to Lead once, with the existing handoff record and
+pending checks. The assigned Reviewer sends its final verdict to Lead once
+when it finishes, including the reviewed SHA and any findings. Do not leave a
+verdict only in an idle pane. Lead follows the existing CI run and resumes the
+merge decision as soon as review and required results are available; the hourly
+queue is recovery for missed handoffs, not the normal delivery trigger. Check
+current-head acceptance, CI and holds before merging. Do not add polling jobs,
+duplicate notifications, another reviewer or a new approval gate.
 
 Freeze operational callers before their focused review as well. A caller or
 fixture correction does not reopen unchanged product source or require another
