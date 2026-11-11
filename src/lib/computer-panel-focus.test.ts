@@ -35,7 +35,7 @@ describe("computer panel entry focus", () => {
     vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key), setItem: (key: string, value: string) => saved.set(key, value) });
     localStorage.setItem("omb-computer-panel-view:scout", "browser");
     rememberComputerPanelOpen({ botId: "scout", opener: null, tabs: true });
-    expect(localStorage.getItem("omb-computer-panel-view:scout")).toBe("mini-apps");
+    expect(localStorage.getItem("omb-computer-panel-view:scout")).toBe("browser");
     expect(takeComputerPanelTabFocus("scout")).toBe(true);
     expect(takeComputerPanelTabFocus("scout")).toBe(false);
     expect(takeComputerPanelTabFocus("other")).toBe(false);
