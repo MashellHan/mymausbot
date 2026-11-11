@@ -998,8 +998,8 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   const routineExecution = routineRun && (routineRun.resultsThreadId ?? routineRun.sourceThreadId) !== bot.threadId ? routineRun : undefined;
   const resultsThreadId = routineExecution?.resultsThreadId ?? routineExecution?.sourceThreadId;
   const canOpenResults = resultsThreadId && [...state.bots, ...state.groups].some((owner) => owner.threadId === resultsThreadId || owner.tasks?.some((task) => task.threadId === resultsThreadId));
-  const rawComputerOnLeft = raw && !remoteClient && !phoneMenu;
-  const computerButton = !phoneMenu && <ChatComputerButton rawLeading={rawComputerOnLeft} open={state.computerOpen} live={busy && place === "browser"}
+  const rawComputerOnLeft = raw && !remoteClient;
+  const computerButton = (!phoneMenu || rawComputerOnLeft) && <ChatComputerButton rawLeading={rawComputerOnLeft} open={state.computerOpen} live={busy && place === "browser"}
     onClick={(event) => { if (!state.computerOpen) rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: event.detail === 0 }); dispatch({ type: "toggleComputer" }); }} />;
 
   return (
