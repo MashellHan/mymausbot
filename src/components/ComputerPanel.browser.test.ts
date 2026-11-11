@@ -1,4 +1,6 @@
-import { createElement } from "react";
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { Bot } from "@/state/store";
@@ -6,20 +8,21 @@ import { browserAvailable, type FeatureFlagConfig } from "@/lib/feature-flags";
 import { t } from "@/lib/i18n";
 
 const fixture = vi.hoisted(() => {
-  vi.stubGlobal("window", {});
-  vi.stubGlobal("document", { visibilityState: "visible" });
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const view = { current: "browser" };
-  vi.stubGlobal("localStorage", { getItem: () => view.current });
-  return { config: {} as FeatureFlagConfig & { cloudHome?: boolean }, view };
+  vi.stubGlobal("localStorage", { getItem: () => view.current, setItem: () => {} });
+  return { config: {} as FeatureFlagConfig & { cloudHome?: boolean }, view,
+    dispatch: vi.fn(), flushBotPatches: vi.fn(async () => null) };
 });
 // These cover the Advanced panel; ComputerPanel.simple.test.ts covers Simple.
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => true, setAdvancedMode: () => {} }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
+  api: vi.fn(async () => ({})),
   useStore: () => ({
     state: { config: { box: { configured: false }, ...fixture.config }, instances: [], computerControl: {}, routines: [], routineRuns: [] },
-    dispatch: vi.fn(),
-    flushBotPatches: vi.fn(),
+    dispatch: fixture.dispatch,
+    flushBotPatches: fixture.flushBotPatches,
   }),
 }));
 import { ComputerPanel } from "./ComputerPanel";
@@ -76,22 +79,43 @@ describe("Computer panel on a narrow screen", () => {
 });
 
 describe("Computer panel Works on", () => {
-  const places = (markup: string) => [...markup.matchAll(/<span>(Auto|Cloud desktop|Private desktop|This computer|Browser|Off)<\/span>/g)].map((match) => match[1]);
-  const computerTab = (config: FeatureFlagConfig & { cloudHome?: boolean }) => {
+  const computerTab = async (config: FeatureFlagConfig & { cloudHome?: boolean }) => {
     fixture.view.current = "computer";
-    try { return render(config); } finally { fixture.view.current = "browser"; }
+    fixture.config = config;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(ComputerPanel, { bot: { ...bot, threadId: "fixture", computer: "off" } })));
+      const section = host.querySelector<HTMLElement>('[data-testid="bot-overview-works"]')!;
+      const disclosure = section.querySelector("button")!;
+      const content = section.querySelector<HTMLElement>("#bot-overview-works-content")!;
+      expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+      expect(content.hidden).toBe(true);
+      expect(content.querySelector('[role="group"]')).toBeNull();
+      await act(async () => disclosure.click());
+      expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+      expect(content.hidden).toBe(false);
+      const places = [...content.querySelectorAll('[role="group"] button')]
+        .map((button) => button.querySelector("span span")?.textContent?.trim());
+      return { places, text: content.textContent ?? "" };
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      fixture.view.current = "browser";
+    }
   };
 
-  it("lists this computer and a private desktop on a desktop or self-hosted server", () => {
-    const markup = computerTab({});
-    expect(places(markup)).toEqual(["Auto", "Cloud desktop", "Private desktop", "This computer", "Browser", "Off"]);
-    expect(markup).toContain("Choose where this bot works.</p>");
+  it("lists this computer and a private desktop on a desktop or self-hosted server", async () => {
+    const { places, text } = await computerTab({});
+    expect(places).toEqual(["Auto", "Cloud desktop", "Private desktop", "This computer", "Browser", "Off"]);
+    expect(text).toContain("Choose where this bot works.");
   });
 
-  it("lists neither on My Cloud, and says why", () => {
-    const markup = computerTab({ cloudHome: true });
-    expect(places(markup)).toEqual(["Auto", "Cloud desktop", "Browser", "Off"]);
-    expect(markup).toContain("Choose where this bot works. It can also use your computer whenever mymausbot is open on it.");
+  it("lists neither on My Cloud, and says why", async () => {
+    const { places, text } = await computerTab({ cloudHome: true });
+    expect(places).toEqual(["Auto", "Cloud desktop", "Browser", "Off"]);
+    expect(text).toContain("Choose where this bot works. It can also use your computer whenever mymausbot is open on it.");
   });
 });
 
