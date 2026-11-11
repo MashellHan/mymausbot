@@ -170,18 +170,24 @@ def launch_agent(path, helpers_dir, config_path, collector_path, azure_dir, pyth
     arguments = value.get("ProgramArguments")
     defaults = {"config": user_home() / ".config/agent-town/activity.json",
                 "azure": user_home() / ".azure", "cache": primary_cache()}
+    environment = value.get("EnvironmentVariables") or {}
+    if (not isinstance(environment, dict)
+            or not {"PATH", "PYTHONUNBUFFERED"} <= set(environment)
+            or set(environment) - {"PATH", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE", "AZURE_CONFIG_DIR"}
+            or not isinstance(environment.get("PATH"), str) or not environment["PATH"]
+            or environment.get("PYTHONUNBUFFERED") != "1"
+            or environment.get("PYTHONDONTWRITEBYTECODE", "1") != "1"):
+        raise ValueError("Scheduled runtime overrides the reviewed default identity or auth directory")
+    scheduled_azure = environment.get("AZURE_CONFIG_DIR", str(defaults["azure"]))
+    if not isinstance(scheduled_azure, str) or not Path(scheduled_azure).is_absolute():
+        raise ValueError("Scheduled auth directory must be an explicit absolute path")
     expected = [str(python_path), str(helpers_dir / "refresh-local-usage.py"), "--collector", str(collector_path)]
     if (value.get("StartInterval") != 300 or not isinstance(arguments, list)
             or arguments not in (expected, [*expected, "--config", str(config_path)])
             or arguments == expected and config_path != defaults["config"]
             or str(python_path) != arguments[0] or not python_path.is_file()
-            or azure_dir != defaults["azure"] or cache_path != defaults["cache"]):
+            or str(azure_dir) != scheduled_azure or cache_path != defaults["cache"]):
         raise ValueError("Existing five-minute scheduled helper is not the selected installation")
-    environment = value.get("EnvironmentVariables") or {}
-    if (not isinstance(environment, dict) or set(environment) != {"PATH", "PYTHONUNBUFFERED"}
-            or not isinstance(environment.get("PATH"), str) or not environment["PATH"]
-            or environment.get("PYTHONUNBUFFERED") != "1"):
-        raise ValueError("Scheduled runtime overrides the reviewed default identity or auth directory")
     working = value.get("WorkingDirectory")
     if working is not None and (not isinstance(working, str) or not Path(working).is_absolute() or not Path(working).is_dir()):
         raise ValueError("Scheduled working directory is unavailable")

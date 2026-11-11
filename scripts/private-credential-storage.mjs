@@ -32,7 +32,9 @@ function fileHash(path) {
 }
 
 export function inspectPrivateCredentialStorage(fixtureRoot, { phase, expected } = {}) {
-  assert(["prelaunch", "postlaunch"].includes(phase));
+  assert(["prelaunch", "postlaunch", "postquit"].includes(phase));
+  if (phase === "postquit") assert.equal(expected?.state, "present", "Postquit check needs the before-quit snapshot");
+  const closed = phase !== "postlaunch";
   const temporary = realpathSync(tmpdir());
   const root = realpathSync(fixtureRoot);
   assert(basename(root).startsWith("omb-private-file-e2e-") && inside(temporary, root));
@@ -66,7 +68,7 @@ export function inspectPrivateCredentialStorage(fixtureRoot, { phase, expected }
       const key = relative(privateRoot, path).replaceAll("\\", "/");
       if (info.isSymbolicLink()) {
         assert(inBrowser);
-        browserEntries.push({ path: key, kind: "symlink", target: phase === "prelaunch" ? readlinkSync(path) : undefined });
+        browserEntries.push({ path: key, kind: "symlink", target: closed ? readlinkSync(path) : undefined });
       } else if (info.isDirectory()) {
         owned(path, true);
         if (inBrowser) browserEntries.push({ path: key, kind: "directory" });
@@ -74,17 +76,22 @@ export function inspectPrivateCredentialStorage(fixtureRoot, { phase, expected }
       } else {
         owned(path, false);
         const row = { path: key, kind: "file", size: Number(info.size) };
-        if (inBrowser) browserEntries.push(phase === "prelaunch" ? { ...row, sha256: fileHash(path) } : row);
+        if (inBrowser) browserEntries.push(closed ? { ...row, sha256: fileHash(path) } : row);
         else records[key] = fileHash(path);
       }
     }
   };
   walk(privateRoot);
   const result = { state: "present", markerSha256: fileHash(marker), records,
-    browserEntries: phase === "prelaunch" ? browserEntries : browserEntries.length };
+    browserEntries: closed ? browserEntries : browserEntries.length };
   if (expected !== undefined) {
-    assert.equal(phase, "prelaunch");
-    assert.deepEqual(result, expected);
+    if (phase === "postquit") {
+      assert.equal(result.markerSha256, expected.markerSha256);
+      assert.deepEqual(result.records, expected.records, "Private credentials changed during quit");
+    } else {
+      assert.equal(phase, "prelaunch");
+      assert.deepEqual(result, expected);
+    }
   }
   return result;
 }
