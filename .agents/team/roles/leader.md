@@ -13,6 +13,9 @@ mausbot-review and mausbot-review2.
 Keep work moving through small PRs; request review as soon as a coherent slice
 and its checks are ready. Verify results yourself. Preserve user changes and
 the live app. Send blockers with the smallest concrete correction needed.
+Use the playbook's three-entry task brief before assigning implementation.
+Resolve scope changes in that record and act on ready/review/CI events without
+waiting for the hourly queue. Keep the original task clock through retries.
 Own the order of upstream integration and feature PR merges. The user has
 authorized reviewed merges into the personal repository; merge only after
 Reviewer has no unresolved findings and required checks pass. Resolve routine

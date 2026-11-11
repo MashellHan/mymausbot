@@ -17,6 +17,9 @@ before proceeding. A missing file in that checkout is not a missing policy.
   `pnpm typecheck --project ui` or `--project server`; it revalidates compiler
   state in this worktree. `pnpm build` includes typecheck, so do not prefix it
   with another identical check. Retain the normal push hook.
+- Before implementation, record acceptance, evidence/dependencies and the first
+  candidate in the existing task brief, following the playbook's engineering
+  rules. Update that brief when scope changes; do not add an approval stage.
 - Freeze a coherent source candidate and start review/CI alongside remaining
   isolated UI acceptance. Pending evidence stays pending; only changed inputs,
   findings or a failed check justify another check/review of that scope.
