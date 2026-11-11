@@ -32,7 +32,7 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
     + ` ${usageMetricHint(metric)}`
     + `${value === null ? ` ${unavailableHint ?? t("computer.usage.changeUnavailableHint")}` : ""}`;
   return <span data-usage-change data-usage-provisional={known || undefined} className={className} title={description}>
-    <span aria-hidden="true">{shown}</span><span className="sr-only">{description}</span>
+    <span aria-hidden="true">{period && <><span className="whitespace-nowrap">{period}</span>{" "}</>}<span className="whitespace-nowrap">{shown}</span></span><span className="sr-only">{description}</span>
   </span>;
 }
 
@@ -40,5 +40,5 @@ export function UsageCount({ value, known }: { value: number | null; known: numb
   const source = useContext(UsageSourceContext);
   const partial = value === null && known !== null;
   const description = partial ? t(source === "primary" ? "computer.usage.primaryKnownCountHint" : source === "profile" ? "computer.usage.syncedCountHint" : "computer.usage.observedCountHint") : undefined;
-  return <span data-usage-provisional={partial || undefined} title={description} aria-description={description}>{countText(value, known)}</span>;
+  return <span data-usage-provisional={partial || undefined} title={description} aria-description={description}>{partial && "≥"}{countText(value, known)}</span>;
 }
