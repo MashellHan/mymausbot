@@ -40,7 +40,7 @@ function changedState(left: MiniAppState | null, right: MiniAppState): boolean {
     || left.data.length !== right.data.length || right.data.some((entry, index) => entry.datasetId !== left.data[index]?.datasetId || entry.revision !== left.data[index]?.revision);
 }
 
-export function MiniAppsPanel() {
+export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; nonce: number } } = {}) {
   const { state: store, dispatch } = useStore();
   const showThreads = useShowThreads();
   const owner = useOwnerOrAdmin();
@@ -72,6 +72,7 @@ export function MiniAppsPanel() {
   const focusAfter = useRef<string | null>(null);
   const defaultsStarted = useRef(false);
   const restored = useRef(false);
+  const openedRequest = useRef<number | null>(null);
   documentRef.current = document;
   stateRef.current = appState;
   selectedRef.current = selectedId;
@@ -121,9 +122,25 @@ export function MiniAppsPanel() {
   useEffect(() => {
     if (!storageKey || !apps || restored.current) return;
     restored.current = true;
+    if (requestedApp && apps.some((app) => app.id === requestedApp.id)) {
+      rememberApp(storageKey, requestedApp.id);
+      return;
+    }
     const saved = savedApp(storageKey);
     if (saved && apps.some((app) => app.id === saved)) setSelectedId(saved);
-  }, [storageKey, apps]);
+  }, [storageKey, apps, requestedApp]);
+
+  useEffect(() => {
+    if (!requestedApp || !apps?.some((app) => app.id === requestedApp.id) || openedRequest.current === requestedApp.nonce) return;
+    openedRequest.current = requestedApp.nonce;
+    focusAfter.current = "selected";
+    rememberApp(storageKey, requestedApp.id);
+    setSelectedId(requestedApp.id);
+    setDocument(null);
+    setAppState(null);
+    setError("");
+    setStale(false);
+  }, [requestedApp, apps, storageKey]);
 
   useEffect(() => {
     if (!visible || !nativeGuard || owner !== true || defaultsStarted.current) return;

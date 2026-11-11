@@ -7,18 +7,19 @@ import { latestRoutineRun, routineDateTime, routineFinished, routineHeldNote, ro
 import type { Bot } from "@/state/store";
 import { Switch } from "../SettingsPrimitives";
 
-export function RoutineList({ routines, runs, bots, loading, error, onOpen, onLogs, onToggle }: {
+export function RoutineList({ routines, runs, bots, loading, error, compact = false, onOpen, onLogs, onToggle }: {
   routines: Routine[];
   runs: RoutineRun[];
   bots?: Bot[];
   loading?: boolean;
   error?: boolean;
+  compact?: boolean;
   onOpen: (routine: Routine) => void;
   onLogs: (routine: Routine) => void;
   onToggle?: (routine: Routine) => void;
 }) {
   const sorted = [...routines].sort((a, b) => Number(b.enabled) - Number(a.enabled) || (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity) || a.name.localeCompare(b.name));
-  return <div className="space-y-3" aria-label={t("routines.list")}>
+  return <div className={compact ? "space-y-2" : "space-y-3"} aria-label={t("routines.list")}>
     {error && <div role="alert" className="rounded-lg bg-danger/10 p-3 text-[12px] text-danger">{t("routines.loadError")}</div>}
     {loading && <p role="status" className="flex items-center gap-2 p-3 text-[12px] text-ink-secondary"><Loader2 size={14} className="animate-spin" />{t("routines.loading")}</p>}
     {!loading && !error && sorted.length === 0 && <div className="rounded-xl border border-dashed border-hairline/50 p-5 text-center text-[13px] text-ink-secondary"><Repeat2 size={20} className="mx-auto mb-2 opacity-60" />{t("routines.empty")}</div>}
@@ -27,7 +28,7 @@ export function RoutineList({ routines, runs, bots, loading, error, onOpen, onLo
       const said = latest && (latest.attention ? "attention" : latest.error ? "error" : latest.output ? "output" : null);
       const bot = bots?.find((candidate) => candidate.id === routine.botId);
       const switched = onToggle !== undefined && !routineFinished(routine);
-      return <article key={routine.id} className="rounded-xl border border-hairline/40 bg-card p-3.5" aria-label={routine.name}>
+      return <article key={routine.id} className={cn("border border-hairline/40 bg-card", compact ? "rounded-lg px-3 py-2.5" : "rounded-xl p-3.5")} aria-label={routine.name}>
         <div className="flex items-start gap-2">
           <button type="button" onClick={() => onOpen(routine)} className="min-w-0 flex-1 text-left hover:text-accent">
             <span className="block truncate text-[13px] font-semibold text-ink">{routine.name}</span>

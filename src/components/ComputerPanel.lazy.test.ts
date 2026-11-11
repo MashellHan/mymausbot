@@ -90,6 +90,11 @@ const open = async (bot: Bot) => {
   }
   flushSync(() => root!.render(createElement(BotEditorStore, { value: value(), children: createElement(ComputerPanel, { bot }) })));
   await settle();
+  const disclosure = document.querySelector<HTMLButtonElement>('[data-testid="bot-overview-computer"] > button');
+  if (disclosure?.getAttribute("aria-expanded") === "false") {
+    flushSync(() => disclosure.click());
+    await settle();
+  }
 };
 const text = () => document.body.textContent ?? "";
 const spinning = () => document.querySelector(".animate-spin") !== null;

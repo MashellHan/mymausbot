@@ -34,7 +34,7 @@ const fixture = vi.hoisted(() => {
 });
 
 // The panel's useState calls in source order, counted from `phase`; keep in step with ComputerPanel.tsx.
-const PHASE_OFFSETS = { phase: 0, resolved: 2, vmStatus: 10, error: 16 } as const;
+const PHASE_OFFSETS = { phase: 0, resolved: 2, vmStatus: 10, error: 16, computerExpanded: 17, worksExpanded: 18 } as const;
 let phaseIndex = -1;
 
 vi.mock("react", async (original) => ({
@@ -45,7 +45,10 @@ vi.mock("react", async (original) => ({
       let value = typeof initial === "function" ? initial() : initial;
       if (value === "checking" && phaseIndex < 0) phaseIndex = index;
       for (const [name, offset] of Object.entries(PHASE_OFFSETS)) {
-        if (phaseIndex >= 0 && index === phaseIndex + offset && name in fixture.seed) value = fixture.seed[name];
+        if (phaseIndex >= 0 && index === phaseIndex + offset) {
+          if (name === "computerExpanded" || name === "worksExpanded") value = true;
+          if (name in fixture.seed) value = fixture.seed[name];
+        }
       }
       fixture.values[index] = value;
     }
@@ -221,18 +224,18 @@ describe("Computer panel tabs", () => {
   });
 
   it("shows Android when connected and keeps Mini Apps after Files in Simple mode", () => {
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabs(render(makeBot()))).toEqual(["Bot", "Browser", "Data", "Files", "Mini Apps"]);
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Android", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabs(render(makeBot()))).toEqual(["Bot", "Android", "Browser", "Data", "Files", "Mini Apps"]);
   });
 
   it("shows Files and Mini Apps after the existing Advanced tabs", () => {
     fixture.advanced = true;
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabs(render(makeBot()))).toEqual(["Bot", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
     fixture.config = {};
     fixture.android = false;
-    expect(tabs(render(makeBot()))).toEqual(["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabs(render(makeBot()))).toEqual(["Bot", "Routines", "Browser", "Data", "Files", "Mini Apps"]);
   });
 
   it("reads a Routines view stored by Advanced as the Computer tab in Simple", () => {
@@ -588,12 +591,12 @@ describe("A chat pinned to a place", () => {
 describe("Technical controls", () => {
   const cloud = () => makeBot({ computer: "cloud" });
 
-  it("hides the gear, backend picker and Routines card in Simple and keeps them in Advanced", () => {
+  it("keeps advanced settings and the Routines tab available", () => {
     const simple = render(cloud());
     expect(simple.nodes.some((node) => node.props.title === "Bot settings")).toBe(false);
     expect(simple.nodes.some((node) => node.type === CloudBackendPicker)).toBe(false);
     expect(simple.html).not.toContain("Works on");
-    expect(simple.buttons.some((node) => text(node.props.children).startsWith("Routines"))).toBe(false);
+    expect(tabs(simple)).not.toContain("Routines");
 
     fixture.advanced = true;
     fixture.values = [];
@@ -601,7 +604,7 @@ describe("Technical controls", () => {
     expect(advanced.nodes.some((node) => node.props.title === "Bot settings")).toBe(true);
     expect(advanced.nodes.some((node) => node.type === CloudBackendPicker)).toBe(true);
     expect(advanced.html).toContain("Works on");
-    expect(advanced.buttons.some((node) => text(node.props.children).startsWith("Routines"))).toBe(true);
+    expect(tabs(advanced)).toContain("Routines");
   });
 
   it("hides the VM settings link in Simple", () => {

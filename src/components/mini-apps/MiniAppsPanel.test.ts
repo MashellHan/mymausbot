@@ -93,8 +93,8 @@ const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("
 const refresh = () => host.querySelector<HTMLButtonElement>('[aria-label="Check for updates"], [aria-label="检查更新"]')!;
 const selected = () => host.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
 const settle = async () => { await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-apps-panel"]')).not.toBeNull()); };
-const render = async () => {
-  await act(async () => { root.render(createElement(MiniAppsPanel)); });
+const render = async (requestedApp?: { id: string; nonce: number }) => {
+  await act(async () => { root.render(createElement(MiniAppsPanel, { requestedApp })); });
   await settle();
 };
 
@@ -180,6 +180,17 @@ beforeEach(() => {
 afterEach(() => { root.unmount(); host.remove(); vi.unstubAllGlobals(); setLocale("en"); });
 
 describe("Mini Apps panel", () => {
+  it("opens a suggested installed app over the saved app without locking later choices", async () => {
+    stored.set("omb-mini-app:fixture-environment", "app_a");
+    await render({ id: "app_b", nonce: 1 });
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_b"));
+    expect(stored.get("omb-mini-app:fixture-environment")).toBe("app_b");
+    await act(async () => { button("First report").click(); });
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(selected()?.dataset.appId).toBe("app_a"));
+  });
+
   it("restores the selected app for this local environment and keeps keyboard navigation inside the app strip", async () => {
     stored.set("omb-mini-app:fixture-environment", "app_b");
     await render();

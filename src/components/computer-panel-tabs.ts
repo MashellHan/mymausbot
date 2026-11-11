@@ -5,7 +5,7 @@ import type { AndroidUsbDevicesStatus } from "./AndroidDevicePanel";
 import type { LocaleKey } from "@/locales";
 
 export const PANEL_TABS: Record<ComputerPanelView, { Icon: LucideIcon; label: LocaleKey; tour?: string }> = {
-  computer: { Icon: Monitor, label: "computer.tab.computer" },
+  computer: { Icon: Monitor, label: "botPanel.avatar.tabBot" },
   routines: { Icon: CalendarClock, label: "computer.tab.routines" },
   android: { Icon: Smartphone, label: "computer.tab.android" },
   browser: { Icon: Globe, label: "computer.tab.browser", tour: "computer-browser" },

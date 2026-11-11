@@ -29,7 +29,7 @@ export function readComputerPanelView(
     if (value === "computer" || value === "android" || value === "browser" || value === "routines" || value === "files" || value === "data" || value === "mini-apps") return value;
   } catch {
   }
-  return "mini-apps";
+  return "computer";
 }
 
 export function writeComputerPanelView(
