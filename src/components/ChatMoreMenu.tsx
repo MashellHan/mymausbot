@@ -194,6 +194,10 @@ export function ChatShareMenu({ bot, className, textOnly = false }: { bot: Bot; 
     : <ShareMenu key={bot.threadId} bot={bot} className={className} textOnly={textOnly} />;
 }
 
+export function RawChatShareMenu({ bot }: { bot: Bot }): JSX.Element {
+  return <ChatShareMenu bot={bot} textOnly className="flex h-9 items-center justify-center rounded-full border border-hairline/60 bg-white px-4 text-[13px] font-medium text-ink shadow-sm hover:bg-raised focus-visible:outline-2 focus-visible:outline-focus" />;
+}
+
 const exportItems = (items: SidebarMenuItem[]): SidebarMenuItem[] => items.filter((item) => EXPORT_ITEMS.includes(item.key)).map((item) => ({
   ...item, heading: undefined, separatorBefore: false, label: t(item.key === "copy" ? "chat.export.copyConversation" : "chat.export.downloadConversation"),
 }));

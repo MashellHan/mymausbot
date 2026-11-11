@@ -54,6 +54,7 @@ import { PinnedBotRoster } from "./PinnedCircleThreads";
 import { SidebarFooter } from "./SidebarFooter";
 import { SidebarResizeHandle } from "./SidebarResizeHandle";
 import { SidebarTileGrid } from "./SidebarTiles";
+import { SidebarInboxMenuItem } from "./SidebarInboxRow";
 import { GlassBar, GlassScrollFrame, GlassScroller } from "./GlassScrollFrame";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { SidebarSearchPill, SidebarSearchToggle } from "./SidebarSimpleTop";
@@ -365,10 +366,12 @@ describe("Simple-mode sidebar layout", () => {
     fixture.raw = true;
     const plus = render().tree.find((node) => node.type === "button" && node.props["aria-label"] === "New or share")!;
     (plus.props.onClick as () => void)();
-    const inbox = render().tree.find((node) => node.type === "button" && Children.toArray(node.props.children).includes("Inbox"))!;
-    expect(inbox.props.role).toBe("menuitem");
-    (inbox.props.onClick as () => void)();
+    const inbox = render().tree.find((node) => node.type === SidebarInboxMenuItem)!;
+    const button = SidebarInboxMenuItem(inbox.props as Parameters<typeof SidebarInboxMenuItem>[0]) as ReactElement<Props>;
+    expect(button.props.role).toBe("menuitem");
+    (button.props.onClick as () => void)();
     expect(fixture.openInbox).toHaveBeenCalledOnce();
+    expect(render().tree.some((node) => node.type === SidebarInboxMenuItem)).toBe(false);
   });
 
   it("New Bot makes a bot at once in both modes, Chief of Staff or not; Advanced keeps Create department and Templates", () => {

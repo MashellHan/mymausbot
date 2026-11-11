@@ -335,7 +335,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   </>;
   return (
     <RawPresentation value={interfaceMode === "raw"}>
-    <div data-interface-mode={interfaceMode} className={cn("flex h-full flex-col", framed && "bg-frame")}>
+    <div data-interface-mode={interfaceMode} data-raw-mac-frame={interfaceMode === "raw" && framed && capabilities.windowChrome === "mac-inset" ? "" : undefined} className={cn("flex h-full flex-col", framed && "bg-frame")}>
       <WindowFrameBar notifications={notificationTray} />
       <BotLimitPopup />
       {!framed && strips}

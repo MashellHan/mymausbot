@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, InstanceInfo } from "@/state/store";
+import { RawPresentation } from "@/lib/raw-presentation";
 
 const fixture = vi.hoisted(() => ({ colorMine: false }));
 
@@ -42,6 +43,16 @@ beforeEach(() => {
 });
 
 describe("bot-colored user bubbles", () => {
+  it("uses black for the main bot and each ordinary bot's own color in Raw", () => {
+    const renderRaw = (candidate: Bot) => renderToStaticMarkup(createElement(RawPresentation, { value: true }, createElement(ChatView, { bot: candidate })));
+    const main = renderRaw({ ...bot, defaultBot: {} });
+    expect(main).toContain("background-color:#1c1c1c");
+    expect(main).toContain("--color-bubble-user-ink:#ffffff");
+    const ordinary = renderRaw(bot);
+    expect(ordinary).toContain(`background-color:${userBubbleTone("yellow").background}`);
+    expect(ordinary).not.toContain("background-color:#1c1c1c");
+  });
+
   it("keeps the skin bubble when the setting is off", () => {
     const html = renderToStaticMarkup(createElement(ChatView, { bot }));
     expect(html).toContain("bg-bubble-user");

@@ -5,6 +5,12 @@ import { closeInbox, openInbox, useInboxPanel, useInboxSupport, useInboxView } f
 import { useTeamPeople } from "@/state/team-people";
 import { inboxFixes, waitingCount } from "./inbox/inbox-view";
 
+export function SidebarInboxMenuItem({ className, onOpened }: { className: string; onOpened: () => void }) {
+  return <button role="menuitem" className={className} onClick={() => { onOpened(); openInbox(); }}>
+    <Inbox size={16} className="text-ink-secondary" />{t("inbox.panel.title")}
+  </button>;
+}
+
 export function SidebarInboxRow({ icons, large, running, hideEmpty = false, onOpened }: {
   icons: boolean;
   /** Simple's row, sized as its bots' rows are. */

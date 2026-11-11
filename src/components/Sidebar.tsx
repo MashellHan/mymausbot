@@ -1,7 +1,7 @@
 import { OrganizationIdentity } from "./OrganizationIdentity";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch } from "react";
 import { createPortal } from "react-dom";
-import { Archive, Bot as BotIcon, Check, ChevronRight, ClipboardCopy, Crown, FolderPlus, Inbox, LayoutTemplate, Loader2, MessageSquarePlus, MoreHorizontal, Pencil, Phone, Pin, Plus, Search, SquarePen, TextQuote, Trash2, Users, X } from "lucide-react";
+import { Archive, Bot as BotIcon, Check, ChevronRight, ClipboardCopy, Crown, FolderPlus, LayoutTemplate, Loader2, MessageSquarePlus, MoreHorizontal, Pencil, Phone, Pin, Plus, Search, SquarePen, TextQuote, Trash2, Users, X } from "lucide-react";
 import { api, useStore, formatTime, visibleMessages, currentTaskBot, botOpensTo, openBot, openThread, type Action, type AppState, type Bot, type BotProject, type Group, type InstanceInfo, type Message } from "@/state/store";
 import { approvalModeFor } from "../../shared/approval-mode";
 import { liveActivityLabel, sidebarMessage } from "@/lib/live-activity";
@@ -74,7 +74,7 @@ import { GlassBar, GlassScrollFrame, GlassScroller } from "./GlassScrollFrame";
 import { DesktopWorkspaceSwitcher, endCloudHowTo } from "./DesktopWorkspaceSwitcher"; import { PlaceTint } from "./PlaceTint"; import { ChromeRailToggle } from "./ChromeRailToggle";
 import { useCloudOwner } from "./CloudOwner";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
-import { NeedsYouButton, OwnerPickerHost, pickOwnerOf } from "./TeamOwner"; import { SidebarPeople } from "./SidebarPeople"; import { SidebarInboxRow } from "./SidebarInboxRow"; import { SidebarActiveThreads } from "./SidebarActiveThreads"; import { setAttentionPinned, useAttentionPinned } from "./inbox/attention-pinned"; import { openInbox, useInboxSupport } from "@/state/inbox";
+import { NeedsYouButton, OwnerPickerHost, pickOwnerOf } from "./TeamOwner"; import { SidebarPeople } from "./SidebarPeople"; import { SidebarInboxMenuItem, SidebarInboxRow } from "./SidebarInboxRow"; import { SidebarActiveThreads } from "./SidebarActiveThreads"; import { setAttentionPinned, useAttentionPinned } from "./inbox/attention-pinned"; import { useInboxSupport } from "@/state/inbox";
 import { showWhoReportsToWhom, TeamMenuItems } from "./SidebarTeamMenu";
 import { MENU_ITEM, MENU_ITEM_SEPARATOR, MENU_SHEET } from "./menu-recipe";
 import { ELEVATED_CONTROL } from "./elevated";
@@ -696,8 +696,7 @@ export function useVisibleMessages(bot: Bot): Message[] {
 }
 
 export const BotListItem = memo(function BotListItem(props: BotRowProps) {
-  const advanced = useAdvancedMode();
-  const raw = useRawPresentation();
+  const advanced = useAdvancedMode(), raw = useRawPresentation();
   const { bot, selected, deleting, mascotMotion, reveal, pendingQueued, instances, liveCall, density, query, dispatch, onMenu, renameRequest, botDrag: drag, botDrop: drop, botDragging: dragging } = props;
   const showThreads = useShowThreads();
   const liveMedia = useLiveMedia();
@@ -1070,9 +1069,6 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
     }
   };
 
-  // A framed window (WindowFrameBar) holds the traffic lights and the rail's button in its top bar, so the top row keeps
-  // no room for them; in Simple it is only the corner holding Search and New, with the bot tiles beside it. With the
-  // frame off on macOS, the traffic lights sit in the top row's corner.
   const framed = windowFramed(capabilities), corner = framed && simpleDesk && !raw;
   const lights = capabilities.windowChrome === "mac-inset" && !framed;
   const draggableChrome = capabilities.windowChrome !== "native";
@@ -1231,14 +1227,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
             </button>
           )}
           </>}
-          {raw && inboxSupport !== "no" && <button
-            onClick={() => { setPlusOpen(false); openInbox(); }}
-            role="menuitem"
-            className={plusItem}
-          >
-            <Inbox size={16} className="text-ink-secondary" />
-            {t("inbox.panel.title")}
-          </button>}
+          {raw && inboxSupport !== "no" && <SidebarInboxMenuItem className={plusItem} onOpened={() => setPlusOpen(false)} />}
         </div>
       </>
     )}

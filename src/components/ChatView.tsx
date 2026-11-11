@@ -1,6 +1,6 @@
 import { createContext, memo, use, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch } from "react";
 import { useAdvancedMode } from "@/lib/interface-mode";
-import { useRawPresentation } from "@/lib/raw-presentation";
+import { rawUserBubbleStyle, useRawPresentation } from "@/lib/raw-presentation";
 import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
 import { ThreadLinkContext } from "@/components/ThreadLinkMenu";
 import { useShowThreads } from "@/lib/thread-preferences";
@@ -96,7 +96,7 @@ import { RenameTitle } from "./RenameTitle"; import { ChatHeadRole, chiefOfStaff
 import { BotActivityPicker } from "./TaskPicker"; import { ChatHeadPill } from "./ChatHeadPill"; import { ThreadPresenceFaces } from "./TeamPresence"; import { useStoreRef } from "@/state/store-ref";
 import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
 import { ModelPicker } from "./ModelPicker";
-import { ChatHeaderMenu, ChatMoreMenu, ChatShareMenu } from "./ChatMoreMenu"; import { TeamOwnHelperHeader, TeamPrivateFirstLine, TeamPrivateHeader, TeamSharedHeader } from "./TeamPrivateChatsLine"; import { ownChatStarted } from "@/state/team-chats";
+import { ChatHeaderMenu, ChatMoreMenu, RawChatShareMenu } from "./ChatMoreMenu"; import { TeamOwnHelperHeader, TeamPrivateFirstLine, TeamPrivateHeader, TeamSharedHeader } from "./TeamPrivateChatsLine"; import { ownChatStarted } from "@/state/team-chats";
 import { useChatFindRequests } from "@/lib/chat-find";
 import { CitationSelectionToolbar, SentCitations } from "./CitationUI";
 import { SpeakButton } from "./SpeakButton";
@@ -819,9 +819,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   const composerDock = useComposerDockPad(composerDockRef);
   // An opened page fills the messages area, between the header and the message box, which stays usable.
   const [pagePane, setPagePane] = useState<HTMLDivElement | null>(null);
-  const advanced = useAdvancedMode();
-  const raw = useRawPresentation();
-  const phone = useMediaQuery(PHONE_LAYOUT);
+  const advanced = useAdvancedMode(), raw = useRawPresentation(), phone = useMediaQuery(PHONE_LAYOUT);
   const phoneMenu = phone && !remoteClient;
   const simpleHead = !advanced && !remoteClient;
   const canWrite = useCanWriteIn(bot.threadId, bot.yourAccess);
@@ -906,11 +904,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   branch.current = messages;
   const onBranch = useCallback((messageId: string) => branch.current.some((m) => m.id === messageId), []);
   const colorMine = useColorUserBubbles();
-  // Simple mode draws your bubble in one flat tone of the bot's colour.
-  const bubbleStyle = useMemo(() => {
-    if (raw && bot.defaultBot) return { ...userBubbleStyle(bot.color, { flat: true }), backgroundColor: "#1c1c1c", backgroundImage: "none", "--color-bubble-user": "#1c1c1c", "--color-ink": "#ffffff" } as CSSProperties;
-    return colorMine || raw ? userBubbleStyle(bot.color, { flat: !advanced }) : undefined;
-  }, [colorMine, bot.color, bot.defaultBot, advanced, raw]);
+  const bubbleStyle = useMemo(() => raw ? rawUserBubbleStyle(bot.color, Boolean(bot.defaultBot)) : colorMine ? userBubbleStyle(bot.color, { flat: !advanced }) : undefined, [colorMine, bot.color, bot.defaultBot, advanced, raw]);
   const hasMore = Boolean(bot.hasMore);
   const reactor = useReactor();
   const speakerViewer = state.config?.team && reactor !== "user" ? reactor : null;
@@ -1130,9 +1124,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           >
             <Monitor size={16} />{busy && place === "browser" && <span aria-hidden="true" className="absolute right-1 top-1 size-1.5 animate-pulse rounded-full bg-success" data-testid="computer-button-live" />}
           </button>}
-          {phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : raw ?
-            <ChatShareMenu bot={bot} textOnly className="flex h-9 items-center justify-center rounded-full border border-hairline/60 bg-white px-4 text-[13px] font-medium text-ink shadow-sm hover:bg-raised focus-visible:outline-2 focus-visible:outline-focus" />
-            : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
+          {phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : raw ? <RawChatShareMenu bot={bot} /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
         </div>
         </div>
       </div>
