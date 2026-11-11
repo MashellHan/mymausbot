@@ -9,7 +9,7 @@ import { waitForExit } from "../../server/testing/cleanup.ts";
 import { canonicalJson, parsePackageDocument } from "../../shared/package-format.ts";
 import { runControlOmb } from "../control-omb.ts";
 import { request } from "../mcp-server.ts";
-import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
+import { agentBrowser, sessionEnv, UI_TOOLS_DIR, type UiHandle } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const FIXTURES = join(ROOT, "shared", "package-fixtures");
@@ -65,6 +65,7 @@ describe("the organization library in the real renderer", () => {
       if (child!.exitCode !== null || child!.signalCode !== null) throw new Error(`UI launcher exited: ${stderr}`);
       try { info = JSON.parse(stdout); return Boolean(info.ui); } catch { return false; }
     }, { timeout: launchTimeout, interval: 250 }).toBe(true);
+    const browser = JSON.parse(readFileSync(info.ui, "utf8")) as UiHandle;
     const ui = (verb: string, ...args: string[]) => runControlOmb(["ui", verb, "--ui", info.ui, ...args]) as Promise<Record<string, any>>;
     const click = (name: string) => ui("click", "--name", name);
     const press = (keys: string) => ui("press", "--keys", keys);
@@ -141,18 +142,14 @@ describe("the organization library in the real renderer", () => {
       addClick = await click("Add Sales desk");
       await expect.poll(async () => (afterAdd = await snapshot()), { timeout: 20_000 }).toContain('button "Sales desk"');
     } catch (error) {
-      const page = Promise.race([
-        ui("eval", "--js", "({ href: location.href, dialog: document.querySelector('[role=dialog]')?.getAttribute('aria-labelledby') ?? null, addButton: [...document.querySelectorAll('button')].some(button => button.getAttribute('aria-label') === 'Add Sales desk'), add: window.__orgLibraryAdd ?? null })").catch(() => null),
-        new Promise<null>((resolve) => { const timer = setTimeout(() => resolve(null), 2_000); timer.unref?.(); }),
-      ]);
       const [pageResult, listing, imported] = await Promise.allSettled([
-        page,
+        agentBrowser(browser.binary, sessionEnv(browser), ["eval", "({ href: location.href, dialog: document.querySelector('[role=dialog]')?.getAttribute('aria-labelledby') ?? null, addButton: [...document.querySelectorAll('button')].some(button => button.getAttribute('aria-label') === 'Add Sales desk'), add: window.__orgLibraryAdd ?? null })"], 2_000).then((value) => value.result).catch(() => null),
         request("/api/org-library", { signal: AbortSignal.timeout(2_000) }, info.url).then((value) => value.packages.map((entry: { name: string; installed: unknown }) => ({ name: entry.name, installed: Boolean(entry.installed) }))),
         request("/api/bots", { signal: AbortSignal.timeout(2_000) }, info.url).then((value) => value.bots.filter((bot: { section?: string }) => bot.section === "Sales desk").map((bot: { id: string }) => bot.id)),
       ]);
       const lines = (text: string) => text.split("\n").filter((line) => /dialog "Templates"|button "Back to templates"|button "Add Sales desk"|button "Sales desk"|alert/.test(line));
       console.error("Organization library Add phase:", JSON.stringify({ beforeOrigin: beforeAddRead.origin, before: lines(beforeAdd), click: addClick && { target: addClick.target, clicked: addClick.clicked },
-        after: lines(afterAdd), page: pageResult.status === "fulfilled" ? pageResult.value?.result ?? null : null,
+        after: lines(afterAdd), page: pageResult.status === "fulfilled" ? pageResult.value : null,
         packages: listing.status === "fulfilled" ? listing.value : null, botIds: imported.status === "fulfilled" ? imported.value : null }));
       throw error;
     }
@@ -183,9 +180,32 @@ describe("the organization library in the real renderer", () => {
     // The bot's panel: where it came from on Bot settings, the organization's skills on Library → Skills.
     await click("Bot settings");
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("From Sales desk 1.3.0 · Acme Partners");
-    await click("Details");
-    await click("Library");
-    await ui("eval", "--js", "document.querySelector('[data-panel-page=\"skills\"]').click(); true");
+    let detailsClick: Record<string, unknown> | null = null;
+    let libraryClick: Record<string, unknown> | null = null;
+    try {
+      detailsClick = await click("Details");
+      libraryClick = await click("Library");
+      await ui("eval", "--js", "document.querySelector('[data-panel-page=\"skills\"]').click(); true");
+    } catch (error) {
+      const page = await agentBrowser(browser.binary, sessionEnv(browser), ["eval", `(() => {
+          const library = document.querySelector('[data-panel-tab="library"]');
+          return {
+            href: location.href,
+            dialogs: [...document.querySelectorAll('[role="dialog"]')].map((node) => node.getAttribute('aria-label') ?? node.getAttribute('aria-labelledby')),
+            tabs: [...document.querySelectorAll('[role="tab"]')].map((node) => ({ name: node.textContent?.trim(), selected: node.getAttribute('aria-selected') })),
+            back: [...document.querySelectorAll('button')].filter((node) => /Back/.test(node.textContent ?? '')).map((node) => node.textContent?.trim()),
+            panelPages: [...document.querySelectorAll('[data-panel-page-view]')].map((node) => node.getAttribute('data-panel-page-view')),
+            libraryTab: library ? { selected: library.getAttribute('aria-selected'), visible: library.getClientRects().length > 0 } : null,
+            skillsRow: Boolean(document.querySelector('[data-panel-page="skills"]')),
+          };
+        })()`], 2_000).then((value) => value.result).catch(() => null);
+      console.error("Organization library Skills phase:", JSON.stringify({
+        detailsClick: detailsClick && { target: detailsClick.target, clicked: detailsClick.clicked },
+        libraryClick: libraryClick && { target: libraryClick.target, clicked: libraryClick.clicked },
+        page,
+      }));
+      throw error;
+    }
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("Skills your organization shares");
     await evidence("org-library-bot-skills.png");
     await click("Add follow-up to this bot");
