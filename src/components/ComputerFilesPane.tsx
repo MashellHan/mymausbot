@@ -198,7 +198,7 @@ export function ComputerFilesPane({ bot, filePreview, onPreviewClose }: {
                       file={reference.file}
                       message={reference.message}
                       linked={reference.file.linked}
-                      className="w-full max-w-none border-hairline bg-panel text-[13px] [&_.truncate]:font-medium [&_.truncate]:text-[light-dark(#1d4ed8,#7fc0ff)] [&_.lucide-file-text]:text-[light-dark(#1d4ed8,#7fc0ff)]"
+                      className="w-full max-w-none border-hairline bg-panel text-[13px] [&_.truncate]:font-medium [&_.truncate]:text-[light-dark(#245da8,#5794df)] [&_.lucide-file-text]:text-[light-dark(#245da8,#5794df)]"
                     />
                   ) : (
                     <div className="flex min-w-0 items-center gap-2 px-2.5 py-2" title={t("computer.files.notSharedHint")}>
