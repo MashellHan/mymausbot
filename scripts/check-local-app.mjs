@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
@@ -103,6 +103,16 @@ export function assertRoutinesSame(before, after) {
   }
 }
 
+export function checkPackageManager(cwd, env = process.env) {
+  const manager = read(join(cwd, "package.json")).packageManager;
+  requireValue(typeof manager === "string" && /^pnpm@\d+\.\d+\.\d+(?:\+.+)?$/.test(manager), "Build source must pin pnpm in package.json");
+  const expected = manager.slice("pnpm@".length).split("+")[0];
+  const result = spawnSync("pnpm", ["--manage-package-manager-versions=false", "--version"], { cwd, env: { ...env, COREPACK_ENABLE_NETWORK: "0" },
+    encoding: "utf8", timeout: 10_000, shell: process.platform === "win32", windowsHide: true });
+  requireValue(result.status === 0, `Packaging subprocess cannot run ${manager}; put the pinned pnpm on PATH before building and retain that PATH for packaging.`);
+  same(result.stdout.trim(), expected, "Packaging pnpm version");
+}
+
 function checkRequestSource(request) {
   validateBuildRequest(request);
   const git = (...args) => execFileSync("git", args, { cwd: request.sourceCheckout, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -112,6 +122,7 @@ function checkRequestSource(request) {
   requireValue(git("status", "--porcelain").length === 0, "Build source checkout must be clean");
   const lockHash = createHash("sha256").update(readFileSync(join(request.sourceCheckout, "pnpm-lock.yaml"))).digest("hex");
   same(lockHash, request.lockfileSha256, "Build lockfile");
+  checkPackageManager(request.sourceCheckout);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
