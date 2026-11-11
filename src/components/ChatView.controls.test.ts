@@ -8,11 +8,12 @@ import { CODEX_USAGE_LIMIT_REACHED, CODEX_USAGE_URL } from "../../shared/codex-u
 import { failedTurnTool } from "../../shared/failed-turn";
 import { PROVIDER_SAFETY_GUIDANCE } from "../../shared/provider-safety";
 import { en } from "@/locales";
+import { RawPresentation } from "@/lib/raw-presentation";
 
 const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
-  return { showThreads: true, advanced: true, menus: [] as { ariaLabel: string; items: { key: string; disabled?: boolean; heading?: string; active?: boolean }[] }[], dispatch: vi.fn(), canWrite: null as boolean | null, showToolCalls: false, platform: "other", localReasonCode: "cua-driver-unavailable", localMessage: "", model: null as ComponentProps<typeof ModelPicker> | null,
+  return { showThreads: true, advanced: true, raw: false, menus: [] as { ariaLabel: string; items: { key: string; disabled?: boolean; heading?: string; active?: boolean }[] }[], dispatch: vi.fn(), canWrite: null as boolean | null, showToolCalls: false, platform: "other", localReasonCode: "cua-driver-unavailable", localMessage: "", model: null as ComponentProps<typeof ModelPicker> | null,
     approval: null as ComponentProps<typeof ApprovalModeSelector> | null };
 });
 vi.mock("@/state/store", async (importOriginal) => {
@@ -33,7 +34,7 @@ vi.mock("@/lib/thread-preferences", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/thread-preferences")>(),
   useShowThreads: () => fixture.advanced && fixture.showThreads,
 }));
-vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, setAdvancedMode: vi.fn() }));
+vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, useInterfaceMode: () => fixture.advanced ? "advanced" : "simple", setAdvancedMode: vi.fn() }));
 // The trigger still renders, so the markup assertions in this file see the same header.
 vi.mock("./SidebarPopoverMenu", async (importOriginal) => ({
   ...await importOriginal<typeof import("./SidebarPopoverMenu")>(),
@@ -74,7 +75,7 @@ describe("the header's right side", () => {
   const header = (of: Bot = bot) => {
     fixture.menus = [];
     fixture.model = null;
-    const markup = renderToStaticMarkup(createElement(ChatView, { bot: of }));
+    const markup = renderToStaticMarkup(createElement(RawPresentation, { value: fixture.raw }, createElement(ChatView, { bot: of })));
     return { markup, controls: markup.slice(markup.indexOf("data-chathead-controls"), markup.indexOf("role=\"log\"")) };
   };
 
@@ -94,8 +95,25 @@ describe("the header's right side", () => {
     }
   });
 
-  it("keeps the model, the computer and ⋯ in a remote client's Simple header, whose settings panel has no room for them", () => {
+  it("leaves Raw's top right to Share while the profile pill opens the Bot panel", () => {
     fixture.advanced = false;
+    fixture.raw = true;
+    try {
+      const { markup, controls } = header();
+      expect(markup).toContain("data-chathead-pill");
+      expect(controls).toContain("Share");
+      expect(controls).not.toContain('data-testid="chat-more"');
+      expect(controls).not.toContain("data-test-model-control");
+      expect(controls).not.toContain('data-tour="computer"');
+    } finally {
+      fixture.raw = false;
+      fixture.advanced = true;
+    }
+  });
+
+  it.each([false, true])("keeps the model, idle computer and ⋯ in a remote client's header, Raw=%s", (raw) => {
+    fixture.advanced = false;
+    fixture.raw = raw;
     window.ogb = { remoteClient: { active: true } } as NonNullable<Window["ogb"]>;
     try {
       const { markup } = header();
@@ -104,10 +122,12 @@ describe("the header's right side", () => {
       expect(fixture.model).toMatchObject({ bot: { id: "bot" }, threadId: "selected" });
       expect(markup).toContain('data-tour="computer"');
       expect(markup).toContain('data-testid="chat-more"');
+      expect(markup).not.toContain('data-panel-share');
       const more = fixture.menus.find((menu) => menu.ariaLabel === "More")!;
       expect(more.items.map((item) => item.key)).toEqual(["find", "new-thread", "copy", "download"]);
     } finally {
       delete window.ogb;
+      fixture.raw = false;
       fixture.advanced = true;
     }
   });

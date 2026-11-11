@@ -15,7 +15,7 @@ import { effortLabel } from "./ModelPicker";
 import { EFFORT_LEVELS, isEffortLevel } from "../../shared/wire";
 import { setColorUserBubbles, useColorUserBubbles } from "@/lib/user-bubble-preference";
 import { setShowThreads, useShowThreadsChoice } from "@/lib/thread-preferences";
-import { setAdvancedMode, useAdvancedMode } from "@/lib/interface-mode";
+import { setInterfaceMode, useInterfaceMode, type InterfaceMode } from "@/lib/interface-mode";
 import { SIMPLE_ONLY } from "@/lib/simple-only";
 import { setPinnedCircles, setUniversalPins, usePinnedCircles, useUniversalPins } from "@/lib/sidebar-preferences";
 import { setShowRunCard, useShowRunCard } from "@/lib/run-card-preferences";
@@ -281,16 +281,19 @@ export function ColorUserBubblesRow({ simple = false }: { simple?: boolean }) {
 }
 
 export function AdvancedModeRow({ simple = false }: { simple?: boolean }) {
-  const enabled = useAdvancedMode();
+  const mode = useInterfaceMode();
   if (SIMPLE_ONLY) return null;
   return (
-    <SettingRow className={simple ? undefined : "rounded-2xl border border-accent-border/40 bg-raised-hover/40 py-4"} title={t("settings.advancedMode.title")}
-      subtitle={t(simple ? "settings.simple.advancedMode" : "settings.advancedMode.subtitle")}>
-      <Switch
-        checked={enabled}
-        aria-label={t("settings.advancedMode.title")}
-        onClick={() => setAdvancedMode(!enabled)}
-      />
+    <SettingRow className={simple ? undefined : "rounded-2xl border border-hairline/40 bg-raised-hover/40 py-4"} title={t("settings.interfaceMode.title")}
+      subtitle={t("settings.interfaceMode.subtitle")}>
+      <div role="group" aria-label={t("settings.interfaceMode.title")} className="flex flex-wrap gap-1 rounded-xl bg-ink/[0.05] p-1">
+        {(["raw", "simple", "advanced"] as const satisfies readonly InterfaceMode[]).map((choice) => (
+          <button key={choice} type="button" aria-pressed={mode === choice} onClick={() => setInterfaceMode(choice)}
+            className="rounded-lg px-3 py-1.5 text-[13px] font-medium text-ink-secondary transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-focus aria-pressed:bg-card aria-pressed:text-ink aria-pressed:shadow-sm">
+            {t(`settings.interfaceMode.${choice}`)}
+          </button>
+        ))}
+      </div>
     </SettingRow>
   );
 }

@@ -15,8 +15,8 @@ if (query.has("ombVoiceProbe")) {
   (window as typeof window & { __ombVoiceProbe?: unknown[] }).__ombVoiceProbe = [];
 }
 setAnalyticsEnabled(false);
-// ?onboarding=1 plays a brand-new install, and a new install opens in Simple mode.
-if (query.has("onboarding") || query.get("fixtureMode") === "simple") setAdvancedMode(false);
+// ?onboarding=1 plays a brand-new install with the default interface mode.
+if (query.get("fixtureMode") === "simple") setAdvancedMode(false);
 if (!query.has("onboarding")) setEmailGateDone("skipped");
 // Every launch is a new browser, so the once-per-browser Simple mode popup shows only with ?simpleModePrompt=1.
 if (!query.has("simpleModePrompt")) markSimpleModePromptSeen();

@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from "react";
 
-import { hasPriorRun } from "./prior-run";
 import { SIMPLE_ONLY } from "./simple-only";
 
 export const ADVANCED_MODE_KEY = "omb-advanced-mode";
+export const INTERFACE_MODE_KEY = "omb-interface-mode";
+export type InterfaceMode = "raw" | "simple" | "advanced";
 
-let sessionChoice: boolean | undefined;
+let sessionChoice: InterfaceMode | undefined;
 const listeners = new Set<() => void>();
 
 function storage(): Storage | undefined {
@@ -16,33 +17,37 @@ function storage(): Storage | undefined {
   }
 }
 
-export function readAdvancedMode(): boolean {
-  if (SIMPLE_ONLY) return false;
+export function readInterfaceMode(): InterfaceMode {
+  if (SIMPLE_ONLY) return "simple";
   if (sessionChoice !== undefined) return sessionChoice;
   try {
-    const store = storage();
-    const stored = store?.getItem(ADVANCED_MODE_KEY);
-    if (stored === "1") return true;
-    if (stored === "0") return false;
-    return hasPriorRun(store);
+    const stored = storage()?.getItem(INTERFACE_MODE_KEY);
+    return stored === "simple" || stored === "advanced" ? stored : "raw";
   } catch {
-    return false;
+    return "raw";
   }
 }
 
-export function settleAdvancedModeDefault(): void {
+export function settleInterfaceModeDefault(): void {
   try {
-    if (storage()?.getItem(ADVANCED_MODE_KEY) == null) setAdvancedMode(readAdvancedMode());
+    const store = storage();
+    if (store && store.getItem(INTERFACE_MODE_KEY) == null) {
+      store.setItem(INTERFACE_MODE_KEY, "raw");
+      store.removeItem(ADVANCED_MODE_KEY);
+    }
   } catch {
   }
 }
+
+export const settleAdvancedModeDefault = settleInterfaceModeDefault;
+export const readAdvancedMode = (): boolean => readInterfaceMode() === "advanced";
 
 function notify() {
   for (const listener of listeners) listener();
 }
 
 function onStorage(event: StorageEvent) {
-  if (event.key !== ADVANCED_MODE_KEY && event.key !== null) return;
+  if (event.key !== INTERFACE_MODE_KEY && event.key !== null) return;
   if (event.storageArea && event.storageArea !== storage()) return;
   sessionChoice = undefined;
   notify();
@@ -61,16 +66,22 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-export function setAdvancedMode(enabled: boolean): void {
+export function setInterfaceMode(mode: InterfaceMode): void {
   if (SIMPLE_ONLY) return;
-  sessionChoice = enabled;
+  sessionChoice = mode;
   try {
-    storage()?.setItem(ADVANCED_MODE_KEY, enabled ? "1" : "0");
+    storage()?.setItem(INTERFACE_MODE_KEY, mode);
   } catch {
   }
   notify();
 }
 
+export const setAdvancedMode = (enabled: boolean): void => setInterfaceMode(enabled ? "advanced" : "simple");
+
+export function useInterfaceMode(): InterfaceMode {
+  return useSyncExternalStore(subscribe, readInterfaceMode, () => "raw");
+}
+
 export function useAdvancedMode(): boolean {
-  return useSyncExternalStore(subscribe, readAdvancedMode, () => false);
+  return useInterfaceMode() === "advanced";
 }

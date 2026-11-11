@@ -11,9 +11,11 @@ import { restoreComposerDraft } from "@/lib/drafts";
 import { setCallMode } from "@/lib/call-mode";
 import { userBubbleTone } from "@/lib/user-bubble-tone";
 import { BOT_BUTTON, botButtonTone } from "@/lib/bot-button";
+import { RawPresentation } from "@/lib/raw-presentation";
 
 const fixture = vi.hoisted(() => ({
   advanced: false,
+  raw: false,
   agentsMcp: true,
   dispatch: vi.fn(),
   call: null as Record<string, unknown> | null,
@@ -34,7 +36,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
 vi.mock("@/lib/cloud-guest", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/cloud-guest")>(), useReactor: () => "user" }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
-vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, setAdvancedMode: vi.fn() }));
+vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, useInterfaceMode: () => fixture.advanced ? "advanced" : "simple", setAdvancedMode: vi.fn() }));
 vi.mock("./CallView", () => ({ CallButton: (props: Record<string, unknown>) => {
   fixture.call = props;
   return null;
@@ -60,7 +62,7 @@ const room: Group = {
 
 let root: Root;
 let container: HTMLDivElement;
-const render = (props: Parameters<typeof Composer>[0]) => flushSync(() => root.render(createElement(Composer, props)));
+const render = (props: Parameters<typeof Composer>[0]) => flushSync(() => root.render(createElement(RawPresentation.Provider, { value: fixture.raw }, createElement(Composer, props))));
 const plus = () => container.querySelector<HTMLElement>("[data-composer-plus]")?.closest("button") ?? null;
 const menu = () => document.body.querySelector<HTMLElement>("[data-composer-menu]");
 const popover = () => document.body.querySelector<HTMLElement>('[data-sidebar-popover-menu="anchored"]');
@@ -87,6 +89,7 @@ function openPlus() {
 
 beforeEach(() => {
   fixture.advanced = false;
+  fixture.raw = false;
   fixture.agentsMcp = true;
   fixture.liveCall = null;
   fixture.config = undefined;
@@ -208,6 +211,15 @@ describe("the Simple composer in a bot chat", () => {
     const backdrop = container.querySelector("[data-composer-backdrop]")!.className.split(" ");
     expect(backdrop).toEqual(expect.arrayContaining(["bg-app", "top-0", "-bottom-4", "-left-5", "-right-5"]));
     expect(backdrop.some((name) => /gradient|blur|^from-|^to-|^opacity/.test(name))).toBe(false);
+  });
+
+  it("keeps Raw's composer backdrop within its 16px gutter", () => {
+    fixture.raw = true;
+    render({ bot });
+    const backdrop = container.querySelector("[data-composer-backdrop]")!.className.split(" ");
+    expect(container.querySelector("[data-raw-composer]")).not.toBeNull();
+    expect(backdrop).toEqual(expect.arrayContaining(["-left-4", "-right-4"]));
+    expect(backdrop).not.toContain("-left-5");
   });
 
   it("attaches through the same file picker as the paperclip", () => {

@@ -104,114 +104,40 @@ describe("the move to Simple as the only mode", () => {
   });
 });
 
-describe("with the switch put back", () => {
-  it("keeps the fork's saved mode and device preferences at startup", async () => {
-    const saved = { ...ADVANCED_PREFS, ...KEPT, "omb-advanced-mode": "1" };
-    for (const [key, value] of Object.entries(saved)) values.set(key, value);
-    vi.resetModules();
-    vi.doUnmock("./simple-only");
-    expect((await vi.importActual<typeof import("./simple-only")>("./simple-only")).SIMPLE_ONLY).toBe(false);
-    const [look, mode] = await Promise.all([import("./new-look"), import("./interface-mode")]);
-    look.settleInterfaceMode();
-    expect(Object.fromEntries(values)).toEqual(saved);
-    expect(mode.readAdvancedMode()).toBe(true);
-    expect(look.newLookDue()).toBe(false);
-  });
-
-  it("gives each browser the mode it had before the move, and leaves the notice alone", async () => {
-    values.set("omb-new-look", "seen");
-    let rolled = await boot(false);
-    expect(rolled.mode.readAdvancedMode()).toBe(true);
-    expect(values.get("omb-advanced-mode")).toBe("1");
-
-    values.clear();
-    values.set("omb-new-look", "none");
-    values.set("omb-skin", "midnight");
-    rolled = await boot(false);
-    expect(rolled.mode.readAdvancedMode()).toBe(false);
-    expect(values.get("omb-advanced-mode")).toBe("0");
-    expect(values.get("omb-new-look")).toBe("none");
-  });
-
-  it("keeps the old default for a browser the move never reached", async () => {
-    values.set("omb-skin", "midnight");
-    const rolled = await boot(false);
-    expect(rolled.mode.readAdvancedMode()).toBe(true);
-    expect(values.get("omb-advanced-mode")).toBe("1");
-    expect(values.has("omb-new-look")).toBe(false);
-  });
-});
-
-describe("Advanced mode back, as shipped", () => {
-  it("ships with the switch off", async () => {
-    vi.resetModules();
-    expect((await vi.importActual<typeof import("./simple-only")>("./simple-only")).SIMPLE_ONLY).toBe(false);
-  });
-
-  it.each(["due", "seen"])("puts a browser the move found on Advanced (%s) back on it once, with word that it is back, and keeps a later switch to Simple", async (look) => {
-    values.set("omb-new-look", look);
-    values.set("omb-skin", "lagoon");
-    const first = await boot(false);
-    expect(first.mode.readAdvancedMode()).toBe(true);
-    expect(values.get("omb-advanced-mode")).toBe("1");
-    expect(first.advancedBackDue()).toBe(true);
-    expect(values.get("omb-new-look"), "the record of the move stays").toBe(look);
-
-    expect((await boot(false)).advancedBackDue(), "owed until it is closed").toBe(true);
-    first.markAdvancedBackSeen();
-    expect(values.get("omb-advanced-back")).toBe("seen");
-    const again = await boot(false);
-    expect(again.advancedBackDue()).toBe(false);
-    expect(again.mode.readAdvancedMode()).toBe(true);
-
-    again.mode.setAdvancedMode(false);
-    const later = await boot(false);
-    expect(later.mode.readAdvancedMode(), "Simple, once chosen, stays").toBe(false);
-    expect(values.get("omb-advanced-back")).toBe("seen");
-  });
-
-  it("restores nothing it cannot know: the reset settings stay at their defaults, which Advanced reads as threads shown, and a choice made since stays", async () => {
-    values.set("omb-new-look", "seen");
-    values.set("openmausbot.universalPins", "true");
-    const back = await boot(false);
-    expect(back.mode.readAdvancedMode()).toBe(true);
-    for (const key of Object.keys(ADVANCED_PREFS).filter((key) => key !== "openmausbot.universalPins")) expect(values.has(key), key).toBe(false);
-    expect(values.get("openmausbot.universalPins")).toBe("true");
-    expect([back.font, back.width]).toEqual(["skin", "standard"]);
-  });
-
-  it("leaves a browser that was on Simple on Simple, with no word", async () => {
-    values.set("omb-new-look", "none");
-    values.set("omb-skin", "midnight");
-    const simple = await boot(false);
-    expect(simple.mode.readAdvancedMode()).toBe(false);
-    expect(simple.advancedBackDue()).toBe(false);
-    expect(values.has("omb-advanced-back")).toBe(false);
-  });
-
-  it.each(["1", "0"])("never runs the one-time cleanup where it has not run: a browser straight from an earlier version keeps its mode (%s) and settings", async (stored) => {
-    for (const [key, value] of Object.entries({ ...ADVANCED_PREFS, ...KEPT, "omb-advanced-mode": stored })) values.set(key, value);
-    const kept = await boot(false);
+describe("Raw as the restored switch default", () => {
+  it.each([undefined, "0", "1"])("migrates an old boolean choice to Raw (%s) without resetting other preferences", async (stored) => {
+    for (const [key, value] of Object.entries({ ...ADVANCED_PREFS, ...KEPT })) values.set(key, value);
+    if (stored) values.set("omb-advanced-mode", stored);
+    const result = await boot(false);
+    expect(result.mode.readInterfaceMode()).toBe("raw");
+    expect(values.get("omb-interface-mode")).toBe("raw");
+    expect(values.has("omb-advanced-mode")).toBe(false);
     for (const [key, value] of Object.entries({ ...ADVANCED_PREFS, ...KEPT })) expect(values.get(key), key).toBe(value);
-    expect(kept.mode.readAdvancedMode()).toBe(stored === "1");
-    expect([kept.font, kept.width]).toEqual(["serif", "full"]);
-    expect(values.has("omb-new-look")).toBe(false);
-    expect(kept.advancedBackDue()).toBe(false);
   });
 
-  it("is safe with no record of the move, an unknown one, or storage that cannot be read", async () => {
-    expect((await boot(false)).mode.readAdvancedMode(), "a new install").toBe(false);
+  it.each(["raw", "simple", "advanced"] as const)("keeps explicit %s through every old look marker", async (choice) => {
+    values.set("omb-new-look", "seen");
+    values.set("omb-interface-mode", choice);
+    values.set("omb-advanced-mode", "1");
+    const first = await boot(false);
+    expect(first.mode.readInterfaceMode()).toBe(choice);
+    expect(first.advancedBackDue()).toBe(false);
+    expect((await boot(false)).mode.readInterfaceMode()).toBe(choice);
+  });
+
+  it("does not resurrect Advanced from an old new-look receipt", async () => {
+    values.set("omb-new-look", "due");
+    values.set("omb-skin", "midnight");
+    const first = await boot(false);
+    expect(first.mode.readInterfaceMode()).toBe("raw");
+    expect(values.get("omb-interface-mode")).toBe("raw");
     expect(values.has("omb-advanced-back")).toBe(false);
+  });
 
-    values.clear();
-    values.set("omb-new-look", "garbled");
-    const unknown = await boot(false);
-    expect(unknown.mode.readAdvancedMode()).toBe(false);
-    expect(unknown.advancedBackDue()).toBe(false);
-
+  it("is safe when storage cannot be read", async () => {
     local.getItem.mockImplementation(() => { throw new Error("blocked"); });
-    const blocked = await boot(false);
-    expect(blocked.advancedBackDue()).toBe(false);
+    const result = await boot(false);
+    expect(result.mode.readInterfaceMode()).toBe("raw");
     local.getItem.mockImplementation((key: string) => values.get(key) ?? null);
   });
 });

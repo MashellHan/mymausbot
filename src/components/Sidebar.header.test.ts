@@ -6,6 +6,8 @@ import { initialDesktopCapabilities } from "@/lib/desktop";
 import { setLocale } from "@/lib/i18n";
 import type { SidebarDensity } from "@/lib/sidebar-preferences";
 import { StoreProvider } from "@/state/store";
+import { RawPresentation } from "@/lib/raw-presentation";
+import { setInboxSupport } from "@/state/inbox";
 
 const fixture = vi.hoisted(() => ({
   density: "comfortable" as SidebarDensity,
@@ -14,6 +16,7 @@ const fixture = vi.hoisted(() => ({
   windowFrame: undefined as boolean | undefined,
   hostLabel: undefined as string | undefined,
   rail: null as { available: boolean; hidden: boolean } | null,
+  raw: false,
 }));
 
 vi.mock("@/lib/sidebar-preferences", async (importOriginal) => ({
@@ -34,7 +37,7 @@ vi.mock("./DesktopCapabilities", async (importOriginal) => ({
 import { Sidebar } from "./Sidebar";
 
 const render = () => renderToStaticMarkup(
-  createElement(StoreProvider, null, createElement(Sidebar, { open: true, onClose: () => {} })),
+  createElement(StoreProvider, null, createElement(RawPresentation, { value: fixture.raw }, createElement(Sidebar, { open: true, onClose: () => {} }))),
 );
 
 beforeEach(() => {
@@ -44,17 +47,29 @@ beforeEach(() => {
   fixture.windowFrame = undefined;
   fixture.hostLabel = undefined;
   fixture.rail = null;
+  fixture.raw = false;
   vi.stubGlobal("window", { innerWidth: 1280, location: { protocol: "http:", search: "" } });
   setLocale("en");
 });
 
 afterEach(() => {
+  setInboxSupport("unknown");
   vi.unstubAllGlobals();
   setLocale("en");
 });
 
 describe("sidebar header", () => {
   const collapse = /aria-label="(Collapse sidebar to avatars|Expand sidebar)"|data-sidebar-edge-toggle/;
+
+  it("keeps search and new visible in Raw while an empty Inbox no longer takes a row above the main bot", () => {
+    fixture.advanced = false;
+    fixture.raw = true;
+    setInboxSupport("yes");
+    const html = render();
+    expect(html).toContain('data-sidebar-search-toggle');
+    expect(html).toContain('aria-label="New or share"');
+    expect(html).not.toContain('data-sidebar-inbox=');
+  });
 
   it.each(["comfortable", "icons"] as const)("keeps the Inbox and add, and no button collapses or expands it, at %s density in Advanced mode", (density) => {
     fixture.density = density;

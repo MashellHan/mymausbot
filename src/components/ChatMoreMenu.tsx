@@ -189,9 +189,13 @@ export const EXPORT_ITEMS = ["copy", "download"];
 
 /** The bot panel's round Share button: on a team who has access, with copying or downloading this conversation under
  * the ⋯ of its header; anywhere else a menu of those two. */
-export function ChatShareMenu({ bot, className }: { bot: Bot; className: string }): JSX.Element {
-  return useTeamName() ? <ShareBotButton bot={bot} className={className} headerMenu={<ExportMore key={bot.threadId} bot={bot} />} />
-    : <ShareMenu key={bot.threadId} bot={bot} className={className} />;
+export function ChatShareMenu({ bot, className, textOnly = false }: { bot: Bot; className: string; textOnly?: boolean }): JSX.Element {
+  return useTeamName() ? <ShareBotButton bot={bot} className={className} headerMenu={<ExportMore key={bot.threadId} bot={bot} />} textOnly={textOnly} />
+    : <ShareMenu key={bot.threadId} bot={bot} className={className} textOnly={textOnly} />;
+}
+
+export function RawChatShareMenu({ bot }: { bot: Bot }): JSX.Element {
+  return <ChatShareMenu bot={bot} textOnly className="flex h-9 items-center justify-center rounded-full border border-hairline/60 bg-white px-4 text-[13px] font-medium text-ink shadow-sm hover:bg-raised focus-visible:outline-2 focus-visible:outline-focus" />;
 }
 
 const exportItems = (items: SidebarMenuItem[]): SidebarMenuItem[] => items.filter((item) => EXPORT_ITEMS.includes(item.key)).map((item) => ({
@@ -207,7 +211,7 @@ function ExportMore({ bot }: { bot: Bot }) {
   );
 }
 
-function ShareMenu({ bot, className }: { bot: Bot; className: string }) {
+function ShareMenu({ bot, className, textOnly }: { bot: Bot; className: string; textOnly: boolean }) {
   const { items } = useChatMoreItems(bot);
   return (
     <SidebarPopoverMenu
@@ -217,7 +221,7 @@ function ShareMenu({ bot, className }: { bot: Bot; className: string }) {
       triggerTitle={t("chat.export.heading")}
       renderTrigger={({ open }) => (
         <span data-panel-share className={cn(className, open && ELEVATED_OPEN)}>
-          <Share size={16} aria-hidden="true" />
+          {textOnly ? t("chat.preview.share") : <Share size={16} aria-hidden="true" />}
         </span>
       )}
     />

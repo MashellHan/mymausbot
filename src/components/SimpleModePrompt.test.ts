@@ -5,7 +5,7 @@ import { act, createElement, Fragment } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLocale } from "@/lib/i18n";
-import { ADVANCED_MODE_KEY, readAdvancedMode, setAdvancedMode, useAdvancedMode } from "@/lib/interface-mode";
+import { INTERFACE_MODE_KEY, readAdvancedMode, setAdvancedMode, useAdvancedMode } from "@/lib/interface-mode";
 import { SIMPLE_MODE_PROMPT_KEY, simpleModePromptSeen } from "@/lib/simple-mode-prompt";
 
 const analytics = vi.hoisted(() => ({ track: vi.fn() }));
@@ -76,7 +76,7 @@ describe("the Simple mode popup", () => {
     await act(async () => { root.render(createElement(Fragment, null, createElement(App), createElement(SimpleModePrompt, { onClose }))); });
     await act(async () => { toggle().click(); });
     expect(readAdvancedMode()).toBe(false);
-    expect(localStorage.getItem(ADVANCED_MODE_KEY)).toBe("0");
+    expect(localStorage.getItem(INTERFACE_MODE_KEY)).toBe("simple");
     expect(app(), "the app behind it switches as it is flipped").toBe("simple");
     expect(toggle().getAttribute("aria-checked")).toBe("true");
     expect(host.querySelector("h2")?.textContent).toBe("Try the new Simple mode");
@@ -91,8 +91,8 @@ describe("the Simple mode popup", () => {
   it("follows the mode when another tab changes it", async () => {
     setAdvancedMode(true);
     await show();
-    localStorage.setItem(ADVANCED_MODE_KEY, "0");
-    await act(async () => { window.dispatchEvent(new StorageEvent("storage", { key: ADVANCED_MODE_KEY, storageArea: localStorage })); });
+    localStorage.setItem(INTERFACE_MODE_KEY, "simple");
+    await act(async () => { window.dispatchEvent(new StorageEvent("storage", { key: INTERFACE_MODE_KEY, storageArea: localStorage })); });
     expect(toggle().getAttribute("aria-checked")).toBe("true");
   });
 

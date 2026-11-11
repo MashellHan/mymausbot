@@ -25,7 +25,8 @@ import {
   ActivityPanel, BotSettingsDialog, CloudAddDialog, ComputerPanel, FilesView, GroupComputerPanel, InspectorPanel, KeyboardShortcutsModal, LocalVmWorkspace,
   PluginsPanel, preloadScreens, RemoteAgentSettingsPanel, RemoteDesktopPanel, RoomPanel, SettingsModal, TeamMapPage, TriggersPage,
 } from "@/components/lazy-screens";
-import { useAdvancedMode } from "@/lib/interface-mode";
+import { useInterfaceMode } from "@/lib/interface-mode";
+import { RawPresentation } from "@/lib/raw-presentation";
 import { useRoomPanelShown } from "@/lib/room-panel";
 import { WorkspaceBackupRecovery } from "@/components/WorkspaceBackupSettings";
 import { NotificationRail, NotificationsPanel } from "@/components/NotificationsPanel";
@@ -154,7 +155,8 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const bot = group || chiefStep ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
   useFilePreviewScope(bot?.id, bot?.threadId, state.computerOpen);
   const notificationFeed = useNotificationFeed() && !remoteClient;
-  const advanced = useAdvancedMode();
+  const interfaceMode = useInterfaceMode();
+  const advanced = interfaceMode === "advanced";
   const roomPanelOpen = useRoomPanelShown({ group, state, simple: !advanced && !remoteClient });
   const sidePanelOpen = (Boolean(bot) && (state.settingsOpen || state.computerOpen || state.inspectorOpen || state.activityOpen)) || (Boolean(group) && !remoteClient && state.computerOpen) || roomPanelOpen || (notificationFeed && state.notificationsOpen) || inboxShown;
   const collapseSidebar = sidePanelOpen && !sidebarAndPanelFit;
@@ -332,7 +334,8 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     <AppNotices quiet={paletteOpen || drawerOpen || Boolean(localVmWorkspaceBotId)} viewer={viewer} />
   </>;
   return (
-    <div className={cn("flex h-full flex-col", framed && "bg-frame")}>
+    <RawPresentation value={interfaceMode === "raw"}>
+    <div data-interface-mode={interfaceMode} data-raw-mac-frame={interfaceMode === "raw" && framed && capabilities.windowChrome === "mac-inset" ? "" : undefined} className={cn("flex h-full flex-col", framed && "bg-frame")}>
       <WindowFrameBar notifications={notificationTray} />
       <BotLimitPopup />
       {!framed && strips}
@@ -355,7 +358,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           className="absolute inset-0 z-30 bg-black/50 md:hidden"
         />
       )}
-      {!calendarFocus && <PlacesRail />}
+      {!calendarFocus && interfaceMode !== "raw" && <PlacesRail />}
       <NewLocalFromMenu />
       {/* A framed window shows the app, its sidebar and the chat or page, as one square pane under the top bar and beside
           the window's rail, running to the window's right and bottom edges. */}
@@ -470,6 +473,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         visible={capabilities.windowChrome === "win-caption" && Boolean(window.ogb?.windowControls)}
       />
     </div>
+    </RawPresentation>
   );
 }
 

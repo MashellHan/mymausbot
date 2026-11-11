@@ -32,9 +32,10 @@ import { botTextShowsSpeaker, laterTextOwns, runShowsSpeaker } from "@/lib/room-
 import { defaultResponderName, groupResponseHint, jevRoomRoutingOn } from "@/lib/group-routing";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { FailedTurnRow, MessageBoundary } from "./ChatView";
-import { SIMPLE_BOT_BUBBLE, SIMPLE_BUBBLE_MAX, SIMPLE_BUBBLE_TEXT, SIMPLE_USER_BUBBLE } from "./chat-bubble";
+import { shouldCollapseUserMessage, SIMPLE_BOT_BUBBLE, SIMPLE_BUBBLE_MAX, SIMPLE_BUBBLE_TEXT, SIMPLE_USER_BUBBLE } from "./chat-bubble";
 import { ReplyBlocks } from "./ReplyBlocks";
 import { useAdvancedMode } from "@/lib/interface-mode";
+import { rawNeutralBubbleStyle, useRawPresentation } from "@/lib/raw-presentation";
 import { CopyButton, MESSAGE_ROW, MessageActions, messageActionClass, ReplyAction } from "./MessageActions";
 import { ReactAction, ReactionChips, useCanReact } from "./Reactions";
 import { ClusterLabel } from "./RoomClusterLabel";
@@ -130,9 +131,6 @@ export function RoomToolChip({ message, roomId, threadId, live = false }: { mess
   );
 }
 
-const USER_COLLAPSE_CHARS = 600;
-const USER_COLLAPSE_LINES = 8;
-
 function RoomTextMessage({
   group,
   message: m,
@@ -166,9 +164,10 @@ function RoomTextMessage({
   const speaking = speech.messageId === m.id && speech.status !== "idle";
   const focus = state.focusMessage;
   const focusedSearch = focus?.messageId === m.id && Boolean(focus.matchText) && focus.threadId === group.threadId;
-  const collapsible = user && !expanded && (display.length > USER_COLLAPSE_CHARS || display.split("\n").length > USER_COLLAPSE_LINES);
+  const collapsible = user && shouldCollapseUserMessage(display, expanded);
   useEffect(() => { if (focusedSearch && collapsible) setExpanded(true); }, [focusedSearch, collapsible, focus?.nonce]);
   const simple = !useAdvancedMode();
+  const raw = useRawPresentation();
   const speakerBot = members.find((member) => member.id === m.from?.botId);
   const replyTarget = m.replyToId ? transcript.find((candidate) => candidate.id === m.replyToId) : null;
   const botText = rawText; const teammates = useTeammates(); const peers = useMemo(() => [...members, ...teammates.peers], [members, teammates]);
@@ -222,6 +221,7 @@ function RoomTextMessage({
                   : simple ? SIMPLE_BOT_BUBBLE : "bg-card px-4 py-2.5 text-ink",
           )}
           title={new Date(m.at).toLocaleString(intlLocale())}
+          style={user && raw ? rawNeutralBubbleStyle : undefined}
         >
           {m.replyToId && (
             <div className="mb-2">

@@ -369,7 +369,7 @@ describe("app_active", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     vi.setSystemTime(new Date(2026, 9, 23, 9, 0));
-    store.set("omb-advanced-mode", "0");
+    store.set("omb-interface-mode", "simple");
     page = openPage();
   });
   afterEach(() => {
@@ -402,7 +402,7 @@ describe("app_active", () => {
   it("says which mode the page is in that day, Simple or Advanced", async () => {
     await page.load();
     expect(active()).toEqual([{ event: "app_active", props: { platform: "browser", mode: "simple" } }]);
-    store.set("omb-advanced-mode", "1");
+    store.set("omb-interface-mode", "advanced");
     vi.setSystemTime(new Date(2026, 9, 24, 9, 0));
     await page.load();
     expect(active()[1]).toEqual({ event: "app_active", props: { platform: "browser", mode: "advanced" } });

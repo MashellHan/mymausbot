@@ -39,7 +39,7 @@ import { TwoPlacesCard } from "./TwoPlacesCard";
 import { BOAT_OFFER_NOTICE, CLOUD_INTRO, GROK_MOVE_NOTICE, launchNotice, localDay, PRODUCT_HUNT_NOTICE, PRODUCT_HUNT_UNTIL, PRODUCT_HUNT_URL, STAR_NOTICE, WHATS_NEW_NOTICE } from "@/lib/notices";
 import { BOAT_OFFER, boatClaimMailto } from "@/lib/boat-offer";
 import { track } from "@/lib/analytics";
-import { ADVANCED_MODE_KEY, setAdvancedMode } from "@/lib/interface-mode";
+import { INTERFACE_MODE_KEY, setAdvancedMode } from "@/lib/interface-mode";
 import { SIMPLE_MODE_PROMPT_KEY } from "@/lib/simple-mode-prompt";
 import { ADVANCED_BACK_KEY } from "@/lib/new-look";
 import { api } from "@/state/store";
@@ -1001,7 +1001,7 @@ describe("the Move from Grok Bot popup", () => {
     expect(render(), "nothing else after it in this launch").toBe("");
     expect(await launch(), "a reload is the same launch").toBe("");
     const second = await relaunch();
-    expect(second).toContain("data-simple-mode-prompt"); expect(second).not.toContain(TITLE);
+    expect(second).toContain(WHATS_NEW); expect(second).not.toContain(TITLE);
     expect(launchNotice()).not.toBe(GROK_MOVE_NOTICE);
   });
 
@@ -1126,11 +1126,11 @@ describe("the Simple mode popup after the update", () => {
   it("changes the mode live from the popup, both ways, while its words stay", async () => {
     await launch();
     press("Simple mode"); await flush();
-    expect(storage.get(ADVANCED_MODE_KEY)).toBe("0");
+    expect(storage.get(INTERFACE_MODE_KEY)).toBe("simple");
     const on = render();
     expect(on).toContain('aria-checked="true"'); expect(on).toContain(TITLE);
     press("Simple mode"); await flush();
-    expect(storage.get(ADVANCED_MODE_KEY)).toBe("1");
+    expect(storage.get(INTERFACE_MODE_KEY)).toBe("advanced");
     expect(render()).toContain('aria-checked="false"');
     expect(prompts().slice(1)).toEqual([{ action: "toggled", mode: "simple" }, { action: "toggled", mode: "advanced" }]);
     expect(storage.has(SIMPLE_MODE_PROMPT_KEY), "flipping never closes it").toBe(false);

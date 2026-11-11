@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Group, Message } from "@/state/store";
+import { RawPresentation } from "@/lib/raw-presentation";
 
 const fixture = vi.hoisted(() => ({ dispatch: vi.fn(), canWrite: true as boolean | null }));
 vi.mock("@/state/store", async (importOriginal) => {
@@ -107,6 +108,23 @@ describe("room message actions", () => {
     expect(html).toContain("Copy message");
     expect(html).toContain("Show full message");
     expect(html).not.toContain("Show raw markdown");
+  });
+
+  it.each(["atelier", "lagoon"])("keeps a Raw group bubble legible over a saved %s skin", (skin) => {
+    const messages = [text("u", "user", "word ".repeat(160))];
+    const group = { ...room, messages };
+    const html = renderToStaticMarkup(createElement("div", { "data-skin": skin, "data-interface-mode": "raw" },
+      createElement(RawPresentation, { value: true }, createElement(Transcript, {
+        group, members: [lead], locale: "en", messages, transcript: messages, onReply: () => {},
+      }))));
+    const start = html.indexOf('data-chat-bubble="simple"');
+    const bubble = html.slice(start, html.indexOf(">", start) + 1);
+    expect(bubble).toContain("background-color:#1c1c1c");
+    expect(bubble).toContain("--color-bubble-user-ink:#fcfcfc");
+    expect(bubble).toContain("--color-ink:#fcfcfc");
+    expect(bubble).toContain("--color-ink-secondary:#c4c4c4");
+    expect(html).toContain("Show full message");
+    expect(markup(messages)).not.toContain("background-color:#1c1c1c");
   });
 
   it("keeps delivered files beneath the reply alongside its quiet actions", () => {

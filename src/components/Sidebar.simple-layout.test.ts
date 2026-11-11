@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppState, Bot, Group } from "@/state/store";
 
 const fixture = vi.hoisted(() => ({
-  values: [] as unknown[], index: 0, effects: [] as EffectCallback[], advanced: false,
+  values: [] as unknown[], index: 0, effects: [] as EffectCallback[], advanced: false, raw: false, openInbox: vi.fn(),
   state: {} as AppState, dispatch: vi.fn(), storage: new Map<string, string>(),
 }));
 vi.mock("react", async (original) => ({
@@ -36,7 +36,11 @@ vi.mock("./DesktopCapabilities", async () => {
   return { useDesktopCapabilities: () => ({ capabilities: initialDesktopCapabilities() }), windowFramed: () => false };
 });
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => fixture.advanced }));
-vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, setAdvancedMode: () => {} }));
+vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, useInterfaceMode: () => fixture.advanced ? "advanced" : "simple", setAdvancedMode: () => {} }));
+vi.mock("@/lib/raw-presentation", () => ({ useRawPresentation: () => fixture.raw }));
+vi.mock("@/state/inbox", async (original) => ({
+  ...await original<typeof import("@/state/inbox")>(), openInbox: fixture.openInbox,
+}));
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
   return { ...original, useStore: () => ({ state: fixture.state, dispatch: fixture.dispatch }) };
@@ -50,6 +54,7 @@ import { PinnedBotRoster } from "./PinnedCircleThreads";
 import { SidebarFooter } from "./SidebarFooter";
 import { SidebarResizeHandle } from "./SidebarResizeHandle";
 import { SidebarTileGrid } from "./SidebarTiles";
+import { SidebarInboxMenuItem } from "./SidebarInboxRow";
 import { GlassBar, GlassScrollFrame, GlassScroller } from "./GlassScrollFrame";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { SidebarSearchPill, SidebarSearchToggle } from "./SidebarSimpleTop";
@@ -85,6 +90,8 @@ const labelled = (tree: ReactElement<Props>[], label: string) => tree.some((node
 beforeEach(() => {
   fixture.values = [];
   fixture.advanced = false;
+  fixture.raw = false;
+  fixture.openInbox.mockClear();
   fixture.storage = new Map();
   fixture.dispatch.mockClear();
   fixture.state = {
@@ -353,6 +360,18 @@ describe("Simple-mode sidebar layout", () => {
     edge(render().tree)!.onAvatars(false);
     expect(fixture.storage.get(SIDEBAR_DENSITY_KEY)).toBe("comfortable");
     expect(render().tree.some((node) => node.type === SimpleRailFooter)).toBe(false);
+  });
+
+  it("keeps an empty Raw Inbox in the existing + menu", () => {
+    fixture.raw = true;
+    const plus = render().tree.find((node) => node.type === "button" && node.props["aria-label"] === "New or share")!;
+    (plus.props.onClick as () => void)();
+    const inbox = render().tree.find((node) => node.type === SidebarInboxMenuItem)!;
+    const button = SidebarInboxMenuItem(inbox.props as Parameters<typeof SidebarInboxMenuItem>[0]) as ReactElement<Props>;
+    expect(button.props.role).toBe("menuitem");
+    (button.props.onClick as () => void)();
+    expect(fixture.openInbox).toHaveBeenCalledOnce();
+    expect(render().tree.some((node) => node.type === SidebarInboxMenuItem)).toBe(false);
   });
 
   it("New Bot makes a bot at once in both modes, Chief of Staff or not; Advanced keeps Create department and Templates", () => {
