@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, InstanceInfo } from "@/state/store";
 import { RawPresentation } from "@/lib/raw-presentation";
+import { contrastRatio } from "@/lib/color-contrast";
 
 const fixture = vi.hoisted(() => ({ colorMine: false }));
 
@@ -25,6 +26,7 @@ vi.mock("@/lib/user-bubble-preference", () => ({ useColorUserBubbles: () => fixt
 
 const { ChatView } = await import("./ChatView");
 const { userBubbleTone } = await import("@/lib/user-bubble-tone");
+const { rawUserBubbleStyle } = await import("@/lib/raw-presentation");
 
 const bot: Bot = {
   id: "bot", threadId: "selected", name: "Sample", title: "", description: "", color: "yellow",
@@ -47,10 +49,25 @@ describe("bot-colored user bubbles", () => {
     const renderRaw = (candidate: Bot) => renderToStaticMarkup(createElement(RawPresentation, { value: true }, createElement(ChatView, { bot: candidate })));
     const main = renderRaw({ ...bot, defaultBot: {} });
     expect(main).toContain("background-color:#1c1c1c");
-    expect(main).toContain("--color-bubble-user-ink:#ffffff");
+    expect(main).toContain("--color-bubble-user-ink:#fcfcfc");
     const ordinary = renderRaw(bot);
     expect(ordinary).toContain(`background-color:${userBubbleTone("yellow").background}`);
     expect(ordinary).not.toContain("background-color:#1c1c1c");
+  });
+
+  it("keeps a long quoted main-bot message readable beyond its body text", () => {
+    const long = { ...bot, defaultBot: {}, messages: [...bot.messages, { id: "long", role: "user" as const, kind: "text" as const, at: 3, text: "word ".repeat(160), replyToId: "b" }] };
+    const html = renderToStaticMarkup(createElement(RawPresentation, { value: true }, createElement(ChatView, { bot: long })));
+    expect(html).toContain("Show full message");
+    expect(html).toContain("data-reply-quote");
+    const style = rawUserBubbleStyle("yellow", true) as Record<string, string>;
+    for (const token of ["--color-ink", "--color-ink-secondary", "--color-ink-tertiary", "--color-accent", "--color-danger", "--color-success"]) {
+      expect(contrastRatio(style[token]!, style.backgroundColor), token).toBeGreaterThanOrEqual(4.5);
+      expect(html).toContain(`${token}:${style[token]}`);
+    }
+    expect(html).toContain(`--color-inset:${style["--color-inset"]}`);
+    expect(html).toContain(`--color-raised:${style["--color-raised"]}`);
+    expect(html).toContain(`--bubble-selection:${style["--bubble-selection"]}`);
   });
 
   it("keeps the skin bubble when the setting is off", () => {

@@ -111,8 +111,9 @@ describe("the header's right side", () => {
     }
   });
 
-  it("keeps the model, the computer and ⋯ in a remote client's Simple header, whose settings panel has no room for them", () => {
+  it.each([false, true])("keeps the model, idle computer and ⋯ in a remote client's header, Raw=%s", (raw) => {
     fixture.advanced = false;
+    fixture.raw = raw;
     window.ogb = { remoteClient: { active: true } } as NonNullable<Window["ogb"]>;
     try {
       const { markup } = header();
@@ -121,10 +122,12 @@ describe("the header's right side", () => {
       expect(fixture.model).toMatchObject({ bot: { id: "bot" }, threadId: "selected" });
       expect(markup).toContain('data-tour="computer"');
       expect(markup).toContain('data-testid="chat-more"');
+      expect(markup).not.toContain('data-panel-share');
       const more = fixture.menus.find((menu) => menu.ariaLabel === "More")!;
       expect(more.items.map((item) => item.key)).toEqual(["find", "new-thread", "copy", "download"]);
     } finally {
       delete window.ogb;
+      fixture.raw = false;
       fixture.advanced = true;
     }
   });
