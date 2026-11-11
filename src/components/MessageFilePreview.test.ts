@@ -149,13 +149,13 @@ describe("generated files in the right panel", () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(list));
   });
 
-  it("discards a cancelled request before the lazy panel mounts, even on a quick generic reopen", async () => {
+  it("discards a cancelled request before the lazy panel mounts, retaining the saved Files choice on reopen", async () => {
     renderChat(makeBot(), false, true, false); openReport();
     expect(fetch).not.toHaveBeenCalled();
     click(button("Close panel"));
     click(button("Open panel"));
     renderChat(makeBot(), false, true, true);
-    await vi.waitFor(() => expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Mini Apps"));
+    await vi.waitFor(() => expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Files"));
     expect(preview()).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -208,7 +208,7 @@ describe("generated files in the right panel", () => {
     expect(preview()?.textContent).not.toContain("Stale secret");
   });
 
-  it("clears preview on tab changes and panel close, leaving generic opens on Mini Apps", async () => {
+  it("clears preview on tab changes and panel close, retaining the saved Files choice", async () => {
     renderChat(); openReport();
     await vi.waitFor(() => expect(preview()?.textContent).toContain("Weekly review"));
     click(button("Mini Apps"));
@@ -220,7 +220,7 @@ describe("generated files in the right panel", () => {
     expect(host.querySelector("[data-computer-panel]")).toBeNull();
     expect(document.activeElement?.textContent).toBe("Report");
     click(button("Open panel"));
-    await vi.waitFor(() => expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Mini Apps"));
+    await vi.waitFor(() => expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim()).toBe("Files"));
     expect(preview()).toBeNull();
   });
 
