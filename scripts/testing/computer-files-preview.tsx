@@ -2,7 +2,7 @@ import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ComputerPanel } from "../../src/components/ComputerPanel";
 import { ChatMarkdown } from "../../src/components/ChatMarkdown";
-import { BotEditorStore, initialState, type Bot } from "../../src/state/store";
+import { BotEditorStore, initialState, type Bot, type Message } from "../../src/state/store";
 import { applySkin } from "../../src/lib/skins";
 import { setAnalyticsEnabled } from "../../src/lib/analytics";
 import { setLocale } from "../../src/lib/i18n";
@@ -13,14 +13,29 @@ import "../../src/styles.css";
 setAnalyticsEnabled(false);
 setLocale("en");
 applySkin(new URLSearchParams(location.search).get("skin") === "atelier" ? "atelier" : "midnight");
-const bot: Bot = await fetch("/__computer-files-fixture").then((response) => response.json());
+const fixture: { bot: Bot; olderPages: Message[][] } = await fetch("/__computer-files-fixture").then((response) => response.json());
 function Preview() {
   const [open, setOpen] = useState(false);
   const [panelReady, setPanelReady] = useState(!new URLSearchParams(location.search).has("defer-panel"));
+  const [bot, setBot] = useState(fixture.bot);
+  const [olderPage, setOlderPage] = useState(0);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   useFilePreviewScope(bot.id, bot.threadId, open);
   const value: Parameters<typeof BotEditorStore>[0]["value"] = {
-    state: { ...initialState, bots: [bot], selectedId: bot.id, computerOpen: open },
-    dispatch: (action) => { if (action.type === "toggleComputer") setOpen(action.open ?? !open); },
+    state: { ...initialState, bots: [bot], selectedId: bot.id, computerOpen: open,
+      loadingOlder: loadingOlder ? { [bot.threadId]: true } : {} },
+    dispatch: (action) => {
+      if (action.type === "toggleComputer") setOpen(action.open ?? !open);
+      if (action.type === "loadOlderMessages" && !loadingOlder && bot.hasMore) {
+        setLoadingOlder(true);
+        window.setTimeout(() => {
+          setBot((current) => ({ ...current, messages: [...fixture.olderPages[olderPage]!, ...current.messages],
+            hasMore: olderPage + 1 < fixture.olderPages.length }));
+          setOlderPage((page) => page + 1);
+          setLoadingOlder(false);
+        }, 250);
+      }
+    },
     flushBotPatches: async () => null, refreshInstances: async () => {}, refreshModels: async () => {},
   };
   return <BotEditorStore value={value}>
