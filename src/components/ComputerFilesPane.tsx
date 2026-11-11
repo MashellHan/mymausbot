@@ -158,7 +158,7 @@ export function ComputerFilesPane({ bot, filePreview, onPreviewClose }: {
   }, [filePreview, preview, onPreviewClose]);
   return (
     <>
-    <div ref={list} hidden={Boolean(preview)} tabIndex={-1} className="flex-1 overflow-y-auto px-5 pb-5 [color-scheme:var(--code-color-scheme)]" data-testid="computer-files">
+    <div ref={list} hidden={Boolean(preview)} tabIndex={-1} className="flex-1 overflow-y-auto px-5 pb-5 [color-scheme:var(--code-color-scheme)] [[data-interface-mode=raw]_&]:[color-scheme:light]" data-testid="computer-files">
       <div className="mt-2 rounded-xl bg-card p-4">
         <div className="text-[14px] font-semibold text-ink">{t("computer.files.folder")}</div>
         <div className="mt-2 flex items-center gap-2">
