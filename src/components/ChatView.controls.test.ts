@@ -95,11 +95,14 @@ describe("the header's right side", () => {
     }
   });
 
-  it("leaves Raw's top right to Share while the profile pill opens the Bot panel", () => {
+  it("puts Computer at Raw's top left while Share stays at the right", () => {
     fixture.advanced = false;
     fixture.raw = true;
     try {
       const { markup, controls } = header();
+      const leading = markup.slice(markup.indexOf("data-chathead-row"), markup.indexOf("data-chathead-identity"));
+      expect(leading).toContain('data-tour="computer"');
+      expect(leading).toContain(">Computer</span>");
       expect(markup).toContain("data-chathead-pill");
       expect(controls).toContain("Share");
       expect(controls).not.toContain('data-testid="chat-more"');
