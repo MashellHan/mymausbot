@@ -182,9 +182,67 @@ describe("the organization library in the real renderer", () => {
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("From Sales desk 1.3.0 · Acme Partners");
     let detailsClick: Record<string, unknown> | null = null;
     let libraryClick: Record<string, unknown> | null = null;
+    let afterDetails: Record<string, unknown> | null = null;
+    let afterLibrary: Record<string, unknown> | null = null;
+    let settled: Record<string, unknown> | null = null;
+    let cleanupError: unknown = null;
+    const navigationRead = () => agentBrowser(browser.binary, sessionEnv(browser),
+      ["eval", "window.__orgLibraryNavigation.snapshot()"], 2_000).then((value) => value.result as Record<string, unknown>);
     try {
+      await agentBrowser(browser.binary, sessionEnv(browser), ["eval", `(() => {
+        const current = () => ({
+          selected: document.querySelector('[data-panel-tab][aria-selected="true"]')?.getAttribute('data-panel-tab') ?? null,
+          page: document.querySelector('[data-panel-page-view]')?.getAttribute('data-panel-page-view') ?? null,
+          skillsRow: Boolean(document.querySelector('[data-panel-page="skills"]')),
+        });
+        const transitions = [{ at: performance.now(), ...current() }];
+        const deliveries = [];
+        const mutations = [];
+        let last = JSON.stringify(current());
+        const record = () => {
+          const state = current();
+          const next = JSON.stringify(state);
+          if (next !== last && transitions.length < 20) transitions.push({ at: performance.now(), ...state });
+          last = next;
+        };
+        const click = (phase) => (event) => {
+          const element = event.target instanceof Element ? event.target : null;
+          const target = element?.closest('[data-panel-tab]');
+          if (deliveries.length < 12) deliveries.push({ at: performance.now(), phase,
+            targetTag: element?.tagName.toLowerCase() ?? null, targetRole: element?.getAttribute('role') ?? null,
+            tab: target?.getAttribute('data-panel-tab') ?? null, inDialog: Boolean(element?.closest('[role="dialog"]')),
+            trusted: event.isTrusted, defaultPrevented: event.defaultPrevented });
+          queueMicrotask(record);
+        };
+        const capture = click('capture');
+        const bubble = click('bubble');
+        document.addEventListener('click', capture, true);
+        document.addEventListener('click', bubble);
+        const observer = new MutationObserver((changes) => {
+          for (const change of changes) if (change.type === 'attributes' && mutations.length < 16) {
+            mutations.push({ at: performance.now(), tab: change.target.getAttribute('data-panel-tab'),
+              before: change.oldValue, after: change.target.getAttribute('aria-selected') });
+          }
+          record();
+        });
+        observer.observe(document.body, { attributes: true, attributeFilter: ['aria-selected'], attributeOldValue: true,
+          childList: true, subtree: true });
+        window.__orgLibraryNavigation = {
+          snapshot: () => ({ current: current(), transitions, deliveries, mutations }),
+          stop: () => { observer.disconnect(); document.removeEventListener('click', capture, true);
+            document.removeEventListener('click', bubble); delete window.__orgLibraryNavigation; },
+        };
+        return true;
+      })()`], 2_000);
       detailsClick = await click("Details");
+      afterDetails = await navigationRead();
       libraryClick = await click("Library");
+      afterLibrary = await navigationRead();
+      await expect.poll(async () => {
+        settled = await navigationRead();
+        const current = settled.current as { selected: string | null; skillsRow: boolean };
+        return current.selected === "library" && current.skillsRow;
+      }, { timeout: 10_000 }).toBe(true);
       await ui("eval", "--js", "document.querySelector('[data-panel-page=\"skills\"]').click(); true");
     } catch (error) {
       const page = await agentBrowser(browser.binary, sessionEnv(browser), ["eval", `(() => {
@@ -197,15 +255,24 @@ describe("the organization library in the real renderer", () => {
             panelPages: [...document.querySelectorAll('[data-panel-page-view]')].map((node) => node.getAttribute('data-panel-page-view')),
             libraryTab: library ? { selected: library.getAttribute('aria-selected'), visible: library.getClientRects().length > 0 } : null,
             skillsRow: Boolean(document.querySelector('[data-panel-page="skills"]')),
+            navigation: window.__orgLibraryNavigation?.snapshot() ?? null,
           };
         })()`], 2_000).then((value) => value.result).catch(() => null);
       console.error("Organization library Skills phase:", JSON.stringify({
-        detailsClick: detailsClick && { target: detailsClick.target, clicked: detailsClick.clicked },
-        libraryClick: libraryClick && { target: libraryClick.target, clicked: libraryClick.clicked },
-        page,
+        detailsClick: detailsClick && { target: detailsClick.target, clicked: detailsClick.clicked, name: detailsClick.name, referenceRole: detailsClick.referenceRole },
+        libraryClick: libraryClick && { target: libraryClick.target, clicked: libraryClick.clicked, name: libraryClick.name, referenceRole: libraryClick.referenceRole },
+        afterDetails, afterLibrary, settled, page,
       }));
       throw error;
+    } finally {
+      try {
+        await agentBrowser(browser.binary, sessionEnv(browser),
+          ["eval", "window.__orgLibraryNavigation?.stop(); true"], 2_000);
+      } catch (error) {
+        cleanupError = error;
+      }
     }
+    if (cleanupError) throw cleanupError;
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("Skills your organization shares");
     await evidence("org-library-bot-skills.png");
     await click("Add follow-up to this bot");
