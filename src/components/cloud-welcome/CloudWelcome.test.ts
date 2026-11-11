@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudSendNotice } from "../../../electron/cloud-send.mjs";
 import { EMPTY_ONBOARDING } from "@/lib/onboarding";
 import { setLocale } from "@/lib/i18n";
-import { ADVANCED_MODE_KEY } from "@/lib/interface-mode";
+import { INTERFACE_MODE_KEY } from "@/lib/interface-mode";
 
 const fixture = vi.hoisted(() => ({
   state: {} as any,
@@ -158,7 +158,7 @@ describe("CloudWelcome", () => {
   });
 
   it("in Advanced mode, starting fresh opens the team library, and skipping is kept as skipped", async () => {
-    localStorage.setItem(ADVANCED_MODE_KEY, "1");
+    localStorage.setItem(INTERFACE_MODE_KEY, "advanced");
     fixture.state.bots = [fixture.state.bots[0]];
     render();
     await vi.waitFor(() => expect(button("Choose a team")).toBeDefined());
@@ -420,7 +420,7 @@ describe("CloudWelcome", () => {
     });
 
     it("back on its step it says in one line what is happening, with a fresh start only behind More in Advanced mode", async () => {
-      localStorage.setItem(ADVANCED_MODE_KEY, "1");
+      localStorage.setItem(INTERFACE_MODE_KEY, "advanced");
       withSend(notice({ running: true, runningReason: "move" }));
       render();
       await vi.waitFor(() => expect(host.querySelector('[data-welcome-step="engine"]')).not.toBeNull());
