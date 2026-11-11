@@ -260,7 +260,7 @@ describe("Computer panel tabs", () => {
 
   it("explains an empty Files tab", () => {
     fixture.view.current = "files";
-    expect(render(makeBot()).html).toContain("Files Scout makes or changes in this chat will show up here.");
+    expect(render(makeBot()).html).toContain("Files Scout shares or changes in this chat will show up here.");
   });
 
   it("shows the selected chat's pinned folder after the bot default changes", () => {
