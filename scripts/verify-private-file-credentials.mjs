@@ -121,6 +121,7 @@ async function phase(name, before, assertion) {
     throw new Error(`Timed out waiting for ${label}`);
   }
   let beforeQuit;
+  let failure;
   try {
     const smoke = await until(() => {
       const failed = output.match(/\[smoke\] renderer-failed ([^\n]*)/);
@@ -155,6 +156,8 @@ async function phase(name, before, assertion) {
     beforeQuit = inspectPrivateCredentialStorage(fixture, { phase: "postlaunch" });
     record.privateStorage = beforeQuit.state;
     record.passed = true;
+  } catch (error) {
+    failure = error;
   } finally {
     child.kill("SIGTERM");
     const gracefulDeadline = Date.now() + 10_000;
@@ -182,13 +185,14 @@ async function phase(name, before, assertion) {
       }
     } catch (error) {
       record.passed = false;
-      throw error;
+      failure ??= error;
     } finally {
       record.finishedAt = now();
       record.elapsedMs = Date.parse(record.finishedAt) - Date.parse(record.startedAt);
       writeFileSync(join(evidence, `attempt-${attempt}-${name}.log`), output, { mode: 0o600 });
     }
   }
+  if (failure) throw failure;
   return record.closedStorage;
 }
 
