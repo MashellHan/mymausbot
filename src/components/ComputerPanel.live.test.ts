@@ -98,7 +98,14 @@ afterAll(() => {
 });
 
 describe("Computer panel live frames", () => {
-  it("starts from its own capture", () => {
+  it("captures only after Computer expands", async () => {
+    expect(captured.posts).toBe(0);
+    expect(preview()).toBeUndefined();
+    const disclosure = document.querySelector<HTMLButtonElement>('[data-testid="bot-overview-computer"] > button')!;
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    flushSync(() => disclosure.click());
+    await settle();
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
     expect(captured.posts).toBe(1);
     expect(preview()).toBe("data:image/png;base64,POLLED");
   });
@@ -137,5 +144,18 @@ describe("Computer panel live frames", () => {
     await settle();
     expect(captured.posts).toBe(posts);
     expect(preview()).toBe("data:image/png;base64,AGAIN");
+  });
+
+  it("stops receiving frames and polling when Computer folds", async () => {
+    const disclosure = document.querySelector<HTMLButtonElement>('[data-testid="bot-overview-computer"] > button')!;
+    const posts = captured.posts;
+    flushSync(() => disclosure.click());
+    await settle();
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    flushSync(() => screen({ png: "HIDDEN" }));
+    await vi.advanceTimersByTimeAsync(35_000);
+    await settle();
+    expect(preview()).toBeUndefined();
+    expect(captured.posts).toBe(posts);
   });
 });

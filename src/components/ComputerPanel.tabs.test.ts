@@ -115,14 +115,14 @@ afterEach(() => {
 });
 
 describe("Computer panel tab", () => {
-  it("opens Mini Apps by default even when the bot uses the browser", async () => {
+  it("opens Bot by default even when the bot uses the browser", async () => {
     localStorage.removeItem("omb-computer-panel-view:scout");
     fixture.browser = true;
     await open(makeBot({ computer: "browser" }));
-    expect(selected()).toBe("Mini Apps");
-    expect(document.querySelector('[data-testid="mini-apps-panel"]')).not.toBeNull();
+    expect(selected()).toBe("Bot");
+    expect(document.querySelector('[data-testid="bot-overview-intro"]')).not.toBeNull();
     await open(makeBot({ computer: "browser", busy: true }));
-    expect(selected()).toBe("Mini Apps");
+    expect(selected()).toBe("Bot");
     flushSync(() => tab("Data").click());
     await open(makeBot({ computer: "browser", busy: false }));
     expect(selected()).toBe("Data");
@@ -159,7 +159,7 @@ describe("Computer panel tab", () => {
 
   it("stays on Data through a model change and follows a conversation change", async () => {
     await open(makeBot());
-    expect(selected()).toBe("Screen");
+    expect(selected()).toBe("Bot");
     flushSync(() => tab("Data").click());
     await settle();
     expect(selected()).toBe("Data");
@@ -170,13 +170,13 @@ describe("Computer panel tab", () => {
     expect(document.querySelector('[data-testid="data-panel"]')).not.toBeNull();
 
     await open(makeBot({ threadId: "thread-2", tasks: [{ threadId: "thread-2", title: "Second", createdAt: 2, approvalMode: "ask" }] } as Partial<Bot>));
-    expect(selected()).toBe("Screen");
+    expect(selected()).toBe("Bot");
   });
 
   it("shows the Browser tab with a published page's Open, and hands the page to the browser to open", async () => {
     fixture.browser = true;
     await open(makeBot());
-    expect(selected()).toBe("Screen");
+    expect(selected()).toBe("Bot");
     const PAGE = "https://abcdefghijklmnopqrstuvwxyz.mausbot.page/";
     flushSync(() => requestPanelPage("scout", PAGE));
     await settle();
@@ -199,9 +199,9 @@ describe("Computer panel tab", () => {
 
   it("keeps one Tab stop and moves it with the arrow, Home and End keys", async () => {
     await open(makeBot());
-    expect(tabStops()).toEqual(["Screen"]);
+    expect(tabStops()).toEqual(["Bot"]);
 
-    press("Screen", "ArrowRight");
+    press("Bot", "ArrowRight");
     await settle();
     expect(selected()).toBe("Routines");
     expect(tabStops()).toEqual(["Routines"]);
@@ -209,41 +209,41 @@ describe("Computer panel tab", () => {
 
     press("Routines", "ArrowLeft");
     await settle();
-    expect(selected()).toBe("Screen");
-    expect(document.activeElement).toBe(tab("Screen"));
+    expect(selected()).toBe("Bot");
+    expect(document.activeElement).toBe(tab("Bot"));
 
     // Wraps around the row's ends.
-    press("Screen", "ArrowLeft");
+    press("Bot", "ArrowLeft");
     await settle();
     expect(selected()).toBe("Mini Apps");
     press("Mini Apps", "ArrowRight");
     await settle();
-    expect(selected()).toBe("Screen");
+    expect(selected()).toBe("Bot");
 
-    press("Screen", "End");
+    press("Bot", "End");
     await settle();
     expect(selected()).toBe("Mini Apps");
     expect(document.activeElement).toBe(tab("Mini Apps"));
     press("Mini Apps", "Home");
     await settle();
-    expect(selected()).toBe("Screen");
-    expect(document.activeElement).toBe(tab("Screen"));
+    expect(selected()).toBe("Bot");
+    expect(document.activeElement).toBe(tab("Bot"));
   });
 
   it("leaves the vertical arrows to the page's scrolling", async () => {
     await open(makeBot());
-    flushSync(() => tab("Screen").focus());
-    expect(press("Screen", "ArrowDown").defaultPrevented).toBe(false);
-    expect(press("Screen", "ArrowUp").defaultPrevented).toBe(false);
+    flushSync(() => tab("Bot").focus());
+    expect(press("Bot", "ArrowDown").defaultPrevented).toBe(false);
+    expect(press("Bot", "ArrowUp").defaultPrevented).toBe(false);
     await settle();
-    expect(selected()).toBe("Screen");
-    expect(document.activeElement).toBe(tab("Screen"));
+    expect(selected()).toBe("Bot");
+    expect(document.activeElement).toBe(tab("Bot"));
   });
 
   it("moves over an Android tab that appeared", async () => {
     fixture.android = true;
     await open(makeBot());
-    expect(tabLabels()).toEqual(["Screen", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabLabels()).toEqual(["Bot", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
     press("Routines", "ArrowRight");
     await settle();
     expect(selected()).toBe("Android");
@@ -259,13 +259,13 @@ describe("Computer panel tab", () => {
     fixture.android = false;
     await open(makeBot());
     expect(tabLabels()).not.toContain("Android");
-    expect(selected()).toBe("Screen");
+    expect(selected()).toBe("Bot");
   });
 
   it("reaches Files and Mini Apps in Simple mode", async () => {
     fixture.advanced = false;
     await open(makeBot());
-    expect(tabLabels()).toEqual(["Screen", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabLabels()).toEqual(["Bot", "Browser", "Data", "Files", "Mini Apps"]);
     press("Data", "ArrowRight");
     await settle();
     expect(selected()).toBe("Files");
@@ -275,9 +275,9 @@ describe("Computer panel tab", () => {
     expect(document.activeElement).toBe(tab("Mini Apps"));
     press("Mini Apps", "ArrowRight");
     await settle();
-    expect(selected()).toBe("Screen");
-    expect(document.activeElement).toBe(tab("Screen"));
-    press("Screen", "End");
+    expect(selected()).toBe("Bot");
+    expect(document.activeElement).toBe(tab("Bot"));
+    press("Bot", "End");
     await settle();
     expect(selected()).toBe("Mini Apps");
     expect(document.activeElement).toBe(tab("Mini Apps"));
@@ -318,14 +318,14 @@ describe("Computer panel tab", () => {
       expect(document.activeElement).toBe(mini);
       press("Mini Apps", "ArrowRight");
       await settle();
-      expect(selected()).toBe("Screen");
-      expect(document.activeElement).toBe(tab("Screen"));
+      expect(selected()).toBe("Bot");
+      expect(document.activeElement).toBe(tab("Bot"));
     } finally { globalThis.ResizeObserver = original; }
   });
 
   it("points every selected trigger at its panel and the panel back", async () => {
     await open(makeBot());
-    for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps"]) {
+    for (const label of ["Bot", "Routines", "Browser", "Data", "Files", "Mini Apps"]) {
       flushSync(() => tab(label).click());
       await settle();
       const trigger = tab(label);
@@ -337,7 +337,7 @@ describe("Computer panel tab", () => {
 
   it("puts every selected panel in the tab sequence", async () => {
     await open(makeBot());
-    for (const label of ["Screen", "Routines", "Browser", "Data", "Files", "Mini Apps"]) {
+    for (const label of ["Bot", "Routines", "Browser", "Data", "Files", "Mini Apps"]) {
       flushSync(() => tab(label).click());
       await settle();
       const panel = document.getElementById(tab(label).getAttribute("aria-controls")!);

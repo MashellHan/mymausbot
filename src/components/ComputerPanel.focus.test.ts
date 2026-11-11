@@ -137,7 +137,7 @@ describe("computer panel entry focus", () => {
 
     runFrames();
     expect(document.activeElement).toBe(activeTab());
-    expect(document.activeElement?.textContent?.trim()).toBe(t("computer.tab.miniApps"));
+    expect(document.activeElement?.textContent?.trim()).toBe(t("botPanel.avatar.tabBot"));
   });
 
   it("leaves a pointer open's focus alone", async () => {

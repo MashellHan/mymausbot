@@ -124,6 +124,11 @@ const open = async (bot: Bot) => {
   root = createRoot(container);
   draw();
   await settle();
+  const disclosure = document.querySelector<HTMLButtonElement>('[data-testid="bot-overview-computer"] > button');
+  if (disclosure?.getAttribute("aria-expanded") === "false") {
+    flushSync(() => disclosure.click());
+    await settle();
+  }
 };
 const button = (label: string) => [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === label);
 const press = async (label: string) => {
@@ -316,7 +321,7 @@ describe("taking control of a Local VM", () => {
     expect(releases(), "leaving the Screen view left the bot waiting").toHaveLength(1);
 
     fixture.beacons = [];
-    await press("Screen");
+    await press("Bot");
     await press("Take control");
     window.dispatchEvent(new Event("pagehide"));
     await settle();
