@@ -7,10 +7,13 @@ import type { Bot, Message } from "@/state/store";
 
 const fixture = vi.hoisted(() => ({ dispatch: vi.fn(), loadingOlder: {} as Record<string, true> }));
 
-vi.mock("@/state/store", async (original) => ({
-  ...await original<typeof import("@/state/store")>(),
-  useStore: () => ({ dispatch: fixture.dispatch, state: { ...original.initialState, loadingOlder: fixture.loadingOlder } }),
-}));
+vi.mock("@/state/store", async (original) => {
+  const module = await original<typeof import("@/state/store")>();
+  return {
+    ...module,
+    useStore: () => ({ dispatch: fixture.dispatch, state: { ...module.initialState, loadingOlder: fixture.loadingOlder } }),
+  };
+});
 
 import { ComputerFilesPane, recentChangedFiles, sharedFileEntries, sharedFileReferences } from "./ComputerFilesPane";
 import { libraryItems } from "./bot-panel/LibraryTab";
@@ -54,7 +57,7 @@ describe("file grants in the visible conversation", () => {
   it("lists a routine-origin attachment and local link without a digest, preferring the attachment for one original", () => {
     const origin = "/private/task/report.md";
     const value = bot([
-      reply("attachment", "", { at: 2, attachments: [{ kind: "file", path: "/attachments/1/report.md", name: "report.md", source: origin }] }),
+      reply("attachment", "", { at: 2, attachments: [{ kind: "file", path: "/attachments/1/report.md", name: "report.md", mime: "text/markdown", source: origin }] }),
       reply("link", `[report](file://${origin})`, { at: 4 }),
       reply("other", "[report](/workspace/other/report.md)", { at: 5 }),
     ]);
