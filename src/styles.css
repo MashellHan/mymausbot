@@ -3471,12 +3471,6 @@ button:disabled.bg-danger {
 [data-raw-composer] {
   padding-inline: 16px;
 }
-[data-raw-composer] [data-tour="composer"] {
-  border-radius: 23px;
-  border: 1px solid #d7d7d7;
-  padding-block: 7px;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.07);
-}
 [data-chat-bubble="simple"][data-raw-bubble] {
   font-size: 15px;
   line-height: 22px;
@@ -3486,6 +3480,15 @@ button:disabled.bg-danger {
   background-color: #f0f0f0;
 }
 @media (min-width: 768px) {
+  [data-raw-composer] [data-tour="composer"] {
+    border-radius: 23px;
+    border: 1px solid #d7d7d7;
+    padding-block: 7px;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.07);
+  }
+  [data-interface-mode="raw"] [data-sidebar-tiles][data-raw] {
+    padding-top: 22px;
+  }
   [data-interface-mode="raw"] [data-sidebar-top-row] {
     height: 48px;
     padding-top: 12px;
