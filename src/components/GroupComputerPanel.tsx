@@ -4,7 +4,7 @@ import { releaseComputerPanelFocus, useComputerPanelEntry } from "@/lib/computer
 import { t } from "@/lib/i18n";
 import { useStore } from "@/state/store";
 import { useCaptionChrome } from "./DesktopCapabilities";
-import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, useComputerPanelResize } from "./computer-panel-resize";
+import { PANEL_MIN_WIDTH, useComputerPanelResize } from "./computer-panel-resize";
 import { panelTabProps, TAB_PANEL_FOCUS, tabPanelProps } from "./computer-panel-tabs";
 import { MiniAppsPanel } from "./mini-apps/MiniAppsPanel";
 
@@ -13,7 +13,7 @@ export function GroupComputerPanel({ groupId }: { groupId: string }) {
   const { dragProps, noDragStyle } = useCaptionChrome();
   const scope = `group:${groupId}`;
   const panelRef = useComputerPanelEntry(scope, "mini-apps");
-  const { panelWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd } = useComputerPanelResize();
+  const { panelWidth, panelMaxWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd } = useComputerPanelResize();
   return (
     <aside
       ref={panelRef}
@@ -21,17 +21,17 @@ export function GroupComputerPanel({ groupId }: { groupId: string }) {
       aria-label={t("botPanel.tab.computer")}
       className={cn(
         "animate-panel-in relative flex h-full shrink-0 flex-col border-l border-hairline/40 bg-panel",
-        "max-2xl:absolute max-2xl:inset-y-0 max-2xl:right-0 max-2xl:z-40 max-2xl:w-full! max-2xl:max-w-[960px]",
+        "max-2xl:absolute max-2xl:inset-y-0 max-2xl:right-0 max-2xl:z-40",
       )}
-      style={{ width: panelWidth }}
+      style={{ width: panelWidth, maxWidth: panelMaxWidth }}
     >
       <div
         ref={separatorRef}
         role="separator"
         aria-orientation="vertical"
         aria-label={t("computer.resizeAria")}
-        aria-valuemin={PANEL_MIN_WIDTH}
-        aria-valuemax={PANEL_MAX_WIDTH}
+        aria-valuemin={Math.min(PANEL_MIN_WIDTH, panelMaxWidth)}
+        aria-valuemax={panelMaxWidth}
         aria-valuenow={separatorWidth ?? undefined}
         tabIndex={0}
         onKeyDown={onSeparatorKeyDown}

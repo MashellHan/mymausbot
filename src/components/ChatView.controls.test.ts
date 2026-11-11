@@ -95,19 +95,18 @@ describe("the header's right side", () => {
     }
   });
 
-  it("puts Computer at Raw's top left while Share stays at the right", () => {
+  it("puts Computer beside Share in Raw's visible header controls", () => {
     fixture.advanced = false;
     fixture.raw = true;
     try {
       const { markup, controls } = header();
-      const leading = markup.slice(markup.indexOf("data-chathead-row"), markup.indexOf("data-chathead-identity"));
-      expect(leading).toContain('data-tour="computer"');
-      expect(leading).toContain(">Computer</span>");
       expect(markup).toContain("data-chathead-pill");
+      expect(controls).toContain('data-tour="computer"');
+      expect(controls).toContain(">Computer</span>");
+      expect(controls.indexOf('data-tour="computer"')).toBeLessThan(controls.indexOf("Share"));
       expect(controls).toContain("Share");
       expect(controls).not.toContain('data-testid="chat-more"');
       expect(controls).not.toContain("data-test-model-control");
-      expect(controls).not.toContain('data-tour="computer"');
     } finally {
       fixture.raw = false;
       fixture.advanced = true;

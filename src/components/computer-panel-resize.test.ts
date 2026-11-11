@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PANEL_MAX_WIDTH, useComputerPanelResize } from "./computer-panel-resize";
+import { PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, computerPanelMaxWidth, useComputerPanelResize } from "./computer-panel-resize";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let host: HTMLDivElement;
@@ -23,6 +23,7 @@ const press = (key: string) => act(() => {
 const stored = new Map<string, string>();
 beforeEach(() => {
   stored.clear();
+  vi.stubGlobal("innerWidth", 2560);
   vi.stubGlobal("localStorage", { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => void stored.set(key, value) });
   host = document.createElement("div");
   document.body.append(host);
@@ -35,11 +36,11 @@ afterEach(() => {
 });
 
 describe("the computer panel's resize edge", () => {
-  it("opens at the maximum despite an older narrow width and still resizes while mounted", () => {
+  it("opens at the unchanged default despite an older narrow width and reaches the new maximum", () => {
     localStorage.setItem("omb-computer-panel-width", "400");
     act(() => root.render(createElement(Panel)));
-    expect(width).toBe(PANEL_MAX_WIDTH);
-    press("ArrowLeft");
+    expect(width).toBe(PANEL_DEFAULT_WIDTH);
+    for (let step = PANEL_DEFAULT_WIDTH; step < PANEL_MAX_WIDTH; step += 40) press("ArrowLeft");
     expect(width).toBe(PANEL_MAX_WIDTH);
     press("ArrowRight");
     expect(width).toBe(PANEL_MAX_WIDTH - 40);
@@ -48,12 +49,16 @@ describe("the computer panel's resize edge", () => {
     act(() => root.unmount());
     root = createRoot(host);
     act(() => root.render(createElement(Panel)));
-    expect(width).toBe(PANEL_MAX_WIDTH);
+    expect(width).toBe(PANEL_DEFAULT_WIDTH);
     expect(localStorage.getItem("omb-computer-panel-width")).toBe("400");
   });
 
-  it("opens at the maximum with no saved width", () => {
+  it("opens at the same default with no saved width and keeps an inline chat edge", () => {
     act(() => root.render(createElement(Panel)));
-    expect(width).toBe(PANEL_MAX_WIDTH);
+    expect(width).toBe(PANEL_DEFAULT_WIDTH);
+    expect(computerPanelMaxWidth(1536)).toBe(PANEL_DEFAULT_WIDTH);
+    expect(computerPanelMaxWidth(1920)).toBe(1344);
+    expect(computerPanelMaxWidth(2560)).toBe(PANEL_MAX_WIDTH);
+    expect(computerPanelMaxWidth(320)).toBe(320);
   });
 });
