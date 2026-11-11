@@ -729,7 +729,7 @@ export type Action =
   | { type: "editMessage"; botId: string; messageId: string; text: string; threadId?: string; sendId?: string }
   | { type: "switchBranch"; botId: string; messageId: string; threadId?: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
-  | { type: "loadOlderMessages"; threadId: string }
+  | { type: "loadOlderMessages"; threadId: string; onError?: (error: Error) => void }
   | { type: "olderMessages"; threadId: string; generation: number; messages: Message[]; hasMore: boolean }
   | { type: "answerCard"; botId: string; messageId: string; answer: string; threadId?: string; groupId?: string }
   | { type: "answerCardFailed"; botId: string; messageId: string; answer: string; groupId?: string }
@@ -2338,6 +2338,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }))
             .catch((error) => {
               rawDispatch({ type: "olderMessages", threadId: action.threadId, generation, messages: [], hasMore: true });
+              action.onError?.(error instanceof Error ? error : new Error(String(error)));
               showError(error);
             });
           break;

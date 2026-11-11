@@ -5,12 +5,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, Message } from "@/state/store";
 
+const fixture = vi.hoisted(() => ({ dispatch: vi.fn(), loadingOlder: {} as Record<string, true> }));
+
 vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(),
-  useStore: () => ({ dispatch: vi.fn() }),
+  useStore: () => ({ dispatch: fixture.dispatch, state: { ...original.initialState, loadingOlder: fixture.loadingOlder } }),
 }));
 
-import { ComputerFilesPane, recentChangedFiles, sharedFileReferences } from "./ComputerFilesPane";
+import { ComputerFilesPane, recentChangedFiles, sharedFileEntries, sharedFileReferences } from "./ComputerFilesPane";
+import { libraryItems } from "./bot-panel/LibraryTab";
 
 const reply = (id: string, text: string, patch: Partial<Message> = {}) =>
   ({ id, role: "bot", kind: "text", at: 1, text, ...patch }) as Message;
@@ -34,6 +37,33 @@ describe("file grants in the visible conversation", () => {
     expect(references.get(path)).toMatchObject({
       file: { path: href, linked: true }, message: { threadId: "thread-1", messageId: "new" },
     });
+  });
+
+  it("uses the latest repeated link's exact message grant", () => {
+    const references = sharedFileReferences(bot([
+      reply("old", "[report](/workspace/report.md)", { at: 1 }),
+      reply("new", "[report](/workspace/report.md)", { at: 3 }),
+    ]));
+    expect(references.get("/workspace/report.md")?.message.messageId).toBe("new");
+    expect(sharedFileEntries(bot([
+      reply("old", "[report](/workspace/report.md)", { at: 1 }),
+      reply("new", "[report](/workspace/report.md)", { at: 3 }),
+    ]))[0]?.at).toBe(3);
+  });
+
+  it("lists a routine-origin attachment and local link without a digest, preferring the attachment for one original", () => {
+    const origin = "/private/task/report.md";
+    const value = bot([
+      reply("attachment", "", { at: 2, attachments: [{ kind: "file", path: "/attachments/1/report.md", name: "report.md", source: origin }] }),
+      reply("link", `[report](file://${origin})`, { at: 4 }),
+      reply("other", "[report](/workspace/other/report.md)", { at: 5 }),
+    ]);
+    const entries = sharedFileEntries(value);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ source: "/workspace/other/report.md", at: 5 });
+    expect(entries[1]).toMatchObject({ source: origin, at: 4, file: { path: "/attachments/1/report.md", private: true }, message: { messageId: "attachment" } });
+    expect(sharedFileReferences(value).get(origin)?.file.path).toBe("/attachments/1/report.md");
+    expect(libraryItems(value)).toMatchObject({ shared: [{ source: "/workspace/other/report.md" }, { source: origin }], unshared: [] });
   });
 
   it("does not turn user prose, digest paths, code examples or web links into grants", () => {
@@ -132,6 +162,8 @@ describe("recent file actions", () => {
   const saveButton = (name: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="Save a copy of ${name}"]`);
 
   beforeEach(() => {
+    fixture.dispatch.mockClear();
+    fixture.loadingOlder = {};
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -186,5 +218,51 @@ describe("recent file actions", () => {
     render(bot(messages, { threadId: "thread-2" }));
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(saveButton("report.md")).not.toBeNull();
+  });
+
+  it("orders shared and unknown files by date, including an older sparse page and the end state", () => {
+    const newer = Date.parse("2026-11-05T12:00:00Z");
+    const older = Date.parse("2026-11-02T12:00:00Z");
+    const recent = reply("recent", "[latest](/workspace/latest.md)", { at: newer });
+    const sparse = reply("sparse", "No files here", { at: older + 1 });
+    const earliest = reply("earliest", "[older](/workspace/older.md)", { at: older });
+    render(bot([recent, { ...digest(["/workspace/unknown.md"]), at: newer - 1 }], { hasMore: true }));
+    expect(container.querySelectorAll("[data-testid='computer-files'] li")).toHaveLength(2);
+    expect(container.textContent).toContain("Load older files");
+    flushSync(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Load older files"))!.click());
+    expect(fixture.dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: "loadOlderMessages", threadId: "thread-1" }));
+    render(bot([sparse, recent, { ...digest(["/workspace/unknown.md"]), at: newer - 1 }], { hasMore: true }));
+    expect(container.textContent).toContain("Load older files");
+    render(bot([earliest, sparse, recent, { ...digest(["/workspace/unknown.md"]), at: newer - 1 }], { hasMore: false }));
+    const sections = [...container.querySelectorAll("[data-testid='computer-files'] section")];
+    expect(sections).toHaveLength(2);
+    expect(sections[0]!.textContent).toContain("latest.md");
+    expect(sections[0]!.textContent).toContain("Not shared");
+    expect(sections[1]!.textContent).toContain("older.md");
+    expect(sections[0]!.querySelector("h3")?.textContent).toMatch(/2026/);
+    expect(sections[1]!.querySelector("h3")?.textContent).toMatch(/2026/);
+    expect(container.textContent).toContain("start of this chat");
+    expect(container.textContent).not.toContain("Load older files");
+  });
+
+  it("retries a failed older page and hides stale errors after a branch switch", () => {
+    const rootMessage = reply("root", "Start", { at: 1 });
+    const shown = reply("shown", "[visible](/workspace/visible.md)", { parentId: "root", at: 2 });
+    const hidden = reply("hidden", "[other](/workspace/other.md)", { parentId: "root", at: 3 });
+    const value = bot([rootMessage, shown, hidden], { activeLeafId: "shown", hasMore: true });
+    render(value);
+    expect(container.textContent).toContain("visible.md");
+    expect(container.textContent).not.toContain("other.md");
+    flushSync(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Load older files"))!.click());
+    const action = fixture.dispatch.mock.calls.at(-1)?.[0];
+    flushSync(() => action.onError(new Error("synthetic page failure")));
+    expect(container.querySelector("[role='alert']")?.textContent).toContain("Couldn't load older files");
+    flushSync(() => [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Retry")!.click());
+    expect(fixture.dispatch).toHaveBeenCalledTimes(2);
+    render(bot([rootMessage, shown, hidden], { activeLeafId: "hidden", hasMore: true }));
+    expect(container.textContent).toContain("other.md");
+    expect(container.textContent).not.toContain("visible.md");
+    flushSync(() => action.onError(new Error("stale failure")));
+    expect(container.querySelector("[role='alert']")).toBeNull();
   });
 });
