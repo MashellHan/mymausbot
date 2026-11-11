@@ -1,5 +1,3 @@
-// The one Inbox row at the top of the sidebar, on every plan and with no account: shaped like a bot's row, with what waits
-// on the person as its count and a dot while any bot is at work. It stays when nothing waits, with no count.
 import { Inbox } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -7,11 +5,12 @@ import { closeInbox, openInbox, useInboxPanel, useInboxSupport, useInboxView } f
 import { useTeamPeople } from "@/state/team-people";
 import { inboxFixes, waitingCount } from "./inbox/inbox-view";
 
-export function SidebarInboxRow({ icons, large, running, onOpened }: {
+export function SidebarInboxRow({ icons, large, running, hideEmpty = false, onOpened }: {
   icons: boolean;
   /** Simple's row, sized as its bots' rows are. */
   large: boolean;
   running: boolean;
+  hideEmpty?: boolean;
   onOpened?: () => void;
 }) {
   const support = useInboxSupport();
@@ -20,6 +19,7 @@ export function SidebarInboxRow({ icons, large, running, onOpened }: {
   const { open } = useInboxPanel();
   if (support === "no") return null;
   const count = waitingCount(view) + inboxFixes(team?.needsYou, view).length;
+  if (hideEmpty && count === 0 && !running) return null;
   const shown = count > 9 ? "9+" : String(count);
   const label = count > 0 ? t("inbox.row.count", { count }) : t("inbox.panel.title");
   const toggle = () => {

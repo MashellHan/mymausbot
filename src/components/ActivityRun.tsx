@@ -23,7 +23,7 @@ export function ActivityRun({
   }, [forceOpen]);
   if (open) {
     return (
-      <div className="flex flex-col gap-1">
+      <div data-raw-activity="" className="flex flex-col gap-1">
         <div className="flex min-w-0 justify-start">
           <button
             type="button"
@@ -40,7 +40,7 @@ export function ActivityRun({
     );
   }
   return (
-    <div className="flex min-w-0 justify-start">
+    <div data-raw-activity="" className="flex min-w-0 justify-start">
       <button
         type="button"
         onClick={() => setOpen(true)}

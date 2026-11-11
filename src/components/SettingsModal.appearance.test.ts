@@ -24,7 +24,7 @@ const fixture = vi.hoisted(() => ({
   colorUserBubbles: false,
   setColorUserBubbles: vi.fn(),
   advancedMode: false,
-  setAdvancedMode: vi.fn(),
+  setInterfaceMode: vi.fn(),
   api: vi.fn(),
   dispatch: vi.fn(),
   switches: [] as ComponentProps<typeof Switch>[],
@@ -72,7 +72,8 @@ vi.mock("@/lib/user-bubble-preference", () => ({
 }));
 vi.mock("@/lib/interface-mode", () => ({
   useAdvancedMode: () => fixture.advancedMode,
-  setAdvancedMode: fixture.setAdvancedMode,
+  useInterfaceMode: () => fixture.advancedMode ? "advanced" : "simple",
+  setInterfaceMode: fixture.setInterfaceMode,
 }));
 vi.mock("@/lib/analytics", () => ({ analyticsEnabled: () => false, setAnalyticsEnabled: vi.fn() }));
 vi.mock("./PeopleSection", () => ({ PeopleSection: () => null }));
@@ -115,29 +116,26 @@ afterEach(() => {
 const render = () => renderToStaticMarkup(createElement(SettingsModal));
 
 describe("Settings → Appearance", () => {
-  it.each([true, false])("flips Advanced mode from General, first in Advanced and last in Simple, when the switch is %s", (enabled) => {
+  it.each([true, false])("offers the three persistent modes from General in %s", (enabled) => {
     fixture.section = "general";
     fixture.advancedMode = enabled;
     const html = render();
-    if (enabled) expect(html.indexOf('aria-label="Advanced mode"')).toBeLessThan(html.indexOf("Language"));
-    else expect(html.indexOf('aria-label="Advanced mode"')).toBeGreaterThan(html.indexOf("Language"));
-    expect(html).toContain('aria-label="Advanced mode"');
-    expect(html).toContain("Nothing is deleted either way");
-    const toggle = fixture.switches.find((props) => props["aria-label"] === "Advanced mode")!;
-    expect(toggle.checked).toBe(enabled);
-    toggle.onClick!({} as never);
-    expect(fixture.setAdvancedMode).toHaveBeenCalledWith(!enabled);
+    if (enabled) expect(html.indexOf('aria-label="Interface mode"')).toBeLessThan(html.indexOf("Language"));
+    else expect(html.indexOf('aria-label="Interface mode"')).toBeGreaterThan(html.indexOf("Language"));
+    expect(html).toContain('aria-label="Interface mode"');
+    for (const choice of ["Raw", "Simple", "Advanced"]) expect(html).toContain(`>${choice}</button>`);
+    expect(html).toContain("Your bots, permissions and conversations stay the same.");
     expect(fixture.api).not.toHaveBeenCalled();
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
   it("keeps the Advanced mode switch reachable from a paired remote client", () => {
     vi.stubGlobal("window", { ogb: { remoteClient: { active: true } } });
-    expect(render()).toContain('aria-label="Advanced mode"');
+    expect(render()).toContain('aria-label="Interface mode"');
   });
 
   it("does not repeat the Advanced mode switch in Appearance on this computer", () => {
-    expect(render()).not.toContain('aria-label="Advanced mode"');
+    expect(render()).not.toContain('aria-label="Interface mode"');
   });
 
   it.each([true, false])("keeps the app language reachable from a paired remote client (Advanced %s)", (advanced) => {

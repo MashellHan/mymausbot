@@ -48,6 +48,8 @@ vi.mock("@/lib/notification-preferences", () => ({
 }));
 vi.mock("@/lib/interface-mode", () => ({
   useAdvancedMode: () => fixture.advancedMode,
+  useInterfaceMode: () => fixture.advancedMode ? "advanced" : "simple",
+  setInterfaceMode: vi.fn(),
   setAdvancedMode: fixture.setAdvancedMode,
 }));
 vi.mock("@/lib/analytics", () => ({ analyticsEnabled: () => false, setAnalyticsEnabled: vi.fn() }));

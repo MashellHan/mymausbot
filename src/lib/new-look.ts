@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 
 import { CHAT_WIDTH_KEY } from "./chat-width";
 import { FONT_KEY } from "./fonts";
-import { ADVANCED_MODE_KEY, setAdvancedMode, settleAdvancedModeDefault } from "./interface-mode";
+import { ADVANCED_MODE_KEY, settleInterfaceModeDefault } from "./interface-mode";
 import { hasPriorRun } from "./prior-run";
 import { RUN_CARD_KEY } from "./run-card-preferences";
 import { SIMPLE_ONLY } from "./simple-only";
@@ -38,13 +38,7 @@ export function settleInterfaceMode(): void {
     const store = storage();
     const look = store?.getItem(NEW_LOOK_KEY);
     if (!SIMPLE_ONLY) {
-      // Switched back: the mode this browser had before its key was retired, and once, word that Advanced is back.
-      if (store && look && store.getItem(ADVANCED_MODE_KEY) == null) {
-        const advanced = look === "due" || look === "seen";
-        if (advanced && store.getItem(ADVANCED_BACK_KEY) == null) store.setItem(ADVANCED_BACK_KEY, "due");
-        setAdvancedMode(advanced);
-      }
-      settleAdvancedModeDefault();
+      settleInterfaceModeDefault();
       return;
     }
     if (!store) return;

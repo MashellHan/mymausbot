@@ -165,12 +165,12 @@ function useBesideCorner(corner: boolean, count: number) {
   return { ref, beside };
 }
 
-export function SidebarTileGrid({ primary, pinned, row, corner = false }: { primary: Bot | null; pinned: Bot[]; row: (bot: Bot) => BotRowProps; corner?: boolean }) {
+export function SidebarTileGrid({ primary, pinned, row, corner = false, raw = false }: { primary: Bot | null; pinned: Bot[]; row: (bot: Bot) => BotRowProps; corner?: boolean; raw?: boolean }) {
   const order = usePinnedCircleDrag(pinned);
   const besideCorner = useBesideCorner(corner, (primary ? 1 : 0) + order.ranked.length);
   if (!primary && order.ranked.length === 0) return null;
   return (
-    <div ref={besideCorner.ref} data-sidebar-tiles="" data-beside-corner={besideCorner.beside ? "" : undefined}
+    <div ref={besideCorner.ref} data-sidebar-tiles="" data-raw={raw ? "" : undefined} data-beside-corner={besideCorner.beside ? "" : undefined}
       className="flex max-h-[40vh] flex-wrap justify-center gap-1 overflow-y-auto px-3 pb-4 pt-2.5" {...order.frameProps}>
       {primary && <SidebarBotTile {...row(primary)} primary />}
       {order.ranked.map((bot) => <SidebarBotTile key={bot.id} {...row(bot)} {...order.dragProps(bot)} />)}

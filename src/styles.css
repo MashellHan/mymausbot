@@ -3387,6 +3387,97 @@ button:disabled.bg-danger {
 .user-bubble-colored {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.16);
 }
+[data-interface-mode="raw"] {
+  --color-app: #fcfcfc;
+  --color-panel: #f5f5f5;
+  --color-frame: #f5f5f5;
+  --color-card: #f0f0f0;
+  --color-composer: #ffffff;
+  --color-menu: #ffffff;
+  --color-menu-hover: #f3f3f3;
+  --color-menu-active: #ebebeb;
+  --color-inset: #f0f0f0;
+  --color-raised: #e8e8e8;
+  --color-raised-hover: #dedede;
+  --color-control: #ededed;
+  --color-hairline: #d7d7d7;
+  --color-edge: #e2e2e2;
+  --color-ink: #1c1c1c;
+  --color-ink-secondary: #666666;
+  --color-ink-tertiary: #707070;
+  --color-bubble-user: #1c1c1c;
+  --color-focus: #424242;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --chat-column-max: 60rem;
+  --chat-bubble-max: 35rem;
+  --chat-bubble-pct: 80%;
+  color-scheme: light;
+  font-family: var(--font-sans);
+}
+[data-interface-mode="raw"] [data-window-place],
+[data-interface-mode="raw"] [data-frame-settings] {
+  visibility: hidden;
+}
+[data-interface-mode="raw"] [data-sidebar] {
+  border-right: 1px solid var(--color-edge);
+}
+[data-interface-mode="raw"] [data-sidebar-tiles][data-raw] {
+  max-height: none;
+  justify-content: center;
+  padding-block: 10px 14px;
+}
+[data-interface-mode="raw"] [data-sidebar-tiles][data-raw] [data-sidebar-tile="primary"] {
+  width: 95px;
+  height: 93px;
+  border-radius: 12px;
+}
+[data-interface-mode="raw"] [data-sidebar-bot-row] {
+  border-radius: 11px;
+}
+[data-interface-mode="raw"] [data-chathead-chevron] {
+  display: none;
+}
+[data-interface-mode="raw"] [data-raw-activity] > button,
+[data-interface-mode="raw"] [data-raw-activity] > div > button,
+[data-interface-mode="raw"] details[data-raw-activity] > summary {
+  min-height: 28px;
+  border-color: transparent;
+  background: transparent;
+  padding-inline: 4px;
+  font-size: 12px;
+  font-weight: 400;
+}
+[data-interface-mode="raw"] [data-raw-activity-status] {
+  display: inline;
+}
+[data-raw-chat] [data-chat-transcript-scroll] {
+  padding-inline: 16px;
+}
+[data-raw-chat] .chat-column-dock {
+  max-width: calc(var(--chat-column-max) + 2rem);
+}
+[data-raw-composer] {
+  padding-inline: 16px;
+}
+[data-raw-composer] [data-tour="composer"] {
+  border-radius: 23px;
+  border: 1px solid #d7d7d7;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.07);
+}
+[data-chat-bubble="simple"][data-raw-bubble] {
+  font-size: 15px;
+  line-height: 22px;
+  border-radius: 18px;
+}
+[data-chat-bubble="simple"][data-raw-bubble]:not(.user-bubble-colored):not(.bg-bubble-user) {
+  background-color: #f0f0f0;
+}
+@media (min-width: 768px) {
+  [data-interface-mode="raw"] [data-sidebar-top-row] {
+    height: 48px;
+    padding-top: 12px;
+  }
+}
 [data-chat-bubble="simple"].user-bubble-colored {
   box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.16);
 }

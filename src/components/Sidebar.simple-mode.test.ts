@@ -8,6 +8,7 @@ const fixture = vi.hoisted(() => ({ advanced: false, showThreads: true, admin: t
 vi.mock("@/lib/interface-mode", async (original) => ({
   ...await original<typeof import("@/lib/interface-mode")>(),
   useAdvancedMode: () => fixture.advanced,
+  useInterfaceMode: () => fixture.advanced ? "advanced" : "simple",
 }));
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => fixture.showThreads }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.admin }));
