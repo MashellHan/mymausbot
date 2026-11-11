@@ -168,7 +168,17 @@ describe("canonical source-qualified contributions", () => {
     const github = value.github.sources[0]!, ado = value.ado.sources[0]!;
     Object.assign(github.coverage, { eligibilityUncertainDays: [date(54)],
       eligibilityUncertainDaysByCategory: { work: [], personal: [date(54)], unclassified: [] } });
+    const repository = github.days[59]!.repositories[0]!;
+    github.days[54]!.knownPrs = 2;
     github.days[54]!.knownCommits = null as never;
+    github.days[54]!.repositories = [
+      { ...repository, id: "github-work", category: "work", knownPrs: 1, knownCommits: 0 },
+      { ...repository, category: "personal", knownPrs: 1, knownCommits: null as never },
+    ];
+    for (const [index, commits] of [[10, 5], [47, 3]] as const) {
+      github.days[index]!.knownCommits = commits;
+      github.days[index]!.repositories = [{ ...repository, knownPrs: 0, knownCommits: commits }];
+    }
     for (const [index, commits] of [[58, 10], [59, 25]] as const) {
       ado.days[index]!.knownCommits = commits;
       ado.days[index]!.repositories[0]!.knownCommits = commits;
@@ -191,6 +201,20 @@ describe("canonical source-qualified contributions", () => {
     delete (github.coverage as typeof github.coverage & { eligibilityUncertainDaysByCategory?: object }).eligibilityUncertainDaysByCategory;
     expect(aggregateContributionSnapshot(parse(value), cutoff + 60_000).windows!["7"].comparison.knownCategories?.work.commits)
       .toBeNull();
+    github.days[54]!.repositories[1]!.knownCommits = 0;
+    expect(() => parse(value)).toThrow("Repository subtotal exceeds account day");
+    github.days[54]!.knownCommits = 1;
+    github.days[54]!.repositories[1]!.knownCommits = 1;
+    github.coverage.eligibilityUncertainDays = [];
+    const repaired = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    for (const period of ["7", "30"] as const) {
+      const window = repaired.windows![period];
+      expect(window.comparison.commits).toBeNull();
+      expect(typeof window.comparison.known?.commits).toBe("number");
+      expect(typeof window.comparison.knownCategories?.personal.commits).toBe("number");
+      expect(typeof window.repositories.rows.find((row) => row.category === "personal")?.knownComparison?.commits)
+        .toBe("number");
+    }
   });
 
   it("rejects malformed or out-of-window eligibility days", () => {

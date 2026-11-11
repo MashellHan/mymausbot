@@ -157,6 +157,7 @@ def envelope(raw, provider, legacy=False):
                 raise ValueError("Invalid contribution repositories")
             repository_rows += len(repos)
             seen_repos, subtotals = set(), {"knownPrs": 0, "knownCommits": 0}
+            unknown_repos = {"knownPrs": False, "knownCommits": False}
             for repo in repos:
                 repo = obj(repo)
                 repo_id = word(repo.get("id"))
@@ -168,11 +169,15 @@ def envelope(raw, provider, legacy=False):
                 if repo["status"] == "ready" and (repo_counts["prs"] is None or repo_counts["commits"] is None):
                     raise ValueError("Ready repository lacks exact counts")
                 for key in subtotals:
-                    subtotals[key] += repo_counts[key] or 0
+                    if repo_counts[key] is None:
+                        unknown_repos[key] = True
+                    else:
+                        subtotals[key] += repo_counts[key]
                 if "provenance" in repo:
                     obj(repo["provenance"])
             for key, subtotal in subtotals.items():
-                if subtotal and (totals[key] is None or subtotal > totals[key]):
+                if (totals[key] is None and repos and not unknown_repos[key]
+                        or totals[key] is not None and subtotal > totals[key]):
                     raise ValueError("Repository subtotal exceeds source day")
         if "provenance" in source:
             obj(source["provenance"])

@@ -335,9 +335,8 @@ class ProfileBeijingTests(unittest.TestCase):
             second = capture(first)
             partial = second["state"]["sources"][source_id]["progress"][repo_id]
             self.assertEqual(partial["pages"], 2)
-            self.assertEqual(partial["eligibilityUncertainDays"], ["2026-09-15"])
-            self.assertEqual([item["oid"] for item in partial["items"]], [HEAD])
-            self.assertIn("history-commit-eligibility-uncertain", second["sources"][0]["coverage"]["reasons"])
+            self.assertEqual(partial["eligibilityUncertainDays"], [])
+            self.assertEqual([item["oid"] for item in partial["items"]], [HEAD, imported])
             third = capture(second)
             self.assertEqual(third["state"]["sources"][source_id]["cache"][repo_id]["head"], HEAD)
             fourth = capture(third)
@@ -348,22 +347,73 @@ class ProfileBeijingTests(unittest.TestCase):
         source = settled["sources"][0]
         self.assertEqual(source["status"], "partial")
         self.assertTrue(source["coverage"]["paginationComplete"])
-        self.assertEqual(source["coverage"]["eligibilityUncertainDays"], ["2026-09-15"])
-        self.assertEqual(source["coverage"]["eligibilityUncertainDaysByCategory"],
-                         {"work": [], "personal": ["2026-09-15"], "unclassified": []})
-        self.assertIn("history-commit-eligibility-uncertain", source["coverage"]["reasons"])
-        self.assertEqual(sum(day["knownCommits"] or 0 for day in source["days"]), 3)
-        self.assertIsNone(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"])
+        self.assertEqual(source["coverage"]["eligibilityUncertainDays"], [])
+        self.assertNotIn("eligibilityUncertainDaysByCategory", source["coverage"])
+        self.assertEqual(sum(day["knownCommits"] or 0 for day in source["days"]), 4)
+        self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"], 1)
         self.assertTrue(all(day["commits"] is None for day in source["days"]))
         proof = settled["state"]["sources"][source_id]["cache"][repo_id]
         self.assertEqual(proof["head"], advanced)
-        self.assertEqual(proof["eligibilityUncertainDays"], ["2026-09-15"])
+        self.assertEqual(proof["eligibilityUncertainDays"], [])
         self.assertIn(imported, proof["checked"])
-        self.assertNotIn(imported, [item["oid"] for item in proof["items"]])
+        self.assertIn(imported, [item["oid"] for item in proof["items"]])
         self.assertEqual(repeated["sources"][0]["days"], source["days"])
-        self.assertEqual(repeated["sources"][0]["coverage"]["eligibilityUncertainDaysByCategory"],
-                         source["coverage"]["eligibilityUncertainDaysByCategory"])
         self.assertEqual(sum("history(first:" in arg for call in api.calls for arg in call), history_calls)
+
+    def test_legacy_uncertain_cache_repairs_only_affected_history_with_persisted_progress(self):
+        api = Api()
+        api.public_created_at = "2026-10-01T00:00:00Z"
+        imported = "9" * 40
+        api.public_history = {HEAD: [(HEAD, "2026-11-09T08:00:00Z", 1),
+                                     (imported, "2026-09-15T08:00:00Z", 1),
+                                     ("2" * 40, "2026-11-08T08:00:00Z", 0)]}
+        source_id = profile.source_id(profile.profile_config(ACCOUNT))
+        repo_id = profile.repository_info(PUBLIC, ACCOUNT, CONFIG, lambda remote, setting: "personal")["id"]
+        previous = collect(api)
+        state = previous["state"]["sources"][source_id]
+        old_proof = state["cache"][repo_id]
+        old_proof["items"] = [item for item in old_proof["items"] if item["oid"] != imported]
+        old_proof["eligibilityUncertainDays"] = ["2026-09-15"]
+        other_id = next(key for key in state["cache"] if key != repo_id)
+        other_proof = copy.deepcopy(state["cache"][other_id])
+        api.public_page_size = 1
+        with patch.object(profile, "HISTORY_PAGES_PER_REPOSITORY", 1):
+            first = collect(api, previous=previous)
+            first_state = first["state"]["sources"][source_id]
+            self.assertEqual(first_state["progress"][repo_id]["pages"], 1)
+            self.assertTrue(first_state["progress"][repo_id]["eligibilityRepair"])
+            self.assertEqual(first_state["cache"][repo_id], old_proof)
+            self.assertEqual(first["sources"][0]["coverage"]["eligibilityUncertainDays"], ["2026-09-15"])
+            self.assertFalse(first["sources"][0]["coverage"]["paginationComplete"])
+            second = collect(api, previous=first)
+            self.assertEqual(second["state"]["sources"][source_id]["progress"][repo_id]["pages"], 2)
+            self.assertEqual(second["sources"][0]["coverage"]["eligibilityUncertainDays"], ["2026-09-15"])
+            settled = collect(api, previous=second)
+            history_calls = sum("history(first:" in arg for call in api.calls for arg in call)
+            repeated = collect(api, previous=settled)
+        source = settled["sources"][0]
+        repaired = settled["state"]["sources"][source_id]
+        self.assertNotIn(repo_id, repaired["progress"])
+        self.assertEqual(repaired["cache"][other_id], other_proof)
+        self.assertEqual(repaired["cache"][repo_id]["eligibilityUncertainDays"], [])
+        self.assertIn(imported, [item["oid"] for item in repaired["cache"][repo_id]["items"]])
+        self.assertEqual(source["coverage"]["eligibilityUncertainDays"], [])
+        self.assertTrue(source["coverage"]["paginationComplete"])
+        self.assertFalse(source["coverage"]["visibilityComplete"])
+        self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"], 1)
+        self.assertEqual(sum("history(first:" in arg for call in api.calls for arg in call), history_calls)
+        self.assertEqual(repeated["sources"][0]["days"], source["days"])
+        legacy_progress = copy.deepcopy(first)
+        old_state = legacy_progress["state"]["sources"][source_id]
+        old_state["cache"].pop(repo_id)
+        old_state["progress"][repo_id].pop("eligibilityRepair")
+        old_state["progress"][repo_id]["pages"] = 2
+        with patch.object(profile, "HISTORY_PAGES_PER_REPOSITORY", 1):
+            restarted = collect(api, previous=legacy_progress)
+        renewed = restarted["state"]["sources"][source_id]["progress"][repo_id]
+        self.assertTrue(renewed["eligibilityRepair"])
+        self.assertEqual(renewed["pages"], 1)
+        self.assertEqual(restarted["sources"][0]["coverage"]["eligibilityUncertainDays"], ["2026-09-15"])
 
     def test_precreation_day_keeps_unaffected_category_zero(self):
         day = "2026-09-15"
@@ -400,14 +450,13 @@ class ProfileBeijingTests(unittest.TestCase):
         source = current["sources"][0]
         proof = current["state"]["sources"][source_id]["cache"][repo_id]
         self.assertEqual(proof["head"], advanced)
-        self.assertEqual(proof["eligibilityUncertainDays"], ["2026-09-15"])
-        self.assertEqual(sum(day["knownCommits"] or 0 for day in source["days"]), 4)
+        self.assertEqual(proof["eligibilityUncertainDays"], [])
+        self.assertEqual(sum(day["knownCommits"] or 0 for day in source["days"]), 5)
         self.assertIn(imported, proof["checked"])
-        self.assertNotIn(imported, [item["oid"] for item in proof["items"]])
+        self.assertIn(imported, [item["oid"] for item in proof["items"]])
         self.assertIn(newer, [item["oid"] for item in proof["items"]])
-        self.assertIn("history-commit-eligibility-uncertain", source["coverage"]["reasons"])
         self.assertTrue(source["coverage"]["paginationComplete"])
-        self.assertIsNone(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"])
+        self.assertEqual(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"], 1)
 
     def test_diverged_head_invalidates_old_reachability_before_new_full_proof(self):
         api = Api()

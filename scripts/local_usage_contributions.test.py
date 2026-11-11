@@ -129,6 +129,26 @@ def refresh(config, **options):
             self.wrapper.refresh_primary(self.collector, self.config, self.root, file=self.target, whole_cycle_seconds=10)
         self.assertEqual(self.target.read_text(), '{"version":1}')
 
+    def test_partial_account_day_accepts_known_category_with_unknown_repository(self):
+        with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
+            value = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                 file=self.target, whole_cycle_seconds=10)
+        source = value["github"]["sources"][0]
+        source["status"] = "partial"
+        source["coverage"]["visibilityComplete"] = False
+        row = source["days"][-1]
+        row["status"], row["commits"], row["knownCommits"] = "partial", None, None
+        known = row["repositories"][0]
+        known["status"], known["category"], known["commits"], known["knownCommits"] = "partial", "work", None, 0
+        row["repositories"].append({**known, "id": "unknown-repo", "category": "personal",
+                                    "prs": 0, "knownPrs": 0, "knownCommits": None})
+        contributions.validate_bindings(value, self.config)
+        known["knownCommits"] = 5
+        contributions.validate_bindings(value, self.config)
+        row["repositories"][1]["knownCommits"] = 0
+        with self.assertRaisesRegex(ValueError, "Repository subtotal exceeds source day"):
+            contributions.validate_bindings(value, self.config)
+
     def test_account_host_case_alias_cannot_double_a_configured_profile(self):
         with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
             self.wrapper.refresh_primary(self.collector, self.config, self.root, file=self.target, whole_cycle_seconds=10)

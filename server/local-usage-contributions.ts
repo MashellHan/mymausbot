@@ -137,8 +137,11 @@ function sourceDay(value: unknown, first: string, last: string, capturedAt: numb
   const repositories = raw.repositories.map(repository);
   if (new Set(repositories.map((row) => row.id)).size !== repositories.length) throw new Error("Duplicate repository day");
   for (const metric of ["knownPrs", "knownCommits"] as const) {
-    const observed = known(repositories.map((row) => row[metric]));
-    if (observed !== null && (totals[metric] === null || observed > totals[metric])) throw new Error("Repository subtotal exceeds account day");
+    const values = repositories.map((row) => row[metric]);
+    const observed = known(values);
+    if (observed !== null && (totals[metric] === null ? values.every((value) => value !== null) : observed > totals[metric])) {
+      throw new Error("Repository subtotal exceeds account day");
+    }
   }
   return { day: date, capturedAt: raw.capturedAt as string, status: state, ...totals, repositories };
 }
