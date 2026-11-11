@@ -24,8 +24,13 @@ Use the current private job and its existing guarded switch/rollback workflow.
 Before compilation, run `pnpm check:delivery request <job>/rebuild-request.json`.
 This read-only preflight requires the source checkout/commit/tree/ref, lockfile
 hash, App version, distinct package/normal/official App paths, Downloads purpose
-and environment identity. It checks clean source and the pinned ref/lock against
-the request. Fetch the source ref before binding it. Supply the actual current
+and environment identity. It checks clean source, the pinned ref/lock and the
+`package.json` pnpm version as resolved by a child process on the current PATH.
+Run preflight with the same environment used by the build and packaging children.
+When pnpm is supplied by `npm exec`, keep subsequent commands inside that pinned
+invocation's PATH; an absolute Node invocation alone does not make pnpm available
+to electron-builder's children. Missing or mismatched pnpm fails before compilation
+without downloading a replacement. Fetch the source ref before binding it. Supply the actual current
 request; do not copy a previous acceptance receipt as a build request.
 
 Check the selected scheduled interpreter, arguments and environment before

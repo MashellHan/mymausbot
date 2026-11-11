@@ -2,13 +2,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { resolveRoutineResultsThread, routineRunDefinition } from "../server/routine-run-definition.ts";
 import type { Routine } from "../server/routines.ts";
-import { assertInventorySame, assertRoutinesSame, validateBuildRequest } from "./check-local-app.mjs";
+import { assertInventorySame, assertRoutinesSame, checkPackageManager, validateBuildRequest } from "./check-local-app.mjs";
 import { assertClosedSqliteCopy } from "./closed-sqlite-snapshot.mjs";
 import { finishOwnedPrivateFixture, inspectPrivateCredentialStorage } from "./private-credential-storage.mjs";
 
@@ -135,6 +135,13 @@ describe("local App preservation", () => {
 
 it("fails delivery preflight before a build for incomplete, dirty or mismatched source", () => {
   const directory = mkdtempSync(join(tmpdir(), "mausbot-delivery-"));
+  const tools = mkdtempSync(join(tmpdir(), "mausbot-build-tools-"));
+  const env = { ...process.env, PATH: `${tools}${delimiter}${process.env.PATH ?? ""}` };
+  const pnpm = join(tools, process.platform === "win32" ? "pnpm.cmd" : "pnpm");
+  const version = (value: string) => {
+    writeFileSync(pnpm, process.platform === "win32" ? `@echo off\r\necho ${value}\r\n` : `#!/bin/sh\nprintf '%s\\n' '${value}'\n`);
+    chmodSync(pnpm, 0o755);
+  };
   const requestPath = join(tmpdir(), `mausbot-request-${process.pid}-${Date.now()}.json`);
   const git = (...args: string[]) => execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
   try {
@@ -142,6 +149,8 @@ it("fails delivery preflight before a build for incomplete, dirty or mismatched 
     git("config", "commit.gpgsign", "false");
     const lock = "synthetic lock\n";
     writeFileSync(join(directory, "pnpm-lock.yaml"), lock);
+    writeFileSync(join(directory, "package.json"), JSON.stringify({ packageManager: "pnpm@10.33.0" }));
+    version("10.33.0");
     git("add", "."); git("commit", "-qm", "fixture");
     const request = { sourceCheckout: directory, sourceCommit: git("rev-parse", "HEAD"), sourceTree: git("rev-parse", "HEAD^{tree}"),
       sourceRef: "HEAD", appVersion: "1.0.0", lockfileSha256: createHash("sha256").update(lock).digest("hex"),
@@ -151,16 +160,21 @@ it("fails delivery preflight before a build for incomplete, dirty or mismatched 
     expect(() => validateBuildRequest({ ...request, targetApp: request.officialApp })).toThrow("different paths");
     const invoke = (value: object) => {
       writeFileSync(requestPath, JSON.stringify(value));
-      return spawnSync(process.execPath, [fileURLToPath(new URL("./check-local-app.mjs", import.meta.url)), "request", requestPath], { encoding: "utf8" });
+      return spawnSync(process.execPath, [fileURLToPath(new URL("./check-local-app.mjs", import.meta.url)), "request", requestPath], { encoding: "utf8", env });
     };
     expect(invoke(request).status).toBe(0);
     expect(invoke({ ...request, sourceCommit: "0".repeat(40) }).status).toBe(1);
     expect(invoke({ ...request, lockfileSha256: "0".repeat(64) }).status).toBe(1);
+    version("9.0.0");
+    expect(invoke(request).stderr).toContain("Packaging pnpm version changed");
+    rmSync(pnpm);
+    expect(() => checkPackageManager(directory, { ...env, PATH: tools })).toThrow("Packaging subprocess cannot run pnpm@10.33.0");
+    version("10.33.0");
     writeFileSync(join(directory, "unexpected.txt"), "not committed");
     const dirty = invoke(request);
     expect(dirty.status).toBe(1);
     expect(dirty.stderr).toContain("must be clean");
-  } finally { rmSync(directory, { recursive: true, force: true }); rmSync(requestPath, { force: true }); }
+  } finally { rmSync(directory, { recursive: true, force: true }); rmSync(tools, { recursive: true, force: true }); rmSync(requestPath, { force: true }); }
 });
 
 it("keeps a real nonempty SQLite WAL in a stable closed copy and rejects missing or changed history", () => {

@@ -1,12 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { launchChrome, type ChromeProcess } from "../../server/browser/chrome/launch.ts";
 import { CdpBrowser } from "../../server/browser/cdp/browser.ts";
 import { removeTempDir, waitForExit } from "../../server/testing/cleanup.ts";
-import { ensureUiBrowser, installedChrome } from "./control-omb-ui.ts";
+import { fixtureChrome } from "./fixture-chrome.ts";
 
 const enabled = process.env.OMB_DASHBOARD_UI === "1";
 
@@ -32,10 +32,7 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
   let chrome: ChromeProcess | undefined;
   let browser: CdpBrowser | undefined;
   try {
-    const installed = [process.env.OMB_CDP_CHROME, installedChrome(), "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/usr/bin/google-chrome"]
-      .find((file): file is string => Boolean(file && existsSync(file)));
-    const executablePath = installed ?? (await ensureUiBrowser()).chrome;
-    if (!executablePath) throw new Error("Dashboard assertions require Chrome");
+    const executablePath = await fixtureChrome();
     chrome = await launchChrome({ executablePath, userDataDir: join(directory, "profile"), mode: "headless", host: "desktop", sandbox: process.env.OMB_BROWSER_SANDBOX !== "0" });
     browser = await CdpBrowser.connect(chrome.transport, { identity: null, viewport: { width: 1600, height: 900 } });
     const page = await browser.waitForPage();
