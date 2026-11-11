@@ -69,7 +69,7 @@ describe("canonical source-qualified contributions", () => {
       prs: 3, commits: 5, comparison: { prs: "new", commits: "new" } });
     expect(result.windows?.["7"]).toMatchObject({ prs: 3, commits: 5 });
     expect(result.windows?.["30"]).toMatchObject({ prs: 3, commits: 5 });
-    expect(result.history.at(-1)).toMatchObject({ day: "2026-11-03", prs: 3, commits: 5 });
+    expect(result.history?.at(-1)).toMatchObject({ day: "2026-11-03", prs: 3, commits: 5 });
   });
 
   it("retains independent source cutoffs during a bounded ADO continuation", () => {
