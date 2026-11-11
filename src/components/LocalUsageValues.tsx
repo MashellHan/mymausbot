@@ -40,5 +40,5 @@ export function UsageCount({ value, known }: { value: number | null; known: numb
   const source = useContext(UsageSourceContext);
   const partial = value === null && known !== null;
   const description = partial ? t(source === "primary" ? "computer.usage.primaryKnownCountHint" : source === "profile" ? "computer.usage.syncedCountHint" : "computer.usage.observedCountHint") : undefined;
-  return <span data-usage-provisional={partial || undefined} title={description} aria-description={description}>{partial && "≥"}{countText(value, known)}</span>;
+  return <span data-usage-provisional={partial || undefined} title={description} aria-description={description}>{countText(value, known)}</span>;
 }
