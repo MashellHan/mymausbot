@@ -51,6 +51,7 @@ class Api:
         self.fail_private_error = None
         self.fail_private_phase = None
         self.public_head = HEAD
+        self.public_created_at = PUBLIC["createdAt"]
         self.public_history = None
         self.public_page_size = 100
         self.commit_details = {}
@@ -84,6 +85,7 @@ class Api:
                 "totalCommitContributions": 2, "totalRepositoriesWithContributedCommits": 1,
                 "totalPullRequestContributions": 2,
                 "commitContributionsByRepository": [{"repository": {**PUBLIC,
+                    "createdAt": self.public_created_at,
                     "defaultBranchRef": {"name": "main", "target": {"oid": self.public_head}}}, "contributions": {
                     "totalCount": 2, "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [{"occurredAt": self.profile_commit_at, "commitCount": 2}]}}],
@@ -97,7 +99,7 @@ class Api:
             raw = PUBLIC if values.get("name") == "public-repo" else PRIVATE
             data = {"viewer": viewer, "repository": {**raw, "nameWithOwner": self.repo_name if raw is PRIVATE else PUBLIC["nameWithOwner"],
                 "owner": {"id": self.owner_id, "login": self.owner_login},
-                "createdAt": "2026-09-10T00:00:00Z",
+                "createdAt": self.public_created_at if raw is PUBLIC else PRIVATE["createdAt"],
                 "defaultBranchRef": {"name": "main", "target": {"oid": head}}}}
         elif "pullRequests(first:" in document:
             data = {"viewer": viewer, "repository": {"id": PRIVATE["id"],
@@ -309,6 +311,87 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assertEqual(sum("history(first:" in arg and "head=" + advanced in call
                              for call in api.calls for arg in call), 0)
         self.assertEqual(sum("parents(first: 100)" in arg for call in api.calls for arg in call), 2)
+
+    def test_precreation_history_page_keeps_newer_events_and_progress_through_head_advance(self):
+        api = Api()
+        api.public_created_at = "2026-10-01T00:00:00Z"
+        api.public_page_size = 1
+        imported, newer, advanced = "1" * 40, "2" * 40, "b" * 40
+        api.public_history = {HEAD: [(HEAD, "2026-11-09T08:00:00Z", 1),
+                                     (imported, "2026-09-15T08:00:00Z", 1),
+                                     (newer, "2026-11-08T08:00:00Z", 0)]}
+        api.commit_details = {advanced: ("2026-11-09T09:00:00Z", [HEAD])}
+        account = {**ACCOUNT, "privateRepositories": []}
+        repo_id = profile.repository_info(PUBLIC, account, CONFIG, lambda remote, config: "personal")["id"]
+        source_id = profile.source_id(profile.profile_config(account))
+
+        def capture(previous=None):
+            return collect(api, account, previous=previous)
+
+        with patch.object(profile, "HISTORY_PAGES_PER_REPOSITORY", 1):
+            first = capture()
+            self.assertEqual(first["state"]["sources"][source_id]["progress"][repo_id]["pages"], 1)
+            api.public_head = advanced
+            second = capture(first)
+            partial = second["state"]["sources"][source_id]["progress"][repo_id]
+            self.assertEqual(partial["pages"], 2)
+            self.assertEqual(partial["eligibilityUncertainDays"], ["2026-09-15"])
+            self.assertEqual([item["oid"] for item in partial["items"]], [HEAD])
+            self.assertIn("history-commit-eligibility-uncertain", second["sources"][0]["coverage"]["reasons"])
+            third = capture(second)
+            self.assertEqual(third["state"]["sources"][source_id]["cache"][repo_id]["head"], HEAD)
+            fourth = capture(third)
+            settled = capture(fourth)
+            history_calls = sum("history(first:" in arg for call in api.calls for arg in call)
+            repeated = capture(settled)
+
+        source = settled["sources"][0]
+        self.assertEqual(source["status"], "partial")
+        self.assertTrue(source["coverage"]["paginationComplete"])
+        self.assertEqual(source["coverage"]["eligibilityUncertainDays"], ["2026-09-15"])
+        self.assertIn("history-commit-eligibility-uncertain", source["coverage"]["reasons"])
+        self.assertEqual(sum(day["knownCommits"] or 0 for day in source["days"]), 3)
+        self.assertIsNone(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"])
+        self.assertTrue(all(day["commits"] is None for day in source["days"]))
+        proof = settled["state"]["sources"][source_id]["cache"][repo_id]
+        self.assertEqual(proof["head"], advanced)
+        self.assertEqual(proof["eligibilityUncertainDays"], ["2026-09-15"])
+        self.assertIn(imported, proof["checked"])
+        self.assertNotIn(imported, [item["oid"] for item in proof["items"]])
+        self.assertEqual(repeated["sources"][0]["days"], source["days"])
+        self.assertEqual(sum("history(first:" in arg for call in api.calls for arg in call), history_calls)
+
+    def test_precreation_delta_commit_does_not_hide_later_newer_parent(self):
+        api = Api()
+        api.public_created_at = "2026-10-01T00:00:00Z"
+        base_commit, imported, newer, advanced = "1" * 40, "2" * 40, "3" * 40, "b" * 40
+        api.public_history = {HEAD: [(HEAD, "2026-11-09T08:00:00Z", 1),
+                                     (base_commit, "2026-11-07T08:00:00Z", 0)]}
+        api.commit_details = {advanced: ("2026-11-09T09:00:00Z", [imported]),
+                              imported: ("2026-09-15T08:00:00Z", [newer]),
+                              newer: ("2026-11-08T08:00:00Z", [HEAD])}
+        account = {**ACCOUNT, "privateRepositories": []}
+        repo_id = profile.repository_info(PUBLIC, account, CONFIG, lambda remote, config: "personal")["id"]
+        source_id = profile.source_id(profile.profile_config(account))
+
+        with patch.object(profile, "HISTORY_PAGES_PER_REPOSITORY", 1):
+            base = collect(api, account)
+            api.public_head = advanced
+            current = base
+            for _ in range(4):
+                current = collect(api, account, previous=current)
+
+        source = current["sources"][0]
+        proof = current["state"]["sources"][source_id]["cache"][repo_id]
+        self.assertEqual(proof["head"], advanced)
+        self.assertEqual(proof["eligibilityUncertainDays"], ["2026-09-15"])
+        self.assertEqual(sum(day["knownCommits"] or 0 for day in source["days"]), 4)
+        self.assertIn(imported, proof["checked"])
+        self.assertNotIn(imported, [item["oid"] for item in proof["items"]])
+        self.assertIn(newer, [item["oid"] for item in proof["items"]])
+        self.assertIn("history-commit-eligibility-uncertain", source["coverage"]["reasons"])
+        self.assertTrue(source["coverage"]["paginationComplete"])
+        self.assertIsNone(next(day for day in source["days"] if day["day"] == "2026-09-15")["knownCommits"])
 
     def test_diverged_head_invalidates_old_reachability_before_new_full_proof(self):
         api = Api()

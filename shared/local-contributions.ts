@@ -30,7 +30,9 @@ export interface LocalContributionSource {
   account: { host: string; login: string; stableId: string };
   scope?: { organization: string; project: string };
   status: LocalUsageStatus;
-  coverage: { identityVerified: boolean; paginationComplete: boolean; visibilityComplete: boolean; reasons: string[] };
+  coverage: { identityVerified: boolean; paginationComplete: boolean; visibilityComplete: boolean;
+    /** Beijing author days with reachable commits whose pre-creation eligibility is unproved. */
+    eligibilityUncertainDays?: string[]; reasons: string[] };
   days: LocalContributionDay[];
   provenance?: object;
 }
