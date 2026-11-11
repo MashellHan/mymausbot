@@ -32,7 +32,7 @@ export function UsageChange({ value, startDay, endDay, metric, daily = false, pe
     + ` ${usageMetricHint(metric)}`
     + `${value === null ? ` ${unavailableHint ?? t("computer.usage.changeUnavailableHint")}` : ""}`;
   return <span data-usage-change data-usage-provisional={known || undefined} className={className} title={description}>
-    <span aria-hidden="true">{shown}</span><span className="sr-only">{description}</span>
+    <span aria-hidden="true">{period && <><span className="whitespace-nowrap">{period}</span>{" "}</>}<span className="whitespace-nowrap">{shown}</span></span><span className="sr-only">{description}</span>
   </span>;
 }
 

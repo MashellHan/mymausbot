@@ -139,6 +139,43 @@ describe("canonical source-qualified contributions", () => {
     }
   });
 
+  it("compares clean periods while keeping an older imported author day uncertain", () => {
+    const value = partialAccountedSnapshot();
+    const github = value.github.sources[0]!;
+    (github.coverage as typeof github.coverage & { eligibilityUncertainDays: string[] }).eligibilityUncertainDays = [date(0)];
+    const importedDay = github.days[0]!;
+    importedDay.knownCommits = 1;
+    importedDay.repositories = [{ ...github.days[59]!.repositories[0]!, knownPrs: 0, knownCommits: 1 }];
+
+    const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    expect(result.windows!["1"]).toMatchObject({ prs: null, commits: null, knownPrs: 3, knownCommits: 53 });
+    expect(result.windows!["1"].comparison.known?.prs).toBe(-70);
+    expect(result.windows!["1"].comparison.known?.commits).toBeCloseTo((53 - 76) / 76 * 100);
+    expect(result.windows!["7"].comparison.known).toEqual({ prs: "new", commits: "new" });
+    expect(result.windows!["30"].comparison.known?.prs).toBe("new");
+    expect(result.windows!["30"].comparison.known?.commits).toBeNull();
+    expect(result.accounts[0]!.coverage.eligibilityUncertainDays).toEqual([date(0)]);
+    expect(result.accounts[0]!.windows["60"].knownCommits).toBe(130);
+
+    github.coverage.paginationComplete = false;
+    const incomplete = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    expect(incomplete.windows!["1"].comparison.known).toEqual({ prs: null, commits: null });
+    expect(incomplete.windows!["7"].comparison.known).toEqual({ prs: null, commits: null });
+  });
+
+  it("rejects malformed or out-of-window eligibility days", () => {
+    const value = partialAccountedSnapshot();
+    const coverage = value.github.sources[0]!.coverage as typeof value.github.sources[0]["coverage"] & { eligibilityUncertainDays: string[] };
+    coverage.eligibilityUncertainDays = ["2026-02-30"];
+    expect(() => parse(value)).toThrow("Invalid contribution day");
+    coverage.eligibilityUncertainDays = ["2026-09-11"];
+    expect(() => parse(value)).toThrow("Invalid eligibility days");
+    coverage.eligibilityUncertainDays = [date(0)];
+    value.github.sources[0]!.status = "ready";
+    value.github.sources[0]!.coverage.visibilityComplete = true;
+    expect(() => parse(value)).toThrow("Ready source has uncertain eligibility");
+  });
+
   it("compares accounted partial categories and proves quiet ready source-days as known zero", () => {
     for (const period of ["1", "7", "30"] as const) {
       const value = partialAccountedSnapshot();

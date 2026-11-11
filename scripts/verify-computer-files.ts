@@ -45,16 +45,22 @@ try {
     extraRoutes: [{ path: "/__computer-files-fixture", handler: async (_req, res) => {
       const current = await api("GET", "/api/bots");
       const shown = current.bots.find((item: { id: string }) => item.id === bot.id);
-      // The sealed launcher deliberately has no Git on PATH. Supply only
-      // the renderer's digest rows; every download still needs the real
-      // persisted reply and is checked by the unmodified server endpoint.
-      const digest = { id: "fixture-digest", role: "bot", kind: "digest", at: Date.now(),
-        parentId: shown.activeLeafId ?? shown.messages.at(-1)?.id,
-        digest: { files: { added: Object.keys(files), changed: [], deleted: [] } } };
+      const now = Date.now();
+      const attachment = { id: "fixture-routine-attachment", role: "bot", kind: "text", at: now,
+        text: "A report made in a separate task was shared here.",
+        attachments: [{ kind: "file", path: "/attachments/fixture-routine-report.md", name: "routine-report.md",
+          source: join(fixture.info.dataDir, "routine-workspace", "routine-report.md") }] };
+      const olderPages = [
+        [{ id: "fixture-sparse", role: "bot", kind: "text", at: now - 2 * 86_400_000, text: "An older turn without files." }],
+        [{ id: "fixture-older-file", role: "bot", kind: "text", at: now - 8 * 86_400_000,
+          text: `[older note](${pathToFileURL(join(workspace, "archive.md")).href})` }],
+      ];
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ ...shown, messages: [...shown.messages, digest], activeLeafId: digest.id }));
+      res.end(JSON.stringify({ bot: { ...shown, messages: [...shown.messages.filter((message: { kind: string }) => message.kind !== "digest"), attachment],
+        activeLeafId: undefined, hasMore: true }, olderPages }));
     } }],
   });
-  console.log(JSON.stringify({ ...fixture.info, previewUrl: ui.previewUrl, botId: bot.id, taskId: sent.taskId }));
+  console.log(JSON.stringify({ ...fixture.info, previewUrl: ui.previewUrl, botId: bot.id, taskId: sent.taskId,
+    scenario: "No-digest local links and routine attachment; first older page sparse, second older page has a dated link" }));
   await parkUntilSignal();
 } finally { await ui?.close(); await fixture.close(); }

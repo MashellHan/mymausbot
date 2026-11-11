@@ -2877,7 +2877,7 @@ describe("restoring the open conversation", () => {
       FixtureEventSource.opened.length = 0;
     });
 
-    const boot = async (seed: Record<string, string> = {}, storage?: { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void }) => {
+    const boot = async (seed: Record<string, string> = {}, storage?: { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void }, bots: Bot[] = [first, second]) => {
       const stored = new Map<string, string>(Object.entries(seed));
       const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body)));
       const answers: Record<string, unknown> = {
@@ -2892,7 +2892,7 @@ describe("restoring the open conversation", () => {
       });
       vi.stubGlobal("EventSource", FixtureEventSource);
       vi.stubGlobal("fetch", (path: string) =>
-        path.startsWith("/api/bots?") ? json({ bots: [first, second], groups: [room] }) : json(answers[path.replace(/\?since=[^&]*$/, "")] ?? {}),
+        path.startsWith("/api/bots?") ? json({ bots, groups: [room] }) : json(answers[path.replace(/\?since=[^&]*$/, "")] ?? {}),
       );
 
       container = document.createElement("div");
@@ -2960,6 +2960,55 @@ describe("restoring the open conversation", () => {
       await settle();
       expect(seen.selectedId).toBe("bot-2");
       expect(stored.get(LAST_CONVERSATION_KEY)).toBe("bot-2");
+    });
+
+    it("does not report an older-page failure after returning to the same branch", async () => {
+      const message = { id: "m1", at: 1, role: "user", kind: "text", text: "start" } as Message;
+      const { stream } = await boot({}, undefined, [{ ...first, messages: [message], hasMore: true, activeLeafId: "m1" }, second]);
+      stream.send(hello());
+      await settle();
+      let rejectPage!: (error: Error) => void;
+      vi.stubGlobal("fetch", (path: string) => new Promise<Response>((_resolve, reject) => {
+        expect(path).toContain("/api/threads/bot-1-thread/messages?");
+        rejectPage = reject;
+      }));
+      const onError = vi.fn();
+      flushSync(() => dispatch({ type: "loadOlderMessages", threadId: "bot-1-thread", onError }));
+      flushSync(() => dispatch({ type: "threadActive", threadId: "bot-1-thread", activeLeafId: "m2" }));
+      flushSync(() => dispatch({ type: "threadActive", threadId: "bot-1-thread", activeLeafId: "m1" }));
+      rejectPage(new Error("stale A failure"));
+      await settle();
+      expect(onError).not.toHaveBeenCalled();
+      expect(seen.error).toBeNull();
+      expect(seen.loadingOlder).toEqual({});
+    });
+
+    it("keeps the current conversation's older-page error when another page fails late", async () => {
+      const message = { id: "m1", at: 1, role: "user", kind: "text", text: "start" } as Message;
+      const { stream } = await boot({}, undefined, [
+        { ...first, messages: [message], hasMore: true },
+        { ...second, messages: [message], hasMore: true },
+      ]);
+      stream.send(hello());
+      await settle();
+      const failures = new Map<string, (error: Error) => void>();
+      vi.stubGlobal("fetch", (path: string) => new Promise<Response>((_resolve, reject) => {
+        failures.set(path.includes("bot-1-thread") ? "A" : "B", reject);
+      }));
+      const oldError = vi.fn();
+      const currentError = vi.fn();
+      flushSync(() => dispatch({ type: "loadOlderMessages", threadId: "bot-1-thread", onError: oldError }));
+      flushSync(() => dispatch({ type: "select", id: "bot-2" }));
+      flushSync(() => dispatch({ type: "loadOlderMessages", threadId: "bot-2-thread", onError: currentError }));
+      failures.get("B")!(new Error("current B failure"));
+      await settle();
+      expect(currentError).toHaveBeenCalledOnce();
+      expect(seen.error).toBe("current B failure");
+      failures.get("A")!(new Error("late A failure"));
+      await settle();
+      expect(oldError).not.toHaveBeenCalled();
+      expect(seen.error).toBe("current B failure");
+      expect(seen.loadingOlder).toEqual({});
     });
 
     it("a pressed Steer that stays queued for its pictures says why, and a plain queued answer stays quiet", async () => {
