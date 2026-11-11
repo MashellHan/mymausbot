@@ -207,7 +207,18 @@ describe("bot setup and tools in the real renderer", () => {
       const panel = [...document.querySelectorAll('[data-mcp-servers]')].find((node) => node.getClientRects().length > 0);
       const button = [...(panel?.querySelectorAll('button') ?? [])].find((node) => node.textContent.trim() === 'Add MCP server' && !node.disabled);
       if (!panel || !button) return false;
-      const trace = { clicks: 0, editorMounts: 0, editorRemovals: 0 };
+      const trace = { clicks: 0, editorMounts: 0, editorRemovals: 0, documentClicks: [] };
+      const target = (node) => ({
+        tag: node instanceof Element ? node.tagName.toLowerCase() : null,
+        button: node instanceof Element ? node.closest('button')?.textContent?.trim().slice(0, 64) ?? null : null,
+        inPanel: node instanceof Node && panel.contains(node),
+        onAdd: node instanceof Node && button.contains(node),
+      });
+      const centerHit = () => {
+        const bounds = button.getBoundingClientRect();
+        return target(document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2));
+      };
+      const hitBefore = centerHit();
       const hasEditor = (node) => node instanceof Element && (node.matches('[data-mcp-editor]') || node.querySelector('[data-mcp-editor]'));
       const observer = new MutationObserver((records) => {
         for (const record of records) {
@@ -217,12 +228,23 @@ describe("bot setup and tools in the real renderer", () => {
       });
       observer.observe(panel, { childList: true, subtree: true });
       const onClick = () => { trace.clicks = Math.min(2, trace.clicks + 1); };
+      const onDocumentClick = (event) => {
+        if (trace.documentClicks.length < 2) trace.documentClicks.push(target(event.target));
+      };
       button.addEventListener('click', onClick, true);
+      document.addEventListener('click', onDocumentClick, true);
+      let activated = false;
       window.__qa507AddProbe = {
-        snapshot: () => ({ ...trace, panelConnected: panel.isConnected, buttonConnected: button.isConnected,
+        snapshot: () => ({ ...trace, hitBefore, hitNow: centerHit(), panelConnected: panel.isConnected, buttonConnected: button.isConnected,
           samePanel: panel === document.querySelector('[data-mcp-servers]'),
           editorNow: !!panel.querySelector('[data-mcp-editor]') }),
-        restore: () => { observer.disconnect(); button.removeEventListener('click', onClick, true); delete window.__qa507AddProbe; },
+        activate: () => {
+          if (activated || !button.isConnected || button.disabled) return false;
+          activated = true;
+          button.click();
+          return true;
+        },
+        restore: () => { observer.disconnect(); button.removeEventListener('click', onClick, true); document.removeEventListener('click', onDocumentClick, true); delete window.__qa507AddProbe; },
       };
       return true;
     })()`).then((value) => value === true, () => false);
@@ -250,10 +272,20 @@ describe("bot setup and tools in the real renderer", () => {
         })()`).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
         console.error("MCP add failure diagnostic", JSON.stringify({
           addProbeInstalled,
-          click: addClick ? { ok: addClick.ok === true, target: typeof addClick.target === "string" ? addClick.target : null, name: typeof addClick.name === "string" ? addClick.name : null } : null,
+          click: addClick ? { ok: addClick.ok === true, target: typeof addClick.target === "string" ? addClick.target : null,
+            name: typeof addClick.name === "string" ? addClick.name : null,
+            referenceRole: typeof addClick.referenceRole === "string" ? addClick.referenceRole : null } : null,
           clickErrorCode: original instanceof Error ? original.name : "UnknownError", state,
         }));
       } catch {}
+      try {
+        const attempted = await diagnosticEval("window.__qa507AddProbe?.activate() ?? false");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const state = await diagnosticEval("window.__qa507AddProbe?.snapshot() ?? { unavailable: 'not-installed' }");
+        console.error("MCP add direct-click diagnostic", JSON.stringify({ attempted: attempted === true, state }));
+      } catch (error) {
+        console.error("MCP add direct-click diagnostic", JSON.stringify({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
+      }
       throw original;
     } finally {
       await diagnosticEval("window.__qa507AddProbe?.restore(); true").catch(() => {});
