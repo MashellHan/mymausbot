@@ -203,6 +203,29 @@ describe("bot setup and tools in the real renderer", () => {
     if ((await mcpFilter()) !== "true") await click("MCP servers");
     await expect.poll(mcpFilter, { timeout: 10_000 }).toBe("true");
     await expect.poll(() => evaluate("[...document.querySelectorAll('[data-mcp-servers] button')].some(b => b.textContent.trim() === 'Add MCP server' && !b.disabled)"), { timeout: 10_000 }).toBe(true);
+    const addProbeInstalled = await diagnosticEval(`(() => {
+      const panel = [...document.querySelectorAll('[data-mcp-servers]')].find((node) => node.getClientRects().length > 0);
+      const button = [...(panel?.querySelectorAll('button') ?? [])].find((node) => node.textContent.trim() === 'Add MCP server' && !node.disabled);
+      if (!panel || !button) return false;
+      const trace = { clicks: 0, editorMounts: 0, editorRemovals: 0 };
+      const hasEditor = (node) => node instanceof Element && (node.matches('[data-mcp-editor]') || node.querySelector('[data-mcp-editor]'));
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) if (hasEditor(node)) trace.editorMounts = Math.min(2, trace.editorMounts + 1);
+          for (const node of record.removedNodes) if (hasEditor(node)) trace.editorRemovals = Math.min(2, trace.editorRemovals + 1);
+        }
+      });
+      observer.observe(panel, { childList: true, subtree: true });
+      const onClick = () => { trace.clicks = Math.min(2, trace.clicks + 1); };
+      button.addEventListener('click', onClick, true);
+      window.__qa507AddProbe = {
+        snapshot: () => ({ ...trace, panelConnected: panel.isConnected, buttonConnected: button.isConnected,
+          samePanel: panel === document.querySelector('[data-mcp-servers]'),
+          editorNow: !!panel.querySelector('[data-mcp-editor]') }),
+        restore: () => { observer.disconnect(); button.removeEventListener('click', onClick, true); delete window.__qa507AddProbe; },
+      };
+      return true;
+    })()`).then((value) => value === true, () => false);
     let addClick: Record<string, unknown> | null = null;
     try {
       addClick = await click("Add MCP server");
@@ -217,6 +240,7 @@ describe("bot setup and tools in the real renderer", () => {
           let selectedBotId = null;
           try { selectedBotId = localStorage.getItem(${JSON.stringify(LAST_CONVERSATION_KEY)}); } catch {}
           return { selectedBotId, filter: document.querySelector('[data-apps-filter=mcp]')?.getAttribute('aria-pressed') ?? null,
+            addEvent: window.__qa507AddProbe?.snapshot() ?? { unavailable: 'not-installed' },
             panels: { total: panels.length, visible: panels.filter(visible).length },
             addButtons: panels.flatMap((panel, index) => [...panel.querySelectorAll('button')]
               .filter((button) => button.textContent.trim() === 'Add MCP server')
@@ -225,11 +249,14 @@ describe("bot setup and tools in the real renderer", () => {
             textarea: { exists: !!textarea, visible: textarea ? visible(textarea) : false } };
         })()`).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
         console.error("MCP add failure diagnostic", JSON.stringify({
+          addProbeInstalled,
           click: addClick ? { ok: addClick.ok === true, target: typeof addClick.target === "string" ? addClick.target : null, name: typeof addClick.name === "string" ? addClick.name : null } : null,
           clickErrorCode: original instanceof Error ? original.name : "UnknownError", state,
         }));
       } catch {}
       throw original;
+    } finally {
+      await diagnosticEval("window.__qa507AddProbe?.restore(); true").catch(() => {});
     }
     const pasted = await ui("snapshot", "--interactive");
     const textarea = Object.entries(pasted.refs as Record<string, { role: string; name: string }>)
