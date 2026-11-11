@@ -225,7 +225,7 @@ async function snapshot(handle: UiHandle, interactive: boolean): Promise<Record<
 const TARGET_WAIT_MS = 5_000;
 
 /** `--ref @eN` verbatim, or the one element whose accessible name is `--name`. */
-async function resolveTarget(handle: UiHandle, values: Record<string, unknown>, verb: string): Promise<{ target: string; name?: string }> {
+async function resolveTarget(handle: UiHandle, values: Record<string, unknown>, verb: string): Promise<{ target: string; name?: string; role?: string }> {
   const ref = typeof values.ref === "string" ? values.ref.trim() : "";
   const name = typeof values.name === "string" ? values.name : "";
   if (Boolean(ref) === Boolean(name)) throw new ControlOmbError(`ui ${verb} needs exactly one of --ref @eN or --name NAME`);
@@ -240,7 +240,10 @@ async function resolveTarget(handle: UiHandle, values: Record<string, unknown>, 
   for (;;) {
     const refs = (await snapshot(handle, false)).refs as Record<string, { name?: unknown; role?: unknown }> | undefined;
     matches = Object.entries(refs ?? {}).filter(([, element]) => element?.name === name);
-    if (matches.length === 1) return { target: `@${matches[0]![0]}`, name };
+    if (matches.length === 1) {
+      const [id, element] = matches[0]!;
+      return { target: `@${id}`, name, ...(typeof element.role === "string" ? { role: element.role } : {}) };
+    }
     if (matches.length > 1 || Date.now() >= deadline) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -335,9 +338,9 @@ export async function runControlOmbUi(args: string[]): Promise<unknown> {
     const text = verb === "type" ? values.text : undefined;
     if (verb === "type" && typeof text !== "string") throw new ControlOmbError("ui type requires --text TEXT");
     await requireLiveSession(handle);
-    const { target, name } = await resolveTarget(handle, values, verb);
+    const { target, name, role } = await resolveTarget(handle, values, verb);
     const data = await agentBrowser(handle.binary, sessionEnv(handle), verb === "click" ? ["click", target] : ["type", target, text as string]);
-    return { ok: true, target, ...(name ? { name } : {}), ...data };
+    return { ok: true, target, ...(name ? { name } : {}), ...(role ? { referenceRole: role } : {}), ...data };
   }
 
   if (verb === "press") {
