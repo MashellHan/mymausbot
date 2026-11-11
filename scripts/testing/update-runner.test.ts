@@ -6,12 +6,13 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync,
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { startFakeDocker } from "./fake-compose-fixture.ts";
 
 import { parseRun, parseRunner } from "../../server/server-update.ts";
 
 const DEPLOY = join(import.meta.dirname, "..", "..", "deploy");
 const RUNNER = join(DEPLOY, "update-runner.sh");
-const FAKE = join(import.meta.dirname, "fake-compose-docker.mjs");
+
 const REPO = "ghcr.io/mashellhan/mymausbot";
 const posix = process.platform !== "win32";
 
@@ -26,12 +27,21 @@ const EARLIER_COPY = "deploy_data-before-update-20261101T000000Z";
 const RUNNER_COPY = "deploy_data-before-update-20261102T000000Z";
 
 const dirs: string[] = [];
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+const interpreters = new Map<string, ReturnType<typeof startFakeDocker>>();
+afterEach(async () => {
+  const errors: unknown[] = [];
+  for (const dir of dirs.splice(0)) {
+    try {
+      await (await interpreters.get(dir))?.close();
+      rmSync(dir, { recursive: true, force: true });
+    } catch (error) { errors.push(error); }
+    finally { interpreters.delete(dir); }
+  }
+  if (errors.length) throw new AggregateError(errors, "fake Docker fixture cleanup failed");
 });
 
 /** A checkout's deploy/ folder running `running`, with root's folder as `--install` leaves it. */
-function install(options: { stable?: Image; running?: Image; updater?: "real" | "recorder"; earlierCopy?: boolean; runnerCopy?: boolean; freeKb?: number } = {}) {
+async function install(options: { stable?: Image; running?: Image; updater?: "real" | "recorder"; earlierCopy?: boolean; runnerCopy?: boolean; freeKb?: number } = {}) {
   const running = options.running ?? OLD;
   const stable = options.stable ?? NEW;
   const root = mkdtempSync(join(tmpdir(), "omb-update-runner-"));
@@ -53,7 +63,6 @@ function install(options: { stable?: Image; running?: Image; updater?: "real" | 
     if (options.updater === "recorder") writeFileSync(join(where, "update.sh"), recorder);
     else copyFileSync(join(DEPLOY, "update.sh"), join(where, "update.sh"));
   }
-  writeFileSync(join(bin, "docker"), `#!/bin/sh\nexec "${process.execPath}" "${FAKE}" "$@"\n`);
   // The user's groups, a folder's group and the group list, as the test says: never the machine's own (a CI user may be in
   // the docker group, a Mac's temporary folders belong to group wheel).
   writeFileSync(join(bin, "id"), '#!/bin/sh\ncase "$1" in -nG) echo "${FAKE_GROUPS:-staff}" ;; *) exec /usr/bin/id "$@" ;; esac\n');
@@ -66,7 +75,7 @@ case "$*" in
 esac
 exec /usr/bin/stat "$@"
 `);
-  for (const name of ["docker", "id", "getent", "stat"]) chmodSync(join(bin, name), 0o755);
+  for (const name of ["id", "getent", "stat"]) chmodSync(join(bin, name), 0o755);
   const images = [running, stable, NEW, NEXT, OLDER].filter((image, at, all) => all.findIndex((other) => other.id === image.id) === at).map((image) => ({ ...image, local: image === running || image.local }));
   const labels: Record<string, string[]> = {};
   if (options.earlierCopy) {
@@ -86,6 +95,9 @@ exec /usr/bin/stat "$@"
   }));
   const setStable = (image: Image) => writeFileSync(join(root, "stable.json"), JSON.stringify({ channel: "stable", version: image.version, image: image.refs.find((ref) => ref.includes("@sha256:")) }));
   setStable(stable);
+  const starting = startFakeDocker(root, fake);
+  interpreters.set(root, starting);
+  await starting;
   writeFileSync(join(state, "status", "runner"), `layout=compose\ndir=${deploy}\nheld=no\n`);
   // The test's own user owns the checkout and cannot run Docker: trusted, as --install --trust-folder-owner leaves it.
   writeFileSync(join(state, "trust"), `dir=${deploy}\n`);
@@ -154,8 +166,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     if (!dash.error) expect(dash.status).toBe(0);
   });
 
-  it("does nothing without a request", () => {
-    const box = install();
+  it("does nothing without a request", async () => {
+    const box = await install();
     expect(box.run().status).toBe(0);
     // Only reads, to say again whether the running image is a released one.
     expect(box.calls().filter((call) => !/^(compose ps -aq|inspect -f|image inspect -f)/.test(call))).toEqual([]);
@@ -163,8 +175,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.runnerInfo()).toMatchObject({ release: true });
   });
 
-  it("takes a request, runs root's copy of update.sh (stable, copy first) and writes how it ended", () => {
-    const box = install();
+  it("takes a request, runs root's copy of update.sh (stable, copy first) and writes how it ended", async () => {
+    const box = await install();
     writeFileSync(box.request, "8d0c6a4e-0000-4000-8000-000000000000\n");
     const done = box.run();
     expect(done.status, done.stdout + done.stderr).toBe(0);
@@ -176,8 +188,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(done.stdout).toContain("Updated from 0.1.150 to 0.1.151.");
   });
 
-  it("runs the same update whatever the request says: no flag, image, version or path in it reaches update.sh", () => {
-    const real = install();
+  it("runs the same update whatever the request says: no flag, image, version or path in it reaches update.sh", async () => {
+    const real = await install();
     writeFileSync(real.request, GREEDY);
     expect(real.run().status).toBe(0);
     expect(real.last()?.result).toBe("updated");
@@ -185,14 +197,14 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(real.calls().filter((call) => call.includes(EVIL) || call.includes("0.1.100"))).toEqual([]);
     expect(existsSync("/tmp/omb-pwned")).toBe(false);
 
-    const recorded = install({ updater: "recorder" });
+    const recorded = await install({ updater: "recorder" });
     writeFileSync(recorded.request, GREEDY);
     recorded.run();
     expect(recorded.argv()).toEqual([`2:--dir ${recorded.deploy}:1`]);
   });
 
-  it("runs neither copy once the install's update.sh differs from root's (a git pull without --install), and says so", () => {
-    const box = install({ updater: "recorder" });
+  it("runs neither copy once the install's update.sh differs from root's (a git pull without --install), and says so", async () => {
+    const box = await install({ updater: "recorder" });
     writeFileSync(join(box.deploy, "update.sh"), `touch "${join(box.root, "ran-the-folder-copy")}"\n`);
     box.ask();
     expect(box.last()).toMatchObject({ run: 1, result: "stale" });
@@ -206,8 +218,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.argv()).toEqual([]);
   });
 
-  it("removes a request that is a link or a folder without following it", () => {
-    const box = install({ updater: "recorder" });
+  it("removes a request that is a link or a folder without following it", async () => {
+    const box = await install({ updater: "recorder" });
     const victim = join(box.root, "precious.txt");
     writeFileSync(victim, "keep me");
     symlinkSync(victim, box.request);
@@ -216,7 +228,7 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(readFileSync(victim, "utf8")).toBe("keep me");
     expect(box.argv()).toEqual([`2:--dir ${box.deploy}:1`]);
 
-    const folder = install({ updater: "recorder" });
+    const folder = await install({ updater: "recorder" });
     mkdirSync(join(folder.request, "nested"), { recursive: true });
     symlinkSync(victim, join(folder.request, "nested", "link"));
     folder.run();
@@ -224,26 +236,26 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(readFileSync(victim, "utf8")).toBe("keep me");
   });
 
-  it("goes by the image's own label, never by the version the server says it runs", () => {
+  it("goes by the image's own label, never by the version the server says it runs", async () => {
     // Newer than stable, claiming to be very old: asked for from the app, it is not "updated" down onto its newer data.
-    const liar = install({ running: { ...NEXT, local: true, serves: "0.1.100" } });
+    const liar = await install({ running: { ...NEXT, local: true, serves: "0.1.100" } });
     liar.ask();
     expect(liar.last()?.result).toBe("refused");
     expect(liar.fakeState().containers.omb.image).toBe(NEXT.id);
     expect(liar.copies()).toEqual([]);
     // Telling the truth, it is newer than stable, and nothing changes either.
-    const newer = install({ running: { ...NEXT, local: true } });
+    const newer = await install({ running: { ...NEXT, local: true } });
     newer.ask();
     expect(newer.last()?.result).toBe("older");
     expect(newer.fakeState().containers.omb.image).toBe(NEXT.id);
     // A server that says it is newer than its image is not trusted for that either.
-    const boaster = install({ running: { ...OLD, serves: "0.1.160" } });
+    const boaster = await install({ running: { ...OLD, serves: "0.1.160" } });
     boaster.ask();
     expect(boaster.last()?.result).toBe("refused");
   });
 
-  it("keeps a person's own copy of the data when the server asked, and the runner's two newest copies", () => {
-    const box = install({ earlierCopy: true, runnerCopy: true });
+  it("keeps a person's own copy of the data when the server asked, and the runner's two newest copies", async () => {
+    const box = await install({ earlierCopy: true, runnerCopy: true });
     // A server that damaged its own data, then asked as soon as a new stable version was out.
     writeFileSync(join(box.fake, "volumes", "deploy_data", "the-last-good-data.txt"), "DAMAGED");
     box.ask();
@@ -263,9 +275,9 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.copies().filter((name) => name !== EARLIER_COPY)).toHaveLength(2);
   });
 
-  it("never tries a stable image again after it rolled back from it, until a person runs update.sh or another is out", () => {
+  it("never tries a stable image again after it rolled back from it, until a person runs update.sh or another is out", async () => {
     const failing = { ...NEW, behaviour: "crashes", lastWords: "Error: cannot read the data" };
-    const box = install({ stable: failing });
+    const box = await install({ stable: failing });
     box.ask({ OMB_RUNNER_GAP_S: "0" });
     expect(box.last()?.result).toBe("rolled-back");
     expect(box.copies()).toHaveLength(1);
@@ -283,7 +295,7 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     box.personRun();
     expect(box.blocked()).toBe(false);
     // Another stable image is tried at once.
-    const fresh = install({ stable: failing });
+    const fresh = await install({ stable: failing });
     fresh.ask({ OMB_RUNNER_GAP_S: "0" });
     fresh.setStable(NEXT);
     fresh.ask({ OMB_RUNNER_GAP_S: "0" });
@@ -292,8 +304,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(fresh.blocked()).toBe(false);
   });
 
-  it("answers a repeated request with nothing to do from its own record, without asking GitHub or the registry", () => {
-    const box = install({ stable: OLD });
+  it("answers a repeated request with nothing to do from its own record, without asking GitHub or the registry", async () => {
+    const box = await install({ stable: OLD });
     box.ask({ OMB_RUNNER_IDLE_S: "300" });
     const before = box.calls().filter((call) => call.startsWith("pull")).length;
     for (let again = 0; again < 3; again += 1) box.ask({ OMB_RUNNER_IDLE_S: "300" });
@@ -301,16 +313,16 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.calls().filter((call) => call.startsWith("pull")).length).toBe(before);
   });
 
-  it("says a build of main is not one the app updates, and runs nothing", () => {
-    const box = install({ running: { ...OLD, label: "main" } });
+  it("says a build of main is not one the app updates, and runs nothing", async () => {
+    const box = await install({ running: { ...OLD, label: "main" } });
     box.ask();
     expect(box.last()).toMatchObject({ result: "unreleased" });
     expect(box.runnerInfo()).toMatchObject({ release: false });
     expect(box.calls().some((call) => call.startsWith("pull") || call.startsWith("compose stop"))).toBe(false);
   });
 
-  it("lets a person's own run use links in the install's folder, as before", () => {
-    const box = install();
+  it("lets a person's own run use links in the install's folder, as before", async () => {
+    const box = await install();
     writeFileSync(join(box.root, "env-real"), "DOMAIN=maus.example.test\n");
     rmSync(join(box.deploy, ".env"));
     symlinkSync(join(box.root, "env-real"), join(box.deploy, ".env"));
@@ -318,7 +330,7 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(done.status, done.stdout + done.stderr).toBe(0);
     expect(box.fakeState().containers.omb.image).toBe(NEW.id);
     // The same link stops a run the server asked for.
-    const asked = install();
+    const asked = await install();
     rmSync(join(asked.deploy, ".env"));
     symlinkSync(join(box.root, "env-real"), join(asked.deploy, ".env"));
     asked.ask();
@@ -326,8 +338,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(asked.fakeState().containers.omb.image).toBe(OLD.id);
   });
 
-  it("runs nothing when the install's folder, or one above it, can be changed by others, and names that folder", () => {
-    const box = install({ updater: "recorder" });
+  it("runs nothing when the install's folder, or one above it, can be changed by others, and names that folder", async () => {
+    const box = await install({ updater: "recorder" });
     const me = userInfo().username;
     const unsafe = (env: Record<string, string> = {}) => {
       box.ask(env);
@@ -367,16 +379,16 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.argv()).toHaveLength(ran + 1);
   });
 
-  it("says when there is no room for a copy of the data, apart from other refusals", () => {
-    const box = install({ freeKb: 1024 });
+  it("says when there is no room for a copy of the data, apart from other refusals", async () => {
+    const box = await install({ freeKb: 1024 });
     box.ask();
     expect(box.last()?.result).toBe("no-room");
     expect(box.fakeState().containers.omb.image).toBe(OLD.id);
   });
 
 
-  it("checks a remembered answer again when the server knows of a newer version, asking only GitHub", () => {
-    const box = install({ stable: OLD });
+  it("checks a remembered answer again when the server knows of a newer version, asking only GitHub", async () => {
+    const box = await install({ stable: OLD });
     box.ask({ OMB_RUNNER_IDLE_S: "300" });
     const pulls = () => box.calls().filter((call) => call.startsWith("pull")).length;
     const before = pulls();
@@ -396,8 +408,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.fakeState().containers.omb.image).toBe(NEW.id);
   });
 
-  it("writes nothing through a .update that is a link", () => {
-    const box = install();
+  it("writes nothing through a .update that is a link", async () => {
+    const box = await install();
     const elsewhere = join(box.root, "elsewhere");
     mkdirSync(elsewhere, { mode: 0o755 });
     symlinkSync(elsewhere, join(box.deploy, ".update"));
@@ -408,8 +420,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.fakeState().containers.omb.image).toBe(OLD.id);
   });
 
-  it("lets runs that change nothing pass freely, and keeps updates that change something four minutes apart", () => {
-    const box = install({ stable: OLD });
+  it("lets runs that change nothing pass freely, and keeps updates that change something four minutes apart", async () => {
+    const box = await install({ stable: OLD });
     // A hostile requester's runs while there is nothing to update to: they stop nothing, and use up no gap.
     for (let at = 1; at <= 3; at += 1) {
       box.ask();
@@ -429,8 +441,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.fakeState().containers.omb.image).toBe(NEXT.id);
   });
 
-  it("spaces even cheap runs QUIET_S apart, waiting rather than refusing", () => {
-    const box = install({ updater: "recorder" });
+  it("spaces even cheap runs QUIET_S apart, waiting rather than refusing", async () => {
+    const box = await install({ updater: "recorder" });
     box.ask({ OMB_RUNNER_QUIET_S: "2" });
     const started = Date.now();
     box.ask({ OMB_RUNNER_QUIET_S: "2", OMB_RUNNER_GAP_S: "0" });
@@ -438,15 +450,15 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.argv()).toHaveLength(2);
   });
 
-  it("puts the old version back when the new one is not healthy, and says so", () => {
-    const box = install({ stable: { ...NEW, behaviour: "crashes", lastWords: "Error: cannot read the data" } });
+  it("puts the old version back when the new one is not healthy, and says so", async () => {
+    const box = await install({ stable: { ...NEW, behaviour: "crashes", lastWords: "Error: cannot read the data" } });
     box.ask();
     expect(box.last()?.result).toBe("rolled-back");
     expect(box.fakeState().containers.omb).toMatchObject({ image: OLD.id, status: "running" });
   });
 
-  it("does nothing while the owner's policy holds updates, and says the hold again whenever systemd runs it", () => {
-    const box = install({ updater: "recorder" });
+  it("does nothing while the owner's policy holds updates, and says the hold again whenever systemd runs it", async () => {
+    const box = await install({ updater: "recorder" });
     writeFileSync(box.policy, '{ "jobs": ["status"], "updates" : "hold" }');
     box.run();
     expect(box.runnerInfo()).toMatchObject({ held: true });
@@ -459,15 +471,15 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.runnerInfo()).toMatchObject({ held: false });
   });
 
-  it("says when root's folder has no update.sh", () => {
-    const box = install({ updater: "recorder" });
+  it("says when root's folder has no update.sh", async () => {
+    const box = await install({ updater: "recorder" });
     rmSync(join(box.state, "update.sh"));
     box.ask();
     expect(box.last()).toMatchObject({ run: 1, result: "no-updater" });
   });
 
-  it("--install makes root's folder with the right owners and modes, copies update.sh into it, and --remove takes it all away", () => {
-    const box = install();
+  it("--install makes root's folder with the right owners and modes, copies update.sh into it, and --remove takes it all away", async () => {
+    const box = await install();
     rmSync(box.state, { recursive: true });
     const tools = rootTools(box.root);
     const sbin = join(box.root, "sbin");
@@ -540,8 +552,8 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(existsSync(join(box.deploy, "update.sh"))).toBe(true);
   });
 
-  it("--install never writes through a link, and leaves an override of the person's own alone", () => {
-    const box = install();
+  it("--install never writes through a link, and leaves an override of the person's own alone", async () => {
+    const box = await install();
     const tools = rootTools(box.root);
     mkdirSync(join(box.root, "systemd"));
     const env = {

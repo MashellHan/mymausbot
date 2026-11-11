@@ -3,9 +3,10 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { startFakeDocker } from "./fake-compose-fixture.ts";
 
 const SCRIPT = join(import.meta.dirname, "..", "..", "deploy", "update.sh");
-const FAKE = join(import.meta.dirname, "fake-compose-docker.mjs");
+
 const REPO = "ghcr.io/mashellhan/mymausbot";
 const posix = process.platform !== "win32";
 
@@ -18,8 +19,17 @@ const ENV = "DOMAIN=maus.example.test\nOMB_SIGNIN_EMAILS=owner@example.test\n";
 const ROLLED_BACK = `${ENV}OMB_IMAGE=${OLD.refs[1]}\n`;
 
 const dirs: string[] = [];
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+const interpreters = new Map<string, ReturnType<typeof startFakeDocker>>();
+afterEach(async () => {
+  const errors: unknown[] = [];
+  for (const dir of dirs.splice(0)) {
+    try {
+      await (await interpreters.get(dir))?.close();
+      rmSync(dir, { recursive: true, force: true });
+    } catch (error) { errors.push(error); }
+    finally { interpreters.delete(dir); }
+  }
+  if (errors.length) throw new AggregateError(errors, "fake Docker fixture cleanup failed");
 });
 
 /** Every file under `dir` with its content: what "the data as it was" means. */
@@ -40,7 +50,7 @@ function stableRecord(version: string, image: string, earlier: string[] = []) {
 }
 
 /** A Compose install on version 0.1.150 with some data, and a stable channel that names `target`. */
-function install(target: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
+async function install(target: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
   const root = mkdtempSync(join(tmpdir(), "omb-update-"));
   dirs.push(root);
   const deploy = join(root, "deploy");
@@ -54,8 +64,6 @@ function install(target: Record<string, unknown> = {}, extra: Record<string, unk
   copyFileSync(SCRIPT, join(deploy, "update.sh"));
   writeFileSync(join(deploy, "docker-compose.yml"), "services: {}\n");
   writeFileSync(join(deploy, ".env"), ENV);
-  writeFileSync(join(root, "bin", "docker"), `#!/bin/sh\nexec "${process.execPath}" "${FAKE}" "$@"\n`);
-  chmodSync(join(root, "bin", "docker"), 0o755);
   const next = { ...NEW, ...target };
   // A version that never answers is waited for; two seconds of that is enough here.
   const wait = next.behaviour === "silent" ? { OMB_UPDATE_WAIT_S: "2" } : {};
@@ -65,6 +73,9 @@ function install(target: Record<string, unknown> = {}, extra: Record<string, unk
     ...extra,
   }));
   writeFileSync(join(root, "stable.json"), stableRecord(next.version, next.refs[0]!));
+  const starting = startFakeDocker(root, fake);
+  interpreters.set(root, starting);
+  await starting;
   const state = () => JSON.parse(readFileSync(join(fake, "state.json"), "utf8"));
   const run = (args: string[] = [], options: { input?: string; env?: Record<string, string>; umask?: string } = {}) => {
     const script = [join(deploy, "update.sh"), ...args];
@@ -102,8 +113,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(spawnSync("bash", ["-n", SCRIPT]).status).toBe(0);
   });
 
-  it("copies the data aside, pins the stable image by digest, and waits until the new version answers and can start bots", () => {
-    const box = install();
+  it("copies the data aside, pins the stable image by digest, and waits until the new version answers and can start bots", async () => {
+    const box = await install();
     const before = tree(box.data);
     const done = box.run();
     expect(done.status, done.stdout + done.stderr).toBe(0);
@@ -137,8 +148,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(calls.slice(calls.indexOf("compose stop"), calls.findIndex((call) => call.includes("--entrypoint cp"))).some((call) => call.includes("{{.State.Running}}"))).toBe(true);
   });
 
-  it("changes nothing when it is run again", () => {
-    const box = install();
+  it("changes nothing when it is run again", async () => {
+    const box = await install();
     expect(box.run().status).toBe(0);
     const calls = box.calls().length;
     const again = box.run();
@@ -148,8 +159,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(box.env()).toBe(`${ENV}OMB_IMAGE=${NEW.refs[0]}\n`);
   });
 
-  it("puts back the old image, its settings and the data when the new version never answers", () => {
-    const box = install({ behaviour: "silent" });
+  it("puts back the old image, its settings and the data when the new version never answers", async () => {
+    const box = await install({ behaviour: "silent" });
     const before = tree(box.data);
     const failed = box.run();
     expect(failed.status).toBe(1);
@@ -165,8 +176,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(box.journal()).toBe(false);
   });
 
-  it("says why in the server's own last words when the new version stops as it starts", () => {
-    const box = install({ behaviour: "crashes", lastWords: "This data was written by a newer MausBot." });
+  it("says why in the server's own last words when the new version stops as it starts", async () => {
+    const box = await install({ behaviour: "crashes", lastWords: "This data was written by a newer MausBot." });
     const failed = box.run();
     expect(failed.status).toBe(1);
     expect(failed.stdout).toContain("The update to 0.1.151 did not work: it kept stopping as it started (This data was written by a newer MausBot.).");
@@ -178,8 +189,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     [{ engine: false }, "no engine can start a bot on it, and one could before"],
     [{ behaviour: "no-caddy" }, "Caddy, which serves it to the internet, did not start again"],
     [{ serves: "0.1.149" }, "it says it is version 0.1.149, not 0.1.151"],
-  ])("rolls back a version that answers but lost what worked before: %j", (target, why) => {
-    const box = install(target);
+  ])("rolls back a version that answers but lost what worked before: %j", async (target, why) => {
+    const box = await install(target);
     const failed = box.run();
     expect(failed.status, failed.stdout).toBe(1);
     expect(failed.stdout).toContain(`The update to 0.1.151 did not work: ${why}.`);
@@ -187,19 +198,19 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(box.env()).toBe(ROLLED_BACK);
   });
 
-  it("does not hold a missing engine against the new version when none worked before", () => {
-    const box = install({ engine: false });
+  it("does not hold a missing engine against the new version when none worked before", async () => {
+    const box = await install({ engine: false });
     box.setState({ images: [{ ...OLD, engine: false }, { ...NEW, engine: false }] });
     expect(box.run().status).toBe(0);
   });
 
-  it("stops before touching the server when the image cannot be downloaded, the disk is short, or the Compose file is an old one", () => {
+  it("stops before touching the server when the image cannot be downloaded, the disk is short, or the Compose file is an old one", async () => {
     for (const [extra, words] of [
       [{ failPull: true }, `Could not download ${NEW.refs[0]}`],
       [{ dataKb: 4_000_000, freeKb: 3_000_000 }, "There is not enough free disk for a copy of the data: it needs about 5320 MB and 2929 MB are free."],
       [{ composeReadsPin: false }, "does not take its image from OMB_IMAGE"],
     ] as const) {
-      const box = install({}, extra);
+      const box = await install({}, extra);
       const refused = box.run();
       expect(refused.status, words).toBe(4);
       expect(refused.stdout).toContain(words);
@@ -210,8 +221,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     }
   });
 
-  it("starts the server again as it was when the copy of the data fails", () => {
-    const box = install({}, { failCopy: true });
+  it("starts the server again as it was when the copy of the data fails", async () => {
+    const box = await install({}, { failCopy: true });
     const before = tree(box.data);
     const refused = box.run();
     expect(refused.status).toBe(4);
@@ -221,8 +232,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(tree(box.data)).toEqual({ ...before, "started-by.txt": "0.1.150\n0.1.150\n" });
   });
 
-  it("refuses a second update while one runs, an image built on the machine, and a channel record that names no pinned image", () => {
-    const busy = install();
+  it("refuses a second update while one runs, an image built on the machine, and a channel record that names no pinned image", async () => {
+    const busy = await install();
     mkdirSync(join(busy.deploy, ".update", "lock"), { recursive: true });
     writeFileSync(join(busy.deploy, ".update", "lock", "pid"), String(process.pid));
     const second = busy.run();
@@ -230,20 +241,20 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(second.stdout).toContain(`An update is already running here (process ${process.pid}).`);
     expect(existsSync(join(busy.deploy, ".update", "lock"))).toBe(true);
 
-    const built = install();
+    const built = await install();
     built.setState({ images: [{ ...OLD, refs: [`${REPO}:latest`] }, NEW] });
     const refused = built.run();
     expect(refused.status).toBe(4);
     expect(refused.stdout).toContain("runs an image built on this machine");
     expect(built.run(["--replace-local-build"]).status).toBe(0);
 
-    const unpinned = install();
+    const unpinned = await install();
     writeFileSync(join(unpinned.root, "stable.json"), JSON.stringify({ version: "0.1.151", image: `${REPO}:latest` }));
     expect(unpinned.run().stdout).toContain("The stable channel names no image this script accepts. Nothing was changed.");
   });
 
-  it("refuses an upstream stable digest without downloading, stopping or changing the install", () => {
-    const box = install();
+  it("refuses an upstream stable digest without downloading, stopping or changing the install", async () => {
+    const box = await install();
     const before = tree(box.data);
     writeFileSync(join(box.root, "stable.json"), stableRecord("0.1.151", `ghcr.io/milind-soni/openmausbot@${id("2")}`));
     const refused = box.run();
@@ -256,8 +267,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(box.journal()).toBe(false);
   });
 
-  it("takes over a lock whose update is gone", () => {
-    const box = install();
+  it("takes over a lock whose update is gone", async () => {
+    const box = await install();
     mkdirSync(join(box.deploy, ".update", "lock"), { recursive: true });
     writeFileSync(join(box.deploy, ".update", "lock", "pid"), "999999");
     const done = box.run();
@@ -267,8 +278,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
   // As the real-server check's step 6 runs it: killed while it waits for a version that never answers, then a `yes`
   // piped in. Its health checks run `docker compose exec`, which forwards standard input to the container: the answer
   // must still reach the question, and the old image, the data and .env (on a version tag) come back exactly.
-  it("after an update killed while it waits, a piped yes puts the old image, the data and .env back", () => {
-    const box = install({ behaviour: "silent" }, {
+  it("after an update killed while it waits, a piped yes puts the old image, the data and .env back", async () => {
+    const box = await install({ behaviour: "silent" }, {
       images: [{ ...OLD, refs: [...OLD.refs, `${REPO}:v0.1.150`] }, { ...NEW, behaviour: "silent" }],
       signalOn: { match: "/api/health\"", signal: "SIGKILL" },
     });
@@ -290,8 +301,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(box.journal()).toBe(false);
   });
 
-  it("asks before it undoes an update an earlier run left unhealthy, says what that loses, and changes nothing without a yes", () => {
-    const box = install({ behaviour: "silent" }, { signalOn: { step: "compose up", signal: "SIGKILL" } });
+  it("asks before it undoes an update an earlier run left unhealthy, says what that loses, and changes nothing without a yes", async () => {
+    const box = await install({ behaviour: "silent" }, { signalOn: { step: "compose up", signal: "SIGKILL" } });
     const before = tree(box.data);
     const killed = box.run();
     expect(killed.signal).toBe("SIGKILL");
@@ -323,8 +334,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(box.state().containers.omb.image).toBe(OLD.id);
   });
 
-  it("keeps a new version that turned out healthy when the update was killed while waiting for it", () => {
-    const box = install({}, { signalOn: { match: "/api/health\"", signal: "SIGKILL" } });
+  it("keeps a new version that turned out healthy when the update was killed while waiting for it", async () => {
+    const box = await install({}, { signalOn: { match: "/api/health\"", signal: "SIGKILL" } });
     expect(box.run().signal).toBe("SIGKILL");
     const next = box.run();
     expect(next.status).toBe(0);
@@ -333,8 +344,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(box.state().containers.omb.image).toBe(NEW.id);
   });
 
-  it("on Ctrl-C while copying, starts the server again with nothing changed; while waiting, puts the old version back", () => {
-    const copying = install({}, { signalOn: { match: "--entrypoint cp ", signal: "SIGINT" } });
+  it("on Ctrl-C while copying, starts the server again with nothing changed; while waiting, puts the old version back", async () => {
+    const copying = await install({}, { signalOn: { match: "--entrypoint cp ", signal: "SIGINT" } });
     const stopped = copying.run();
     expect(stopped.status).toBe(130);
     expect(stopped.stdout).toContain("The update stopped while it copied the data aside. Nothing was changed, and the server was started again.");
@@ -342,7 +353,7 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(copying.env()).toBe(ENV);
     expect(copying.journal()).toBe(false);
 
-    const waiting = install({}, { signalOn: { match: "/api/health\"", signal: "SIGTERM" } });
+    const waiting = await install({}, { signalOn: { match: "/api/health\"", signal: "SIGTERM" } });
     const before = tree(waiting.data);
     const back = waiting.run();
     expect(back.status).toBe(1);
@@ -351,8 +362,8 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     expect(tree(waiting.data)).toEqual({ ...before, "started-by.txt": "0.1.150\n0.1.150\n" });
   });
 
-  it("goes back on request after a good update, once, and only after a typed yes", () => {
-    const box = install();
+  it("goes back on request after a good update, once, and only after a typed yes", async () => {
+    const box = await install();
     const before = tree(box.data);
     expect(box.run().status).toBe(0);
     writeFileSync(join(box.data, ".openmausbot", "bots.json"), "[]");
@@ -369,9 +380,9 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
 
   // A released version's own tag, or a digest, never moves: .env comes back byte for byte. Only a moving tag (`stable`,
   // `latest`, or none) is replaced by the digest of the version that ran.
-  it("puts .env back exactly when it named a tag that does not move", () => {
+  it("puts .env back exactly when it named a tag that does not move", async () => {
     for (const named of [`${REPO}:v0.1.150`, OLD.refs[1]!]) {
-      const box = install({}, { images: [{ ...OLD, refs: [...OLD.refs, `${REPO}:v0.1.150`] }, NEW] });
+      const box = await install({}, { images: [{ ...OLD, refs: [...OLD.refs, `${REPO}:v0.1.150`] }, NEW] });
       writeFileSync(join(box.deploy, ".env"), `${ENV}OMB_IMAGE=${named}\n`, { mode: 0o600 });
       const before = box.env();
       expect(box.run().status).toBe(0);
@@ -380,7 +391,7 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
       expect(back.status, back.stdout).toBe(0);
       expect(box.env(), named).toBe(before);
     }
-    const moving = install();
+    const moving = await install();
     writeFileSync(join(moving.deploy, ".env"), `${ENV}OMB_IMAGE=${REPO}:stable\n`);
     expect(moving.run().status).toBe(0);
     expect(moving.run(["--rollback", "--yes"]).status).toBe(0);
@@ -389,21 +400,21 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
 
   // A hardened server answers `openmausbot doctor` without a session with a refusal, so before the server's own count
   // the check that a bot can still start never ran there.
-  it("checks a hardened version's engines with the server's own count, where doctor is refused", () => {
+  it("checks a hardened version's engines with the server's own count, where doctor is refused", async () => {
     const hardened = { counts: true, doctor: false };
-    const lost = install({ ...hardened, engine: false });
+    const lost = await install({ ...hardened, engine: false });
     lost.setState({ images: [{ ...OLD, ...hardened }, { ...NEW, ...hardened, engine: false }] });
     const failed = lost.run();
     expect(failed.status, failed.stdout).toBe(1);
     expect(failed.stdout).toContain("The update to 0.1.151 did not work: no engine can start a bot on it, and one could before.");
-    const kept = install(hardened);
+    const kept = await install(hardened);
     kept.setState({ images: [{ ...OLD, ...hardened }, { ...NEW, ...hardened }] });
     expect(kept.run().status).toBe(0);
     expect(kept.state().containers.omb.image).toBe(NEW.id);
   });
 
-  it("moves an install the installer made with Caddy in the server's network to the current files, and back on rollback", () => {
-    const box = install();
+  it("moves an install the installer made with Caddy in the server's network to the current files, and back on rollback", async () => {
+    const box = await install();
     const oldCompose = `# Written by MausBot's installer (deploy/install.sh), and written again each time it runs.
 name: openmausbot
 services:
@@ -433,8 +444,8 @@ services:
     expect(box.env()).toBe(ROLLED_BACK);
   });
 
-  it("says how to move this repository's docker-compose.yml when it still has Caddy in the server's network", () => {
-    const box = install();
+  it("says how to move this repository's docker-compose.yml when it still has Caddy in the server's network", async () => {
+    const box = await install();
     writeFileSync(join(box.deploy, "docker-compose.yml"), 'services:\n  caddy:\n    network_mode: "service:omb"\n');
     expect(box.run(["--check"]).stdout).toContain("git pull brings the current one");
     const done = box.run();
@@ -443,8 +454,8 @@ services:
     expect(readFileSync(join(box.deploy, "docker-compose.yml"), "utf8")).toContain("network_mode");
   });
 
-  it("puts the old version back when Docker cannot start the new one at all", () => {
-    const box = install({}, { failUp: NEW.id });
+  it("puts the old version back when Docker cannot start the new one at all", async () => {
+    const box = await install({}, { failUp: NEW.id });
     const failed = box.run();
     expect(failed.status).toBe(1);
     expect(failed.stdout).toContain("Docker could not start 0.1.151");
@@ -453,8 +464,8 @@ services:
     expect(box.env()).toBe(ROLLED_BACK);
   });
 
-  it("when the data cannot be put back: leaves the data and the copy as they are, keeps the journal, and tries again only when asked", () => {
-    const box = install({ behaviour: "silent" }, { failRestore: true });
+  it("when the data cannot be put back: leaves the data and the copy as they are, keeps the journal, and tries again only when asked", async () => {
+    const box = await install({ behaviour: "silent" }, { failRestore: true });
     const before = tree(box.data);
     const failed = box.run();
     expect(failed.status).toBe(2);
@@ -485,8 +496,8 @@ services:
     expect(box.journal()).toBe(false);
   });
 
-  it("updates to a named version, and --check changes nothing", () => {
-    const box = install();
+  it("updates to a named version, and --check changes nothing", async () => {
+    const box = await install();
     const check = box.run(["--check"]);
     expect(check.said).toEqual(["This server runs 0.1.150.", "./update.sh would update it to 0.1.151."]);
     expect(box.calls().some((call) => /^(pull|compose (stop|up)|run|volume)/.test(call))).toBe(false);
@@ -497,26 +508,26 @@ services:
     expect(box.env()).toBe(`${ENV}OMB_IMAGE=${NEW.refs[0]}\n`);
   });
 
-  it("reads the version from the record's top level, whatever its history holds", () => {
-    const box = install();
+  it("reads the version from the record's top level, whatever its history holds", async () => {
+    const box = await install();
     writeFileSync(join(box.root, "stable.json"), stableRecord("0.1.151", NEW.refs[0]!, ["0.1.150", "0.1.149", "0.1.148"]));
     const done = box.run();
     expect(done.status, done.stdout).toBe(0);
     expect(done.said).toContain("Updated from 0.1.150 to 0.1.151.");
     // Keys in any order, on one line, with the history before the version.
-    const again = install();
+    const again = await install();
     writeFileSync(join(again.root, "stable.json"), JSON.stringify({ history: [{ version: "0.1.151" }, { version: "0.1.140" }], image: NEW.refs[0], version: "0.1.151" }));
     expect(again.run().said).toContain("Updated from 0.1.150 to 0.1.151.");
     // A record whose top level names no version is refused, not read from its history.
-    const bare = install();
+    const bare = await install();
     writeFileSync(join(bare.root, "stable.json"), JSON.stringify({ image: NEW.refs[0], history: [{ version: "0.1.151" }] }));
     const refused = bare.run();
     expect(refused.status).toBe(4);
     expect(refused.stdout).toContain("The stable channel names no image this script accepts.");
   });
 
-  it("carries on when the terminal closes in the middle of an update", () => {
-    const box = install({}, { signalOn: { match: "/api/health\"", signal: "SIGHUP" } });
+  it("carries on when the terminal closes in the middle of an update", async () => {
+    const box = await install({}, { signalOn: { match: "/api/health\"", signal: "SIGHUP" } });
     const done = box.run();
     expect(done.signal).toBe(null);
     expect(done.status, done.stdout).toBe(0);
@@ -525,8 +536,8 @@ services:
     expect(box.journal()).toBe(false);
   });
 
-  it("on Ctrl-C while it looks at an earlier run's unfinished update, changes nothing", () => {
-    const box = install({ behaviour: "silent" }, { signalOn: { step: "compose up", signal: "SIGKILL" } });
+  it("on Ctrl-C while it looks at an earlier run's unfinished update, changes nothing", async () => {
+    const box = await install({ behaviour: "silent" }, { signalOn: { step: "compose up", signal: "SIGKILL" } });
     expect(box.run().signal).toBe("SIGKILL");
     const since = tree(box.data);
     box.setState({ signalOn: { match: "State.Status", signal: "SIGINT" } });
@@ -538,8 +549,8 @@ services:
     expect(box.calls().some((call) => call.includes(".omb-restore"))).toBe(false);
   });
 
-  it("keeps the server as it is when an earlier update is left unfinished and the owner says keep", () => {
-    const box = install({ behaviour: "silent" }, { signalOn: { match: "/api/health\"", signal: "SIGKILL" } });
+  it("keeps the server as it is when an earlier update is left unfinished and the owner says keep", async () => {
+    const box = await install({ behaviour: "silent" }, { signalOn: { match: "/api/health\"", signal: "SIGKILL" } });
     expect(box.run().signal).toBe("SIGKILL");
     const kept = box.run([], { input: "keep\n" });
     expect(kept.status, kept.stdout).toBe(0);
@@ -550,9 +561,9 @@ services:
     expect(box.last()).toBe(true);
   });
 
-  it("never goes to an older version unless told to, judged by the version the server says it is", () => {
+  it("never goes to an older version unless told to, judged by the version the server says it is", async () => {
     // 0.1.152 runs, and stable is still 0.1.151.
-    const newer = install();
+    const newer = await install();
     newer.setState({ images: [{ ...OLD, version: "0.1.152" }, NEW] });
     const refused = newer.run();
     expect(refused.status).toBe(5);
@@ -568,24 +579,24 @@ services:
     expect(told.said).toContain("Updated from 0.1.152 to 0.1.151.");
 
     // A build of main (`latest`) is labelled with the branch; it says the version of the release it was built after.
-    const main = install();
+    const main = await install();
     main.setState({ images: [{ ...OLD, version: undefined, label: "main", serves: "0.1.151" }, NEW] });
     const same = main.run();
     expect(same.status).toBe(5);
     expect(same.stdout).toContain("This server runs a build of main that says 0.1.151, and may hold changes made after 0.1.151 was released.");
-    const behind = install();
+    const behind = await install();
     behind.setState({ images: [{ ...OLD, version: undefined, label: "main", serves: "0.1.150" }, NEW] });
     const moved = behind.run();
     expect(moved.status, moved.stdout).toBe(0);
     expect(behind.state().containers.omb.image).toBe(NEW.id);
   });
 
-  it("does not copy the data until the server has stopped, and drops a copy that does not match", () => {
+  it("does not copy the data until the server has stopped, and drops a copy that does not match", async () => {
     for (const [extra, words] of [
       [{ failStop: true }, "The server could not be stopped"],
       [{ corruptCopy: true }, "Copying the data aside failed, or the copy did not match the data"],
     ] as const) {
-      const box = install({}, extra);
+      const box = await install({}, extra);
       const before = tree(box.data);
       const refused = box.run();
       expect(refused.status, words).toBe(4);
@@ -600,9 +611,9 @@ services:
     }
   });
 
-  it("keeps the copy from the update before until the next copy has been checked", () => {
+  it("keeps the copy from the update before until the next copy has been checked", async () => {
     const NEWER = { id: id("c"), refs: [`${REPO}@${id("3")}`, `${REPO}:v0.1.152`], version: "0.1.152", local: false, engine: true };
-    const box = install();
+    const box = await install();
     expect(box.run().status).toBe(0);
     const [first] = box.copies();
     box.setState({ images: [...box.state().images, NEWER] });
@@ -618,8 +629,8 @@ services:
     expect(box.copies()[0]).not.toBe(first);
   });
 
-  it("takes the newest release until a first version is made stable, and stops on a channel it cannot reach", () => {
-    const box = install();
+  it("takes the newest release until a first version is made stable, and stops on a channel it cannot reach", async () => {
+    const box = await install();
     rmSync(join(box.root, "stable.json"));
     writeFileSync(join(box.root, "newest.json"), JSON.stringify({ tag_name: "v0.1.151", html_url: "https://example.test/release", assets: [{ name: "x", version: "9.9.9" }] }));
     const done = box.run();
@@ -628,15 +639,15 @@ services:
     expect(box.calls()).toContain(`pull -q ${REPO}:v0.1.151`);
     expect(box.env()).toBe(`${ENV}OMB_IMAGE=${NEW.refs[0]}\n`);
 
-    const unreachable = install();
+    const unreachable = await install();
     const refused = unreachable.run([], { env: { OMB_STABLE_URL: "http://127.0.0.1:9/stable.json" } });
     expect(refused.status).toBe(4);
     expect(refused.stdout).toContain("Could not read the stable channel");
     expect(unreachable.calls().some((call) => call.startsWith("pull"))).toBe(false);
   });
 
-  it.skipIf(process.getuid?.() === 0)("says plainly that the install folder cannot be written, and changes nothing", () => {
-    const box = install();
+  it.skipIf(process.getuid?.() === 0)("says plainly that the install folder cannot be written, and changes nothing", async () => {
+    const box = await install();
     chmodSync(box.deploy, 0o555);
     try {
       const refused = box.run();
