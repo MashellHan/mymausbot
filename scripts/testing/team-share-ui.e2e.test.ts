@@ -67,7 +67,12 @@ describe("Share team in the real renderer", () => {
 
     await click("New or share");
     await click("Templates");
-    await click("Share");
+    await expect.poll(snapshot, { timeout: 10_000 }).toContain('dialog "Templates"');
+    const state = await ui("snapshot", "--interactive");
+    const shareTab = Object.entries(state.refs as Record<string, { role: string; name: string }>)
+      .find(([, entry]) => entry.role === "tab" && entry.name === "Share");
+    expect(shareTab).toBeDefined();
+    await ui("click", "--ref", `@${shareTab![0]}`);
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("Share the Sales desk department");
     await click("Share the Sales desk department");
     // A refused first look is not a dead end: the sentence, no counts and no
