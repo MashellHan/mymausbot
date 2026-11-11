@@ -158,9 +158,9 @@ export function ComputerFilesPane({ bot, filePreview, onPreviewClose }: {
   }, [filePreview, preview, onPreviewClose]);
   return (
     <>
-    <div ref={list} hidden={Boolean(preview)} tabIndex={-1} className="flex-1 overflow-y-auto px-5 pb-5" data-testid="computer-files">
+    <div ref={list} hidden={Boolean(preview)} tabIndex={-1} className="flex-1 overflow-y-auto px-5 pb-5 [color-scheme:var(--code-color-scheme)]" data-testid="computer-files">
       <div className="mt-2 rounded-xl bg-card p-4">
-        <div className="text-[13px] font-medium text-ink">{t("computer.files.folder")}</div>
+        <div className="text-[14px] font-semibold text-ink">{t("computer.files.folder")}</div>
         <div className="mt-2 flex items-center gap-2">
           <FolderOpen size={15} className="shrink-0 text-ink-secondary" aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink" title={cwd ?? undefined}>
@@ -180,14 +180,14 @@ export function ComputerFilesPane({ bot, filePreview, onPreviewClose }: {
         {pinned !== undefined && <p className="mt-2 text-[12px] leading-5 text-ink-secondary">{t("computer.files.pinnedFolderHint")}</p>}
       </div>
       <div className="mt-3 rounded-xl bg-card p-4">
-        <div className="text-[13px] font-medium text-ink">{t("computer.files.title")}</div>
+        <h2 className="text-[16px] font-semibold text-ink">{t("computer.files.title")}</h2>
         {groups.length === 0 ? (
           <p className="mt-2 text-[12px] leading-5 text-ink-secondary">{t("computer.files.emptyShared", { name: bot.name })}</p>
         ) : (
-          <div className="mt-2 space-y-3">
+          <div className="mt-4 space-y-5">
           {groups.map((group) => <section key={group.day}>
-            <h3 className="mb-1 text-[11px] font-medium text-ink-secondary">{group.label}</h3>
-            <ul className="flex flex-col gap-1">
+            <h3 className="mb-2 border-b border-hairline pb-2 text-[13px] font-semibold text-ink">{group.label}</h3>
+            <ul className="flex flex-col gap-2">
             {group.rows.map(({ path, reference }) => {
               const { name, folder } = splitPath(path);
               return (
@@ -198,7 +198,7 @@ export function ComputerFilesPane({ bot, filePreview, onPreviewClose }: {
                       file={reference.file}
                       message={reference.message}
                       linked={reference.file.linked}
-                      className="w-full max-w-none"
+                      className="w-full max-w-none border-hairline bg-panel text-[13px] [&_.truncate]:font-medium [&_.truncate]:text-[light-dark(#1d4ed8,#7fc0ff)] [&_.lucide-file-text]:text-[light-dark(#1d4ed8,#7fc0ff)]"
                     />
                   ) : (
                     <div className="flex min-w-0 items-center gap-2 px-2.5 py-2" title={t("computer.files.notSharedHint")}>
