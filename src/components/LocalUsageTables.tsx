@@ -69,6 +69,7 @@ export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "
   const periods: readonly Period[] = historyWindow ? [...shortPeriods, "60"] : shortPeriods;
   const id = useId();
   const window = period === "60" && historyWindow ? historyWindow : windows[period === "60" ? "30" : period];
+  const periodDays = period === "60" ? undefined : windows[period].days;
   const repositories = window.repositories;
   return <section className="mt-6" aria-labelledby={`${id}-heading`}>
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -105,9 +106,11 @@ export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "
                 <th scope="row" dir="auto" className="px-2 py-2 text-left font-medium [overflow-wrap:anywhere]">{row.name}</th>
                 <td className="px-2 py-2 text-ink-secondary [overflow-wrap:anywhere]">{t(`computer.usage.category.${row.category}`)}</td>
                 <td className="px-2 py-2 text-right [overflow-wrap:anywhere]"><UsageCount value={row.prs} known={row.knownPrs} />
-                  <UsageChange value={row.comparison.prs} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="prs" className="block text-[13px] text-ink-secondary" /></td>
+                  <UsageChange value={row.comparison.prs ?? row.knownComparison?.prs ?? null} known={row.comparison.prs === null && row.knownComparison?.prs != null}
+                    periodDays={periodDays} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="prs" className="block text-[13px] text-ink-secondary" /></td>
                 <td className="px-2 py-2 text-right [overflow-wrap:anywhere]"><UsageCount value={row.commits} known={row.knownCommits} />
-                  <UsageChange value={row.comparison.commits} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="commits" className="block text-[13px] text-ink-secondary" /></td>
+                  <UsageChange value={row.comparison.commits ?? row.knownComparison?.commits ?? null} known={row.comparison.commits === null && row.knownComparison?.commits != null}
+                    periodDays={periodDays} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric="commits" className="block text-[13px] text-ink-secondary" /></td>
               </tr>)}
               {!!((repositories.unattributedPrs ?? 0) + (repositories.unattributedCommits ?? 0)) && <tr className="border-t border-hairline/40 text-ink-secondary">
                 <th scope="row" colSpan={2} className="px-3 py-2 text-left font-normal">{t("computer.usage.unattributedRepository")}</th>

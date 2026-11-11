@@ -314,6 +314,28 @@ describe("local Usage panel", () => {
     expect(contributions.windows!["1"].comparison.prs).toBeNull();
   });
 
+  it("labels known repository comparisons with the same period and keeps unavailable values blank", async () => {
+    const contributions = primaryUsageFixture("2026-11-03", true);
+    const repository = contributions.windows!["1"].repositories.rows[0]!;
+    repository.comparison = { prs: null, commits: null };
+    repository.knownComparison = { prs: 27.3, commits: -7.4 };
+    const displayedChanges = () => {
+      const row = [...host.querySelectorAll('[data-usage-repositories] tbody tr')].find((item) =>
+        item.querySelector('th')?.textContent === repository.name)!;
+      return [...row.querySelectorAll<HTMLElement>('[data-usage-change]')];
+    };
+    await renderRaw({ ...sample, contributions });
+    expect(displayedChanges().map((change) => change.querySelector('[aria-hidden="true"]')?.textContent))
+      .toEqual(["DoD +27.3%", "DoD -7.4%"]);
+    for (const change of displayedChanges()) {
+      expect(change.getAttribute("title")).toContain("Known subtotal");
+      expect(change.getAttribute("data-usage-provisional")).toBe("true");
+    }
+    repository.knownComparison.commits = null;
+    await renderRaw({ ...sample, contributions });
+    expect(displayedChanges()[1]?.querySelector('[aria-hidden="true"]')?.textContent).toBe("DoD —");
+  });
+
   it("shows qualified work and personal category DoD/WoW/MoM with exact-null honesty in both locales", async () => {
     const contributions = primaryUsageFixture("2026-11-03", true);
     await renderRaw({ ...sample, contributions });
@@ -544,7 +566,7 @@ describe("local Usage panel", () => {
     expect(values()[1]).toMatch(/^1/);
     expect(values()[2]).toContain("2");
     const repositoryChanges = () => [...host.querySelectorAll('[data-usage-repositories] tbody tr:first-child [data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
-    expect(repositoryChanges()).toEqual(["—", "+10%"]);
+    expect(repositoryChanges()).toEqual(["DoD —", "DoD +10%"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-11-02");
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(tabs[3]);
@@ -554,7 +576,7 @@ describe("local Usage panel", () => {
     expect(document.activeElement).toBe(tabs[2]);
     expect(values()[1]).toMatch(/^30/);
     expect(values()[2]).toContain("60");
-    expect(repositoryChanges()).toEqual(["—", "+30%"]);
+    expect(repositoryChanges()).toEqual(["30d —", "30d +30%"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-09-05–2026-10-04");
     await render({ ...sample, status: "stale" });
     expect(daily.open).toBe(true);

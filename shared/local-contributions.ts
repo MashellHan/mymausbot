@@ -32,7 +32,10 @@ export interface LocalContributionSource {
   status: LocalUsageStatus;
   coverage: { identityVerified: boolean; paginationComplete: boolean; visibilityComplete: boolean;
     /** Beijing author days with reachable commits whose pre-creation eligibility is unproved. */
-    eligibilityUncertainDays?: string[]; reasons: string[] };
+    eligibilityUncertainDays?: string[];
+    /** The same uncertainty scoped to the verified repository category; its union equals eligibilityUncertainDays. */
+    eligibilityUncertainDaysByCategory?: Record<LocalUsageCategory, string[]>;
+    reasons: string[] };
   days: LocalContributionDay[];
   provenance?: object;
 }
@@ -76,7 +79,8 @@ export interface LocalContributionAccount {
 
 export interface LocalContributionRepositories {
   coverage: LocalUsageCoverage;
-  rows: (LocalContributionCounts & { id: string; name: string; category: LocalUsageCategory; comparison: LocalUsageCountComparison })[];
+  rows: (LocalContributionCounts & { id: string; name: string; category: LocalUsageCategory;
+    comparison: LocalUsageCountComparison; knownComparison?: LocalUsageCountComparison })[];
   unattributedPrs: number | null;
   unattributedCommits: number | null;
   sharedCommits: number;

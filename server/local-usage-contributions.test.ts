@@ -163,6 +163,60 @@ describe("canonical source-qualified contributions", () => {
     expect(incomplete.windows!["7"].comparison.known).toEqual({ prs: null, commits: null });
   });
 
+  it("keeps unrelated work comparisons and clean repository days when personal eligibility is uncertain", () => {
+    const value = partialAccountedSnapshot();
+    const github = value.github.sources[0]!, ado = value.ado.sources[0]!;
+    Object.assign(github.coverage, { eligibilityUncertainDays: [date(54)],
+      eligibilityUncertainDaysByCategory: { work: [], personal: [date(54)], unclassified: [] } });
+    const repository = github.days[59]!.repositories[0]!;
+    github.days[54]!.knownPrs = 2;
+    github.days[54]!.knownCommits = null as never;
+    github.days[54]!.repositories = [
+      { ...repository, id: "github-work", category: "work", knownPrs: 1, knownCommits: 0 },
+      { ...repository, category: "personal", knownPrs: 1, knownCommits: null as never },
+    ];
+    for (const [index, commits] of [[10, 5], [47, 3]] as const) {
+      github.days[index]!.knownCommits = commits;
+      github.days[index]!.repositories = [{ ...repository, knownPrs: 0, knownCommits: commits }];
+    }
+    for (const [index, commits] of [[58, 10], [59, 25]] as const) {
+      ado.days[index]!.knownCommits = commits;
+      ado.days[index]!.repositories[0]!.knownCommits = commits;
+    }
+    const result = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    const today = result.windows!["1"];
+    expect(today.comparison.known?.commits).toBeCloseTo((78 - 86) / 86 * 100);
+    expect(today.comparison.knownCategories?.personal.commits).toBeCloseTo((53 - 76) / 76 * 100);
+    expect(today.repositories.rows.find((row) => row.category === "personal")?.knownComparison?.commits)
+      .toBeCloseTo((53 - 76) / 76 * 100);
+    expect(today.repositories.rows.find((row) => row.category === "personal")?.comparison.commits).toBeNull();
+    for (const period of ["7", "30"] as const) {
+      const window = result.windows![period];
+      expect(window.comparison.known?.commits).toBeNull();
+      expect(window.comparison.knownCategories?.personal.commits).toBeNull();
+      expect(window.comparison.knownCategories?.work.commits).toBe("new");
+      expect(window.repositories.rows.find((row) => row.category === "personal")?.knownComparison?.commits).toBeNull();
+      expect(window.repositories.rows.find((row) => row.category === "work")?.knownComparison?.commits).toBe("new");
+    }
+    delete (github.coverage as typeof github.coverage & { eligibilityUncertainDaysByCategory?: object }).eligibilityUncertainDaysByCategory;
+    expect(aggregateContributionSnapshot(parse(value), cutoff + 60_000).windows!["7"].comparison.knownCategories?.work.commits)
+      .toBeNull();
+    github.days[54]!.repositories[1]!.knownCommits = 0;
+    expect(() => parse(value)).toThrow("Repository subtotal exceeds account day");
+    github.days[54]!.knownCommits = 1;
+    github.days[54]!.repositories[1]!.knownCommits = 1;
+    Object.assign(github.coverage, { eligibilityUncertainDays: [] });
+    const repaired = aggregateContributionSnapshot(parse(value), cutoff + 60_000);
+    for (const period of ["7", "30"] as const) {
+      const window = repaired.windows![period];
+      expect(window.comparison.commits).toBeNull();
+      expect(typeof window.comparison.known?.commits).toBe("number");
+      expect(typeof window.comparison.knownCategories?.personal.commits).toBe("number");
+      expect(typeof window.repositories.rows.find((row) => row.category === "personal")?.knownComparison?.commits)
+        .toBe("number");
+    }
+  });
+
   it("rejects malformed or out-of-window eligibility days", () => {
     const value = partialAccountedSnapshot();
     const coverage = value.github.sources[0]!.coverage as typeof value.github.sources[0]["coverage"] & { eligibilityUncertainDays: string[] };
@@ -171,6 +225,9 @@ describe("canonical source-qualified contributions", () => {
     coverage.eligibilityUncertainDays = ["2026-09-11"];
     expect(() => parse(value)).toThrow("Invalid eligibility days");
     coverage.eligibilityUncertainDays = [date(0)];
+    Object.assign(coverage, { eligibilityUncertainDaysByCategory: { work: [], personal: [], unclassified: [] } });
+    expect(() => parse(value)).toThrow("Invalid eligibility categories");
+    Object.assign(coverage, { eligibilityUncertainDaysByCategory: { work: [], personal: [date(0)], unclassified: [] } });
     value.github.sources[0]!.status = "ready";
     value.github.sources[0]!.coverage.visibilityComplete = true;
     expect(() => parse(value)).toThrow("Ready source has uncertain eligibility");

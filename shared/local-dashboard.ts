@@ -130,6 +130,8 @@ export interface LocalUsageRepository extends LocalUsageCounts {
   category: LocalUsageCategory;
   /** Previous equal-length period; its dates are on the enclosing window. */
   comparison: LocalUsageCountComparison;
+  /** Previous equal-length period using qualified known subtotals when exact coverage is unavailable. */
+  knownComparison?: LocalUsageCountComparison;
 }
 
 export interface LocalUsageRepositories {
