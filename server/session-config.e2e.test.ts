@@ -58,6 +58,44 @@ describe("embedded server session config across App-run restarts", () => {
     expect(newAppRun.anthropic.key).toBeUndefined();
   });
 
+  it.each([undefined, "old-modelgo-key"])("keeps a ModelGo session key off disk with previous key %s", (diskKey) => {
+    const { root, old } = fixture();
+    const file = join(root, "config.json");
+    writeFileSync(file, JSON.stringify({ ...old, ...(diskKey ? { modelgo: { key: diskKey } } : {}) }));
+    const result = run(root, `import { saveConfig, loadConfig, confirmSessionConfig, setSessionConfigPublisher } from ${JSON.stringify(configModule)};
+      let snapshot = null;
+      setSessionConfigPublisher((value) => { snapshot = value; });
+      saveConfig({ modelgo: { key: "synthetic-modelgo-session-key" } });
+      await confirmSessionConfig();
+      saveConfig({ profile: { name: "Session fixture" } });
+      await confirmSessionConfig();
+      console.log(JSON.stringify({ snapshot, runtime: loadConfig() }));`);
+    expect(JSON.parse(readFileSync(file, "utf8")).modelgo?.key).toBe(diskKey);
+    expect(readFileSync(file, "utf8")).not.toContain("synthetic-modelgo-session-key");
+    expect(result.runtime.modelgo.key).toBe("synthetic-modelgo-session-key");
+    expect(result.snapshot.modelgo.key).toBe("synthetic-modelgo-session-key");
+    const restarted = run(root, `import { loadConfig } from ${JSON.stringify(configModule)};
+      console.log(JSON.stringify(loadConfig()));`, "session", result.snapshot);
+    expect(restarted.modelgo.key).toBe("synthetic-modelgo-session-key");
+    const newAppRun = run(root, `import { loadConfig } from ${JSON.stringify(configModule)};
+      console.log(JSON.stringify(loadConfig()));`);
+    expect(newAppRun.modelgo?.key).toBe(diskKey);
+  });
+
+  it.each([undefined, "old-modelgo-key"])("refuses a ModelGo session save before changing disk key %s when its publisher is absent", (diskKey) => {
+    const { root, old } = fixture();
+    const file = join(root, "config.json");
+    writeFileSync(file, JSON.stringify({ ...old, ...(diskKey ? { modelgo: { key: diskKey } } : {}) }));
+    const before = readFileSync(file);
+    const result = run(root, `import { saveConfig } from ${JSON.stringify(configModule)};
+      let error = null;
+      try { saveConfig({ modelgo: { key: "synthetic-modelgo-refused-key" }, profile: { name: "Refused" } }); }
+      catch (cause) { error = cause.message; }
+      console.log(JSON.stringify({ error }));`);
+    expect(result.error).toBe("The desktop session credential owner is unavailable");
+    expect(readFileSync(file)).toEqual(before);
+  });
+
   it("keeps the existing secure-mode disk behavior", () => {
     const { root } = fixture();
     run(root, `import { saveConfig } from ${JSON.stringify(configModule)}; saveConfig({ openai: { key: "system-mode-key" } }); console.log(JSON.stringify({ ok: true }));`, "system");

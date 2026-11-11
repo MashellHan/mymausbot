@@ -22,6 +22,7 @@ it("keeps direct and desktop-external provider secrets in this App run through a
   try {
     const openai = "sk-proj-synthetic-session-0123456789";
     const xai = "xai-synthetic-session-0123456789";
+    const modelgo = "synthetic-modelgo-session-0123456789";
     expect(await put("/api/config", { openai: { key: openai } })).toMatchObject({ status: 200, body: { openai: { configured: true } } });
     expect(readFileSync(configFile, "utf8")).not.toContain(openai);
     expect(JSON.parse(readFileSync(captured, "utf8")).openai.key).toBe(openai);
@@ -29,11 +30,17 @@ it("keeps direct and desktop-external provider secrets in this App run through a
     expect((await status()).openai.configured).toBe(true);
     expect(readFileSync(configFile, "utf8")).not.toContain(openai);
 
-    expect(await put("/api/config?secretStorage=external", { xai: { key: xai } })).toMatchObject({ status: 200, body: { xai: { configured: true } } });
+    expect(await put("/api/config?secretStorage=external", { xai: { key: xai }, modelgo: { key: modelgo } }))
+      .toMatchObject({ status: 200, body: { xai: { configured: true }, modelgo: { configured: true } } });
     expect(readFileSync(configFile, "utf8")).not.toContain(xai);
     expect(JSON.parse(readFileSync(captured, "utf8")).xai.key).toBe(xai);
+    expect(readFileSync(configFile, "utf8")).not.toContain(modelgo);
+    expect(JSON.parse(readFileSync(captured, "utf8")).modelgo.key).toBe(modelgo);
     await fixture.stop(); await fixture.start();
-    expect((await status()).xai.configured).toBe(true);
+    const restartedStatus = await status();
+    expect(restartedStatus.xai.configured).toBe(true);
+    expect(restartedStatus.modelgo.configured).toBe(true);
+    expect(readFileSync(configFile, "utf8")).not.toContain(modelgo);
     expect(await put("/api/config", { openai: { key: "" } })).toMatchObject({ status: 200, body: { openai: { configured: false } } });
     expect(readFileSync(configFile, "utf8")).not.toContain(openai);
     expect(JSON.parse(readFileSync(captured, "utf8")).openai.key).toBe("");

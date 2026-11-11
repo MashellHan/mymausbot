@@ -347,7 +347,7 @@ describe("Get the phone app", () => {
 
   it("links the App Store and Android with no code to scan, and points on to Connect your phone where this window can pair", () => {
     const html = render([to("here", "to this computer")]);
-    expect(html).toContain("On your phone, install MausBot from the App Store, or download it for Android.");
+    expect(html).toContain("On your phone, install mymausbot from the App Store, or download it for Android.");
     expect(html).toMatch(/<button[^>]*data-phone-app="ios"[^>]*>App Store<\/button>/);
     expect(html).toMatch(/<button[^>]*data-phone-app="android"[^>]*>Android<\/button>/);
     expect(html).not.toContain("<svg");

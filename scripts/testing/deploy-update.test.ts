@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT = join(import.meta.dirname, "..", "..", "deploy", "update.sh");
 const FAKE = join(import.meta.dirname, "fake-compose-docker.mjs");
-const REPO = "ghcr.io/milind-soni/openmausbot";
+const REPO = "ghcr.io/mashellhan/mymausbot";
 const posix = process.platform !== "win32";
 
 const id = (letter: string) => `sha256:${letter.repeat(64)}`;
@@ -240,6 +240,20 @@ describe.skipIf(!posix)("deploy/update.sh", () => {
     const unpinned = install();
     writeFileSync(join(unpinned.root, "stable.json"), JSON.stringify({ version: "0.1.151", image: `${REPO}:latest` }));
     expect(unpinned.run().stdout).toContain("The stable channel names no image this script accepts. Nothing was changed.");
+  });
+
+  it("refuses an upstream stable digest without downloading, stopping or changing the install", () => {
+    const box = install();
+    const before = tree(box.data);
+    writeFileSync(join(box.root, "stable.json"), stableRecord("0.1.151", `ghcr.io/milind-soni/openmausbot@${id("2")}`));
+    const refused = box.run();
+    expect(refused.status).toBe(4);
+    expect(refused.stdout).toContain("The stable channel names no image this script accepts. Nothing was changed.");
+    expect(box.calls().some((call) => /^(pull|compose (stop|up)|run|volume create)/.test(call))).toBe(false);
+    expect(box.env()).toBe(ENV);
+    expect(tree(box.data)).toEqual(before);
+    expect(box.copies()).toEqual([]);
+    expect(box.journal()).toBe(false);
   });
 
   it("takes over a lock whose update is gone", () => {

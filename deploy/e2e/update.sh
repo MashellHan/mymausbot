@@ -19,10 +19,17 @@ REPO=ghcr.io/milind-soni/openmausbot
 FROM=${FROM_VERSION:-0.1.150}
 TO=${TO_VERSION:-0.1.151}
 mkdir -p "$OUT"
+# Fixture releases 0.1.150/0.1.151 are published upstream. Only this disposable copy changes its image trust root.
+FIXTURE_UPDATE="$OUT/update.sh"
+sed '/^REPO=/s|mashellhan/mymausbot|milind-soni/openmausbot|; /^PINNED=/s|mashellhan/mymausbot|milind-soni/openmausbot|' \
+  "$ROOT/deploy/update.sh" >"$FIXTURE_UPDATE" || exit 1
+grep -Fqx "REPO=\"$REPO\"" "$FIXTURE_UPDATE" || exit 1
+grep -Fqx 'PINNED="^ghcr\.io/milind-soni/openmausbot@sha256:[0-9a-f]{64}$"' "$FIXTURE_UPDATE" || exit 1
+cp "$ROOT/deploy/update.sh" "$OUT/production-update.sh" || exit 1
 if [ "$LAYOUT" = installer ]; then DIR=/opt/openmausbot DATA=/opt/openmausbot/data
 else DIR=/srv/openmausbot-e2e/deploy DATA=deploy_data; fi
 # Under umask 000, as a root shell may have it: what update.sh writes must not take its modes from there.
-UPDATE=(bash -c "umask 000; exec bash \"\$0\" \"\$@\"" "$ROOT/deploy/update.sh" --dir "$DIR")
+UPDATE=(bash -c "umask 000; exec bash \"\$0\" \"\$@\"" "$FIXTURE_UPDATE" --dir "$DIR")
 
 step() { printf '\n== %s\n' "$*"; }
 fail() {
@@ -269,7 +276,7 @@ cp "$DIR/.update/update.log" "$OUT/update.log"
 step "11. the Update server button: the server asks with a file, systemd runs the standard update, the outcome is written back"
 "${UPDATE[@]}" --rollback --yes >"$OUT/11-back.txt" 2>&1 || fail "could not go back to $FROM for the button's run"
 [ "$(version)" = "$FROM" ] || fail "not on $FROM before the button's run"
-cp "$ROOT/deploy/update.sh" "$DIR/update.sh"
+cp "$FIXTURE_UPDATE" "$DIR/update.sh"
 OMB_RUNNER_GAP_S=0 OMB_RUNNER_QUIET_S=0 bash "$ROOT/deploy/update-runner.sh" --install --dir "$DIR" | tee "$OUT/11-install.txt"
 [ "${PIPESTATUS[0]}" = 0 ] || fail "update-runner.sh --install failed"
 systemctl is-active --quiet openmausbot-update.path || fail "the path unit is not watching"

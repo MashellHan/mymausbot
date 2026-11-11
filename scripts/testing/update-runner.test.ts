@@ -12,7 +12,7 @@ import { parseRun, parseRunner } from "../../server/server-update.ts";
 const DEPLOY = join(import.meta.dirname, "..", "..", "deploy");
 const RUNNER = join(DEPLOY, "update-runner.sh");
 const FAKE = join(import.meta.dirname, "fake-compose-docker.mjs");
-const REPO = "ghcr.io/milind-soni/openmausbot";
+const REPO = "ghcr.io/mashellhan/mymausbot";
 const posix = process.platform !== "win32";
 
 const id = (letter: string) => `sha256:${letter.repeat(64)}`;
