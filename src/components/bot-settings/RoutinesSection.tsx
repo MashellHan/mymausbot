@@ -10,9 +10,10 @@ export function RoutinesSection({ bot, routines, runs, defaultRunOn, compact = f
   const { state, dispatch } = useStore();
   const [editing, setEditing] = useState<Routine | "new" | null>(null);
   return <div className={compact ? "flex flex-col gap-3" : "flex flex-col gap-4"}>
-    <div className={compact ? "flex flex-wrap items-center gap-2" : "rounded-xl bg-card p-4"}>
+    <div className={compact ? "flex flex-wrap items-center gap-3 px-1" : "rounded-xl bg-card p-4"}>
       {compact ? <>
-        <h2 className="min-w-0 flex-1 text-[15px] font-semibold text-ink">{t("routines.kind.routine")}</h2>
+        <CalendarClock size={17} className="shrink-0 text-ink-secondary" aria-hidden="true" />
+        <h2 data-overview-section-title="" className="min-w-0 flex-1 text-[15px] font-semibold text-ink">{t("routines.kind.routine")}</h2>
         <button type="button" onClick={() => setEditing("new")} className="flex items-center gap-1 rounded-lg bg-control px-2.5 py-1.5 text-[12px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent"><Plus size={13} aria-hidden="true" />{t("computer.routines.create")}</button>
       </> : <>
       <div className="flex items-center gap-2"><CalendarClock size={16} className="text-accent" /><h2 className="min-w-0 flex-1 text-[15px] font-medium text-ink">{t("computer.tab.routines")}</h2><span className="text-[12px] text-ink-secondary">{routines.length}</span></div>
