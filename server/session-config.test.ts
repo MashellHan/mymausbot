@@ -34,7 +34,7 @@ describe("session-only config persistence", () => {
 
   it("classifies direct provider keys and opaque instance or MCP updates, while ordinary settings stay durable", () => {
     const patches: JsonObject[] = [{ openai: { key: "new" } }, { anthropic: { key: "new" } }, { openrouter: { key: "new" } },
-      { mistral: { key: "new" } }, { opencodeGo: { providerKeys: { VENICE_API_KEY: "new" } } },
+      { mistral: { key: "new" } }, { modelgo: { key: "new" } }, { opencodeGo: { providerKeys: { VENICE_API_KEY: "new" } } },
       { instances: { custom: { driver: "customAcp" } } }, { mcpServers: {} }, { composio: { sessionId: "grant" } },
       { tts: { geminiKey: "key" } }, { live: { keyFor: "azure:example.test" } }];
     for (const patch of patches) {

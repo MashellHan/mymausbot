@@ -20,6 +20,16 @@ function list(props: Partial<Parameters<typeof RoutineList>[0]> = {}) {
 afterEach(() => vi.useRealTimers());
 
 describe("routine list", () => {
+  it("warns on an enabled routine whose bot is paused, with a way to swap it in", () => {
+    const paused = list({ pausedBots: ["scout"] });
+    expect(paused).toContain("bot is paused on this plan, so it won&#x27;t run.");
+    expect(paused).toContain("Swap awake bots");
+    expect(list({ compact: true, pausedBots: ["scout"] })).toContain("Swap awake bots");
+    expect(list({ pausedBots: ["scout"], routines: [{ ...routine, enabled: false }] })).not.toContain("Swap awake bots");
+    expect(list({ pausedBots: ["other"] })).not.toContain("Swap awake bots");
+    expect(list()).not.toContain("Swap awake bots");
+  });
+
   it("keeps overview cards to title, schedule, last result, and the existing switch", () => {
     const markup = list({ compact: true, onToggle: vi.fn(), routines: [{ ...routine, warning: "Connection missing", failureStreak: 2, skippedRuns: 3, weekRuns: { ok: 1, total: 2 } }], runs: [{ ...run, status: "failed", error: "Provider disconnected." }] });
     expect(markup).toContain('title="Morning brief"');

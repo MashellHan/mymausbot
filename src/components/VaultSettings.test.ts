@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fixture = vi.hoisted(() => ({ api: vi.fn(), dispatch: vi.fn(), admin: true as boolean | null, config: null as { cloudHome?: boolean } | null }));
+const fixture = vi.hoisted(() => ({ api: vi.fn(), dispatch: vi.fn(), admin: true as boolean | null, config: null as { cloudHome?: boolean; team?: { id: string; name: string } } | null }));
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
   api: fixture.api,
@@ -150,7 +150,7 @@ describe("Settings → Vault: logins", () => {
     await click("Connect 1Password");
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
     expect(fixture.api).toHaveBeenNthCalledWith(2, "/api/logins/1password", { method: "POST", body: JSON.stringify({ token: "ops_fake-typed-token" }) });
-    expect(host.querySelector("[data-onepassword]")!.textContent).toContain("Connected to Shared with OMB · 1 logins with a website");
+    expect(host.querySelector("[data-onepassword]")!.textContent).toContain("Connected to Shared with OMB · 1 logins, keys and secrets");
     expect(host.innerHTML).not.toContain("ops_fake-typed-token");
     const row = host.querySelector('[data-login-row="example.com"]')!;
     expect(row.textContent).toContain("From 1Password · All bots");
@@ -196,6 +196,23 @@ describe("Settings → Vault: logins", () => {
     await render();
     expect(fixture.api).not.toHaveBeenCalled();
     expect(host.textContent).toContain("Only an admin of this installation can see and change the Vault.");
+  });
+
+  it("shows a Team Cloud member only the secrets they gave bots in their own chats, which they can delete and nothing more", async () => {
+    fixture.admin = false;
+    fixture.config = { team: { id: "acme", name: "Acme" } };
+    const own = { id: "s9", name: "Stripe secret key", source: "card", bots: ["pepper"], createdAt: 1, updatedAt: 1 };
+    fixture.api.mockResolvedValueOnce({ logins: [], secrets: [own], onePassword: OFF }).mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ logins: [], secrets: [], onePassword: OFF });
+    await render();
+    expect(fixture.api).toHaveBeenCalledWith("/api/vault");
+    expect(host.textContent).toContain("Only you can use them, in your own chats with that bot");
+    expect([...host.querySelectorAll("[data-secret-row]")].map((row) => row.textContent)).toEqual([expect.stringContaining("Saved from a chat · Pepper")]);
+    for (const absent of ["Add", "Change Stripe secret key"]) expect(button(absent), absent).toBeUndefined();
+    for (const selector of ["[data-onepassword]", "[data-vault-keys]", "[data-vault-filter]"]) expect(host.querySelector(selector), selector).toBeNull();
+    await click("Delete Stripe secret key");
+    await click("Delete for good");
+    expect(fixture.api).toHaveBeenNthCalledWith(2, "/api/vault/secrets/s9", { method: "DELETE" });
+    expect(host.textContent).toContain("A key you type into a bot's card in your own chat shows here.");
   });
 });
 
@@ -265,6 +282,14 @@ describe("Settings → Vault: keys and secrets", () => {
     expect(fixture.api).toHaveBeenCalledTimes(3);
     await click("Delete for good");
     expect(fixture.api).toHaveBeenNthCalledWith(4, "/api/vault/secrets/s1", { method: "DELETE" });
+  });
+
+  it("says which MCP servers lost their key when a secret is deleted", async () => {
+    fixture.api.mockResolvedValueOnce(listed()).mockResolvedValueOnce({ ok: true, keysOff: ["stripe", "notion"] }).mockResolvedValueOnce(listed([LINKED]));
+    await render();
+    await click("Delete Stripe secret key");
+    await click("Delete for good");
+    expect(host.querySelector("[data-vault-keys-off]")?.textContent).toContain("stripe, notion");
   });
 
   it("imports a pasted .env file as one secret per line", async () => {

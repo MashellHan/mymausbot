@@ -63,6 +63,18 @@ it("creates a client-only native QR using a freshly verified origin and the one-
   expect(fx.copy).toHaveBeenCalledWith(link.href);
 });
 
+it("keeps native Funnel pairing available without taking another flow's focus", async () => {
+  await render({ reveal: false, focusRequest: 1 });
+  expect(host.querySelector("[data-phone-pairing-action]")).toBeNull();
+  expect(document.activeElement).not.toBe(host.querySelector("[data-funnel-pairing-action]"));
+  expect(fx.api.mock.calls.filter(([path]) => path === "/api/auth/pairing")).toHaveLength(0);
+  await render({ reveal: true, focusRequest: 1 });
+  expect(host.querySelector("[data-phone-pairing-action]")).toBe(host.querySelector("[data-funnel-pairing-action]"));
+  await click("[data-funnel-pairing-action]");
+  const pairing = fx.api.mock.calls.find(([path]) => path === "/api/auth/pairing")!;
+  expect(JSON.parse(pairing[1].body)).toEqual({ scopes: ["client"] });
+});
+
 it("clears the old QR and does not issue another credential when verification fails", async () => {
   await render(); await click("[data-funnel-pairing-action]"); expect(qr()).not.toBeNull();
   vi.mocked(funnel.refresh).mockResolvedValue({ status: "unavailable", reason: "unverified" });
