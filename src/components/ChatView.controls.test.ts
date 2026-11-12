@@ -13,7 +13,7 @@ import { RawPresentation } from "@/lib/raw-presentation";
 const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
-  return { showThreads: true, advanced: true, raw: false, menus: [] as { ariaLabel: string; items: { key: string; disabled?: boolean; heading?: string; active?: boolean }[] }[], dispatch: vi.fn(), canWrite: null as boolean | null, showToolCalls: false, platform: "other", localReasonCode: "cua-driver-unavailable", localMessage: "", model: null as ComponentProps<typeof ModelPicker> | null,
+  return { showThreads: true, advanced: true, raw: false, needsInputStop: false, menus: [] as { ariaLabel: string; items: { key: string; disabled?: boolean; heading?: string; active?: boolean }[] }[], dispatch: vi.fn(), canWrite: null as boolean | null, showToolCalls: false, platform: "other", localReasonCode: "cua-driver-unavailable", localMessage: "", model: null as ComponentProps<typeof ModelPicker> | null,
     approval: null as ComponentProps<typeof ApprovalModeSelector> | null };
 });
 vi.mock("@/state/store", async (importOriginal) => {
@@ -35,6 +35,7 @@ vi.mock("@/lib/thread-preferences", async (importOriginal) => ({
   useShowThreads: () => fixture.advanced && fixture.showThreads,
 }));
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, useInterfaceMode: () => fixture.advanced ? "advanced" : "simple", setAdvancedMode: vi.fn() }));
+vi.mock("@/lib/thread-needs-input", () => ({ useThreadNeedsInputStop: () => fixture.needsInputStop }));
 // The trigger still renders, so the markup assertions in this file see the same header.
 vi.mock("./SidebarPopoverMenu", async (importOriginal) => ({
   ...await importOriginal<typeof import("./SidebarPopoverMenu")>(),
@@ -153,6 +154,22 @@ describe("the header's right side", () => {
   it("keeps Stop in the Advanced header while a turn runs", () => {
     const { controls } = header({ ...bot, busy: true, tasks: (bot.tasks ?? []).map((task) => ({ ...task, busy: true })) });
     expect(controls).toContain('title="Stop this turn"');
+  });
+
+  it("offers the same exact-thread Stop for a parked request with no busy turn or card", () => {
+    fixture.needsInputStop = true;
+    const idle = { ...bot, busy: false, waitingForTeammates: false };
+    try {
+      fixture.advanced = false;
+      const simple = header(idle);
+      expect(simple.controls).not.toContain('title="Stop this turn"');
+      expect(simple.markup).toContain('data-composer-stop="slot"');
+      fixture.advanced = true;
+      expect(header(idle).controls).toContain('title="Stop this turn"');
+    } finally {
+      fixture.needsInputStop = false;
+      fixture.advanced = true;
+    }
   });
 
   it("leaves Advanced mode's model, computer and ⋯ exactly as they were, the inspector unlocked", () => {

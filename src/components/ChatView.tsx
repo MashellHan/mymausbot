@@ -4,7 +4,7 @@ import { rawUserBubbleStyle, useRawPresentation } from "@/lib/raw-presentation";
 import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
 import { ThreadLinkContext } from "@/components/ThreadLinkMenu";
 import { useShowThreads } from "@/lib/thread-preferences";
-import { AlertTriangle, ChevronLeft, ChevronRight, Copy, RefreshCw, Square, Webhook } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Copy, RefreshCw, Webhook } from "lucide-react";
 import { WorkingDots } from "@/components/WorkingIndicator";
 import { ACTION_ICON, ChatBusyContext, CopyButton, MESSAGE_ROW, MessageActions, messageActionClass, ReplyAction, type MessageMenuItem } from "@/components/MessageActions";
 import { copyText } from "@/lib/copy-text";
@@ -96,9 +96,11 @@ import { RenameTitle } from "./RenameTitle"; import { ChatHeadRole, chiefOfStaff
 import { BotActivityPicker } from "./TaskPicker"; import { ChatHeadPill } from "./ChatHeadPill"; import { HeaderShare } from "./bot-access/HeaderShare"; import { ThreadPresenceFaces } from "./TeamPresence"; import { useStoreRef } from "@/state/store-ref"; import { sameFields, useStoreDispatch, useStoreSelector } from "@/state/store-select"; import { sameDrawnBots } from "@/lib/drawn-bots";
 import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
 import { ChatComputerButton } from "./ChatComputerButton";
+import { ChatStopButton } from "./ChatStopButton";
 import { ModelPicker } from "./ModelPicker";
 import { ChatHeaderMenu, ChatMoreMenu } from "./ChatMoreMenu"; import { TeamOwnHelperHeader, TeamPrivateFirstLine, TeamPrivateHeader, TeamSharedHeader } from "./TeamPrivateChatsLine"; import { ownChatStarted } from "@/state/team-chats";
 import { useChatFindRequests } from "@/lib/chat-find";
+import { useThreadNeedsInputStop } from "@/lib/thread-needs-input";
 import { CitationSelectionToolbar, SentCitations } from "./CitationUI";
 import { SpeakButton } from "./SpeakButton";
 import { CallOverlay } from "./CallView";
@@ -107,7 +109,6 @@ import { LiveCallChip } from "./LiveCallPill";
 import { effectivePlace, toolPlace, type EffectivePlace } from "@/lib/place";
 import { cn } from "@/lib/cn";
 import { activeLocale, intlLocale, t } from "@/lib/i18n";
-import { COMPACT_BUBBLE } from "@/lib/compact-chip";
 import { groupTranscript, isStatusActivity, turnDurations, workedLabel } from "@/lib/activity-runs";
 import { StatusActivityRow } from "@/components/StatusActivityRow";
 import { CancelledTurnRow } from "./CancelledTurnRow";
@@ -133,7 +134,7 @@ import { PinnedBanner } from "./ChatPinnedBanner";
 import { highlightCitationSource } from "@/lib/citations-dom";
 import { useCanWriteIn, useReactor } from "@/lib/cloud-guest";
 import { formattedReplyWidth, isFormattedReply, splitReplyBlocks } from "@/lib/formatted-reply";
-import { otherSpeaker } from "@/lib/own-profile"; import { useSharedRun } from "./SharedQueueLine";
+import { otherSpeaker } from "@/lib/own-profile"; import { useMayAct, useSharedRun } from "./SharedQueueLine";
 import { latestFailure, latestReply, type TranscriptSnapshot } from "@/lib/transcript-announcer";
 import { pendingApprovals } from "./PendingApproval";
 import { TranscriptAnnouncer } from "./TranscriptAnnouncer";
@@ -902,6 +903,9 @@ export const ChatView = memo(function ChatView({ bot: profile }: { bot: Bot }) {
     [bot.id, bot.threadId, bot.name, bot.color, bot.voice, tts, localVoice, hasMore, bots, mentionPeers, state.config?.profile?.name, focus, showToolCalls, locale, dispatch, onBranch, bubbleStyle, bot.replyStyle, advanced, raw, canWrite, openedAt, speakerViewer],
   );
   const currentTask = bot.tasks?.find((task) => task.threadId === bot.threadId), place = effectivePlace(bot, currentTask), team = state.config?.team, privateChat = Boolean(team) && (currentTask?.private === true || (ownChatStarted(bot.threadId) && !currentTask?.shared)), ownHelper = Boolean(team) && !privateChat && Boolean(bot.defaultBot?.person), sharedChat = Boolean(team) && !privateChat && !ownHelper;
+  const mayAct = useMayAct();
+  const needsInputStop = useThreadNeedsInputStop(bot.id, bot.threadId, bot.activity,
+    !bot.busy && !bot.waitingForTeammates && canWrite !== false && (!sharedChat || mayAct(currentTask?.askedBy)), stoppedAt);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   useEffect(() => setEditingId(null), [bot.id, bot.threadId]);
@@ -1094,18 +1098,8 @@ export const ChatView = memo(function ChatView({ bot: profile }: { bot: Bot }) {
           data-chathead-controls
           className={cn("flex shrink-0 items-center gap-2", !phone && "@max-[30rem]/chathead:ml-auto @max-[30rem]/chathead:justify-end @min-[30rem]/chathead:col-start-3 @min-[30rem]/chathead:justify-self-end", !phone && !rawComputerDirect && "@max-[30rem]/chathead:flex-wrap")}
         >{sharedChat && <ThreadPresenceFaces threadId={bot.threadId} />}
-          {!simpleHead && (bot.busy || bot.waitingForTeammates) && (
-            <button
-              onClick={() => dispatch({ type: "interrupt", botId: bot.id, threadId: bot.threadId })}
-              className={cn(
-                "flex items-center gap-1.5 rounded-full border border-hairline/40 bg-raised/60 px-2.5 py-1 text-[13px] text-ink-secondary hover:bg-raised hover:text-ink",
-                COMPACT_BUBBLE,
-              )}
-              title={t("chat.stopTurn")}
-            >
-              <Square size={12} className="fill-current" />
-              <span className="@max-4xl/chathead:hidden">{t("chat.stop")}</span>
-            </button>
+          {!simpleHead && (bot.busy || bot.waitingForTeammates || needsInputStop) && (
+            <ChatStopButton onClick={() => dispatch({ type: "interrupt", botId: bot.id, threadId: bot.threadId })} />
           )}
           <ThreadContextWarning bot={bot} messages={messages} />
           {phone && <UsageAlert engine={bot.modelSelection?.instanceId} />}
@@ -1267,6 +1261,7 @@ export const ChatView = memo(function ChatView({ bot: profile }: { bot: Bot }) {
       <Composer
         key={bot.threadId}
         bot={profile}
+        needsInputStop={needsInputStop}
         replyTo={replyTo}
         replyDraftId={replyId}
         onClearReply={clearReply}

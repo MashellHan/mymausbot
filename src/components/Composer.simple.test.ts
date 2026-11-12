@@ -259,6 +259,16 @@ describe("the Simple composer in a bot chat", () => {
     expect(container.querySelector('[data-composer-stop="slot"]')).toBeNull();
   });
 
+  it("stops the exact parked thread without treating an idle bot or another thread as busy", () => {
+    render({ bot, needsInputStop: true });
+    const stop = container.querySelector<HTMLButtonElement>('[data-composer-stop="slot"]');
+    expect(stop?.getAttribute("aria-label")).toBe("Stop this turn");
+    click(stop);
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "interrupt", botId: bot.id, threadId: bot.threadId });
+    render({ bot, needsInputStop: false });
+    expect(container.querySelector("[data-composer-stop]")).toBeNull();
+  });
+
   it("shows the approval level as a chip only while this conversation overrides the bot, in the panel's words", () => {
     render({ bot: { ...bot, approvalMode: "full" } });
     expect(container.querySelector("[data-approval-chip]")).toBeNull();
