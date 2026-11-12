@@ -171,21 +171,32 @@ describe("the data folder's format marker", () => {
 });
 
 describe("a server starting on a data folder", () => {
-  /** The real server on `dir`, until it exits or `until` holds. */
   async function start(dir: string, until: () => boolean): Promise<{ code: number | null; stderr: string }> {
-    const child = spawn(process.execPath, [join(import.meta.dirname, "index.ts")], {
+    const port = await freePortBlock([0, 1]);
+    const bootstrap = `process.on('message', message => { if (message === 'stop') process.emit('SIGTERM'); });
+      await import(${JSON.stringify(new URL("./index.ts", import.meta.url).href)});`;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", bootstrap], {
       cwd: ROOT,
       env: {
         ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-        HOME: dir, USERPROFILE: dir, OMB_DATA_DIR: join(dir, "data"), OMB_PORT: String(await freePortBlock([0, 1])),
+        HOME: dir, USERPROFILE: dir, OMB_DATA_DIR: join(dir, "data"), OMB_PORT: String(port),
       },
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
+    const readyLine = `openmausbot server on http://127.0.0.1:${port}`;
+    let outputTail = "";
+    let ready = false;
+    child.stdout!.on("data", (chunk) => {
+      if (ready) return;
+      const output = outputTail + String(chunk);
+      ready = output.includes(readyLine);
+      outputTail = output.slice(-readyLine.length);
     });
     let stderr = "";
     child.stderr!.on("data", (chunk) => (stderr += chunk));
     const exited = new Promise<number | null>((resolve) => child.once("close", resolve));
-    const watch = setInterval(() => { if (until()) child.kill("SIGTERM"); }, 50);
+    const watch = setInterval(() => { if (ready && until()) { clearInterval(watch); child.send("stop"); } }, 50);
     try {
       return { code: await exited, stderr };
     } finally {
@@ -233,7 +244,8 @@ describe("a server starting on a data folder", () => {
   it("marks a new data folder with the format it writes", async () => {
     const dir = dataDir();
     const marker = join(dir, "data", DATA_FORMAT_FILE);
-    await start(dir, () => existsSync(marker));
+    const { code } = await start(dir, () => existsSync(marker));
+    expect(code).toBe(0);
     expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ format: DATA_FORMAT.writes, writtenBy: VERSION });
   }, 60_000);
 });
