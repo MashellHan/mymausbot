@@ -247,6 +247,7 @@
   "activity.tool.team.useTool": "Use tool",
   "activity.tool.team.vmExec": "Vm exec",
   "activity.tool.team.waitUntil": "Wait until",
+  "activity.tool.team.withdrawWaitingThread": "Withdraw waiting thread",
   "activity.tool.team.xPost": "X post",
   "activity.tool.team.xProfile": "X profile",
   "activity.tool.team.xSearch": "X search",
