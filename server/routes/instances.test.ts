@@ -1,25 +1,33 @@
 // A finished sign-in step changes what an engine reports: the next engine list probes its CLI again.
 import { createServer, type Server } from "node:http";
+import { mkdtempSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { instanceConfigs, type AppConfig } from "../config.ts";
 import type { ProviderAuthenticationStart, ProviderAuthenticationStatus } from "../contracts.ts";
 import { ENGINE_LIST_REUSE_MS, ProviderRegistry } from "../harness/registry.ts";
+import { hostedModelPolicy } from "../hosted-models.ts";
 import { json, readBody } from "../harness/http.ts";
 import { ProviderAuthSessions } from "../provider-auth-sessions.ts";
 import type { RequestAuth } from "../request-auth.ts";
+import { removeTempDir } from "../testing/cleanup.ts";
 import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { createInstanceRoutes, type InstanceRouteDeps } from "./instances.ts";
 import { dispatchRoutes } from "./table.ts";
 
 const servers: Server[] = [];
+const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))));
+  for (const directory of directories.splice(0)) await removeTempDir(directory);
 });
 
 async function serve(extra: Partial<InstanceRouteDeps> = {}, auth: RequestAuth = { kind: "loopback", scopes: ["admin"] }) {
   const fake = makeFakeDriver();
+  const cfg = extra.cfg ?? { instances: { a: { driver: "fake" } } } as AppConfig;
   const registry = new ProviderRegistry([fake.driver]);
   await registry.load({ a: { driver: "fake" } });
   const sign = {
@@ -35,7 +43,7 @@ async function serve(extra: Partial<InstanceRouteDeps> = {}, auth: RequestAuth =
   });
   const deps = {
     store: { bots: [], tasks: () => [] },
-    cfg: { instances: { a: { driver: "fake" } } } as unknown as AppConfig,
+    cfg,
     registry,
     sessions: { isLive: () => true },
     providerAuthSessions: new ProviderAuthSessions(),
@@ -43,6 +51,7 @@ async function serve(extra: Partial<InstanceRouteDeps> = {}, auth: RequestAuth =
     providerConfigBusy: { get: () => false, set: () => {} },
     providerInstancesChanging: new Set<string>(),
     describeInstances: () => registry.describe({ reuse: { ms: ENGINE_LIST_REUSE_MS, changed: () => {} } }),
+    effectiveProviderConfigs: () => instanceConfigs(cfg),
     threadBusy: () => false,
     botForThread: () => null,
     activeGroupTurnForBot: () => null,
@@ -113,6 +122,55 @@ describe("the engine list", () => {
     expect(fake.probes).toHaveLength(2);
     expect(await probesAfterList()).toBe(2);
   });
+
+  it("describes exact model routes without joining same-name connections or changing selection IDs", async () => {
+    const cfg = { instances: {
+      a: { driver: "fake", displayName: "Studio Proxy" },
+      b: { driver: "fake", displayName: "Studio Proxy" },
+    } } as unknown as AppConfig;
+    const { call } = await serve({ cfg, describeInstances: async () => ["a", "b"].map((instanceId) => ({
+      instanceId, driverKind: "fake", displayName: "Studio Proxy", snapshot: { state: "available" },
+      models: { default: "M", options: [{ id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }] }] },
+    })) });
+    const { instances } = await call("GET", "/api/instances");
+    expect(instances.map((instance: any) => [instance.instanceId, instance.driverKind, instance.models.options[0]])).toEqual([
+      ["a", "fake", { id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }], providerRoute: { id: "connection", label: "Studio Proxy", provenance: "configured" } }],
+      ["b", "fake", { id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }], providerRoute: { id: "connection", label: "Studio Proxy", provenance: "configured" } }],
+    ]);
+  });
+
+  it("uses the generated ChatGPT-plan config that the registered fleet actually runs", async () => {
+    const cfg = { instances: { codex: { driver: "codex" } } } as AppConfig;
+    const { call } = await serve({ cfg, describeInstances: async () => [{
+      instanceId: "chatgpt", driverKind: "codex", models: { default: "M", options: [{ id: "M", label: "M" }] },
+    }] });
+    expect(instanceConfigs(cfg).chatgpt.config).toMatchObject({ authMode: "chatgpt-plan" });
+    const { instances } = await call("GET", "/api/instances");
+    expect(instances[0].models.options[0].providerRoute).toEqual({ id: "native:chatgpt-plan", label: "OpenAI", provenance: "native" });
+  });
+
+  it("uses the effective hosted Company route without returning its gateway or token", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omb-provider-route-")); directories.push(root);
+    const token = `omb_workspace_${"a".repeat(43)}`;
+    const hosted = hostedModelPolicy(root, {
+      OMB_ADMIN_URL: "https://admin.example.test", OMB_PUBLIC_URL: "https://fixture.example.test",
+      OMB_ADMIN_WORKSPACE: "fixture", OMB_ADMIN_MEMBERSHIP: "portal",
+      OMB_HOSTED_MODEL_TOKEN: token,
+      OMB_HOSTED_MODELS: JSON.stringify({ anthropic: [], openai: ["M"], openrouter: [] }),
+    })!;
+    const { call } = await serve({
+      cfg: { instances: { codex: { driver: "codex" } } } as AppConfig,
+      hostedModels: true,
+      effectiveProviderConfigs: () => hosted.configs(),
+      describeInstances: async () => [{
+        instanceId: "codex", driverKind: "codex", models: { default: "M", options: [{ id: "M", label: "M" }] },
+      }],
+    });
+    const response = await call("GET", "/api/instances");
+    expect(response.instances[0].models.options[0].providerRoute).toEqual({ id: "connection", provenance: "configured" });
+    expect(JSON.stringify(response)).not.toContain(token);
+    expect(JSON.stringify(response)).not.toContain("admin.example.test");
+  });
 });
 
 describe("whether the server can start a bot", () => {
@@ -143,9 +201,10 @@ describe("an engine's check", () => {
 describe("installing an engine's own build from Settings", () => {
   async function serveInstall(options: { useCli?: string; busy?: boolean }) {
     const persisted: Array<{ instanceId: string; instances: unknown }> = [];
+    const cfg = { instances: { opencode: { driver: "opencodeGo" } } } as AppConfig;
     const deps = {
       store: { bots: [], tasks: () => [] },
-      cfg: { instances: { opencode: { driver: "opencodeGo" } } } as unknown as AppConfig,
+      cfg,
       registry: {
         installRuntime: async () => options.useCli ? { useCli: options.useCli } : true,
         get: () => null,
@@ -159,6 +218,7 @@ describe("installing an engine's own build from Settings", () => {
       providerConfigBusy: { get: () => options.busy === true, set: () => {} },
       providerInstancesChanging: new Set<string>(),
       describeInstances: async () => [],
+      effectiveProviderConfigs: () => instanceConfigs(cfg),
       persistProviderInstance: async (instanceId: string, instances: unknown) => { persisted.push({ instanceId, instances }); },
       threadBusy: () => false,
       botForThread: () => null,

@@ -8,6 +8,7 @@ import type {
 } from "../shared/runtime-events.ts";
 import type { LocalModelFacts, OllamaProblem } from "../shared/local-model.ts";
 import type { ProviderIcon } from "../shared/provider-icon.ts";
+import type { ModelProviderRoute } from "../shared/model-provider-route.ts";
 
 export type { CloudBackend, EffortLevel, ModelSelection } from "../shared/wire.ts";
 export type {
@@ -483,6 +484,8 @@ export interface ModelCatalog {
     loaded?: boolean;
     /** Upstream provider id (e.g. "zai"), shown as a badge so BYOK duplicates stay distinguishable. */
     provider?: string;
+    /** Provider identity for grouping, scoped to this exact instance and model catalog. */
+    providerRoute?: ModelProviderRoute;
     /** Context window in tokens, when known; sizes the model-facing rebuild. */
     contextWindow?: number;
     /** Discovery hints; the native session revalidates these before each turn. */
