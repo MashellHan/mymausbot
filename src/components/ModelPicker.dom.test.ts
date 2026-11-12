@@ -673,6 +673,22 @@ describe("inline overview model settings", () => {
       selection: { instanceId: "codex", model: "gpt-5.6" } }));
   });
 
+  it("keeps the saved OpenCode provider and model selected when reasoning uses a native variant", async () => {
+    const option: Option = { id: "provider/model", label: "Provider model",
+      providerRoute: { id: "configured:route", label: "Example", provenance: "configured" },
+      variants: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] };
+    fixture.instances = [{ ...claude([option]), instanceId: "opencode", driverKind: "opencodeGo", displayName: "OpenCode",
+      capabilities: { modelVariants: true } }];
+    const bot: Bot = { ...scout(), modelSelection: { instanceId: "opencode", model: option.id, variant: "high" } };
+    render(bot, options);
+    await settle();
+    expect(select("Provider").value).toBe(provider("opencode", "configured:route"));
+    expect(select("Choose model").disabled).toBe(false);
+    expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Provider model");
+    choose(select("Choose model"), JSON.stringify(["opencode", option.id]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: bot.modelSelection }));
+  });
+
   it("keeps equally named connections and local routes separate by exact instance and route", async () => {
     const sharedRoute = { id: "native:openai", label: "OpenAI", provenance: "native" as const };
     fixture.instances = [

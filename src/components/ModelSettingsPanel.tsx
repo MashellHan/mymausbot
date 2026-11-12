@@ -52,7 +52,7 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
   const selection = bot.modelSelection;
   const active = instances.find((instance) => instance.instanceId === selection.instanceId);
   const groups = providerGroups(instances);
-  const selectedOption = active && modelChoices(active, active.models.options).find((option) => choiceIsSelected(option, selection));
+  const selectedOption = active?.models.options.find((option) => option.id === selection.model);
   const savedKey = active && selectedOption ? JSON.stringify([active.instanceId, selectedOption.providerRoute?.id ?? "unknown"]) : "current";
   const [providerKey, setProviderKey] = useState(savedKey);
   const busyReasonId = useId();
@@ -62,7 +62,8 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
   const choices = source ? modelChoices(source.instance, source.options).map((option) => ({
     instance: source.instance,
     option, value: JSON.stringify([source.instance.instanceId, option.id]),
-    selected: source.key === savedKey && choiceIsSelected(option, selection),
+    selected: source.key === savedKey && (source.instance.driverKind === "antigravityAgent"
+      ? choiceIsSelected(option, selection) : option.id === selection.model),
     disabled: Boolean(source.instance.policy || needsCli(source.instance) || option.orgBlocked || (!option.custom && needsSignIn(source.instance) && !isCustomOnly(source.instance))),
   })) : [];
   const selected = choices.find((choice) => choice.selected);
