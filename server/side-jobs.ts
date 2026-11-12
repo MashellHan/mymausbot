@@ -35,7 +35,7 @@ export function helperSelection(cfg: HelperConfig, env: Record<string, string | 
 }
 
 /** "representative": a person's assistant answering a teammate's question for them, which must never get tools. */
-export type SideJob = "compaction" | "memory" | "skill-review" | "setup-suggestions" | "representative" | "status-reply";
+export type SideJob = "compaction" | "memory" | "skill-review" | "setup-suggestions" | "mini-app-suggestions" | "representative" | "status-reply";
 
 export type SideJobInstance = Pick<ProviderInstance, "instanceId" | "driverKind" | "enabled" | "generateText" | "generateMemoryText" | "models" | "quickModelsUsable"> & {
   adapter: { capabilities: Pick<ProviderAdapter["capabilities"], "agentsMcp"> };
@@ -78,7 +78,7 @@ type TextCall = (prompt: string, options?: TextGenerationOptions) => Promise<str
 
 /** Jobs someone is waiting on, and the representative, which must never get tools, run only on a one-off text call:
  * generateMemoryText starts a whole agent process. */
-const ONE_OFF_ONLY: ReadonlySet<SideJob> = new Set(["compaction", "setup-suggestions", "representative", "status-reply"]);
+const ONE_OFF_ONLY: ReadonlySet<SideJob> = new Set(["compaction", "setup-suggestions", "mini-app-suggestions", "representative", "status-reply"]);
 
 function ownCall(job: SideJob, instance: SideJobInstance): TextCall | undefined {
   const call = ONE_OFF_ONLY.has(job) ? instance.generateText : instance.generateText ?? instance.generateMemoryText;
@@ -189,7 +189,8 @@ export function createSideJobs(deps: SideJobsDeps): SideJobs {
       if (!bot || !own || deps.refusal(own)) return null;
       // The review's changes are written with the bot's own skill tools, whoever read the conversation.
       if (job === "skill-review" && own.adapter.capabilities.agentsMcp !== true) return null;
-      const call = ownCall(job, own);
+      // Only this native text path excludes tools and rejects returned tool calls.
+      const call = job === "mini-app-suggestions" && own.driverKind !== "openai-compat" ? undefined : ownCall(job, own);
       if (call) {
         // The summary belongs to a turn that already passed the spend limit and is not booked on its own.
         if (job === "compaction") return { via: "engine", generateText: call };
@@ -202,7 +203,7 @@ export function createSideJobs(deps: SideJobsDeps): SideJobs {
       }
       if (!helperModelAllowed(bot)) return null;
       const helper = usableHelper();
-      if (!helper) return null;
+      if (!helper || (job === "mini-app-suggestions" && helper.instance.driverKind !== "openai-compat")) return null;
       return { via: "helper", generateText: booked(job, bot, helper.instance, helper.call, { kind: "helper", botId: bot.id, job }, () => (helper.model ? { model: helper.model } : {})) };
     },
   };

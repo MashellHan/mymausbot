@@ -15,6 +15,9 @@ import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
 import { ReportStore } from "../mini-apps/report-store.ts";
 import { DefaultMiniApps } from "../mini-apps/defaults.ts";
+import { MiniAppSuggestions } from "../mini-apps/suggestions.ts";
+import type { SideJobText } from "../side-jobs.ts";
+import type { Store } from "../store.ts";
 import { reportAppsForBot } from "../mini-apps/report-apps.ts";
 import { parseReportTool, reportKindSchema } from "../mini-apps/report-schema.ts";
 import { localDashboardProviders, type LocalDashboardProviders } from "./local-dashboard.ts";
@@ -38,20 +41,24 @@ interface MiniAppRouteDeps {
   routines(): Pick<RoutineManager, "listRoutines" | "runForThread" | "isActiveThread"> | null;
   localEnabled(): boolean;
   bots(): Array<{ id: string; name: string; toolScope?: unknown }>;
+  suggestions?: MiniAppSuggestions;
 }
 
 export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" | "reports"> & {
-  store: Parameters<typeof createChatApps>[0]["store"];
+  store: Parameters<typeof createChatApps>[0]["store"] & Pick<Store, "bot" | "taskByThread">;
   dataDir: string;
   validPublisher(id: string): boolean;
   dashboardProviders?: LocalDashboardProviders;
+  suggestionWriter?(botId: string): SideJobText | null;
 } & Pick<Parameters<typeof createChatApps>[0], "liveRows" | "liveRoots" | "paused">) {
-  const { store, dataDir, validPublisher, dashboardProviders, liveRows, liveRoots, paused, ...shared } = input;
+  const { store, dataDir, validPublisher, dashboardProviders, suggestionWriter, liveRows, liveRoots, paused, ...shared } = input;
   const chatApps = createChatApps({ store, dataDir,
     references: () => [...appDocRefs(), ...miniAppDocRefs()], liveRows, liveRoots, paused });
-  const deps = { ...shared, apps: new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
-    dashboardProviders: dashboardProviders ?? localDashboardProviders }),
-    reports: new ReportStore(shared.data, createReportTemplate) };
+  const apps = new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
+    dashboardProviders: dashboardProviders ?? localDashboardProviders });
+  apps.initialize();
+  const deps = { ...shared, apps, suggestions: new MiniAppSuggestions({ apps, store,
+    writer: suggestionWriter ?? (() => null) }), reports: new ReportStore(shared.data, createReportTemplate) };
   return { chatApps, owner: createMiniAppRoutes(deps), internal: createMiniAppsInternalRoutes(deps),
     reportAppsForBot: (botId: string) => reportAppsForBot(deps, botId) };
 }
@@ -90,6 +97,10 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
     try {
       assertOwner();
       if (url.search) throw appFailure(400, "Query parameters are not supported.");
+      if (path === `${ROOT}/suggestions` && method === "POST") {
+        if (!deps.suggestions) throw appFailure(503, "Mini App suggestions are unavailable.");
+        return json(res, 200, deps.suggestions.read(owner, await readBody(req, 4096)));
+      }
       if (path === `${ROOT}/defaults` && method === "POST") {
         return json(res, 200, await defaults.ensure(owner, await readBody(req, 900_000)));
       }
