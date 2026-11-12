@@ -928,6 +928,30 @@ describe("the Library tab", () => {
     expect(onOpen).toHaveBeenLastCalledWith("folder");
     expect(rowValue(library(makeBot({ cwd: "/Users/omkar/Projects/site" })), "folder")).toBe("/Users/omkar/Projects/site");
   });
+
+  it("keeps Files settings ahead of many generated links and shows the pinned chat folder", () => {
+    const messages = Array.from({ length: 20 }, (_, index) => ({
+      id: `page-${index}`, role: "bot", kind: "text", at: index + 1,
+      publishedPage: { state: "live", title: `Page ${index}`, url: `https://example.test/${index}` },
+    })) as Bot["messages"];
+    const bot = makeBot({
+      cwd: "/workspace/default", messages,
+      tasks: [{ threadId: "thread-scout", title: "Main", createdAt: 1, cwd: "/workspace/pinned" }],
+    });
+    const rendered = capture(() => LibraryTab({ bot, onOpen, embedded: true }));
+    const order = ["memory", "skills", "folder"].map((page) => rendered.html.indexOf(`data-panel-page="${page}"`));
+    expect(order.every((index) => index > -1)).toBe(true);
+    expect(order[0]).toBeLessThan(order[1]!);
+    expect(order[1]).toBeLessThan(order[2]!);
+    expect(order[2]).toBeLessThan(rendered.html.indexOf('data-panel-card="pages"'));
+    expect(rendered.html).toContain("Page 0");
+    expect(rendered.html).toContain("Page 19");
+    expect(rendered.html).not.toContain('data-panel-card="files"');
+    expect(rowValue(rendered, "folder")).toBe("/workspace/pinned");
+    expect(rendered.html).toContain("This chat keeps its current folder.");
+    click(find(rendered, "data-panel-page", "folder"));
+    expect(onOpen).toHaveBeenLastCalledWith("folder");
+  });
 });
 
 describe("the Computer tab", () => {

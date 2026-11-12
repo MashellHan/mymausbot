@@ -23,7 +23,7 @@ export interface LibraryItems {
 }
 
 /** What the bot made in the open conversation, newest first: its live published pages, its apps, and its files. */
-export function libraryItems(bot: Bot, messages: readonly Message[] = visibleMessages(bot)): LibraryItems {
+export function libraryItems(bot: Bot, messages: readonly Message[] = visibleMessages(bot), includeFiles = true): LibraryItems {
   const pages: LibraryItems["pages"] = [];
   const apps: LibraryItems["apps"] = [];
   const seenPages = new Set<string>();
@@ -35,6 +35,7 @@ export function libraryItems(bot: Bot, messages: readonly Message[] = visibleMes
     }
     if (message.kind === "app" && message.app?.doc) apps.push({ messageId: message.id, title: message.app.title });
   }
+  if (!includeFiles) return { pages, apps, shared: [], unshared: [] };
   const references = sharedFileReferences(bot);
   const shared: LibraryItems["shared"] = [];
   const seenFiles = new Set<string>();
@@ -49,20 +50,22 @@ export function libraryItems(bot: Bot, messages: readonly Message[] = visibleMes
 
 const fileName = (path: string) => path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
 
-export function LibraryTab({ bot, onOpen }: { bot: Bot; onOpen: (page: SimplePageId) => void }) {
+export function LibraryTab({ bot, onOpen, embedded = false }: { bot: Bot; onOpen: (page: SimplePageId) => void; embedded?: boolean }) {
   const { dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
   const openPage = usePageOpener();
   const phone = !useMediaQuery(SIDEBAR_INLINE, true);
   const skills = useManagedSkills(bot);
   const memory = useMemoryDoc(bot);
-  const { pages, apps, shared, unshared } = useMemo(() => libraryItems(bot), [bot]);
+  const { pages, apps, shared, unshared } = useMemo(() => libraryItems(bot, undefined, !embedded), [bot, embedded]);
   const showInChat = (messageId: string) => {
     dispatch({ type: "focusMessage", threadId: bot.threadId, messageId });
-    if (phone) dispatch({ type: "toggleSettings", open: false });
+    if (phone) dispatch({ type: embedded ? "toggleComputer" : "toggleSettings", open: false });
   };
   const skillsOn = skills.skills.filter(skillSwitchOn).length;
   const notes = memory.docs ? panelMemoryNotes(memory.docs).length : null;
+  const pinnedFolder = bot.tasks?.find((task) => task.threadId === bot.threadId)?.cwd;
+  const currentFolder = pinnedFolder === undefined ? bot.cwd : pinnedFolder;
   const memoryValue = bot.memoryEnabled === false ? t("botPanel.memory.off")
     : notes === null ? (memory.error ? t("botPanel.memory.nothingYet") : undefined)
     : notes === 0 ? t("botPanel.memory.nothingYet")
@@ -81,13 +84,17 @@ export function LibraryTab({ bot, onOpen }: { bot: Bot; onOpen: (page: SimplePag
         data-panel-page="folder"
         icon={Folder}
         title={t("computer.files.folder")}
-        value={bot.cwd ? shortPath(bot.cwd, capabilities.host?.homeDir) : t("botPanel.folder.private")}
+        hint={embedded && pinnedFolder !== undefined ? t("computer.files.pinnedFolderHint") : undefined}
+        value={embedded
+          ? currentFolder ? shortPath(currentFolder, capabilities.host?.homeDir)
+            : currentFolder === null ? t("computer.files.homeFolder") : t("computer.files.privateFolder", { name: bot.name })
+          : bot.cwd ? shortPath(bot.cwd, capabilities.host?.homeDir) : t("botPanel.folder.private")}
         onClick={() => onOpen("folder")}
       />
     </Card>
   );
 
-  if (pages.length + apps.length + shared.length + unshared.length === 0) {
+  if (!embedded && pages.length + apps.length + shared.length + unshared.length === 0) {
     return (
       <div data-panel-tabpanel="library">
         <p data-panel-empty="library" className="px-3 py-7 text-center text-[13px] leading-[18px] text-ink-tertiary">
@@ -98,7 +105,8 @@ export function LibraryTab({ bot, onOpen }: { bot: Bot; onOpen: (page: SimplePag
     );
   }
   return (
-    <div data-panel-tabpanel="library">
+    <div data-panel-tabpanel={embedded ? undefined : "library"}>
+      {embedded && keeps}
       {pages.length > 0 && (
         <Card label={t("botPanel.library.pages")} anchor="pages">
           {pages.map((page) => (
@@ -113,7 +121,7 @@ export function LibraryTab({ bot, onOpen }: { bot: Bot; onOpen: (page: SimplePag
           ))}
         </Card>
       )}
-      {shared.length + unshared.length > 0 && (
+      {!embedded && shared.length + unshared.length > 0 && (
         <section data-panel-card="files">
           <CardLabel>{t("botPanel.library.files")}</CardLabel>
           <ul className="flex flex-col gap-1.5">
@@ -132,8 +140,8 @@ export function LibraryTab({ bot, onOpen }: { bot: Bot; onOpen: (page: SimplePag
           </ul>
         </section>
       )}
-      <p className="mt-3 text-center text-[12px] text-ink-tertiary">{t("botPanel.library.scope")}</p>
-      {keeps}
+      {!embedded && <p className="mt-3 text-center text-[12px] text-ink-tertiary">{t("botPanel.library.scope")}</p>}
+      {!embedded && keeps}
     </div>
   );
 }

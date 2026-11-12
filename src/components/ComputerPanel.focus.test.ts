@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { AppState, Bot, InstanceInfo } from "@/state/store";
 import { setLocale, t } from "@/lib/i18n";
 import { rememberComputerPanelOpen } from "@/lib/computer-panel-focus";
+import { requestComputerPanelView } from "@/lib/computer-panel-view";
 
 const fixture = { advanced: true };
 
@@ -37,6 +38,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
   api: async (path: string) => {
     if (path.startsWith("/api/bots/scout/computer/control")) return { held: false, helpReason: null };
     if (path.startsWith("/api/bots/scout/computer?")) return { surface: "cloud", backend: "box", configured: true, box: { boxId: "bx_23456789", state: "ready" } };
+    if (path.startsWith("/api/bots/scout/memory/file?")) return { path: "MEMORY.md", text: "", hash: "", exists: false };
     return {};
   },
 }));
@@ -200,6 +202,46 @@ describe("computer panel entry focus", () => {
     flushSync(() => tabByLabel("Data").click());
     await settle();
     expect(document.activeElement).toBe(tabByLabel("Data"));
+  });
+
+  it.each(["Files", "Browser"])("returns a mounted %s panel to Bot when its header requests the overview", async (view) => {
+    await open(makeBot());
+    flushSync(() => tabByLabel(view).click());
+    expect(activeTab()).toBe(tabByLabel(view));
+
+    flushSync(() => requestComputerPanelView("scout", "computer"));
+    await settle();
+    expect(activeTab()).toBe(tabByLabel("Bot"));
+    expect(localStorage.getItem("omb-computer-panel-view:scout")).toBe("computer");
+  });
+
+  it("keeps Files settings below a bounded file list and returns their pages to Files", async () => {
+    const messages = Array.from({ length: 20 }, (_, index) => ({
+      id: `page-${index}`, role: "bot", kind: "text", at: index + 1, text: "",
+      publishedPage: { state: "live", title: `Page ${index}`, url: `https://example.test/${index}` },
+      digest: { files: { added: [`/workspace/pinned/file-${index}.md`], changed: [], deleted: [] } },
+    })) as Bot["messages"];
+    await open(makeBot({ cwd: "/workspace/default", messages,
+      tasks: [{ threadId: "thread", title: "Main", createdAt: 1, cwd: "/workspace/pinned" }] }));
+    flushSync(() => tabByLabel("Files").click());
+    await settle();
+    expect(document.querySelector('[data-testid="computer-files"]')?.className).toContain("overflow-y-auto");
+    expect(document.querySelectorAll('[data-panel-page="folder"]')).toHaveLength(1);
+    expect(document.querySelector('[data-panel-page="folder"]')?.textContent).toContain("/workspace/pinned");
+    expect(document.querySelector('[data-testid="files-library-links"]')?.textContent).toContain("Page 0");
+    expect(document.querySelector('[data-testid="files-library-links"]')?.textContent).toContain("Page 19");
+    for (const page of ["memory", "skills", "folder"]) {
+      flushSync(() => document.querySelector<HTMLElement>(`[data-panel-page="${page}"]`)!.click());
+      expect(document.querySelector(`[data-panel-page-view="${page}"]`)).not.toBeNull();
+      flushSync(() => document.querySelector<HTMLElement>("[data-panel-back]")!.click());
+      runFrames();
+      expect(activeTab()).toBe(tabByLabel("Files"));
+    }
+    flushSync(() => requestComputerPanelView("scout", "computer"));
+    await settle();
+    expect(document.querySelector('[data-panel-card="model"]')).not.toBeNull();
+    flushSync(() => document.querySelector<HTMLElement>('[aria-controls="bot-overview-works-content"]')!.click());
+    expect(document.querySelector('#bot-overview-works-content')?.textContent).toContain("Signed-in sites");
   });
 
   it("stops following the selection once focus leaves the tab row", async () => {

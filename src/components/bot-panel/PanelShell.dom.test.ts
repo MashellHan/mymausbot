@@ -7,12 +7,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, BotSettingsSection } from "@/state/store";
 
-const fixture = vi.hoisted(() => ({ dispatch: vi.fn(), settingsOpen: false }));
+const fixture = vi.hoisted(() => ({ dispatch: vi.fn(), settingsOpen: false, computerOpen: false }));
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
   return {
     ...original,
-    useStore: () => ({ state: { ...original.initialState, settingsOpen: fixture.settingsOpen }, dispatch: fixture.dispatch, flushBotPatches: () => Promise.resolve(null) }),
+    useStore: () => ({ state: { ...original.initialState, settingsOpen: fixture.settingsOpen, computerOpen: fixture.computerOpen }, dispatch: fixture.dispatch, flushBotPatches: () => Promise.resolve(null) }),
   };
 });
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => false, readAdvancedMode: () => false, setAdvancedMode: vi.fn() }));
@@ -250,13 +250,26 @@ describe("the chat header's pill", () => {
   });
 
   it("says the panel is open and points at it, then hides the hover chevron", () => {
-    fixture.settingsOpen = true;
+    fixture.computerOpen = true;
     const { header, done } = pill();
     try {
       const button = header.querySelector<HTMLButtonElement>("[data-chathead-pill]")!;
       expect(button.getAttribute("aria-expanded")).toBe("true");
-      expect(button.getAttribute("aria-controls")).toBe("bot-panel");
+      expect(button.getAttribute("aria-controls")).toBe("computer-panel");
       expect(header.querySelector("[data-chathead-chevron]")).toBeNull();
+    } finally {
+      fixture.computerOpen = false;
+      done();
+    }
+  });
+
+  it("keeps the remote client's profile panel target", () => {
+    fixture.settingsOpen = true;
+    const { header, done } = pill({ remoteClient: true });
+    try {
+      const button = header.querySelector<HTMLButtonElement>("[data-chathead-pill]")!;
+      expect(button.getAttribute("aria-expanded")).toBe("true");
+      expect(button.getAttribute("aria-controls")).toBe("bot-panel");
     } finally {
       fixture.settingsOpen = false;
       done();
