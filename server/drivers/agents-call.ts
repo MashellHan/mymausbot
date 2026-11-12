@@ -31,6 +31,7 @@ import { callPageTool, PAGE_TOOL_NAMES } from "./agents-pages-tools.ts";
 import { callMiniAppTool, MINI_APP_TOOL_NAMES } from "./agents-mini-app-tools.ts";
 import { callPersonTool, PERSON_TOOL_NAMES } from "./agents-person-tools.ts";
 import { callDevsTool, DEVS_TOOL_NAMES } from "./agents-devs-tools.ts";
+import { callWithdrawWaitingThread } from "./agents-withdraw-tool.ts";
 
 export interface ToolCallContext {
   botId: string;
@@ -439,6 +440,7 @@ export async function callTool(called: string, input: Json, context: ToolCallCon
     if (r.error) return { text: `Couldn't close that thread: ${String(r.error)}`, isError: true };
     return { text: `Closed #${String(r.title)}${r.botName ? ` on @${String(r.botName)}` : ""}. It stays in the person's sidebar, idle, with a note that you closed it.` };
   }
+  if (name === "withdraw_waiting_thread") return callWithdrawWaitingThread(args, context);
   if (name === "start_thread") {
     const title = String(args.title ?? "").trim();
     const message = String(args.message ?? "").trim();
