@@ -39,6 +39,7 @@ vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => fixture.advan
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, setAdvancedMode: () => {} }));
 vi.mock("@/lib/raw-presentation", () => ({ useRawPresentation: () => false }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.admin }));
+vi.mock("@/state/store-select", async (importOriginal) => (await import("@/testing/plain-store-select")).plainStoreSelect(await importOriginal()));
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
   return { ...original, useStore: () => ({ state: fixture.state, dispatch: fixture.dispatch }) };
@@ -49,6 +50,7 @@ import { BOTS_SECTION_ID, CHANNELS_SECTION_ID, userSectionId } from "@/lib/sideb
 import { SIDEBAR_DENSITY_KEY } from "@/lib/sidebar-preferences";
 import { PHONE_LAYOUT } from "@/lib/use-media-query";
 import { BotContextMenu, BotListItem, Sidebar, TeamMenuItems } from "./Sidebar";
+const drawSidebar = (Sidebar as unknown as { type: (props: import("react").ComponentProps<typeof Sidebar>) => import("react").ReactNode }).type;
 import { NEW_DEPARTMENT } from "./SidebarBotDrag";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -74,7 +76,7 @@ function nodes(value: ReactNode): ReactElement<Props>[] {
 }
 function render() {
   fixture.index = 0;
-  const root = Sidebar({ open: false, onClose: () => {} }) as ReactElement<Props>;
+  const root = drawSidebar({ open: false, onClose: () => {} }) as ReactElement<Props>;
   return [root, ...nodes(root.props.children)];
 }
 const rows = () => render().filter((node) => node.type === BotListItem).map((node) => node.props as unknown as RowProps);

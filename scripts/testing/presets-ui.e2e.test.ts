@@ -64,9 +64,8 @@ describe("Preset bots in the real renderer", () => {
     await expect.poll(snapshot, { timeout: 10_000 }).toContain('button "You"');
     await click("You");
     await click("Settings");
-    // New bot defaults sit on the AI page.
-    await expect.poll(() => evaluate("(() => { document.querySelector('[data-settings-page=\"ai\"]')?.click(); return Boolean(document.querySelector('[data-new-bot-share]')); })()"), { timeout: 10_000 }).toBe(true);
-    await click("Share as preset…");
+    await expect.poll(() => evaluate("(() => { (() => { const mode = document.querySelector('select[aria-labelledby=\"settings-interface-mode\"]'); if (mode && mode.value !== \"advanced\") { mode.value = \"advanced\"; mode.dispatchEvent(new Event('change', { bubbles: true })); } })(); document.querySelector('[data-settings-page=\"bots\"]')?.click(); return Boolean(document.querySelector('[data-new-bot-share]')); })()"), { timeout: 10_000 }).toBe(true);
+    await evaluate("document.querySelector('[data-new-bot-share]').click(); true");
     await expect.poll(snapshot, { timeout: 20_000 }).toContain("What's in the file");
     let dialog = await snapshot();
     for (const line of ["Share New bot defaults as a preset", "follow-up", "Never included: model choices, folders, where bots work, approval levels"]) expect(dialog).toContain(line);

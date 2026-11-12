@@ -2,7 +2,8 @@ import { OrganizationIdentity } from "./OrganizationIdentity";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch } from "react";
 import { createPortal } from "react-dom";
 import { Archive, Bot as BotIcon, Check, ChevronRight, ClipboardCopy, Crown, FolderPlus, LayoutTemplate, Loader2, MessageSquarePlus, MoreHorizontal, Pencil, Phone, Pin, Plus, Search, SquarePen, TextQuote, Trash2, Users, X } from "lucide-react";
-import { api, useStore, formatTime, visibleMessages, currentTaskBot, botOpensTo, openBot, openThread, type Action, type AppState, type Bot, type BotProject, type Group, type InstanceInfo, type Message } from "@/state/store";
+import { sidebarState } from "./sidebar-state"; import { sameFields, useStoreDispatch, useStoreSelector } from "@/state/store-select"; import { useStoreRef } from "@/state/store-ref"; import { sameDrawnBots } from "@/lib/drawn-bots";
+import { api, formatTime, visibleMessages, currentTaskBot, botOpensTo, openBot, openThread, type Action, type AppState, type Bot, type BotProject, type Group, type InstanceInfo, type Message } from "@/state/store";
 import { approvalModeFor } from "../../shared/approval-mode";
 import { liveActivityLabel, sidebarMessage } from "@/lib/live-activity";
 import { SidebarWorkingStep } from "./SidebarWorkingStep";
@@ -138,7 +139,7 @@ export function openBotContextMenu(onMenu: (menu: MenuState) => void, botId: str
   onMenu({ botId, x: event.clientX, y: event.clientY });
 }
 
-export function GroupListItem({
+export const GroupListItem = memo(function GroupListItem({
   group,
   density,
   query = "",
@@ -149,9 +150,9 @@ export function GroupListItem({
   query?: string;
   onMenu: (menu: { groupId: string; x: number; y: number }) => void;
 }) {
-  const { state, dispatch } = useStore();
+  const dispatch = useStoreDispatch(), bots = useStoreSelector((s) => s.bots, sameDrawnBots), instances = useStoreSelector((s) => s.instances);
   const advanced = useAdvancedMode();
-  const selected = state.activeView === "chat" && state.selectedId === group.id;
+  const selected = useStoreSelector((s) => s.activeView === "chat" && s.selectedId === group.id);
   const [threadsOpen, setThreadsOpen] = useSearchDisclosure(`group:${group.id}`, query ?? "", searchMatchesThreads(query ?? "", group.tasks), selected);
   const wasSelected = useRef(selected);
   useEffect(() => {
@@ -164,7 +165,7 @@ export function GroupListItem({
   const railTile = !advanced && density === "icons";
   const roomBusy = Boolean(group.busyBotId) || Boolean(group.working);
   const members = group.memberIds
-    .map((id) => state.bots.find((b) => b.id === id))
+    .map((id) => bots.find((b) => b.id === id))
     .filter((b): b is Bot => Boolean(b));
   const last = group.messages.at(-1);
   return (
@@ -203,7 +204,7 @@ export function GroupListItem({
           {simpleRow && !expanded && group.unread && <RowDot />}
         </div>
         {!expanded && <div className="flex items-center justify-between gap-2">
-          <span className={cn("truncate text-ink-secondary", simpleRow ? "text-[13px] leading-[18px]" : "text-[11px]")}>{group.description || groupPreview(group, state.bots, state.instances, advanced)}</span>
+          <span className={cn("truncate text-ink-secondary", simpleRow ? "text-[13px] leading-[18px]" : "text-[11px]")}>{group.description || groupPreview(group, bots, instances, advanced)}</span>
           {!simpleRow && group.unread && <span className="size-2 shrink-0 rounded-full bg-accent" />}
         </div>}
         {simpleRow && <RowStatusText unread={group.unread} />}
@@ -223,7 +224,7 @@ export function GroupListItem({
     {expanded && <GroupThreadList group={group} selected={selected} query={group.name.toLowerCase().includes(query.toLowerCase()) ? "" : query} />}
     </>
   );
-}
+});
 
 function RoomContextMenu({
   menu,
@@ -238,9 +239,9 @@ function RoomContextMenu({
 }) {
   const motion = useHeldMenuMotion(menu);
   const shown = motion.value;
-  const { state, dispatch } = useStore();
+  const dispatch = useStoreDispatch(), store = useStoreRef();
   const remoteClient = window.ogb?.remoteClient?.active === true;
-  const group = shown ? state.groups.find((g) => g.id === shown.groupId) : undefined;
+  const group = useStoreSelector((s) => shown ? s.groups.find((g) => g.id === shown.groupId) : undefined);
   const [renaming, setRenaming] = useState(false);
   const [describing, setDescribing] = useState(false);
   const [draft, setDraft] = useState(group?.name ?? "");
@@ -248,8 +249,8 @@ function RoomContextMenu({
 
   useEffect(() => {
     if (!menu) return;
-    setDraft(state.groups.find((g) => g.id === menu.groupId)?.name ?? "");
-    setDescriptionDraft(state.groups.find((g) => g.id === menu.groupId)?.description ?? "");
+    const named = store.state().groups.find((g) => g.id === menu.groupId);
+    setDraft(named?.name ?? ""); setDescriptionDraft(named?.description ?? "");
     setRenaming(false);
     setDescribing(false);
   }, [menu]);
@@ -451,7 +452,7 @@ export function currentArchivableBot(bots: readonly Bot[], id: string): Bot | un
 
 const NO_FOLDERS: BotProject[] = [];
 
-export function BotThreadList({ bot, selected, query, pendingQueued, reveal, locale, generatedTitles, dispatch, activityLabel, hidden = false }: BotRowProps & {
+export function BotThreadList({ bot, selected, query, pendingQueued, routineRuns, reveal, locale, generatedTitles, dispatch, activityLabel, hidden = false }: BotRowProps & {
   activityLabel?: string;
   hidden?: boolean;
 }) {
@@ -485,7 +486,7 @@ export function BotThreadList({ bot, selected, query, pendingQueued, reveal, loc
   useSnoozeExpiry(tasks);
   const bulk = useBulkSelect();
   const { own: ownTasks, helpers } = bulk.active ? { own: tasks, helpers: [] } : partitionHelperThreads(tasks, bot.threadId, query, projects);
-  const visibleTasks = orderedThreadList(visibleSidebarThreads(ownTasks, bot.threadId, query, projects, showAll || bulk.active));
+  const visibleTasks = orderedThreadList(visibleSidebarThreads(ownTasks, bot.threadId, query, projects, showAll || bulk.active, routineRuns));
   const visibleProjectIndex = (projectId: string) => visibleTasks.findIndex((task) => task.projectId === projectId);
   const folderRank = (projectId: string) => {
     const index = visibleProjectIndex(projectId);
@@ -651,7 +652,7 @@ export interface BotRowProps {
   deleting: boolean;
   mascotMotion: AppState["mascotMotion"];
   reveal: AppState["revealThread"];
-  pendingQueued: AppState["pendingQueued"];
+  pendingQueued: AppState["pendingQueued"]; routineRuns?: AppState["routineRuns"];
   instances: InstanceInfo[];
   liveCall: AppState["liveCall"];
   locale: string;
@@ -666,8 +667,8 @@ export interface BotRowProps {
   botDragging?: boolean;
 }
 
-export function botRowProps(
-  state: AppState,
+export function botRowProps<State extends Pick<AppState, "activeView" | "selectedId" | "revealThread" | "deletingBots" | "mascotMotion" | "pendingQueued" | "routineRuns" | "instances" | "liveCall" | "config">>(
+  state: State,
   dispatch: Dispatch<Action>,
   bot: Bot,
   layout: Pick<BotRowProps, "density" | "query" | "onMenu" | "renameRequest" | "botDrag" | "botDrop" | "botDragging">,
@@ -681,7 +682,7 @@ export function botRowProps(
     deleting: state.deletingBots[bot.id] === true,
     mascotMotion: selected && state.mascotMotion?.botId === bot.id ? state.mascotMotion : null,
     reveal: reveal && (bot.threadId === reveal.threadId || bot.tasks?.some((task) => task.threadId === reveal.threadId)) ? reveal : null,
-    pendingQueued: state.pendingQueued,
+    pendingQueued: state.pendingQueued, routineRuns: state.routineRuns,
     instances: state.instances,
     liveCall: state.liveCall,
     locale: activeLocale(),
@@ -921,12 +922,12 @@ export const BotListItem = memo(function BotListItem(props: BotRowProps) {
   );
 });
 
-export function Sidebar({ open, onClose, collapseToIcons = false }: {
+export const Sidebar = memo(function Sidebar({ open, onClose, collapseToIcons = false }: {
   open: boolean;
   onClose: () => void;
   collapseToIcons?: boolean;
 }) {
-  const { state, dispatch } = useStore();
+  const state = useStoreSelector(sidebarState, sameFields), dispatch = useStoreDispatch();
   const now = useRelativeNow();
   const cloudOwner = useCloudOwner(state.config?.cloudHome === true);
   const endHowTo = useCallback(() => endCloudHowTo(dispatch), [dispatch]);
@@ -1176,7 +1177,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
             {t("sidebar.newChat.title")}
           </button>}
           {!advanced && plusBot && <><button role="menuitem" className={plusItem} onClick={() => { setPlusOpen(false); dispatch({ type: "newTask", botId: plusBot.id }); }}><SquarePen size={16} className="text-ink-secondary" />{t("sidebar.newConversationWith", { name: plusBot.name })}</button><div role="separator" className={MENU_ITEM_SEPARATOR} /></>}
-          {teamSettingsAllowed !== false && <button
+          {(teamSettingsAllowed !== false || state.config?.team) && <button
             onClick={() => { setPlusOpen(false); dispatch({ type: "newBot" }); }}
             role="menuitem"
             className={plusItem}
@@ -1622,7 +1623,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
           anchor={sidebarRef.current}
           style={windowNoDragStyle}
           onClose={() => setNewChatOpen(false)}
-          onNewBot={teamSettingsAllowed === false ? undefined : () => { setNewChatOpen(false); dispatch({ type: "newBot" }); }}
+          onNewBot={teamSettingsAllowed === false && !state.config?.team ? undefined : () => { setNewChatOpen(false); dispatch({ type: "newBot" }); }}
           onNewGroup={() => { setNewChatOpen(false); setNewRoom(true); }}
         />,
         document.body,
@@ -1685,4 +1686,4 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
         )}
     </aside>
   );
-}
+});

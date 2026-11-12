@@ -16,12 +16,18 @@ const fixture = vi.hoisted(() => {
     computerOpen: false,
     savePanel: vi.fn(),
     find: vi.fn(),
+    team: false,
+    open: vi.fn(),
   };
 });
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
-  return { ...original, useStore: () => ({ state: { ...original.initialState, inspectorOpen: fixture.inspectorOpen, computerOpen: fixture.computerOpen }, dispatch: fixture.dispatch }) };
+  return { ...original, useStore: () => ({ state: { ...original.initialState, inspectorOpen: fixture.inspectorOpen, computerOpen: fixture.computerOpen, ...(fixture.team ? { config: { ...original.initialState.config, team: { id: "acme", name: "Acme" } } } : {}) }, dispatch: fixture.dispatch }) };
 });
+vi.mock("./conversation-share/conversation-share", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./conversation-share/conversation-share")>(),
+  openConversationDialog: fixture.open,
+}));
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, setAdvancedMode: vi.fn() }));
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => fixture.advanced && fixture.threadsChosen }));
 vi.mock("@/lib/chat-find", async (importOriginal) => ({
@@ -71,6 +77,8 @@ beforeEach(() => {
   fixture.computerOpen = false;
   fixture.savePanel.mockClear();
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: fixture.savePanel });
+  fixture.team = false;
+  fixture.open.mockClear();
   fixture.dispatch.mockClear();
   fixture.find.mockClear();
 });
@@ -206,5 +214,33 @@ describe("ChatHeaderMenu, Advanced mode's header ⋯", () => {
     const items = menuOf(createElement(ChatHeaderMenu, { bot })).items;
     expect(keys(items)).toEqual(expect.arrayContaining(["new-thread", "threads"]));
     expect(items.find((item) => item.key === "threads")!.submenu).toHaveLength(3);
+  });
+});
+
+describe("sharing the conversation on screen, on a team", () => {
+  const withSide = (extra: Partial<Task>): Bot => ({ ...bot, tasks: bot.tasks!.map((each) => (each.threadId === "side" ? { ...each, ...extra } : each)) });
+  const shareKeys = (item: Bot) => keys(menuOf(createElement(ChatHeaderMenu, { bot: item })).items).filter((key) => key.startsWith("share-"));
+
+  it("offers its own person both shares of a private conversation, each opening its confirm step", () => {
+    fixture.team = true;
+    const items = menuOf(createElement(ChatHeaderMenu, { bot: withSide({ private: true }) })).items;
+    expect(items.filter((item) => item.key.startsWith("share-")).map((item) => item.label)).toEqual(["Share with the team", "Share with…"]);
+    items.find((item) => item.key === "share-team")!.onSelect();
+    expect(fixture.open).toHaveBeenLastCalledWith({ kind: "team", botId: "pepper", threadId: "side" });
+    items.find((item) => item.key === "share-person")!.onSelect();
+    expect(fixture.open).toHaveBeenLastCalledWith({ kind: "person", botId: "pepper", threadId: "side" });
+  });
+
+  it("only widens to the team what its person shared with one person, and offers nothing to the person it was shared with", () => {
+    fixture.team = true;
+    expect(shareKeys(withSide({ shared: true, sharedWith: { name: "Marta", byYou: true } }))).toEqual(["share-team"]);
+    expect(shareKeys(withSide({ shared: true, sharedWith: { name: "Rui" } }))).toEqual([]);
+    expect(shareKeys(withSide({ shared: true }))).toEqual([]);
+    expect(shareKeys(withSide({}))).toEqual([]);
+    expect(shareKeys({ ...withSide({ private: true }), defaultBot: { person: "rui@acme.test" } } as Bot), "a chat with their own MausBot").toEqual([]);
+  });
+
+  it("is not offered off a team", () => {
+    expect(shareKeys(withSide({ private: true }))).toEqual([]);
   });
 });

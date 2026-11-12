@@ -89,16 +89,17 @@ describe("the pairing code", () => {
     for (const over of [{}, { state: e2e }]) {
       const html = render(over);
       expect(qrCodes(html)).toBe(1);
-      expect(html).toContain("Open mymausbot on your phone and scan this code.");
+      expect(html).toContain("Install mymausbot on your phone from the App Store or Google Play, then scan this code in the app.");
       expect(html).toContain("Scan it from inside the mymausbot app, not the camera.");
     }
   });
 
-  it("links the phone app without a code of its own", () => {
-    const html = render({ state: e2e });
-    expect(html).toContain("install mymausbot from the App Store, or download it for Android.");
-    expect(html).toMatch(/data-phone-app="ios"[^>]*>App Store</);
-    expect(html).toMatch(/data-phone-app="android"[^>]*>Android</);
+  it("names the stores without linking to them", () => {
+    for (const over of [{}, { state: e2e }]) {
+      const html = render(over);
+      expect(html).not.toMatch(/apps\.apple\.com|play\.google\.com|\.apk|<a /);
+      expect(html).not.toMatch(/<button[^>]*>(App Store|Google Play)</);
+    }
   });
 
   it("says nothing about scanning once the code expired", () => {
