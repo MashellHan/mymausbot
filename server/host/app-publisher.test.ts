@@ -2,11 +2,12 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { startFakeAppHosting, type FakeAppHosting } from "../testing/fake-app-hosting.ts";
 import { collectAppFiles, createAppPublisher, needsOwnNetlify, publishable, type AppPublishAnswer } from "./app-publisher.ts";
 import { createIncludedHosting, DEFAULT_HOSTING_LIMITS } from "./included-hosting.ts";
+import * as bundle from "../pages/bundle.ts";
 import { SITE_FILE } from "./netlify-sites.ts";
 
 const TOKEN = "omb_host_publisher_test_token_0123456789abcdef";
@@ -48,7 +49,13 @@ beforeEach(async () => {
   credential = { token: TOKEN, api: fake.url, included: true };
   warnings = [];
 });
-afterEach(async () => { await fake.stop(); rmSync(dataDir, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); await fake.stop(); rmSync(dataDir, { recursive: true, force: true }); });
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 describe("publishing a bot's folder on the plan's included hosting", () => {
   it("publishes the folder, checks the link serves a web page and leaves the record the page lists", async () => {
@@ -119,7 +126,7 @@ describe("publishing a bot's folder on the plan's included hosting", () => {
     expect(record("mira", "bakery").access).toBe("public");
   });
 
-  it("says a publish is still being processed instead of calling it live or failed, and status picks it up", async () => {
+  it("reports a pending publish becoming ready without changing its record during status", async () => {
     site("mira", "bakery");
     fake.processingPolls = 1_000;
     const { publisher: made } = publisher({ waitMs: 60 });
@@ -128,10 +135,11 @@ describe("publishing a bot's folder on the plan's included hosting", () => {
     expect(String(pending.body.message)).toContain("still being processed");
     expect(record("mira", "bakery")).toMatchObject({ hosting: "included", deployState: "processing" });
     expect(record("mira", "bakery")).not.toHaveProperty("publishedAt");
+    const pendingRecord = readFileSync(join(workspace("mira"), "bakery", SITE_FILE));
     [...fake.apps.values()][0]!.pollsLeft = 0;
     const status = await made.status({ botId: "mira", roots: roots("mira"), path: "bakery" });
     expect(status.body).toMatchObject({ ok: true, state: "ready", live: true, title: "Bakery order page", apps: "1 of 10", publishesThisMonth: "1 of 200" });
-    expect(record("mira", "bakery")).toMatchObject({ deployState: "ready", access: "public" });
+    expect(readFileSync(join(workspace("mira"), "bakery", SITE_FILE))).toEqual(pendingRecord);
   });
 
   it("does not call a link published when it answers as something other than a web page", async () => {
@@ -401,10 +409,11 @@ describe("deleting, a takedown and a server with no included hosting", () => {
     site("mira", "bakery");
     const { publisher: made } = publisher();
     await made.publish({ botId: "mira", roots: roots("mira"), path: "bakery", title: "Bakery order page" });
+    const publishedRecord = readFileSync(join(workspace("mira"), "bakery", SITE_FILE));
     fake.takeDown(String(record("mira", "bakery").appKey));
     const status = await made.status({ botId: "mira", roots: roots("mira"), path: "bakery" });
     expect(status.body).toMatchObject({ ok: true, state: "taken_down", live: false, message: "This app was taken down by MausBot. Its link no longer works." });
-    expect(record("mira", "bakery").deployState).toBe("taken_down");
+    expect(readFileSync(join(workspace("mira"), "bakery", SITE_FILE))).toEqual(publishedRecord);
     const again = await made.publish({ botId: "mira", roots: roots("mira"), path: "bakery", title: "Bakery order page" });
     expect(again).toMatchObject({ status: 409, body: { code: "taken_down" } });
     expect(String(again.body.error)).toContain("was taken down by MausBot, so it can't be published again");
@@ -438,5 +447,143 @@ describe("deleting, a takedown and a server with no included hosting", () => {
     expect(live.length).toBeGreaterThan(0);
     expect(live.every((call) => call.authorization === null)).toBe(true);
     expect(seen.filter((call) => call.authorization !== null).every((call) => call.url.startsWith(`${fake.url}/`) && call.authorization === `Bearer ${TOKEN}`)).toBe(true);
+  });
+});
+
+
+describe("included hosting keeps the originating turn's authority", () => {
+  for (const phase of ["folder key", "allowance", "collection", "manifest", "poll"] as const) {
+    it.each(["revoked", "stopped"])(`starts no later mutation after ${phase} resolves for a %s turn`, async (ending) => {
+      await fake.stop();
+      fake = await startFakeAppHosting(TOKEN, { privateFirst: true });
+      credential = { token: TOKEN, api: fake.url, included: true };
+      site("mira", "bakery");
+      const { hosting, publisher: made } = publisher();
+      const entered = deferred(), release = deferred();
+      const hold = async <T>(pending: Promise<T>): Promise<T> => {
+        const value = await pending;
+        entered.resolve();
+        await release.promise;
+        return value;
+      };
+      if (phase === "folder key") {
+        const keyFor = hosting.keyFor;
+        vi.spyOn(hosting, "keyFor").mockImplementation((...args) => hold(keyFor(...args)));
+      } else if (phase === "allowance") {
+        const list = hosting.list;
+        vi.spyOn(hosting, "list").mockImplementation((...args) => hold(list(...args)));
+      } else if (phase === "collection") {
+        const read = bundle.readContained;
+        vi.spyOn(bundle, "readContained").mockImplementation((...args) => hold(read(...args)));
+      } else if (phase === "manifest") {
+        const start = hosting.start;
+        vi.spyOn(hosting, "start").mockImplementation((...args) => hold(start(...args)));
+      } else {
+        fake.processingPolls = 2;
+        const app = hosting.app;
+        let reads = 0;
+        vi.spyOn(hosting, "app").mockImplementation((...args) => ++reads === 2 ? hold(app(...args)) : app(...args));
+      }
+      let active = true;
+      const abort = new AbortController();
+      const pending = made.publish({ botId: "mira", roots: roots("mira"), path: "bakery", title: "Bakery" }, {
+        assertActive: () => { if (!active) throw new Error("turn ended"); }, signal: abort.signal,
+      }).catch((error: unknown) => error);
+      try {
+        await entered.promise;
+        const requests = [...fake.requests];
+        if (ending === "revoked") active = false;
+        else abort.abort();
+        release.resolve();
+        const answer = await pending;
+        if (ending === "revoked") expect(answer).toEqual(new Error("turn ended"));
+        else expect(answer).toMatchObject({ status: 400, body: { error: "The publish was stopped." } });
+        expect(fake.requests).toEqual(requests);
+        expect(fake.requests.some((request) => request.startsWith("PATCH "))).toBe(false);
+        expect(existsSync(join(workspace("mira"), "bakery", SITE_FILE))).toBe(false);
+        expect([...fake.apps.values()].every((app) => app.visibility === "private")).toBe(true);
+      } finally { release.resolve(); await pending; }
+    });
+  }
+
+  it.each(["revoked", "stopped"])("does not start queued uploads after in-flight uploads return to a %s turn", async (ending) => {
+    site("mira", "bakery");
+    for (let i = 0; i < 4; i += 1) write("mira", `bakery/file-${i}.txt`, String(i));
+    const { hosting, publisher: made } = publisher();
+    const entered = deferred(), release = deferred();
+    const upload = hosting.upload;
+    let completed = 0, active = true;
+    const abort = new AbortController();
+    vi.spyOn(hosting, "upload").mockImplementation(async (...args) => {
+      await upload(...args);
+      if (++completed === 4) entered.resolve();
+      await release.promise;
+    });
+    const pending = made.publish({ botId: "mira", roots: roots("mira"), path: "bakery", title: "Bakery" }, {
+      assertActive: () => { if (!active) throw new Error("turn ended"); }, signal: abort.signal,
+    }).catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      expect(fake.uploads).toHaveLength(4);
+      const requests = [...fake.requests];
+      if (ending === "revoked") active = false;
+      else abort.abort();
+      release.resolve();
+      const answer = await pending;
+      if (ending === "revoked") expect(answer).toEqual(new Error("turn ended"));
+      else expect(answer).toMatchObject({ status: 400, body: { error: "The publish was stopped." } });
+      expect(fake.requests).toEqual(requests);
+      expect(fake.uploads).toHaveLength(4);
+      expect(existsSync(join(workspace("mira"), "bakery", SITE_FILE))).toBe(false);
+    } finally { release.resolve(); await pending; }
+  });
+
+  it.each(["revoked", "stopped"])("does not delete after its app lookup returns to a %s turn", async (ending) => {
+    site("mira", "bakery");
+    const { hosting, publisher: made } = publisher();
+    await made.publish({ botId: "mira", roots: roots("mira"), path: "bakery", title: "Bakery" });
+    const before = readFileSync(join(workspace("mira"), "bakery", SITE_FILE));
+    const entered = deferred(), release = deferred();
+    const app = hosting.app;
+    vi.spyOn(hosting, "app").mockImplementation(async (...args) => {
+      const value = await app(...args); entered.resolve(); await release.promise; return value;
+    });
+    let active = true;
+    const abort = new AbortController();
+    const pending = made.remove({ botId: "mira", roots: roots("mira"), path: "bakery" }, {
+      assertActive: () => { if (!active) throw new Error("turn ended"); }, signal: abort.signal,
+    }).catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      const requests = [...fake.requests];
+      if (ending === "revoked") active = false;
+      else abort.abort();
+      release.resolve();
+      const answer = await pending;
+      if (ending === "revoked") expect(answer).toEqual(new Error("turn ended"));
+      else expect(answer).toMatchObject({ status: 400, body: { error: "The publish was stopped." } });
+      expect(fake.requests).toEqual(requests);
+      expect(fake.apps.size).toBe(1);
+      expect(readFileSync(join(workspace("mira"), "bakery", SITE_FILE))).toEqual(before);
+    } finally { release.resolve(); await pending; }
+  });
+
+  it("observes a ready private app without publishing it or changing its record", async () => {
+    await fake.stop();
+    fake = await startFakeAppHosting(TOKEN, { privateFirst: true });
+    credential = { token: TOKEN, api: fake.url, included: true };
+    fake.processingPolls = 1_000;
+    site("mira", "bakery");
+    const { publisher: made } = publisher({ waitMs: 0 });
+    expect((await made.publish({ botId: "mira", roots: roots("mira"), path: "bakery", title: "Bakery" })).body).toMatchObject({ pending: true });
+    const before = readFileSync(join(workspace("mira"), "bakery", SITE_FILE));
+    const [app] = [...fake.apps.values()];
+    app!.pollsLeft = 0;
+    fake.requests.length = 0;
+    const answer = await made.status({ botId: "mira", roots: roots("mira"), path: "bakery" });
+    expect(answer.body).toMatchObject({ ok: true, state: "ready", visibility: "private", live: false });
+    expect(fake.requests).toEqual(["GET /apps", `GET /apps/${app!.key}`]);
+    expect(app!.visibility).toBe("private");
+    expect(readFileSync(join(workspace("mira"), "bakery", SITE_FILE))).toEqual(before);
   });
 });

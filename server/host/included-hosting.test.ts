@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { hostingCredential } from "../included-services.ts";
 import { startFakeAppHosting, type FakeAppHosting } from "../testing/fake-app-hosting.ts";
@@ -110,4 +110,25 @@ describe("the included hosting client", () => {
     await expect(hosting().remove("app-gone")).rejects.toMatchObject({ code: "unavailable" });
     await expect(hosting().makePublic("app-gone")).resolves.toBeNull();
   });
+});
+
+
+it.each(["remove", "makePublic"] as const)("keeps %s bound to its caller's abort signal", async (method) => {
+  let entered!: (signal: AbortSignal) => void;
+  const entering = new Promise<AbortSignal>((resolve) => { entered = resolve; });
+  const fetcher = vi.fn(async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const signal = init!.signal!;
+    entered(signal);
+    return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true }));
+  });
+  const abort = new AbortController();
+  const pending = hosting(fetcher)[method]("app-owned", abort.signal);
+  const signal = await entering;
+  const refused = expect(pending).rejects.toMatchObject({ code: "failed", message: "The publish was stopped." });
+  abort.abort();
+  await refused;
+  expect(signal.aborted).toBe(true);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await expect(hosting(fetcher)[method]("app-owned", abort.signal)).rejects.toMatchObject({ code: "failed" });
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

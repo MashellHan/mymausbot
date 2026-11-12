@@ -21,6 +21,8 @@ export interface AppHostingContext {
   /** index.ts's readInternalBody: re-checks the capability after the read. */
   readBody: () => Promise<unknown>;
   folders: BotFolders;
+  requireActive: () => void;
+  signal: AbortSignal;
 }
 
 const ROUTE = "/api/internal/apps/publish";
@@ -32,14 +34,19 @@ export function createAppHostingInternalRoutes(publisher: AppPublisher) {
     if (ctx.method !== "POST" || ctx.path !== ROUTE) return PASS;
     const parsed = body.safeParse(await ctx.readBody() ?? {});
     if (!parsed.success) return void ctx.json(ctx.res, 400, { error: "publish_app takes action (publish or delete), path, project and title, all text." });
+    ctx.requireActive();
+    ctx.signal.throwIfAborted();
     const { roots, vmWorkspace } = await ctx.folders();
+    ctx.requireActive();
+    ctx.signal.throwIfAborted();
+    const turn = { assertActive: ctx.requireActive, signal: ctx.signal };
     const hostPath = (path: string | undefined) => (path && vmWorkspace ? guestWorkspaceToHost(path, VM_WORKSPACE_GUEST, vmWorkspace) ?? path : path);
     const { action = "publish", title } = parsed.data, path = hostPath(parsed.data.path), project = hostPath(parsed.data.project);
     const input = { botId: ctx.botId, roots: vmWorkspace ? [vmWorkspace, ...roots] : roots, ...(project ? { project } : {}) };
     if (action !== "status" && !path?.trim()) return void ctx.json(ctx.res, 400, { error: `publish_app ${action} needs path: the folder to ${action}.` });
-    const answer = action === "status" ? await publisher.status({ ...input, ...(path ? { path } : {}) })
-      : action === "delete" ? await publisher.remove({ ...input, path: path! })
-        : await publisher.publish({ ...input, path: path!, ...(title ? { title } : {}) });
+    const answer = action === "status" ? await publisher.status({ ...input, ...(path ? { path } : {}) }, turn)
+      : action === "delete" ? await publisher.remove({ ...input, path: path! }, turn)
+        : await publisher.publish({ ...input, path: path!, ...(title ? { title } : {}) }, turn);
     ctx.json(ctx.res, answer.status, answer.body);
   };
 }

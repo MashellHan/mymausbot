@@ -177,6 +177,7 @@ export function createIncludedHosting(deps: IncludedHostingDeps) {
   };
 
   async function relay(method: string, path: string, init: { json?: unknown; bytes?: Buffer; signal?: AbortSignal } = {}): Promise<Record<string, unknown>> {
+    if (init.signal?.aborted) throw new HostingRefusal("failed", "The publish was stopped.");
     const credential = deps.credential();
     if (!credential) throw new HostingRefusal("unavailable", "This server has no included app hosting. Publish on the person's own Netlify account (deploy.mjs in the publish-to-netlify skill).", true);
     const timeout = AbortSignal.timeout(init.bytes ? UPLOAD_TIMEOUT_MS : CALL_TIMEOUT_MS);
@@ -244,15 +245,16 @@ export function createIncludedHosting(deps: IncludedHostingDeps) {
       try {
         return app((await relay("PATCH", at(key), { json: { visibility: "public" }, ...(signal ? { signal } : {}) })).app);
       } catch (error) {
+        if (signal?.aborted) throw error;
         if (error instanceof HostingRefusal && (error.code === "not_found" || error.code === "failed")) return null;
         throw error;
       }
     },
 
     /** An app the relay no longer has counts as deleted. */
-    async remove(key: string): Promise<void> {
+    async remove(key: string, signal?: AbortSignal): Promise<void> {
       try {
-        await relay("DELETE", at(key));
+        await relay("DELETE", at(key), signal ? { signal } : {});
       } catch (error) {
         if (!(error instanceof HostingRefusal && error.code === "not_found")) throw error;
       }
