@@ -1,5 +1,6 @@
 import { FileText, FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { cn } from "@/lib/cn";
 import { useStore, visibleMessages, type Bot } from "@/state/store";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { collectMessageFiles, fileIdentity, splitMessageAttachments, type GalleryFile } from "./AttachmentGallery";
@@ -119,8 +120,8 @@ function splitPath(path: string): { name: string; folder: string } {
   return cut < 0 ? { name: path, folder: "" } : { name: path.slice(cut + 1), folder: path.slice(0, cut) };
 }
 
-export function ComputerFilesPane({ bot, filePreview, onPreviewClose, showFolder = true }: {
-  bot: Bot; filePreview?: PanelFilePreview | null; onPreviewClose?: () => void; showFolder?: boolean;
+export function ComputerFilesPane({ bot, filePreview, onPreviewClose, showFolder = true, bounded = false }: {
+  bot: Bot; filePreview?: PanelFilePreview | null; onPreviewClose?: () => void; showFolder?: boolean; bounded?: boolean;
 }) {
   const { dispatch, state } = useStore();
   const { capabilities } = useDesktopCapabilities();
@@ -158,7 +159,7 @@ export function ComputerFilesPane({ bot, filePreview, onPreviewClose, showFolder
   }, [filePreview, preview, onPreviewClose]);
   return (
     <>
-    <div ref={list} hidden={Boolean(preview)} tabIndex={-1} className="flex-1 overflow-y-auto px-5 pb-5 [color-scheme:var(--code-color-scheme)]" data-testid="computer-files">
+    <div ref={list} hidden={Boolean(preview)} tabIndex={-1} className={cn("min-h-0 overflow-y-auto px-5 pb-5 [color-scheme:var(--code-color-scheme)]", bounded ? "max-h-[50dvh]" : "flex-1")} data-testid="computer-files">
       {showFolder && <div className="mt-2 rounded-xl bg-card p-4">
         <div className="text-[14px] font-semibold text-ink">{t("computer.files.folder")}</div>
         <div className="mt-2 flex items-center gap-2">
