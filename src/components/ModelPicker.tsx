@@ -56,6 +56,7 @@ export function EffortRow({
   className,
   label,
   compact = false,
+  wide = false,
 }: {
   bot: Bot;
   threadId?: string;
@@ -63,12 +64,13 @@ export function EffortRow({
   className?: string;
   label?: ReactNode;
   compact?: boolean;
+  wide?: boolean;
 }) {
   const { state, dispatch } = useStore();
   const selection = bot.modelSelection;
   const instance = state.instances.find((candidate) => candidate.instanceId === selection.instanceId);
   if (instance?.capabilities?.modelVariants) {
-    return <ModelVariantRow bot={bot} threadId={threadId} updateBotDefault={updateBotDefault} className={className} label={label} compact={compact} quiet={compact} />;
+    return <ModelVariantRow bot={bot} threadId={threadId} updateBotDefault={updateBotDefault} className={className} label={label} compact={compact} wide={wide} quiet={compact} />;
   }
   const levels = instance?.capabilities?.effortLevels;
   if (!levels?.length) return null;
@@ -76,7 +78,7 @@ export function EffortRow({
   if (compact) return (
     <label className={cn("flex items-center justify-between gap-3", className)}>
       {label}
-      <Select size="sm" variant="quiet" className="max-w-[65%]" aria-label={t("model.effort.label")} value={selection.effort ?? ""}
+      <Select size="sm" variant="quiet" className={wide ? "w-[65%]" : "max-w-[65%]"} aria-label={t("model.effort.label")} value={selection.effort ?? ""}
         onChange={(event) => dispatch({ type: "setModel", botId: bot.id, threadId, ...(updateBotDefault ? { updateBotDefault: true } : {}),
           selection: { ...selection, effort: levels.find((level) => level === event.target.value) } })}>
         <option value="">{t("model.effort.default")}</option>
@@ -142,7 +144,7 @@ export function ModelVariantRow({ bot, threadId, updateBotDefault, className, la
     <div className={className}>
       <label className="flex items-center justify-between gap-3">
         {label}
-        <Select size="sm" variant={quiet ? "quiet" : "field"} aria-label={t("model.variant.label")} className={wide ? "flex-1" : "max-w-[65%]"}
+        <Select size="sm" variant={quiet ? "quiet" : "field"} aria-label={t("model.variant.label")} className={wide ? quiet ? "w-[65%]" : "flex-1" : "max-w-[65%]"}
           value={selection.variant === undefined ? "unset" : missing ? "missing" : String(options.findIndex((option) => option.id === selection.variant))}
           onChange={(event) => choose(options[Number(event.target.value)]?.id)}>
           <option value="unset">{t("model.variant.session")}</option>
@@ -200,12 +202,13 @@ const MENU_ITSELF = ":scope";
 
 export function ModelPicker({
   bot: shown, threadId, className, label, size = "md",
-  contained = false, showReasoning = false,
+  contained = false, showReasoning = false, inlineSettings = false,
 }: {
   bot: Bot;
   threadId?: string;
   className?: string;
   contained?: boolean; showReasoning?: boolean;
+  inlineSettings?: boolean;
   label?: ReactNode;
   size?: "sm" | "md";
 }) {
@@ -338,8 +341,8 @@ export function ModelPicker({
 
   // An engine with no models listed yet, or only a list it never confirmed, is asked for them, then they are shown.
   useEffect(() => {
-    if (open) ((hasOfficialModels || customOnly) && !modelsAwaitEngine(railInstance) ? refreshLocalInstances : () => refreshModels(displayedInstanceId))();
-  }, [open, refreshLocalInstances]);
+    if (open || inlineSettings) ((hasOfficialModels || customOnly) && !modelsAwaitEngine(railInstance) ? refreshLocalInstances : () => refreshModels(displayedInstanceId))();
+  }, [open, inlineSettings, refreshLocalInstances]);
 
   useEffect(() => {
     if (bot.busy) setOpen(false);
@@ -528,7 +531,7 @@ export function ModelPicker({
     : levels.length > 0 && !shown.busy ? { levels, current: selection.effort, onPick: writeEffort, onReset: () => writeEffort(undefined) }
     : null;
   const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
-    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy}
+    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
       onChange={(next) => applySelection(active, next)} />
     : null;
 
@@ -988,9 +991,42 @@ export function ModelPicker({
     </div>
   );
 
+  const settingsChoices = inlineSettings ? pickerInstances.flatMap((instance) => modelChoices(instance, instance.models.options).map((option) => ({
+    instance, option, value: JSON.stringify([instance.instanceId, option.id]),
+    selected: instance.instanceId === selection.instanceId && (option.nativeModel ?? option.id) === selection.model
+      && (option.variant === undefined || option.variant === selection.variant),
+    disabled: Boolean(instance.policy || needsCli(instance) || option.orgBlocked || (!option.custom && needsSignIn(instance) && !isCustomOnly(instance))),
+  }))) : [];
+  const selectedChoice = settingsChoices.find((choice) => choice.selected);
+
   return (
     <div ref={rootRef} className={cn(contained ? "w-full" : "relative", className)}>
-      {contained ? (
+      {inlineSettings ? <div data-model-settings className="space-y-3">
+        <label className="flex items-center justify-between gap-3">
+          <span className="text-[13px] text-ink-secondary">{t("model.simple.model")}</span>
+          <Select size="sm" variant="quiet" className="w-[65%]" aria-label={t("model.choose")} title={summary}
+            value={selectedChoice?.value ?? "current"} disabled={locked || loadingInstances || refreshingId !== null}
+            onChange={(event) => {
+              const choice = settingsChoices.find((candidate) => candidate.value === event.target.value);
+              if (choice && !choice.disabled) pick(choice.instance, choice.option.nativeModel ?? choice.option.id, choice.option.variant);
+            }}>
+            {!selectedChoice && <option value="current" disabled>{modelName(active, selection.model, selection.variant)}</option>}
+            {pickerInstances.map((instance) => <optgroup key={instance.instanceId} label={engineDisplayName(instance)}>
+              {settingsChoices.filter((choice) => choice.instance === instance).map((choice) =>
+                <option key={choice.value} value={choice.value} disabled={choice.disabled}>{choice.option.label}</option>)}
+            </optgroup>)}
+          </Select>
+        </label>
+        {attention && <p className="text-[12px] text-warning">{attention}</p>}
+        <fieldset disabled={shown.busy || Boolean(active?.policy)} className="min-w-0 space-y-3 border-0 p-0">
+          <EffortRow compact wide bot={shown} threadId={threadId}
+            updateBotDefault={Boolean(threadId && simpleUpdatesBotDefault && (simpleView || scope === "bot"))}
+            label={<span className="text-[13px] text-ink-secondary">{active?.capabilities?.modelVariants ? t("model.simple.reasoning") : t("model.effort.label")}</span>} />
+          {contextWindow}
+        </fieldset>
+        {!remote && <button type="button" onClick={openEngines}
+          className="rounded-sm text-[12px] text-ink-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("model.simple.manage")}</button>}
+      </div> : contained ? (
         <div className="flex items-center justify-between gap-4">
           {label}
           {trigger}
@@ -998,7 +1034,7 @@ export function ModelPicker({
       ) : (
         trigger
       )}
-      {menu && floating ? createPortal(menu, document.body) : menu}
+      {!inlineSettings && (menu && floating ? createPortal(menu, document.body) : menu)}
       {!contained && changedBotModel && !open && ownModelThreads > 0 && (
         <div data-thread-models-notice role="status"
           className="menu-surface absolute right-0 top-full z-30 mt-1 flex w-max max-w-[min(300px,calc(100vw-2rem))] items-center gap-2 py-1.5 pl-3 pr-1.5 text-[13px] leading-[18px]">

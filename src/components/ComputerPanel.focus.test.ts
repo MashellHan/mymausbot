@@ -140,10 +140,11 @@ describe("computer panel entry focus", () => {
     const toggle = model.querySelector<HTMLButtonElement>('[aria-controls="bot-overview-model-content"]')!;
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.textContent).toContain("thread-model");
-    expect(model.querySelector('[data-panel-row="model"]')).toBeNull();
+    expect(model.querySelector('[data-model-settings]')).toBeNull();
     flushSync(() => toggle.click());
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(model.querySelector('[data-panel-row="model"] [data-tour="model"]')).not.toBeNull();
+    expect(model.querySelector('[data-model-settings] select[aria-label="Choose model"]')).not.toBeNull();
+    expect(document.querySelector('[data-model-picker-content]')).toBeNull();
   });
 
   it("hands the keyboard's open to the active tab, one frame later", async () => {

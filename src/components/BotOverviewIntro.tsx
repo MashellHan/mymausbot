@@ -11,7 +11,7 @@ import { BotAvatar } from "./Avatar";
 import { ModelPicker } from "./ModelPicker";
 import { modelName } from "@/lib/simple-model-menu";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
-import { RowIcon, RowText, rowCls } from "./bot-panel/rows";
+import { RowIcon } from "./bot-panel/rows";
 import { MiniAppIcon, iconKindForApp } from "./mini-apps/MiniAppIcon";
 import { miniAppDisplayName } from "./mini-apps/mini-app-display";
 import { miniAppNativeFrameGuard } from "./mini-apps/native-frame-guard";
@@ -34,10 +34,7 @@ function OverviewModel({ bot }: { bot: Bot }) {
       <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform", expanded && "rotate-180")} aria-hidden="true" />
     </button>
     <div id="bot-overview-model-content" hidden={!expanded}>{expanded &&
-      <div data-panel-row="model" className={cn(rowCls, "rounded-[8px]")}>
-        <ModelPicker bot={bot} contained threadId={bot.threadId} showReasoning
-          label={<RowText title={t("model.simple.model")} />} />
-      </div>}
+      <ModelPicker bot={bot} contained threadId={bot.threadId} showReasoning inlineSettings className="px-1 pb-2 pt-3" />}
     </div>
   </section>;
 }
