@@ -8,14 +8,14 @@ import type { TailscaleFunnelConnection } from "../lib/tailscale-funnel";
 // These pin the card as always offered; the server decides who may act.
 const fixture = vi.hoisted(() => ({ section: "companion" as AppSettingsSection, config: undefined as { cloudHome?: boolean } | undefined, phonePairing: 0, funnel: null as TailscaleFunnelConnection | null }));
 vi.mock("@/lib/tailscale-funnel", () => ({ useTailscaleFunnel: () => fixture.funnel }));
-// Pinned to Advanced: these cover the Advanced rail; Simple has its own suite.
-vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => true, setAdvancedMode: () => {} }));
+vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => true, setAdvancedMode: () => {}, useInterfaceMode: () => "advanced", setInterfaceMode: vi.fn() }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({ capabilities: {} }) }));
+vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
 
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
   api: vi.fn(),
-  useStore: () => ({ state: { appSettingsSection: fixture.section, config: fixture.config, appSettingsPhonePairing: fixture.phonePairing }, dispatch: vi.fn() }),
+  useStore: () => ({ state: { appSettingsSection: fixture.section, config: fixture.config, appSettingsPhonePairing: fixture.phonePairing, instances: [], bots: [] }, dispatch: vi.fn() }),
 }));
 vi.mock("./RemoteComputerSection", () => ({ RemoteComputerSection: () => null }));
 vi.mock("./CustomDomainSettings", () => ({ CustomDomainSettings: () => null }));
@@ -37,7 +37,7 @@ afterEach(() => {
 
 const render = () => renderToStaticMarkup(createElement(SettingsModal));
 
-describe("Settings → Remote access: server pairing card visibility", () => {
+describe("Settings → Phone & devices: server pairing card visibility", () => {
   it("is offered on a hosted server reached from a browser (no window.ogb)", () => {
     vi.stubGlobal("window", {});
     expect(render()).toContain("SERVER_PAIRING_CARD_MARKER");
@@ -48,9 +48,11 @@ describe("Settings → Remote access: server pairing card visibility", () => {
     expect(render()).toContain("SERVER_PAIRING_CARD_MARKER");
   });
 
-  it("is offered when this desktop is a remote client of a hosted workspace, whose phones pair only here", () => {
+  it("is not a page for a desktop that drives another computer: it opens This app's place of that connection instead", () => {
     vi.stubGlobal("window", { ogb: { remoteClient: { active: true } } });
-    expect(render()).toContain("SERVER_PAIRING_CARD_MARKER");
+    const html = render();
+    expect(html).not.toContain("SERVER_PAIRING_CARD_MARKER");
+    expect(html).not.toContain('data-settings-page="phone"');
   });
 
   it("on an OMB Cloud home, which is personal, tells the card so and offers no People section to invite anyone", () => {
@@ -99,11 +101,9 @@ describe("Settings → Remote access opened by Connect your phone", () => {
     expect(html).not.toContain("COMPANION_SECTION");
   });
 
-  it("on another server, in a browser or as a remote client, reveals that server's pairing code", () => {
+  it("on another server in a browser, reveals that server's pairing code", () => {
     fixture.phonePairing = 1;
     vi.stubGlobal("window", {});
-    expect(render()).toContain("SERVER_PAIRING_CARD_MARKER focus=1");
-    vi.stubGlobal("window", { ogb: { companion: {}, remoteClient: { active: true } } });
     const html = render();
     expect(html).toContain("SERVER_PAIRING_CARD_MARKER focus=1");
     expect(html).not.toContain("COMPANION_SECTION");
@@ -116,10 +116,12 @@ describe("Settings → Remote access opened by Connect your phone", () => {
     expect(html).not.toContain("SERVER_PAIRING_CARD_MARKER");
   });
 
-  it("this computer's page is Phone & devices; a server's own page is This server", () => {
+  it("is Phone & devices on this computer and on a server's own page alike", () => {
     vi.stubGlobal("window", { ogb: { companion: {} } });
     expect(render()).toContain(">Phone &amp; devices<");
     vi.stubGlobal("window", {});
-    expect(render()).toContain(">This server<");
+    const html = render();
+    expect(html).toContain(">Phone &amp; devices<");
+    expect(html).not.toContain("This server");
   });
 });

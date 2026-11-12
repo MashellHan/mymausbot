@@ -68,6 +68,8 @@ function profiles(): Record<string, Record<string, string>> {
   all["default+no-computer-pick"] = { ...all.default!, OMB_COMPUTER_SELECTION: "0" };
   for (const name of ["default", "non-chief"]) all[`${name}+room`] = { ...all[name]!, OMB_COMPUTER_SELECTION: "0", OMB_ROOM: "1" };
   all["default+images"] = { ...all.default!, OMB_IMAGE_GENERATION: "1" };
+  all["skills+shared+voice+x+team+images+hosting"] = { ...all["skills+shared+voice+x+team+images"]!, OMB_APP_HOSTING: "1" };
+  all["default+hosting"] = { ...all.default!, OMB_APP_HOSTING: "1" };
   return all;
 }
 
@@ -75,41 +77,43 @@ const PROFILES = profiles();
 /** Refused by the server to every bot that is not a Chief of Staff. */
 const CHIEF_ONLY_TOOLS = ["create_bot", "list_team_setup", "propose_team_setup", "propose_bot_deletion", "manage_room", "retry_thread"];
 /** The profile that mounts the most: its bridged list is checked in whole. */
-const FULL = "skills+shared+voice+x+team+images";
+const FULL = "skills+shared+voice+x+team+images+hosting";
 
 /** Bytes of each bridged list when its budget was last set. A list may not
  * exceed this by more than 2%, and may not undercut it by more than 2%
  * either: lock a saving in by lowering the number. A Chief's list is longer
  * than another bot's only by the Chief-only names in find_tool's description. */
 const BUDGET_BASELINE: Record<string, number> = {
-  "default": 17882,
-  "voice": 18663,
-  "shared": 17922,
-  "shared+voice": 18703,
-  "skills": 17909,
-  "skills+voice": 18690,
-  "skills+shared": 17949,
-  "skills+shared+voice": 18730,
-  "non-chief": 17765,
-  "voice+non-chief": 18546,
-  "shared+non-chief": 17805,
-  "shared+voice+non-chief": 18586,
-  "skills+non-chief": 17792,
-  "skills+voice+non-chief": 18573,
-  "skills+shared+non-chief": 17832,
-  "skills+shared+voice+non-chief": 18613,
-  "skills+shared+voice+cloud-home": 18641,
-  "skills+shared+voice+non-chief+cloud-home": 18524,
-  "skills+shared+voice+x": 18791,
-  "skills+shared+voice+x+team": 18791,
-  "skills+shared+voice+x+team+images": 18807,
-  "default+legacy-switches": 17882,
-  "default+mausbot": 17934,
-  "skills+shared+voice+mausbot": 18782,
-  "default+no-computer-pick": 16670,
-  "default+room": 16633,
-  "non-chief+room": 16516,
-  "default+images": 17898,
+  "default": 17897,
+  "voice": 18678,
+  "shared": 17937,
+  "shared+voice": 18718,
+  "skills": 17924,
+  "skills+voice": 18705,
+  "skills+shared": 17964,
+  "skills+shared+voice": 18745,
+  "non-chief": 17780,
+  "voice+non-chief": 18561,
+  "shared+non-chief": 17820,
+  "shared+voice+non-chief": 18601,
+  "skills+non-chief": 17807,
+  "skills+voice+non-chief": 18588,
+  "skills+shared+non-chief": 17847,
+  "skills+shared+voice+non-chief": 18628,
+  "skills+shared+voice+cloud-home": 18656,
+  "skills+shared+voice+non-chief+cloud-home": 18539,
+  "skills+shared+voice+x": 18806,
+  "skills+shared+voice+x+team": 18806,
+  "skills+shared+voice+x+team+images": 18822,
+  "default+legacy-switches": 17897,
+  "default+mausbot": 17949,
+  "skills+shared+voice+mausbot": 18797,
+  "default+no-computer-pick": 16685,
+  "default+room": 16641,
+  "non-chief+room": 16524,
+  "default+images": 17913,
+  "skills+shared+voice+x+team+images+hosting": 20024,
+  "default+hosting": 19099,
 };
 
 type RpcAnswer = { id: number; result?: { tools?: unknown[]; content?: Array<{ text: string }>; isError?: boolean }; error?: { code: number; message: string } };
@@ -281,8 +285,9 @@ describe("agents proxy tools/list golden with the tool bridge on", () => {
     expect(base).toEqual(["tool_result_read", "list_room_targets", "coordinate_bots", "list_bots", "list_rooms", "select_computer", "attach_file", "publish_page", "post_to_room", "request_credential", "request_sign_in", "fill_login", "message_person", "memory_update"]);
     for (const name of Object.keys(PROFILES)) {
       const selects = PROFILES[name]!.OMB_COMPUTER_SELECTION === "1";
-      expect(hotOf(name).filter((tool) => tool !== "send_voice_note"), name).toEqual(base.filter((tool) =>
-        selects || tool !== "select_computer"));
+      // publish_app puts an app on the public web, so the host counts it as outbound and it is never behind use_tool.
+      expect(hotOf(name).filter((tool) => tool !== "send_voice_note" && tool !== "publish_app"), name).toEqual(selects ? base : base.filter((tool) => tool !== "select_computer"));
+      expect(hotOf(name).includes("publish_app"), name).toBe(PROFILES[name]!.OMB_APP_HOSTING === "1");
       expect(hotOf(name).includes("send_voice_note"), name).toBe(PROFILES[name]!.OMB_VOICE_NOTES === "1");
     }
   });
