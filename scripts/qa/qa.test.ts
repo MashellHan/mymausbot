@@ -962,18 +962,50 @@ describe("Lead queue and bounded recovery", () => {
     const calls: string[] = [];
     const api = async (path: string, options: any = {}) => {
       if (options.method === "POST") { calls.push(path); return null; }
-      return { workflow_runs: path.includes("ci.yml") ? [run] : [] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [passedPreflight("typecheck + lint")] };
+      if (path.includes("/artifacts?")) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
+      return { workflow_runs: path.includes("ci.yml") ? [run] : [{ status: "completed", conclusion: "failure", display_title: `QA report ${run.id}` }] };
     };
     const state = {};
     const health = async () => ({ healthy: false, reason: "report missing" });
-    await recoverQa(state, { api, health, now, repository });
-    await recoverQa(state, { api, health, now, repository });
+    const readArtifact = async () => ({ "qa-plan.json": JSON.stringify(pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), run)) });
+    await recoverQa(state, { api, readArtifact, health, now, repository });
+    await recoverQa(state, { api, readArtifact, health, now, repository });
     expect(calls).toEqual(["/actions/workflows/qa-report.yml/dispatches"]);
     calls.length = 0;
     const incomplete = async () => ({ healthy: false, report: { ...report, executionComplete: false } });
-    await recoverQa(state, { api, health: incomplete, now, repository });
-    await recoverQa(state, { api, health: incomplete, now, repository });
+    await recoverQa(state, { api, readArtifact, health: incomplete, now, repository });
+    await recoverQa(state, { api, readArtifact, health: incomplete, now, repository });
     expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
+  });
+
+  it("retains a completed startup failure without a plan and never retries its impossible report", async () => {
+    const failed = { ...run, id: 301, event: "workflow_dispatch", conclusion: "startup_failure" };
+    const scheduled = { ...run, id: 300, created_at: new Date(now - HOUR_MS).toISOString() };
+    const calls: string[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [failed, scheduled] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [{ status: "completed", conclusion: "failure", display_title: `QA report ${failed.id}` }] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [] };
+      if (path.includes("/artifacts?") || path.startsWith("/actions/artifacts?")) return { artifacts: [] };
+      throw new Error(path);
+    };
+    const state: Record<string, unknown> = { recoveryFor: scheduled.id, recoveryRequestedAt: new Date(now - 60_000).toISOString() };
+    const first = await recoverQa(state, { api, now, repository });
+    const second = await recoverQa(state, { api, now: now + HOUR_MS, repository });
+    expect(first).toMatchObject({ healthy: false, blockedAreas: ["global"] });
+    expect(second.healthy).toBe(false);
+    expect(calls).toEqual([]);
+    expect(state).toMatchObject({ recoveryFor: scheduled.id, lastRecoveryDecision: {
+      action: "hold", reason: "missing_trusted_plan", candidate: null,
+      unreportable: { runId: failed.id, sha: failed.head_sha, attempt: 1, conclusion: "startup_failure", reason: "missing_trusted_plan" } } });
+    expect(state).not.toHaveProperty("reportRetry");
+    await expect(recoverQa(state, { api: async (path: string, options: any) => {
+      if (path.includes("/jobs?filter=all")) throw new Error("GitHub read unavailable");
+      return api(path, options);
+    }, now, repository })).rejects.toThrow("GitHub read unavailable");
+    expect(calls).toEqual([]);
   });
 
   it("waits through the daily grace window, recovers once, and leaves a running bootstrap alone", async () => {
@@ -982,17 +1014,20 @@ describe("Lead queue and bounded recovery", () => {
     const api = async (path: string, options: any = {}) => {
       if (options.method === "POST") { calls.push(path); return null; }
       if (path.includes("qa-report.yml")) return { workflow_runs: [{ status: "completed", conclusion: "success", display_title: `QA report ${scheduled.id}` }] };
+      if (path.includes("/jobs?filter=all")) return { jobs: [passedPreflight("typecheck + lint")] };
+      if (path.includes("/artifacts?")) return { artifacts: [{ name: "qa-plan-attempt-1", id: 9 }] };
       return { workflow_runs: [scheduled] };
     };
     const state = {};
     const health = async () => ({ healthy: true, report: { ...report, executionComplete: true } });
-    await recoverQa(state, { api, health, now, repository });
+    const readArtifact = async () => ({ "qa-plan.json": JSON.stringify(pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), scheduled)) });
+    await recoverQa(state, { api, readArtifact, health, now, repository });
     expect(calls).toEqual([]);
     scheduled.updated_at = new Date(now - 26 * HOUR_MS).toISOString();
-    await recoverQa(state, { api, health, now, repository });
+    await recoverQa(state, { api, readArtifact, health, now, repository });
     expect(calls).toEqual([]);
-    await recoverQa(state, { api, health, now: now + 1, repository });
-    await recoverQa(state, { api, health, now: now + 1, repository });
+    await recoverQa(state, { api, readArtifact, health, now: now + 1, repository });
+    await recoverQa(state, { api, readArtifact, health, now: now + 1, repository });
     expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
 
     const bootstrap = { ...run, id: 200, event: "workflow_dispatch", status: "in_progress" };
@@ -1106,8 +1141,7 @@ describe("Lead queue and bounded recovery", () => {
     const newer = { ...run, id: 201, created_at: new Date(now - 120_000).toISOString() };
     const older = { ...pushRun, id: 200, head_sha: "b".repeat(40), status: "completed",
       created_at: new Date(now - 180_000).toISOString() };
-    const plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), older);
-    expect(fullPushPlan(plan)).toBe(true);
+    const plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), newer);
     const calls: string[] = [];
     const api = async (path: string, options: any = {}) => {
       if (options.method === "POST") { calls.push(path); return null; }
@@ -1128,7 +1162,7 @@ describe("Lead queue and bounded recovery", () => {
     expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
     expect(state).toMatchObject({ recoveryFor: newer.id });
     expect(readArtifact).toHaveBeenCalled();
-    expect(readArtifact.mock.calls.every(([artifact]) => artifact.name === "mausbot-qa-report")).toBe(true);
+    expect(readArtifact.mock.calls.some(([artifact]) => artifact.name === "qa-plan-attempt-1")).toBe(true);
   });
 
   it.each([
@@ -1139,7 +1173,6 @@ describe("Lead queue and bounded recovery", () => {
   ])("keeps an older active push in flight behind a newer $name", async ({ event, createdOffset, incomplete, pending }) => {
     const newer = { ...run, id: 201, event, head_sha: "c".repeat(40), created_at: new Date(now + createdOffset).toISOString() };
     const older = { ...pushRun, id: 200, head_sha: "b".repeat(40), created_at: new Date(now - 180_000).toISOString() };
-    const plan = pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), older);
     const calls: string[] = [];
     const api = async (path: string, options: any = {}) => {
       if (options.method === "POST") { calls.push(path); return null; }
@@ -1147,19 +1180,21 @@ describe("Lead queue and bounded recovery", () => {
       if (path.includes("qa-report.yml/runs")) return { workflow_runs: incomplete
         ? [{ status: "completed", conclusion: "success", display_title: `QA report ${newer.id}` }] : [] };
       if (path.includes("/jobs?filter=all")) {
-        if (path.includes(`/runs/${newer.id}/`)) throw new Error("newer jobs unavailable");
+        if (path.includes(`/runs/${newer.id}/`) && event === "push") throw new Error("newer jobs unavailable");
+        if (path.includes(`/runs/${newer.id}/`)) return { jobs: [passedPreflight("typecheck + lint")] };
         return { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "in_progress" }] };
       }
       if (path.startsWith("/actions/artifacts?")) return { artifacts: incomplete
         ? [{ name: "mausbot-qa-report", workflow_run: { id: 300 } }] : [] };
-      if (path.includes("/artifacts?")) return { artifacts: pending ? [] : [{ name: "qa-plan-attempt-1", id: 9 }] };
+      if (path.includes("/artifacts?")) return { artifacts: pending ? [] : [{ name: "qa-plan-attempt-1", id: 9,
+        workflow_run: { id: path.includes(`/runs/${newer.id}/`) ? newer.id : older.id } }] };
       if (path === "/actions/runs/300") return { path: ".github/workflows/qa-report.yml", head_branch: "main",
         head_repository: { full_name: repository }, event: "workflow_run", conclusion: "success" };
       if (path.startsWith("/issues?")) return [];
       throw new Error(path);
     };
-    const readArtifact = vi.fn(async (artifact: { name: string }) => artifact.name.startsWith("qa-plan")
-      ? { "qa-plan.json": JSON.stringify(plan) } : { "qa-report.json": JSON.stringify({ ...report, runId: newer.id,
+    const readArtifact = vi.fn(async (artifact: { name: string; workflow_run?: { id: number } }) => artifact.name.startsWith("qa-plan")
+      ? { "qa-plan.json": JSON.stringify(pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), artifact.workflow_run?.id === newer.id ? newer : older)) } : { "qa-report.json": JSON.stringify({ ...report, runId: newer.id,
         sha: newer.head_sha, executionComplete: false }) });
     const state = { startedAt: new Date(now - 60_000).toISOString() };
     expect((await qaHealth({ api, readArtifact, now, repository })).healthy).toBe(false);
@@ -1174,6 +1209,8 @@ describe("Lead queue and bounded recovery", () => {
     const calls: string[] = [];
     const api = async (path: string, options: any = {}) => {
       if (options.method === "POST") { calls.push(path); return null; }
+      if (path.includes("/jobs?filter=all")) return { jobs: [] };
+      if (path.includes("/artifacts?")) return { artifacts: [] };
       return { workflow_runs: path.includes("ci.yml") ? [run] : [] };
     };
     const state = { startedAt: new Date(now).toISOString() };
