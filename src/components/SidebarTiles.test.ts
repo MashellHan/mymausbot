@@ -70,6 +70,15 @@ describe("the sidebar tiles", () => {
     expect(unread).toContain('aria-label="MausBot · Unread"');
   });
 
+  it("leaves the Raw chief tile unfilled while keeping its current state and badge ring", () => {
+    const raw = renderToStaticMarkup(createElement(SidebarBotTile, { ...props(bot({ chiefOfStaff: true }), true), primary: true, raw: true }));
+    expect(raw).toContain('aria-current="page"');
+    expect(raw).toContain('bg-transparent');
+    expect(raw).not.toContain('bg-[var(--tile)]');
+    expect(raw).toContain('[--tile:var(--color-panel)]');
+    expect(raw).toContain('data-testid="chief-badge"');
+  });
+
   it("opens the bot on Enter and its menu from the ContextMenu key", () => {
     let tree: ReactNode;
     function Capture() { tree = tile({ ...props(bot()), primary: true }); return tree; }

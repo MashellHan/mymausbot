@@ -21,9 +21,9 @@ import { useBotUnread } from "./unread-notice";
 
 const RING = "ring-2 ring-[var(--tile)]";
 
-type TileProps = BotRowProps & PinnedCircleDragProps & { primary?: boolean };
+type TileProps = BotRowProps & PinnedCircleDragProps & { primary?: boolean; raw?: boolean };
 
-export const SidebarBotTile = memo(function SidebarBotTile({ primary = false, drag, dragging, drop, prevId, nextId, ...row }: TileProps) {
+export const SidebarBotTile = memo(function SidebarBotTile({ primary = false, raw = false, drag, dragging, drop, prevId, nextId, ...row }: TileProps) {
   const { bot, selected, deleting, mascotMotion, pendingQueued, instances, liveCall, dispatch, onMenu, renameRequest } = row;
   const showThreads = useShowThreads();
   const liveMedia = useLiveMedia();
@@ -75,8 +75,9 @@ export const SidebarBotTile = memo(function SidebarBotTile({ primary = false, dr
       onKeyDown={onKeyDown}
       onContextMenu={(event) => openBotContextMenu(onMenu, bot.id, event)}
       className={cn(
-        "flex h-[92px] w-[78px] shrink-0 cursor-pointer flex-col items-center rounded-[8px] bg-[var(--tile)] px-1 pt-2 transition-colors duration-150", SIMPLE_ROW_FOCUS,
-        selected ? "[--tile:var(--color-raised)]" : "[--tile:var(--color-panel)] hover:[--tile:color-mix(in_srgb,var(--color-raised)_50%,var(--color-panel))]",
+        "flex h-[92px] w-[78px] shrink-0 cursor-pointer flex-col items-center rounded-[8px] px-1 pt-2 transition-colors duration-150", SIMPLE_ROW_FOCUS,
+        raw ? "bg-transparent [--tile:var(--color-panel)] hover:bg-raised/50" : cn("bg-[var(--tile)]",
+          selected ? "[--tile:var(--color-raised)]" : "[--tile:var(--color-panel)] hover:[--tile:color-mix(in_srgb,var(--color-raised)_50%,var(--color-panel))]"),
         pinnedCircleDragClass({ drag, dragging, drop }),
       )}
     >
@@ -172,8 +173,8 @@ export function SidebarTileGrid({ primary, pinned, row, corner = false, raw = fa
   return (
     <div ref={besideCorner.ref} data-sidebar-tiles="" data-raw={raw ? "" : undefined} data-beside-corner={besideCorner.beside ? "" : undefined}
       className="flex max-h-[40vh] flex-wrap justify-center gap-1 overflow-y-auto px-3 pb-4 pt-2.5" {...order.frameProps}>
-      {primary && <SidebarBotTile {...row(primary)} primary />}
-      {order.ranked.map((bot) => <SidebarBotTile key={bot.id} {...row(bot)} {...order.dragProps(bot)} />)}
+      {primary && <SidebarBotTile {...row(primary)} primary raw={raw} />}
+      {order.ranked.map((bot) => <SidebarBotTile key={bot.id} {...row(bot)} {...order.dragProps(bot)} raw={raw} />)}
       <span role="status" className="sr-only">{order.moved}</span>
     </div>
   );

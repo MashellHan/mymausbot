@@ -133,6 +133,19 @@ afterEach(() => {
 });
 
 describe("computer panel entry focus", () => {
+  it("starts with Model folded while naming the current thread's effective model", async () => {
+    await open(makeBot({ tasks: [{ threadId: "thread", title: "Thread", createdAt: 1,
+      modelSelection: { instanceId: "claude", model: "thread-model" } }] }));
+    const model = document.querySelector<HTMLElement>('[data-panel-card="model"]')!;
+    const toggle = model.querySelector<HTMLButtonElement>('[aria-controls="bot-overview-model-content"]')!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.textContent).toContain("thread-model");
+    expect(model.querySelector('[data-panel-row="model"]')).toBeNull();
+    flushSync(() => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(model.querySelector('[data-panel-row="model"] [data-tour="model"]')).not.toBeNull();
+  });
+
   it("hands the keyboard's open to the active tab, one frame later", async () => {
     rememberComputerPanelOpen({ botId: "scout", opener: chatButton(), tabs: true });
     expect(localStorage.getItem("omb-computer-panel-view:scout")).toBeNull();
@@ -230,6 +243,8 @@ describe("computer panel entry focus", () => {
     flushSync(() => tabByLabel("Files").click());
     await settle();
     expect(document.querySelector('[data-testid="computer-files"]')?.className).toContain("overflow-y-auto");
+    expect(document.querySelector('[data-testid="computer-files"]')?.className).toContain("max-h-[50dvh]");
+    expect(document.querySelector('[data-testid="computer-files"]')?.parentElement?.className).not.toContain("flex-1");
     expect(document.querySelectorAll('[data-panel-page="folder"]')).toHaveLength(1);
     expect(document.querySelector('[data-panel-page="folder"]')?.textContent).toContain("/workspace/pinned");
     expect(document.querySelector('[data-testid="files-library-links"]')?.textContent).toContain("Page 0");

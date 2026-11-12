@@ -205,6 +205,7 @@ export function ModelPicker({
   threadId,
   className,
   contained = false,
+  showReasoning = false,
   label,
   size = "md",
 }: {
@@ -212,6 +213,7 @@ export function ModelPicker({
   threadId?: string;
   className?: string;
   contained?: boolean;
+  showReasoning?: boolean;
   label?: ReactNode;
   size?: "sm" | "md";
 }) {
@@ -486,7 +488,7 @@ export function ModelPicker({
     if (updateBotDefault && threadId) setChangedBotModel(true);
     // A model with reasoning levels keeps the menu open, so its level can be set next without opening it again;
     // picking a variant row already sets that level.
-    if (variant !== undefined || contained || !offersReasoning(state, instance, nextSelection, threadId ?? bot.threadId)) close(true);
+    if (variant !== undefined || (contained && !showReasoning) || !offersReasoning(state, instance, nextSelection, threadId ?? bot.threadId)) close(true);
     else refocusAfterPick();
   };
 
@@ -529,7 +531,7 @@ export function ModelPicker({
     dispatch({ type: "setModel", botId: bot.id, threadId, ...(threadId && simpleUpdatesBotDefault ? { updateBotDefault: true } : {}),
       selection: effort ? { ...model, effort } : model });
   };
-  const thinking: SimpleThinking | null = contained ? null
+  const thinking: SimpleThinking | null = contained && !showReasoning ? null
     : variantChoices(state, selection, threadId ?? bot.threadId) ? {
       variants: (
         <ModelVariantRow compact quiet bot={shown} threadId={threadId} updateBotDefault={Boolean(threadId) && simpleUpdatesBotDefault} className="px-2 py-1"
@@ -881,7 +883,7 @@ export function ModelPicker({
                 </>
               )}
 
-              {!contained && (
+              {(!contained || showReasoning) && (
                 <EffortRow
                   compact
                   bot={shown}
