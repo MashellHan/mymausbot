@@ -99,11 +99,37 @@ describe("bot setup and tools in the real renderer", () => {
       document.querySelector('[data-chathead-pill]')?.click();
       return false;
     })()`), { timeout: 10_000 }).toBe(true);
-    const openApps = async () => {
+    const appsEntryState = (expectedBotName: string) => diagnosticEval(`(() => {
+      const panel = document.querySelector('#bot-panel');
+      const gear = document.querySelector('[data-panel-gear]');
+      const pill = document.querySelector('[data-chathead-pill]');
+      const page = panel?.querySelector('[data-panel-page-view]')?.getAttribute('data-panel-page-view') ?? null;
+      const tab = panel?.querySelector('[data-panel-tab][aria-selected="true"]')?.getAttribute('data-panel-tab') ?? null;
+      return {
+        panel: { exists: !!panel, visible: !!panel?.getClientRects().length,
+          botMatchesExpected: panel?.querySelector('#bot-settings-title')?.textContent?.trim() === ${JSON.stringify(expectedBotName)} },
+        pill: { expanded: pill?.getAttribute('aria-expanded') ?? null,
+          botMatchesExpected: pill?.querySelector(':scope > span[dir="auto"]')?.textContent?.trim() === ${JSON.stringify(expectedBotName)} },
+        gear: { count: document.querySelectorAll('[data-panel-gear]').length, inPanel: !!panel?.contains(gear), visible: !!gear?.getClientRects().length },
+        page: page?.slice(0, 32) ?? null, tab: tab?.slice(0, 32) ?? null,
+        settings: !!panel?.querySelector('[data-panel-settings]'), apps: !!panel?.querySelector('[data-panel-page="apps"]'),
+        computerPanel: !!document.querySelector('[data-computer-panel]')?.getClientRects().length,
+      };
+    })()`);
+    const openApps = async (expectedBotName: string) => {
       await openPanel();
       await click("Bot settings");
       await expect.poll(() => evaluate("(() => { const gear = document.querySelector('[data-panel-gear]'); gear?.click(); return Boolean(gear); })()"), { timeout: 10_000 }).toBe(true);
-      await expect.poll(() => evaluate("Boolean(document.querySelector('[data-panel-page=\"apps\"]'))"), { timeout: 10_000 }).toBe(true);
+      const afterGear = await appsEntryState(expectedBotName).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
+      try {
+        await expect.poll(() => evaluate("Boolean(document.querySelector('[data-panel-page=\"apps\"]'))"), { timeout: 10_000 }).toBe(true);
+      } catch (original) {
+        try {
+          const afterWait = await appsEntryState(expectedBotName).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
+          console.error("Apps entry failure diagnostic", JSON.stringify({ afterGear, afterWait }));
+        } catch {}
+        throw original;
+      }
       await evaluate("document.querySelector('[data-panel-page=\"apps\"]').click(); true");
       await expect.poll(snapshot, { timeout: 10_000 }).toContain("Connect another app");
     };
@@ -153,7 +179,7 @@ describe("bot setup and tools in the real renderer", () => {
     // exercises the same external open action as the shipped chat header.
     await runControlOmb(["send", "--bot", created[0].id, "--text", "Reply briefly for the sidebar test.", "--url", info.url]);
     expect((await runControlOmb(["wait", "--bot", created[0].id, "--timeout", "20", "--url", info.url]) as { status: string }).status).toBe("settled");
-    await openApps();
+    await openApps(created[0].name);
     expect(await evaluate("Boolean(document.querySelector('[data-simple-mcp]'))")).toBe(false);
     const settingsPage = () => evaluate("document.querySelector('[data-settings-page][aria-current=\"page\"]')?.getAttribute('data-settings-page') ?? null");
     const searchValue = () => evaluate("document.querySelector('[data-settings-search]')?.value ?? null");
@@ -194,7 +220,7 @@ describe("bot setup and tools in the real renderer", () => {
     await closeSettings();
 
     // Add the server where every app is added, from the panel's Connect another app.
-    await openApps();
+    await openApps(created[0].name);
     await evaluate("document.querySelector('[data-panel-link=\"add-app\"]').click(); true");
     const mcpFilter = () => evaluate("document.querySelector('[data-apps-filter=mcp]')?.getAttribute('aria-pressed')");
     await expect.poll(mcpFilter, { timeout: 10_000 }).toMatch(/^(?:true|false)$/);
@@ -313,7 +339,7 @@ describe("bot setup and tools in the real renderer", () => {
     await press("Escape");
     const useFixture = `${created[0].name} can use fixture`;
     const fixtureSwitch = () => evaluate(`document.querySelector(${JSON.stringify(`[aria-label="${useFixture}"]`)})?.getAttribute('aria-checked') ?? null`);
-    await openApps();
+    await openApps(created[0].name);
     await expect.poll(fixtureSwitch, { timeout: 10_000 }).toBe("true");
     const tapInstalled = await diagnosticEval(`(() => {
       const original = window.fetch;
@@ -375,7 +401,7 @@ describe("bot setup and tools in the real renderer", () => {
       await diagnosticEval("window.__qa507McpProbe?.restore(); true").catch(() => {});
     }
     await press("Escape");
-    await openApps();
+    await openApps(created[0].name);
     await expect.poll(fixtureSwitch, { timeout: 10_000 }).toBe("false");
 
     // New bot from above settings puts the new bot's chat in front: no
