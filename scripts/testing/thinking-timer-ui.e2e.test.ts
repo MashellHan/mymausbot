@@ -96,13 +96,20 @@ function elapsedSeconds(text: string): number {
   return -1;
 }
 
-/** A bot's conversations are listed in its panel, which the chat header's pill opens; click it only while closed. */
 async function openConversations(handle: string, name: string): Promise<void> {
-  await waitUntil(async () => (await ui("eval", handle, "--js", `(() => {
-    if (document.querySelector('[data-panel-card="conversations"] [data-sidebar-thread-row]')) return true;
-    document.querySelector('[data-chathead-pill][aria-expanded="false"]')?.click();
-    return false;
-  })()`)).result, 10_000, `${name}'s conversations to show`);
+  let settingsOpened = false;
+  await waitUntil(async () => {
+    const phase = (await ui("eval", handle, "--js", `(() => {
+      if (document.querySelector('[data-panel-card="conversations"] [data-sidebar-thread-row]')) return "ready";
+      if (${settingsOpened}) return "waiting";
+      const settings = document.querySelector('[data-computer-panel] button[aria-label="Bot settings"]');
+      if (settings) { settings.click(); return "settings"; }
+      document.querySelector('[data-chathead-pill][aria-expanded="false"]')?.click();
+      return "profile";
+    })()`)).result;
+    if (phase === "settings") settingsOpened = true;
+    return phase === "ready";
+  }, 10_000, `${name}'s conversations to show`);
 }
 
 async function waitUntil<T>(probe: () => Promise<T>, timeoutMs: number, what: string): Promise<T> {
