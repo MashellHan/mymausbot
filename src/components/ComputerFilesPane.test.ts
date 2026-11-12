@@ -161,7 +161,7 @@ describe("file grants in the visible conversation", () => {
 describe("recent file actions", () => {
   let root: Root;
   let container: HTMLDivElement;
-  const render = (value: Bot) => flushSync(() => root.render(createElement(ComputerFilesPane, { bot: value })));
+  const render = (value: Bot, showFolder = true) => flushSync(() => root.render(createElement(ComputerFilesPane, { bot: value, showFolder })));
   const saveButton = (name: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="Save a copy of ${name}"]`);
 
   beforeEach(() => {
@@ -191,6 +191,15 @@ describe("recent file actions", () => {
     expect(container.textContent).toContain("Not shared");
     expect(container.querySelector('[title="Ask the bot to share a file link in this chat to save a copy."]')).not.toBeNull();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("omits only the duplicate folder card when Files includes Library settings", () => {
+    const value = bot([reply("shared", "[report](/workspace/report.md)")]);
+    render(value, false);
+    expect(container.textContent).not.toContain("Working folder");
+    expect(container.textContent).toContain("report.md");
+    render(value);
+    expect(container.textContent).toContain("Working folder");
   });
 
   it("downloads through the exact shared message and preserves the original URL", async () => {

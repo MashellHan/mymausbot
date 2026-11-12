@@ -1,6 +1,6 @@
 import { localizedTaskTitle } from "@/lib/task-title";
 import { ChevronRight, Lock, UserRound, Users } from "lucide-react";
-import type { ComponentProps } from "react";
+import type { ComponentProps, MouseEvent } from "react";
 
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -9,6 +9,7 @@ import { awayFromMainThread } from "@/state/thread-navigation";
 import { BotAvatar } from "./Avatar";
 import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
 import { sidebarBotActivityTasks } from "./SidebarBotActivity";
+import { COMPUTER_PANEL_ID } from "@/lib/computer-panel-focus";
 import { BOT_PANEL_ID } from "./bot-panel/side-panel";
 import { sharedChatAudience } from "./TeamPrivateChatsLine";
 
@@ -29,17 +30,15 @@ function privacyLabelOf(privacy: ChatHeadPrivacy): string | null {
   }
 }
 
-/** Simple mode's whole chat header: the bot's face and name in one pill, which opens and closes the bot panel. Away from
- * the bot's main conversation it also names the one on screen. A dot says another of the bot's conversations needs a
- * look; a team chat says who can read it with one quiet glyph. */
-export function ChatHeadPill({ bot, avatar, privacy, onToggle }: {
+export function ChatHeadPill({ bot, avatar, privacy, remoteClient = false, onToggle }: {
   bot: Bot;
   avatar: Pick<ComponentProps<typeof BotAvatar>, "state" | "motion" | "motionKey" | "animated">;
   privacy: ChatHeadPrivacy;
-  onToggle: () => void;
+  remoteClient?: boolean;
+  onToggle: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   const { state } = useStore();
-  const open = state.settingsOpen;
+  const open = remoteClient ? state.settingsOpen : state.computerOpen;
   const elsewhere = sidebarBotActivityTasks(bot, state.pendingQueued).filter((task) => task.threadId !== bot.threadId).length;
   const privacyLabel = privacyLabelOf(privacy);
   const PrivacyIcon = privacy ? PRIVACY_ICONS[privacy.kind] : Users;
@@ -57,7 +56,7 @@ export function ChatHeadPill({ bot, avatar, privacy, onToggle }: {
       title={t("chat.openBotPanel")}
       aria-label={conversation ? `${label}, ${conversation}` : label}
       aria-expanded={open}
-      aria-controls={open ? BOT_PANEL_ID : undefined}
+      aria-controls={open ? remoteClient ? BOT_PANEL_ID : COMPUTER_PANEL_ID : undefined}
       className={cn("group flex min-w-0 max-w-full items-center gap-2 rounded-full py-[7.5px] pl-[7.5px] pr-[13.5px] text-ink", ELEVATED_FLOAT, ELEVATED_HOVER)}
     >
       <BotAvatar bot={bot} size={24} {...avatar} />

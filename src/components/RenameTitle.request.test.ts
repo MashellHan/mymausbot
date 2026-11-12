@@ -50,3 +50,17 @@ it("stays put when the rename request moves on to another bot, and only the bot 
   await act(async () => root.unmount());
   host.remove();
 });
+
+it("passes the activation event from the displayed name to its panel opener", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const target = vi.fn();
+  await act(async () => root.render(createElement(RenameTitle, { value: "Scout", onCommit: vi.fn(), showEditButton: true,
+    onActivate: (event) => target(event.currentTarget, event.detail) })));
+  const button = host.querySelector<HTMLButtonElement>('[aria-label="Open Scout\'s profile"]')!;
+  await act(async () => button.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 })));
+  expect(target).toHaveBeenCalledWith(button, 0);
+  await act(async () => root.unmount());
+  host.remove();
+});

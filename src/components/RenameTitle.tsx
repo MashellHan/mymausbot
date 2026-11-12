@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { t } from "@/lib/i18n";
 import { Pencil } from "lucide-react";
 
@@ -21,7 +21,7 @@ export function RenameTitle({
   value: string;
   onCommit: (next: string) => void;
   onEditingChange?: (editing: boolean) => void;
-  onActivate?: () => void;
+  onActivate?: (event: MouseEvent<HTMLButtonElement>) => void;
   showEditButton?: boolean;
   editRequest?: number;
   title?: string;

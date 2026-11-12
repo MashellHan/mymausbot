@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight, Loader2, Sparkles } from "lucide-react";
 import type { MiniAppSummary } from "../../shared/mini-apps";
 import type { Routine, RoutineRun, RoutineRunOn } from "@/lib/routines";
 import { t } from "@/lib/i18n";
+import { cn } from "@/lib/cn";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, type Bot } from "@/state/store";
 import { BotAvatar } from "./Avatar";
+import { ModelPicker } from "./ModelPicker";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
+import { RowIcon, RowText, rowCls } from "./bot-panel/rows";
 import { MiniAppIcon, iconKindForApp } from "./mini-apps/MiniAppIcon";
 import { miniAppDisplayName } from "./mini-apps/mini-app-display";
 import { miniAppNativeFrameGuard } from "./mini-apps/native-frame-guard";
@@ -41,6 +44,12 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApp 
       <BotAvatar bot={bot} size={52} state="happy" animated={false} />
       <h1 className="min-w-0 truncate text-[19px] font-semibold leading-7 text-ink" title={bot.name}>{bot.name}</h1>
     </header>
+    <section data-panel-card="model">
+      <div data-panel-row="model" className={cn(rowCls, "rounded-[8px]")}>
+        <ModelPicker bot={bot} contained threadId={bot.threadId}
+          label={<span className="flex shrink-0 items-center gap-2.5"><RowIcon icon={Sparkles} /><RowText title={t("model.simple.model")} /></span>} />
+      </div>
+    </section>
     <RoutinesSection key={bot.id} bot={bot} routines={routines} runs={runs} defaultRunOn={defaultRunOn} compact />
     <section aria-label={t("model.suggested")}>
       <h2 className="mb-3 text-[15px] font-semibold text-ink">{t("model.suggested")}</h2>
