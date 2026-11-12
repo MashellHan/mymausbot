@@ -443,7 +443,7 @@ async function catalogAround(
       ? main.model
       : null;
 
-  return mergeLocalInject(
+  const catalog = await mergeLocalInject(
     {
       default: configured && seen.has(configured) ? configured : official.default,
       options,
@@ -451,4 +451,13 @@ async function catalogAround(
     env,
     fetchImpl,
   );
+  for (const option of catalog.options) {
+    if (option.providerRoute?.provenance !== "local") continue;
+    const provider = decodeCodexSelection(option.id).modelProvider;
+    const declared = provider ? known.get(provider) : undefined;
+    if (provider && declared?.baseUrl && !codexInjectHost(provider)) {
+      option.providerRoute = configuredProviderRoute(provider, declared.name);
+    }
+  }
+  return catalog;
 }

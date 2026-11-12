@@ -171,6 +171,25 @@ name = "oMLX"
     expect(option?.providerRoute?.id).toMatch(/^configured:[a-f0-9]{16}$/);
   });
 
+  it("keeps a newly probed reserved-provider model on its configured remote Codex route", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "ollama"\nmodel = "Seed"\n[model_providers.ollama]\nname = "Remote Gateway"\nbase_url = "https://remote.example.test/v1"\n`,
+    });
+    const catalog = await readCodexModelCatalog(
+      { HOME: home, VITEST: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" },
+      async (url) => String(url).includes("remote.example.test/v1/models")
+        ? new Response(JSON.stringify({ data: [{ id: "Seed" }] }), { status: 200 })
+        : String(url).includes(":11434/v1/models")
+          ? new Response(JSON.stringify({ data: [{ id: "M" }] }), { status: 200 })
+          : new Response("nope", { status: 500 }),
+    );
+    expect(catalog.options.find((row) => row.id === "ollama::M")?.providerRoute)
+      .toEqual(catalog.options.find((row) => row.id === "ollama::Seed")?.providerRoute);
+    expect(catalog.options.find((row) => row.id === "ollama::M")?.providerRoute)
+      .toMatchObject({ label: "Remote Gateway", provenance: "configured" });
+    expect(JSON.stringify(catalog)).not.toContain("remote.example.test");
+  });
+
   it("honors CODEX_HOME over HOME and merges live /v1/models", async () => {
     const ignored = scratchHome({
       "config.toml": `model_provider = "omlx"\nmodel = "ignored"\n`,
