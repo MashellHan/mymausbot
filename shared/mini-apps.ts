@@ -53,6 +53,10 @@ export interface MiniAppSummary {
   revision: number;
   templateVersion: number;
   publisherBotIds: string[];
+  /** Current host replies use null for old apps. This does not grant access. */
+  responsibleBotId?: string | null;
+  /** Current host replies use [] for old apps; these are descriptions, not permissions. */
+  capabilities?: string[];
   /** Present on current host replies; old saved receipts may omit it. */
   dashboard?: MiniAppDashboardDeclaration | null;
   /** Installed built-in identity survives grant revocation; it grants no dashboard reads. */
@@ -94,6 +98,9 @@ export interface MiniAppPublish {
   html: string;
   bindings: MiniAppDataBinding[];
   publisherBotIds?: string[];
+  /** Only the workspace owner may assign or clear responsibility. */
+  responsibleBotId?: string | null;
+  capabilities?: string[];
   /** Only the workspace owner may set or revoke a native dashboard grant. */
   dashboardKind?: MiniAppDashboardKind | null;
   /** Only the workspace owner may label an installed shipped template. */
@@ -114,6 +121,20 @@ export interface MiniAppArchive {
 export interface MiniAppMutationResult {
   app: MiniAppSummary;
   replayed: boolean;
+}
+
+/** Local owner request for the selected Bot's current task. */
+export interface MiniAppSuggestionsRequest { botId: string; threadId: string }
+export type MiniAppSuggestionReason =
+  | { kind: "responsible" }
+  | { kind: "developed" }
+  | { kind: "task"; capability: string; taskPhrase: string };
+export interface MiniAppSuggestion { app: MiniAppSummary; reason: MiniAppSuggestionReason }
+export interface MiniAppSuggestionsResult {
+  botId: string;
+  threadId: string;
+  suggestions: MiniAppSuggestion[];
+  refreshPending: boolean;
 }
 
 /** The host supplies the installed revision; an iframe can select only a declared query and parameters. */
