@@ -56,8 +56,8 @@ function ownModelThread(threadModel: string, botModel: string, others: Array<[st
 let host: HTMLDivElement;
 let root: Root;
 const parentKey = vi.fn();
-const render = (bot = scout()) => flushSync(() => root.render(createElement("div", { onKeyDown: (event: { key: string }) => parentKey(event.key) },
-  createElement(ModelPicker, { bot, threadId: bot.threadId }))));
+const render = (bot = scout(), options: { contained?: boolean; showReasoning?: boolean } = {}) => flushSync(() => root.render(createElement("div", { onKeyDown: (event: { key: string }) => parentKey(event.key) },
+  createElement(ModelPicker, { bot, threadId: bot.threadId, ...options }))));
 const settle = async () => {
   for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 };
@@ -287,6 +287,22 @@ describe("an OpenCode model typed by hand", () => {
 });
 
 describe("picking a model that has reasoning levels", () => {
+  for (const advanced of [false, true]) {
+    it(`offers reasoning in the overview's contained ${advanced ? "full" : "Simple"} picker after a model pick`, async () => {
+      fixture.advanced = advanced;
+      const options = { contained: true, showReasoning: true };
+      render(scout(), options);
+      await openWith("click");
+      press("ArrowDown");
+      press("Enter");
+      await settle();
+      expect(menu()).not.toBeNull();
+      render(scout("claude-sonnet-5-5"), options);
+      await settle();
+      expect(menu()!.querySelector(advanced ? 'select[aria-label="Reasoning effort"]' : "[data-effort-pill]")).not.toBeNull();
+    });
+  }
+
   for (const advanced of [false, true]) {
     it(`keeps the ${advanced ? "full" : "Simple"} menu open on the new model so its level can be set next, and Escape still closes it`, async () => {
       fixture.advanced = advanced;
