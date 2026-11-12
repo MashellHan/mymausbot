@@ -204,16 +204,14 @@ export function ModelPicker({
   bot: shown,
   threadId,
   className,
-  contained = false,
-  showReasoning = false,
+  contained = false, showReasoning = false,
   label,
   size = "md",
 }: {
   bot: Bot;
   threadId?: string;
   className?: string;
-  contained?: boolean;
-  showReasoning?: boolean;
+  contained?: boolean; showReasoning?: boolean;
   label?: ReactNode;
   size?: "sm" | "md";
 }) {
