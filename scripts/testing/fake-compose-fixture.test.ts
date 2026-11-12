@@ -34,14 +34,29 @@ async function fixture() {
   const starting = startFakeDocker(root, fake);
   entry.docker = starting;
   const docker = await starting;
-  const env = { PATH: `${join(root, "bin")}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: root, FAKE_DOCKER_DIR: fake };
-  const run = (args: string[], input = "", extra: Record<string, string> = {}) => spawnSync(join(root, "bin", "docker"), args, {
+  const env = { PATH: `${join(root, "bin")}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: root, FAKE_DOCKER_DIR: fake, BASH_ENV: docker.shellInit };
+  const run = (args: string[], input = "", extra: Record<string, string | undefined> = {}) => spawnSync("bash", ["-c", 'docker "$@"', "bash", ...args], {
     cwd: deploy, env: { ...env, ...extra }, input, encoding: "utf8", timeout: 10_000,
   });
   return { root, fake, deploy, state, save, docker, env, run, entry };
 }
 
 describe.skipIf(process.platform === "win32")("fixture-owned Docker interpreter", () => {
+  it("keeps standalone and sourced command results equivalent without changing the caller shell", async () => {
+    const box = await fixture();
+    box.state.images[0]!.lastWords = "\0first\0last\n\n";
+    box.save();
+    for (const args of [["compose", "logs"], ["unknown", "a b\n'quote'"], ["run", "--entrypoint", "sh", "image", "-c", 'printf "%s\\n" "$SYNTHETIC_VALUE"; exit 7']]) {
+      const env = { ...box.env, SYNTHETIC_VALUE: "unchanged\n'quoted'" };
+      const native = spawnSync(join(box.root, "bin", "docker"), args, { cwd: box.deploy, env, input: "kept\n", encoding: "utf8", timeout: 10_000 });
+      const sourced = box.run(args, "kept\n", { SYNTHETIC_VALUE: env.SYNTHETIC_VALUE });
+      for (const key of ["status", "signal", "stdout", "stderr", "error"] as const) expect(sourced[key]).toEqual(native[key]);
+    }
+    const caller = spawnSync("bash", ["-c", 'before=$(pwd); docker unknown >/dev/null 2>&1; status=$?; [ "$before" = "$PWD" ] && [ -z "${transport+x}" ] && printf "caller:%s\\n" "$status"'], { cwd: box.deploy, env: box.env, encoding: "utf8", timeout: 10_000 });
+    expect(caller.status).toBe(0);
+    expect(caller.stdout).toBe("caller:64\n");
+  });
+
   it("reloads state and caller cwd/environment, without sharing another fixture's state", async () => {
     const one = await fixture();
     const two = await fixture();
@@ -55,6 +70,10 @@ describe.skipIf(process.platform === "win32")("fixture-owned Docker interpreter"
     writeFileSync(join(one.deploy, ".env"), "OMB_IMAGE=from-file\n");
     expect(one.run(["compose", "config"]).stdout).toBe("services:\n  omb:\n    image: from-file\n");
     expect(one.run(["compose", "config"], "", { OMB_IMAGE: "from-env" }).stdout).toBe("services:\n  omb:\n    image: from-env\n");
+    expect(one.run(["compose", "config"], "", { OMB_IMAGE: "" }).stdout).toBe("services:\n  omb:\n    image: old\n");
+    const unusualImage = "line one\n'quoted'=\"double\"\\backslash %s\n";
+    expect(one.run(["compose", "config"], "", { OMB_IMAGE: unusualImage }).stdout).toBe(`services:\n  omb:\n    image: ${unusualImage}\n`);
+    expect(one.run(["compose", "config"]).stdout).toBe("services:\n  omb:\n    image: from-file\n");
     const unknown = one.run(["unknown", "a b\n'quote'"]);
     expect(unknown.status).toBe(64);
     expect(unknown.stderr).toBe("fake docker: unknown command: unknown a b\n'quote'\n");
@@ -76,14 +95,26 @@ describe.skipIf(process.platform === "win32")("fixture-owned Docker interpreter"
     });
     expect(remaining("compose ps -aq omb").stdout).toBe(binary);
     expect(remaining("compose exec omb openmausbot doctor").stdout).toBe("");
-    const script = 'IFS= read -r answer; printf "%s:%s\\n" "$answer" "$SYNTHETIC_VALUE"; pwd; exit 7';
-    const real = box.run(["run", "--entrypoint", "sh", "image", "-c", script], "kept\n", { SYNTHETIC_VALUE: "v 'quoted'" });
+    const script = 'IFS= read -r answer; printf "%s:%s\\n" "$answer" "$SYNTHETIC_VALUE"; printf "%s:%s:%s\\n" "${EMPTY_VALUE+x}" "$EMPTY_VALUE" "${UNSET_VALUE+x}"; pwd; exit 7';
+    const value = "v 'quoted'\n=\"double\"\\backslash %s\n";
+    const real = box.run(["run", "--entrypoint", "sh", "image", "-c", script], "kept\n", { SYNTHETIC_VALUE: value, EMPTY_VALUE: "" });
     expect(real.status).toBe(7);
-    expect(real.stdout).toBe(`kept:v 'quoted'\n${realpathSync(box.deploy)}\n`);
+    expect(real.stdout).toBe(`kept:${value}\nx::\n${realpathSync(box.deploy)}\n`);
     expect(real.stderr).toBe("helper exited 7\n");
     const missing = box.run(["run", "--entrypoint", "no-such-fixture-command", "image"]);
     expect(missing.status).toBe(1);
     expect(missing.stderr).toBe("helper exited null\n");
+  });
+
+  it.each([undefined, "", "another-fixture"])("refuses fixture identity %s and reaps its child", async (identity) => {
+    const box = await fixture();
+    const result = box.run(["compose", "ps", "-aq", "omb"], "", { FAKE_DOCKER_DIR: identity });
+    expect(result.status).toBe(125);
+    expect(existsSync(join(box.fake, "calls.log"))).toBe(false);
+    await expect(box.docker.close()).rejects.toThrow("fake Docker fixture mismatch");
+    expect(box.docker.child.exitCode).toBe(125);
+    expect(() => process.kill(box.docker.child.pid!, 0)).toThrow();
+    box.entry.docker = undefined;
   });
 
   it("exits on owner EOF and refuses calls after its exact child is reaped", async () => {

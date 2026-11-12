@@ -62,7 +62,8 @@ umask > "$transport/mask" || fail 'cannot write mask'
 IFS= read -r mask < "$transport/mask" || fail 'cannot read mask'
 {
   printf '%s\\0' "$PWD" "$mask" "$#" "$@"
-  /usr/bin/env -0
+  if [ "\${OMB_IMAGE+x}" ]; then printf '%s\\0' "OMB_IMAGE=$OMB_IMAGE"; fi
+  if [ "\${FAKE_DOCKER_DIR+x}" ]; then printf '%s\\0' "FAKE_DOCKER_DIR=$FAKE_DOCKER_DIR"; fi
 } > "$transport/request" || fail 'cannot write request'
 printf 'run\\n' >&3 || fail 'request pipe closed'
 while IFS= read -r -t 5 -u 4 response; do
@@ -92,9 +93,11 @@ done
 fail 'response pipe closed or timed out'
 `;
   try {
+    const shellInit = join(transport, "shell.sh");
+    writeFileSync(shellInit, `if [ -n "\${BASH_VERSION:-}" ]; then\ndocker() (\n${shim.slice(shim.indexOf("\n") + 1)}\n)\nfi\n`, { mode: 0o600 });
     writeFileSync(join(root, "bin", "docker"), shim, { mode: 0o755 });
     await ready;
-    return { close, child, transport };
+    return { close, child, transport, shellInit };
   } catch (error) {
     try { await close(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "fake Docker startup and cleanup failed"); }
     throw error;

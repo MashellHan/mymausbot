@@ -75,7 +75,7 @@ async function install(target: Record<string, unknown> = {}, extra: Record<strin
   writeFileSync(join(root, "stable.json"), stableRecord(next.version, next.refs[0]!));
   const starting = startFakeDocker(root, fake);
   interpreters.set(root, starting);
-  await starting;
+  const { shellInit } = await starting;
   const state = () => JSON.parse(readFileSync(join(fake, "state.json"), "utf8"));
   const run = (args: string[] = [], options: { input?: string; env?: Record<string, string>; umask?: string } = {}) => {
     const script = [join(deploy, "update.sh"), ...args];
@@ -84,7 +84,7 @@ async function install(target: Record<string, unknown> = {}, extra: Record<strin
       encoding: "utf8", input: options.input ?? "", timeout: 60_000,
       env: {
         // sbin: sha256sum is /sbin/sha256sum on macOS.
-        PATH: `${join(root, "bin")}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: root, FAKE_DOCKER_DIR: fake,
+        PATH: `${join(root, "bin")}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: root, FAKE_DOCKER_DIR: fake, BASH_ENV: shellInit,
         OMB_STABLE_URL: `file://${join(root, "stable.json")}`, OMB_NEWEST_URL: `file://${join(root, "newest.json")}`,
         OMB_UPDATE_POLL_S: "0", OMB_UPDATE_WAIT_S: "120", OMB_UPDATE_ENGINE_WAIT_S: "1", ...wait, ...options.env,
       },

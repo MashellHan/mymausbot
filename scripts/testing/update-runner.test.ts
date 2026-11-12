@@ -67,14 +67,24 @@ async function install(options: { stable?: Image; running?: Image; updater?: "re
   // the docker group, a Mac's temporary folders belong to group wheel).
   writeFileSync(join(bin, "id"), '#!/bin/sh\ncase "$1" in -nG) echo "${FAKE_GROUPS:-staff}" ;; *) exec /usr/bin/id "$@" ;; esac\n');
   writeFileSync(join(bin, "getent"), '#!/bin/sh\ncase "$1" in\n  group) [ -n "${FAKE_GETENT:-}" ] || exit 2; echo "$FAKE_GETENT" ;;\n  passwd) [ -n "${FAKE_PASSWD:-}" ] || exit 2; printf "%s\\n" "$FAKE_PASSWD" ;;\n  *) exit 2 ;;\nesac\n');
-  writeFileSync(join(bin, "stat"), `#!/bin/sh
+  const statProbe = process.platform === "darwin" ? spawnSync("/usr/bin/stat", ["-L", "-c", "%u", root], {
+    encoding: "utf8", env: { PATH: "/usr/bin:/bin" }, timeout: 5_000,
+  }) : undefined;
+  const statRefusal = statProbe?.status === 1 && statProbe.stdout === "" && statProbe.stderr.startsWith("/usr/bin/stat: illegal option -- c\nusage: stat ")
+    ? `case "$#:$1:\${2-}:\${3-}" in
+  '4:-L:-c:%u' | '4:-L:-c:%a') printf '%s' '${statProbe.stderr.replaceAll("'", "'\\''")}' >&2; exit 1 ;;
+esac\n` : "";
+  const statFunction = join(root, "stat-function.sh");
+  writeFileSync(statFunction, `stat() (
 case "$*" in
   *" %g "*) echo "\${FAKE_GID:-1000}"; exit 0 ;;
   *"%U:%G"* | *"%Su:%Sg"*) for last; do :; done; echo "$(/usr/bin/stat -L -c %U "$last" 2>/dev/null || /usr/bin/stat -L -f %Su "$last"):\${FAKE_GROUP:-staff}"; exit 0 ;;
   *" %G "* | *" %Sg "*) echo "\${FAKE_GROUP:-staff}"; exit 0 ;;
 esac
-exec /usr/bin/stat "$@"
+${statRefusal}exec /usr/bin/stat "$@"
+)
 `);
+  writeFileSync(join(bin, "stat"), `#!/bin/sh\n. "${statFunction}"\nstat "$@"\n`);
   for (const name of ["id", "getent", "stat"]) chmodSync(join(bin, name), 0o755);
   const images = [running, stable, NEW, NEXT, OLDER].filter((image, at, all) => all.findIndex((other) => other.id === image.id) === at).map((image) => ({ ...image, local: image === running || image.local }));
   const labels: Record<string, string[]> = {};
@@ -97,18 +107,18 @@ exec /usr/bin/stat "$@"
   setStable(stable);
   const starting = startFakeDocker(root, fake);
   interpreters.set(root, starting);
-  await starting;
+  const { shellInit } = await starting;
   writeFileSync(join(state, "status", "runner"), `layout=compose\ndir=${deploy}\nheld=no\n`);
   // The test's own user owns the checkout and cannot run Docker: trusted, as --install --trust-folder-owner leaves it.
   writeFileSync(join(state, "trust"), `dir=${deploy}\n`);
   writeFileSync(join(state, "status", "last"), "run=0\nstate=done\nresult=updated\nat=0\nran=0\n");
   const request = join(state, "request", "request");
   const policy = join(root, "policy.json");
-  const run = (env: Record<string, string> = {}) => spawnSync("sh", [RUNNER], {
+  const run = (env: Record<string, string> = {}) => spawnSync("sh", ["-c", '. "$1"; . "$2"; shift 2; . "$0"', RUNNER, statFunction, shellInit], {
     encoding: "utf8", timeout: 60_000,
     env: {
       // The unit's own environment, as --install writes it, and nothing from the request.
-      PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: root, FAKE_DOCKER_DIR: fake, OMB_INSTALL_DIR: deploy, OMB_UPDATE_STATE_DIR: state,
+      PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: root, FAKE_DOCKER_DIR: fake, BASH_ENV: shellInit, OMB_INSTALL_DIR: deploy, OMB_UPDATE_STATE_DIR: state,
       OMB_UPDATE_POLICY: policy, OMB_STABLE_URL: `file://${join(root, "stable.json")}`, OMB_NEWEST_URL: `file://${join(root, "newest.json")}`,
       OMB_UPDATE_POLL_S: "0", OMB_UPDATE_WAIT_S: "120", OMB_UPDATE_ENGINE_WAIT_S: "1", OMB_RUNNER_QUIET_S: "0", OMB_RUNNER_IDLE_S: "0", ...env,
     },
@@ -131,7 +141,7 @@ exec /usr/bin/stat "$@"
     personRun: (env: Record<string, string> = {}) => spawnSync("bash", [join(deploy, "update.sh"), "--dir", deploy], {
       encoding: "utf8", input: "", timeout: 60_000,
       env: {
-        PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: root, FAKE_DOCKER_DIR: fake, OMB_UPDATE_STATE_DIR: state, OMB_STABLE_URL: `file://${join(root, "stable.json")}`,
+        PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`, HOME: root, FAKE_DOCKER_DIR: fake, BASH_ENV: shellInit, OMB_UPDATE_STATE_DIR: state, OMB_STABLE_URL: `file://${join(root, "stable.json")}`,
         OMB_UPDATE_POLL_S: "0", OMB_UPDATE_WAIT_S: "120", OMB_UPDATE_ENGINE_WAIT_S: "1", ...env,
       },
     }),
@@ -160,6 +170,45 @@ exec /usr/bin/install $args
 }
 
 describe.skipIf(!posix)("deploy/update-runner.sh", () => {
+  it.skipIf(process.platform !== "darwin")("preserves native stat refusals and fresh permission reads in the fixture", async () => {
+    const box = await install({ updater: "recorder" });
+    const file = join(box.root, "stat 'file'");
+    const missing = join(box.root, "missing");
+    const link = join(box.root, "stat-link");
+    writeFileSync(file, "synthetic\n");
+    symlinkSync(file, link);
+    const stat = (program: string, args: string[], extra: Record<string, string> = {}) => {
+      const command = program.endsWith("stat-function.sh") ? "sh" : program;
+      const argv = command === "sh" ? ["-c", '. "$1"; shift; stat "$@"', "sh", program, ...args] : args;
+      const result = spawnSync(command, argv, { encoding: "utf8", env: { PATH: "/usr/bin:/bin", ...extra }, timeout: 5_000 });
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+    };
+    for (const adapter of [join(box.root, "bin", "stat"), join(box.root, "stat-function.sh")]) {
+      for (const path of [file, missing, link]) {
+        for (const format of ["%u", "%a"]) {
+          const args = ["-L", "-c", format, path];
+          expect(stat(adapter, args)).toEqual(stat("/usr/bin/stat", args));
+        }
+      }
+      for (const mode of [0o600, 0o640]) {
+        chmodSync(file, mode);
+        const args = ["-L", "-f", "%p", link];
+        const native = stat("/usr/bin/stat", args);
+        expect(native.status).toBe(0);
+        expect(native.stdout.trim().slice(-3)).toBe(mode.toString(8));
+        expect(stat(adapter, args)).toEqual(native);
+      }
+      expect(stat(adapter, ["-L", "-f", "%u", missing])).toEqual(stat("/usr/bin/stat", ["-L", "-f", "%u", missing]));
+      expect(stat(adapter, ["-L", "-c", "%U", file])).toEqual(stat("/usr/bin/stat", ["-L", "-c", "%U", file]));
+      expect(stat(adapter, ["-L", "-c", "%g", file], { FAKE_GID: "42" }).stdout).toBe("42\n");
+      expect(stat(adapter, ["-L", "-f", "%Sg", file], { FAKE_GROUP: "fixture-group" }).stdout).toBe("fixture-group\n");
+      const owner = stat("/usr/bin/stat", ["-L", "-f", "%Su", file]).stdout.trim();
+      expect(stat(adapter, ["-L", "-f", "%Su:%Sg", file], { FAKE_GROUP: "fixture-group" }).stdout).toBe(`${owner}:fixture-group\n`);
+    }
+  });
+
   it("is plain POSIX sh", () => {
     expect(spawnSync("sh", ["-n", RUNNER]).status).toBe(0);
     const dash = spawnSync("dash", ["-n", RUNNER]);
