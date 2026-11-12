@@ -455,6 +455,18 @@ export async function callTool(called: string, input: Json, context: ToolCallCon
     if (r.error) return { text: `Couldn't close that thread: ${String(r.error)}`, isError: true };
     return { text: `Closed #${String(r.title)}${r.botName ? ` on @${String(r.botName)}` : ""}. It stays in the person's sidebar, idle, with a note that you closed it.` };
   }
+  if (name === "withdraw_waiting_thread") {
+    const threadId = typeof args.thread_id === "string" ? args.thread_id.trim() : "";
+    if (!/^[\w-]+$/.test(threadId)) return { text: "withdraw_waiting_thread needs an exact thread_id from list_threads.", isError: true };
+    const { ok, body } = await apiResponse(`/api/internal/threads/${threadId}/withdraw-wait`, { method: "POST" });
+    if (!ok) return { text: `Could not withdraw that wait: ${String(body.error ?? "request refused")}`, isError: true };
+    if (body.threadId !== threadId || body.waiting !== false || typeof body.withdrawn !== "boolean") {
+      return { text: "The server did not confirm the waiting thread's state.", isError: true };
+    }
+    return { text: body.withdrawn === true
+      ? "That thread's wait was withdrawn. Its conversation and messages remain; the person can start new work there later."
+      : "That thread is no longer waiting for an answer. Nothing was changed." };
+  }
   if (name === "start_thread") {
     const title = String(args.title ?? "").trim();
     const message = String(args.message ?? "").trim();

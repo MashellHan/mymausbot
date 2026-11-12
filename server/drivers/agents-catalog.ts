@@ -288,6 +288,17 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "withdraw_waiting_thread",
+    description:
+      "When the person explicitly asks you in this direct conversation to cancel an older question or card waiting on them in one of YOUR own threads, withdraw that exact wait. Use its thread id from list_threads. This stops only that waiting request, keeps the conversation and its messages, and does not close or delete the thread. It cannot stop a running or queued thread, a teammate's thread, or this current turn. If refused, tell the person and do not try close_thread instead.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { thread_id: { type: "string", description: "The exact waiting thread id from list_threads." } },
+      required: ["thread_id"],
+    },
+  },
+  {
     name: "start_thread",
     description:
       "Open a separate job on yourself: one conversation with its own history and its own run, shown to the person as a row under you, without switching the person's selected conversation. Use it only when the user requests independent jobs (for example one review per pull request, \"review each pull request\" — one thread per pull request) instead of doing them inside this conversation, or a second opinion from another model (model_selection from list_models, report_back true). The title becomes the row's name, so make it short and specific, and write it as #Title when you mention it to the person; give complete instructions, since the run will not see this conversation. You can open at most five per turn; a self-opened job cannot open more jobs. This is not a teammate handoff: use coordinate_bots for teammates (thread \"new\" opens a fresh thread on them) and their automatic replies. If a call is refused, do not retry it: say what you still wanted opened.",
@@ -897,7 +908,7 @@ const WATCHER_TOOL_NAMES = new Set(["create_options_card"]);
 
 const LOCAL_ONLY_TOOL_NAMES = new Set(["vm_exec", ...MINI_APP_TOOL_NAMES]);
 /** Refused in a room's thread, since a room holds no wait. */
-const ROOM_REFUSED_TOOL_NAMES = WAIT_TOOL_NAMES;
+const ROOM_REFUSED_TOOL_NAMES = new Set([...WAIT_TOOL_NAMES, "withdraw_waiting_thread"]);
 const CLOUD_HOME_SURFACE = {
   type: "string", enum: ["auto", "cloud", "browser"],
   description: "auto = suitable configured computer, cloud = the bot's cloud computer, browser = built-in browser. Omit to list. This server runs in the cloud: the user's own computer and a Local VM are not places here.",

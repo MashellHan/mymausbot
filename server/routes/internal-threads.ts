@@ -29,6 +29,10 @@ export function createInternalThreadRoutes(deps: {
   queuedThreadPosition(botId: string, threadId: string): number | null;
   /** `showTitle`: the caller is the receiver, so its own busy threads it may see can be named. */
   queuedReason(node: HandoffView, showTitle?: (threadId: string) => boolean): string;
+  personRequestedWithdrawal(): boolean;
+  samePerson(threadId: string): boolean;
+  waitingForPerson(threadId: string): boolean;
+  stopWaiting(threadId: string): Promise<void>;
 }): RouteHandler {
   const { store, coordinator, from, fromThreadId } = deps;
   return async ({ res, path, method, json }) => {
@@ -78,6 +82,25 @@ export function createInternalThreadRoutes(deps: {
       }
       rows.sort((a, b) => b.openedAt - a.openedAt);
       return json(res, 200, { threads: rows.slice(0, 100) });
+    }
+    const withdrawMatch = method === "POST" ? path.match(/^\/api\/internal\/threads\/([\w-]+)\/withdraw-wait$/) : null;
+    if (withdrawMatch) {
+      if (!deps.ownsThread(from.id, fromThreadId) || !deps.personRequestedWithdrawal()) {
+        return json(res, 403, { error: "only this bot's direct request from the person can withdraw a waiting thread" });
+      }
+      const threadId = withdrawMatch[1]!;
+      const task = store.taskByThread(from.id, threadId);
+      if (!task || !deps.shown(threadId)) return json(res, 404, { error: "no such thread on this bot" });
+      if (threadId === fromThreadId || (task.openedBy && task.openedBy.botId !== from.id) || !deps.samePerson(threadId)) {
+        return json(res, 403, { error: "this request cannot withdraw that thread" });
+      }
+      if (deps.threadBusy(from.id, threadId) || deps.queuedThreadPosition(from.id, threadId) !== null ||
+        coordinator.active().some((node) => node.threadId === threadId && (node.status === "running" || node.status === "queued"))) {
+        return json(res, 409, { error: "that thread is running or queued; only the person can stop active work" });
+      }
+      if (!deps.waitingForPerson(threadId)) return json(res, 200, { withdrawn: false, waiting: false, threadId });
+      await deps.stopWaiting(threadId);
+      return json(res, 200, { withdrawn: true, waiting: false, threadId });
     }
     // close_thread folds a thread, never deletes it (a person's confirmed action), and never while it runs.
     const closeMatch = method === "POST" ? path.match(/^\/api\/internal\/threads\/([\w-]+)\/close$/) : null;
