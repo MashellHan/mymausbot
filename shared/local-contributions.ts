@@ -37,7 +37,8 @@ export interface LocalContributionSource {
     eligibilityUncertainDaysByCategory?: Record<LocalUsageCategory, string[]>;
     reasons: string[] };
   days: LocalContributionDay[];
-  provenance?: object;
+  /** Per-source observation times; stale rows retain their original cutoff. Raw continuation stays private. */
+  provenance?: { sourceCutoffAt?: string; sourceCapturedAt?: string };
 }
 
 export interface LocalContributionDay extends LocalContributionCounts {

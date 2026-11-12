@@ -80,6 +80,30 @@ describe("canonical source-qualified contributions", () => {
     expect(result.sourceDays?.ado.endDay).toBe("2026-11-10");
   });
 
+  it("keeps a retained GitHub cutoff honest while ADO advances across Beijing midnight", () => {
+    const old = primaryUsageSnapshotFixture("2026-11-10", "2026-11-10T15:58:00Z");
+    const current = primaryUsageSnapshotFixture("2026-11-11", "2026-11-10T16:01:00Z");
+    const retained = { ...old.github.sources[0]!, status: "stale",
+      days: old.github.sources[0]!.days.filter((row) => row.day >= current.github.operationWindow.startDay),
+      provenance: { sourceCutoffAt: old.github.asOfAt, sourceCapturedAt: old.github.capturedAt } };
+    current.github.sources[0] = retained;
+    Object.assign(current.github.collection, { complete: false, reasons: ["history-incomplete"] });
+    const now = Date.parse(current.ado.capturedAt) + 60_000;
+    const result = aggregateContributionSnapshot(parseContributionSnapshot(current, now), now);
+    expect(result.status).toBe("stale");
+    expect(result.cutoffAt).toBe(Date.parse(old.github.asOfAt));
+    expect(result.sourceCoverage?.stale).toBe(1);
+    expect(result.accounts.find((account) => account.provider === "github")).toMatchObject({
+      status: "stale", cutoffAt: Date.parse(old.github.asOfAt), capturedAt: Date.parse(old.github.capturedAt) });
+    expect(result.sourceDays?.ado.endDay).toBe("2026-11-11");
+    expect(result.windows?.["1"]).toMatchObject({ commits: null, knownCommits: 5,
+      missingDays: ["2026-11-11"], comparison: { known: { commits: null } } });
+    expect(result.history?.at(-2)?.knownCommits).toBe(4);
+    expect(result.history?.at(-1)?.knownCommits).toBe(5);
+    retained.provenance.sourceCapturedAt = "2026-11-10T15:57:00Z";
+    expect(() => parseContributionSnapshot(current, now)).toThrow("Invalid contribution source cutoff");
+  });
+
   it("keeps Beijing source days, accounts, categories, repositories and comparisons on one version", () => {
     const result = aggregateContributionSnapshot(parse(snapshot()), cutoff + 60_000);
     expect(result.metricDefinition).toBe("contributions-v2");

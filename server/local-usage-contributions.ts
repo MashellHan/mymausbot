@@ -155,7 +155,7 @@ function eligibilityDays(value: unknown, first: string, last: string): string[] 
   return days;
 }
 
-function source(value: unknown, first: string, last: string, capturedAt: number, now: number,
+function source(value: unknown, first: string, last: string, cutoffAt: number, capturedAt: number, now: number,
   provider: "github" | "ado"): LocalContributionSource {
   const raw = record(value);
   const account = record(raw.account);
@@ -183,7 +183,14 @@ function source(value: unknown, first: string, last: string, capturedAt: number,
       JSON.stringify([...(eligibilityUncertainDays ?? [])].sort())) throw new Error("Invalid eligibility categories");
   if (state === "ready" && eligibilityUncertainDays?.length) throw new Error("Ready source has uncertain eligibility");
   if (state === "ready" && days.length !== 60) throw new Error("Ready source lacks full 60-day window");
-  if (raw.provenance !== undefined) record(raw.provenance);
+  const provenance = raw.provenance === undefined ? undefined : record(raw.provenance);
+  const sourceCutoffAt = provenance?.sourceCutoffAt === undefined ? undefined : instant(provenance.sourceCutoffAt, now);
+  const sourceCapturedAt = provenance?.sourceCapturedAt === undefined ? undefined : instant(provenance.sourceCapturedAt, now);
+  if (sourceCapturedAt !== undefined && sourceCutoffAt === undefined ||
+      (provider === "github" && sourceCutoffAt !== undefined && sourceCutoffAt > cutoffAt) ||
+      (sourceCutoffAt !== undefined && sourceCutoffAt > (sourceCapturedAt ?? capturedAt)) ||
+      (sourceCapturedAt !== undefined && (sourceCapturedAt > capturedAt ||
+        days.some((row) => Date.parse(row.capturedAt) > sourceCapturedAt)))) throw new Error("Invalid contribution source cutoff");
   const scope = raw.scope === undefined ? undefined : record(raw.scope);
   if (provider === "ado" && !scope) throw new Error("ADO source lacks verified project scope");
   return {
@@ -196,6 +203,10 @@ function source(value: unknown, first: string, last: string, capturedAt: number,
       ...(eligibilityUncertainDaysByCategory === undefined ? {} : { eligibilityUncertainDaysByCategory }),
       reasons: reasons(coverage.reasons) },
     days,
+    ...(sourceCutoffAt === undefined && sourceCapturedAt === undefined ? {} : { provenance: {
+      ...(sourceCutoffAt === undefined ? {} : { sourceCutoffAt: provenance!.sourceCutoffAt as string }),
+      ...(sourceCapturedAt === undefined ? {} : { sourceCapturedAt: provenance!.sourceCapturedAt as string }),
+    } }),
   };
 }
 
@@ -216,7 +227,7 @@ export function parseContributionEnvelope(value: unknown, provider: "github" | "
   if (typeof collection.complete !== "boolean") throw new Error("Invalid collection completeness");
   if (!Array.isArray(raw.sources) || !raw.sources.length || raw.sources.length > MAX_SOURCES ||
       !Array.isArray(raw.activeSourceIds) || raw.activeSourceIds.length !== raw.sources.length) throw new Error("Invalid contribution sources");
-  const sources = raw.sources.map((row) => source(row, first, last, capture, now, provider));
+  const sources = raw.sources.map((row) => source(row, first, last, cutoff, capture, now, provider));
   const ids = raw.activeSourceIds.map((id) => text(id));
   if (new Set(ids).size !== ids.length || new Set(sources.map((item) => item.id)).size !== sources.length ||
       ids.some((id) => !sources.some((item) => item.id === id))) throw new Error("Contribution source identity mismatch");
@@ -269,7 +280,8 @@ function qualified(entry: Entry): LocalContributionCounts {
 function accountedCategory(entry: Entry, category: LocalUsageCategory, metric: "knownPrs" | "knownCommits"): boolean {
   const value = entry.day, coverage = entry.source.coverage;
   if (!value || !coverage.identityVerified || !coverage.paginationComplete ||
-      (entry.source.status !== "ready" && entry.source.status !== "partial") ||
+      (entry.source.status !== "ready" && entry.source.status !== "partial" &&
+        (entry.source.status !== "stale" || !entry.source.provenance?.sourceCapturedAt)) ||
       (value.status !== "ready" && value.status !== "partial")) return false;
   const uncertain = metric === "knownCommits" && coverage.eligibilityUncertainDays?.includes(value.day);
   const scoped = coverage.eligibilityUncertainDaysByCategory;
@@ -375,15 +387,20 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
     return { ...combined, coverage, categories, repositories: repositories.repositories,
       missingDays, startDay: start, endDay: ending };
   };
-  const asOf = Math.min(Date.parse(snapshot.github.asOfAt), Date.parse(snapshot.ado.asOfAt));
-  const capturedAt = Math.max(Date.parse(snapshot.github.capturedAt), Date.parse(snapshot.ado.capturedAt));
+  const sourceCutoffs = sources.map(({ provider, source }) => Date.parse(source.provenance?.sourceCutoffAt ??
+    (provider === "github" ? snapshot.github.asOfAt : snapshot.ado.asOfAt)));
+  const sourceCaptures = sources.map(({ provider, source }) => Date.parse(source.provenance?.sourceCapturedAt ??
+    (provider === "github" ? snapshot.github.capturedAt : snapshot.ado.capturedAt)));
+  const asOf = Math.min(...sourceCutoffs);
+  const capturedAt = Math.max(...sourceCaptures);
   const windows = Object.fromEntries(([1, 7, 30] as const).map((period) => {
     const current = aggregatePeriod(period, end), previous = aggregatePeriod(period, shift(current.startDay, -1));
     const previousStart = previous.startDay, previousEnd = previous.endDay;
     const observations = Array.from({ length: period * 2 }, (_, index) => on(shift(previousStart, index))).flat();
     const knownChange = (metric: "knownPrs" | "knownCommits") => observations.length > 0 && observations.every(({ source, day }) =>
       source.coverage.identityVerified && source.coverage.paginationComplete &&
-      (source.status === "ready" || source.status === "partial") && day &&
+      (source.status === "ready" || source.status === "partial" ||
+        source.status === "stale" && Boolean(source.provenance?.sourceCapturedAt)) && day &&
       (metric === "knownPrs" || !source.coverage.eligibilityUncertainDays?.includes(day.day)) &&
       (day.status === "ready" || day.status === "partial") && day[metric] !== null)
       ? percentage(current[metric], previous[metric]) : null;
@@ -433,7 +450,8 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
     return { sourceId: source.id, sourceIds: [source.id], provider, host: source.account.host, login: source.account.login,
       ...(source.scope ? { scope: source.scope } : {}), status: source.status,
       scopes: source.scope ? [source.scope] : [],
-      cutoffAt: Date.parse(envelope.asOfAt), capturedAt: Date.parse(envelope.capturedAt), coverage: source.coverage,
+      cutoffAt: Date.parse(source.provenance?.sourceCutoffAt ?? envelope.asOfAt),
+      capturedAt: Date.parse(source.provenance?.sourceCapturedAt ?? envelope.capturedAt), coverage: source.coverage,
       windows: Object.fromEntries(PERIODS.map((period) => [String(period), countsForSource(source, provider, period)])) as
         LocalContributionAccount["windows"] };
   });
@@ -465,7 +483,7 @@ export function aggregateContributionSnapshot(snapshot: LocalContributionSnapsho
     snapshot.github.collection.complete && snapshot.ado.collection.complete && history.every((row) => row.coverage === "ready");
   const anyObserved = history.some((row) => row.coverage !== "unavailable");
   const resultStatus: LocalUsageStatus = !anyObserved ? "unavailable"
-    : now - Math.min(Date.parse(snapshot.github.capturedAt), Date.parse(snapshot.ado.capturedAt)) > STALE_MS || sourceCoverage.stale > 0 ? "stale"
+    : now - Math.min(...sourceCaptures) > STALE_MS || sourceCoverage.stale > 0 ? "stale"
       : allReady ? "ready" : "partial";
   const sixty = aggregatePeriod(60, end);
   return { metricDefinition: "contributions-v2", timeZone: "Asia/Shanghai", dateBasis: {

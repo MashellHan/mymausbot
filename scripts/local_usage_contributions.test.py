@@ -1,3 +1,4 @@
+import copy
 import datetime as dt
 import importlib.util
 import json
@@ -38,6 +39,7 @@ class ContributionWriterTests(unittest.TestCase):
 from zoneinfo import ZoneInfo
 def collect(config, run, repository_category, *, at, days, previous):
     assert days == 60 and config["githubProfiles"][0]["stableId"] == "fixture-stable-id"
+    mode = config.get("syntheticMode", "ready")
     end = at.astimezone(ZoneInfo("Asia/Shanghai")).date()
     rows = []
     for offset in range(59, -1, -1):
@@ -49,17 +51,40 @@ def collect(config, run, repository_category, *, at, days, previous):
                 "status": "ready", "prs": value, "knownPrs": value, "commits": value, "knownCommits": value}] if value else []})
     source = {"id": "github:fixture", "account": {"host": "github.com", "login": "fixture", "stableId": "fixture-stable-id"},
         "status": "ready", "coverage": {"identityVerified": True, "paginationComplete": True, "visibilityComplete": True, "reasons": []}, "days": rows}
+    if mode != "ready":
+        source["status"] = "unavailable" if mode == "source-error" else "partial"
+        source["coverage"].update({"identityVerified": mode != "source-error",
+            "paginationComplete": mode not in ("incomplete", "source-error"),
+            "visibilityComplete": False, "reasons": [mode]})
+        for row in rows:
+            row["status"] = "unavailable" if mode == "source-error" else "partial"
+            row["prs"] = row["commits"] = None
+            if mode in ("incomplete", "source-error"):
+                row["knownPrs"] = row["knownCommits"] = None
+                row["repositories"] = []
+        if mode == "complete-correction":
+            source["coverage"].update({"paginationComplete": True, "visibilityComplete": True, "reasons": []})
+            source["status"] = "ready"
+            for row in rows:
+                row["status"] = "ready"
+                row["prs"] = row["knownPrs"] = row["commits"] = row["knownCommits"] = 1 if row["day"] == end.isoformat() else 0
+                if row["repositories"]:
+                    for repo in row["repositories"]:
+                        repo["prs"] = repo["knownPrs"] = repo["commits"] = repo["knownCommits"] = 1
+    old_page = previous.get("state", {}).get("sources", {}).get("github:fixture", {}).get("progress", {}).get("page", 0) if previous else 0
     return {"version": 2, "metricDefinition": "github-profile-beijing-v1", "provider": "github",
         "asOfAt": at.isoformat().replace("+00:00", "Z"), "capturedAt": at.isoformat().replace("+00:00", "Z"),
         "dateBasis": {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"},
         "operationWindow": {"startDay": rows[0]["day"], "endDay": rows[-1]["day"], "todayPartial": True},
         "activeSourceIds": ["github:fixture"], "sources": [source],
-        "collection": {"requestCount": 1, "elapsedSeconds": 0.1, "complete": True, "reasons": []}}
+        "collection": {"requestCount": 1, "elapsedSeconds": 0.1, "complete": mode in ("ready", "complete-correction"), "reasons": [] if mode in ("ready", "complete-correction") else [mode]},
+        "state": {"schema": 1, "sources": {"github:fixture": {"account": source["account"],
+            "scopeHash": config.get("syntheticScope", "scope-one"), "progress": {"page": old_page + 1}}}}}
 ''')
         (self.fixture / "local_usage_ado.py").write_text('''from local_usage_profile import collect as github
 def collect(config, run, repository_category, *, at, days, previous):
     assert config["adoAuthorEmails"] == ["corporate@example.test"]
-    result = github(config, run, repository_category, at=at, days=days, previous=None)
+    result = github({**config, "syntheticMode": "ready"}, run, repository_category, at=at, days=days, previous=None)
     result["provider"] = "ado"
     result["metricDefinition"] = "ado-default-head-beijing-v1"
     result["dateBasis"] = {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"}
@@ -175,6 +200,100 @@ def refresh(config, **options):
             with self.assertRaisesRegex(ValueError, "previous generation retained"):
                 self.wrapper.refresh_primary(self.collector, self.config, self.root, file=self.target, whole_cycle_seconds=10)
             self.assertEqual(self.target.read_bytes(), before)
+
+    def test_incomplete_history_retains_partial_observations_and_resumes_after_restart(self):
+        with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
+            self.config["syntheticMode"] = "visibility-partial"
+            first = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                 file=self.target, whole_cycle_seconds=10)
+            original_cutoff = first["github"]["asOfAt"]
+            self.config["syntheticMode"] = "incomplete"
+            second = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                  file=self.target, whole_cycle_seconds=10)
+            self.assertEqual(second["github"]["sources"][0]["days"][-1]["knownCommits"], 2)
+            self.assertEqual(second["github"]["sources"][0]["status"], "stale")
+            self.assertEqual(second["github"]["sources"][0]["provenance"]["sourceCutoffAt"], original_cutoff)
+            self.assertEqual(second["github"]["state"]["sources"]["github:fixture"]["progress"]["page"], 2)
+            self.assertEqual(second["ado"]["sources"][0]["status"], "ready")
+            self.wrapper = load_wrapper(SCRIPT)
+            with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
+                third = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                     file=self.target, whole_cycle_seconds=10)
+                self.assertEqual(third["github"]["state"]["sources"]["github:fixture"]["progress"]["page"], 3)
+                self.assertEqual(third["github"]["sources"][0]["provenance"]["sourceCutoffAt"], original_cutoff)
+                self.config["syntheticMode"] = "complete-correction"
+                recovered = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                         file=self.target, whole_cycle_seconds=10)
+                self.assertEqual(recovered["github"]["sources"][0]["status"], "ready")
+                self.assertEqual(recovered["github"]["sources"][0]["days"][-1]["knownCommits"], 1)
+                self.assertNotIn("provenance", recovered["github"]["sources"][0])
+
+    def test_source_error_and_changed_scope_do_not_publish_false_retention(self):
+        with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
+            first = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                 file=self.target, whole_cycle_seconds=10)
+            self.config["syntheticMode"] = "source-error"
+            retained = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                    file=self.target, whole_cycle_seconds=10)
+            self.assertEqual(retained["github"]["sources"][0]["status"], "stale")
+            self.assertEqual(retained["github"]["sources"][0]["days"][-1]["knownCommits"], 2)
+            self.config["syntheticScope"] = "different-scope"
+            changed = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                   file=self.target, whole_cycle_seconds=10)
+            self.assertEqual(changed["github"]["sources"][0]["status"], "unavailable")
+            self.assertIsNone(changed["github"]["sources"][0]["days"][-1]["knownCommits"])
+            self.assertEqual(first["github"]["metricDefinition"], changed["github"]["metricDefinition"])
+
+    def test_new_beijing_day_retains_old_cutoff_with_missing_day_and_healthy_ado(self):
+        with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
+            prior = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                 file=self.target, whole_cycle_seconds=10)
+        oldest = prior["github"]["operationWindow"]["startDay"]
+        old_source = prior["github"]["sources"][0]
+        old_source["status"] = "partial"
+        old_source["coverage"].update({"eligibilityUncertainDays": [oldest],
+            "eligibilityUncertainDaysByCategory": {"work": [], "personal": [oldest], "unclassified": []},
+            "reasons": ["history-commit-eligibility-uncertain"]})
+        prior["github"]["collection"].update({"complete": False, "reasons": ["history-commit-eligibility-uncertain"]})
+        contributions.validate_bindings(prior, self.config)
+        candidate = copy.deepcopy(prior)
+        next_day = (dt.date.fromisoformat(prior["github"]["operationWindow"]["endDay"]) + dt.timedelta(days=1)).isoformat()
+        for provider in ("github", "ado"):
+            envelope = candidate[provider]
+            envelope["asOfAt"] = (contributions.instant(envelope["asOfAt"]) + dt.timedelta(days=1)).isoformat().replace("+00:00", "Z")
+            envelope["capturedAt"] = envelope["asOfAt"]
+            envelope["operationWindow"] = {"startDay": envelope["sources"][0]["days"][1]["day"],
+                                            "endDay": next_day, "todayPartial": True}
+            source = envelope["sources"][0]
+            source["days"] = source["days"][1:]
+            day = {**source["days"][-1], "day": next_day, "capturedAt": envelope["capturedAt"]}
+            source["days"].append(day)
+        github = candidate["github"]["sources"][0]
+        github["status"] = "partial"
+        github["coverage"].update({"paginationComplete": False, "reasons": ["history-incomplete"],
+                                   "eligibilityUncertainDays": [],
+                                   "eligibilityUncertainDaysByCategory": {"work": [], "personal": [], "unclassified": []}})
+        lost = github["days"][-2]
+        lost.update({"status": "partial", "prs": None, "knownPrs": None,
+                     "commits": None, "knownCommits": None, "repositories": []})
+        github["days"][-1].update({"status": "unavailable", "prs": None, "knownPrs": None,
+                                   "commits": None, "knownCommits": None, "repositories": []})
+        candidate["github"]["collection"].update({"complete": False, "reasons": ["history-incomplete"]})
+        contributions.validate_bindings(candidate, self.config)
+        contributions.preserve_incomplete_github(prior, candidate)
+        contributions.validate_bindings(candidate, self.config)
+        retained = candidate["github"]["sources"][0]
+        self.assertEqual(retained["status"], "stale")
+        self.assertEqual(retained["days"][-1]["day"], prior["github"]["operationWindow"]["endDay"])
+        self.assertEqual(retained["provenance"]["sourceCutoffAt"], prior["github"]["asOfAt"])
+        self.assertEqual(retained["coverage"]["eligibilityUncertainDays"], [])
+        self.assertEqual(retained["coverage"]["eligibilityUncertainDaysByCategory"],
+                         {"work": [], "personal": [], "unclassified": []})
+        self.assertEqual(candidate["ado"]["sources"][0]["days"][-1]["day"], next_day)
+        stale = copy.deepcopy(candidate)
+        stale["github"]["asOfAt"] = (contributions.instant(prior["github"]["asOfAt"]) - dt.timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        with self.assertRaisesRegex(ValueError, "Older contribution capture"):
+            contributions.preserve_incomplete_github(candidate, stale)
 
     def test_whole_cycle_deadline_reaps_owned_workers_without_publication(self):
         profile = self.fixture / "local_usage_profile.py"
