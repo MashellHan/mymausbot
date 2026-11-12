@@ -1063,7 +1063,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
                     dispatch({ type: "updateBot", botId: bot.id, patch: { name } });
                   }
                 }}
-                onActivate={() => openBotOverview()}
+                onActivate={openBotOverview}
                 showEditButton
                 className="truncate text-[14px] font-semibold text-ink"
                 editButtonClassName="size-6 rounded-full"

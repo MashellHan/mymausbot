@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { t } from "@/lib/i18n";
 import { usePageOpener } from "@/lib/page-open";
 import { shortPath } from "@/lib/short-path";
-import { SIDEBAR_INLINE, useMediaQuery } from "@/lib/use-media-query";
+import { SIDEBAR_INLINE, TWO_SIDE_PANELS_FIT, useMediaQuery } from "@/lib/use-media-query";
 import { useStore, visibleMessages, type Bot, type Message } from "@/state/store";
 import { AttachedFileChip } from "../AttachmentPreview";
 import { recentChangedFiles, sharedFileReferences } from "../ComputerFilesPane";
@@ -55,12 +55,13 @@ export function LibraryTab({ bot, onOpen, embedded = false }: { bot: Bot; onOpen
   const { capabilities } = useDesktopCapabilities();
   const openPage = usePageOpener();
   const phone = !useMediaQuery(SIDEBAR_INLINE, true);
+  const computerOverlay = !useMediaQuery(TWO_SIDE_PANELS_FIT, true);
   const skills = useManagedSkills(bot);
   const memory = useMemoryDoc(bot);
   const { pages, apps, shared, unshared } = useMemo(() => libraryItems(bot, undefined, !embedded), [bot, embedded]);
   const showInChat = (messageId: string) => {
     dispatch({ type: "focusMessage", threadId: bot.threadId, messageId });
-    if (phone) dispatch({ type: embedded ? "toggleComputer" : "toggleSettings", open: false });
+    if (embedded ? computerOverlay : phone) dispatch({ type: embedded ? "toggleComputer" : "toggleSettings", open: false });
   };
   const skillsOn = skills.skills.filter(skillSwitchOn).length;
   const notes = memory.docs ? panelMemoryNotes(memory.docs).length : null;

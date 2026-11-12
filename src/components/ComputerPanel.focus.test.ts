@@ -3,7 +3,7 @@ import { StrictMode, createElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AppState, Bot, InstanceInfo } from "@/state/store";
+import type { AppState, Bot, InstanceInfo, Message } from "@/state/store";
 import { setLocale, t } from "@/lib/i18n";
 import { rememberComputerPanelOpen } from "@/lib/computer-panel-focus";
 import { requestComputerPanelView } from "@/lib/computer-panel-view";
@@ -61,12 +61,13 @@ const makeBot = (patch: Partial<Bot> = {}): Bot => ({
 }) as unknown as Bot;
 
 let root: Root | null = null;
+const dispatch = vi.fn();
 let frames: Array<{ id: number; run: FrameRequestCallback }> = [];
 let nextFrame = 1;
 
 const value = (): Parameters<typeof BotEditorStore>[0]["value"] => ({
   state: { ...initialState, instances: [engine("claude")], config: { box: { configured: true } } as AppState["config"] } as AppState,
-  dispatch: vi.fn(),
+  dispatch,
   flushBotPatches: async () => null,
   refreshInstances: async () => {},
   refreshModels: async () => {},
@@ -104,6 +105,7 @@ beforeAll(() => {
   vi.stubGlobal("ogb", undefined);
 });
 beforeEach(() => {
+  dispatch.mockClear();
   const saved = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => saved.get(key) ?? null,
@@ -216,11 +218,13 @@ describe("computer panel entry focus", () => {
   });
 
   it("keeps Files settings below a bounded file list and returns their pages to Files", async () => {
-    const messages = Array.from({ length: 20 }, (_, index) => ({
+    const messages = Array.from({ length: 20 }, (_, index): Message => ({
       id: `page-${index}`, role: "bot", kind: "text", at: index + 1, text: "",
       publishedPage: { state: "live", title: `Page ${index}`, url: `https://example.test/${index}` },
-      digest: { files: { added: [`/workspace/pinned/file-${index}.md`], changed: [], deleted: [] } },
-    })) as Bot["messages"];
+      digest: { turnId: `turn-${index}`, botId: "scout", threadId: "thread", at: index + 1,
+        durationMs: 1, tools: [], memory: [], reply: "", hookCoverage: "full",
+        files: { added: [`/workspace/pinned/file-${index}.md`], changed: [], deleted: [] } },
+    }));
     await open(makeBot({ cwd: "/workspace/default", messages,
       tasks: [{ threadId: "thread", title: "Main", createdAt: 1, cwd: "/workspace/pinned" }] }));
     flushSync(() => tabByLabel("Files").click());
@@ -242,6 +246,18 @@ describe("computer panel entry focus", () => {
     expect(document.querySelector('[data-panel-card="model"]')).not.toBeNull();
     flushSync(() => document.querySelector<HTMLElement>('[aria-controls="bot-overview-works-content"]')!.click());
     expect(document.querySelector('#bot-overview-works-content')?.textContent).toContain("Signed-in sites");
+  });
+
+  it("uncovers chat for a generated app on an overlaid 960px Computer panel", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({ matches: query !== "(min-width: 1536px)", addEventListener: () => {}, removeEventListener: () => {} }));
+    const message = { id: "app", role: "bot", kind: "app", at: 1, app: { title: "Report", doc: "# Report" } } as Bot["messages"][number];
+    await open(makeBot({ messages: [message] }));
+    flushSync(() => tabByLabel("Files").click());
+    await settle();
+    flushSync(() => document.querySelector<HTMLElement>('[data-panel-row="app"]')!.click());
+    expect(dispatch).toHaveBeenCalledWith({ type: "focusMessage", threadId: "thread", messageId: "app" });
+    expect(dispatch).toHaveBeenCalledWith({ type: "toggleComputer", open: false });
+    expect(dispatch).not.toHaveBeenCalledWith({ type: "toggleSettings", open: false });
   });
 
   it("stops following the selection once focus leaves the tab row", async () => {

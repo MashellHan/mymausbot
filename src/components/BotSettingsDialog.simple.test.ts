@@ -4,7 +4,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Routine } from "@/lib/routines";
 import type { MemoryDoc } from "@/lib/memory";
-import type { Bot, BotSettingsSection, InstanceInfo } from "@/state/store";
+import type { Bot, BotSettingsSection, InstanceInfo, Message } from "@/state/store";
 import { AVATAR_FOCUS_CENTER, AVATAR_ZOOM_MIN } from "../../shared/bot-avatar";
 import type { ManagedSkill } from "./bot-settings/SkillsSection";
 import type { McpServerSummary } from "@/lib/mcp-servers";
@@ -930,10 +930,10 @@ describe("the Library tab", () => {
   });
 
   it("keeps Files settings ahead of many generated links and shows the pinned chat folder", () => {
-    const messages = Array.from({ length: 20 }, (_, index) => ({
+    const messages = Array.from({ length: 20 }, (_, index): Message => ({
       id: `page-${index}`, role: "bot", kind: "text", at: index + 1,
       publishedPage: { state: "live", title: `Page ${index}`, url: `https://example.test/${index}` },
-    })) as Bot["messages"];
+    }));
     const bot = makeBot({
       cwd: "/workspace/default", messages,
       tasks: [{ threadId: "thread-scout", title: "Main", createdAt: 1, cwd: "/workspace/pinned" }],

@@ -1751,7 +1751,7 @@ export function ComputerPanel({
           </div>
         )}
         <div className="mt-4 border-t border-hairline/50 pt-3" aria-label={t("settings.sites.title")}><h3 className="text-[13px] font-semibold text-ink-secondary">{t("settings.sites.title")}</h3>
-          <BrowserLogins bot={bot} browserEnabled={browserEnabled} onOpenBrowser={() => selectPanelView("browser")} />
+          <BrowserLogins bot={profileBot} browserEnabled={browserEnabled} onOpenBrowser={() => selectPanelView("browser")} />
         </div>
           </>}</div>
         </section>
