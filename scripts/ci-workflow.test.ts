@@ -52,6 +52,12 @@ describe("CI concurrency", () => {
     expect(decision({ github: { event_name: "workflow_dispatch", ref: "refs/heads/release/v1" } }).group).toBe("ci-workflow_dispatch-refs/heads/release/v1");
   });
 
+  it("validates the model manifest before anything lands on main", () => {
+    const step = workflow.jobs.static.steps.find((candidate: { name?: string }) => candidate.name === "Validate the model manifest");
+    expect(step.run).toContain("scripts/check-model-manifest.mjs");
+    expect(workflow.on.pull_request).toBeDefined();
+  });
+
   it.each(["qa:triaged", "qa:p1", "qa:kind:product", "qa:scope:agents", "owner:upstream", "bug"])(
     "keeps %s metadata separate while its required proof gate stays pending", (label) => {
       for (const action of ["labeled", "unlabeled"]) {

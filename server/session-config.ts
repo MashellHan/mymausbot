@@ -6,7 +6,7 @@ import type { JsonObject } from "./schema.ts";
 
 const SECRET_FIELDS: Record<string, readonly string[]> = {
   xai: ["key"], anthropic: ["key"], mistral: ["key"], cerebras: ["key"],
-  groq: ["key"], greenference: ["key"], meta: ["key"], deepseek: ["key"],
+  groq: ["key"], greenference: ["key"], modelgo: ["key"], meta: ["key"], deepseek: ["key"],
   openai: ["key"], openrouter: ["key"], openaiCompat: ["key"],
   treg: ["key"], postiz: ["key"], composio: ["apiKey", "userId", "sessionId"],
   box: ["token"], opencodeGo: ["apiKey", "providerKeys"],

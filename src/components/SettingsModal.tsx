@@ -41,6 +41,7 @@ import { CloudAccountSettings } from "./CloudAccountSettings";
 import { ProSettingsCard } from "./ProIntroduction";
 import { CloudUsageSettings } from "./CloudUsageMeter";
 import { Card, SettingsGroup, SIMPLE_BUTTONS } from "./SettingsPrimitives";
+import { Layer, useIsTopLayer } from "./Layer";
 import { shortcutLabel } from "./ShortcutHint";
 import { UsageSection } from "./UsageSection";
 import { SkillsSection } from "./SkillsSection";
@@ -71,6 +72,7 @@ import { SIMPLE_ONLY } from "@/lib/simple-only";
 import { Select } from "./Select";
 import { SavedStepsRow } from "./SavedStepsRow";
 import { BrowserProfilesRow, ColorUserBubblesRow, AdvancedModeRow, ExperimentalFeaturesRow, LanguageRow, NewBotEffortRow, PinnedCirclesRow, ReplayTourRow, RunCardRow, FollowUpRow, SendKeyRow, ShowThreadsRow, ToolCallsRow, UniversalPinsRow, UpdatesRow } from "./AppSettingsRows";
+import { ServerUpdateRow } from "./ServerUpdateRow";
 import { SIMPLE_ADVANCED_ONLY, SIMPLE_MORE_LIMITS, SimpleAiPage, SimpleBillingPage, SimpleComputerPage, SimpleGeneralPage, SimpleLooksPage, SimpleMorePage, SimpleUpdatesPage, type Disclose, type SimpleDisclosureId } from "./SettingsSimplePages";
 
 // labelKey, not a label: t() reads the active pack when called, so a label resolved at module scope would freeze the
@@ -96,7 +98,7 @@ export const SECTIONS: Array<{
   { id: "appearance", group: "you", labelKey: "settings.section.appearance", icon: Palette, keywords: ["skin", "theme", "appearance", "font", "typeface", "chat width", "width", "wide", "full width", "bubble", "bubbles", "tools", "tool calls", "threads", "show threads", "hide threads", "sidebar", "display", "run", "this run", "run card", "commands", "notifications", "sound", "sounds", "mute", "silent", "chime", "pinned", "circles", "universal", "groups", "top", "send", "enter", "return", "shift+enter", "ctrl+enter", "cmd+enter", "⌘+enter", "new line", "keyboard", "ime", "japanese", "message color", "my messages", "toolbar", "tools layout", "footer", "routines", "triggers", "team map", "color", "colour", "cloud color", "server color", "tint", "sidebar color", "sidebar picture", "picture", "image", "banner", "background", "computers", "your computers", "rail", "strip", "frame", "window frame", "title bar"] },
   { id: "companion", group: "you", labelKey: "settings.section.companion", icon: TabletSmartphone, keywords: ["companion", "device", "phone", "desktop", "client", "host", "pair", "pairing", "mobile", "https", "secure", "tailscale", "wifi", "remote", "advanced", "domain", "dns", "self-hosted", "server", "caddy"] },
   { id: "engines", group: "ai", labelKey: "settings.section.engines", icon: Terminal, keywords: ["models", "model providers", "engines", "claude", "codex", "grok", "providers", "cli", "sign in", "subscription"] },
-  { id: "connections", group: "ai", labelKey: "settings.section.connections", icon: KeyRound, keywords: ["keys", "api", "api key", "api keys", "connections", "composio", "box", "xai", "mistral", "cerebras", "meta", "muse", "vps", "router", "openrouter", "base url", "openai", "anthropic", "groq", "greenference", "opencode", "deepseek", "provider", "lm studio", "lmstudio", "llm studio", "llmstudio", "bionic"] },
+  { id: "connections", group: "ai", labelKey: "settings.section.connections", icon: KeyRound, keywords: ["keys", "api", "api key", "api keys", "connections", "composio", "box", "xai", "mistral", "cerebras", "meta", "muse", "vps", "router", "openrouter", "base url", "openai", "anthropic", "groq", "greenference", "modelgo", "opencode", "deepseek", "provider", "ollama", "lm studio", "lmstudio", "llm studio", "llmstudio", "bionic"] },
   { id: "decisionModel", group: "ai", labelKey: "settings.section.decisionModel", icon: Zap, keywords: ["decision", "extraction", "jev", "typesafe", "cloudflare", "workers ai", "clef", "clairic", "email", "routing", "auto", "rooms", "who answers"] },
   { id: "imageGeneration", group: "ai", labelKey: "settings.section.imageGeneration", icon: ImagePlus, keywords: ["image", "images", "picture", "generate", "avatar", "gpt image", "grok imagine", "gemini", "nano banana", "openrouter", "flux", "backup"] },
   { id: "skills", group: "ai", labelKey: "settings.section.skills", icon: BookOpen, keywords: ["skills", "library", "assign", "agent skills", "skill md"] },
@@ -133,6 +135,9 @@ export const SIMPLE_PAGES: SimpleSettingsPage[] = [
   { id: "updates", labelKey: "settings.simple.page.updates", icon: CloudDownload, sections: ["updates"],
     keywords: ["update", "version", "release", "product updates", "newsletter", "email updates", "welcome", "tour", "diagnostics", "logs", "support"] },
 ];
+
+/** What only an admin can use: a team's member isn't offered these at all. */
+export const TEAM_ADMIN_SECTIONS: readonly AppSettingsSection[] = ["engines", "connections", "decisionModel", "imageGeneration", "computer", "usage", "backups", "import"];
 
 export const SIMPLE_HIDDEN_SECTIONS: readonly AppSettingsSection[] = ["backups", "experimental", "workspaces", "skills", "decisionModel", "imageGeneration"];
 
@@ -184,6 +189,11 @@ export function keySearchResults(query: string): KeyEntry[] {
 export const openKeyResult = (entry: KeyEntry) => entry.uses ? openKeySettings(entry.uses, entry.id) : openKeySettings(entry.id);
 
 export function SettingsModal() {
+  return <Layer modal><SettingsDialog /></Layer>;
+}
+
+function SettingsDialog() {
+  const isTop = useIsTopLayer();
   const { state, dispatch } = useStore();
   const advanced = useAdvancedMode();
   const remoteActive = window.ogb?.remoteClient?.active === true;
@@ -214,7 +224,8 @@ export function SettingsModal() {
     .filter((entry) => entry.id !== "workspaces" || workspacesAvailable(state.config))
     .filter((entry) => entry.id !== "people" || (!window.ogb && state.config?.cloudHome !== true))
     .filter((entry) => entry.id !== "activity" || (!window.ogb && ownerOrAdmin === true))
-    .filter((entry) => entry.id !== "botAccess" || (Boolean(state.config?.team) && ownerOrAdmin === true));
+    .filter((entry) => entry.id !== "botAccess" || (Boolean(state.config?.team) && ownerOrAdmin === true))
+    .filter((entry) => !(state.config?.team && ownerOrAdmin === false && TEAM_ADMIN_SECTIONS.includes(entry.id)));
   const availableSections = baseSections.filter((entry) => entry.id !== "skills" || skillsLibraryEnabled(state.config));
   const visibleSections = availableSections.filter((entry) => sectionMatches(entry, q));
 
@@ -278,6 +289,7 @@ export function SettingsModal() {
     else dialog?.focus();
 
     const onKey = (event: KeyboardEvent) => {
+      if (!isTop()) return;
       if (!searchFirst.current && dialog && document.activeElement === dialog && event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey
         && search?.checkVisibility()) {
         event.preventDefault();
@@ -323,7 +335,7 @@ export function SettingsModal() {
       window.removeEventListener("keydown", onKey);
       previousFocus?.focus();
     };
-  }, [dispatch]);
+  }, [dispatch, isTop]);
 
   const openSection = (id: AppSettingsSection) => dispatch({ type: "toggleAppSettings", open: true, section: id });
 
@@ -333,7 +345,7 @@ export function SettingsModal() {
   const showLocalFunnel = thisComputer && Boolean(funnel?.checking || funnelPairs);
   const remoteAccess = {
     client: <RemoteComputerSection hideWhenUnavailable legacyOnly />,
-    domain: remoteActive || thisComputer ? null : <CustomDomainSettings />,
+    domain: remoteActive || thisComputer || (state.config?.team && ownerOrAdmin === false) ? null : <CustomDomainSettings />,
     // Security: the server decides who may pair (an owner or admin session), not this gate.
     pairing: !thisComputer || showLocalFunnel ? <ServerPairingCard cloudHome={state.config?.cloudHome === true} focusRequest={!computerPairs || funnelPairs ? phoneFocus : 0} team={state.config?.team?.name} teamPhoneBlocked={state.config?.managedPolicy?.remoteAccess === false ? t("policy.teamRemoteBlocked", { organization: state.config.managedPolicy.organizationName }) : null} simple={!advanced} funnel={funnel} /> : null,
     companion: thisComputer ? <PhoneDevicesSection profileEmail={state.config?.profile?.email} focusRequest={computerPairs && !funnel?.checking && !funnelPairs ? phoneFocus : 0} simple={!advanced} /> : null,
@@ -388,7 +400,7 @@ export function SettingsModal() {
             <PinnedPanelsSettings />
 
             {!remoteActive && <ReplayTourRow />}
-            <UpdatesRow />
+            {window.ogb?.updater ? <UpdatesRow /> : <ServerUpdateRow title={t("settings.updates.title")} />}
             <DiagnosticsRow />
           </>
         );
@@ -458,7 +470,7 @@ export function SettingsModal() {
         ? <SimpleLooksPage toolCalls={!remoteActive} onBack={() => { setSubPage(null); setReveal("appearance"); }} />
         : subPage === "more"
           ? <SimpleMorePage sections={moreSections} onOpen={(id) => { setSubPage(null); openSection(id); }} onBack={() => { setSubPage(null); setReveal("more"); }} />
-          : <SimpleGeneralPage has={has} peopleOpen={section === "people"} onLooks={() => setSubPage("looks")} onMore={has("general") ? () => setSubPage("more") : undefined} />;
+          : <SimpleGeneralPage has={has} peopleOpen={section === "people"} onLooks={() => setSubPage("looks")} onMore={has("general") && !(state.config?.team && ownerOrAdmin === false) ? () => setSubPage("more") : undefined} />;
       case "ai": return <SimpleAiPage has={has} disclose={disclose} connections={renderSection("connections")} />;
       case "computer": return <SimpleComputerPage has={has} remoteAccess={remoteAccess} servers={<ConnectedWorkspacesSettings />} disclose={disclose} />;
       case "billing": return <SimpleBillingPage has={has} disclose={disclose} cloudAccount={renderSection("cloudAccount")} />;
