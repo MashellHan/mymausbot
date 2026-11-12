@@ -8009,6 +8009,8 @@
   "secretCard.sessionUnavailable": "This save needs a persistent credential file, which is unavailable in session-only mode. Nothing was changed. Ask the bot for a one-use secret reference or switch modes before the next App launch.",
   "secretCard.sessionUse": "Use for this run",
   "secretCard.sessionWaiting": "Available until you quit. Your bot will continue when its current turn settles.",
+  "server.appSettings.change": "Change {label}?",
+  "server.appSettings.notSet": "not set",
   "server.botApi.confinedWhy": "This call came in through the Bot API, so it can only answer from what this bot already knows.",
   "server.botApi.engineRefusal": "This thread came in through the Bot API, and this bot's AI can't work in it. Start a new conversation.",
   "server.botPaused": "Paused: Starter keeps {limit} bots awake. Upgrade to wake it, or swap which bots are awake.",

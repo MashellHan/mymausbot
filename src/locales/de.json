@@ -2487,6 +2487,8 @@
   "secretCard.file": "Wird in einer privaten Datei gespeichert, die die Befehle deines Bots 24 Stunden lang lesen können, und danach gelöscht. Es landet nie im Chat.",
   "secretCard.ref": "{app} bewahrt es für eine einzige Nutzung durch seine eigenen Werkzeuge auf. Dein Bot sieht es nie, und es landet nie im Chat.",
   "secretCard.resumed": "Bot fortgesetzt",
+  "server.appSettings.change": "{label} ändern?",
+  "server.appSettings.notSet": "nicht gesetzt",
   "server.botApi.confinedWhy": "Dieser Aufruf kam über die Bot-API, deshalb kann der Bot nur mit dem antworten, was er bereits weiß.",
   "server.botApi.engineRefusal": "Diese Unterhaltung kam über die Bot-API, und die KI dieses Bots kann darin nicht arbeiten. Beginne eine neue Unterhaltung.",
   "server.botPaused": "Pausiert: Starter hält {limit} Bots wach. Führe ein Upgrade durch, um ihn zu wecken, oder tausche, welche Bots wach sind.",
