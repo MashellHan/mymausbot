@@ -187,6 +187,7 @@ describe("bot setup and tools in the real renderer", () => {
     const openPanelUsage = async () => {
       await openPanel();
       const probeInstalled = await diagnosticEval(`(() => {
+        window.__qa507UsageProbe?.close();
         const state = () => {
           const panel = document.querySelector('#bot-panel');
           const back = document.querySelector('[data-panel-back]');
@@ -214,9 +215,9 @@ describe("bot setup and tools in the real renderer", () => {
           clicks.push(record);
           setTimeout(() => { record.after = state(); }, 0);
         };
-        document.addEventListener('click', onClick, true);
         window.__qa507UsageProbe = { initial: state(), clicks, state,
           close: () => document.removeEventListener('click', onClick, true) };
+        document.addEventListener('click', onClick, true);
         return true;
       })()`).then(() => true, () => false);
       try {
@@ -229,14 +230,16 @@ describe("bot setup and tools in the real renderer", () => {
           return false;
         })()`), { timeout: 10_000 }).toBe(true);
       } catch (original) {
-        const trace = await diagnosticEval(`(() => {
-          const probe = window.__qa507UsageProbe;
-          return probe ? { initial: probe.initial, clicks: probe.clicks, final: probe.state() } : { unavailable: 'probe-not-installed' };
-        })()`).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
-        console.error("Usage navigation failure diagnostic", JSON.stringify({ probeInstalled, trace }));
+        try {
+          const trace = await diagnosticEval(`(() => {
+            const probe = window.__qa507UsageProbe;
+            return probe ? { initial: probe.initial, clicks: probe.clicks, final: probe.state() } : { unavailable: 'probe-not-installed' };
+          })()`).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
+          console.error("Usage navigation failure diagnostic", JSON.stringify({ probeInstalled, trace }));
+        } catch {}
         throw original;
       } finally {
-        if (probeInstalled) await diagnosticEval("window.__qa507UsageProbe?.close(); delete window.__qa507UsageProbe; true").catch(() => {});
+        await diagnosticEval("window.__qa507UsageProbe?.close(); delete window.__qa507UsageProbe; true").catch(() => {});
       }
       const state = await ui("snapshot", "--interactive");
       const cost = Object.entries(state.refs as Record<string, { role: string; name: string }>)
