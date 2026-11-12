@@ -558,6 +558,49 @@ it("T8 Stop while parked on a credential card cancels the root and stops the car
   expect(await f.task(f.clive.id, job)).toMatchObject({ busy: false, activity: "idle" });
 }), hostTimeout(60_000));
 
+it("a direct user turn withdraws two old waits on its own bot without clearing history or another thread", () => scenario(async (f) => {
+  const botId = f.clive.id;
+  const first = (await f.api("POST", `/api/bots/${botId}/tasks`, { title: "First old wait" })).body.task.threadId as string;
+  const second = (await f.api("POST", `/api/bots/${botId}/tasks`, { title: "Second old wait" })).body.task.threadId as string;
+  const current = f.clive.activeTaskId as string;
+  f.script(botId,
+    { key: "WAIT-ONE", match: ["OLD-ONE"], steps: [{ tool: "request_credential", arguments: { credential_id: "openaiApiKey", reason: "Synthetic first wait" } }], reply: "WAIT-ONE: waiting for the key." },
+    { key: "WAIT-TWO", match: ["OLD-TWO"], steps: [{ tool: "request_credential", arguments: { credential_id: "xaiApiKey", reason: "Synthetic old wait" } }], reply: "WAIT-TWO: waiting for the key." });
+  await f.say(botId, first, "OLD-ONE: ask me for the first model key.");
+  await expect.poll(() => f.roots().find((row: any) => row.assignee.destination.threadId === first)?.status, { timeout: 30_000 }).toBe("needs_input");
+  await f.say(botId, second, "OLD-TWO: ask me for the model key.");
+  await expect.poll(() => f.roots().find((row: any) => row.assignee.destination.threadId === second)?.status, { timeout: 30_000 }).toBe("needs_input");
+  const card = (await f.messages(second)).find((message: any) => message.kind === "secret");
+  expect(card).toBeDefined();
+  const contents = (rows: any[]) => rows.map((row) => [row.id, row.role, row.kind, row.text]);
+  const before = [contents(await f.messages(first)), contents(await f.messages(second))];
+
+  f.script(botId, { key: "WITHDRAW", match: ["WITHDRAW-OLD"], steps: [
+    { tool: "withdraw_waiting_thread", arguments: { thread_id: first } },
+    { tool: "withdraw_waiting_thread", arguments: { thread_id: second } },
+    { tool: "withdraw_waiting_thread", arguments: { thread_id: first } },
+  ], reply: "WITHDRAW-DONE: both old waits are clear." });
+  await f.say(botId, current, "WITHDRAW-OLD: withdraw my two old waits on this bot; keep our conversations.");
+  await expect.poll(async () => await f.said(current, "WITHDRAW-DONE"), { timeout: 30_000 }).toBe(1);
+  const evidence = f.turn("WITHDRAW").evidence.filter((entry: any) => entry.step).map((entry: any) => entry.response.result.content[0].text as string);
+  expect(evidence).toEqual([
+    expect.stringContaining("wait was withdrawn"), expect.stringContaining("wait was withdrawn"),
+    expect.stringContaining("no longer waiting"),
+  ]);
+  expect(f.roots().filter((row: any) => [first, second].includes(row.assignee.destination.threadId)).map((row: any) => [row.status, row.outcome]))
+    .toEqual([["cancelled", "stopped"], ["cancelled", "stopped"]]);
+  expect(f.roots().find((row: any) => row.assignee.destination.threadId === current)?.status).toBe("completed");
+  expect(contents(await f.messages(first)).slice(0, before[0].length)).toEqual(before[0]);
+  expect(contents(await f.messages(second)).slice(0, before[1].length)).toEqual(before[1]);
+  expect((await f.messages(second)).find((row: any) => row.id === card.id).secret.stopped).toBe(true);
+  expect((await f.task(botId, first)).activity).toBe("idle");
+  expect((await f.task(botId, second)).activity).toBe("idle");
+  await f.restart("SIGTERM");
+  expect(f.roots().filter((row: any) => [first, second].includes(row.assignee.destination.threadId)).map((row: any) => row.status)).toEqual(["cancelled", "cancelled"]);
+  expect(contents(await f.messages(first)).slice(0, before[0].length)).toEqual(before[0]);
+  expect((await f.messages(second)).find((row: any) => row.id === card.id).secret.stopped).toBe(true);
+}), hostTimeout(90_000));
+
 it("T8 Stop while parked on connector cards cancels the root and stops the cards; connecting afterwards is kept but starts nothing", async () => {
   const composio = await composioStub();
   try {
