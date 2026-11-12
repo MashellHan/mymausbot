@@ -163,9 +163,10 @@ it("switching the workspace endpoint moves discovery and existing chats without 
     const { instances } = await api("POST", "/api/instances/openaiCompat/refresh-models");
     expect(received.filter((request) => request.provider === "first").map((request) => request.key))
       .not.toContain("Bearer fixture-second-key");
+    const providerRoute = { id: "connection", provenance: "configured" };
     expect(instances.find((instance: { instanceId: string }) => instance.instanceId === "openaiCompat").models.options)
-      .toEqual([{ id: "fixture-shared-model", label: "fixture-shared-model", custom: true },
-        { id: "fixture-second-model", label: "fixture-second-model", custom: true }]);
+      .toEqual([{ id: "fixture-shared-model", label: "fixture-shared-model", custom: true, providerRoute },
+        { id: "fixture-second-model", label: "fixture-second-model", custom: true, providerRoute }]);
     await send(bot, "second provider reply");
     expect(received).toContainEqual({ provider: "second", path: "/v1/chat/completions", key: "Bearer fixture-second-key" });
 
