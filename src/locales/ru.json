@@ -4280,6 +4280,7 @@
   "routines.noNextRun": "Следующий запуск не назначен",
   "routines.nextRun": "Далее {time}",
   "routines.latestRun": "Последний: {status}",
+  "routines.lastRunPrefix": "Последний:",
   "routines.neverRun": "Ещё не запускалось",
   "routines.continuityLabel": "Помнить последний запуск",
   "routines.continuityHelp": "Каждый запуск начинается с отчёта предыдущего, поэтому бот знает, что нашёл в прошлый раз. Подходит для проверок вроде QA или мониторинга.",

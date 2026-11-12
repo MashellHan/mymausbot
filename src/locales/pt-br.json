@@ -4857,6 +4857,7 @@
   "routines.noNextRun": "A próxima execução não está agendada",
   "routines.nextRun": "Próxima: {time}",
   "routines.latestRun": "Última: {status}",
+  "routines.lastRunPrefix": "Última:",
   "routines.neverRun": "Ainda não rodou",
   "routines.continuityLabel": "Lembrar a última execução",
   "routines.continuityHelp": "Cada execução começa com o relatório da anterior, para o bot saber o que encontrou da última vez. Bom para verificações de qualidade ou monitoramento.",

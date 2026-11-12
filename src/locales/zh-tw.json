@@ -5021,6 +5021,7 @@
   "routines.noNextRun": "未排定下次執行",
   "routines.nextRun": "下次 {time}",
   "routines.latestRun": "最新：{status}",
+  "routines.lastRunPrefix": "上次：",
   "routines.neverRun": "尚未執行",
   "routines.continuityLabel": "記住上次執行",
   "routines.continuityHelp": "每次執行都會以上次執行的報告開始，讓機器人知道上次發現了什麼。適合 QA 或監控之類的檢查。",

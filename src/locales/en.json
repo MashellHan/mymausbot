@@ -5102,6 +5102,7 @@
   "routines.noNextRun": "No next run scheduled",
   "routines.nextRun": "Next {time}",
   "routines.latestRun": "Latest: {status}",
+  "routines.lastRunPrefix": "Last:",
   "routines.neverRun": "Not run yet",
   "routines.continuityLabel": "Remember the last run",
   "routines.continuityHelp": "Each run starts with the previous run's report, so the bot knows what it found last time. Good for checks like QA or monitoring.",

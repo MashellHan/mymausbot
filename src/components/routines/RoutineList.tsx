@@ -30,14 +30,19 @@ export function RoutineList({ routines, runs, bots, loading, error, compact = fa
       const switched = onToggle !== undefined && !routineFinished(routine);
       return <article key={routine.id} className={cn("border border-hairline/40 bg-card", compact ? "rounded-lg px-3 py-2.5" : "rounded-xl p-3.5")} aria-label={routine.name}>
         <div className="flex items-start gap-2">
-          <button type="button" onClick={() => onOpen(routine)} className="min-w-0 flex-1 text-left hover:text-accent">
-            <span className="block truncate text-[13px] font-semibold text-ink">{routine.name}</span>
-            <span className="mt-1 block text-[12px] leading-relaxed text-ink-secondary">{bot && `${bot.name} · `}{scheduleLabel(routine.schedule)}</span>
+          <button type="button" onClick={() => onOpen(routine)} title={compact ? routine.name : undefined} className={cn("min-w-0 flex-1 text-left hover:text-accent", compact && "rounded-sm focus-visible:outline-2 focus-visible:outline-accent")}>
+            <span className={cn("block truncate font-semibold text-ink", compact ? "text-[14px]" : "text-[13px]")}>{routine.name}</span>
+            <span className={compact ? "mt-1 block truncate text-[12px] text-ink-secondary" : "mt-1 block text-[12px] leading-relaxed text-ink-secondary"}>{!compact && bot && `${bot.name} · `}{scheduleLabel(routine.schedule)}</span>
+            {compact && <span className="mt-1 block truncate text-[11px] text-ink-secondary">
+              {t("routines.lastRunPrefix")} <span className={latest ? routineRunTone(latest) : undefined}>{latest ? routineRunLabel(latest) : t("routines.neverRun")}</span>
+              {latest && <> · {routineDateTime(latest.finishedAt ?? latest.startedAt ?? latest.scheduledFor)}</>}
+            </span>}
           </button>
           {switched
             ? <Switch checked={routine.enabled} aria-label={t("routines.toggle", { name: routine.name })} onClick={() => onToggle(routine)} />
             : <span className={cn("shrink-0 rounded-full bg-inset px-2 py-0.5 text-[10px]", routine.enabled && routine.nextRunAt != null ? "text-accent" : "text-ink-secondary")}>{routineScheduleState(routine)}</span>}
         </div>
+        {!compact && <>
         {(switched || routineNextLabel(routine) !== routineScheduleState(routine)) && <div className="mt-2 text-[12px] text-ink-secondary">{routineNextLabel(routine)}</div>}
         <div className="mt-1 flex items-start justify-between gap-2">
           <div className="min-w-0 text-[12px]">
@@ -54,6 +59,7 @@ export function RoutineList({ routines, runs, bots, loading, error, compact = fa
           {t("routines.skippedRuns", { count: routine.skippedRuns })}
           {routine.lastSkippedAt != null && <> · {t("routines.lastSkipped", { date: routineDateTime(routine.lastSkippedAt) })}</>}
         </p>}
+        </>}
       </article>;
     })}
   </div>;

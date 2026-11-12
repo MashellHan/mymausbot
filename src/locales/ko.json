@@ -4634,6 +4634,7 @@
   "routines.noNextRun": "다음 실행 예정 없음",
   "routines.nextRun": "다음 {time}",
   "routines.latestRun": "최근: {status}",
+  "routines.lastRunPrefix": "최근:",
   "routines.neverRun": "아직 실행 안 됨",
   "routines.continuityLabel": "마지막 실행 기억하기",
   "routines.continuityHelp": "실행할 때마다 이전 실행의 보고서로 시작해서, 봇이 지난번에 찾은 내용을 알아요. QA나 모니터링 같은 점검에 좋아요.",
