@@ -186,14 +186,58 @@ describe("bot setup and tools in the real renderer", () => {
     // The panel's Usage row shows what this bot has spent and opens Settings on Usage & billing.
     const openPanelUsage = async () => {
       await openPanel();
-      // Back out of any page to the panel's tabs, then to Details.
-      await expect.poll(() => evaluate(`(() => {
-        const back = document.querySelector('[data-panel-back]');
-        if (back) { back.click(); return false; }
-        if (document.querySelector('[data-panel-tabpanel="details"]')) return true;
-        [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent.trim() === 'Details')?.click();
-        return false;
-      })()`), { timeout: 10_000 }).toBe(true);
+      const probeInstalled = await diagnosticEval(`(() => {
+        const state = () => {
+          const panel = document.querySelector('#bot-panel');
+          const back = document.querySelector('[data-panel-back]');
+          const details = [...document.querySelectorAll('[role="tab"]')]
+            .find((tab) => tab.textContent.trim() === 'Details');
+          return {
+            panelVisible: !!panel?.getClientRects().length,
+            pillExpanded: document.querySelector('[data-chathead-pill]')?.getAttribute('aria-expanded') ?? null,
+            page: panel?.querySelector('[data-panel-page-view]')?.getAttribute('data-panel-page-view') ?? null,
+            tab: panel?.querySelector('[data-panel-tab][aria-selected="true"]')?.getAttribute('data-panel-tab') ?? null,
+            detailsPanel: !!panel?.querySelector('[data-panel-tabpanel="details"]'),
+            back: { count: document.querySelectorAll('[data-panel-back]').length,
+              inPanel: !!back && !!panel?.contains(back), visible: !!back?.getClientRects().length },
+            details: { foundByText: !!details, inPanel: !!details && !!panel?.contains(details),
+              visible: !!details?.getClientRects().length,
+              panelLabel: panel?.querySelector('[data-panel-tab="details"]')?.textContent?.trim().slice(0, 32) ?? null },
+          };
+        };
+        const clicks = [];
+        const onClick = (event) => {
+          const target = event.target instanceof Element ? event.target.closest('[data-panel-back], [role="tab"]') : null;
+          if (!target || clicks.length >= 6) return;
+          const record = { target: target.hasAttribute('data-panel-back') ? 'back' : target.getAttribute('data-panel-tab') ?? 'other-tab',
+            inPanel: !!document.querySelector('#bot-panel')?.contains(target), before: state() };
+          clicks.push(record);
+          setTimeout(() => { record.after = state(); }, 0);
+        };
+        document.addEventListener('click', onClick, true);
+        window.__qa507UsageProbe = { initial: state(), clicks, state,
+          close: () => document.removeEventListener('click', onClick, true) };
+        return true;
+      })()`).then(() => true, () => false);
+      try {
+        // Back out of any page to the panel's tabs, then to Details.
+        await expect.poll(() => evaluate(`(() => {
+          const back = document.querySelector('[data-panel-back]');
+          if (back) { back.click(); return false; }
+          if (document.querySelector('[data-panel-tabpanel="details"]')) return true;
+          [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent.trim() === 'Details')?.click();
+          return false;
+        })()`), { timeout: 10_000 }).toBe(true);
+      } catch (original) {
+        const trace = await diagnosticEval(`(() => {
+          const probe = window.__qa507UsageProbe;
+          return probe ? { initial: probe.initial, clicks: probe.clicks, final: probe.state() } : { unavailable: 'probe-not-installed' };
+        })()`).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
+        console.error("Usage navigation failure diagnostic", JSON.stringify({ probeInstalled, trace }));
+        throw original;
+      } finally {
+        if (probeInstalled) await diagnosticEval("window.__qa507UsageProbe?.close(); delete window.__qa507UsageProbe; true").catch(() => {});
+      }
       const state = await ui("snapshot", "--interactive");
       const cost = Object.entries(state.refs as Record<string, { role: string; name: string }>)
         .filter(([, entry]) => entry.role === "button" && entry.name.startsWith("Usage") && entry.name.includes("$0.01"));
