@@ -33,7 +33,7 @@ export function RoutineList({ routines, runs, bots, loading, error, compact = fa
         <div className={cn("flex gap-2", compact ? "items-center" : "items-start")}>
           {compact && <Clock3 size={14} aria-hidden="true" className="shrink-0 text-ink-tertiary" />}
           <button type="button" onClick={() => onOpen(routine)} title={compact ? routine.name : undefined} className={cn("min-w-0 flex-1 text-left hover:text-accent", compact && "rounded-sm focus-visible:outline-2 focus-visible:outline-accent")}>
-            <span className={cn("block truncate text-ink", compact ? "text-[13px] font-medium leading-[18px]" : "text-[13px] font-semibold")}>{routine.name}</span>
+            <span data-compact-routine-title={compact ? "" : undefined} className={cn("block truncate text-ink", compact ? "text-[13px] font-medium leading-[18px]" : "text-[13px] font-semibold")}>{routine.name}</span>
             <span className={compact ? "mt-0.5 block truncate text-[12px] text-ink-secondary" : "mt-1 block text-[12px] leading-relaxed text-ink-secondary"}>{!compact && bot && `${bot.name} · `}{scheduleLabel(routine.schedule)}</span>
             {compact && <span className="mt-0.5 block truncate text-[11px] text-ink-secondary">
               {t("routines.lastRunPrefix")} <span className={latest ? routineRunTone(latest) : undefined}>{latest ? routineRunLabel(latest) : t("routines.neverRun")}</span>

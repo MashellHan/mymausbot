@@ -3436,6 +3436,12 @@ button:disabled.bg-danger {
 [data-interface-mode="raw"] [data-testid="bot-overview-intro"] :is(h2, [data-panel-model-title]) {
   color: var(--color-ink-secondary);
 }
+[data-interface-mode="raw"] [data-testid="bot-overview-intro"] :is([data-overview-section-title], [data-panel-model-title]) {
+  color: color-mix(in srgb, var(--color-ink) 70%, var(--color-ink-secondary));
+}
+[data-interface-mode="raw"] [data-testid="bot-overview-intro"] [data-compact-routine-title] {
+  color: color-mix(in srgb, var(--color-ink) 42%, var(--color-ink-secondary));
+}
 [data-interface-mode="raw"] [data-testid="bot-overview-intro"] article {
   border-color: light-dark(#e8e8e8, #414141);
 }
