@@ -128,6 +128,8 @@ export interface MiniAppSuggestionsRequest { botId: string; threadId: string }
 export type MiniAppSuggestionReason =
   | { kind: "responsible" }
   | { kind: "developed" }
+  /** Current publisher permission for this Bot; no publication or development is implied. */
+  | { kind: "publisher-grant" }
   | { kind: "task"; capability: string; taskPhrase: string };
 export interface MiniAppSuggestion { app: MiniAppSummary; reason: MiniAppSuggestionReason }
 export interface MiniAppSuggestionsResult {

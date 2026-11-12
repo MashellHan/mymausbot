@@ -50,7 +50,7 @@ export class MiniAppSuggestions {
     const developed = this.deps.apps.developedBy(botId);
     const identity = JSON.stringify({ botId, threadId, role: [bot.title, bot.description, bot.soulHash, bot.assignedSkills],
       model: bot.modelSelection, task: [task.title, task.updatedAt],
-      apps: apps.map((app) => [app.id, app.revision, app.responsibleBotId, app.capabilities, app.description, developed.has(app.id)]) });
+      apps: apps.map((app) => [app.id, app.revision, app.responsibleBotId, app.publisherBotIds, app.capabilities, app.description, developed.has(app.id)]) });
     const key = createHash("sha256").update(identity).digest("hex");
     const candidates = apps.filter((app) => capabilities(app).length)
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)).slice(0, 80);
@@ -92,8 +92,9 @@ export class MiniAppSuggestions {
     for (const app of apps) {
       if (app.responsibleBotId === botId) suggestions.push({ app, reason: { kind: "responsible" } });
       else if (developed.has(app.id)) suggestions.push({ app, reason: { kind: "developed" } });
+      else if (app.publisherBotIds.includes(botId)) suggestions.push({ app, reason: { kind: "publisher-grant" } });
     }
-    const priority = { responsible: 0, developed: 1, task: 2 };
+    const priority = { responsible: 0, developed: 1, task: 2, "publisher-grant": 3 };
     suggestions.sort((a, b) => priority[a.reason.kind] - priority[b.reason.kind] || a.app.createdAt - b.app.createdAt || a.app.id.localeCompare(b.app.id));
     const seen = new Set<string>();
     const bounded: MiniAppSuggestion[] = [];
