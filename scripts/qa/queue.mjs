@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { artifactFiles, fullRunEvidence, github, pages } from "./github.mjs";
-import { eligibleRun, issueLabels, triageOf } from "./contracts.mjs";
+import { artifactFiles, fullRunEvidence, github, pages, runJobs, runPlan } from "./github.mjs";
+import { eligibleRun, fullRunPlan, issueLabels, triageOf } from "./contracts.mjs";
 import { FULL_QA_FRESHNESS_MS, qaHealth } from "./health.mjs";
 import { scanProcesses } from "./scan.mjs";
 
@@ -30,10 +30,20 @@ export async function recoverQa(state, { api = github, readArtifact = artifactFi
   const runs = (await api("/actions/workflows/ci.yml/runs?branch=main&per_page=100")).workflow_runs.filter((run) => eligibleRun(run, repository, false));
   const sinceInstallation = (run) => !state.startedAt || Date.parse(run.created_at) >= Date.parse(state.startedAt);
   const fullRuns = [];
-  let latest, pendingPlan = false, completedSeen = false;
+  let latest, unreportable, pendingPlan = false, completedSeen = false;
   for (const run of runs) {
     if (completedSeen && run.status === "completed") continue;
-    const evidence = await fullRunEvidence(run, { api, readArtifact, repository, now });
+    let evidence = await fullRunEvidence(run, { api, readArtifact, repository, now });
+    if (evidence === "full" && run.status === "completed" && run.event !== "push") {
+      const jobs = await runJobs(run.id, run.run_attempt, api);
+      const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", api);
+      const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
+      if (!plan || !fullRunPlan(plan)) {
+        evidence = "unknown";
+        unreportable = { runId: run.id, sha: run.head_sha, attempt: run.run_attempt, conclusion: run.conclusion,
+          reason: plan ? "invalid_full_plan" : "missing_trusted_plan" };
+      }
+    }
     if (evidence === "pending") pendingPlan = true;
     if (run.status === "completed" && (evidence === "full" || evidence === "unknown")) completedSeen = true;
     if (evidence !== "full") continue;
@@ -44,8 +54,21 @@ export async function recoverQa(state, { api = github, readArtifact = artifactFi
   const reporterRuns = (await api("/actions/workflows/qa-report.yml/runs?per_page=100")).workflow_runs;
   const reporting = reporterRuns.some((run) => run.status !== "completed");
   const reported = new Set(reporterRuns.filter((run) => run.conclusion === "success").map((run) => Number(run.display_title?.match(/^QA report (\d+)$/)?.[1])));
-  const backlog = runs.filter((run) => run.status === "completed" && sinceInstallation(run)
-    && !reported.has(run.id)).at(-1);
+  let backlog;
+  if (!reporting) for (const run of [...runs].reverse()) {
+    if (run.status !== "completed" || !sinceInstallation(run) || reported.has(run.id) || run.id === unreportable?.runId) continue;
+    if (fullRuns.includes(run)) { backlog = run; break; }
+    const evidence = await fullRunEvidence(run, { api, readArtifact, repository, now });
+    if (evidence !== "full") continue;
+    if (run.event !== "push") {
+      const jobs = await runJobs(run.id, run.run_attempt, api);
+      const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", api);
+      const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
+      if (!plan || !fullRunPlan(plan)) continue;
+    }
+    backlog = run;
+    break;
+  }
   const deliver = !qa.report && latest ? latest : backlog;
   if (deliver && !reporting) {
     const key = `${deliver.id}:${deliver.run_attempt}`;
@@ -69,9 +92,10 @@ export async function recoverQa(state, { api = github, readArtifact = artifactFi
     at: new Date(now).toISOString(),
     action: dispatch ? "dispatch" : !executionMissing || activeFull ? "reuse" : pendingPlan ? "wait" : "hold",
     reason: dispatch ? !latest ? "no_completed_full" : qa.report && !qa.report.executionComplete ? "incomplete_report" : "stale_completed_full"
-      : !executionMissing ? "fresh_completed_full" : activeFull ? "active_full" : pendingPlan ? "pending_plan" : "recovery_already_requested",
+      : !executionMissing ? "fresh_completed_full" : activeFull ? "active_full" : pendingPlan ? "pending_plan" : unreportable?.reason ?? "recovery_already_requested",
     candidate: candidate ? { runId: candidate.id, sha: candidate.head_sha, attempt: candidate.run_attempt,
       event: candidate.event, status: candidate.status } : null,
+    ...(unreportable ? { unreportable } : {}),
     anchor,
   };
   return qa;
