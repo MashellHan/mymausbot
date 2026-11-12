@@ -216,11 +216,56 @@ describe("persistent Mini Apps", () => {
       const { docs, data } = fixture();
       const apps = new MiniApps({ docs, data, validPublisher: () => true,
         access: { database: () => db, write: (work) => work(db) } });
-      expect(apps.list(owner)).toMatchObject([{ id: "legacy", dashboard: null, dashboardIdentity: null, shippedTemplateKind: null }]);
+      expect(apps.list(owner)).toMatchObject([{ id: "legacy", dashboard: null, dashboardIdentity: null,
+        shippedTemplateKind: null, responsibleBotId: null, capabilities: [] }]);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_kind")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_identity")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "shipped_template_kind")).toBe(true);
+      expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "responsible_bot_id")).toBe(true);
     } finally { db.close(); }
+  });
+
+  it("keeps explicit responsibility separate from grants and verified Bot template development", async () => {
+    const { apps } = fixture();
+    const ownerMade = await apps.publish(owner, publication({ requestKey: "owner-create", publisherBotIds: ["publisher"] }));
+    expect(apps.developedBy("publisher")).not.toContain(ownerMade.app.id);
+    expect(ownerMade.app.responsibleBotId).toBeNull();
+    await expect(apps.publish(bot(), publication({ requestKey: "self-assign", expectedRevision: 1,
+      responsibleBotId: "publisher" }), ownerMade.app.id)).rejects.toMatchObject({ status: 403 });
+    const titleOnly = await apps.publish(bot(), publication({ requestKey: "title-only", expectedRevision: 1,
+      title: "Inventory title", capabilities: ["Review inventory quantities"] }), ownerMade.app.id);
+    expect(apps.developedBy("publisher")).not.toContain(ownerMade.app.id);
+    expect(titleOnly.app.capabilities).toEqual(["Review inventory quantities"]);
+    const assigned = await apps.publish(owner, publication({ requestKey: "assign", expectedRevision: 2,
+      responsibleBotId: "publisher" }), ownerMade.app.id);
+    expect(assigned.app.responsibleBotId).toBe("publisher");
+    await expect(apps.publish(owner, publication({ requestKey: "unknown", expectedRevision: 3,
+      responsibleBotId: "unknown" }), ownerMade.app.id)).rejects.toMatchObject({ status: 400 });
+    const revised = await apps.publish(bot(), publication({ requestKey: "real-layout", expectedRevision: 3,
+      html: "<h1>Updated inventory</h1>" }), ownerMade.app.id);
+    expect(revised.app.responsibleBotId).toBe("publisher");
+    expect(apps.developedBy("publisher")).toContain(ownerMade.app.id);
+    const botMade = await apps.publish(bot(), publication({ requestKey: "bot-create", slug: "bot-inventory" }));
+    expect(apps.developedBy("publisher")).toContain(botMade.app.id);
+    closeMessageDb();
+    expect(apps.developedBy("publisher")).toEqual(new Set([ownerMade.app.id, botMade.app.id]));
+  });
+
+  it("rehydrates only successful Bot creation and changed-template receipts once at startup", async () => {
+    const { apps } = fixture();
+    const created = await apps.publish(bot(), publication({ requestKey: "slug-create", slug: "created-by-bot" }));
+    const ownerMade = await apps.publish(owner, publication({ requestKey: "owner-create", slug: "owner-made",
+      publisherBotIds: ["publisher"] }));
+    await apps.publish(bot(), publication({ requestKey: "title-only", slug: "owner-made", expectedRevision: 1,
+      title: "Changed title" }), ownerMade.app.id);
+    const changed = await apps.publish(owner, publication({ requestKey: "owner-two", slug: "owner-two",
+      publisherBotIds: ["publisher"] }));
+    await apps.publish(bot(), publication({ requestKey: "layout", slug: "owner-two", expectedRevision: 1,
+      html: "<h1>Changed template</h1>" }), changed.app.id);
+    applicationDatabase().exec("DELETE FROM mini_app_development; DELETE FROM mini_app_recommendation_meta");
+    closeMessageDb();
+    expect(apps.developedBy("publisher")).toEqual(new Set([created.app.id, changed.app.id]));
+    expect(applicationDatabase().prepare("SELECT key FROM mini_app_recommendation_meta").all()).toHaveLength(1);
   });
 
   it("opens a no-Data dashboard when unrelated retained Data is unavailable", async () => {

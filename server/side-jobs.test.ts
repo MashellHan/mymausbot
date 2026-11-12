@@ -206,6 +206,15 @@ describe("the setup card's answers", () => {
   });
 });
 
+it("uses the configured one-off model and booked usage for Mini App suggestions", async () => {
+  const { jobs, state, claude } = setup();
+  const writer = jobs.text("mini-app-suggestions", "claude");
+  expect(writer?.via).toBe("engine");
+  expect(await writer!.generateText("Synthetic app capabilities and task")).toBe("claude wrote this");
+  expect(claude.calls.map((call) => call.prompt)).toEqual(["Synthetic app capabilities and task"]);
+  expect(state.booked[0]?.row.threadId).toMatch(/^mini-app-suggestions-/);
+});
+
 describe("who writes a small job", () => {
   it("is the bot's own engine whenever it can: the helper is never called", async () => {
     const { jobs, state, claude, openrouter } = setup({ helper: { instanceId: "openrouter" } });

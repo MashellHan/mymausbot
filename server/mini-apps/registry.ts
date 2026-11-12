@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import type { MiniAppDataBinding } from "../../shared/mini-app-data.ts";
 import { MINI_APP_DASHBOARD_RESOURCES, type MiniAppArchive, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
@@ -11,6 +12,7 @@ import type { DataEngine } from "../data/types.ts";
 import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
 import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
 import { appFailure, archiveSchema, parseDashboardRead, parsePublish, parseQuery, rollbackSchema } from "./validation.ts";
+import { developedMiniApps, ensureMiniAppDevelopment, recordMiniAppDevelopment } from "./development.ts";
 
 export const MINI_APPS_OWNER = "workspace-owner";
 
@@ -38,6 +40,7 @@ export function ensureMiniApps(db: DatabaseSync): void {
       dashboard_kind TEXT CHECK(dashboard_kind IN ('agent-team', 'usage') OR dashboard_kind IS NULL),
       dashboard_identity TEXT CHECK(dashboard_identity IN ('agent-team', 'usage') OR dashboard_identity IS NULL),
       shipped_template_kind TEXT CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL),
+      responsible_bot_id TEXT, capabilities TEXT NOT NULL DEFAULT '[]',
       UNIQUE(owner_id, slug)
     );
     CREATE TABLE IF NOT EXISTS mini_app_versions (
@@ -62,6 +65,9 @@ export function ensureMiniApps(db: DatabaseSync): void {
   if (!columns.some(({ name }) => name === "shipped_template_kind")) {
     db.exec("ALTER TABLE mini_apps ADD COLUMN shipped_template_kind TEXT CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL)");
   }
+  if (!columns.some(({ name }) => name === "responsible_bot_id")) db.exec("ALTER TABLE mini_apps ADD COLUMN responsible_bot_id TEXT");
+  if (!columns.some(({ name }) => name === "capabilities")) db.exec("ALTER TABLE mini_apps ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'");
+  ensureMiniAppDevelopment(db);
   initialized.add(db);
 }
 
@@ -81,6 +87,7 @@ type AppRow = {
   revision: number; template_version: number; publishers: string; created_at: number; updated_at: number;
   dashboard_kind: MiniAppDashboardKind | null; dashboard_identity: MiniAppDashboardKind | null;
   shipped_template_kind: MiniAppShippedTemplateKind | null;
+  responsible_bot_id: string | null; capabilities: string;
 };
 type VersionRow = { version: number; doc: string; title: string; description: string; bindings: string; created_at: number };
 function declaration(kind: MiniAppDashboardKind | null): MiniAppDashboardDeclaration | null {
@@ -94,6 +101,7 @@ function declaration(kind: MiniAppDashboardKind | null): MiniAppDashboardDeclara
 const summary = (row: AppRow): MiniAppSummary => ({
   id: row.id, slug: row.slug, title: row.title, description: row.description, status: row.status,
   revision: row.revision, templateVersion: row.template_version, publisherBotIds: JSON.parse(row.publishers) as string[],
+  responsibleBotId: row.responsible_bot_id, capabilities: JSON.parse(row.capabilities) as string[],
   dashboard: declaration(row.dashboard_kind), dashboardIdentity: row.dashboard_identity,
   shippedTemplateKind: row.shipped_template_kind,
   createdAt: row.created_at, updatedAt: row.updated_at,
@@ -127,6 +135,8 @@ export class MiniApps {
     ensureMiniApps(db);
     return db;
   }
+
+  initialize(): void { this.db(); }
 
   private row(id: string): AppRow | undefined {
     return this.db().prepare("SELECT * FROM mini_apps WHERE id = ? AND owner_id = ?").get(id, MINI_APPS_OWNER) as AppRow | undefined;
@@ -164,6 +174,10 @@ export class MiniApps {
       .map(summary).filter((app) => !actor.botId || app.publisherBotIds.includes(actor.botId));
   }
 
+  developedBy(botId: string): Set<string> {
+    return developedMiniApps(this.db(), botId);
+  }
+
   dashboardCatalog(actor: MiniAppActor): MiniAppDashboardDiscovery[] {
     this.authorize(actor);
     return (this.db().prepare("SELECT * FROM mini_apps WHERE owner_id = ? AND status = 'active' AND dashboard_identity IS NOT NULL ORDER BY created_at, id")
@@ -193,7 +207,8 @@ export class MiniApps {
     if (row.content_hash !== this.hash(input)) throw appFailure(409, "This request key was already used with different content.");
     const app = JSON.parse(row.result) as MiniAppSummary;
     return { app: { ...app, dashboard: app.dashboard ?? null, dashboardIdentity: app.dashboardIdentity ?? app.dashboard?.kind ?? null,
-      shippedTemplateKind: app.shippedTemplateKind ?? null }, replayed: true };
+      shippedTemplateKind: app.shippedTemplateKind ?? null, responsibleBotId: app.responsibleBotId ?? null,
+      capabilities: app.capabilities ?? [] }, replayed: true };
   }
 
   private hash(input: unknown): string { return createHash("sha256").update(canonical(input)).digest("hex"); }
@@ -216,6 +231,8 @@ export class MiniApps {
     const input = parsePublish(raw);
     if (actor.botId && input.dashboardKind !== undefined) throw appFailure(403, "Only the workspace owner can grant dashboard resources.");
     if (actor.botId && input.shippedTemplateKind !== undefined) throw appFailure(403, "Only the workspace owner can identify a shipped template.");
+    if (actor.botId && input.responsibleBotId !== undefined) throw appFailure(403, "Only the workspace owner can assign responsibility.");
+    if (input.responsibleBotId && !this.validPublisher(input.responsibleBotId)) throw appFailure(400, "The responsible Bot does not exist.");
     const target = id ?? `slug:${input.slug}`;
     const existing = id ? this.require(actor, id, true) : (() => {
       const row = this.db().prepare("SELECT * FROM mini_apps WHERE owner_id = ? AND slug = ?").get(MINI_APPS_OWNER, input.slug) as AppRow | undefined;
@@ -253,6 +270,8 @@ export class MiniApps {
       this.expected(current, input.expectedRevision);
       if (!current && db.prepare("SELECT 1 FROM mini_apps WHERE owner_id = ? AND slug = ?").get(MINI_APPS_OWNER, input.slug)) throw appFailure(409, "A Mini App already uses this slug.");
       if (publishers.some((publisher) => !this.validPublisher(publisher))) throw appFailure(409, "A publisher bot was removed during publication.");
+      const responsibleBotId = input.responsibleBotId === undefined ? current?.responsibleBotId ?? null : input.responsibleBotId;
+      if (responsibleBotId && !this.validPublisher(responsibleBotId)) throw appFailure(409, "The responsible Bot no longer exists.");
       const now = Date.now();
       const appId = current?.id ?? randomUUID();
       const last = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM mini_app_versions WHERE app_id = ?").get(appId) as { version: number };
@@ -267,19 +286,26 @@ export class MiniApps {
       }
       if (dashboardIdentity && shippedTemplateKind) throw appFailure(400, "A native dashboard cannot also be a Data template.");
       this.requireDashboardBindings(dashboardIdentity, input.bindings);
+      const previousVersion = current && this.version(appId, current.templateVersion);
+      const developed = !current || previousVersion?.doc !== stored.doc ||
+        !isDeepStrictEqual(JSON.parse(previousVersion.bindings) as MiniAppDataBinding[], input.bindings);
       const app: MiniAppSummary = { id: appId, slug: input.slug, title: input.title, description: input.description,
         status: "active", revision: (current?.revision ?? 0) + 1, templateVersion: last.version + 1,
-        publisherBotIds: publishers, dashboard: declaration(dashboardKind), dashboardIdentity, shippedTemplateKind,
+        publisherBotIds: publishers, responsibleBotId, capabilities: input.capabilities ?? current?.capabilities ?? [],
+        dashboard: declaration(dashboardKind), dashboardIdentity, shippedTemplateKind,
         createdAt: current?.createdAt ?? now, updatedAt: now };
-      db.prepare(`INSERT INTO mini_apps (id, owner_id, slug, title, description, status, revision, template_version, publishers, created_at, updated_at, dashboard_kind, dashboard_identity, shipped_template_kind)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      db.prepare(`INSERT INTO mini_apps (id, owner_id, slug, title, description, status, revision, template_version, publishers, created_at, updated_at, dashboard_kind, dashboard_identity, shipped_template_kind, responsible_bot_id, capabilities)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description, status=excluded.status,
         revision=excluded.revision, template_version=excluded.template_version, publishers=excluded.publishers,
         updated_at=excluded.updated_at, dashboard_kind=excluded.dashboard_kind, dashboard_identity=excluded.dashboard_identity,
-        shipped_template_kind=excluded.shipped_template_kind`)
+        shipped_template_kind=excluded.shipped_template_kind, responsible_bot_id=excluded.responsible_bot_id,
+        capabilities=excluded.capabilities`)
         .run(appId, MINI_APPS_OWNER, app.slug, app.title, app.description, app.status, app.revision, app.templateVersion,
-          JSON.stringify(publishers), app.createdAt, now, dashboardKind, dashboardIdentity, shippedTemplateKind);
+          JSON.stringify(publishers), app.createdAt, now, dashboardKind, dashboardIdentity, shippedTemplateKind,
+          responsibleBotId, JSON.stringify(app.capabilities));
       db.prepare("INSERT INTO mini_app_versions VALUES (?, ?, ?, ?, ?, ?, ?)").run(appId, app.templateVersion, stored.doc, app.title, app.description, JSON.stringify(input.bindings), now);
+      if (actor.botId && developed) recordMiniAppDevelopment(db, appId, actor.botId, now);
       return this.receipt(db, actor, target, "publish", input, app);
     });
   }
