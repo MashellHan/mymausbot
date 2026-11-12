@@ -5504,6 +5504,7 @@
   "computer.miniApps.suggested.more": "All Mini Apps",
   "computer.miniApps.suggested.responsible": "Responsible",
   "computer.miniApps.suggested.developed": "Developed",
+  "computer.miniApps.suggested.publisherGrant": "This Bot can publish this app",
   "computer.miniApps.published": "App updated {time}",
   "computer.miniApps.timeUnavailable": "time unavailable",
   "computer.miniApps.changedDuringRead": "The app changed while opening. Check for updates.",

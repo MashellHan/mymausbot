@@ -650,6 +650,7 @@ describe("inline overview model settings", () => {
     expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Choose model");
     expect([...select("Choose model").options].map((option) => option.textContent)).not.toContain("Claude Opus 5.5");
     render({ ...scout(), id: "another-bot" }, options);
+    await settle();
     expect(select("AI source").value).toBe("claude");
     choose(select("AI source"), "codex");
     choose(select("Choose model"), JSON.stringify(["codex", "gpt-5.6"]));
