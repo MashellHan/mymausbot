@@ -614,6 +614,7 @@ describe("inline overview model settings", () => {
     await settle();
     expect(menu()).toBeNull();
     expect(chip()).toBeNull();
+    expect(select("AI source").value).toBe("claude");
     expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Claude Opus 5.5");
     expect(select("Reasoning effort").value).toBe("high");
     expect(host.querySelector<HTMLInputElement>('[aria-label="Context window"]')!.value).toBe("256000");
@@ -639,6 +640,23 @@ describe("inline overview model settings", () => {
     expect(menu()).toBeNull();
   });
 
+  it("chooses an AI source before its model without changing the saved selection", async () => {
+    fixture.instances.push({ ...claude([{ id: "gpt-5.6", label: "GPT-5.6" }]),
+      instanceId: "codex", driverKind: "codex", displayName: "Codex" });
+    render(scout(), options);
+    await settle();
+    choose(select("AI source"), "codex");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Choose model");
+    expect([...select("Choose model").options].map((option) => option.textContent)).not.toContain("Claude Opus 5.5");
+    render({ ...scout(), id: "another-bot" }, options);
+    expect(select("AI source").value).toBe("claude");
+    choose(select("AI source"), "codex");
+    choose(select("Choose model"), JSON.stringify(["codex", "gpt-5.6"]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
+      selection: { instanceId: "codex", model: "gpt-5.6" } }));
+  });
+
   it("keeps guest changes on their thread and exposes only supported model settings", async () => {
     fixture.owner = false;
     fixture.instances[0]!.capabilities = {};
@@ -651,6 +669,22 @@ describe("inline overview model settings", () => {
     render({ ...scout(), busy: true }, options);
     expect(select("Choose model").disabled).toBe(true);
     expect(host.querySelector<HTMLFieldSetElement>("fieldset")!.disabled).toBe(true);
+  });
+
+  it("names the running thread's model lock while keeping supported next-message reasoning available", async () => {
+    fixture.instances[0]!.capabilities!.configurableContextWindow = true;
+    const busy = { ...scout(), busy: true };
+    render(busy, options);
+    await settle();
+    expect(select("AI source").disabled).toBe(true);
+    expect(select("Choose model").disabled).toBe(true);
+    expect(host.querySelector('[data-model-busy-reason]')?.textContent).toContain("Stop this thread's turn before changing its model");
+    expect(host.querySelector('[data-model-busy-reason]')?.textContent).toContain("Reasoning level applies from the next message");
+    expect(host.querySelector<HTMLFieldSetElement>("fieldset")!.disabled).toBe(false);
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Context window"]')!.disabled).toBe(true);
+    choose(select("Reasoning effort"), "high");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel", threadId: "thread-scout",
+      selection: { instanceId: "claude", model: "claude-opus-5-5", effort: "high" } }));
   });
 
   it("keeps signed-out and blocked catalog options unavailable while allowing configured custom models", async () => {
@@ -666,5 +700,18 @@ describe("inline overview model settings", () => {
     expect(fixture.dispatch).not.toHaveBeenCalled();
     choose(control, option("local").value);
     expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { instanceId: "claude", model: "local" } }));
+  });
+
+  it("explains sign-in on a previewed source without blocking its configured custom model", async () => {
+    fixture.instances.push({ ...claude([{ id: "official", label: "Official" }, { id: "local", label: "Local", custom: true }], false),
+      instanceId: "second", displayName: "Second" });
+    render(scout(), options);
+    await settle();
+    choose(select("AI source"), "second");
+    expect(host.querySelector('[data-model-settings]')?.textContent).toContain("Sign in for Second's own models");
+    const models = select("Choose model");
+    expect([...models.options].find((option) => option.textContent === "Official")!.disabled).toBe(true);
+    expect([...models.options].find((option) => option.textContent === "Local")!.disabled).toBe(false);
+    expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 });

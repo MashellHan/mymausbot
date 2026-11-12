@@ -2875,6 +2875,7 @@
   "model.blurb.fastest": "最快、最便宜。适合简单任务。",
   "model.blurb.light": "快速轻巧。",
   "model.simple.model": "模型",
+  "model.source": "AI 来源",
   "model.simple.manage": "管理 AI 账户",
   "model.simple.needsSetup": "需要先设置 {name} 才能使用。",
   "model.simple.setUp": "设置",
