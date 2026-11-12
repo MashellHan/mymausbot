@@ -14,7 +14,8 @@ vi.mock("qrcode.react", () => ({ QRCodeSVG: ({ value }: { value: string }) => cr
 const ORIGIN = "https://computer.tail123.ts.net";
 const CREDENTIAL = `omb_pair_${"a".repeat(43)}`;
 let host: HTMLDivElement, root: Root, funnel: TailscaleFunnelConnection;
-const qr = () => host.querySelector<SVGElement>("[data-qr-value]");
+const dialog = () => document.querySelector<HTMLElement>('[role="dialog"][data-pair-dialog="code"]');
+const qr = () => dialog()?.querySelector<SVGElement>("[data-qr-value]") ?? null;
 const click = async (selector: string) => { await act(async () => { host.querySelector<HTMLButtonElement>(selector)!.click(); }); };
 const render = async (props: Partial<Parameters<typeof ServerPairingCard>[0]> = {}) => {
   await act(async () => { root.render(createElement(ServerPairingCard, { funnel, ...props })); });
@@ -36,6 +37,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(async () => { root.unmount(); }); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals();
+  expect(dialog()).toBeNull();
 });
 
 it("creates a client-only native QR using a freshly verified origin and the one-time credential", async () => {
@@ -55,12 +57,24 @@ it("creates a client-only native QR using a freshly verified origin and the one-
   expect(link.searchParams.get("token")).toBe(CREDENTIAL);
   expect(link.searchParams.get("name")).toBe("Fixture computer");
   expect(link.searchParams.has("code")).toBe(false);
-  expect(host.textContent).toContain("phone app");
-  expect(host.textContent).not.toContain(CREDENTIAL);
-  expect(host.textContent).not.toContain("AAAABBBBCCCC");
-  const copy = [...host.querySelectorAll("button")].find(button => button.textContent === "Copy link")!;
+  expect(dialog()?.textContent).toContain("phone app");
+  expect(document.body.textContent).not.toContain(CREDENTIAL);
+  expect(document.body.textContent).not.toContain("AAAABBBBCCCC");
+  const copy = [...dialog()!.querySelectorAll("button")].find(button => button.textContent === "Copy link")!;
   await act(async () => { copy.click(); });
   expect(fx.copy).toHaveBeenCalledWith(link.href);
+});
+
+it("keeps native Funnel pairing available without taking another flow's focus", async () => {
+  await render({ reveal: false, focusRequest: 1 });
+  expect(host.querySelector("[data-phone-pairing-action]")).toBeNull();
+  expect(document.activeElement).not.toBe(host.querySelector("[data-funnel-pairing-action]"));
+  expect(fx.api.mock.calls.filter(([path]) => path === "/api/auth/pairing")).toHaveLength(0);
+  await render({ reveal: true, focusRequest: 1 });
+  expect(host.querySelector("[data-phone-pairing-action]")).toBe(host.querySelector("[data-funnel-pairing-action]"));
+  await click("[data-funnel-pairing-action]");
+  const pairing = fx.api.mock.calls.find(([path]) => path === "/api/auth/pairing")!;
+  expect(JSON.parse(pairing[1].body)).toEqual({ scopes: ["client"] });
 });
 
 it("clears the old QR and does not issue another credential when verification fails", async () => {
@@ -81,14 +95,14 @@ it("refreshes the server device list while the native invitation is open", async
   fx.api.mockResolvedValueOnce({ sessions: [{ id: "native-phone", label: "Fixture iPhone", scopes: ["client"], lastSeenAt: Date.now(), expiresAt: Date.now() + 86400000 }] });
   await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
   expect(host.textContent).toContain("Fixture iPhone");
-  expect([...host.querySelectorAll("button")].some(button => button.textContent === "Sign out")).toBe(true);
+  expect([...host.querySelectorAll("button")].some(button => button.textContent === "Remove")).toBe(true);
 });
 
 it("removes an expired native QR and rejects malformed native credentials", async () => {
   await render(); await click("[data-funnel-pairing-action]");
   await act(async () => { await vi.advanceTimersByTimeAsync(300000); });
   expect(qr()).toBeNull();
-  expect(host.textContent).toContain("expired");
+  expect(dialog()?.textContent).toContain("expired");
   fx.api.mockResolvedValueOnce({ credential: "invalid", expiresAt: Date.now() + 300000 });
   await click("[data-funnel-pairing-action]");
   expect(qr()).toBeNull();
@@ -97,11 +111,11 @@ it("removes an expired native QR and rejects malformed native credentials", asyn
 
 it("keeps browser/admin pairing separate and hides native creation from non-owners, portal members and cloud homes", async () => {
   await render();
-  const browser = [...host.querySelectorAll("button")].find(button => button.textContent === "Create pairing code")!;
+  const browser = [...host.querySelectorAll("button")].find(button => button.textContent === "Pair a phone")!;
   await act(async () => { browser.click(); });
   expect(funnel.refresh).not.toHaveBeenCalled();
   expect(JSON.parse(fx.api.mock.calls.find(([path]) => path === "/api/auth/pairing")![1].body)).toEqual({ scopes: ["admin", "client"] });
-  expect(host.textContent).toContain("AAAABBBBCCCC");
+  expect(dialog()?.textContent).toContain("AAAABBBBCCCC");
   await render({ cloudHome: true }); expect(host.querySelector("[data-funnel-pairing-action]")).toBeNull();
   await act(async () => { root.unmount(); }); root = createRoot(host);
   fx.api.mockImplementation(async (path: string) => path === "/api/config" ? { membership: { pairingCodes: false } } : { sessions: [] });

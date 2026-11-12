@@ -1,8 +1,10 @@
 import { directMessageSent, roomMessageSent } from "@/lib/product-events";
+import { TeamAudienceLabel } from "./TeamSideSwitch";
 import { useComposerDictation } from "@/lib/use-composer-dictation";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { Mic, Paperclip, Square, X } from "lucide-react";
-import { useStore, visibleMessages, currentTaskBot, type Bot, type Group, type Message } from "@/state/store";
+import { sameFields, useStoreDispatch, useStoreSelector } from "@/state/store-select"; import { useStoreRef } from "@/state/store-ref"; import { sameDrawnBots } from "@/lib/drawn-bots";
+import { visibleMessages, currentTaskBot, type Bot, type Group, type Message } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
 import { useMenuMotion } from "./MenuMotion";
@@ -88,6 +90,7 @@ import { serializeThreadRefs, threadTokenFromPaste, threadTokenSpacing } from "@
 import {
   composerSlashTrigger,
   goalTextFromComposer,
+  builtInCommandText,
   replaceComposerSlashTrigger,
   skillSlashCommands,
   slashCommandMatches,
@@ -125,7 +128,7 @@ export function Composer({
 }) {
   const bot = profile ? currentTaskBot(profile) : undefined;
   const locked = setupLocked || Boolean(bot?.awaitingThreadSnapshot);
-  const { state, dispatch } = useStore();
+  const state = useStoreSelector((s) => ({ instances: s.instances, config: s.config, queued: s.pendingQueued[group?.threadId ?? bot?.threadId ?? ""] }), sameFields), dispatch = useStoreDispatch(), store = useStoreRef(), bots = useStoreSelector((s) => s.bots, sameDrawnBots);
   const { threads, currentBotId } = useThreadRefs();
   const advanced = useAdvancedMode();
   const raw = useRawPresentation();
@@ -149,10 +152,10 @@ export function Composer({
   const approvals = pendingApprovals(group ? group.messages : bot ? visibleMessages(bot) : []);
   const approval = approvals[0];
   const blocking = Boolean(approval && !approval.message.card?.computerAsk);
-  const approvalBot = group
+  const asker = useStoreSelector((s) => s.bots.find((one) => one.id === approval?.message.inbox?.from.botId)), approvalBot = group
     ? members?.find((member) => member.id === approval?.message.from?.botId) ??
       members?.find((member) => member.id === groupBusyBotId)
-    : state.bots.find((one) => one.id === approval?.message.inbox?.from.botId) ?? bot;
+    : asker ?? bot;
   const busyName = group
     ? (members?.find((b) => b.id === groupBusyBotId)?.name ??
       (groupWorking ? t("composer.busy.team") : t("composer.busy.aBot")))
@@ -162,7 +165,7 @@ export function Composer({
     : `bot:${bot?.id ?? ""}:${bot?.threadId ?? ""}`;
   const [text, setText, attachments, setAttachments] = useComposerDraft(
     draftId,
-    !group && bot ? `bot:${bot.id}` : undefined,
+    !group && bot && !state.config?.team ? `bot:${bot.id}` : undefined,
   );
   const attachmentPending = useDraftAttachmentPending(draftId);
   const failedSends = useFailedComposerSends(draftId); const picks = mentionPicksFor(draftId);
@@ -318,7 +321,7 @@ export function Composer({
       id: "setup",
       label: "/setup",
       description: t("composer.command.setupDesc"),
-    });
+    }, { kind: "command", id: "burst", label: "/burst", description: t("composer.command.burstDesc") });
     available.push(...skillSlashCommands(slashSkills));
     return available.filter((command) => slashCommandMatches(command, slash.query));
   }, [slash, dismissedSlashAt, group, bot, canLearn, state.instances, locale, slashSkills]);
@@ -332,11 +335,11 @@ export function Composer({
           ...(!group.dm ? [{ id: "__everyone__", name: "everyone" }] : []),
           ...(members ?? []).map((member) => ({ id: member.id, name: member.name, bot: member })),
         ]
-      : state.bots
+      : bots
           .filter((member) => member.id !== bot?.id && !member.hidden && !hiddenFromSidebar(member, viewer))
           .map((member) => ({ id: member.id, name: member.name, bot: member }));
     return mentionChoicesForQuery([...pool, ...teammateChoices(teammates.people), DEVS_CHOICE], mention.query);
-  }, [mention, dismissedAt, state.bots, bot?.id, group, members, teammates, viewer]);
+  }, [mention, dismissedAt, bots, bot?.id, group, members, teammates, viewer]);
   const mentionEveryoneCount = (members ?? []).filter((member) => !member.hidden).length;
   const mentionPickerOpen = candidates.length > 0;
   const commandMotion = useMenuMotion(commandPickerOpen);
@@ -384,7 +387,7 @@ export function Composer({
     if (!slash || !command) return;
     const spaceAfter = /^\s/.test(text.slice(slash.end)) ? "" : " ";
     const replacement = command.kind === "skill" ? `${command.label}${spaceAfter}`
-      : command.id === "learn" ? "/learn " : command.id === "setup" ? "/setup " : "";
+      : builtInCommandText(command.id);
     const next = replaceComposerSlashTrigger(text, slash, replacement);
     editText(next.text);
     setCaret(next.caret);
@@ -404,7 +407,7 @@ export function Composer({
   };
 
   const sharedChat = Boolean(state.config?.team && !group && profile?.tasks?.some((task) => task.threadId === threadId && !task.private));
-  const queuedMessages = sharedChat ? [] : state.pendingQueued[threadId] ?? [];
+  const queuedMessages = sharedChat ? [] : state.queued ?? [];
   const pendingCount = queuedMessages.length;
   const canSteerQueued = composerCanSteerQueuedMessages(
     busy,
@@ -560,7 +563,7 @@ export function Composer({
     if (!composed) return;
     stopDictation();
     const body = restoredRequestText(draftId) ?? composed;
-    const dataContext = dataContextFor(body, state.computerOpen ? state.dataView : null, !group && bot ? { botId: bot.id, threadId } : undefined);
+    const dataContext = dataContextFor(body, store.state().computerOpen ? store.state().dataView : null, !group && bot ? { botId: bot.id, threadId } : undefined);
     const sentDraft: ComposerDraftSnapshot = {
       draftId,
       revision: draftRevision(draftId),
@@ -760,7 +763,7 @@ export function Composer({
             else if (bot) dispatch({ type: "cancelQueued", botId: bot.id, threadId, queueId });
           }}
           onEdit={locked ? undefined : editQueued}
-        />
+        /><TeamAudienceLabel bot={bot} group={group} />
         <div className="relative">
           {/* Plain canvas behind the composer and the strip below it, so the transcript ends at the composer
               with no fade. Simple mode starts it at the composer's top edge, Advanced at its middle. */}
@@ -832,7 +835,7 @@ export function Composer({
           <MentionTextarea
           wrapperClassName={singleRow || simpleDock ? undefined : cn("@max-[30rem]/composer:order-first @max-[30rem]/composer:basis-full", stacked && "order-first basis-full")}
           inputRef={inputRef}
-          peers={[...(group ? members ?? [] : state.bots.filter((member) => member.id !== bot?.id)), ...teammates.peers]}
+          peers={[...(group ? members ?? [] : bots.filter((member) => member.id !== bot?.id)), ...teammates.peers]}
           everyone={Boolean(group && !group.dm)}
           dir="auto"
           rows={1}

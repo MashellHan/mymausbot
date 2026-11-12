@@ -418,6 +418,9 @@ function parkUntilSignalOrExit(child: ChildProcess, stopRequested: () => boolean
   });
 }
 
+type UiLaunchPhase = "browser-ensure" | "browser-ready" | "fixture-start" | "fixture-ready"
+  | "fixture-configured" | "preview-start" | "preview-ready" | "browser-open-start" | "browser-opened";
+
 /** `ui launch`: fixture, preview, seeded bot, browser session, handle file;
  * park until interrupted, then close the browser, the preview and the
  * fixture in that order. Only ever runs from the executable CLI. */
@@ -425,11 +428,12 @@ export async function launchUi(
   args: string[],
   parentEnv: NodeJS.ProcessEnv = process.env,
   io: { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream } = process,
-  fixtureOptions: { boatFixtureApi?: string } = {},
+  fixtureOptions: { boatFixtureApi?: string; onPhase?: (phase: UiLaunchPhase) => void } = {},
 ): Promise<void> {
   const values = parse("ui launch", args, { entry: { type: "string" }, "tool-calls": { type: "string" }, mode: { type: "string" }, engine: { type: "string" }, simple: { type: "boolean", default: false } });
-  if (values.engine !== undefined && values.engine !== "codex") {
-    throw new ControlOmbError(`unknown --engine ${JSON.stringify(values.engine)}`, "the fake Claude CLI always runs; --engine codex adds the fake Codex app-server beside it");
+  const extraEngines: Record<string, "codex" | "customAcp" | "cline" | "copilot" | "opencode"> = { codex: "codex", acp: "customAcp", cline: "cline", copilot: "copilot", opencode: "opencode" };
+  if (values.engine !== undefined && !Object.hasOwn(extraEngines, String(values.engine))) {
+    throw new ControlOmbError(`unknown --engine ${JSON.stringify(values.engine)}`, "the fake Claude CLI always runs; --engine codex adds the fake Codex app-server beside it, --engine acp, cline or copilot a fake ACP agent, --engine opencode the OpenCode at OMB_VERIFY_OPENCODE_CLI");
   }
   const entryName = typeof values.entry === "string" ? values.entry : "threads";
   if (!Object.hasOwn(ENTRIES, entryName)) {
@@ -451,6 +455,9 @@ export async function launchUi(
     fakeEnv.FAKE_CLAUDE_MODE = String(values.mode);
   }
   const note = (line: string) => io.stderr.write(`ui launch: ${line}\n`);
+  const phase = (name: UiLaunchPhase) => {
+    try { fixtureOptions.onPhase?.(name); } catch {}
+  };
 
   // A Ctrl-C at any point after this stops the launch at its next step and
   // still runs the cleanup below for whatever already started.
@@ -465,28 +472,37 @@ export async function launchUi(
   let preview: MountedPreview | undefined;
   let opened: { binary: string; env: NodeJS.ProcessEnv } | undefined;
   try {
+    phase("browser-ensure");
     const { binary, chrome } = await ensureUiBrowser(parentEnv, note);
     checkpoint();
+    phase("browser-ready");
+    phase("fixture-start");
     fixture = await launchVerificationServer({ ...parentEnv, ...fakeEnv }, startup.signal, undefined,
-      { binaryPath: binary, executablePath: chrome ?? "" }, undefined, undefined, values.engine === "codex" ? ["codex"] : [], fixtureOptions.boatFixtureApi);
+      { binaryPath: binary, executablePath: chrome ?? "" }, undefined, undefined, values.engine === undefined ? [] : [extraEngines[String(values.engine)]!], fixtureOptions.boatFixtureApi);
     checkpoint();
+    phase("fixture-ready");
     const api = fixtureApi(fixture.info.url);
     await api("PATCH", "/api/config", { language: "en" });
     const { bots } = await api("GET", "/api/bots") as { bots: Array<{ id: string; defaultBot?: object }> };
     for (const bot of bots.filter((bot) => bot.defaultBot)) await api("PATCH", `/api/bots/${bot.id}`, { welcomed: true });
     const created = await runControlOmb(["new-bot", "--name", SEEDED_BOT, "--url", fixture.info.url]) as { bot: { id: string } };
     checkpoint();
+    phase("fixture-configured");
     // stdout carries the handle and nothing else; Vite's port and dependency
     // notes would otherwise land there first.
+    phase("preview-start");
     preview = await mountPreview(fixture, { ...entry, logLevel: "warn" });
     checkpoint();
+    phase("preview-ready");
     const previewUrl = new URL(preview.previewUrl);
     if (values.simple === true) previewUrl.searchParams.set("fixtureMode", "simple");
     const session: SessionEnv = { home: fixture.info.dataDir, session: `omb-ui-${new URL(fixture.info.url).port}`, chrome };
     const env = sessionEnv(session, parentEnv);
     opened = { binary, env };
+    phase("browser-open-start");
     await agentBrowser(binary, env, ["open", previewUrl.href], 120_000);
     checkpoint();
+    phase("browser-opened");
     const handle: UiHandle = {
       url: fixture.info.url,
       previewUrl: previewUrl.href,

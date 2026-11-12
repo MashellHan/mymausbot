@@ -48,6 +48,14 @@ describe("decodeCodexSelection", () => {
     });
   });
 
+  it("reads a Fast row as its base model on the Fast tier", () => {
+    expect(decodeCodexSelection("gpt-5.6-sol+priority")).toEqual({
+      model: "gpt-5.6-sol",
+      modelProvider: OFFICIAL_CODEX_PROVIDER,
+      serviceTier: "priority",
+    });
+  });
+
   it("splits provider-encoded custom ids", () => {
     expect(decodeCodexSelection("omlx::Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning")).toEqual({
       model: "Qwen3.6-35B-A3B-bf16:qwen3-5-6-n-r-reasoning",
@@ -75,6 +83,24 @@ describe("readCodexModelCatalog", () => {
       default: "gpt-fake-default",
       options: [
         { id: "gpt-fake-default", label: "GPT Fake Default" },
+        { id: "gpt-page-two", label: "GPT Page Two" },
+      ],
+    });
+  });
+
+  it("adds a Fast row after each model that offers Fast and does not already run on it", async () => {
+    chmodSync(FAKE_CLI, 0o755);
+    const catalog = await readCodexModelCatalog(
+      { HOME: join(tmpdir(), "omb-codex-app-server-tiers"), PATH: process.env.PATH, FAKE_CODEX_TIERS: "1" },
+      fetch,
+      FAKE_CLI,
+    );
+
+    expect(catalog).toEqual({
+      default: "gpt-fake-default",
+      options: [
+        { id: "gpt-fake-default", label: "GPT Fake Default" },
+        { id: "gpt-fake-default+priority", label: "GPT Fake Default · Fast" },
         { id: "gpt-page-two", label: "GPT Page Two" },
       ],
     });
@@ -131,11 +157,63 @@ name = "oMLX"
       id: local,
       label: "gpt-5.4 (oMLX)",
       custom: true,
+      providerRoute: { id: "local:omlx", label: "oMLX", provenance: "local" },
     });
     expect(decodeCodexSelection(catalog.default)).toEqual({
       model: "gpt-5.4",
       modelProvider: "omlx",
     });
+  });
+
+  it("keeps configured provider identity without exposing its endpoint or credential key", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "proxy_alpha"\nmodel = "Model-A"\n[model_providers.proxy_alpha]\nname = "Studio Proxy"\nbase_url = "https://secret.example.test/token/path"\nenv_key = "PRIVATE_STUDIO_KEY"\n`,
+    });
+    const catalog = await readCodexModelCatalog({ HOME: home }, async () => { throw new Error("offline fixture"); });
+    const option = catalog.options.find((row) => row.id === "proxy_alpha::Model-A");
+    expect(option?.providerRoute).toMatchObject({ label: "Studio Proxy", provenance: "configured" });
+    expect(option?.providerRoute?.id).toMatch(/^configured:[a-f0-9]{16}$/);
+    expect(JSON.stringify(option)).not.toMatch(/secret\.example|PRIVATE_STUDIO_KEY/);
+  });
+
+  it("does not repeat a credential-bearing provider name in a model label", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "proxy_alpha"\nmodel = "Model-A"\n[model_providers.proxy_alpha]\nname = "https://secret.example.test/key=abc"\n`,
+    });
+    const catalog = await readCodexModelCatalog({ HOME: home });
+    const option = catalog.options.find((row) => row.id === "proxy_alpha::Model-A");
+    expect(option?.providerRoute?.label).toBe("proxy_alpha");
+    expect(option?.label).toBe("Model-A");
+    expect(JSON.stringify(option)).not.toContain("secret.example");
+  });
+
+  it("keeps a reserved Codex provider name configured when its endpoint is remote", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "ollama"\nmodel = "Model-A"\n[model_providers.ollama]\nname = "Remote Gateway"\nbase_url = "https://remote.example.test/v1"\n`,
+    });
+    const catalog = await readCodexModelCatalog({ HOME: home }, async () => { throw new Error("offline fixture"); });
+    const option = catalog.options.find((row) => row.id === "ollama::Model-A");
+    expect(option?.providerRoute).toMatchObject({ label: "Remote Gateway", provenance: "configured" });
+    expect(option?.providerRoute?.id).toMatch(/^configured:[a-f0-9]{16}$/);
+  });
+
+  it("keeps a newly probed reserved-provider model on its configured remote Codex route", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "ollama"\nmodel = "Seed"\n[model_providers.ollama]\nname = "Remote Gateway"\nbase_url = "https://remote.example.test/v1"\n`,
+    });
+    const catalog = await readCodexModelCatalog(
+      { HOME: home, VITEST: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" },
+      async (url) => String(url).includes("remote.example.test/v1/models")
+        ? new Response(JSON.stringify({ data: [{ id: "Seed" }] }), { status: 200 })
+        : String(url).includes(":11434/v1/models")
+          ? new Response(JSON.stringify({ data: [{ id: "M" }] }), { status: 200 })
+          : new Response("nope", { status: 500 }),
+    );
+    expect(catalog.options.find((row) => row.id === "ollama::M")?.providerRoute)
+      .toEqual(catalog.options.find((row) => row.id === "ollama::Seed")?.providerRoute);
+    expect(catalog.options.find((row) => row.id === "ollama::M")?.providerRoute)
+      .toMatchObject({ label: "Remote Gateway", provenance: "configured" });
+    expect(JSON.stringify(catalog)).not.toContain("remote.example.test");
   });
 
   it("honors CODEX_HOME over HOME and merges live /v1/models", async () => {

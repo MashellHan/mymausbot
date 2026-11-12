@@ -82,7 +82,7 @@ export function createTeamMove(deps) {
     const shown = read().moves.filter((move) => !move.told && eligible(move)).at(-1);
     if (!shown) return null;
     const phase = shown.phase === "done" ? "done" : shown.failing ? "failed" : "moving";
-    return { bot: { id: shown.bot.id, name: shown.name ?? shown.bot.name }, team: { id: shown.team.id, name: shown.team.name }, phase };
+    return { bot: { id: shown.bot.id, name: shown.name ?? shown.bot.name }, team: { id: shown.team.id, name: shown.team.name }, phase, ...(Array.isArray(shown.bots) ? { bots: shown.bots.length } : {}) };
   };
   const publish = () => { try { deps.onChange?.(view()); } catch {} };
   /** The move of this bot, changed as `change` says; the journal is written before anything acts on it. */
@@ -245,7 +245,7 @@ export function createTeamMove(deps) {
     kick,
     view,
     /** Starts moving a bot into a team; a bot already moving there goes on. */
-    start({ bot, team, source }) {
+    start({ bot, team, ...rest }) {
       const journal = read();
       const held = journal.moves.find((move) => move.bot.id === bot.id && currentSource(move));
       if (held && held.phase !== "done" && !held.stopped) {
@@ -254,7 +254,7 @@ export function createTeamMove(deps) {
       }
       const moves = journal.moves.filter((move) => move.bot.id !== bot.id || !currentSource(move))
         .map((move) => (move.phase === "done" && currentSource(move) ? { ...move, told: true } : move));
-      deps.journal.write({ v: 1, moves: [...moves, { bot, team, ...(source ? { source } : {}), phase: "copy", startedAt: now() }] });
+      deps.journal.write({ v: 1, moves: [...moves, { ...rest, bot, team, phase: "copy", startedAt: now() }] });
       publish();
       return kick();
     },

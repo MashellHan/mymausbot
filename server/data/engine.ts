@@ -20,6 +20,7 @@ import { executeNamedRead, listSourceTables, readNamedPage, verifyBaseTable, typ
 import { commitBusinessCreate, ensureRevision, readRevision } from "./revision.ts";
 import { quoteIdentifier } from "./sql-identifiers.ts";
 import { removeSourceStore, retainedStoreFile, storeFolder, DATA_DB_FILE, DATA_TMP_DIR } from "./storage.ts";
+import { tableIdentifierParts } from "./identifiers.ts";
 import {
   DataFailure,
   type BotDatabase,
@@ -515,7 +516,7 @@ class BotDb implements BotDatabase {
   }
 
   private async lookup(name: string): Promise<CatalogEntry> {
-    const parts = this.splitIdentifier(name.trim()).slice(-2);
+    const parts = (tableIdentifierParts(name) ?? this.splitIdentifier(name.trim())).slice(-2);
     const table = parts[parts.length - 1];
     const schema = parts.length === 2 ? parts[0] : null;
     if (!table) throw new DataFailure({ code: "invalid_input", message: "A table name is required." });
@@ -584,8 +585,8 @@ class BotDb implements BotDatabase {
 
   private async source(target: string): Promise<string> {
     const text = target.trim().replace(/;+\s*$/, "");
-    const looksLikeName = /^[\w."$ -]+$/.test(text) && !/\s(?:from|select|with|values)\s/i.test(text) && !/^(?:select|with|from|values|pivot|unpivot|show|describe)\b/i.test(text);
-    if (looksLikeName) return this.resolveTable(text);
+    const displayName = /^[\w."$ -]+$/.test(text) && !/\s(?:from|select|with|values)\s/i.test(text) && !/^(?:select|with|from|values|pivot|unpivot|show|describe)\b/i.test(text);
+    if (tableIdentifierParts(text) || displayName) return this.resolveTable(text);
     return `(${text}) AS omb_described`;
   }
 

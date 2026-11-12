@@ -238,7 +238,7 @@ describe("OpenAICompatDriver", () => {
     await inst.dispose();
   });
 
-  it.each(["OMB_GROQ_API_KEY", "OMB_GREENFERENCE_API_KEY", "OMB_META_API_KEY", "OMB_DEEPSEEK_API_KEY", "OMB_ANTHROPIC_API_KEY", "omb_groq_api_key"])(
+  it.each(["OMB_GROQ_API_KEY", "OMB_GREENFERENCE_API_KEY", "OMB_MODELGO_API_KEY", "OMB_META_API_KEY", "OMB_DEEPSEEK_API_KEY", "OMB_ANTHROPIC_API_KEY", "omb_groq_api_key"])(
     "does not send the desktop workspace key %s to a custom endpoint, but accepts an explicit instance key", async (name) => {
       const previous = process.env[name];
       const previousDesktop = process.env.OMB_DESKTOP_PARENT;
@@ -312,6 +312,30 @@ describe("OpenAICompatDriver", () => {
     recorder.stop();
     await inst.dispose();
   }, 20_000);
+
+  it.each([
+    ["a network failure", () => { throw new TypeError("fetch failed"); }],
+    ["a provider 503", () => new Response("overloaded", { status: 503 })],
+  ])("retries %s instead of failing the turn", async (_label, firstAnswer) => {
+    const reply = 'data: {"choices":[{"index":0,"delta":{"content":"done"}}]}\n\ndata: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n';
+    let completions = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      completions += 1;
+      return completions === 1 ? firstAnswer() : new Response(reply, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }));
+    const inst = await OpenAICompatDriver.create({
+      instanceId: "compat-retry", displayName: "Compat", enabled: true,
+      config: { url: "https://api.example.com/v1", apiKeyEnv: "OPENAI_COMPAT_API_KEY" }, environment: { OPENAI_COMPAT_API_KEY: "secret" },
+    });
+    const recorder = recordEvents(inst.adapter);
+    await inst.adapter.sendTurn({ threadId: "thread", text: "hi", model: "vendor/model" });
+    expect(await recorder.until((event) => event.type === "turn.retrying")).toMatchObject({ attempt: 1 });
+    expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
+    expect(completions).toBe(2);
+    recorder.stop();
+    await inst.dispose();
+  });
 
   it("exposes a refreshed model catalog", async () => {
     vi.stubGlobal(
