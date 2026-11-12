@@ -515,10 +515,18 @@ describe("encrypted full workspace backups", () => {
   });
 
   it("rejects authenticated credential metadata, saved auth paths, and connection-bearing config", async () => {
+    const started = performance.now();
+    const phase = (label: "setup begin" | "setup end" | "metadata begin" | "metadata end" | "path/config begin" | "path/config end") => {
+      try { console.error(`workspace-backup phase: ${label} ${Math.round(performance.now() - started)}ms`); }
+      catch { return; }
+    };
+    phase("setup begin");
     const source = directory();
     const exported = await createWorkspaceBackup(source, { password: PASSWORD });
     const staged = await stageWorkspaceBackup(source, exported.path, { password: PASSWORD });
     const base = readJson(join(source, ".backups", staged.id, "staged", "manifest.json"));
+    phase("setup end");
+    phase("metadata begin");
     for (const variant of [
       { credentials: { xaiApiKey: "secret" } },
       { summary: { ...base.summary, includesCredentials: false } },
@@ -526,6 +534,8 @@ describe("encrypted full workspace backups", () => {
       const path = encryptedPayload(source, Buffer.concat([tarEntry("manifest.json", "File", JSON.stringify({ ...base, ...variant })), tarEntry("data", "Directory"), Buffer.alloc(1024)]));
       await expect(stageWorkspaceBackup(directory(), path, { password: PASSWORD })).rejects.toThrow(/metadata/);
     }
+    phase("metadata end");
+    phase("path/config begin");
     for (const [name, content] of [
       ["team-computers.json", '{"computers":[{"id":"foreign-computer","section":"Design"}]}'],
       ["workspace-credentials.json", '{"xaiApiKey":"secret"}'],
@@ -552,6 +562,7 @@ describe("encrypted full workspace backups", () => {
       const path = encryptedPayload(source, Buffer.concat([tarEntry("manifest.json", "File", JSON.stringify(manifest)), tarEntry("data", "Directory"), ...parents.map((parent) => tarEntry(`data/${parent}`, "Directory")), tarEntry(`data/${name}`, "File", content), Buffer.alloc(1024)]));
       await expect(stageWorkspaceBackup(directory(), path, { password: PASSWORD })).rejects.toThrow(/Unsafe|connection settings|webhook credentials/);
     }
+    phase("path/config end");
   });
 
   it("retains differently cased destination auth roots and refuses them in recovery journals", async () => {
