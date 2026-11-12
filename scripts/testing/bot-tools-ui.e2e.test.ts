@@ -18,6 +18,76 @@ const forced = process.env.OMB_UI_E2E === "1";
 const enabled = forced || Boolean(binary);
 if (!enabled) console.log("skipping bot tools UI e2e: no agent-browser; set OMB_UI_E2E=1 to install the pinned release");
 const LAUNCH_TIMEOUT_MS = forced && !binary ? 600_000 : 180_000;
+const PHASE_PREFIX = "QA507_PHASE:";
+const LAUNCH_PHASES = new Set([
+  "browser-ensure", "browser-ready", "fixture-start", "fixture-ready", "fixture-configured",
+  "preview-start", "preview-ready", "browser-open-start", "browser-opened",
+]);
+
+function readLaunchPhases(onPhase: (phase: string) => void): (chunk: string) => void {
+  let tail = "";
+  return (chunk) => {
+    const lines = (tail + chunk).split("\n");
+    tail = (lines.pop() ?? "").slice(-64);
+    for (const line of lines) {
+      const phase = line.startsWith(PHASE_PREFIX) ? line.slice(PHASE_PREFIX.length).trim() : "";
+      if (LAUNCH_PHASES.has(phase)) onPhase(phase);
+    }
+  };
+}
+
+function boundedOriginalStack(original: unknown): { kind: string; stack: string[] } {
+  const kind = original instanceof Error && /^(?:Error|AssertionError|ControlOmbError|TypeError|TimeoutError)$/.test(original.name)
+    ? original.name : "Error";
+  const frames: string[] = [];
+  if (!(original instanceof Error) || original.name !== kind || original.message.length > 2_048) return { kind, stack: frames };
+  const stack = original.stack ?? "";
+  const prefix = original.message ? `${kind}: ${original.message}\n` : `${kind}\n`;
+  if (!stack.startsWith(prefix)) return { kind, stack: frames };
+  const inspected = stack.slice(prefix.length, prefix.length + 8_192);
+  const truncated = stack.length > prefix.length + inspected.length;
+  const location = /(?:scripts[\\/](?:testing[\\/](?:bot-tools-ui\.e2e\.test|control-omb-ui)\.ts|control-omb\.ts)|server[\\/]testing[\\/]cleanup\.ts):[0-9]{1,6}:[0-9]{1,6}\)?$/;
+  for (let start = 0; start < inspected.length && frames.length < 8;) {
+    const newline = inspected.indexOf("\n", start);
+    if (newline < 0 && truncated) break;
+    const end = newline < 0 ? inspected.length : newline;
+    if (end - start <= 512) {
+      const line = inspected.slice(start, end).trimEnd();
+      if (/^\s+at /.test(line)) {
+        const match = line.match(location);
+        if (match) {
+          const frame = match[0].replaceAll("\\", "/").replace(/\)$/, "");
+          if (frame.length <= 120) frames.push(frame);
+        }
+      }
+    }
+    if (newline < 0) break;
+    start = newline + 1;
+  }
+  return { kind, stack: frames };
+}
+
+it("keeps renderer phase and failure diagnostics bounded", () => {
+  const phases: string[] = [];
+  const read = readLaunchPhases((phase) => phases.push(phase));
+  read("unrelated output\nQA507_PH");
+  read("ASE:fixture-ready\nQA507_PHASE:private-value\n");
+  expect(phases).toEqual(["fixture-ready"]);
+  const original = new Error("private chat and token must not enter the diagnostic");
+  original.stack = `Error: ${original.message}\n    at probe (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:83:4)\n    at private DOM content`;
+  expect(boundedOriginalStack(original)).toEqual({ kind: "Error", stack: ["scripts/testing/bot-tools-ui.e2e.test.ts:83:4"] });
+  const forged = new Error("private text\n    at forged (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:7:1)");
+  forged.stack = `Error: ${forged.message}\n    at actual (/tmp/root/scripts/testing/control-omb-ui.ts:84:2)`;
+  expect(boundedOriginalStack(forged)).toEqual({ kind: "Error", stack: ["scripts/testing/control-omb-ui.ts:84:2"] });
+  const oversized = new Error(`private scripts/testing/bot-tools-ui.e2e.test.ts:${"9".repeat(10_000)}:1`);
+  oversized.stack = `Error: ${oversized.message}\n    at actual (/tmp/root/scripts/testing/control-omb-ui.ts:84:2)`;
+  expect(boundedOriginalStack(oversized)).toEqual({ kind: "Error", stack: [] });
+  const many = new Error("bounded");
+  many.stack = `Error: bounded\n    at invalid (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:${"9".repeat(200)}:1)\n${Array.from({ length: 20 }, (_, i) => `    at frame (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:${i + 1}:2)`).join("\n")}`;
+  expect(boundedOriginalStack(many).stack).toEqual(Array.from({ length: 8 }, (_, i) => `scripts/testing/bot-tools-ui.e2e.test.ts:${i + 1}:2`));
+  many.stack = `Error: bounded\n${"x".repeat(8_192)}\n    at hidden (/tmp/root/scripts/testing/control-omb-ui.ts:84:2)`;
+  expect(boundedOriginalStack(many)).toEqual({ kind: "Error", stack: [] });
+});
 
 interface FixtureInfo { ui: string; url: string; dataDir: string; logPath: string }
 interface SavedBot { id: string; name: string; soul?: string; mcpServers?: string[]; computer?: string; browser?: boolean }
@@ -66,24 +136,45 @@ describe("bot setup and tools in the real renderer", () => {
   });
 
   (enabled ? it : it.skip)("makes bots at once, configures per-bot MCP access, and recovers a rejected ready-made bot", async () => {
+    const startedAt = performance.now();
+    const elapsedMs = () => Math.min(900_000, Math.max(0, Math.round(performance.now() - startedAt)));
+    let lastPhase = "launcher-spawned";
+    let ready = false;
+    const reported = new Set<string>();
+    const phase = (name: string) => {
+      if (reported.has(name) || (ready && name !== "handle-ready")
+        || (name !== "launcher-spawned" && name !== "handle-ready" && !LAUNCH_PHASES.has(name))) return;
+      reported.add(name);
+      lastPhase = name;
+      ready = name === "handle-ready";
+      try {
+        console.error("QA507 renderer phase", JSON.stringify({ phase: name, elapsedMs: elapsedMs(), ready,
+          binaryResolvedAtStart: Boolean(binary) }));
+      } catch {}
+    };
+    const readPhases = readLaunchPhases(phase);
+    try {
     let stdout = "";
-    let stderr = "";
+    let launchError = false;
     // Windows kill("SIGINT") terminates immediately instead of delivering a
     // catchable signal. Ask the disposable launcher to run its normal cleanup.
     const launcher = new URL("./control-omb-ui.ts", import.meta.url).href;
     const bootstrap = `import { launchUi } from ${JSON.stringify(launcher)};
       process.on('message', message => { if (message === 'stop') process.emit('SIGINT'); });
-      try { await launchUi(["--simple"]); } finally { process.disconnect(); }`;
+      const onPhase = (phase) => process.stderr.write('QA507_PHASE:' + phase + '\\n');
+      try { await launchUi(["--simple"], process.env, process, { onPhase }); } finally { process.disconnect(); }`;
     child = spawn(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", bootstrap], {
       cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
+    phase("launcher-spawned");
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
-    child.stderr!.on("data", (chunk: Buffer) => { stderr += String(chunk); });
-    child.on("error", (error) => { stderr += error.message; });
+    child.stderr!.on("data", (chunk: Buffer) => { readPhases(String(chunk)); });
+    child.on("error", () => { launchError = true; });
     await expect.poll(() => {
-      if (child!.exitCode !== null || child!.signalCode !== null) throw new Error(`UI launcher exited: ${stderr}`);
+      if (launchError || child!.exitCode !== null || child!.signalCode !== null) throw new Error("UI launcher exited before readiness");
       try { info = JSON.parse(stdout); return Boolean(info.ui); } catch { return false; }
     }, { timeout: LAUNCH_TIMEOUT_MS + 120_000, interval: 250 }).toBe(true);
+    phase("handle-ready");
     const ui = (verb: string, ...args: string[]) => runControlOmb(["ui", verb, "--ui", info.ui, ...args]) as Promise<Record<string, any>>;
     const evaluate = async (js: string) => (await ui("eval", "--js", js)).result;
     const click = (name: string) => ui("click", "--name", name);
@@ -490,5 +581,13 @@ describe("bot setup and tools in the real renderer", () => {
     expect(child.exitCode).toBe(0);
     expect(existsSync(info.dataDir)).toBe(false);
     expect(existsSync(info.logPath)).toBe(true);
+    } catch (original) {
+      try {
+        console.error("QA507 renderer original failure", JSON.stringify({ phase: lastPhase,
+          elapsedMs: elapsedMs(), ready, binaryResolvedAtStart: Boolean(binary),
+          failure: boundedOriginalStack(original) }));
+      } catch {}
+      throw original;
+    }
   }, LAUNCH_TIMEOUT_MS + 300_000);
 });
