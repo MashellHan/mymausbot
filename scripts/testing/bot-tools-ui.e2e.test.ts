@@ -277,6 +277,7 @@ describe("bot setup and tools in the real renderer", () => {
     // The panel's Usage row shows what this bot has spent and opens Settings on Usage & billing.
     const openPanelUsage = async () => {
       await openPanel();
+      await click("Bot settings");
       const probeInstalled = await diagnosticEval(`(() => {
         window.__qa507UsageProbe?.close();
         const state = () => {
