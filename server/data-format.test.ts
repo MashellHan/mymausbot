@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,18 +8,27 @@ import {
   checkDataFormat, DATA_FORMAT, DATA_FORMAT_FILE, DataFormatError, dataFormatStepProblem, readDataFormat, stampDataFormat, type ReleasedDataFormat,
 } from "./data-format.ts";
 import { freePortBlock } from "./testing/ports.ts";
+import { waitForExit } from "./testing/cleanup.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const { version: VERSION } = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { version: string };
 const released = JSON.parse(readFileSync(join(import.meta.dirname, "data-format-released.json"), "utf8")) as ReleasedDataFormat;
 const dirs: string[] = [];
+const children = new Map<string, ChildProcess>();
 const dataDir = () => {
   const dir = mkdtempSync(join(tmpdir(), "omb-data-format-"));
   dirs.push(dir);
   return dir;
 };
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+afterEach(async () => {
+  let runningChild: string | undefined;
+  for (const dir of dirs.splice(0)) {
+    const child = children.get(dir);
+    if (child) await waitForExit(child, { signal: "SIGTERM" });
+    if (children.has(dir)) { runningChild = dir; continue; }
+    rmSync(dir, { recursive: true, force: true });
+  }
+  if (runningChild) throw new Error(`fixture child still owns ${runningChild}`);
 });
 
 describe("the N-1 rule", () => {
@@ -171,10 +180,10 @@ describe("the data folder's format marker", () => {
 });
 
 describe("a server starting on a data folder", () => {
-  async function start(dir: string, until: () => boolean): Promise<{ code: number | null; stderr: string }> {
+  const serverBootstrap = `process.on('message', message => { if (message === 'stop') process.emit('SIGTERM'); });
+    await import(${JSON.stringify(new URL("./index.ts", import.meta.url).href)});`;
+  async function start(dir: string, until: () => boolean, bootstrap = serverBootstrap, deadlineMs = 45_000): Promise<{ code: number | null; stderr: string }> {
     const port = await freePortBlock([0, 1]);
-    const bootstrap = `process.on('message', message => { if (message === 'stop') process.emit('SIGTERM'); });
-      await import(${JSON.stringify(new URL("./index.ts", import.meta.url).href)});`;
     const child = spawn(process.execPath, ["--input-type=module", "-e", bootstrap], {
       cwd: ROOT,
       env: {
@@ -195,12 +204,31 @@ describe("a server starting on a data folder", () => {
     });
     let stderr = "";
     child.stderr!.on("data", (chunk) => (stderr += chunk));
-    const exited = new Promise<number | null>((resolve) => child.once("close", resolve));
-    const watch = setInterval(() => { if (ready && until()) { clearInterval(watch); child.send("stop"); } }, 50);
+    let fail!: (error: unknown) => void;
+    const failed = new Promise<never>((_, reject) => { fail = reject; });
+    child.on("error", fail);
+    children.set(dir, child);
+    const exited = new Promise<number | null>((resolve) => child.once("close", (code) => {
+      children.delete(dir);
+      child.off("error", fail);
+      resolve(code);
+    }));
+    let sent = false;
+    const watch = setInterval(() => {
+      if (!ready || sent) return;
+      try {
+        if (!until()) return;
+        sent = true;
+        child.send("stop", (error) => { if (error) fail(error); });
+      } catch (error) { fail(error); }
+    }, 50);
+    const deadline = setTimeout(() => fail(new Error(`fixture server did not stop within ${deadlineMs} ms`)), deadlineMs);
     try {
-      return { code: await exited, stderr };
+      return { code: await Promise.race([exited, failed]), stderr };
     } finally {
       clearInterval(watch);
+      clearTimeout(deadline);
+      if (children.has(dir)) await waitForExit(child, { signal: "SIGTERM" });
     }
   }
 
@@ -247,5 +275,22 @@ describe("a server starting on a data folder", () => {
     const { code } = await start(dir, () => existsSync(marker));
     expect(code).toBe(0);
     expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({ format: DATA_FORMAT.writes, writtenBy: VERSION });
+  }, 60_000);
+
+  it("stops a child that wrote a marker but never reached readiness", async () => {
+    const dir = dataDir();
+    const data = join(dir, "data");
+    mkdirSync(data);
+    writeFileSync(join(data, DATA_FORMAT_FILE), "{}");
+    await expect(start(dir, () => true, "setInterval(() => {}, 1_000)", 100)).rejects.toThrow("fixture server did not stop within 100 ms");
+    expect(children.has(dir)).toBe(false);
+  }, 60_000);
+
+  it("preserves a disconnected IPC send failure after closing its child", async () => {
+    const dir = dataDir();
+    const bootstrap = `console.log('openmausbot server on http://127.0.0.1:' + process.env.OMB_PORT);
+      process.disconnect(); setInterval(() => {}, 1_000);`;
+    await expect(start(dir, () => true, bootstrap, 5_000)).rejects.toMatchObject({ code: "ERR_IPC_CHANNEL_CLOSED" });
+    expect(children.has(dir)).toBe(false);
   }, 60_000);
 });
