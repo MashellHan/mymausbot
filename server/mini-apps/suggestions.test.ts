@@ -39,6 +39,31 @@ describe("Mini App suggestions", () => {
     expect(() => f.read()).not.toThrow();
   });
 
+  it("uses current publisher permission without claiming publication or development", () => {
+    const f = fixture();
+    f.setApps([
+      app("owner-only"), app("other-bot", { publisherBotIds: ["other"] }),
+      app("later", { publisherBotIds: ["bot"], createdAt: 2 }),
+      app("earlier", { publisherBotIds: ["bot"] }),
+      app("archived", { publisherBotIds: ["bot"], status: "archived" }),
+    ]);
+    expect(f.read()).toMatchObject({ refreshPending: false, suggestions: [
+      { app: { id: "earlier" }, reason: { kind: "publisher-grant" } },
+      { app: { id: "later" }, reason: { kind: "publisher-grant" } },
+    ] });
+    f.setApps([app("later", { publisherBotIds: [] }), app("earlier", { publisherBotIds: ["bot"], responsibleBotId: "bot" })]);
+    expect(f.read().suggestions.map(({ app, reason }) => [app.id, reason.kind])).toEqual([["earlier", "responsible"]]);
+    f.setDeveloped(["later"]);
+    expect(f.read().suggestions.map(({ app, reason }) => [app.id, reason.kind])).toEqual([
+      ["earlier", "responsible"], ["later", "developed"],
+    ]);
+    f.setApps([app("owner-only"), ...["d", "b", "a", "c"].map((id) => app(id, { publisherBotIds: ["bot"] }))]);
+    f.setDeveloped([]);
+    expect(f.read().suggestions.map(({ app, reason }) => [app.id, reason.kind])).toEqual([
+      ["a", "publisher-grant"], ["b", "publisher-grant"], ["c", "publisher-grant"],
+    ]);
+  });
+
   it("invalidates a warm ranking for a new app and a changed Bot role", async () => {
     const generateText = vi.fn(async (prompt: string) => {
       const input = JSON.parse(prompt) as { apps: Array<{ id: string; capabilities: string[] }> };
@@ -58,6 +83,10 @@ describe("Mini App suggestions", () => {
     expect(f.read().refreshPending).toBe(true);
     await new Promise(setImmediate);
     expect(generateText).toHaveBeenCalledTimes(3);
+    f.setApps([app("older"), app("new", { createdAt: 2, updatedAt: 2, publisherBotIds: ["bot"] })]);
+    expect(f.read().refreshPending).toBe(true);
+    await new Promise(setImmediate);
+    expect(generateText).toHaveBeenCalledTimes(4);
   });
 
   it("warms asynchronously, validates exact task and capability evidence, deduplicates and caps at three", async () => {

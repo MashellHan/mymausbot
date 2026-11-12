@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, Lightbulb, Loader2, Sparkles } from "lucide-react";
 import type { MiniAppSuggestionReason, MiniAppSuggestionsRequest, MiniAppSuggestionsResult } from "../../shared/mini-apps";
 import type { Routine, RoutineRun, RoutineRunOn } from "@/lib/routines";
 import { t } from "@/lib/i18n";
@@ -40,8 +40,12 @@ function OverviewModel({ bot }: { bot: Bot }) {
 }
 
 function suggestionReason(reason: MiniAppSuggestionReason): string {
-  return reason.kind === "task" ? reason.capability
-    : t(reason.kind === "responsible" ? "computer.miniApps.suggested.responsible" : "computer.miniApps.suggested.developed");
+  switch (reason.kind) {
+    case "task": return reason.capability;
+    case "responsible": return t("computer.miniApps.suggested.responsible");
+    case "developed": return t("computer.miniApps.suggested.developed");
+    case "publisher-grant": return t("computer.miniApps.suggested.publisherGrant");
+  }
 }
 
 export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps }: {
@@ -92,8 +96,9 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
     <OverviewModel key={`model:${bot.id}`} bot={bot} />
     <RoutinesSection key={bot.id} bot={bot} routines={routines} runs={runs} defaultRunOn={defaultRunOn} compact />
     <section aria-label={t("model.suggested")}>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-[15px] font-semibold text-ink">{t("model.suggested")}</h2>
+      <div className="mb-3 flex items-center gap-3 px-1">
+        <Lightbulb size={17} className="shrink-0 text-ink-secondary" aria-hidden="true" />
+        <h2 data-overview-section-title="" className="min-w-0 flex-1 text-[15px] font-semibold text-ink">{t("model.suggested")}</h2>
         {owner === true && nativeGuard && <button type="button" onClick={() => onOpenApps()} aria-label={t("computer.miniApps.suggested.more")}
           className="rounded-sm text-[12px] text-ink-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("apps.more")}</button>}
       </div>

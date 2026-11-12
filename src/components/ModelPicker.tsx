@@ -842,9 +842,11 @@ export function ModelPicker({
   return (
     <div ref={rootRef} className={cn(contained ? "w-full" : "relative", className)}>
       {inlineSettings ? <ModelSettingsPanel bot={shown} instances={pickerInstances} summary={summary} attention={attention}
+        busyReason={shown.busy && locked ? t(threadId ? "model.threadBusy" : "model.busy") : undefined}
+        reasoningWhileBusy={Boolean(shown.busy && active && !active.policy && offersReasoning(state, active, selection, threadId ?? bot.threadId))}
         disabled={locked || loadingInstances || refreshingId !== null} onPick={pick} onManage={remote ? undefined : openEngines}>
         <EffortRow compact wide bot={shown} threadId={threadId}
-          updateBotDefault={Boolean(threadId && simpleUpdatesBotDefault && (simpleView || scope === "bot"))}
+          updateBotDefault={shown.busy ? busyUpdatesBotDefault : Boolean(threadId && simpleUpdatesBotDefault && (simpleView || scope === "bot"))}
           label={<span className="text-[13px] text-ink-secondary">{active?.capabilities?.modelVariants ? t("model.simple.reasoning") : t("model.effort.label")}</span>} />
         {contextWindow}
       </ModelSettingsPanel> : contained ? (
