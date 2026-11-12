@@ -20,13 +20,12 @@ function suggestionReason(reason: MiniAppSuggestionReason): string {
     : t(reason.kind === "responsible" ? "computer.miniApps.suggested.responsible" : "computer.miniApps.suggested.developed");
 }
 
-export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApp, onOpenApps }: {
+export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps }: {
   bot: Bot;
   routines: Routine[];
   runs: RoutineRun[];
   defaultRunOn: RoutineRunOn;
-  onOpenApp: (id: string) => void;
-  onOpenApps: () => void;
+  onOpenApps: (id?: string) => void;
 }) {
   const owner = useOwnerOrAdmin();
   const nativeGuard = miniAppNativeFrameGuard();
@@ -76,7 +75,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApp,
     <section aria-label={t("model.suggested")}>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-[15px] font-semibold text-ink">{t("model.suggested")}</h2>
-        {owner === true && nativeGuard && <button type="button" onClick={onOpenApps} aria-label={t("computer.miniApps.suggested.more")}
+        {owner === true && nativeGuard && <button type="button" onClick={() => onOpenApps()} aria-label={t("computer.miniApps.suggested.more")}
           className="rounded-sm text-[12px] text-ink-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("apps.more")}</button>}
       </div>
       {owner !== true || !nativeGuard ? <p className="text-[12px] text-ink-secondary">{t(owner === null ? "computer.miniApps.loading" : owner === false ? "computer.miniApps.accessEnded" : "computer.miniApps.desktopRequired")}</p>
@@ -84,7 +83,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApp,
         : !current?.data || current.data.refreshPending && suggestions.length === 0 ? <p role="status" className="flex items-center gap-2 text-[12px] text-ink-secondary"><Loader2 size={14} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>
         : suggestions.length === 0 ? <p className="text-[12px] text-ink-secondary">{t("computer.miniApps.suggested.empty")}</p>
         : <div className="grid grid-cols-2 gap-2 @min-[34rem]/botoverview:grid-cols-3">
-          {suggestions.map(({ app, reason }) => <button key={app.id} type="button" title={miniAppDisplayName(app)} onClick={() => onOpenApp(app.id)}
+          {suggestions.map(({ app, reason }) => <button key={app.id} type="button" title={miniAppDisplayName(app)} onClick={() => onOpenApps(app.id)}
             className="flex min-w-0 items-center gap-2.5 rounded-lg border border-hairline/50 bg-card px-3 py-2 text-left text-[13px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent">
             <MiniAppIcon kind={iconKindForApp(app)} />
             <span className="min-w-0 flex-1">

@@ -1305,8 +1305,7 @@ export function ComputerPanel({
       ) : (
       <div {...tabPanelProps("computer")} className={cn("@container/botoverview flex-1 overflow-y-auto px-5 pb-5", TAB_PANEL_FOCUS)}>
         <BotOverviewIntro bot={bot} routines={botRoutines} runs={state.routineRuns} defaultRunOn={cloudRoutineReady ? "cloud" : "maus"}
-          onOpenApps={() => { setRequestedApp(undefined); selectPanelView("mini-apps"); }}
-          onOpenApp={(id) => { setRequestedApp((current) => ({ id, nonce: (current?.nonce ?? 0) + 1 })); selectPanelView("mini-apps"); }} />
+          onOpenApps={(id) => { setRequestedApp((current) => id ? { id, nonce: (current?.nonce ?? 0) + 1 } : undefined); selectPanelView("mini-apps"); }} />
         <section className="mt-6 border-t border-hairline/50 pt-2" data-testid="bot-overview-computer">
           <button type="button" aria-expanded={computerExpanded} aria-controls="bot-overview-screen" onClick={() => setComputerExpanded((open) => !open)}
             className="flex w-full min-w-0 items-center gap-3 rounded-lg px-1 py-2 text-left hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent">

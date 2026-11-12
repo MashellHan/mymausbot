@@ -32,11 +32,10 @@ const response = (selected: Bot, suggestions: MiniAppSuggestion[] = [], refreshP
 
 let root: Root;
 let host: HTMLDivElement;
-const onOpenApp = vi.fn();
 const onOpenApps = vi.fn();
 const render = async (selected = bot()) => {
   await act(async () => { root.render(createElement(BotOverviewIntro, {
-    bot: selected, routines: [], runs: [], defaultRunOn: "maus", onOpenApp, onOpenApps,
+    bot: selected, routines: [], runs: [], defaultRunOn: "maus", onOpenApps,
   })); });
 };
 const card = (name: string) => host.querySelector<HTMLButtonElement>(`button[title="${name}"]`);
@@ -47,7 +46,6 @@ beforeEach(() => {
   fixture.api.mockReset();
   fixture.owner = true;
   fixture.visible = true;
-  onOpenApp.mockReset();
   onOpenApps.mockReset();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ogb", { app: { blocksOpaqueFrameNavigation: true } });
@@ -79,8 +77,8 @@ describe("Bot overview suggestions", () => {
     expect(card("Report")?.textContent).toContain("Developed");
     expect(card("Expenses")?.textContent).toContain("Summarize expenses");
     await act(async () => { card("Budget")!.click(); more()!.click(); });
-    expect(onOpenApp).toHaveBeenCalledWith("Budget");
-    expect(onOpenApps).toHaveBeenCalledOnce();
+    expect(onOpenApps).toHaveBeenNthCalledWith(1, "Budget");
+    expect(onOpenApps).toHaveBeenNthCalledWith(2);
   });
 
   it("cancels the old Bot request and never shows its late response in the newly selected Bot", async () => {
