@@ -39,12 +39,32 @@ function readLaunchPhases(onPhase: (phase: string) => void): (chunk: string) => 
 function boundedOriginalStack(original: unknown): { kind: string; stack: string[] } {
   const kind = original instanceof Error && /^(?:Error|AssertionError|ControlOmbError|TypeError|TimeoutError)$/.test(original.name)
     ? original.name : "Error";
-  const stack = original instanceof Error ? original.stack ?? "" : "";
-  const location = /(?:scripts[\\/](?:testing[\\/](?:bot-tools-ui\.e2e\.test|control-omb-ui)\.ts|control-omb\.ts)|server[\\/]testing[\\/]cleanup\.ts):\d+:\d+/;
-  return { kind, stack: stack.split("\n").flatMap((line) => {
-    const match = line.match(location);
-    return match ? [match[0].replaceAll("\\", "/")] : [];
-  }).slice(0, 8) };
+  const frames: string[] = [];
+  if (!(original instanceof Error) || original.name !== kind || original.message.length > 2_048) return { kind, stack: frames };
+  const stack = original.stack ?? "";
+  const prefix = original.message ? `${kind}: ${original.message}\n` : `${kind}\n`;
+  if (!stack.startsWith(prefix)) return { kind, stack: frames };
+  const inspected = stack.slice(prefix.length, prefix.length + 8_192);
+  const truncated = stack.length > prefix.length + inspected.length;
+  const location = /(?:scripts[\\/](?:testing[\\/](?:bot-tools-ui\.e2e\.test|control-omb-ui)\.ts|control-omb\.ts)|server[\\/]testing[\\/]cleanup\.ts):[0-9]{1,6}:[0-9]{1,6}\)?$/;
+  for (let start = 0; start < inspected.length && frames.length < 8;) {
+    const newline = inspected.indexOf("\n", start);
+    if (newline < 0 && truncated) break;
+    const end = newline < 0 ? inspected.length : newline;
+    if (end - start <= 512) {
+      const line = inspected.slice(start, end).trimEnd();
+      if (/^\s+at /.test(line)) {
+        const match = line.match(location);
+        if (match) {
+          const frame = match[0].replaceAll("\\", "/").replace(/\)$/, "");
+          if (frame.length <= 120) frames.push(frame);
+        }
+      }
+    }
+    if (newline < 0) break;
+    start = newline + 1;
+  }
+  return { kind, stack: frames };
 }
 
 it("keeps renderer phase and failure diagnostics bounded", () => {
@@ -54,8 +74,19 @@ it("keeps renderer phase and failure diagnostics bounded", () => {
   read("ASE:fixture-ready\nQA507_PHASE:private-value\n");
   expect(phases).toEqual(["fixture-ready"]);
   const original = new Error("private chat and token must not enter the diagnostic");
-  original.stack = "Error: private chat and token\n    at probe (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:83:4)\n    at private DOM content";
+  original.stack = `Error: ${original.message}\n    at probe (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:83:4)\n    at private DOM content`;
   expect(boundedOriginalStack(original)).toEqual({ kind: "Error", stack: ["scripts/testing/bot-tools-ui.e2e.test.ts:83:4"] });
+  const forged = new Error("private text\n    at forged (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:7:1)");
+  forged.stack = `Error: ${forged.message}\n    at actual (/tmp/root/scripts/testing/control-omb-ui.ts:84:2)`;
+  expect(boundedOriginalStack(forged)).toEqual({ kind: "Error", stack: ["scripts/testing/control-omb-ui.ts:84:2"] });
+  const oversized = new Error(`private scripts/testing/bot-tools-ui.e2e.test.ts:${"9".repeat(10_000)}:1`);
+  oversized.stack = `Error: ${oversized.message}\n    at actual (/tmp/root/scripts/testing/control-omb-ui.ts:84:2)`;
+  expect(boundedOriginalStack(oversized)).toEqual({ kind: "Error", stack: [] });
+  const many = new Error("bounded");
+  many.stack = `Error: bounded\n    at invalid (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:${"9".repeat(200)}:1)\n${Array.from({ length: 20 }, (_, i) => `    at frame (/tmp/root/scripts/testing/bot-tools-ui.e2e.test.ts:${i + 1}:2)`).join("\n")}`;
+  expect(boundedOriginalStack(many).stack).toEqual(Array.from({ length: 8 }, (_, i) => `scripts/testing/bot-tools-ui.e2e.test.ts:${i + 1}:2`));
+  many.stack = `Error: bounded\n${"x".repeat(8_192)}\n    at hidden (/tmp/root/scripts/testing/control-omb-ui.ts:84:2)`;
+  expect(boundedOriginalStack(many)).toEqual({ kind: "Error", stack: [] });
 });
 
 interface FixtureInfo { ui: string; url: string; dataDir: string; logPath: string }
