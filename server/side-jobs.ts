@@ -189,7 +189,8 @@ export function createSideJobs(deps: SideJobsDeps): SideJobs {
       if (!bot || !own || deps.refusal(own)) return null;
       // The review's changes are written with the bot's own skill tools, whoever read the conversation.
       if (job === "skill-review" && own.adapter.capabilities.agentsMcp !== true) return null;
-      const call = ownCall(job, own);
+      // Only this native text path excludes tools and rejects returned tool calls.
+      const call = job === "mini-app-suggestions" && own.driverKind !== "openai-compat" ? undefined : ownCall(job, own);
       if (call) {
         // The summary belongs to a turn that already passed the spend limit and is not booked on its own.
         if (job === "compaction") return { via: "engine", generateText: call };
@@ -202,7 +203,7 @@ export function createSideJobs(deps: SideJobsDeps): SideJobs {
       }
       if (!helperModelAllowed(bot)) return null;
       const helper = usableHelper();
-      if (!helper) return null;
+      if (!helper || (job === "mini-app-suggestions" && helper.instance.driverKind !== "openai-compat")) return null;
       return { via: "helper", generateText: booked(job, bot, helper.instance, helper.call, { kind: "helper", botId: bot.id, job }, () => (helper.model ? { model: helper.model } : {})) };
     },
   };

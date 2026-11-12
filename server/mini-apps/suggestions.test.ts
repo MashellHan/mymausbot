@@ -86,6 +86,33 @@ describe("Mini App suggestions", () => {
     expect(f.read().suggestions.map(({ app }) => app.id)).toEqual(["a"]);
   });
 
+  it("aborts a stalled writer at the full deadline and ignores its late answer", async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (value: string) => void;
+      let signal: AbortSignal | undefined;
+      const generateText = vi.fn((_prompt: string, options?: { signal?: AbortSignal }) => {
+        signal = options?.signal;
+        return new Promise<string>((resolve) => { finish = resolve; });
+      });
+      const f = fixture(() => ({ via: "engine", generateText }));
+      f.setApps([app("a", { responsibleBotId: "bot" }), app("b")]);
+      expect(f.read().refreshPending).toBe(true);
+      await Promise.resolve();
+      expect(generateText).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(signal?.aborted).toBe(true);
+      expect(f.read()).toMatchObject({ refreshPending: false, suggestions: [{ app: { id: "a" }, reason: { kind: "responsible" } }] });
+      finish(JSON.stringify({ matches: [{ appId: "b", capability: "Analyze inventory and prepare stock reports", taskPhrase: "stock report" }] }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.read().suggestions.map(({ app }) => app.id)).toEqual(["a"]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(f.read().refreshPending).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses stale Bot tasks and rejects model IDs or reasons absent from current metadata", async () => {
     const f = fixture(() => ({ via: "engine", generateText: async () => JSON.stringify({ matches: [
       { appId: "missing", capability: "Analyze inventory and prepare stock reports", taskPhrase: "stock report" },

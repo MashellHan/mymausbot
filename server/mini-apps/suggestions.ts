@@ -65,11 +65,19 @@ export class MiniAppSuggestions {
           "Never infer responsibility, development, permissions, or a capability absent from this input.",
         bot: { title: bot.title.slice(0, 160), description: bot.description.slice(0, 500), skills: bot.assignedSkills?.slice(0, 20) ?? [] },
         task: task.title.slice(0, 80), apps: candidates.map((app) => ({ id: app.id, capabilities: capabilities(app) })) });
-        void Promise.resolve().then(() => { actor.assertActive(); return writer.generateText(prompt, { timeoutMs: 8_000 }); }).then((raw) => {
+        const abort = new AbortController();
+        const deadline = new Promise<never>((_, reject) => {
+          abort.signal.addEventListener("abort", () => reject(new Error("Mini App suggestion deadline elapsed")), { once: true });
+        });
+        const timer = setTimeout(() => abort.abort(), 8_000);
+        void Promise.race([
+          Promise.resolve().then(() => { actor.assertActive(); return writer.generateText(prompt, { signal: abort.signal, timeoutMs: 8_000 }); }),
+          deadline,
+        ]).then((raw) => {
           const parsed = modelSchema.safeParse(JSON.parse(raw));
           this.cache.set(key, parsed.success ? parsed.data.matches : []);
           if (this.cache.size > 64) this.cache.delete(this.cache.keys().next().value!);
-        }).catch(() => { this.retryLater(key); }).finally(() => { this.running.delete(key); });
+        }).catch(() => { this.retryLater(key); }).finally(() => { clearTimeout(timer); this.running.delete(key); });
       } else this.retryLater(key);
     }
 
