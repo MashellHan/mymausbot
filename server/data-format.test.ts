@@ -182,7 +182,7 @@ describe("the data folder's format marker", () => {
 describe("a server starting on a data folder", () => {
   const serverBootstrap = `process.on('message', message => { if (message === 'stop') process.emit('SIGTERM'); });
     await import(${JSON.stringify(new URL("./index.ts", import.meta.url).href)});`;
-  async function start(dir: string, until: () => boolean, bootstrap = serverBootstrap, deadlineMs = 45_000): Promise<{ code: number | null; stderr: string }> {
+  async function start(dir: string, until: (child: ChildProcess) => boolean, bootstrap = serverBootstrap, deadlineMs = 45_000): Promise<{ code: number | null; stderr: string }> {
     const port = await freePortBlock([0, 1]);
     const child = spawn(process.execPath, ["--input-type=module", "-e", bootstrap], {
       cwd: ROOT,
@@ -217,7 +217,7 @@ describe("a server starting on a data folder", () => {
     const watch = setInterval(() => {
       if (!ready || sent) return;
       try {
-        if (!until()) return;
+        if (!until(child)) return;
         sent = true;
         child.send("stop", (error) => { if (error) fail(error); });
       } catch (error) { fail(error); }
@@ -290,7 +290,7 @@ describe("a server starting on a data folder", () => {
     const dir = dataDir();
     const bootstrap = `console.log('openmausbot server on http://127.0.0.1:' + process.env.OMB_PORT);
       process.disconnect(); setInterval(() => {}, 1_000);`;
-    await expect(start(dir, () => true, bootstrap, 5_000)).rejects.toMatchObject({ code: "ERR_IPC_CHANNEL_CLOSED" });
+    await expect(start(dir, (child) => !child.connected, bootstrap, 5_000)).rejects.toMatchObject({ code: "ERR_IPC_CHANNEL_CLOSED" });
     expect(children.has(dir)).toBe(false);
   }, 60_000);
 });
