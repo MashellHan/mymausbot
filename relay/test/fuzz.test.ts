@@ -6,6 +6,7 @@ import { after, before, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import { Close, SUBPROTOCOL } from "../src/wire.ts";
 import { Client, fakeHost, freshIp, mintToken, phoneHello, sleep, splicedPair, startTestRelay, type TestRelay } from "./helpers.ts";
+import { captureTcpState } from "./tcp-snapshot.ts";
 
 /** How long the random campaign runs: CI gives 20 s to a pull request and 10 min to the nightly run. */
 const FUZZ_MS = Number(process.env.RELAY_FUZZ_MS) || 3_000;
@@ -64,47 +65,87 @@ function strangeJson(): string {
   ])();
 }
 
+interface FuzzProgress {
+  startedAt: number;
+  attempted: number;
+  opened: number;
+  completedCloses: number;
+  inFlight: number;
+  reportedOpenFailure: boolean;
+}
+
 /** One random socket: a first message that is never valid, then (sometimes) more. Returns how the relay closed it. */
-async function fuzzOne(): Promise<number> {
-  const client = await Client.open(t.url, pick(PATHS));
-  const valid = pick([
-    JSON.stringify({ t: "auth", v: 1, token: mintToken(t.key, { exp: 1 }) }),
-    JSON.stringify({ t: "phone", v: 1, hid: randomBytes(16).toString("base64url"), adm: randomBytes(32).toString("base64url") }),
-    JSON.stringify({ t: "data", v: 1, sid: randomBytes(16).toString("base64url"), token: "x.y" }),
-  ]);
-  const sends = 1 + randomInt(3);
-  for (let i = 0; i < sends && client.ws.readyState === WebSocket.OPEN; i++) {
-    switch (randomInt(6)) {
-      case 0:
-        client.sendBinary(randomBytes(randomInt(5_000)));
-        break;
-      case 1:
-        client.ws.send(randomBytes(1 + randomInt(200)), { binary: false });
-        break;
-      case 2:
-        client.ws.send(mutate(valid), { binary: false });
-        break;
-      case 3:
-        client.send(strangeJson());
-        break;
-      case 4:
-        client.ws.send(randomBytes(4_097 + randomInt(65_000)), { binary: randomInt(2) === 0 });
-        break;
-      default:
-        client.ws.send(randomBytes(70_001 + randomInt(100_000)), { binary: randomInt(2) === 0 });
+async function fuzzOne(progress: FuzzProgress): Promise<number> {
+  progress.attempted++;
+  progress.inFlight++;
+  try {
+    let client: Client;
+    try {
+      client = await Client.open(t.url, pick(PATHS));
+    } catch (error) {
+      if (!progress.reportedOpenFailure) {
+        progress.reportedOpenFailure = true;
+        try {
+          const counts = {
+            elapsedMs: Math.round(performance.now() - progress.startedAt),
+            attempted: progress.attempted, opened: progress.opened,
+            completedCloses: progress.completedCloses, inFlight: progress.inFlight,
+            trackedSockets: t.relay.sockets().size, trackedHosts: t.relay.ctx.hosts.size,
+          };
+          let tcp: ReturnType<typeof captureTcpState>;
+          try { tcp = captureTcpState(t.relay.port); } catch { tcp = { unavailable: "snapshot-error" }; }
+          const code = (error as NodeJS.ErrnoException).code;
+          console.error("Relay first Client.open failure diagnostic", JSON.stringify({
+            errorCode: typeof code === "string" ? code : null, ...counts, tcp,
+          }));
+        } catch {}
+      }
+      throw error;
     }
+    progress.opened++;
+    const valid = pick([
+      JSON.stringify({ t: "auth", v: 1, token: mintToken(t.key, { exp: 1 }) }),
+      JSON.stringify({ t: "phone", v: 1, hid: randomBytes(16).toString("base64url"), adm: randomBytes(32).toString("base64url") }),
+      JSON.stringify({ t: "data", v: 1, sid: randomBytes(16).toString("base64url"), token: "x.y" }),
+    ]);
+    const sends = 1 + randomInt(3);
+    for (let i = 0; i < sends && client.ws.readyState === WebSocket.OPEN; i++) {
+      switch (randomInt(6)) {
+        case 0:
+          client.sendBinary(randomBytes(randomInt(5_000)));
+          break;
+        case 1:
+          client.ws.send(randomBytes(1 + randomInt(200)), { binary: false });
+          break;
+        case 2:
+          client.ws.send(mutate(valid), { binary: false });
+          break;
+        case 3:
+          client.send(strangeJson());
+          break;
+        case 4:
+          client.ws.send(randomBytes(4_097 + randomInt(65_000)), { binary: randomInt(2) === 0 });
+          break;
+        default:
+          client.ws.send(randomBytes(70_001 + randomInt(100_000)), { binary: randomInt(2) === 0 });
+      }
+    }
+    const { code } = await client.closedWithin(t.relay.ctx.limits.authDeadlineMs + 3_000);
+    progress.completedCloses++;
+    return code;
+  } finally {
+    progress.inFlight--;
   }
-  const { code } = await client.closedWithin(t.relay.ctx.limits.authDeadlineMs + 3_000);
-  return code;
 }
 
 describe("pre-auth fuzzing", () => {
   test(`random first messages on every path for ${FUZZ_MS} ms: each socket is refused with a protocol close code`, async () => {
     const seen = new Map<number, number>();
     const stop = performance.now() + FUZZ_MS;
+    const progress: FuzzProgress = { startedAt: stop - FUZZ_MS, attempted: 0, opened: 0, completedCloses: 0, inFlight: 0, reportedOpenFailure: false };
     let runs = 0;
     while (performance.now() < stop) {
-      const codes = await Promise.all(Array.from({ length: 16 }, () => fuzzOne()));
+      const codes = await Promise.all(Array.from({ length: 16 }, () => fuzzOne(progress)));
       for (const code of codes) {
         seen.set(code, (seen.get(code) ?? 0) + 1);
         assert.ok(REFUSED.has(code as never), `closed with ${code}`);
