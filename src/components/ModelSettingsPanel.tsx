@@ -15,6 +15,16 @@ type ProviderGroup = {
   options: ModelOption[];
 };
 
+const MODEL_TYPE_LABELS: Readonly<Record<string, string>> = {
+  antigravityAgent: "Antigravity", cerebras: "Cerebras", claudeAgent: "Claude", clineAgent: "Cline",
+  codex: "Codex", commandCodeAgent: "Command Code", copilotAgent: "GitHub Copilot", cursorAgent: "Cursor",
+  customAcp: "Custom (ACP)", deepseekAgent: "DeepSeek Harness", droidAgent: "Droid", geminiAgent: "Gemini",
+  greenference: "Greenference", grok: "Grok (API)", grokAgent: "Grok", groq: "Groq", hermesAgent: "Hermes",
+  kimiAgent: "Kimi", kiroAgent: "Kiro", meta: "Meta Muse (API)", minimax: "MiniMax (API)",
+  mistral: "Mistral (API)", museCode: "Muse Code", "openai-compat": "OpenAI-compatible",
+  opencodeGo: "OpenCode", piAgent: "pi", qwenAgent: "Qwen",
+};
+
 function providerGroups(instances: readonly InstanceInfo[]): ProviderGroup[] {
   const groups: ProviderGroup[] = [];
   for (const instance of instances) for (const option of instance.models.options) {
@@ -62,6 +72,19 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
         : previewInstance && needsSignIn(previewInstance) && !isCustomOnly(previewInstance) ? t("model.simple.signInForOwn", { name: engineDisplayName(previewInstance) }) : undefined;
   const providerName = (group: ProviderGroup) => group.route.label?.trim()
     || t(group.route.provenance === "local" ? "model.connection.local" : "model.connection.unknown");
+  const connectionName = (group: ProviderGroup) => group.instance.snapshot.account?.email?.trim()
+    || engineDisplayName(group.instance).trim();
+  const providerLabels = groups.map((group) => {
+    const name = providerName(group);
+    const matching = groups.filter((other) => providerName(other) === name);
+    if (matching.length === 1) return name;
+    const connection = connectionName(group);
+    const label = connection && connection !== name ? `${name} · ${connection}` : name;
+    const ambiguous = matching.filter((other) => connectionName(other) === connection);
+    return ambiguous.length > 1 ? `${label} · ${ambiguous.indexOf(group) + 1}` : label;
+  });
+  const modelTypeName = (kind: string) => (Object.hasOwn(MODEL_TYPE_LABELS, kind) ? MODEL_TYPE_LABELS[kind] : undefined)
+    ?? t("model.type.unknown");
 
   return <div data-model-settings className="space-y-3">
     <label className="flex items-center justify-between gap-3">
@@ -69,20 +92,16 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
       <Select size="sm" variant="quiet" className="w-[65%]" aria-label={t("model.source")}
         aria-describedby={busyReason ? busyReasonId : undefined} value={source?.key ?? "current"} disabled={disabled}
         onChange={(event) => setProviderKey(event.target.value)}>
-        {!source && <option value="current" disabled>{t("model.connection.unknown")} · {selection.instanceId}</option>}
-        {groups.map((group) => {
-          const label = providerName(group);
-          const repeated = groups.some((other) => other.key !== group.key && providerName(other) === label);
-          return <option key={group.key} value={group.key}>{repeated ? `${label} · ${group.instance.instanceId}/${group.route.id}` : label}</option>;
-        })}
+        {!source && <option value="current" disabled>{t("model.connection.unknown")}</option>}
+        {groups.map((group, index) => <option key={group.key} value={group.key}>{providerLabels[index]}</option>)}
       </Select>
     </label>
     <label className="flex items-center justify-between gap-3">
       <span className="text-[13px] text-ink-secondary">{t("model.type")}</span>
       <Select key={source?.key ?? "current"} size="sm" variant="quiet" className="w-[65%]" aria-label={t("model.type")}
         disabled={disabled || !source}>
-        {previewInstance ? <option value={previewInstance.driverKind}>{previewInstance.driverKind}</option>
-          : <option value="current" disabled>{active?.driverKind ?? t("model.simple.unavailable")}</option>}
+        {previewInstance ? <option value={previewInstance.driverKind}>{modelTypeName(previewInstance.driverKind)}</option>
+          : <option value="current" disabled>{active ? modelTypeName(active.driverKind) : t("model.simple.unavailable")}</option>}
       </Select>
     </label>
     <label className="flex items-center justify-between gap-3">
@@ -103,7 +122,12 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
     {busyReason && <p id={busyReasonId} data-model-busy-reason role="status" className="text-[12px] text-ink-secondary">
       {busyReason}{reasoningWhileBusy && ` · ${t("model.reasoningNextTurn")}`}
     </p>}
-    <fieldset disabled={Boolean(active?.policy) || (bot.busy && !reasoningWhileBusy)} className="min-w-0 space-y-3 border-0 p-0">{children}</fieldset>
+    <fieldset disabled={Boolean(active?.policy) || (bot.busy && !reasoningWhileBusy)} className="min-w-0 space-y-3 border-0 p-0">
+      {providerKey !== savedKey && <legend data-current-model-settings className="mb-2 text-[12px] text-ink-secondary">
+        {t("model.currentSettings", { model: modelName(active, selection.model, selection.variant) })}
+      </legend>}
+      {children}
+    </fieldset>
     {onManage && <button type="button" onClick={onManage}
       className="rounded-sm text-[12px] text-ink-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">{t("model.simple.manage")}</button>}
   </div>;

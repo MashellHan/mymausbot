@@ -619,6 +619,8 @@ describe("inline overview model settings", () => {
     expect(chip()).toBeNull();
     expect(select("Provider").value).toBe(provider("claude"));
     expect(select("Model type").value).toBe("claudeAgent");
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("Claude");
+    expect(host.querySelector('[data-current-model-settings]')).toBeNull();
     expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Claude Opus 5.5");
     expect(select("Reasoning effort").value).toBe("high");
     expect(select("Context window").value).toBe("256000");
@@ -642,17 +644,29 @@ describe("inline overview model settings", () => {
 
   it("previews a provider and its execution driver before committing its model", async () => {
     fixture.instances.push({ ...claude([{ id: "gpt-5.6", label: "GPT-5.6" }]),
-      instanceId: "codex", driverKind: "codex", displayName: "Codex" });
+      instanceId: "codex", driverKind: "codex", displayName: "Work account" });
+    fixture.instances.push({ ...claude([{ id: "proxy-model", label: "Proxy model" }]),
+      instanceId: "proxy", driverKind: "openai-compat", displayName: "Custom connection" });
+    fixture.instances.push({ ...claude([{ id: "future-model", label: "Future model" }]),
+      instanceId: "future", driverKind: "__proto__", displayName: "Not a model type" });
     render(scout(), options);
     await settle();
     choose(select("Provider"), provider("codex"));
     expect(fixture.dispatch).not.toHaveBeenCalled();
     expect(select("Model type").value).toBe("codex");
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("Codex");
+    expect(host.querySelector('[data-current-model-settings]')?.textContent).toContain("Current model settings · Claude Opus 5.5");
     expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Choose model");
     expect([...select("Choose model").options].map((option) => option.textContent)).not.toContain("Claude Opus 5.5");
+    choose(select("Provider"), provider("proxy"));
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("OpenAI-compatible");
+    choose(select("Provider"), provider("future"));
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("Unknown model type");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
     render({ ...scout(), id: "another-bot" }, options);
     await settle();
     expect(select("Provider").value).toBe(provider("claude"));
+    expect(host.querySelector('[data-current-model-settings]')).toBeNull();
     choose(select("Provider"), provider("codex"));
     choose(select("Choose model"), JSON.stringify(["codex", "gpt-5.6"]));
     expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
@@ -676,12 +690,14 @@ describe("inline overview model settings", () => {
       provider("claude"), provider("connection-a", "native:openai"),
       provider("connection-a", "local:omlx"), provider("connection-b", "native:openai"),
     ]);
-    expect(providers.options[0]!.textContent).toBe("Unknown connection");
-    expect([...providers.options].map((option) => option.textContent)).toContain("Local connection");
-    expect([...providers.options].filter((option) => option.textContent?.startsWith("OpenAI"))).toHaveLength(2);
+    expect([...providers.options].map((option) => option.textContent)).toEqual([
+      "Unknown connection", "OpenAI · Same account · 1", "Local connection", "OpenAI · Same account · 2",
+    ]);
+    expect([...providers.options].map((option) => option.textContent).join(" ")).not.toMatch(/connection-[ab]|native:openai/);
 
     choose(providers, provider("connection-a", "native:openai"));
     expect(select("Model type").value).toBe("codex");
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("Codex");
     expect([...select("Choose model").options].map((option) => option.textContent)).not.toContain("Local model");
     expect(fixture.dispatch).not.toHaveBeenCalled();
     choose(select("Choose model"), JSON.stringify(["connection-a", "same"]));

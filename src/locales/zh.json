@@ -2877,6 +2877,8 @@
   "model.simple.model": "模型",
   "model.source": "提供方",
   "model.type": "模型类型",
+  "model.type.unknown": "未知模型类型",
+  "model.currentSettings": "当前模型设置 · {model}",
   "model.connection.local": "本地连接",
   "model.connection.unknown": "未知连接",
   "model.simple.manage": "管理 AI 账户",

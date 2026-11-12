@@ -3066,6 +3066,8 @@
   "model.simple.model": "Model",
   "model.source": "Provider",
   "model.type": "Model type",
+  "model.type.unknown": "Unknown model type",
+  "model.currentSettings": "Current model settings · {model}",
   "model.connection.local": "Local connection",
   "model.connection.unknown": "Unknown connection",
   "model.simple.manage": "Manage AI accounts",
