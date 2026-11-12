@@ -206,6 +206,27 @@ describe("the setup card's answers", () => {
   });
 });
 
+it("uses only an isolated native text path for Mini App suggestions", async () => {
+  const { jobs, state, claude, openrouter } = setup();
+  expect(jobs.text("mini-app-suggestions", "claude")).toBeNull();
+  expect(claude.calls).toEqual([]);
+  const writer = jobs.text("mini-app-suggestions", "openrouter");
+  expect(writer?.via).toBe("engine");
+  expect(await writer!.generateText("Synthetic app capabilities and task")).toBe("openrouter wrote this");
+  expect(openrouter.calls.map((call) => call.prompt)).toEqual(["Synthetic app capabilities and task"]);
+  expect(state.booked[0]?.row.threadId).toMatch(/^mini-app-suggestions-/);
+
+  const helper = setup({ helper: { instanceId: "openrouter" } });
+  const viaHelper = helper.jobs.text("mini-app-suggestions", "claude");
+  expect(viaHelper?.via).toBe("helper");
+  expect(await viaHelper!.generateText("Synthetic task")).toBe("openrouter wrote this");
+  expect(helper.claude.calls).toEqual([]);
+  expect(helper.openrouter.calls).toHaveLength(1);
+
+  helper.state.instances.set("openrouter", { ...helper.openrouter.instance, driverKind: "unverified" });
+  expect(helper.jobs.text("mini-app-suggestions", "claude")).toBeNull();
+});
+
 describe("who writes a small job", () => {
   it("is the bot's own engine whenever it can: the helper is never called", async () => {
     const { jobs, state, claude, openrouter } = setup({ helper: { instanceId: "openrouter" } });

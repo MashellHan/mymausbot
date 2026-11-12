@@ -6,7 +6,7 @@ export interface SelectableInstance {
   driverKind: string;
   snapshot: ProviderSnapshot;
   models: ModelCatalog;
-  capabilities?: { effortLevels?: readonly EffortLevel[]; modelVariants?: boolean };
+  capabilities?: { effortLevels?: readonly EffortLevel[]; modelVariants?: boolean; configurableContextWindow?: boolean };
   access?: EngineAccess;
   enabled?: boolean;
 }
@@ -74,6 +74,7 @@ export function selectDefaultModelSelection(
     const selection = { ...preferred };
     // A saved effort can outlive driver support: keep the model, let the provider use its default effort.
     if (selection.effort && !instance.capabilities?.effortLevels?.includes(selection.effort)) delete selection.effort;
+    if (selection.contextWindowTokens !== undefined && !instance.capabilities?.configurableContextWindow) delete selection.contextWindowTokens;
     return selection;
   }
   const available = instances.filter((instance) => instance.enabled !== false && instance.snapshot.state === "available" && context.refusal?.(instance) === undefined && defaultModel(instance));

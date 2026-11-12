@@ -1,3 +1,6 @@
+import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { focusComputerPanelEntry } from "./computer-panel-focus";
+
 export type ComputerPanelView = "computer" | "android" | "browser" | "routines" | "files" | "data" | "mini-apps";
 
 type PanelTabsContext = { advanced: boolean; androidConnected: boolean };
@@ -14,6 +17,7 @@ export function resolveComputerPanelView(view: ComputerPanelView, context: Panel
 }
 
 const STORAGE_PREFIX = "omb-computer-panel-view";
+export const COMPUTER_PANEL_VIEW_REQUEST = "omb-computer-panel-view-request";
 
 function storageKey(botId: string): string {
   return `${STORAGE_PREFIX}:${botId}`;
@@ -41,4 +45,28 @@ export function writeComputerPanelView(
     storage.setItem(storageKey(botId), view);
   } catch {
   }
+}
+
+export function requestComputerPanelView(botId: string, view: ComputerPanelView, focusTabs = false): void {
+  writeComputerPanelView(botId, view);
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(COMPUTER_PANEL_VIEW_REQUEST, { detail: { botId, view, focusTabs } }));
+}
+
+export function useComputerPanelViewRequest(
+  botId: string,
+  panelRef: RefObject<HTMLElement | null>,
+  explicitView: RefObject<boolean>,
+  setView: Dispatch<SetStateAction<ComputerPanelView>>,
+): void {
+  useEffect(() => {
+    const onView = (event: Event) => {
+      const request = (event as CustomEvent<{ botId: string; view: ComputerPanelView; focusTabs: boolean }>).detail;
+      if (request?.botId !== botId) return;
+      explicitView.current = true;
+      setView(request.view);
+      if (request.focusTabs) requestAnimationFrame(() => focusComputerPanelEntry(panelRef.current));
+    };
+    window.addEventListener(COMPUTER_PANEL_VIEW_REQUEST, onView);
+    return () => window.removeEventListener(COMPUTER_PANEL_VIEW_REQUEST, onView);
+  }, [botId, panelRef, explicitView, setView]);
 }

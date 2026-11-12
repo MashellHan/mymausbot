@@ -331,6 +331,7 @@ describe("testing an AI with one tiny message before a new bot's default trusts 
     for (const touch of [
       // The same model at another effort is a choice too (the very same choice again can't be told apart from none).
       () => store.choose("chief", { ...on("claude"), effort: "low" }),
+      () => store.choose("chief", { ...on("claude"), contextWindowTokens: 200_000 }),
       () => store.choose("chief", on("grok")),
       () => { chief().tasks[0]!.modelSelection = on("claude"); store.emit({ type: "bot", botId: "chief" }); },
       () => store.say("chief-main", "user"),

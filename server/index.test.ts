@@ -5579,6 +5579,8 @@ describe("harness HTTP API", () => {
         { body: { ...selection, model: `${selection.model}-not-offered` }, error: /not offered/i },
         { body: { ...selection, effort: "turbo" }, error: /not recognized/i },
         { body: { ...selection, effort: "none" }, error: /not offered/i },
+        { body: { ...selection, contextWindowTokens: 200_000 }, error: /cannot configure its context window/i },
+        { body: { ...selection, contextWindowTokens: 200_000.5 }, error: /contextWindowTokens must be a supported token count/i },
         { body: { instanceId: selection.instanceId }, error: /modelSelection\.model/i },
         { body: { ...selection, autoApprove: true }, error: /unsupported model field: autoApprove/i },
       ];

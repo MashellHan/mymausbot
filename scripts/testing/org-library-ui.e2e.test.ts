@@ -177,9 +177,16 @@ describe("the organization library in the real renderer", () => {
       .find(([, entry]) => entry.role === "button" && /Open .+ profile/.test(entry.name));
     expect(profile).toBeDefined();
     await ui("click", "--ref", `@${profile![0]}`);
-    // The bot's panel: where it came from on Bot settings, the organization's skills on Library → Skills.
     await click("Bot settings");
+    await expect.poll(async () => (await ui("eval", "--js", "Boolean(document.querySelector('[role=dialog] [data-panel-gear]'))")).result,
+      { timeout: 10_000 }).toBe(true);
+    await ui("eval", "--js", "document.querySelector('[role=dialog] [data-panel-gear]').click(); true");
+    await expect.poll(async () => (await ui("eval", "--js", "Boolean(document.querySelector('[role=dialog] [data-panel-page-view=\"settings\"]'))")).result,
+      { timeout: 10_000 }).toBe(true);
     await expect.poll(snapshot, { timeout: 10_000 }).toContain("From Sales desk 1.3.0 · Acme Partners");
+    await ui("eval", "--js", "document.querySelector('[role=dialog] [data-panel-page-view=\"settings\"] [data-panel-back]').click(); true");
+    await expect.poll(async () => (await ui("eval", "--js", "Boolean(document.querySelector('[role=dialog] [data-panel-tab=\"details\"][aria-selected=\"true\"]'))")).result,
+      { timeout: 10_000 }).toBe(true);
     let detailsClick: Record<string, unknown> | null = null;
     let libraryClick: Record<string, unknown> | null = null;
     let afterDetails: Record<string, unknown> | null = null;

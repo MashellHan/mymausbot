@@ -117,8 +117,8 @@ describe("control-omb ui drives the real renderer", () => {
     await ui("type", info.ui, "--name", "Message Pepper", "--text", "Find the striped zebra");
     await ui("press", info.ui, "--keys", "Enter");
     await ui("wait-settle", info.ui, "--timeout", "60");
-    // The chat's ⋯ items live in the bot panel, which the chat header's pill opens.
     await ui("click", info.ui, "--name", "Open Pepper's profile");
+    await ui("click", info.ui, "--name", "Bot settings");
     await ui("click", info.ui, "--name", "Find in conversation");
     await ui("type", info.ui, "--name", "Find in this conversation", "--text", "zebra");
     const highlighted = async () => (await ui("eval", info.ui, "--js", "[...CSS.highlights.get('search-result-text') ?? []][0]?.toString() ?? null")).result;
@@ -348,6 +348,7 @@ describe("control-omb ui drives the real renderer", () => {
     expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 
     await ui("click", info.ui, "--name", "Open Pepper's profile");
+    await ui("click", info.ui, "--name", "Bot settings");
     await ui("click", info.ui, "--name", "Inspector");
     // A local page fetches a screen when it opens, so the panel arrives just after the click.
     const inspected = await vi.waitFor(async () => {

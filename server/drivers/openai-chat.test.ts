@@ -57,6 +57,25 @@ describe("createOpenAIChatRuntime one-shot usage", () => {
   };
   const choices = [{ message: { content: "helper result" }, finish_reason: "stop" }];
 
+  it("keeps an OpenAI-compatible text call tool-free even when turns allow tools", async () => {
+    const requests: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/models")) return new Response(JSON.stringify({ data: [] }), { headers: { "content-type": "application/json" } });
+      requests.push(JSON.parse(init?.body as string) as Record<string, unknown>);
+      return new Response(JSON.stringify({ choices }), { headers: { "content-type": "application/json" } });
+    }));
+    const instance = await OpenAICompatDriver.create({
+      instanceId: "fixture", displayName: "Fixture", enabled: true,
+      config: OpenAICompatDriver.decodeConfig({ url: "https://example.test/v1", apiKeyEnv: "FIXTURE_KEY", model: "fixture-model", tools: true }),
+      environment: { FIXTURE_KEY: "fixture-key" },
+    });
+    await expect(instance.generateText!("Rank this synthetic task")).resolves.toBe("helper result");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).not.toHaveProperty("tools");
+    expect(requests[0]).not.toHaveProperty("tool_choice");
+    await instance.dispose();
+  });
+
   it("reports the actual helper model and known provider usage once, preserving the text result", async () => {
     const instance = await fixture({
       model: "grok-3-mini-actual", choices,

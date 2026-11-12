@@ -144,6 +144,8 @@ export interface SendTurnInput {
   model?: string;
   effort?: EffortLevel;
   variant?: string;
+  /** Requested native window for this turn; absent leaves the engine's default. */
+  contextWindowTokens?: number;
   resumeCursor?: unknown;
   /** Start without the previous native context or retained process; wins over resumeCursor. */
   sessionReset?: boolean;
@@ -273,6 +275,8 @@ export interface ProviderAdapter {
     effortLevels?: readonly EffortLevel[];
     /** The driver validates and applies model-specific variant IDs per session. */
     modelVariants?: boolean;
+    /** The installed native engine can apply a requested window on both new and resumed sessions. */
+    configurableContextWindow?: boolean;
     /** The driver keeps a live session and can take a user message mid-turn (steer). */
     queueing?: boolean;
     /** steer() delivers `images` as structured input; requires queueing and nativeImageInput. */

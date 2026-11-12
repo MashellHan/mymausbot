@@ -1,5 +1,6 @@
 import type { ModelRequestCardData } from "../shared/model-request.ts";
 import type { ModelSelection } from "../shared/wire.ts";
+import { requestedContextWindowSchema } from "./model-selection-schema.ts";
 import { harnessCapabilityLines, type DriverCapabilities } from "./harness-capabilities.ts";
 import { newId } from "./contracts.ts";
 import { UNDO_STALE, type DirectApply, type DirectApplyCheck } from "./direct-apply.ts";
@@ -75,7 +76,8 @@ export type UndoModelRequestResult =
   | { claimed: true; state: "undone"; targetBotId: string };
 
 const sameSelection = (a: ModelSelection, b: ModelSelection) =>
-  a.instanceId === b.instanceId && a.model === b.model && a.effort === b.effort && a.variant === b.variant;
+  a.instanceId === b.instanceId && a.model === b.model && a.effort === b.effort && a.variant === b.variant &&
+  a.contextWindowTokens === b.contextWindowTokens;
 
 function reasonText(value: unknown): string {
   if (typeof value !== "string") throw new ModelRequestError("reason is required");
@@ -89,7 +91,7 @@ function parseSelection(input: unknown): ModelSelection {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     throw new ModelRequestError("model_selection must be an object with instanceId and model");
   }
-  const value = input as { instanceId?: unknown; model?: unknown; effort?: unknown; variant?: unknown };
+  const value = input as { instanceId?: unknown; model?: unknown; effort?: unknown; variant?: unknown; contextWindowTokens?: unknown };
   if (typeof value.instanceId !== "string" || !value.instanceId.trim()) {
     throw new ModelRequestError("model_selection.instanceId is required");
   }
@@ -104,6 +106,11 @@ function parseSelection(input: unknown): ModelSelection {
   if (value.variant !== undefined) {
     if (typeof value.variant !== "string" || !value.variant.trim()) throw new ModelRequestError("model_selection.variant must be a variant id");
     selection.variant = value.variant;
+  }
+  if (value.contextWindowTokens !== undefined) {
+    const parsed = requestedContextWindowSchema.safeParse(value.contextWindowTokens);
+    if (!parsed.success) throw new ModelRequestError("model_selection.contextWindowTokens must be a supported token count");
+    selection.contextWindowTokens = parsed.data;
   }
   return selection;
 }

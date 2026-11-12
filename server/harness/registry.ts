@@ -548,6 +548,7 @@ export class ProviderRegistry {
             images: inst.adapter.capabilities.images === true,
             effortLevels: inst.adapter.capabilities.effortLevels,
             modelVariants: inst.adapter.capabilities.modelVariants === true,
+            configurableContextWindow: inst.adapter.capabilities.configurableContextWindow === true,
             queueing: inst.adapter.capabilities.queueing === true,
             localComputerMcp: inst.adapter.capabilities.localComputerMcp === true,
             approvalReview: inst.reviewPermission !== undefined,

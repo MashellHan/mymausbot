@@ -1,4 +1,4 @@
-import { createContext, memo, use, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type MouseEvent } from "react";
 import { useAdvancedMode } from "@/lib/interface-mode";
 import { rawUserBubbleStyle, useRawPresentation } from "@/lib/raw-presentation";
 import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
@@ -14,6 +14,7 @@ import { useSpeech } from "@/lib/tts/useSpeech";
 import { localSystemVoiceActive } from "@/lib/local-voice";
 import { computerStartLine, useScreensWhile } from "@/lib/computer-start";
 import { rememberComputerPanelOpen } from "@/lib/computer-panel-focus";
+import { requestComputerPanelView } from "@/lib/computer-panel-view";
 import { useCaptionChrome, useDesktopCapabilities } from "@/components/DesktopCapabilities";
 import {
   api,
@@ -97,7 +98,7 @@ import { BotActivityPicker } from "./TaskPicker"; import { ChatHeadPill } from "
 import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
 import { ChatComputerButton } from "./ChatComputerButton";
 import { ModelPicker } from "./ModelPicker";
-import { ChatHeaderMenu, ChatMoreMenu, RawChatShareMenu } from "./ChatMoreMenu"; import { TeamOwnHelperHeader, TeamPrivateFirstLine, TeamPrivateHeader, TeamSharedHeader } from "./TeamPrivateChatsLine"; import { ownChatStarted } from "@/state/team-chats";
+import { ChatHeaderMenu, ChatMoreMenu } from "./ChatMoreMenu"; import { TeamOwnHelperHeader, TeamPrivateFirstLine, TeamPrivateHeader, TeamSharedHeader } from "./TeamPrivateChatsLine"; import { ownChatStarted } from "@/state/team-chats";
 import { useChatFindRequests } from "@/lib/chat-find";
 import { CitationSelectionToolbar, SentCitations } from "./CitationUI";
 import { SpeakButton } from "./SpeakButton";
@@ -999,6 +1000,12 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
   const resultsThreadId = routineExecution?.resultsThreadId ?? routineExecution?.sourceThreadId;
   const canOpenResults = resultsThreadId && [...state.bots, ...state.groups].some((owner) => owner.threadId === resultsThreadId || owner.tasks?.some((task) => task.threadId === resultsThreadId));
   const rawComputerDirect = raw && !remoteClient;
+  const openBotOverview = (event?: MouseEvent<HTMLButtonElement>) => {
+    if (remoteClient) { dispatch({ type: "toggleSettings", open: true }); return; }
+    if (!state.computerOpen) rememberComputerPanelOpen({ botId: bot.id, opener: event?.currentTarget ?? null, tabs: event?.detail === 0 });
+    requestComputerPanelView(bot.id, "computer", state.computerOpen && event?.detail === 0);
+    dispatch({ type: "toggleComputer", open: true });
+  };
   const computerButton = (!phoneMenu || rawComputerDirect) && <ChatComputerButton rawDirect={rawComputerDirect} open={state.computerOpen} live={busy && place === "browser"}
     onClick={(event) => { if (!state.computerOpen) rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: event.detail === 0 }); dispatch({ type: "toggleComputer" }); }} />;
 
@@ -1024,13 +1031,14 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
               bot={bot}
               avatar={{ state: stateForBot({ ...bot, messages }), motion: mascotMotion?.kind ?? "none", motionKey: mascotMotion?.nonce ?? 0, animated: headerAnimated }}
               privacy={privateChat ? { kind: "private" } : ownHelper ? { kind: "ownHelper" } : sharedChat && team ? { kind: "shared", team: team.name, onlyPeopleAdded: bot.onlyPeopleAdded } : null}
-              onToggle={() => dispatch({ type: "toggleSettings", open: !state.settingsOpen })}
+              remoteClient={remoteClient}
+              onToggle={remoteClient ? () => dispatch({ type: "toggleSettings", open: !state.settingsOpen }) : openBotOverview}
             />
           ) : advanced ? (
             <div data-chathead-pill className={cn(CHATHEAD_PILL, "pr-1")}>
               <button
                 type="button"
-                onClick={() => dispatch({ type: "toggleSettings", open: true })}
+                onClick={openBotOverview}
                 className="flex shrink-0 items-center justify-center rounded-full"
                 title={t("chat.openProfile")}
                 aria-label={t("chat.openProfileAria", { name: bot.name })}
@@ -1055,7 +1063,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
                     dispatch({ type: "updateBot", botId: bot.id, patch: { name } });
                   }
                 }}
-                onActivate={() => dispatch({ type: "toggleSettings", open: true })}
+                onActivate={openBotOverview}
                 showEditButton
                 className="truncate text-[14px] font-semibold text-ink"
                 editButtonClassName="size-6 rounded-full"
@@ -1067,7 +1075,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
             <button
               type="button"
               data-chathead-pill data-tour="bot-pill"
-              onClick={() => dispatch({ type: "toggleSettings", open: true })}
+              onClick={openBotOverview}
               title={t("chat.openProfile")}
               aria-label={t("chat.openProfileAria", { name: bot.name })}
               className={cn("group flex h-9 min-w-0 items-center gap-2.5 rounded-full py-0.5 pl-2 pr-3.5 text-ink", ELEVATED_FLOAT, ELEVATED_HOVER)}
@@ -1114,7 +1122,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           {(!phone || remoteClient) && (!raw || remoteClient) && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
           <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, state, showThreads)} />{!phoneMenu && <WatchScreenButton botId={bot.id} messages={messages} liveTools={liveTools} place={place} />}
           {computerButton}
-          {phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : raw && !remoteClient ? <RawChatShareMenu bot={bot} /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
+          {phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
         </div>
         </div>
       </div>

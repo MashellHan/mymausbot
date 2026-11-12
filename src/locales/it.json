@@ -4130,6 +4130,7 @@
   "routines.noNextRun": "Nessuna esecuzione successiva pianificata",
   "routines.nextRun": "Prossima {time}",
   "routines.latestRun": "Ultima: {status}",
+  "routines.lastRunPrefix": "Ultima:",
   "routines.neverRun": "Non ancora eseguita",
   "routines.continuityLabel": "Ricorda l'ultima esecuzione",
   "routines.continuityHelp": "Ogni esecuzione parte dal rapporto dell'esecuzione precedente, così il bot sa che cosa ha trovato l'ultima volta. Utile per controlli come il QA o il monitoraggio.",

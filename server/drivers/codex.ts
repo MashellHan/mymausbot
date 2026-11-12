@@ -25,6 +25,8 @@ import { chatgptPlanCodexArgs, PLAN_TOKEN_BRIDGE_ENV, planTokenRenewal, startPla
 export { chatgptPlanCodexArgs } from "./codex-plan-token.ts";
 import { captureCliTree, describeSpawnFailure, killCliTree, spawnCli, waitForExit } from "../procs.ts";
 import { cliVersionProbe } from "../cli-version-probe.ts";
+import { requestedContextWindowSchema } from "../model-selection-schema.ts";
+import { codexContextWindowSupported, extendShellExclusions } from "./codex-thread-config.ts";
 import { codexLaunch, codexLaunchesStarting, codexLaunchSlot, codexRpcTimeoutMs, keepStopping, RELAUNCH_EXIT_WAIT_MS, spawnHoldingSlot, tryCodexLaunchSlot } from "./codex-process.ts";
 import { perTurnCustomMcp } from "../mcp-registry.ts";
 
@@ -132,29 +134,6 @@ function additionalPermissionSummary(permissions: unknown, reason: unknown): str
   const exact = JSON.stringify(requested);
   const prefix = typeof reason === "string" && reason.trim() ? `${reason.trim()} — ` : "";
   return `${prefix}Requested permissions: ${exact}`;
-}
-
-/** Thread-config overrides adding `patterns` to the person's shell exclusions. Codex keeps two
- * representations, the `exclude`/`include_only` lists and the `filters` table, and a higher layer
- * that writes one drops the other below it (codex-cli 0.160, which reports unset fields as null). */
-function extendShellExclusions(policy: Record<string, unknown>, patterns: readonly string[]): Record<string, unknown> {
-  const unconfirmed = () => new Error("Codex could not confirm its shell environment exclusions. No prompt was sent.");
-  const exclude = policy.exclude ?? undefined;
-  const filters = policy.filters ?? undefined;
-  if (exclude !== undefined && (!Array.isArray(exclude) || exclude.some(name => typeof name !== "string"))) throw unconfirmed();
-  if (filters === undefined) {
-    return { "shell_environment_policy.exclude": [...new Set([...(exclude ?? []) as string[], ...patterns])] };
-  }
-  const table = plainRecord(filters);
-  if (!table || Object.values(table).some(action => action !== "exclude" && action !== "include")) throw unconfirmed();
-  // One Codex layer cannot mix the two; writing filters would drop the lists.
-  if (exclude !== undefined || (policy.include_only ?? undefined) !== undefined) throw unconfirmed();
-  // Patterns match, merge across layers, and must be unique ignoring case.
-  const ours = new Set(patterns.map(pattern => pattern.toLowerCase()));
-  return { "shell_environment_policy.filters": Object.fromEntries([
-    ...Object.entries(table).filter(([pattern]) => !ours.has(pattern.toLowerCase())),
-    ...patterns.map(pattern => [pattern, "exclude"]),
-  ]) };
 }
 
 /** Codex persists these on its native thread, so they are explicit on start, resume and every turn.
@@ -435,6 +414,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       onAuthenticated: async () => { loginAccepted(); await refreshModels(); },
     });
     const listeners = new Set<RuntimeEventListener>();
+    let contextWindowSupported = false;
     interface Turn {
       stop: () => Promise<boolean>;
       steer?: (text: string) => Promise<SteerOutcome>;
@@ -465,6 +445,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       };
       assertPlanCurrent();
       if (planUnavailable) throw new Error(planUnavailable);
+      if (turn.contextWindowTokens !== undefined) {
+        if (!requestedContextWindowSchema.safeParse(turn.contextWindowTokens).success) throw new Error("The requested context window is invalid.");
+        const probe = await cliVersionProbe(config.cli)(childEnv());
+        contextWindowSupported = "version" in probe && codexContextWindowSupported(probe.version);
+        if (!contextWindowSupported) throw new Error("This Codex CLI cannot set a context window. Update Codex or restore the native default.");
+      }
       const planToken = planAuth ? await planAuth.accessToken() : undefined;
       assertPlanCurrent();
       if (planAuth) {
@@ -652,6 +638,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             command: server.command, args: server.args, env_vars: Object.keys(server.env), env: {}, default_tools_approval_mode: selectedApprovals.get(name) ?? "prompt",
           }]),
         ) } };
+        if (turn.contextWindowTokens !== undefined) selectionConfig.config = { ...selectionConfig.config, model_context_window: turn.contextWindowTokens };
 
         const commandCwd = permissionLaunchCwd(turn.cwd ?? homedir());
         const releaseSlot = tryCodexLaunchSlot() ?? await waitForLaunchSlot(attempt);
@@ -1535,6 +1522,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     if (planUnavailable) return { state: "unavailable", authenticated: false, chatgptPlan: true, reason: planUnavailable, authenticationUnavailableReason: planUnavailable };
     const env = childEnv();
     const probe = await readCliVersion(env);
+    contextWindowSupported = "version" in probe && codexContextWindowSupported(probe.version);
     if (!("version" in probe)) return { state: "unavailable", reason: probe.reason, ...(plan ? { chatgptPlan: true } : {}) };
     const { version } = probe;
     const warning = planWarning ?? (planAuth && !planRenewal.noteVersion(version) ? "Update Codex to 0.165.0 or newer to renew ChatGPT credentials during a running task." : undefined);
@@ -1678,6 +1666,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         images: true,
         nativeImageInput: true,
         effortLevels: ["low", "medium", "high", "xhigh", "max"],
+        get configurableContextWindow() { return contextWindowSupported; },
         strictResume: true,
       },
       sendTurn,

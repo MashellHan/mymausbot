@@ -4,7 +4,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Routine } from "@/lib/routines";
 import type { MemoryDoc } from "@/lib/memory";
-import type { Bot, BotSettingsSection, InstanceInfo } from "@/state/store";
+import type { Bot, BotSettingsSection, InstanceInfo, Message } from "@/state/store";
 import { AVATAR_FOCUS_CENTER, AVATAR_ZOOM_MIN } from "../../shared/bot-avatar";
 import type { ManagedSkill } from "./bot-settings/SkillsSection";
 import type { McpServerSummary } from "@/lib/mcp-servers";
@@ -927,6 +927,30 @@ describe("the Library tab", () => {
     click(find(rendered, "data-panel-page", "folder"));
     expect(onOpen).toHaveBeenLastCalledWith("folder");
     expect(rowValue(library(makeBot({ cwd: "/Users/omkar/Projects/site" })), "folder")).toBe("/Users/omkar/Projects/site");
+  });
+
+  it("keeps Files settings ahead of many generated links and shows the pinned chat folder", () => {
+    const messages = Array.from({ length: 20 }, (_, index): Message => ({
+      id: `page-${index}`, role: "bot", kind: "text", at: index + 1,
+      publishedPage: { state: "live", title: `Page ${index}`, url: `https://example.test/${index}` },
+    }));
+    const bot = makeBot({
+      cwd: "/workspace/default", messages,
+      tasks: [{ threadId: "thread-scout", title: "Main", createdAt: 1, cwd: "/workspace/pinned" }],
+    });
+    const rendered = capture(() => LibraryTab({ bot, onOpen, embedded: true }));
+    const order = ["memory", "skills", "folder"].map((page) => rendered.html.indexOf(`data-panel-page="${page}"`));
+    expect(order.every((index) => index > -1)).toBe(true);
+    expect(order[0]).toBeLessThan(order[1]!);
+    expect(order[1]).toBeLessThan(order[2]!);
+    expect(order[2]).toBeLessThan(rendered.html.indexOf('data-panel-card="pages"'));
+    expect(rendered.html).toContain("Page 0");
+    expect(rendered.html).toContain("Page 19");
+    expect(rendered.html).not.toContain('data-panel-card="files"');
+    expect(rowValue(rendered, "folder")).toBe("/workspace/pinned");
+    expect(rendered.html).toContain("This chat keeps its current folder.");
+    click(find(rendered, "data-panel-page", "folder"));
+    expect(onOpen).toHaveBeenLastCalledWith("folder");
   });
 });
 

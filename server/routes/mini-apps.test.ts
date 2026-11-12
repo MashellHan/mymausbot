@@ -83,3 +83,25 @@ it("keeps app-scoped dashboard reads behind the existing local owner gate", asyn
   expect(dashboardRead).toHaveBeenCalledWith(expect.objectContaining({ writeAllowed: true }),
     "11111111-1111-4111-8111-111111111111", { resource: "teams", expectedRevision: 1 });
 });
+
+it("keeps suggestions behind the local owner gate and passes only the selected Bot task", async () => {
+  const read = vi.fn(() => ({ botId: "bot", threadId: "current", suggestions: [], refreshPending: false }));
+  const deps = { localEnabled: () => true, suggestions: { read } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
+  const route = createMiniAppRoutes(deps);
+  const json = vi.fn();
+  const path = "/api/mini-apps/suggestions";
+  const readBody = vi.fn(async () => ({ botId: "bot", threadId: "current" }));
+  const call = (auth: RequestAuth) => {
+    const req = new IncomingMessage(new Socket());
+    Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+    return route({ method: "POST", path, url: new URL(`http://127.0.0.1${path}`), req, res: new ServerResponse(req),
+      auth, json, readBody });
+  };
+  await call({ kind: "loopback", scopes: [] });
+  expect(readBody).not.toHaveBeenCalled();
+  expect(read).not.toHaveBeenCalled();
+  await call({ kind: "loopback", scopes: ["admin"] });
+  expect(read).toHaveBeenCalledWith(expect.objectContaining({ writeAllowed: true }), { botId: "bot", threadId: "current" });
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200,
+    { botId: "bot", threadId: "current", suggestions: [], refreshPending: false });
+});

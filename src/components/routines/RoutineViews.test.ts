@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Routine, RoutineRun } from "@/lib/routines";
 import { RoutineList } from "./RoutineList";
-import { latestRoutineRun, routineNextLabel } from "@/lib/routine-display";
+import { latestRoutineRun, routineDateTime, routineNextLabel } from "@/lib/routine-display";
+import { scheduleLabel } from "@/lib/schedule-label";
 import { setLocale } from "@/lib/i18n";
 
 const routine: Routine = {
@@ -23,9 +24,22 @@ describe("routine list", () => {
     const paused = list({ pausedBots: ["scout"] });
     expect(paused).toContain("bot is paused on this plan, so it won&#x27;t run.");
     expect(paused).toContain("Swap awake bots");
+    expect(list({ compact: true, pausedBots: ["scout"] })).toContain("Swap awake bots");
     expect(list({ pausedBots: ["scout"], routines: [{ ...routine, enabled: false }] })).not.toContain("Swap awake bots");
     expect(list({ pausedBots: ["other"] })).not.toContain("Swap awake bots");
     expect(list()).not.toContain("Swap awake bots");
+  });
+
+  it("keeps overview cards to title, schedule, last result, and the existing switch", () => {
+    const markup = list({ compact: true, onToggle: vi.fn(), routines: [{ ...routine, warning: "Connection missing", failureStreak: 2, skippedRuns: 3, weekRuns: { ok: 1, total: 2 } }], runs: [{ ...run, status: "failed", error: "Provider disconnected." }] });
+    expect(markup).toContain('title="Morning brief"');
+    expect(markup).toContain(scheduleLabel(routine.schedule));
+    expect(markup).toContain(`Last: <span class="text-danger">Failed</span> · ${routineDateTime(100)}`);
+    expect(markup).toContain('role="switch" aria-checked="true"');
+    for (const hidden of ["Run logs", "Next ", "Brief prepared.", "Provider disconnected.", "runs OK this week", "Connection missing", "Recent consecutive failures", "Scheduled occurrences skipped"]) {
+      expect(markup).not.toContain(hidden);
+    }
+    expect(list({ compact: true, runs: [] })).toContain("Last: <span>Not run yet</span>");
   });
 
   it("shows saved skips and recent failure streaks without claiming all offline occurrences were counted", () => {
@@ -80,6 +94,22 @@ describe("routine list", () => {
     expect(markup).toContain("Latest: Failed");
     expect(markup).toContain("Provider disconnected.");
     expect(markup).not.toContain("Latest: Completed");
+  });
+
+  it("hides only finished one-time schedules in the compact overview", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const finished: Routine = { ...routine, id: "finished", name: "Finished once", schedule: { type: "once", at: 10 }, enabled: false, nextRunAt: null };
+    const future: Routine = { ...routine, id: "future", name: "Future once", schedule: { type: "once", at: 20_000 }, enabled: false, nextRunAt: null };
+    const pending: Routine = { ...routine, id: "pending", name: "Pending once", schedule: { type: "once", at: 10 }, nextRunAt: 11_000 };
+    const recurring: Routine = { ...routine, id: "recurring", name: "Recurring" };
+    const routines = [finished, future, pending, recurring];
+    const overview = list({ compact: true, routines, runs: [], onToggle: vi.fn() });
+    expect(overview).not.toContain("Finished once");
+    for (const name of ["Future once", "Pending once", "Recurring"]) expect(overview).toContain(name);
+    expect(overview.match(/<article/g)).toHaveLength(3);
+    expect(list({ compact: true, routines: [finished], runs: [] })).not.toContain("No schedules yet.");
+    expect(list({ routines, runs: [] })).toContain("Finished once");
   });
 
   it("keeps the state badge where the list cannot pause, and swaps it for a switch where it can", () => {

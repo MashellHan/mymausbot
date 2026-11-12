@@ -4814,6 +4814,7 @@
   "routines.noNextRun": "次の実行予定はありません",
   "routines.nextRun": "次回 {time}",
   "routines.latestRun": "最新：{status}",
+  "routines.lastRunPrefix": "前回：",
   "routines.neverRun": "まだ実行していません",
   "routines.continuityLabel": "前回の実行を覚えておく",
   "routines.continuityHelp": "各実行は前回のレポートを引き継いで始まるため、ボットは前回見つけた内容を把握できます。QA や監視などの確認作業に適しています。",

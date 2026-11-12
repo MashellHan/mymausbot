@@ -201,6 +201,7 @@ import { assertWithinBudget, noteSpend, spendAlertText, spendState, takeSpendAle
 import { fleetAvailable, fleetSocketPath } from "./fleet-client.ts";
 import { HOSTED_CONTRACT_HEADER, HOSTED_CONTRACT_METADATA, HOSTED_CONTRACT_VERSION } from "./hosted-contract.ts";
 import { cliProbeEnvironment, testCliBinary } from "./cli-probe.ts";
+import { requestedContextWindowSchema } from "./model-selection-schema.ts";
 import { buildMentionNotification, buildNoticeNotification, buildNotification, buildSpendNotification, type Notification, unaskedBotThread } from "./notify.ts";
 import {
   isModelVariant,
@@ -2584,7 +2585,7 @@ function checkedModelSelection(
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, status: 400, error: "modelSelection must be an object" };
   }
-  const value = raw as { instanceId?: unknown; model?: unknown; effort?: unknown; variant?: unknown };
+  const value = raw as { instanceId?: unknown; model?: unknown; effort?: unknown; variant?: unknown; contextWindowTokens?: unknown };
   if (typeof value.instanceId !== "string" || !value.instanceId.trim()) {
     return { ok: false, status: 400, error: "modelSelection.instanceId is required" };
   }
@@ -2611,11 +2612,19 @@ function checkedModelSelection(
     }
     selection.variant = value.variant;
   }
+  if (value.contextWindowTokens !== undefined) {
+    const parsed = requestedContextWindowSchema.safeParse(value.contextWindowTokens);
+    if (!parsed.success) return { ok: false, status: 400, error: "contextWindowTokens must be a supported token count" };
+    selection.contextWindowTokens = parsed.data;
+  }
   const modelChanged = current && (selection.instanceId !== current.selection.instanceId || selection.model !== current.selection.model);
   if (current?.busy && modelChanged) {
     return { ok: false, status: 409, ...userError("serverError.model.botBusy") };
   }
   const target = registry.get(selection.instanceId);
+  if (selection.contextWindowTokens !== undefined && target?.adapter.capabilities.configurableContextWindow !== true) {
+    return { ok: false, status: 400, error: "this engine cannot configure its context window" };
+  }
   if (providerInstancesChanging.has(selection.instanceId)) {
     return { ok: false, status: 409, ...userError("serverError.model.accountUpdating") };
   }
@@ -7651,7 +7660,7 @@ async function beginTurn(
   const automated = commsDepth > 0 || opts?.automationSource !== undefined
     || Boolean(opts?.unattended || opts?.cardContinuation || opts?.peerAsk || opts?.coordination || opts?.compactOnly || opts?.computerSelectionContinuation);
   const route = routeDirectTurn(bot, task, store.activePath(threadId), resolvedImages, instance, automated, quickFallback.refused(instance.instanceId));
-  const { model, effort, variant } = route;
+  const { model, effort, variant, contextWindowTokens } = route;
   assertModelVariantSupported({ variant, effort }, instance.adapter.capabilities);
   if (effort && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
     throw Object.assign(
@@ -8449,6 +8458,7 @@ async function beginTurn(
         model,
         effort,
         variant,
+        ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
         resumeCursor: dispatchContext.resumeCursor,
         sessionReset: dispatchContext.sessionReset,
         ...(dispatchContext.recoveryText !== undefined ? { recoveryText: withTurnClock(clock, attachmentsForBox(dispatchContext.recoveryText, cwd) + shareNote.text) } : {}),
@@ -9857,6 +9867,7 @@ async function runClaimedGroupMemberTurn(
     readyBot.modelSelection.model !== preparedSelection.model ||
     readyBot.modelSelection.effort !== preparedSelection.effort ||
     readyBot.modelSelection.variant !== preparedSelection.variant ||
+    readyBot.modelSelection.contextWindowTokens !== preparedSelection.contextWindowTokens ||
     readyBot.composio !== preparedComposio;
   if (setupChanged) {
     if (setupRetry === 0) {
@@ -12125,7 +12136,7 @@ ROUTES.push(createBotMessageRoutes({
     { emoji, name: person.name ?? person.email, at: Date.now() }),
 }));
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; };
-const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen() }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
+const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen(), suggestionWriter: (botId) => sideJobs.text("mini-app-suggestions", botId) }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, keys: mcpKeys, storedServers: () => cfg.mcpServers ?? {}, mountedServers: engineMcpServers, personMcp: teamConnections.personMcp, probeAs: (server) => mcpServersHost.probeAs(server), oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc, threadVisible: (auth, threadId) => (auth.kind !== "session" || sessions.isLive(auth.session.id)) && visibleTo(viewerFor(auth)).thread(threadId) }));
 const { react } = createReactions({

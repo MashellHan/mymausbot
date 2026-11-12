@@ -13,9 +13,10 @@ import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "./bot-thread-limi
 import { anthropicKeyEnv } from "./anthropic-key-env.ts";
 import { withoutComputerEngine } from "./computer-engine-removal.ts";
 import { newBotDefaultsSchema, type NewBotDefaults } from "./new-bot-defaults.ts";
+import { defaultModelSelectionSchema } from "./model-selection-schema.ts";
 import { replaySettings } from "./replay-settings.ts";
 import { EFFORT_LEVELS, type EffortLevel } from "../shared/wire.ts";
-import { isModelVariant, type InstanceConfigMap, type McpServerSpec, type ModelSelection } from "./contracts.ts";
+import { type InstanceConfigMap, type McpServerSpec, type ModelSelection } from "./contracts.ts";
 import { API_KEY_FLEET, DEFAULT_FLEET, OPENAI_API_INSTANCE, OPENROUTER_API_INSTANCE, CLAUDE_API_INSTANCE, PRODUCT_FLEET_ADDITIONS } from "./instance-fleets.ts";
 export { CLAUDE_API_INSTANCE, OPENAI_API_INSTANCE, OPENROUTER_API_INSTANCE, XAI_API_INSTANCE } from "./instance-fleets.ts";
 import { DEFAULT_WINDOW_MINUTES, MAX_WINDOW_MINUTES } from "./cache-keepwarm.ts";
@@ -267,13 +268,6 @@ const instanceConfigSchema = z.object({
   config: z.json().optional(),
 });
 const instanceConfigMapSchema = z.record(z.string(), instanceConfigSchema);
-const defaultModelSelectionSchema = z.object({
-  instanceId: z.string().trim().min(1).max(200),
-  model: z.string().trim().min(1).max(500),
-  effort: z.enum(EFFORT_LEVELS).optional(),
-  variant: z.string().refine(isModelVariant, "invalid model variant").optional(),
-}).refine((selection) => selection.variant === undefined || selection.effort === undefined,
-  "choose either a model variant or an effort level");
 const automaticRecoverySchema = z.object({
   enabled: z.boolean(),
   backup: defaultModelSelectionSchema.optional(),

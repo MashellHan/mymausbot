@@ -101,6 +101,7 @@ describe("QuickModelFallback", () => {
     const { instance, sent } = engine([refusedQuickTurn, answered]);
     bus.attach([instance]);
     const route = quick();
+    route.own.contextWindowTokens = 200_000;
 
     await expect(fallback.sendTurn(instance, input, route)).resolves.toEqual({ turnId: "turn-1" });
     await settled();
@@ -118,6 +119,8 @@ describe("QuickModelFallback", () => {
       { model: "gpt-6-luna", effort: "high", variant: "v" },
     ]);
     expect(sent[1]).toMatchObject({ threadId: "t", text: input.text, system: input.system });
+    expect(sent[0]).not.toHaveProperty("contextWindowTokens");
+    expect(sent[1].contextWindowTokens).toBe(200_000);
     expect(route.onFallback).toHaveBeenCalledTimes(1);
   });
 

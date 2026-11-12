@@ -81,6 +81,7 @@ vi.mock("./AndroidDevicePanel", () => ({
   useAndroidUsbDevices: () => ({ devices: fixture.android ? [{ serial: "p1" }] : [] }),
 }));
 vi.mock("./BrowserPanel", () => ({ BrowserPanel: () => createElement("div", null, "BROWSER-PANEL") }));
+vi.mock("./ModelPicker", () => ({ ModelPicker: () => null }));
 vi.mock("./CloudScreenPreview", () => ({ CloudScreenPreview: () => null }));
 vi.mock("./LocalScreenPreview", () => ({ LocalScreenPreview: () => null }));
 vi.mock("./LinuxLocalControl", () => ({ LinuxLocalControl: () => null }));
@@ -93,6 +94,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
   api: (...args: unknown[]) => fixture.api(...args),
   useStore: () => ({
     state: {
+      bots: [],
       config: { box: { configured: true }, ...fixture.config },
       instances: fixture.instances,
       computerControl: {},
@@ -111,6 +113,7 @@ const { CloudBackendPicker } = await import("./CloudBackendPicker");
 const { SimpleVpsChoices } = await import("./SimpleVpsChoices");
 const { LocalComputerAutoWarning } = await import("./LocalComputerAutoWarning");
 const { KeyRow } = await import("./keys/KeyRow");
+const { BrowserLogins } = await import("./bot-panel/browser-logins");
 
 afterAll(() => vi.unstubAllGlobals());
 
@@ -175,6 +178,8 @@ const tabs = (rendered: ReturnType<typeof render>) => {
   const bar = rendered.nodes.find((node) => node.props["data-testid"] === "computer-tabs")!;
   return nodes(bar.props.children).filter((node) => node.type === "button").map((node) => text(node.props.children));
 };
+const folderRow = (rendered: ReturnType<typeof render>) =>
+  rendered.html.match(/<button[^>]*data-panel-page="folder"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? "";
 const placeLine = (rendered: ReturnType<typeof render>) =>
   text(rendered.nodes.find((node) => node.props["data-testid"] === "place-line")!.props.children).replace(/&#x27;/g, "'");
 const grid = (rendered: ReturnType<typeof render>) => {
@@ -204,6 +209,11 @@ beforeEach(() => {
 });
 
 describe("Computer panel tabs", () => {
+  it("keeps bot-wide busy state on signed-in sites when the selected task is idle", () => {
+    const rendered = render(makeBot({ busy: true, tasks: [{ threadId: "thread-scout", title: "Main", createdAt: 1, busy: false }] }));
+    const sites = rendered.nodes.find((node) => node.type === BrowserLogins);
+    expect(sites?.props.bot).toMatchObject({ busy: true });
+  });
   it("centres the tabs as a pill with close pinned right, in both modes", () => {
     for (const advanced of [false, true]) {
       fixture.advanced = advanced;
@@ -275,12 +285,10 @@ describe("Computer panel tabs", () => {
         { threadId: "thread-scout", title: "Existing chat", createdAt: 2, cwd: "/Users/me/original-project" },
       ],
     }));
-    expect(rendered.html).toContain('title="/Users/me/original-project"');
-    expect(rendered.html).toContain("~/original-project");
+    expect(folderRow(rendered)).toContain("~/original-project");
     expect(rendered.html).not.toContain("/workspace/new-project");
     expect(rendered.html).not.toContain("/workspace/other-project");
-    expect(rendered.html).toContain("Change default");
-    expect(rendered.html).toContain("This chat keeps its current folder.");
+    expect(folderRow(rendered)).toContain("This chat keeps its current folder.");
   });
 
   it("keeps showing the pinned private folder after the bot default is cleared", () => {
@@ -288,8 +296,8 @@ describe("Computer panel tabs", () => {
     const rendered = render(makeBot({ tasks: [
       { threadId: "thread-scout", title: "Existing chat", createdAt: 1, cwd: "/Users/me/.openmausbot/task-workspaces/scout/thread-scout" },
     ] }));
-    expect(rendered.html).toContain('title="/Users/me/.openmausbot/task-workspaces/scout/thread-scout"');
-    expect(rendered.html).toContain("~/.openmausbot/task-workspaces/scout/thread-scout");
+    expect(folderRow(rendered)).toContain("~/.openmausbot/task-workspaces/scout/thread-scout");
+    expect(folderRow(rendered)).toContain("This chat keeps its current folder.");
     expect(rendered.html).not.toContain("Scout&#x27;s private folder");
   });
 
@@ -299,20 +307,18 @@ describe("Computer panel tabs", () => {
       cwd: "/workspace/new-project",
       tasks: [{ threadId: "thread-scout", title: "Legacy chat", createdAt: 1, cwd: null }],
     }));
-    expect(rendered.html).toContain("Home folder");
+    expect(folderRow(rendered)).toContain("Home folder");
+    expect(folderRow(rendered)).toContain("This chat keeps its current folder.");
     expect(rendered.html).not.toContain("/workspace/new-project");
     expect(rendered.html).not.toContain("Scout&#x27;s private folder");
-    expect(rendered.html).toContain("Change default");
   });
 
   it("uses the bot default until the selected chat has a folder pin", () => {
     fixture.view.current = "files";
     for (const tasks of [undefined, [{ threadId: "thread-scout", title: "New chat", createdAt: 1 }]]) {
       const rendered = render(makeBot({ cwd: "/Users/me/new-project", tasks }));
-      expect(rendered.html).toContain('title="/Users/me/new-project"');
-      expect(rendered.html).toContain("~/new-project");
-      expect(rendered.html).not.toContain("This chat keeps its current folder.");
-      expect(rendered.html).not.toContain("Change default");
+      expect(folderRow(rendered)).toContain("~/new-project");
+      expect(folderRow(rendered)).not.toContain("This chat keeps its current folder.");
     }
   });
 });
@@ -591,9 +597,9 @@ describe("A chat pinned to a place", () => {
 describe("Technical controls", () => {
   const cloud = () => makeBot({ computer: "cloud" });
 
-  it("keeps advanced settings and the Routines tab available", () => {
+  it("keeps Bot settings in both modes and technical controls in Advanced", () => {
     const simple = render(cloud());
-    expect(simple.nodes.some((node) => node.props.title === "Bot settings")).toBe(false);
+    expect(simple.nodes.some((node) => node.props.title === "Bot settings")).toBe(true);
     expect(simple.nodes.some((node) => node.type === CloudBackendPicker)).toBe(false);
     expect(simple.html).not.toContain("Works on");
     expect(tabs(simple)).not.toContain("Routines");

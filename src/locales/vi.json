@@ -3530,6 +3530,7 @@
   "routines.noNextRun": "Không có lần chạy tiếp theo nào được lên lịch",
   "routines.nextRun": "Tiếp theo {time}",
   "routines.latestRun": "Gần nhất: {status}",
+  "routines.lastRunPrefix": "Gần nhất:",
   "routines.neverRun": "Chưa chạy lần nào",
   "routines.continuityLabel": "Ghi nhớ lần chạy trước",
   "routines.continuityHelp": "Mỗi lần chạy bắt đầu với báo cáo của lần chạy trước, nhờ đó bot biết lần trước đã tìm thấy những gì. Phù hợp cho các hoạt động kiểm tra như QA hoặc giám sát.",

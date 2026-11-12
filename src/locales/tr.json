@@ -3530,6 +3530,7 @@
   "routines.noNextRun": "Planlanmış sonraki çalıştırma yok",
   "routines.nextRun": "Sonraki: {time}",
   "routines.latestRun": "En son: {status}",
+  "routines.lastRunPrefix": "En son:",
   "routines.neverRun": "Henüz çalıştırılmadı",
   "routines.continuityLabel": "Son çalıştırmayı hatırla",
   "routines.continuityHelp": "Her çalıştırma önceki çalıştırmanın raporuyla başlar, böylece bot geçen sefer ne bulduğunu bilir. QA veya izleme gibi kontroller için uygundur.",
