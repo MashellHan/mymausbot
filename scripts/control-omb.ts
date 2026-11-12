@@ -162,6 +162,8 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
     // Without it the server also scans /opt/homebrew/bin, /usr/local/bin and the
     // login shell's PATH, finding a developer's own engine CLIs that CI lacks.
     OMB_TEST_SEALED_PATH: "1",
+    // The project's live announcement cards would sit over the corner the UI tests click in.
+    OMB_DISABLE_ANNOUNCEMENTS: "1",
   });
   // The fake engines' knobs are the one thing a caller may script into the child.
   for (const [key, value] of Object.entries(parentEnv)) {
@@ -174,6 +176,8 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
   if (parentEnv.OMB_TEST_INTERNAL_CAPABILITY_KEY) childEnv.OMB_TEST_INTERNAL_CAPABILITY_KEY = parentEnv.OMB_TEST_INTERNAL_CAPABILITY_KEY;
   // One log line per browser call and preview frame.
   if (parentEnv.OMB_BROWSER_TIMING === "1") childEnv.OMB_BROWSER_TIMING = "1";
+  // A share on the tailnet (server/tailnet-listener.ts): a test names one of this machine's own addresses as its stand-in.
+  for (const key of ["OMB_TAILNET_NAME", "OMB_TAILNET_ADDRESSES", "OMB_TEST_TAILNET_STAND_IN"]) if (parentEnv[key]) childEnv[key] = parentEnv[key];
   // Warm summaries' minutes as seconds (server/warm-summary.ts), and the switch that turns them off.
   for (const key of ["OMB_WARM_SUMMARY_TIME_SCALE", "OMB_WARM_SUMMARY"]) if (parentEnv[key]) childEnv[key] = parentEnv[key];
   // A loopback fake only: the key never reaches a real provider.
@@ -245,6 +249,7 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
       if (parentEnv.OMB_TEST_SESSION_CONFIG_REPLY) childEnv.OMB_TEST_SESSION_CONFIG_REPLY = parentEnv.OMB_TEST_SESSION_CONFIG_REPLY;
       if (existsSync(capture)) childEnv.OMB_SESSION_CONFIG_JSON = readFileSync(capture, "utf8");
     }
+    if (parentEnv.OMB_TEST_DESKTOP_TAILNET_SHARE) childEnv.OMB_TEST_DESKTOP_TAILNET_SHARE = parentEnv.OMB_TEST_DESKTOP_TAILNET_SHARE;
   }
   // The driver record the app hands its own server: without it, no server may use this computer.
   if (parentEnv.OMB_TEST_DESKTOP_CUA_CONNECTION) childEnv.OMB_TEST_DESKTOP_CUA_CONNECTION = parentEnv.OMB_TEST_DESKTOP_CUA_CONNECTION;

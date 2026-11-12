@@ -35,7 +35,7 @@ import type { ModelVariantOption, RuntimeEvent } from "../../shared/runtime-even
 import type { MausColor, MausMotion } from "@/lib/mascot";
 import type { BotAvatarCrop } from "../../shared/bot-avatar";
 import { approvalModeFor, type ApprovalMode } from "../../shared/approval-mode";
-import { askResetBridge, desktopCapabilitiesNow } from "@/lib/desktop"; import { isBotLimitRefusal, stoppedAtBotLimit } from "@/lib/bot-limit";
+import { askResetBridge, desktopCapabilitiesNow } from "@/lib/desktop"; import { isBotLimitRefusal, showCreatedPaused, stoppedAtBotLimit } from "@/lib/bot-limit";
 import { sameModelSelection } from "../../shared/thread-model";
 import type { BotBodyId } from "../../shared/bot-body";
 import { StoreRefContext } from "./store-ref-context";
@@ -44,7 +44,7 @@ import type { ProfileRequestCardData } from "../../shared/profile-request";
 import type { ModelRequestCardData } from "../../shared/model-request";
 import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
-import type { GroupGoalRunCardData } from "../../shared/group-goal-run";
+import type { GroupGoalRunCardData } from "../../shared/group-goal-run"; import type { BurstCardData } from "../../shared/burst";
 import type { PlaceRow } from "../../shared/place-view";
 import {
   reviewedSkillSha256,
@@ -121,7 +121,7 @@ export type ComputerControlState = { held: boolean; helpReason: string | null; h
 export interface Message extends Pick<import("../../shared/wire").WireMessage, "widget" | "app" | "fromApp" | "pointed" | "routedBy" | "quickModel" | "automation" | "publishedPage" | "sender" | "setupSuggestion" | "helperIntro" | "helperFollowup" | "setupOffer" | "savedSteps" | "setupChoices" | "setupChoicesPending" | "setupChoicesUpdating" | "setupRequest" | "relay" | "inbox" | "sentDirectly" | "doneWhen" | "bugReport" | "engineCompaction" | "stoppedBy"> {
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "signin" | "routine.run" | "goal.run" | "digest" | "compaction" | "call" | "widget" | "app";
+  kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "signin" | "routine.run" | "goal.run" | "burst" | "digest" | "compaction" | "call" | "widget" | "app";
   text?: string;
   digest?: TurnDigest;
   compaction?: import("../../shared/wire").WireMessage["compaction"];
@@ -131,7 +131,7 @@ export interface Message extends Pick<import("../../shared/wire").WireMessage, "
   secret?: SecretRequestCardData;
   signIn?: import("../../shared/wire").SignInRequestCardData;
   routineRun?: RoutineRunCardData;
-  goalRun?: GroupGoalRunCardData;
+  goalRun?: GroupGoalRunCardData; burst?: BurstCardData;
   call?: import("../../shared/wire").LiveCallRecord;
   channelMode?: "chat" | "goal";
   tool?: { name: string; ok?: boolean; spoken?: string; setup?: boolean; claudeUpdate?: boolean; place?: PlaceRow; limitResetsAt?: number; partial?: boolean; summary?: string; input?: string; output?: string ; itemId?: string; outputPath?: string; fullResult?: boolean; clipped?: boolean; nameCode?: string; nameParams?: Record<string, string | number>; summaryCode?: string; summaryParams?: Record<string, string | number>; rescue?: import("../../shared/first-reply-rescue").FirstReplyRescue; step?: import("../../shared/turn-progress").LiveStep; whose?: { person: string; app: string }; label?: string; problem?: string };
@@ -164,7 +164,7 @@ export interface Message extends Pick<import("../../shared/wire").WireMessage, "
 
 export type GroupDefaultResponder = import("../../shared/wire").GroupDefaultResponder;
 
-export interface Group extends Pick<WireGroup, "memberContext" | "queue"> {
+export interface Group extends Pick<WireGroup, "memberContext" | "queue" | "chiefAbsent"> {
   usage?: GroupThreadUsage | null;
   id: string;
   threadId: string;
@@ -248,7 +248,7 @@ export interface ThreadOpener {
   botId: string;
   name: string;
   delegationId?: string;
-  at: number;
+  at: number; burstId?: string;
 }
 
 export interface ThreadCloser {
@@ -405,7 +405,7 @@ export type { BrowserEngineSummary, BrowserProfile, ConfigStatus, ManagedPolicyS
 // A section left out here is wiped from state.config whenever a config frame lands.
 export type ConfigStatusFrame = Pick<
   ConfigStatus,
-  "xai" | "mistral" | "cerebras" | "groq" | "greenference" | "meta" | "deepseek" | "xResearch" | "treg" | "postiz" | "anthropic" | "openai" | "openrouter" | "openaiCompat" | "fleet" | "composio" | "box" | "vps" | "rooms" | "mcp" | "threads" | "automaticRecovery" | "cacheKeepWarm" | "localVm" | "opencodeGo" | "tts" | "decider" | "helpers" | "imageGen" | "live" | "savedKeys" | "profile" | "everyBotRules" | "language" | "features" | "onboarding" | "browserEngine" | "browserProfiles" | "edition" | "budgets" | "billing" | "managedPolicy" | "cloudHome" | "team" | "workspaceBanner"
+  "awakeLimit" | "pausedBots" | "xai" | "mistral" | "cerebras" | "groq" | "greenference" | "modelgo" | "meta" | "deepseek" | "xResearch" | "treg" | "postiz" | "anthropic" | "openai" | "openrouter" | "openaiCompat" | "fleet" | "composio" | "box" | "vps" | "rooms" | "mcp" | "threads" | "automaticRecovery" | "cacheKeepWarm" | "localVm" | "opencodeGo" | "tts" | "decider" | "helpers" | "imageGen" | "live" | "savedKeys" | "profile" | "everyBotRules" | "language" | "features" | "onboarding" | "browserEngine" | "browserProfiles" | "edition" | "budgets" | "billing" | "managedPolicy" | "cloudHome" | "team" | "workspaceBanner"
 >;
 
 export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
@@ -413,7 +413,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     xai: frame.xai,
     mistral: frame.mistral,
     cerebras: frame.cerebras,
-    groq: frame.groq, greenference: frame.greenference, deepseek: frame.deepseek,
+    groq: frame.groq, greenference: frame.greenference, modelgo: frame.modelgo, deepseek: frame.deepseek,
     meta: frame.meta, xResearch: frame.xResearch, treg: frame.treg, postiz: frame.postiz,
     anthropic: frame.anthropic,
     openai: frame.openai,
@@ -444,7 +444,7 @@ export function configStatusFromFrame(frame: ConfigStatusFrame): ConfigStatus {
     budgets: frame.budgets,
     billing: frame.billing,
     managedPolicy: frame.managedPolicy,
-    ...(frame.cloudHome ? { cloudHome: true } : {}), ...(frame.team ? { team: frame.team } : {}), ...(frame.workspaceBanner ? { workspaceBanner: frame.workspaceBanner } : {}),
+    ...(frame.cloudHome ? { cloudHome: true } : {}), ...(frame.team ? { team: frame.team } : {}), ...(frame.awakeLimit !== undefined ? { awakeLimit: frame.awakeLimit } : {}), ...(frame.pausedBots ? { pausedBots: frame.pausedBots } : {}), ...(frame.workspaceBanner ? { workspaceBanner: frame.workspaceBanner } : {}),
   };
 }
 
@@ -471,13 +471,13 @@ export interface InstanceInfo extends InstanceEndpointInfo {
     version?: string | null;
     update?: { title: string; message: string; command: string };
     billing?: "metered" | "subscription";
-    warning?: { title: string; message: string };
+    warning?: { title: string; message: string }; ollama?: import("../../shared/local-model").OllamaProblem;
   };
   /** What one tiny test message through this AI showed, for its current sign-in; absent until one is sent. */
   aiTest?: import("../../shared/ai-ranking").AiTestState;
   /** Why it didn't answer, in plain words, when it said (signed out, a used-up limit…). */
   aiTestError?: string;
-  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean; loaded?: boolean; provider?: string; variants?: ModelVariantOption[]; orgBlocked?: true; local?: import("../../shared/local-model").LocalModelFacts }> };
+  models: { default: string; options: Array<{ id: string; label: string; custom?: boolean; loaded?: boolean; provider?: string; variants?: ModelVariantOption[]; orgBlocked?: true; needsCliUpdate?: string; local?: import("../../shared/local-model").LocalModelFacts }> };
   capabilities?: {
     computerMcp?: boolean;
     agentsMcp?: boolean;
@@ -2597,13 +2597,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             method: "POST",
             body: JSON.stringify(restrictedCopyRequest(source)),
           })
-            .then(({ bot }) =>
+            .then(({ bot, paused }) =>
               api(`/api/bots/${bot.id}`, {
                 method: "PATCH",
                 body: JSON.stringify(duplicateProfile),
-              }).then(({ bot: patched }) =>
-                rawDispatch({ type: "botAdded", bot: { ...bot, ...patched, messages: bot.messages } }),
-              ),
+              }).then(({ bot: patched }) => {
+                rawDispatch({ type: "botAdded", bot: { ...bot, ...patched, messages: bot.messages } });
+                if (paused) showCreatedPaused(bot.id);
+              }),
             )
             .catch(showError);
           break;

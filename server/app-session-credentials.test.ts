@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ChatGptPlanAuthController } from "./drivers/chatgpt-plan-auth.ts";
 import { claudeAuthStatus } from "./drivers/claude-auth-status.ts";
-import { LOGINS_FILE, LOGINS_KEY_FILE, VaultStore as LoginStore } from "./vault-store.ts";
+import { LOGINS_FILE, LOGINS_KEY_FILE, MEMBER_SECRETS_FILE, VaultStore as LoginStore } from "./vault-store.ts";
 import { McpOAuthStore } from "./mcp-oauth-store.ts";
 import { SecretVault } from "./secret-vault.ts";
 import { appLoginKeychainForbidden, appSessionCredentials } from "./app-session-credentials.ts";
@@ -51,9 +51,12 @@ it("keeps pre-existing MCP OAuth and saved-login files untouched and refuses per
   const oauthFile = join(root, "mcp-oauth.json");
   const loginFile = join(root, LOGINS_FILE);
   const keyFile = join(root, LOGINS_KEY_FILE);
+  const memberFile = join(root, MEMBER_SECRETS_FILE);
   const oldOauth = Buffer.from(JSON.stringify({ servers: { docs: { url: "https://example.test/mcp", state: "signed-in", tokens: { access: "old-synthetic" } } } }));
   const oldLogins = Buffer.from("old synthetic encrypted login bytes");
   const oldKey = Buffer.from("ab".repeat(32));
+  const oldMembers = Buffer.from("old synthetic member secret bytes");
+  writeFileSync(memberFile, oldMembers);
   writeFileSync(oauthFile, oldOauth); writeFileSync(loginFile, oldLogins); writeFileSync(keyFile, oldKey);
   const oauth = new McpOAuthStore(oauthFile);
   expect(oauth.get("docs", "https://example.test/mcp")).toBeUndefined();
@@ -63,9 +66,13 @@ it("keeps pre-existing MCP OAuth and saved-login files untouched and refuses per
   expect(() => logins.create({ site: "example.test", hosts: ["example.test"], exactHost: false,
     username: "synthetic", password: "new-synthetic", source: "settings", bots: "all" })).toThrow("session-only credential mode");
   expect(() => logins.setOnePasswordToken("new-synthetic")).toThrow("session-only credential mode");
+  expect(logins.listSecrets({ person: "fixture@example.test", team: true })).toEqual([]);
+  expect(() => logins.saveSecret({ name: "Fixture key", value: "new-synthetic", source: "settings", bots: "all",
+    person: "fixture@example.test" })).toThrow("session-only credential mode");
   expect(readFileSync(oauthFile)).toEqual(oldOauth);
   expect(readFileSync(loginFile)).toEqual(oldLogins);
   expect(readFileSync(keyFile)).toEqual(oldKey);
+  expect(readFileSync(memberFile)).toEqual(oldMembers);
 });
 
 it("refuses persistent secret files while one-use memory refs remain available", () => {

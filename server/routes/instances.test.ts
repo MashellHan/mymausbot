@@ -12,6 +12,7 @@ import { ENGINE_LIST_REUSE_MS, ProviderRegistry } from "../harness/registry.ts";
 import { hostedModelPolicy } from "../hosted-models.ts";
 import { json, readBody } from "../harness/http.ts";
 import { ProviderAuthSessions } from "../provider-auth-sessions.ts";
+import type { RequestAuth } from "../request-auth.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { createInstanceRoutes, type InstanceRouteDeps } from "./instances.ts";
@@ -24,7 +25,7 @@ afterEach(async () => {
   for (const directory of directories.splice(0)) await removeTempDir(directory);
 });
 
-async function serve(extra: Partial<InstanceRouteDeps> = {}) {
+async function serve(extra: Partial<InstanceRouteDeps> = {}, auth: RequestAuth = { kind: "loopback", scopes: ["admin"] }) {
   const fake = makeFakeDriver();
   const cfg = extra.cfg ?? { instances: { a: { driver: "fake" } } } as AppConfig;
   const registry = new ProviderRegistry([fake.driver]);
@@ -61,7 +62,7 @@ async function serve(extra: Partial<InstanceRouteDeps> = {}) {
     const url = new URL(req.url ?? "/", "http://localhost");
     const handled = await dispatchRoutes(routes, {
       req, res, url, path: url.pathname, method: req.method ?? "GET",
-      auth: { kind: "loopback", scopes: ["admin"] }, json, readBody,
+      auth, json, readBody,
     });
     if (!handled) json(res, 404, { from: "inline routes" });
   });
@@ -169,6 +170,22 @@ describe("the engine list", () => {
     expect(response.instances[0].models.options[0].providerRoute).toEqual({ id: "connection", provenance: "configured" });
     expect(JSON.stringify(response)).not.toContain(token);
     expect(JSON.stringify(response)).not.toContain("admin.example.test");
+  });
+});
+
+describe("whether the server can start a bot", () => {
+  it("counts the engines that are available and names none of them", async () => {
+    const { call } = await serve({
+      describeInstances: async () => [
+        { instanceId: "claude", snapshot: { state: "available" } },
+        { instanceId: "codex", snapshot: { state: "needs-login" } },
+        { instanceId: "custom-1", snapshot: { state: "available" } },
+        { instanceId: "broken" },
+      ],
+    });
+    expect(await call("GET", "/api/health/engines")).toEqual({ app: "openmausbot", engines: 2 });
+    const none = await serve({ describeInstances: async () => [{ instanceId: "codex", snapshot: { state: "unavailable" } }] });
+    expect(await none.call("GET", "/api/health/engines")).toEqual({ app: "openmausbot", engines: 0 });
   });
 });
 
@@ -372,3 +389,32 @@ describe("hiding a provider", () => {
   });
 });
 
+
+describe("looking for Ollama", () => {
+  it("answers what one address said, and refuses an address that is not one", async () => {
+    const ollama = createServer((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/tags") return response.end(JSON.stringify({ models: [{ name: "qwen3:4b", size: 2_500_000_000, details: { parameter_size: "4.0B" } }] }));
+      if (request.url === "/api/version") return response.end(JSON.stringify({ version: "0.12.6" }));
+      response.statusCode = 404;
+      response.end("{}");
+    });
+    servers.push(ollama);
+    await new Promise<void>((ready) => ollama.listen(0, "127.0.0.1", ready));
+    const address = `http://127.0.0.1:${(ollama.address() as AddressInfo).port}`;
+    const { call, base } = await serve();
+    expect(await call("GET", `/api/instances/ollama?url=${encodeURIComponent(`${address}/v1`)}`)).toEqual({
+      status: { state: "ready", url: address, version: "0.12.6", models: [{ name: "qwen3:4b", bytes: 2_500_000_000, parameters: "4.0B" }] },
+    });
+    const refused = await fetch(`${base}/api/instances/ollama?url=${encodeURIComponent("ftp://127.0.0.1:11434")}`);
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toEqual({ error: "Enter an http or https address, such as http://127.0.0.1:11434." });
+  });
+
+  it("is only for the owner: a shared server's bot shell or a hosted workspace can't make this server ask an address", async () => {
+    const shell = await serve({}, { kind: "loopback", scopes: ["admin"], trust: "service" });
+    expect((await fetch(`${shell.base}/api/instances/ollama?url=${encodeURIComponent("http://127.0.0.1:9")}`)).status).toBe(403);
+    const hosted = await serve({ hostedModels: true });
+    expect((await fetch(`${hosted.base}/api/instances/ollama`)).status).toBe(403);
+  });
+});

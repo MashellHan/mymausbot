@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url);
 const environments = require("./environments.cjs");
 const localOrigin = require("./local-origin.cjs");
 
-const POPUP = "whats-new-2026-11", BOAT = "boat-credit-2026-11", GROK = "grok-move-2026-11";
+const POPUP = "whats-new-2026-11", BOAT = "boat-credit-2026-11", GROK = "grok-move-2026-11", MODELGO = "modelgo-offer-2026-11";
 const NOON = new Date(2026, 9, 16, 12).getTime();
 const LOCAL = "http://127.0.0.1:18799", CLOUD = "https://omb-u-1.fly.dev", VPS = "https://bots.example.test";
 
@@ -27,7 +27,7 @@ test("a page on an older release keeps working with the longer list: its own ids
 });
 
 test("What's new, Boat's credit offer and the Grok Bot move are the notices a page can record; seen and analytics survive a restart; a broken record never stops the app", () => {
-  assert.deepEqual([...DESKTOP_NOTICES], [POPUP, BOAT, GROK]);
+  assert.deepEqual([...DESKTOP_NOTICES], [POPUP, BOAT, GROK, MODELGO]);
   let saved = null;
   const writes = [];
   const prefs = createDesktopPrefs({ read: () => saved, write: value => { writes.push(value); saved = structuredClone(value); } });
@@ -83,6 +83,21 @@ test("main binds desktop preferences before choosing its startup credential mode
     const app = { getPath: (name) => { assert.equal(name, "userData"); return dir; } };
     assert.equal(vm.runInNewContext(`${startup}\nCREDENTIAL_MODE`, { configureDesktopCredentialMode, app, fs, process }), "session");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("an announcement card's mark and the last sponsor day are kept beside the fixed notices, the newest few only", () => {
+  let saved = { seen: [POPUP] };
+  const prefs = createDesktopPrefs({ read: () => saved, write: value => { saved = structuredClone(value); } });
+  prefs.markSeen("announcement:phone-app"); prefs.markSeen("announcement:phone-app");
+  prefs.markSeen("announcement-sponsor:2026-11-01"); prefs.markSeen("announcement-sponsor:2026-12-01");
+  assert.deepEqual(prefs.seen(), [POPUP, "announcement:phone-app", "announcement-sponsor:2026-12-01"], "one sponsor day: the latest");
+  for (const id of ["announcement:", "announcement:Bad Id", "announcement:x", `announcement:${"x".repeat(41)}`, "announcement-sponsor:soon", "announcement:../../x"]) prefs.markSeen(id);
+  assert.deepEqual(prefs.seen(), [POPUP, "announcement:phone-app", "announcement-sponsor:2026-12-01"], "nothing outside the two shapes is kept");
+  for (let index = 0; index < 45; index++) prefs.markSeen(`announcement:card-${index}`);
+  const marks = prefs.seen().filter(id => id.startsWith("announcement:"));
+  assert.equal(marks.length, 40); assert.equal(marks.at(-1), "announcement:card-44"); assert.ok(prefs.seen().includes(POPUP));
+  const restarted = createDesktopPrefs({ read: () => saved, write: () => {} });
+  assert.deepEqual(restarted.seen(), prefs.seen(), "survives a restart");
 });
 
 test("a write that fails leaves the last whole record on disk, analytics opt-out included", () => {

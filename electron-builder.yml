@@ -147,6 +147,9 @@ mac:
     NSMicrophoneUsageDescription: mymausbot uses the microphone for voice dictation into the composer.
     NSSpeechRecognitionUsageDescription: mymausbot transcribes your voice on-device to type messages for you.
     NSAccessibilityUsageDescription: mymausbot uses Accessibility when you let a bot control this Mac.
+    NSLocalNetworkUsageDescription: mymausbot connects to your phones and your other computers on this network and on Tailscale.
+    NSBonjourServices:
+      - _openmausbot._tcp
     NSScreenCaptureUsageDescription: mymausbot uses Screen Recording so bots can see this Mac before acting.
     NSDownloadsFolderUsageDescription: mymausbot needs access to Downloads to find bot setup files you want to import.
   # Notarization runs manually after the build (notarytool + staple),

@@ -5,6 +5,8 @@ import { nextShortcutBot, shortcutBots, shownBotIds } from "@/lib/sidebar-shortc
 import { useShowThreads } from "@/lib/thread-preferences";
 import { useWelcomeViewer, WelcomeGate } from "@/components/onboarding/WelcomeGate";
 import { MausBotWelcome } from "@/components/MausBotWelcome";
+import { NewBotNameHost } from "@/components/NewBotName";
+import { MemberApps } from "@/components/MemberApps";
 import { CloudTimeZoneSync } from "@/components/CloudTimeZone";
 import { cloudSignInDue, spotlightsQuiet, type WelcomeViewer } from "@/lib/onboarding";
 import { FirstConversationTour } from "@/components/onboarding/FirstConversationTour";
@@ -33,6 +35,7 @@ import { NotificationRail, NotificationsPanel } from "@/components/Notifications
 import { useNotificationFeed } from "@/lib/notification-preferences";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { AppNotices } from "@/components/AppNotices";
+import { AppGrantNotice } from "@/components/AppGrantPrompt";
 import { BotLimitPopup } from "@/components/BotLimitPopup";
 import { CloudAsleepStrip } from "@/components/CloudAsleepStrip";
 import { LiveConnectionStrip } from "@/components/LiveConnectionStrip";
@@ -57,7 +60,7 @@ import { cloudIntentDue, cloudIntentShown, useCloudIntent } from "@/lib/cloud-in
 import { CloudSetup } from "@/components/CloudSetup";
 import { CloudWelcome } from "@/components/cloud-welcome/CloudWelcome";
 import { TeamWelcome } from "@/components/TeamWelcome";
-import { teamWelcomeDue, useTeamWelcomeRecord } from "@/lib/team-welcome";
+import { invitedToTeam, teamWelcomeDue, useTeamWelcomeRecord } from "@/lib/team-welcome";
 import { WelcomeKeeper } from "@/components/cloud-welcome/WelcomeKeeper";
 import { EmptyChatShell } from "@/components/onboarding/EmptyChatShell";
 import { cloudFirstRun, cloudWelcomeVisible, useCloudWelcome } from "@/lib/cloud-welcome";
@@ -179,8 +182,9 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
     && state.activeView === "chat" && !(!remoteClient && localVmWorkspaceBotId);
   const firstRun = cloudFirstRun({ welcome: welcomeOnScreen, intent: cloudAsk, signIn: cloudSignIn || cloudJobWaiting });
   const team = state.config?.team ?? null;
-  const teamWelcomeRecord = useTeamWelcomeRecord(team && viewer?.canSave === false ? team.id : null);
-  const teamWelcomeOn = teamWelcomeDue({ team, canSave: viewer?.canSave, record: teamWelcomeRecord }) && state.activeView === "chat";
+  const invited = invitedToTeam(viewer);
+  const teamWelcomeRecord = useTeamWelcomeRecord(team && invited ? team.id : null);
+  const teamWelcomeOn = teamWelcomeDue({ team, invited, record: teamWelcomeRecord }) && state.activeView === "chat";
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -451,7 +455,8 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       <CloudHowTo />
       <CloudSetup viewer={viewer} welcomeShown={welcomeOnScreen} />
       <WelcomeKeeper viewer={viewer} />
-      {state.pluginsOpen && <PluginsPanel />}
+      {state.pluginsOpen && (team && viewer?.canSave === false ? <MemberApps /> : <PluginsPanel />)}
+      <AppGrantNotice />
       {state.shortcutsOpen && (
         <KeyboardShortcutsModal
           open={state.shortcutsOpen}
@@ -491,6 +496,7 @@ function Application() {
         </ThreadRefsProvider>
         <WelcomeGate viewer={viewer} />
         <MausBotWelcome viewer={viewer} />
+        <NewBotNameHost />
         <CloudTimeZoneSync viewer={viewer} />
         <GuidedTour />
         <LiveCallHost />
