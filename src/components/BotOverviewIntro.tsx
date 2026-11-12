@@ -1,19 +1,46 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, Loader2, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, Sparkles } from "lucide-react";
 import type { MiniAppSuggestionReason, MiniAppSuggestionsRequest, MiniAppSuggestionsResult } from "../../shared/mini-apps";
 import type { Routine, RoutineRun, RoutineRunOn } from "@/lib/routines";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { usePageVisible } from "@/lib/page-visible";
-import { api, type Bot } from "@/state/store";
+import { api, useStore, type Bot } from "@/state/store";
 import { BotAvatar } from "./Avatar";
 import { ModelPicker } from "./ModelPicker";
+import { modelName } from "@/lib/simple-model-menu";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { RowIcon, RowText, rowCls } from "./bot-panel/rows";
 import { MiniAppIcon, iconKindForApp } from "./mini-apps/MiniAppIcon";
 import { miniAppDisplayName } from "./mini-apps/mini-app-display";
 import { miniAppNativeFrameGuard } from "./mini-apps/native-frame-guard";
+
+function OverviewModel({ bot }: { bot: Bot }) {
+  const { state } = useStore();
+  const [expanded, setExpanded] = useState(false);
+  const selection = bot.modelSelection;
+  const instance = state.instances.find((candidate) => candidate.instanceId === selection.instanceId);
+  const summary = modelName(instance, selection.model, selection.variant);
+
+  return <section data-panel-card="model">
+    <button type="button" aria-expanded={expanded} aria-controls="bot-overview-model-content" onClick={() => setExpanded((open) => !open)}
+      className="flex w-full min-w-0 items-center gap-3 rounded-lg px-1 py-2 text-left hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent">
+      <RowIcon icon={Sparkles} />
+      <span className="min-w-0 flex-1">
+        <span data-panel-model-title="" className="block text-[15px] font-semibold text-ink">{t("model.simple.model")}</span>
+        <span className="block truncate text-[12px] text-ink-secondary" title={summary}>{summary}</span>
+      </span>
+      <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform", expanded && "rotate-180")} aria-hidden="true" />
+    </button>
+    <div id="bot-overview-model-content" hidden={!expanded}>{expanded &&
+      <div data-panel-row="model" className={cn(rowCls, "rounded-[8px]")}>
+        <ModelPicker bot={bot} contained threadId={bot.threadId} showReasoning
+          label={<RowText title={t("model.simple.model")} />} />
+      </div>}
+    </div>
+  </section>;
+}
 
 function suggestionReason(reason: MiniAppSuggestionReason): string {
   return reason.kind === "task" ? reason.capability
@@ -65,12 +92,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
       <BotAvatar bot={bot} size={52} state="happy" animated={false} />
       <h1 className="min-w-0 truncate text-[19px] font-semibold leading-7 text-ink" title={bot.name}>{bot.name}</h1>
     </header>
-    <section data-panel-card="model">
-      <div data-panel-row="model" className={cn(rowCls, "rounded-[8px]")}>
-        <ModelPicker bot={bot} contained threadId={bot.threadId}
-          label={<span className="flex shrink-0 items-center gap-2.5"><RowIcon icon={Sparkles} /><RowText title={t("model.simple.model")} /></span>} />
-      </div>
-    </section>
+    <OverviewModel key={`model:${bot.id}`} bot={bot} />
     <RoutinesSection key={bot.id} bot={bot} routines={routines} runs={runs} defaultRunOn={defaultRunOn} compact />
     <section aria-label={t("model.suggested")}>
       <div className="mb-3 flex items-center justify-between gap-3">

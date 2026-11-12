@@ -7,7 +7,7 @@ import type { Bot } from "@/state/store";
 import { setLocale } from "@/lib/i18n";
 
 const fixture = vi.hoisted(() => ({ api: vi.fn(), owner: true, visible: true }));
-vi.mock("@/state/store", () => ({ api: fixture.api }));
+vi.mock("@/state/store", () => ({ api: fixture.api, useStore: () => ({ state: { instances: [] } }) }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.owner }));
 vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => fixture.visible }));
 vi.mock("./Avatar", () => ({ BotAvatar: () => null }));

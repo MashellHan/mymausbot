@@ -33,8 +33,8 @@ function FilesWithLibrary({ bot, filePreview, onPreviewClose }: { bot: Bot; file
         intro={PAGES[page].intro ? t(PAGES[page].intro, { name: bot.name }) : undefined} onBack={back} />
       <div className={cn("mt-4", pageSurfaceCls)}><PageBody page={page} bot={bot} derived={derived} onOpen={openPage} /></div>
     </div> : <>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <ComputerFilesPane bot={bot} filePreview={filePreview} onPreviewClose={onPreviewClose} showFolder={false} />
+      <div className={cn("flex min-h-0 flex-col overflow-hidden", filePreview?.botId === bot.id && "flex-1")}>
+        <ComputerFilesPane bot={bot} filePreview={filePreview} onPreviewClose={onPreviewClose} showFolder={false} bounded />
       </div>
       {!filePreview && <div data-testid="files-library-links" className="max-h-[42%] shrink-0 overflow-y-auto border-t border-hairline/50 px-4 pb-5">
         <LibraryTab bot={bot} onOpen={openPage} embedded />

@@ -89,13 +89,22 @@ const finishedRun: RoutineRun = {
   createdAt: Date.UTC(2026, 8, 6, 9),
 };
 
-function render(routines: Routine[], runs: RoutineRun[]) {
+function render(routines: Routine[], runs: RoutineRun[], compact = false) {
   return renderToStaticMarkup(
-    createElement(RoutinesSection, { bot, routines, runs }),
+    createElement(RoutinesSection, { bot, routines, runs, compact }),
   );
 }
 
 describe("RoutinesSection", () => {
+  it("uses a singular heading without an inflated compact count", () => {
+    const compact = render([activeRoutine, pausedRoutine], [], true);
+    expect(compact).toContain(">Routine</h2><button");
+    expect(compact).not.toContain("Automations");
+    const full = render([activeRoutine, pausedRoutine], []);
+    expect(full).toContain(">Routines</h2><span");
+    expect(full).toContain(">2</span>");
+  });
+
   it("shows an empty state when the bot has no routines", () => {
     const markup = render([], []);
     expect(markup).toContain("No schedules yet.");
