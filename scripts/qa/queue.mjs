@@ -54,8 +54,21 @@ export async function recoverQa(state, { api = github, readArtifact = artifactFi
   const reporterRuns = (await api("/actions/workflows/qa-report.yml/runs?per_page=100")).workflow_runs;
   const reporting = reporterRuns.some((run) => run.status !== "completed");
   const reported = new Set(reporterRuns.filter((run) => run.conclusion === "success").map((run) => Number(run.display_title?.match(/^QA report (\d+)$/)?.[1])));
-  const backlog = fullRuns.filter((run) => run.status === "completed" && sinceInstallation(run)
-    && !reported.has(run.id)).at(-1);
+  let backlog;
+  if (!reporting) for (const run of [...runs].reverse()) {
+    if (run.status !== "completed" || !sinceInstallation(run) || reported.has(run.id) || run.id === unreportable?.runId) continue;
+    if (fullRuns.includes(run)) { backlog = run; break; }
+    const evidence = await fullRunEvidence(run, { api, readArtifact, repository, now });
+    if (evidence !== "full") continue;
+    if (run.event !== "push") {
+      const jobs = await runJobs(run.id, run.run_attempt, api);
+      const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", api);
+      const plan = await runPlan(run, jobs, artifacts, { api, readArtifact });
+      if (!plan || !fullRunPlan(plan)) continue;
+    }
+    backlog = run;
+    break;
+  }
   const deliver = !qa.report && latest ? latest : backlog;
   if (deliver && !reporting) {
     const key = `${deliver.id}:${deliver.run_attempt}`;

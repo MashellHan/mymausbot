@@ -1008,6 +1008,45 @@ describe("Lead queue and bounded recovery", () => {
     expect(calls).toEqual([]);
   });
 
+  it.each([
+    { name: "delivered newer full run", newerHasPlan: true },
+    { name: "planless newer run", newerHasPlan: false },
+  ])("backfills an older trusted report behind a $name without changing latest health", async ({ newerHasPlan }) => {
+    const newest = { ...run, id: 202, event: "workflow_dispatch", head_sha: "c".repeat(40) };
+    const older = { ...run, id: 201, event: "workflow_dispatch", head_sha: "b".repeat(40),
+      created_at: new Date(now - 120_000).toISOString() };
+    const anchor = { ...run, id: 200, created_at: new Date(now - HOUR_MS).toISOString() };
+    const calls: { path: string; runId: string }[] = [];
+    const api = async (path: string, options: any = {}) => {
+      if (options.method === "POST") { calls.push({ path, runId: options.body.inputs?.run_id }); return null; }
+      if (path.includes("ci.yml/runs")) return { workflow_runs: [newest, older, anchor] };
+      if (path.includes("qa-report.yml/runs")) return { workflow_runs: [
+        { status: "completed", conclusion: newerHasPlan ? "success" : "failure", display_title: `QA report ${newest.id}` },
+        { status: "completed", conclusion: "failure", display_title: `QA report ${older.id}` },
+      ] };
+      const id = Number(path.match(/^\/actions\/runs\/(\d+)\//)?.[1]);
+      if (path.includes("/jobs?filter=all")) return { jobs: id === older.id || id === newest.id && newerHasPlan
+        ? [passedPreflight("typecheck + lint")] : [] };
+      if (path.includes("/artifacts?")) return { artifacts: id === older.id || id === newest.id && newerHasPlan
+        ? [{ name: "qa-plan-attempt-1", id: 9, workflow_run: { id } }] : [] };
+      throw new Error(path);
+    };
+    const readArtifact = async (artifact: { workflow_run: { id: number } }) => ({ "qa-plan.json": JSON.stringify(
+      pushPlan(ciOutputs(FULL_SCOPE, ALL_OS), artifact.workflow_run.id === newest.id ? newest : older)) });
+    const health = async () => newerHasPlan
+      ? { healthy: true, report: { ...report, runId: newest.id, sha: newest.head_sha, executionComplete: true } }
+      : { healthy: false, reason: "latest run has no trusted report" };
+    const state: Record<string, unknown> = { startedAt: new Date(now - 30 * 60_000).toISOString(), recoveryFor: anchor.id };
+    const result = await recoverQa(state, { api, readArtifact, health, now, repository });
+    await recoverQa(state, { api, readArtifact, health, now: now + 1, repository });
+    expect(result.healthy).toBe(newerHasPlan);
+    expect(calls).toEqual([{ path: "/actions/workflows/qa-report.yml/dispatches", runId: String(older.id) }]);
+    expect(state).toMatchObject({ recoveryFor: anchor.id, reportRetry: { [`${older.id}:1`]: now },
+      lastRecoveryDecision: { action: newerHasPlan ? "reuse" : "hold",
+        reason: newerHasPlan ? "fresh_completed_full" : "missing_trusted_plan",
+        candidate: newerHasPlan ? { runId: newest.id } : null } });
+  });
+
   it("waits through the daily grace window, recovers once, and leaves a running bootstrap alone", async () => {
     const scheduled = { ...run, updated_at: new Date(now - 24 * HOUR_MS).toISOString() };
     const calls: string[] = [];
