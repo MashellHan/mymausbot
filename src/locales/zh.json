@@ -4826,6 +4826,7 @@
   "routines.noNextRun": "尚未计划下次运行",
   "routines.nextRun": "下次 {time}",
   "routines.latestRun": "最新：{status}",
+  "routines.lastRunPrefix": "上次：",
   "routines.neverRun": "尚未运行",
   "routines.continuityLabel": "记住上次执行",
   "routines.continuityHelp": "每次执行都以上次执行的报告开始，让机器人知道上次发现了什么。适合 QA 或监控这类检查。",

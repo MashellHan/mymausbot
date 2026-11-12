@@ -2153,6 +2153,7 @@
   "routines.noNextRun": "Наступний запуск не заплановано",
   "routines.nextRun": "Наступний {time}",
   "routines.latestRun": "Останній: {status}",
+  "routines.lastRunPrefix": "Останній:",
   "routines.neverRun": "Ще не запускався",
   "routines.loading": "Завантажуємо рутини…",
   "routines.loadError": "Не вдалося оновити рутини. Повторюємо… Збережена інформація може бути застарілою.",

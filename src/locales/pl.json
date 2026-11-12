@@ -4223,6 +4223,7 @@
   "routines.noNextRun": "Brak zaplanowanego następnego uruchomienia",
   "routines.nextRun": "Następne: {time}",
   "routines.latestRun": "Ostatnie: {status}",
+  "routines.lastRunPrefix": "Ostatnie:",
   "routines.neverRun": "Jeszcze nie uruchomiono",
   "routines.continuityLabel": "Pamiętaj ostatnie uruchomienie",
   "routines.continuityHelp": "Każde uruchomienie zaczyna się od raportu z poprzedniego uruchomienia, więc bot wie, co znalazł ostatnio. Przydatne w kontrolach, takich jak QA lub monitorowanie.",
