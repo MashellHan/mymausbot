@@ -7,7 +7,7 @@ describe("model provider routes", () => {
     const described = [
       { instanceId: "codex", driverKind: "codex", models: { default: "gpt", options: [
         { id: "gpt", label: "GPT" },
-        { id: "omlx::Qwen", label: "Qwen", custom: true },
+        { id: "omlx::Qwen", label: "Qwen", custom: true, providerRoute: { id: "local:omlx", label: "oMLX", provenance: "local" as const } },
       ] } },
       { instanceId: "other", driverKind: "other", models: { default: "m", options: [{ id: "m", label: "M" }] } },
     ];
@@ -17,6 +17,26 @@ describe("model provider routes", () => {
       { id: "local:omlx", label: "oMLX", provenance: "local" },
     ]);
     expect((result[1].models.options[0] as any).providerRoute).toEqual({ id: "unknown", provenance: "unknown" });
+  });
+
+  it("does not infer a local provider from remote reserved or host-shaped model IDs", () => {
+    const described = [
+      { instanceId: "remote", driverKind: "openai-compat", models: { default: "ollama", options: [
+        { id: "ollama", label: "Ollama", custom: true },
+        { id: "omlx::M", label: "M", custom: true, providerRoute: { id: "configured:opaque", label: "Remote route", provenance: "configured" as const } },
+      ] } },
+      { instanceId: "unconfigured", driverKind: "other", models: { default: "omlx::M", options: [
+        { id: "omlx::M", label: "M", custom: true },
+      ] } },
+    ];
+    const configs = { remote: { driver: "openai-compat", config: { url: "https://remote.example.test/v1" } } };
+    const result = withModelProviderRoutes(described, configs) as typeof described;
+    expect(result[0].models.options.map((option) => (option as any).providerRoute)).toEqual([
+      { id: "connection", provenance: "configured" },
+      { id: "configured:opaque", label: "Remote route", provenance: "configured" },
+    ]);
+    expect((result[1].models.options[0] as any).providerRoute).toEqual({ id: "unknown", provenance: "unknown" });
+    expect(result[0].models.options.map((option) => option.id)).toEqual(["ollama", "omlx::M"]);
   });
 
   it("bounds configured names and drops a route that resembles a credential-bearing URL", () => {

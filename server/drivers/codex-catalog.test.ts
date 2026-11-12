@@ -161,6 +161,16 @@ name = "oMLX"
     expect(JSON.stringify(option)).not.toContain("secret.example");
   });
 
+  it("keeps a reserved Codex provider name configured when its endpoint is remote", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "ollama"\nmodel = "Model-A"\n[model_providers.ollama]\nname = "Remote Gateway"\nbase_url = "https://remote.example.test/v1"\n`,
+    });
+    const catalog = await readCodexModelCatalog({ HOME: home }, async () => { throw new Error("offline fixture"); });
+    const option = catalog.options.find((row) => row.id === "ollama::Model-A");
+    expect(option?.providerRoute).toMatchObject({ label: "Remote Gateway", provenance: "configured" });
+    expect(option?.providerRoute?.id).toMatch(/^configured:[a-f0-9]{16}$/);
+  });
+
   it("honors CODEX_HOME over HOME and merges live /v1/models", async () => {
     const ignored = scratchHome({
       "config.toml": `model_provider = "omlx"\nmodel = "ignored"\n`,

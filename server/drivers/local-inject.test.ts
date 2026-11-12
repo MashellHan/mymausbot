@@ -234,8 +234,23 @@ describe("mergeLocalInject", () => {
       },
     );
     expect(catalog.options[0]).toEqual({ id: "claude-sonnet-5", label: "Claude Sonnet 5" });
-    expect(catalog.options.some((option) => option.id === "omlx::GLM-5.2-fp8" && option.custom)).toBe(true);
+    expect(catalog.options.find((option) => option.id === "omlx::GLM-5.2-fp8")).toMatchObject({
+      custom: true, providerRoute: { id: "local:omlx", label: "oMLX", provenance: "local" },
+    });
     expect(catalog.options.some((option) => option.id.includes("nomic"))).toBe(false);
+  });
+
+  it("preserves a configured route when a probed local host has the same encoded ID", async () => {
+    const catalog = await mergeLocalInject(
+      { default: "omlx::M", options: [{ id: "omlx::M", label: "Remote M", custom: true,
+        providerRoute: { id: "configured:remote", label: "Remote Gateway", provenance: "configured" } }] },
+      { VITEST: "true", OPENMAUSBOT_PROBE_LOCAL_INJECT: "1" },
+      async (url) => String(url).includes(":8080")
+        ? new Response(JSON.stringify({ data: [{ id: "M" }] }), { status: 200 })
+        : new Response("nope", { status: 500 }),
+    );
+    expect(catalog.options.find((option) => option.id === "omlx::M")?.providerRoute)
+      .toEqual({ id: "configured:remote", label: "Remote Gateway", provenance: "configured" });
   });
 
   it("drops a leftover custom API id that a live inject already covers", async () => {

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 
 import type { ModelProviderRoute } from "../shared/model-provider-route.ts";
 import type { InstanceConfigMap, ModelCatalog } from "./contracts.ts";
-import { localHost } from "./drivers/local-inject.ts";
 
 const LABEL = /^[\p{L}\p{N}][\p{L}\p{N} ._()-]{0,79}$/u;
 const ROUTE_ID = /^[a-z0-9:_-]{1,80}$/;
@@ -22,11 +21,6 @@ export function configuredProviderRoute(id: string, label?: string): ModelProvid
   return { id: `configured:${digest}`, ...(safe ? { label: safe } : {}), provenance: "configured" };
 }
 
-export function localProviderRoute(id: string): ModelProviderRoute | undefined {
-  const host = localHost(id);
-  return host ? { id: `local:${host.id}`, label: host.label, provenance: "local" } : undefined;
-}
-
 function safeRoute(value: unknown): ModelProviderRoute | undefined {
   if (!value || typeof value !== "object") return undefined;
   const route = value as Partial<ModelProviderRoute>;
@@ -43,17 +37,20 @@ export function withModelProviderRoutes(described: unknown, configs: InstanceCon
   return described.map((instance: DescribedInstance) => {
     if (!instance || typeof instance.instanceId !== "string" || typeof instance.driverKind !== "string" ||
       !Array.isArray(instance.models?.options)) return instance;
-    const config = configs[instance.instanceId];
+    const candidate = configs[instance.instanceId];
+    const config = candidate?.driver === instance.driverKind ? candidate : undefined;
     const label = providerLabel(config?.displayName);
-    const configured = config?.displayName ? { id: "connection", ...(label ? { label } : {}), provenance: "configured" as const } : undefined;
-    const codexConfig = instance.driverKind === "codex" ? config?.config as { endpoint?: unknown; managed?: unknown; authMode?: unknown } | undefined : undefined;
+    const settings = config?.config && typeof config.config === "object" && !Array.isArray(config.config)
+      ? config.config as Record<string, unknown> : {};
+    const configured = config?.displayName || (instance.driverKind === "openai-compat" && typeof settings.url === "string" && settings.url.trim())
+      ? { id: "connection", ...(label ? { label } : {}), provenance: "configured" as const } : undefined;
+    const codexConfig = instance.driverKind === "codex" ? settings : undefined;
     const routedCodex = Boolean(codexConfig?.endpoint || codexConfig?.managed);
     return { ...instance, models: { ...instance.models, options: instance.models.options.map((option) => {
-      const localId = option.custom && !routedCodex ? option.id.split("::", 1)[0] : undefined;
       const route = (routedCodex ? configured ?? { id: "connection", provenance: "configured" as const } : undefined)
-        ?? (localId ? localProviderRoute(localId) : undefined)
+        ?? (codexConfig?.authMode === "chatgpt-plan" ? CODEX_PLAN : undefined)
         ?? safeRoute(option.providerRoute)
-        ?? (instance.driverKind === "codex" && !option.custom ? codexConfig?.authMode === "chatgpt-plan" ? CODEX_PLAN : CODEX_NATIVE : undefined)
+        ?? (instance.driverKind === "codex" && !option.custom ? CODEX_NATIVE : undefined)
         ?? configured ?? UNKNOWN;
       return { ...option, providerRoute: route };
     }) } };

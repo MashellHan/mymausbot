@@ -47,6 +47,7 @@ export interface InstanceRouteDeps {
   providerConfigBusy: BusyFlag;
   providerInstancesChanging: Pick<Set<string>, "add" | "delete">;
   describeInstances(): Promise<unknown>;
+  effectiveProviderConfigs(): InstanceConfigMap;
   persistProviderInstance(instanceId: string, instances: InstanceConfigMap): Promise<void>;
   configStatus(): ConfigStatus;
   broadcast(payload: Record<string, unknown>): void;
@@ -67,7 +68,7 @@ export function createInstanceRoutes(deps: InstanceRouteDeps): RouteHandler {
   } = deps;
   const describeInstances = async () => {
     const configs = persistableInstanceConfigs(cfg);
-    const described = withModelProviderRoutes(await deps.describeInstances(), configs);
+    const described = withModelProviderRoutes(await deps.describeInstances(), deps.effectiveProviderConfigs());
     return hostedModels ? described
       : withEndpointUrls(withCodexEndpointInfo(withClaudeEndpointInfo(described, configs), configs), configs);
   };

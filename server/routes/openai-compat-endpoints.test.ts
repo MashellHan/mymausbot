@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { AppConfig } from "../config.ts";
+import { instanceConfigs, type AppConfig } from "../config.ts";
 import type { InstanceConfigMap } from "../contracts.ts";
 import { json, readBody } from "../harness/http.ts";
 import { endpointBaseUrl, endpointDisplayUrl } from "../openai-compat-endpoints.ts";
@@ -33,6 +33,7 @@ async function serve(options: { hosted?: boolean; botInstance?: string } = {}) {
     describeInstances: async () => Object.entries(cfg.instances ?? {}).map(([instanceId, entry]) => ({
       instanceId, driverKind: entry.driver, displayName: entry.displayName ?? entry.driver,
     })),
+    effectiveProviderConfigs: () => instanceConfigs(cfg),
     persistProviderInstance: async (_id: string, instances: InstanceConfigMap) => {
       cfg.instances = instances;
       persisted.push(structuredClone(instances));

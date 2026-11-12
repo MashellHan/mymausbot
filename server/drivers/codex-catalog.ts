@@ -9,8 +9,8 @@ import { qualifiedModelLabel } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
 import { codexHome } from "./codex-identity.ts";
 import { unconfirmedModelCatalog } from "../startup-model-catalog.ts";
-import { codexLocalProviderArgs, mergeLocalInject } from "./local-inject.ts";
-import { configuredProviderRoute, localProviderRoute, providerLabel } from "../model-provider-routes.ts";
+import { codexInjectHost, codexLocalProviderArgs, localProviderRoute, mergeLocalInject } from "./local-inject.ts";
+import { configuredProviderRoute, providerLabel } from "../model-provider-routes.ts";
 
 export const STATIC_CODEX_MODELS: ModelCatalog = {
   default: "gpt-5.6-sol",
@@ -429,7 +429,7 @@ async function catalogAround(
       id,
       label: niceLabel(extra.model, extra.provider, known, named),
       custom: true,
-      providerRoute: localProviderRoute(extra.provider)
+      providerRoute: (codexInjectHost(extra.provider) ? localProviderRoute(extra.provider) : undefined)
         ?? configuredProviderRoute(extra.provider, known.get(extra.provider)?.name),
     });
   }
