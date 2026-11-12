@@ -604,6 +604,7 @@ describe("requested context window", () => {
 describe("inline overview model settings", () => {
   const options = { contained: true, showReasoning: true, inlineSettings: true };
   const select = (name: string) => host.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`)!;
+  const provider = (instanceId: string, routeId = "unknown") => JSON.stringify([instanceId, routeId]);
   const choose = (control: HTMLSelectElement, value: string) => flushSync(() => {
     control.value = value;
     control.dispatchEvent(new Event("change", { bubbles: true }));
@@ -616,7 +617,10 @@ describe("inline overview model settings", () => {
     await settle();
     expect(menu()).toBeNull();
     expect(chip()).toBeNull();
-    expect(select("AI source").value).toBe("claude");
+    expect(select("Provider").value).toBe(provider("claude"));
+    expect(select("Model type").value).toBe("claudeAgent");
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("Claude");
+    expect(host.querySelector('[data-current-model-settings]')).toBeNull();
     expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Claude Opus 5.5");
     expect(select("Reasoning effort").value).toBe("high");
     expect(select("Context window").value).toBe("256000");
@@ -638,22 +642,86 @@ describe("inline overview model settings", () => {
     expect(menu()).toBeNull();
   });
 
-  it("chooses an AI source before its model without changing the saved selection", async () => {
+  it("previews a provider and its execution driver before committing its model", async () => {
     fixture.instances.push({ ...claude([{ id: "gpt-5.6", label: "GPT-5.6" }]),
-      instanceId: "codex", driverKind: "codex", displayName: "Codex" });
+      instanceId: "codex", driverKind: "codex", displayName: "Work account" });
+    fixture.instances.push({ ...claude([{ id: "proxy-model", label: "Proxy model" }]),
+      instanceId: "proxy", driverKind: "openai-compat", displayName: "Custom connection" });
+    fixture.instances.push({ ...claude([{ id: "future-model", label: "Future model" }]),
+      instanceId: "future", driverKind: "__proto__", displayName: "Not a model type" });
     render(scout(), options);
     await settle();
-    choose(select("AI source"), "codex");
+    choose(select("Provider"), provider("codex"));
     expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect(select("Model type").value).toBe("codex");
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("Codex");
+    expect(host.querySelector('[data-current-model-settings]')?.textContent).toContain("Current model settings · Claude Opus 5.5");
     expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Choose model");
     expect([...select("Choose model").options].map((option) => option.textContent)).not.toContain("Claude Opus 5.5");
+    choose(select("Provider"), provider("proxy"));
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("OpenAI-compatible");
+    choose(select("Provider"), provider("future"));
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("Unknown model type");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
     render({ ...scout(), id: "another-bot" }, options);
     await settle();
-    expect(select("AI source").value).toBe("claude");
-    choose(select("AI source"), "codex");
+    expect(select("Provider").value).toBe(provider("claude"));
+    expect(host.querySelector('[data-current-model-settings]')).toBeNull();
+    choose(select("Provider"), provider("codex"));
     choose(select("Choose model"), JSON.stringify(["codex", "gpt-5.6"]));
     expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
       selection: { instanceId: "codex", model: "gpt-5.6" } }));
+  });
+
+  it("keeps the saved OpenCode provider and model selected when reasoning uses a native variant", async () => {
+    const option: Option = { id: "provider/model", label: "Provider model",
+      providerRoute: { id: "configured:route", label: "Example", provenance: "configured" },
+      variants: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] };
+    fixture.instances = [{ ...claude([option]), instanceId: "opencode", driverKind: "opencodeGo", displayName: "OpenCode",
+      capabilities: { modelVariants: true } }];
+    const bot: Bot = { ...scout(), modelSelection: { instanceId: "opencode", model: option.id, variant: "high" } };
+    render(bot, options);
+    await settle();
+    expect(select("Provider").value).toBe(provider("opencode", "configured:route"));
+    expect(select("Choose model").disabled).toBe(false);
+    expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Provider model");
+    choose(select("Choose model"), JSON.stringify(["opencode", option.id]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: bot.modelSelection }));
+  });
+
+  it("keeps equally named connections and local routes separate by exact instance and route", async () => {
+    const sharedRoute = { id: "native:openai", label: "OpenAI", provenance: "native" as const };
+    fixture.instances = [
+      claude([{ id: "claude-opus-5-5", label: "Opus", providerRoute: { id: "unknown", provenance: "unknown" } }]),
+      { ...claude([{ id: "same", label: "Model A", providerRoute: sharedRoute },
+        { id: "local", label: "Local model", providerRoute: { id: "local:omlx", provenance: "local" } }]),
+        instanceId: "connection-a", driverKind: "codex", displayName: "Same account" },
+      { ...claude([{ id: "same", label: "Model B", providerRoute: sharedRoute }]),
+        instanceId: "connection-b", driverKind: "codex", displayName: "Same account" },
+    ];
+    render(scout(), options);
+    await settle();
+    const providers = select("Provider");
+    expect([...providers.options].map((option) => option.value)).toEqual([
+      provider("claude"), provider("connection-a", "native:openai"),
+      provider("connection-a", "local:omlx"), provider("connection-b", "native:openai"),
+    ]);
+    expect([...providers.options].map((option) => option.textContent)).toEqual([
+      "Unknown connection", "OpenAI · Same account · 1", "Local connection", "OpenAI · Same account · 2",
+    ]);
+    expect([...providers.options].map((option) => option.textContent).join(" ")).not.toMatch(/connection-[ab]|native:openai/);
+
+    choose(providers, provider("connection-a", "native:openai"));
+    expect(select("Model type").value).toBe("codex");
+    expect(select("Model type").selectedOptions[0]!.textContent).toBe("Codex");
+    expect([...select("Choose model").options].map((option) => option.textContent)).not.toContain("Local model");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    choose(select("Choose model"), JSON.stringify(["connection-a", "same"]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { instanceId: "connection-a", model: "same" } }));
+
+    choose(select("Provider"), provider("connection-b", "native:openai"));
+    choose(select("Choose model"), JSON.stringify(["connection-b", "same"]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { instanceId: "connection-b", model: "same" } }));
   });
 
   it("keeps guest changes on their thread and exposes only supported model settings", async () => {
@@ -675,7 +743,8 @@ describe("inline overview model settings", () => {
     const busy = { ...scout(), busy: true };
     render(busy, options);
     await settle();
-    expect(select("AI source").disabled).toBe(true);
+    expect(select("Provider").disabled).toBe(true);
+    expect(select("Model type").disabled).toBe(true);
     expect(select("Choose model").disabled).toBe(true);
     expect(host.querySelector('[data-model-busy-reason]')?.textContent).toContain("Stop this thread's turn before changing its model");
     expect(host.querySelector('[data-model-busy-reason]')?.textContent).toContain("Reasoning level applies from the next message");
@@ -716,7 +785,7 @@ describe("inline overview model settings", () => {
       instanceId: "second", displayName: "Second" });
     render(scout(), options);
     await settle();
-    choose(select("AI source"), "second");
+    choose(select("Provider"), provider("second"));
     expect(host.querySelector('[data-model-settings]')?.textContent).toContain("Sign in for Second's own models");
     const models = select("Choose model");
     expect([...models.options].find((option) => option.textContent === "Official")!.disabled).toBe(true);
