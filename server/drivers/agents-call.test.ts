@@ -127,6 +127,92 @@ describe("create_bot", () => {
   });
 });
 
+describe("create_bot copy_from_bot_id", () => {
+  it("creates a copy from just a name and the bot to copy", async () => {
+    const calls: Array<{ path: string; body: unknown }> = [];
+    const result = await callTool("create_bot", { name: "Bugfixer 2", copy_from_bot_id: " bot-old " }, context({
+      client: {
+        api: async (path, init) => { calls.push({ path, body: JSON.parse(String(init?.body)) }); return { id: "b2", name: "Bugfixer 2" }; },
+        apiResponse: async () => ({ ok: true, status: 200, body: {} }),
+      },
+    }));
+    expect(result.isError).toBeFalsy();
+    expect(calls).toEqual([{ path: "/api/internal/create-bot",
+      body: { fromBotId: "bot-voice", fromThreadId: "thread-voice", name: "Bugfixer 2", role: "", instructions: "", copyFromBotId: "bot-old" } }]);
+  });
+});
+
+describe("team creation with every optional field filled in", () => {
+  // Strict tool-calling engines send each optional field, as "" or null, when they mean to leave it out.
+  const recording = (calls: Array<{ path: string; body: any }>, answer: Record<string, unknown>) => context({
+    client: {
+      api: async (path, init) => { calls.push({ path, body: JSON.parse(String(init?.body)) }); return answer; },
+      apiResponse: async () => ({ ok: true, status: 200, body: {} }),
+    },
+  });
+
+  it("propose_team_setup drops a blank botId on create, a blank key on update and blank effort/variant", async () => {
+    const calls: Array<{ path: string; body: any }> = [];
+    const selection = { instanceId: "codex", model: "gpt-5", effort: "", variant: null };
+    await callTool("propose_team_setup", {
+      reason: "Shop team",
+      operations: [
+        { action: "create", key: "buyer", botId: "", fields: { name: "Buyer", title: "Buyer", soul: "Buy.", modelSelection: selection } },
+        { action: "update", key: " ", botId: "b-1", fields: { modelSelection: { instanceId: "codex", model: "gpt-5", effort: "high", variant: "" } } },
+      ],
+    }, recording(calls, { state: "applied", title: "Team" }));
+    expect(calls[0].body.plan.operations).toEqual([
+      { action: "create", key: "buyer", fields: { name: "Buyer", title: "Buyer", soul: "Buy.", modelSelection: { instanceId: "codex", model: "gpt-5" } } },
+      { action: "update", botId: "b-1", fields: { modelSelection: { instanceId: "codex", model: "gpt-5", effort: "high" } } },
+    ]);
+  });
+
+  it("propose_team_setup keeps a real botId on create so the receiver still names the mistake", async () => {
+    const calls: Array<{ path: string; body: any }> = [];
+    const operations = [{ action: "create", key: "buyer", botId: "b-9", fields: { name: "Buyer" } }];
+    await callTool("propose_team_setup", { reason: "r", operations }, recording(calls, { state: "applied" }));
+    expect(calls[0].body.plan.operations).toEqual(operations);
+  });
+
+  it("create_bot drops blank effort and variant from the model choice", async () => {
+    const calls: Array<{ path: string; body: any }> = [];
+    await callTool("create_bot", { name: "Scout", role: "Ops", instructions: "Work.", modelSelection: { instanceId: "codex", model: "gpt-5", effort: "", variant: "  " } },
+      recording(calls, { id: "b1", name: "Scout" }));
+    expect(calls[0].body.modelSelection).toEqual({ instanceId: "codex", model: "gpt-5" });
+  });
+
+  it("propose_team_setup drops null optional fields but keeps an empty description", async () => {
+    const calls: Array<{ path: string; body: any }> = [];
+    await callTool("propose_team_setup", {
+      reason: "Shop team",
+      operations: [
+        { action: "create", key: "buyer", fields: { name: "Buyer", description: null, cwd: null, chiefOfStaff: null } },
+        { action: "update", botId: "b-1", fields: { description: "" } },
+      ],
+    }, recording(calls, { state: "applied" }));
+    expect(calls[0].body.plan.operations).toEqual([
+      { action: "create", key: "buyer", fields: { name: "Buyer" } },
+      { action: "update", botId: "b-1", fields: { description: "" } },
+    ]);
+  });
+
+  it("propose_model drops blank effort and variant from the model choice", async () => {
+    const calls: Array<{ path: string; body: any }> = [];
+    const result = await callTool("propose_model", { model_selection: { instanceId: "codex", model: "gpt-5", effort: "", variant: null }, reason: "Faster." },
+      recording(calls, { state: "applied" }));
+    expect(result.isError).toBeFalsy();
+    expect(calls[0].body.modelSelection).toEqual({ instanceId: "codex", model: "gpt-5" });
+  });
+
+  it("start_thread drops a blank effort from the model choice", async () => {
+    const calls: Array<{ path: string; body: any }> = [];
+    const result = await callTool("start_thread", { title: "Review", message: "Review it.", model_selection: { instanceId: "codex", model: "gpt-5", effort: " " } },
+      recording(calls, { self: true, state: "queued", threadId: "t-1", title: "Review" }));
+    expect(result.isError).toBeFalsy();
+    expect(calls[0].body.modelSelection).toEqual({ instanceId: "codex", model: "gpt-5" });
+  });
+});
+
 describe("mcp_server", () => {
   it("posts the action and fields and returns the route's text for the model", async () => {
     const calls: Array<{ path: string; method?: string; body: unknown }> = [];
@@ -316,6 +402,29 @@ describe("memory_update", () => {
 
     await callTool("memory_update", { action: "append", text: "The person prefers short answers again" }, ctx);
     expect(isForgotten("The person likes short answers")).toBe(false);
+  });
+
+  it("lets a forgotten fact count again when the person restores it as a change to an existing entry", async () => {
+    const bot = "bot-memory-supersede-forgotten";
+    const ctx = context({ botId: bot, client: harness(bot) });
+    expect((await callTool("memory_update", { action: "append", text: "The person wants replies in English" }, ctx)).isError).toBeFalsy();
+    expect((await callTool("memory_update", { action: "forget", old_text: "long replies" }, ctx)).isError).toBeFalsy();
+    expect(isForgotten("The person likes long replies")).toBe(true);
+
+    const changed = await callTool("memory_update", { action: "supersede", old_text: "The person wants replies in English", text: "The person wants long replies in English" }, ctx);
+    expect(changed.isError, changed.text).toBeFalsy();
+    expect(isForgotten("The person likes long replies")).toBe(false);
+  });
+
+  it("keeps a forgotten fact blocked when a supersede names an entry that is not there", async () => {
+    const bot = "bot-memory-supersede-stale";
+    const ctx = context({ botId: bot, client: harness(bot) });
+    expect((await callTool("memory_update", { action: "append", text: "The person wants replies in English" }, ctx)).isError).toBeFalsy();
+    expect((await callTool("memory_update", { action: "forget", old_text: "long replies" }, ctx)).isError).toBeFalsy();
+
+    const stale = await callTool("memory_update", { action: "supersede", old_text: "The person wants replies in French", text: "The person wants long replies in English" }, ctx);
+    expect(stale.isError).toBe(true);
+    expect(isForgotten("The person likes long replies")).toBe(true);
   });
 
   it("removes a whole dated entry when only its fact is named, never leaving a note with a date and no text", async () => {

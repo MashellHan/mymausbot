@@ -6,12 +6,12 @@ import type { JsonObject } from "./schema.ts";
 
 const SECRET_FIELDS: Record<string, readonly string[]> = {
   xai: ["key"], anthropic: ["key"], mistral: ["key"], cerebras: ["key"],
-  groq: ["key"], greenference: ["key"], meta: ["key"], deepseek: ["key"],
+  groq: ["key"], greenference: ["key"], modelgo: ["key"], meta: ["key"], deepseek: ["key"],
   openai: ["key"], openrouter: ["key"], openaiCompat: ["key"],
   treg: ["key"], postiz: ["key"], composio: ["apiKey", "userId", "sessionId"],
   box: ["token"], opencodeGo: ["apiKey", "providerKeys"],
   tts: ["key", "fishKey", "geminiKey"], decider: ["key", "openrouterKey", "workersAiToken"],
-  imageGen: ["key", "customApiKey"], live: ["key", "keyFor"],
+  imageGen: ["key", "customApiKey", "geminiKey"], live: ["key", "keyFor"],
 };
 const OPAQUE_SECTIONS = ["instances", "mcpServers"] as const;
 const object = (value: unknown): JsonObject | null => value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : null;

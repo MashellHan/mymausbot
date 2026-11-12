@@ -130,6 +130,8 @@ describe("what a bridged turn is listed", () => {
     expect(names(bridgeFor({ botId: WATCHER_OPTIONS_CARD_BOT_ID }).listed)[0]).toBe("create_options_card");
     expect(names(bridgeFor().listed)).not.toContain("create_options_card");
     expect(names(bridgeFor({ memory: false }).listed)).not.toContain("memory_update");
+    expect(bridgeFor().listed.find((tool) => tool.name === "memory_update")!.description)
+      .toContain("supersede, not append, a changed fact or instruction");
     for (const options of [{ chief: true }, { skills: true }, { shared: true }, { cloudHome: true }]) {
       expect(names(bridgeFor(options).listed), JSON.stringify(options)).toEqual(names(bridgeFor().listed));
     }

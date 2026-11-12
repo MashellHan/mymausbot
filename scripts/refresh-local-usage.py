@@ -727,9 +727,13 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                 current = {"version": 2, **{stage: json.loads((Path(temporary) / (stage + ".json")).read_text())
                     for stage in ("github", "ado")}}
                 local_usage_contributions.validate_bindings(current, config)
+                local_usage_contributions.preserve_incomplete_github(previous, current)
+                local_usage_contributions.validate_bindings(current, config)
                 local_usage_contributions.write_private(target, current)
                 print(json.dumps({"primary": "published", "legacy": results.get("legacy", "not-run"),
                     "asOfAt": current["github"]["asOfAt"], "sources": len(current["github"]["sources"]) + len(current["ado"]["sources"]),
+                    "staleSources": sum(source["status"] == "stale" for stage in ("github", "ado")
+                                        for source in current[stage]["sources"]),
                     "elapsedSeconds": round(whole_cycle_seconds - max(0, deadline - time.monotonic()), 1)}))
                 return current
             finally:

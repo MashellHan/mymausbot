@@ -54,6 +54,7 @@ let computerRequests: { method: string; url: string; body: unknown }[] = [];
 let computerResponse: unknown = { current: "local", available: ["local", "vm"] };
 let computerStatus = 200;
 let lastCreateBody: any = null;
+let createBotExtra: Record<string, unknown> = {};
 let lastCreateRoomBody: unknown = null;
 let lastManageRoomBody: unknown = null;
 let lastCredentialBody: any = null;
@@ -299,7 +300,7 @@ beforeAll(async () => {
       req.on("end", () => {
         lastCreateBody = JSON.parse(data);
         res.writeHead(201, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "bot-designer", name: "Pixel", section: "Work", modelSelection: lastCreateBody.modelSelection }));
+        res.end(JSON.stringify({ id: "bot-designer", name: "Pixel", section: "Work", modelSelection: lastCreateBody.modelSelection, ...createBotExtra }));
       });
       return;
     }
@@ -647,6 +648,7 @@ describe("agents-proxy MCP surface", () => {
       "list_threads",
       "close_thread",
       "start_thread",
+      "burst",
       "list_models",
       "vm_exec",
       "attach_file",
@@ -1099,6 +1101,21 @@ describe("agents-proxy MCP surface", () => {
       role: "Product designer",
       instructions: "Design and review the user experience.",
     });
+  });
+
+  it("tells the Chief when the new bot has no cloud computer yet, so handed work runs without one", async () => {
+    const plain = await callTool("create_bot", { name: "Pixel", role: "Product designer", instructions: "Design." });
+    expect(plain.result.content[0].text).not.toContain("cloud computer");
+    createBotExtra = { noCloudComputerYet: true };
+    try {
+      const res = await callTool("create_bot", { name: "Pixel", role: "Product designer", instructions: "Design." });
+      const text = res.result.content[0].text;
+      expect(text).toContain("Created @Pixel in Work");
+      expect(text).toContain("@Pixel has no cloud computer yet");
+      expect(text).toContain("tell the person");
+    } finally {
+      createBotExtra = {};
+    }
   });
 
   it("passes an explicit specialist model selection intact and reports the applied model", async () => {

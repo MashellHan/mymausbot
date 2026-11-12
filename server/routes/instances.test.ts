@@ -1,24 +1,33 @@
 // A finished sign-in step changes what an engine reports: the next engine list probes its CLI again.
 import { createServer, type Server } from "node:http";
+import { mkdtempSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { instanceConfigs, type AppConfig } from "../config.ts";
 import type { ProviderAuthenticationStart, ProviderAuthenticationStatus } from "../contracts.ts";
 import { ENGINE_LIST_REUSE_MS, ProviderRegistry } from "../harness/registry.ts";
+import { hostedModelPolicy } from "../hosted-models.ts";
 import { json, readBody } from "../harness/http.ts";
 import { ProviderAuthSessions } from "../provider-auth-sessions.ts";
+import type { RequestAuth } from "../request-auth.ts";
+import { removeTempDir } from "../testing/cleanup.ts";
 import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { createInstanceRoutes, type InstanceRouteDeps } from "./instances.ts";
 import { dispatchRoutes } from "./table.ts";
 
 const servers: Server[] = [];
+const directories: string[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))));
+  for (const directory of directories.splice(0)) await removeTempDir(directory);
 });
 
-async function serve(extra: Partial<InstanceRouteDeps> = {}) {
+async function serve(extra: Partial<InstanceRouteDeps> = {}, auth: RequestAuth = { kind: "loopback", scopes: ["admin"] }) {
   const fake = makeFakeDriver();
+  const cfg = extra.cfg ?? { instances: { a: { driver: "fake" } } } as AppConfig;
   const registry = new ProviderRegistry([fake.driver]);
   await registry.load({ a: { driver: "fake" } });
   const sign = {
@@ -34,7 +43,7 @@ async function serve(extra: Partial<InstanceRouteDeps> = {}) {
   });
   const deps = {
     store: { bots: [], tasks: () => [] },
-    cfg: { instances: { a: { driver: "fake" } } } as unknown as AppConfig,
+    cfg,
     registry,
     sessions: { isLive: () => true },
     providerAuthSessions: new ProviderAuthSessions(),
@@ -42,6 +51,7 @@ async function serve(extra: Partial<InstanceRouteDeps> = {}) {
     providerConfigBusy: { get: () => false, set: () => {} },
     providerInstancesChanging: new Set<string>(),
     describeInstances: () => registry.describe({ reuse: { ms: ENGINE_LIST_REUSE_MS, changed: () => {} } }),
+    effectiveProviderConfigs: () => instanceConfigs(cfg),
     threadBusy: () => false,
     botForThread: () => null,
     activeGroupTurnForBot: () => null,
@@ -52,7 +62,7 @@ async function serve(extra: Partial<InstanceRouteDeps> = {}) {
     const url = new URL(req.url ?? "/", "http://localhost");
     const handled = await dispatchRoutes(routes, {
       req, res, url, path: url.pathname, method: req.method ?? "GET",
-      auth: { kind: "loopback", scopes: ["admin"] }, json, readBody,
+      auth, json, readBody,
     });
     if (!handled) json(res, 404, { from: "inline routes" });
   });
@@ -112,6 +122,71 @@ describe("the engine list", () => {
     expect(fake.probes).toHaveLength(2);
     expect(await probesAfterList()).toBe(2);
   });
+
+  it("describes exact model routes without joining same-name connections or changing selection IDs", async () => {
+    const cfg = { instances: {
+      a: { driver: "fake", displayName: "Studio Proxy" },
+      b: { driver: "fake", displayName: "Studio Proxy" },
+    } } as unknown as AppConfig;
+    const { call } = await serve({ cfg, describeInstances: async () => ["a", "b"].map((instanceId) => ({
+      instanceId, driverKind: "fake", displayName: "Studio Proxy", snapshot: { state: "available" },
+      models: { default: "M", options: [{ id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }] }] },
+    })) });
+    const { instances } = await call("GET", "/api/instances");
+    expect(instances.map((instance: any) => [instance.instanceId, instance.driverKind, instance.models.options[0]])).toEqual([
+      ["a", "fake", { id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }], providerRoute: { id: "connection", label: "Studio Proxy", provenance: "configured" } }],
+      ["b", "fake", { id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }], providerRoute: { id: "connection", label: "Studio Proxy", provenance: "configured" } }],
+    ]);
+  });
+
+  it("uses the generated ChatGPT-plan config that the registered fleet actually runs", async () => {
+    const cfg = { instances: { codex: { driver: "codex" } } } as AppConfig;
+    const { call } = await serve({ cfg, describeInstances: async () => [{
+      instanceId: "chatgpt", driverKind: "codex", models: { default: "M", options: [{ id: "M", label: "M" }] },
+    }] });
+    expect(instanceConfigs(cfg).chatgpt.config).toMatchObject({ authMode: "chatgpt-plan" });
+    const { instances } = await call("GET", "/api/instances");
+    expect(instances[0].models.options[0].providerRoute).toEqual({ id: "native:chatgpt-plan", label: "OpenAI", provenance: "native" });
+  });
+
+  it("uses the effective hosted Company route without returning its gateway or token", async () => {
+    const root = mkdtempSync(join(tmpdir(), "omb-provider-route-")); directories.push(root);
+    const token = `omb_workspace_${"a".repeat(43)}`;
+    const hosted = hostedModelPolicy(root, {
+      OMB_ADMIN_URL: "https://admin.example.test", OMB_PUBLIC_URL: "https://fixture.example.test",
+      OMB_ADMIN_WORKSPACE: "fixture", OMB_ADMIN_MEMBERSHIP: "portal",
+      OMB_HOSTED_MODEL_TOKEN: token,
+      OMB_HOSTED_MODELS: JSON.stringify({ anthropic: [], openai: ["M"], openrouter: [] }),
+    })!;
+    const { call } = await serve({
+      cfg: { instances: { codex: { driver: "codex" } } } as AppConfig,
+      hostedModels: true,
+      effectiveProviderConfigs: () => hosted.configs(),
+      describeInstances: async () => [{
+        instanceId: "codex", driverKind: "codex", models: { default: "M", options: [{ id: "M", label: "M" }] },
+      }],
+    });
+    const response = await call("GET", "/api/instances");
+    expect(response.instances[0].models.options[0].providerRoute).toEqual({ id: "connection", provenance: "configured" });
+    expect(JSON.stringify(response)).not.toContain(token);
+    expect(JSON.stringify(response)).not.toContain("admin.example.test");
+  });
+});
+
+describe("whether the server can start a bot", () => {
+  it("counts the engines that are available and names none of them", async () => {
+    const { call } = await serve({
+      describeInstances: async () => [
+        { instanceId: "claude", snapshot: { state: "available" } },
+        { instanceId: "codex", snapshot: { state: "needs-login" } },
+        { instanceId: "custom-1", snapshot: { state: "available" } },
+        { instanceId: "broken" },
+      ],
+    });
+    expect(await call("GET", "/api/health/engines")).toEqual({ app: "openmausbot", engines: 2 });
+    const none = await serve({ describeInstances: async () => [{ instanceId: "codex", snapshot: { state: "unavailable" } }] });
+    expect(await none.call("GET", "/api/health/engines")).toEqual({ app: "openmausbot", engines: 0 });
+  });
 });
 
 describe("an engine's check", () => {
@@ -126,9 +201,10 @@ describe("an engine's check", () => {
 describe("installing an engine's own build from Settings", () => {
   async function serveInstall(options: { useCli?: string; busy?: boolean }) {
     const persisted: Array<{ instanceId: string; instances: unknown }> = [];
+    const cfg = { instances: { opencode: { driver: "opencodeGo" } } } as AppConfig;
     const deps = {
       store: { bots: [], tasks: () => [] },
-      cfg: { instances: { opencode: { driver: "opencodeGo" } } } as unknown as AppConfig,
+      cfg,
       registry: {
         installRuntime: async () => options.useCli ? { useCli: options.useCli } : true,
         get: () => null,
@@ -142,6 +218,7 @@ describe("installing an engine's own build from Settings", () => {
       providerConfigBusy: { get: () => options.busy === true, set: () => {} },
       providerInstancesChanging: new Set<string>(),
       describeInstances: async () => [],
+      effectiveProviderConfigs: () => instanceConfigs(cfg),
       persistProviderInstance: async (instanceId: string, instances: unknown) => { persisted.push({ instanceId, instances }); },
       threadBusy: () => false,
       botForThread: () => null,
@@ -312,3 +389,32 @@ describe("hiding a provider", () => {
   });
 });
 
+
+describe("looking for Ollama", () => {
+  it("answers what one address said, and refuses an address that is not one", async () => {
+    const ollama = createServer((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/tags") return response.end(JSON.stringify({ models: [{ name: "qwen3:4b", size: 2_500_000_000, details: { parameter_size: "4.0B" } }] }));
+      if (request.url === "/api/version") return response.end(JSON.stringify({ version: "0.12.6" }));
+      response.statusCode = 404;
+      response.end("{}");
+    });
+    servers.push(ollama);
+    await new Promise<void>((ready) => ollama.listen(0, "127.0.0.1", ready));
+    const address = `http://127.0.0.1:${(ollama.address() as AddressInfo).port}`;
+    const { call, base } = await serve();
+    expect(await call("GET", `/api/instances/ollama?url=${encodeURIComponent(`${address}/v1`)}`)).toEqual({
+      status: { state: "ready", url: address, version: "0.12.6", models: [{ name: "qwen3:4b", bytes: 2_500_000_000, parameters: "4.0B" }] },
+    });
+    const refused = await fetch(`${base}/api/instances/ollama?url=${encodeURIComponent("ftp://127.0.0.1:11434")}`);
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toEqual({ error: "Enter an http or https address, such as http://127.0.0.1:11434." });
+  });
+
+  it("is only for the owner: a shared server's bot shell or a hosted workspace can't make this server ask an address", async () => {
+    const shell = await serve({}, { kind: "loopback", scopes: ["admin"], trust: "service" });
+    expect((await fetch(`${shell.base}/api/instances/ollama?url=${encodeURIComponent("http://127.0.0.1:9")}`)).status).toBe(403);
+    const hosted = await serve({ hostedModels: true });
+    expect((await fetch(`${hosted.base}/api/instances/ollama`)).status).toBe(403);
+  });
+});

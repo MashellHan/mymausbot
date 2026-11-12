@@ -1,4 +1,5 @@
 import { Clock3, FileText, Loader2, Repeat2 } from "lucide-react";
+import { showBotLimit } from "@/lib/bot-limit";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import type { Routine, RoutineRun } from "@/lib/routines";
@@ -7,10 +8,12 @@ import { latestRoutineRun, routineDateTime, routineFinished, routineHeldNote, ro
 import type { Bot } from "@/state/store";
 import { Switch } from "../SettingsPrimitives";
 
-export function RoutineList({ routines, runs, bots, loading, error, compact = false, onOpen, onLogs, onToggle }: {
+export function RoutineList({ routines, runs, bots, pausedBots, loading, error, compact = false, onOpen, onLogs, onToggle }: {
   routines: Routine[];
   runs: RoutineRun[];
   bots?: Bot[];
+  /** Bots a Starter Cloud has paused: a routine on one runs nothing until it is swapped in. */
+  pausedBots?: readonly string[];
   loading?: boolean;
   error?: boolean;
   compact?: boolean;
@@ -62,6 +65,10 @@ export function RoutineList({ routines, runs, bots, loading, error, compact = fa
           {routine.lastSkippedAt != null && <> · {t("routines.lastSkipped", { date: routineDateTime(routine.lastSkippedAt) })}</>}
         </p>}
         </>}
+        {routine.enabled && pausedBots?.includes(routine.botId) && <p className="mt-2 text-[12px] leading-relaxed text-warning" data-routine-bot-paused="">
+          {t("routines.botPaused")}{" "}
+          <button type="button" className="cursor-pointer text-accent hover:underline" onClick={() => showBotLimit("paused")}>{t("routines.botPausedSwap")}</button>
+        </p>}
       </article>;
     })}
   </div>;

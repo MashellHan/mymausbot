@@ -2,6 +2,7 @@
 // driving it, with the owner's pairing token standing in for the desktop window's Cloud cookie. No network.
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import { errorMonitor } from "node:events";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,6 +22,30 @@ let base: string;
 let child: ChildProcess;
 let log = "";
 let ownerToken = "";
+
+interface HealthObservation { atMs: number; durationMs: number; status?: number; pid?: number | null; error?: string }
+const startup = {
+  pid: null as number | null, spawnedAtMs: null as number | null,
+  markers: [] as Array<{ marker: string; stream: "stdout" | "stderr"; atMs: number }>,
+  childError: null as { atMs: number; code: string } | null,
+  exit: null as { atMs: number; code: number | null; signal: string | null } | null,
+  healthAttempts: 0, firstHealth: null as HealthObservation | null, lastHealth: null as HealthObservation | null,
+  outcome: "pending", outcomeAtMs: null as number | null,
+};
+const STARTUP_MARKERS = [
+  ["cloud-home", "bots run on the engines the person signs in to here"],
+  ["box-off", "bot box: off (not-linux)"],
+  ["environment-secrets-warning", "cloud home: its secrets came in this process's environment"],
+  ["offline-manifest", "[model-manifest] could not refresh the model list (HTTP 503); keeping the current one"],
+  ["service-trust", "local requests: service trust ("],
+  ["listening", "openmausbot server on http://127.0.0.1:"],
+] as const;
+const OBSERVED_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EHOSTUNREACH", "EADDRINUSE", "ENOENT", "EACCES", "EPERM", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET"]);
+function observedCode(error: unknown): string {
+  const failure = error as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = failure?.cause?.code ?? failure?.code;
+  return typeof code === "string" && OBSERVED_CODES.has(code) ? code : "other";
+}
 
 // Node 24-26's fetch (undici 7-8) does not resend a request whose kept-alive socket the server closed after 5 s idle,
 // as the app's Chromium fetch does, and a Windows runner can stall this server past that: no request here reuses one.
@@ -77,6 +102,8 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
   base = `http://127.0.0.1:${port}`;
   const offlinePrelude = `data:text/javascript,${encodeURIComponent('globalThis.fetch = async () => new Response("offline fixture", { status: 503 });')}`;
   const roomyDisk = pathToFileURL(join(SERVER_DIR, "testing", "roomy-disk.mjs")).href;
+  const started = performance.now();
+  const elapsed = () => Math.round((performance.now() - started) * 1000) / 1000;
   child = spawn(process.execPath, ["--import", roomyDisk, "--import", offlinePrelude, join(SERVER_DIR, "index.ts")], {
     cwd: join(SERVER_DIR, ".."),
     env: {
@@ -89,21 +116,59 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stdout?.on("data", (chunk) => { log += chunk; });
-  child.stderr?.on("data", (chunk) => { log += chunk; });
+  startup.pid = child.pid ?? null;
+  child.once("spawn", () => { startup.spawnedAtMs = elapsed(); });
+  child.once(errorMonitor, (error) => { startup.childError = { atMs: elapsed(), code: observedCode(error) }; });
+  child.once("exit", (code, signal) => {
+    startup.exit = { atMs: elapsed(), code, signal: signal === null || ["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGABRT", "SIGSEGV"].includes(signal) ? signal : "other" };
+  });
+  const tails = { stdout: "", stderr: "" };
+  const observe = (stream: "stdout" | "stderr") => (chunk: Buffer) => {
+    log += chunk;
+    if (startup.outcome !== "pending") return;
+    const text = tails[stream] + chunk;
+    for (const [marker, needle] of STARTUP_MARKERS) {
+      if (text.includes(needle) && !startup.markers.some((seen) => seen.marker === marker)) startup.markers.push({ marker, stream, atMs: elapsed() });
+    }
+    tails[stream] = text.slice(-512);
+  };
+  child.stdout?.on("data", observe("stdout"));
+  child.stderr?.on("data", observe("stderr"));
   const deadline = Date.now() + 20_000;
-  for (;;) {
-    if (child.exitCode !== null) throw new Error(`the Cloud home exited:\n${log}`);
-    try { if ((await api("GET", "/api/health")).body?.pid === child.pid) break; } catch {}
-    if (Date.now() > deadline) throw new Error(`the Cloud home did not start:\n${log}`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  try {
+    for (;;) {
+      if (child.exitCode !== null) throw new Error(`the Cloud home exited:\n${log}`);
+      const atMs = elapsed();
+      const seen: HealthObservation = { atMs, durationMs: 0 };
+      startup.healthAttempts += 1;
+      try {
+        const answer = await api("GET", "/api/health");
+        seen.status = answer.status;
+        seen.pid = Number.isSafeInteger(answer.body?.pid) ? answer.body.pid : null;
+        if (answer.body?.pid === child.pid) { startup.outcome = "ready"; break; }
+      } catch (error) { seen.error = observedCode(error); }
+      finally {
+        seen.durationMs = Math.round((elapsed() - atMs) * 1000) / 1000;
+        startup.firstHealth ??= seen;
+        startup.lastHealth = seen;
+      }
+      if (Date.now() > deadline) throw new Error(`the Cloud home did not start:\n${log}`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  } finally {
+    if (startup.outcome === "pending") startup.outcome = "failed";
+    startup.outcomeAtMs = elapsed();
   }
   ownerToken = await ownerPairing();
 }, 30_000);
 
 afterAll(async () => {
-  if (child) await waitForExit(child, { signal: "SIGTERM" });
-  if (home) await removeTempDir(home);
+  try {
+    if (child) await waitForExit(child, { signal: "SIGTERM" });
+    if (home) await removeTempDir(home);
+  } finally {
+    try { console.log(`cloud-startup-observation ${JSON.stringify(startup)}`); } catch {}
+  }
 });
 
 // The desktop's fetch, but over the test's loopback edge: the owner's pairing token stands in for the window's cookie.

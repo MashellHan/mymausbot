@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import type { ModelProviderRoute } from "../../shared/model-provider-route.ts";
 import type { ModelCatalog, ProviderInstance } from "../contracts.ts";
 import { isContextName, pickedName, servedModel, serveWithWindow } from "./ollama-context.ts";
 
@@ -107,6 +108,11 @@ export function localHost(id: string): LocalHost | undefined {
   return HOST_BY_ID.get(id);
 }
 
+export function localProviderRoute(id: string): ModelProviderRoute | undefined {
+  const host = localHost(id);
+  return host ? { id: `local:${host.id}`, label: host.label, provenance: "local" } : undefined;
+}
+
 export function injectedApiModel(id: string | null | undefined): string | null {
   return decodeInjectId(id)?.model ?? null;
 }
@@ -141,14 +147,17 @@ export function hostApiKey(host: LocalHost, env: Record<string, string | undefin
 
 const CODEX_RESERVED_PROVIDERS = new Set(["openai", "ollama", "lmstudio"]);
 
+export function codexInjectHost(id: string): LocalHost | undefined {
+  return CODEX_RESERVED_PROVIDERS.has(id) ? undefined : localHost(id);
+}
+
 /** Codex local providers without rewriting config.toml: secrets ride the child env, argv names the key only. */
 export function codexLocalProviderArgs(
   env: Record<string, string | undefined>,
   modelId: string | null | undefined,
 ): string[] {
   const inject = decodeInjectId(modelId);
-  if (!inject || CODEX_RESERVED_PROVIDERS.has(inject.host)) return [];
-  const host = localHost(inject.host);
+  const host = inject ? codexInjectHost(inject.host) : undefined;
   if (!host) return [];
   const envKey = `OPENMAUSBOT_LOCAL_${host.id.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
   env[envKey] = hostApiKey(host, env);
@@ -428,6 +437,7 @@ export async function mergeLocalInject(
     if (existing) {
       if (extra.loaded) existing.loaded = true;
       if (extra.contextWindow) existing.contextWindow = extra.contextWindow;
+      existing.providerRoute ??= localProviderRoute(extra.host);
       continue;
     }
     seen.add(extra.id);
@@ -435,6 +445,7 @@ export async function mergeLocalInject(
       id: extra.id,
       label: extra.label,
       custom: true,
+      providerRoute: localProviderRoute(extra.host),
       ...(extra.loaded ? { loaded: true } : {}),
       ...(extra.contextWindow ? { contextWindow: extra.contextWindow } : {}),
     });

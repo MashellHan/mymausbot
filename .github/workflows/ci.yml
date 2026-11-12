@@ -138,8 +138,18 @@ jobs:
         run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/qa.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
+      - name: Validate the model manifest
+        # Installs download this file from main within hours of a change, so a bad edit must not land.
+        env:
+          MANIFEST_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: node scripts/check-model-manifest.mjs --against "$MANIFEST_BASE"
       - run: pnpm check:contrast
       - run: pnpm lint
+      - name: Validate the announcements file
+        # Installs download it from main within the hour (docs/announcements.md), so a bad edit must not land.
+        env:
+          ANNOUNCEMENTS_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: node scripts/check-announcements.mjs --against "$ANNOUNCEMENTS_BASE"
       - name: Source guards
         # The tests that only read the source: seconds here, and they stay in the shards. On Nov 3-4 2026 one of them was
         # red on main for 11 hours, and each PR heard about it after about 70 minutes, once its shards had found a runner.
@@ -264,6 +274,7 @@ jobs:
           OMB_VITEST_E2E: ${{ matrix.e2e }}
           OMB_VITEST_SUBSET: ${{ matrix.files }}
           OMB_VITEST_WORKERS: ${{ matrix.workers }}
+          OMB_VITEST_FIRST_SHARD_SECONDS: ${{ matrix.os == 'macos-latest' && matrix.files == '' && '120' || '0' }}
           OMB_DASHBOARD_UI: ${{ contains(matrix.files, 'local-dashboard-ui') && '1' || '0' }}
         run: pnpm exec vitest run ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} --reporter=default --reporter=github-actions --reporter=json --outputFile.json=qa-results/${{ matrix.shard }}/vitest.json
       - name: Report flaky tests that needed a retry

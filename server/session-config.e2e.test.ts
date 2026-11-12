@@ -58,6 +58,48 @@ describe("embedded server session config across App-run restarts", () => {
     expect(newAppRun.anthropic.key).toBeUndefined();
   });
 
+  for (const [provider, section, field] of [["ModelGo", "modelgo", "key"], ["Gemini image", "imageGen", "geminiKey"]] as const) {
+    const sessionKey = `synthetic-${section}-session-key`;
+    it.each([undefined, `old-${section}-key`])(`keeps a ${provider} session key off disk with previous key %s`, (diskKey) => {
+      const { root, old } = fixture();
+      const file = join(root, "config.json");
+      writeFileSync(file, JSON.stringify({ ...old, ...(diskKey ? { [section]: { [field]: diskKey } } : {}) }));
+      const result = run(root, `import { saveConfig, loadConfig, confirmSessionConfig, setSessionConfigPublisher } from ${JSON.stringify(configModule)};
+        let snapshot = null;
+        setSessionConfigPublisher((value) => { snapshot = value; });
+        saveConfig(${JSON.stringify({ [section]: { [field]: sessionKey } })});
+        await confirmSessionConfig();
+        saveConfig({ profile: { name: "Session fixture" } });
+        await confirmSessionConfig();
+        console.log(JSON.stringify({ snapshot, runtime: loadConfig() }));`);
+      expect(JSON.parse(readFileSync(file, "utf8"))[section]?.[field]).toBe(diskKey);
+      expect(readFileSync(file, "utf8")).not.toContain(sessionKey);
+      expect(result.runtime[section][field]).toBe(sessionKey);
+      expect(result.snapshot[section][field]).toBe(sessionKey);
+      const restarted = run(root, `import { loadConfig } from ${JSON.stringify(configModule)};
+        console.log(JSON.stringify(loadConfig()));`, "session", result.snapshot);
+      expect(restarted[section][field]).toBe(sessionKey);
+      const newAppRun = run(root, `import { loadConfig } from ${JSON.stringify(configModule)};
+        console.log(JSON.stringify(loadConfig()));`);
+      expect(newAppRun[section]?.[field]).toBe(diskKey);
+    });
+
+    it.each([undefined, `old-${section}-key`])(`refuses a ${provider} session save before changing disk key %s when its publisher is absent`, (diskKey) => {
+      const { root, old } = fixture();
+      const file = join(root, "config.json");
+      writeFileSync(file, JSON.stringify({ ...old, ...(diskKey ? { [section]: { [field]: diskKey } } : {}) }));
+      const before = readFileSync(file);
+      const result = run(root, `import { saveConfig } from ${JSON.stringify(configModule)};
+        let error = null;
+        try { saveConfig(${JSON.stringify({ [section]: { [field]: `synthetic-${section}-refused-key` }, profile: { name: "Refused" } })}); }
+        catch (cause) { error = cause.message; }
+        console.log(JSON.stringify({ error }));`);
+      expect(result.error).toBe("The desktop session credential owner is unavailable");
+      expect(readFileSync(file)).toEqual(before);
+    });
+
+  }
+
   it("keeps the existing secure-mode disk behavior", () => {
     const { root } = fixture();
     run(root, `import { saveConfig } from ${JSON.stringify(configModule)}; saveConfig({ openai: { key: "system-mode-key" } }); console.log(JSON.stringify({ ok: true }));`, "system");

@@ -26,7 +26,7 @@ import type { QuestionRequestCardData } from "./ask-question.ts";
 import type { AutomationLine, RoutineRunCardData } from "./routine-run.ts";
 import type { WidgetPayload } from "./widget.ts";
 import type { AppFromRef, AppPayload, AppPointedRef } from "./app.ts";
-import type { GroupGoalRunCardData } from "./group-goal-run.ts";
+import type { GroupGoalRunCardData } from "./group-goal-run.ts"; import type { BurstCardData } from "./burst.ts";
 import type { RuntimeEvent } from "./runtime-events.ts";
 import type { NotificationLogEntry } from "./notification.ts";
 import type { Routine, RoutineRun } from "./routines.ts";
@@ -75,7 +75,7 @@ export interface TaskOpenedBy {
   /** What kind of conversation the opener made this: "pair" is the one
    * durable conversation between two bots; "work" closes itself once its
    * result has been reported. */
-  kind?: "pair" | "work";
+  kind?: "pair" | "work"; /** The burst this thread is one part of: it is listed under that burst's card, not on its own. */ burstId?: string;
   /** The opener's own conversation this "work" thread was opened from.
    * Everything that conversation later sends this bot continues here. */
   threadId?: string;
@@ -139,6 +139,9 @@ export interface WireTask extends InboxTask {
   /** Set when a bot, not a person, opened this thread. */ openedBy?: TaskOpenedBy;
   /** On a team's server: one person's conversation, seen by them alone (never by another member or an admin). */
   private?: true;
+  /** On a team's server: a private conversation its person shared, never private again. `sharedWith`: shared with one person,
+   * the other reader as this viewer sees them (`byYou` to the one who shared it); nobody else, an admin included, is sent it. */
+  shared?: true; sharedWith?: { name: string; byYou?: true };
   /** Team Cloud, where several people write, while it works: whose request runs (they or an Owner or Admin stop it). */ askedBy?: ResolvedSender;
   /** Set by close_thread; absent while the thread is open. */
   closedBy?: TaskClosedBy;
@@ -441,12 +444,13 @@ export interface WireMessage extends ServerTextLine, HelperIntroField, SetupCard
   roomRequest?: { id: string; phase: "request" | "result" };
   id: string;
   role: "bot" | "user";
-  kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "signin" | "routine.run" | "goal.run" | "digest" | "compaction" | "call" | "widget" | "app";
+  kind: "text" | "options" | "activity" | "screen" | "connector" | "secret" | "signin" | "routine.run" | "goal.run" | "burst" | "digest" | "compaction" | "call" | "widget" | "app";
   text?: string;
   digest?: TurnDigest;
   /** kind "compaction" with no `compaction` record: the engine condensed its own session. A marker for people, never context. */
   engineCompaction?: true;
-  compaction?: { summary: string; firstKeptId: string; foldedThroughId: string; tokensBefore: number; by: "person" | "harness" };
+  compaction?: { summary: string; firstKeptId: string; foldedThroughId: string; tokensBefore: number; by: "person" | "harness";
+    /** The divider "Start fresh" leaves: no summary, and a provider reads nothing before it. */ fresh?: true };
   /** Renderers receive only the allowlisted /api/attachments URL. `file` entries are opened through the message-scoped
    * file route, never by path. `source`: a bot attach-file copy's original path on the server, for Show in folder.
    * `fromTool`: an image a tool's result returned while the bot worked, which it did not make or send. */
@@ -480,7 +484,7 @@ export interface WireMessage extends ServerTextLine, HelperIntroField, SetupCard
   /** signin rows: the bot asked the person to sign in to a site themselves. */
   signIn?: SignInRequestCardData;
   /** One idempotently updated status card for a routine run. */
-  routineRun?: RoutineRunCardData;
+  routineRun?: RoutineRunCardData; /** The card a burst shows in its parent chat: first a preview, then its progress. */ burst?: BurstCardData;
   automation?: AutomationLine;
   /** Terminal receipt for a bounded multi-bot channel goal. */
   goalRun?: GroupGoalRunCardData;
@@ -519,7 +523,7 @@ export interface WireMessage extends ServerTextLine, HelperIntroField, SetupCard
    * one. Absent reads as the profile name. */
   sender?: ResolvedSender;
   /** Provider turn that produced this message. */
-  turnId?: string; /** A stopped row where several people use the server: who pressed Stop. */ stoppedBy?: ResolvedSender;
+  turnId?: string; /** A stopped row where several people use the server: who pressed Stop. */ stoppedBy?: ResolvedSender; /** A bot reply: the `itemId` its words streamed under, so a client swaps the streamed text for this message. */ itemId?: string;
   /** Server-proven originating user message, including supported harness
    * continuations. Absent means external clients must not infer ownership. */
   requestMessageId?: string;
@@ -713,7 +717,7 @@ export interface SecretRequestCardData {
   description: string;
   /** Optional named-key copy for client localization; `description` remains the complete fallback for English and older cards. */
   descriptionParts?: {
-    baseCode: "secretCard.greenference.description" | "secretCard.geminiTts.description";
+    baseCode: "secretCard.greenference.description" | "secretCard.modelgo.description" | "secretCard.geminiTts.description";
     reason: string;
     bot: string;
   };
@@ -825,7 +829,7 @@ export interface GroupTask {
 /** A room as a client may see it: the record plus the computed working flag. */
 export interface WireGroup {
   /** Computed from the usage ledger, not stored in groups.json. */
-  usage?: GroupThreadUsage | null;
+  usage?: GroupThreadUsage | null; /** Transient: the department's Chief of Staff, when this room is without it. Null clears an earlier value. */ chiefAbsent?: { botId: string; name: string } | null;
   /** transient: each member's context in the active thread, from its last
    * turn there, and whether its next turn there was asked to start
    * compacted. */
