@@ -1758,6 +1758,8 @@
   "browser.zoom.in": "Zoom in",
   "browser.zoom.out": "Zoom out",
   "browser.zoom.reset": "Reset zoom",
+  "bubblav.description": "Your website’s AI support chatbot on BubblaV: reports, unanswered questions, conversations, knowledge and widget settings.",
+  "bubblav.notice": "Sign in with BubblaV and choose one chatbot. No API key needed. With Full access, a bot that can use BubblaV can read that chatbot’s conversations and leads and change or delete its knowledge and settings, so choose which bots get it under Bot access. Choose Read only on BubblaV’s consent page to block every change.",
   "burst.back": "Back",
   "burst.cancel": "Cancel",
   "burst.cancelAll": "Cancel all",
