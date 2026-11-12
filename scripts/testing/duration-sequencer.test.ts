@@ -147,6 +147,7 @@ describe("vitest shard balance", () => {
 
   it("logs its split, and annotates a CI run whose weights match no files", async () => {
     vi.stubEnv("GITHUB_ACTIONS", "true");
+    vi.stubEnv("OMB_VITEST_SUBSET", "");
     // Host mode remains available for targeted local checks.
     vi.stubEnv("OMB_VITEST_E2E", "");
     const lines: string[] = [];
