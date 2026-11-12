@@ -243,7 +243,7 @@ describe("computer panel entry focus", () => {
     flushSync(() => tabByLabel("Files").click());
     await settle();
     expect(document.querySelector('[data-testid="computer-files"]')?.className).toContain("overflow-y-auto");
-    expect(document.querySelector('[data-testid="computer-files"]')?.className).toContain("max-h-[50dvh]");
+    expect(document.querySelector('[data-testid="computer-files"]')?.className).toContain("max-h-[65dvh]");
     expect(document.querySelector('[data-testid="computer-files"]')?.parentElement?.className).not.toContain("flex-1");
     expect(document.querySelectorAll('[data-panel-page="folder"]')).toHaveLength(1);
     expect(document.querySelector('[data-panel-page="folder"]')?.textContent).toContain("/workspace/pinned");
