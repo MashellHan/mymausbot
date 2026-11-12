@@ -120,6 +120,18 @@ describe("Bot overview suggestions", () => {
     expect(fixture.api).toHaveBeenCalledTimes(1);
   });
 
+  it("ends loading when the sole follow-up is still pending without usable suggestions", async () => {
+    vi.useFakeTimers();
+    fixture.api.mockResolvedValue(response(bot(), [], true));
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(9_000); });
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Mini Apps could not be loaded.");
+    expect(more()).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+  });
+
   it("removes suggestions and cancels pending refresh when owner access ends", async () => {
     vi.useFakeTimers();
     fixture.api.mockResolvedValue(response(bot(), [suggestion("Private app")], true));

@@ -50,7 +50,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
         });
         if (controller.signal.aborted) return;
         if (data.botId !== bot.id || data.threadId !== bot.threadId) throw new Error("Suggestion context changed");
-        setResponse({ context, data, error: false });
+        setResponse({ context, data, error: !mayFollowUp && data.refreshPending && !data.suggestions.some(({ app }) => app.status === "active") });
         if (mayFollowUp && data.refreshPending) followUp = setTimeout(() => void load(false), 9_000);
       } catch {
         if (!controller.signal.aborted) setResponse({ context, data: null, error: true });
