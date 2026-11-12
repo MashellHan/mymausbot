@@ -149,9 +149,17 @@ describe("CI concurrency", () => {
     expect(run.env?.OMB_VITEST_E2E).toBe("${{ matrix.e2e }}");
     expect(run.env?.OMB_VITEST_SUBSET).toBe("${{ matrix.files }}");
     expect(run.env?.OMB_VITEST_WORKERS).toBe("${{ matrix.workers }}");
+    expect(run.env?.OMB_VITEST_FIRST_SHARD_SECONDS).toBe("${{ matrix.os == 'macos-latest' && matrix.files == '' && '120' || '0' }}");
     const { include } = vitestMatrix(["macos-latest"]);
     expect(include.map((entry) => entry.shard)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(include.every((entry) => entry.e2e === "all")).toBe(true);
+    expect(include.filter((entry) => entry.node_tests).map((entry) => entry.shard)).toEqual([1]);
+    for (const matrix of include) {
+      expect(interpolate(run.env!.OMB_VITEST_FIRST_SHARD_SECONDS, { matrix })).toBe("120");
+    }
+    for (const matrix of [{ os: "ubuntu-latest", files: "" }, { os: "macos-latest", files: "server/a.test.ts" }]) {
+      expect(interpolate(run.env!.OMB_VITEST_FIRST_SHARD_SECONDS, { matrix })).toBe("0");
+    }
     const units = (workflow.jobs.vitest.steps as { name?: string; if?: string; run?: string; "timeout-minutes"?: number }[]).find((step) => step.name === "Electron unit tests")!;
     expect(units["timeout-minutes"]).toBe(5);
     expect(units.run).toBe("pnpm test:electron");

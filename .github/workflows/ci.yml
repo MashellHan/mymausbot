@@ -274,6 +274,7 @@ jobs:
           OMB_VITEST_E2E: ${{ matrix.e2e }}
           OMB_VITEST_SUBSET: ${{ matrix.files }}
           OMB_VITEST_WORKERS: ${{ matrix.workers }}
+          OMB_VITEST_FIRST_SHARD_SECONDS: ${{ matrix.os == 'macos-latest' && matrix.files == '' && '120' || '0' }}
           OMB_DASHBOARD_UI: ${{ contains(matrix.files, 'local-dashboard-ui') && '1' || '0' }}
         run: pnpm exec vitest run ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} --reporter=default --reporter=github-actions --reporter=json --outputFile.json=qa-results/${{ matrix.shard }}/vitest.json
       - name: Report flaky tests that needed a retry

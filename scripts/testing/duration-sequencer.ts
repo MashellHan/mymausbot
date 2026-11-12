@@ -50,12 +50,13 @@ function unlistedE2eSeconds(weights: ShardWeights): number {
 // Longest-processing-time first: sort by seconds (ties by key, so the result
 // never depends on the order vitest found the files), then give each file to
 // the shard with the least time so far, the lowest index winning a tie.
-export function planShards(keys: readonly string[], weights: ShardWeights, count: number) {
+export function planShards(keys: readonly string[], weights: ShardWeights, count: number, firstShardSeconds = 0) {
+  if (!Number.isFinite(firstShardSeconds) || firstShardSeconds < 0) throw new Error("Invalid first-shard work duration");
   const e2eSeconds = unlistedE2eSeconds(weights);
   const seconds = keys.map((key) => Object.hasOwn(weights, key) ? weights[key] : E2E.test(key) ? e2eSeconds : UNLISTED_SECONDS);
   const order = keys.map((_, i) => i)
     .sort((a, b) => seconds[b] - seconds[a] || (keys[a] < keys[b] ? -1 : keys[a] > keys[b] ? 1 : 0));
-  const loads = Array.from({ length: count }, () => 0);
+  const loads = Array.from({ length: count }, (_, index) => index === 0 ? firstShardSeconds : 0);
   const shardOf: number[] = [];
   for (const i of order) {
     let target = 0;
@@ -72,7 +73,8 @@ export class DurationSequencer extends BaseSequencer {
     if (!shard) return files;
     const weights = loadShardWeights(root);
     const keys = files.map((spec) => weightKey(root, spec.moduleId) ?? spec.moduleId);
-    const { shardOf, loads } = planShards(keys, weights, shard.count);
+    const firstShardSeconds = Number(process.env.OMB_VITEST_FIRST_SHARD_SECONDS ?? 0);
+    const { shardOf, loads } = planShards(keys, weights, shard.count, firstShardSeconds);
     const mine = files.filter((_, i) => shardOf[i] === shard.index - 1);
     // One line per run, so a CI log shows the weights were applied. If most
     // weighted files go unmatched (a path-key mismatch on some platform), the
@@ -82,7 +84,7 @@ export class DurationSequencer extends BaseSequencer {
     const found = keys.filter((key) => Object.hasOwn(weights, key)).length;
     this.ctx.logger.log(
       `duration-sequencer: shard ${shard.index}/${shard.count} runs ${mine.length} of ${files.length} files, ` +
-      `~${Math.round(loads[shard.index - 1])}s recorded; ${found} of ${listed} weighted files found`,
+      `~${Math.round(loads[shard.index - 1])}s planned; ${firstShardSeconds}s first-shard work; ${found} of ${listed} weighted files found`,
     );
     // A run of a chosen few files (OMB_VITEST_SUBSET: ci.yml's locale and docs tests) finds few by design.
     if (process.env.GITHUB_ACTIONS === "true" && !process.env.OMB_VITEST_SUBSET && found < listed * 0.9) {

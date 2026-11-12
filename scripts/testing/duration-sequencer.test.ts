@@ -5,7 +5,7 @@
 import { globSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BaseSequencer, type TestSequencerConstructor, type TestSpecification, type Vitest } from "vitest/node";
 import viteConfig from "../../vite.config.ts";
 import { VITEST_SHARDS, VITEST_WORKERS } from "../ci-scope.mjs";
@@ -39,6 +39,8 @@ async function split(Sequencer: TestSequencerConstructor, files: readonly string
   return shards;
 }
 
+beforeEach(() => vi.stubEnv("OMB_VITEST_FIRST_SHARD_SECONDS", "0"));
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -56,7 +58,7 @@ describe("vitest shard balance", () => {
   });
 
   it("keeps macOS all-mode on one worker with room for observed 1.4x work under the 30-minute cap", () => {
-    const { loads } = planShards(FILES, loadShardWeights(ROOT, "darwin"), VITEST_SHARDS["macos-latest"]);
+    const { loads } = planShards(FILES, loadShardWeights(ROOT, "darwin"), VITEST_SHARDS["macos-latest"], 120);
     expect(VITEST_WORKERS["macos-latest"]).toBe(1);
     expect(Math.max(...loads) * 1.4).toBeLessThan(28 * 60);
   });
@@ -66,6 +68,38 @@ describe("vitest shard balance", () => {
       const shards = await split(DurationSequencer, FILES, count);
       expect(shards.flat().sort(), `${count} shards`).toEqual(FILES);
     }
+  });
+
+  it("balances fixed first-shard work with tests without duplicating or dropping a file", () => {
+    const files = ["a", "b", "c", "d", "e", "f"];
+    const weights = Object.fromEntries(files.map((file) => [file, 10]));
+    const result = planShards(files, weights, 2, 20);
+    expect(result.loads).toEqual([40, 40]);
+    expect(files.filter((_, i) => result.shardOf[i] === 0)).toEqual(["c", "e"]);
+    expect(files.filter((_, i) => result.shardOf[i] === 1)).toEqual(["a", "b", "d", "f"]);
+    expect(planShards([...files].reverse(), weights, 2, 20).shardOf.reverse()).toEqual(result.shardOf);
+    expect(planShards(files, weights, 1, 20).loads).toEqual([80]);
+  });
+
+  it("applies the same first-shard work to every shard's plan, including local reproduction", async () => {
+    vi.stubEnv("OMB_VITEST_FIRST_SHARD_SECONDS", "120");
+    const shards = await split(DurationSequencer, FILES, 8);
+    const planned = planShards(FILES, WEIGHTS, 8, 120);
+    expect(shards.flat().sort()).toEqual(FILES);
+    for (let shard = 0; shard < 8; shard++) {
+      expect(shards[shard]).toEqual(FILES.filter((_, i) => planned.shardOf[i] === shard));
+    }
+    const baseline = planShards(FILES, WEIGHTS, 8);
+    expect(planned.loads[0] - 120).toBeLessThan(baseline.loads[0]);
+    expect(Math.max(...planned.loads) - Math.min(...planned.loads)).toBeLessThanOrEqual(1);
+    vi.stubEnv("OMB_VITEST_FIRST_SHARD_SECONDS", "");
+    const unseeded = await split(DurationSequencer, FILES, 8);
+    expect(unseeded[0]).toEqual(FILES.filter((_, i) => baseline.shardOf[i] === 0));
+  });
+
+  it.each(["-1", "NaN", "Infinity", "unknown"])("refuses an invalid fixed duration %s", async (value) => {
+    vi.stubEnv("OMB_VITEST_FIRST_SHARD_SECONDS", value);
+    await expect(new DurationSequencer(context(1, 8)).shard(specs(FILES))).rejects.toThrow("Invalid first-shard work duration");
   });
 
   it("never puts two of the slowest files in one shard while a shard is free", async () => {
@@ -117,7 +151,7 @@ describe("vitest shard balance", () => {
     vi.stubEnv("OMB_VITEST_E2E", "");
     const lines: string[] = [];
     await new DurationSequencer(context(2, VITEST_SHARDS["macos-latest"], (line) => lines.push(line))).shard(specs(FILES));
-    expect(lines).toEqual([expect.stringMatching(new RegExp(`^duration-sequencer: shard 2/${VITEST_SHARDS["macos-latest"]} runs \\d+ of ${FILES.length} files, ~\\d+s recorded; ${Object.keys(WEIGHTS).length} of ${Object.keys(WEIGHTS).length} weighted files found$`))]);
+    expect(lines).toEqual([expect.stringMatching(new RegExp(`^duration-sequencer: shard 2/${VITEST_SHARDS["macos-latest"]} runs \\d+ of ${FILES.length} files, ~\\d+s planned; 0s first-shard work; ${Object.keys(WEIGHTS).length} of ${Object.keys(WEIGHTS).length} weighted files found$`))]);
 
     lines.length = 0;
     vi.stubEnv("OMB_VITEST_E2E", "host");
