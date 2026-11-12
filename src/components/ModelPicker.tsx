@@ -456,32 +456,27 @@ export function ModelPicker({
     dispatch({ type: "setModel", botId: bot.id, threadId: threadId ?? bot.threadId, updateBotDefault: false, selection: profile.modelSelection });
   };
 
-  const pick = (instance: InstanceInfo, model: string, variant?: string) => {
+  const applySelection = (instance: InstanceInfo, nextSelection: ModelSelection, variantPicked = false) => {
     if (bot.busy || instance.policy) return;
-    const nextSelection = modelSelectionForPick(selection, instance, model);
-    if (variant !== undefined) nextSelection.variant = variant;
     const updateBotDefault = !threadId || (simpleUpdatesBotDefault && (simpleView || scope === "bot"));
     const targets = [currentTaskBot(profile, threadId ?? bot.threadId), ...(updateBotDefault ? [profile] : [])];
     if (targets.some((target) => modelSwitchNeedsAsk(approvalModeFor(target),
       state.instances.find((candidate) => candidate.instanceId === target.modelSelection.instanceId)?.driverKind,
       instance.driverKind))) {
       setPendingSwitch({ botId: bot.id, threadId: threadId ?? bot.threadId,
-        selection: nextSelection, updateBotDefault, name: modelLabel(instance, model) });
+        selection: nextSelection, updateBotDefault, name: modelLabel(instance, nextSelection.model) });
       close(false);
       return;
     }
-    dispatch({
-      type: "setModel",
-      botId: bot.id,
-      threadId: threadId ?? bot.threadId,
-      updateBotDefault,
-      selection: nextSelection,
-    });
+    dispatch({ type: "setModel", botId: bot.id, threadId: threadId ?? bot.threadId, updateBotDefault, selection: nextSelection });
     if (updateBotDefault && threadId) setChangedBotModel(true);
-    // A model with reasoning levels keeps the menu open, so its level can be set next without opening it again;
-    // picking a variant row already sets that level.
-    if (variant !== undefined || (contained && !showReasoning) || !offersReasoning(state, instance, nextSelection, threadId ?? bot.threadId)) close(true);
+    if (variantPicked || (contained && !showReasoning) || !offersReasoning(state, instance, nextSelection, threadId ?? bot.threadId)) close(true);
     else refocusAfterPick();
+  };
+  const pick = (instance: InstanceInfo, model: string, variant?: string) => {
+    const nextSelection = modelSelectionForPick(selection, instance, model);
+    if (variant !== undefined) nextSelection.variant = variant;
+    applySelection(instance, nextSelection, variant !== undefined);
   };
 
   const resetVariant = contained && selection.variant !== undefined ? () => {
@@ -533,8 +528,8 @@ export function ModelPicker({
     : levels.length > 0 && !shown.busy ? { levels, current: selection.effort, onPick: writeEffort, onReset: () => writeEffort(undefined) }
     : null;
   const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
-    ? <ModelContextWindow selection={selection} disabled={shown.busy} onChange={(next) =>
-      dispatch({ type: "setModel", botId: bot.id, threadId, updateBotDefault: Boolean(threadId && simpleUpdatesBotDefault && (simpleView || scope === "bot")), selection: next })} />
+    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy}
+      onChange={(next) => applySelection(active, next)} />
     : null;
 
   const botModelSelection = follows !== undefined && profile.modelSelection.instanceId === railInstance?.instanceId

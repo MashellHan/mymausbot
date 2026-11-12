@@ -550,6 +550,38 @@ describe("requested context window", () => {
       selection: { ...bot.modelSelection, contextWindowTokens: 128_000 } }));
   });
 
+  it.each(["bot", "thread"])("discards an unsaved draft when the %s changes", async (target) => {
+    const bot = setup();
+    render(bot);
+    await openWith("click");
+    openContext();
+    type(section().querySelector<HTMLInputElement>("input")!, "1000000");
+    render({ ...bot, ...(target === "bot" ? { id: "other-bot" } : { threadId: "other-thread" }) });
+    expect(section().querySelector("input")).toBeNull();
+    openContext();
+    expect(section().querySelector<HTMLInputElement>("input")!.value).toBe("256000");
+    save();
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("uses the existing provider-switch confirmation before changing a Bot default across permission mappings", async () => {
+    const bot = setup();
+    fixture.instances.push(claude(three));
+    fixture.bots = [{ ...scout(), approvalMode: "edits", tasks: [{ threadId: bot.threadId, title: "Synthetic task", createdAt: 1,
+      modelSelection: bot.modelSelection, approvalMode: "full", followsBotModel: false }] }];
+    render(bot);
+    await openWith("click");
+    openContext();
+    type(section().querySelector<HTMLInputElement>("input")!, "1000000");
+    save();
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    const dialog = document.querySelector<HTMLElement>('[role="alertdialog"]')!;
+    expect(dialog.textContent).toContain("Switch model with Ask permissions?");
+    flushSync(() => [...dialog.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Switch with Ask")!.click());
+    expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: true,
+      selection: { ...bot.modelSelection, contextWindowTokens: 1_000_000 }, resetApprovalToAsk: true });
+  });
+
   it("refuses invalid windows before dispatch and does not invent support for another engine", async () => {
     const bot = setup();
     render(bot);
