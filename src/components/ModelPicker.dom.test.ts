@@ -8,6 +8,7 @@ import type { Bot, InstanceInfo } from "@/state/store";
 
 const fixture = vi.hoisted(() => ({
   advanced: false,
+  owner: true as boolean | null,
   instances: [] as InstanceInfo[],
   bots: [] as Bot[],
   dispatch: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
   }),
 }));
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced, setAdvancedMode: () => {} }));
-vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
+vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.owner }));
 vi.mock("./Avatar", () => ({ BotAvatar: () => null }));
 
 const { ModelPicker } = await import("./ModelPicker");
@@ -82,6 +83,7 @@ const openWith = async (key: "ArrowDown" | "click") => {
 
 beforeEach(() => {
   fixture.advanced = false;
+  fixture.owner = true;
   fixture.bots = [];
   fixture.instances = [claude(three)];
   fixture.dispatch.mockReset();
@@ -460,6 +462,7 @@ describe("a model the organization turned off", () => {
 
 describe("while the bot is working", () => {
   it("opens to the reasoning level only, saves a pick for the next message, and keeps the model locked", async () => {
+    fixture.instances[0]!.capabilities!.configurableContextWindow = true;
     const busy = { ...scout(), busy: true };
     fixture.bots = [busy];
     render(busy);
@@ -470,6 +473,7 @@ describe("while the bot is working", () => {
     expect(panel.textContent).toContain("Stop this thread's turn before changing its model");
     expect(panel.textContent).toContain("The bot's model: this thread, groups, and every thread that uses the bot's model.");
     expect(menu()!.querySelector("[data-simple-models]")).toBeNull();
+    expect(menu()!.querySelector("[data-model-context-window]")).toBeNull();
     for (const option of three) expect(menu()!.textContent).not.toContain(option.label);
     const effort = panel.querySelector<HTMLSelectElement>("select")!;
     effort.value = "high";
@@ -502,5 +506,63 @@ describe("while the bot is working", () => {
     fixture.bots = [busy];
     render(busy);
     expect(chip().disabled).toBe(true);
+  });
+});
+
+describe("requested context window", () => {
+  const setup = () => {
+    fixture.instances = [{ ...claude([{ id: "fixture-model", label: "Fixture model" }]), instanceId: "codex", driverKind: "codex",
+      capabilities: { effortLevels: ["low", "high"], configurableContextWindow: true } }];
+    return { ...scout(), modelSelection: { instanceId: "codex", model: "fixture-model", effort: "high" as const, contextWindowTokens: 256_000 } };
+  };
+  const section = () => menu()!.querySelector<HTMLElement>("[data-model-context-window]")!;
+  const openContext = () => flushSync(() => section().querySelector<HTMLButtonElement>("button")!.click());
+  const save = () => flushSync(() => section().querySelector<HTMLFormElement>("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+
+  for (const advanced of [false, true]) it(`saves and resets the requested window without changing reasoning in ${advanced ? "full" : "simple"} mode`, async () => {
+    fixture.advanced = advanced;
+    const bot = setup();
+    render(bot, { contained: true, showReasoning: true });
+    await openWith("click");
+    expect(section().querySelector("input")).toBeNull();
+    expect(section().textContent).toContain("256,000");
+    openContext();
+    type(section().querySelector<HTMLInputElement>("input")!, "1000000");
+    save();
+    const next = { ...bot.modelSelection, contextWindowTokens: 1_000_000 };
+    expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: !advanced, selection: next });
+    render({ ...bot, modelSelection: next }, { contained: true, showReasoning: true });
+    if (advanced) flushSync(() => [...menu()!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Thread + bot default")!.click());
+    flushSync(() => section().querySelector<HTMLButtonElement>('button[type="button"]:last-child')!.click());
+    expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: true,
+      selection: { instanceId: "codex", model: "fixture-model", effort: "high" } });
+  });
+
+  it("keeps a guest change on their own thread", async () => {
+    fixture.owner = false;
+    const bot = setup();
+    render(bot);
+    await openWith("click");
+    openContext();
+    type(section().querySelector<HTMLInputElement>("input")!, "128000");
+    save();
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: bot.threadId, updateBotDefault: false,
+      selection: { ...bot.modelSelection, contextWindowTokens: 128_000 } }));
+  });
+
+  it("refuses invalid windows before dispatch and does not invent support for another engine", async () => {
+    const bot = setup();
+    render(bot);
+    await openWith("click");
+    openContext();
+    for (const value of ["4096", "1000001", "12.5", "1e6"]) {
+      type(section().querySelector<HTMLInputElement>("input")!, value);
+      save();
+      expect(section().querySelector('[role="alert"]')).not.toBeNull();
+      expect(fixture.dispatch).not.toHaveBeenCalled();
+    }
+    fixture.instances[0]!.capabilities!.configurableContextWindow = false;
+    render(bot);
+    expect(menu()!.querySelector("[data-model-context-window]")).toBeNull();
   });
 });

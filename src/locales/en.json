@@ -3078,6 +3078,8 @@
   "model.simple.signIn": "Sign in",
   "model.simple.lookingModels": "Looking for models…",
   "model.simple.auto": "Auto",
+  "model.context.label": "Context window",
+  "model.context.invalid": "Enter a whole number between {min} and {max} tokens.",
   "model.simple.useDefault": "Use default",
   "model.simple.back": "Back",
   "model.simple.clearSearch": "Clear search",

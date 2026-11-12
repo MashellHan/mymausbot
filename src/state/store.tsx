@@ -493,6 +493,7 @@ export interface InstanceInfo extends InstanceEndpointInfo {
     images?: boolean;
     effortLevels?: readonly EffortLevel[];
     modelVariants?: boolean;
+    configurableContextWindow?: boolean;
     queueing?: boolean;
     localComputerMcp?: boolean;
     approvalReview?: boolean;

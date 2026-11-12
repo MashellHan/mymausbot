@@ -23,6 +23,7 @@ import { approvalModeFor, modelSwitchNeedsAsk } from "../../shared/approval-mode
 import { cn } from "@/lib/cn";
 import { useMenuMotion } from "./MenuMotion";
 import { SimpleModelMenu, type SimpleThinking } from "./SimpleModelMenu";
+import { ModelContextWindow } from "./ModelContextWindow";
 import { apiKeysLabel, ClaudeAccountSelect, engineStatus, FollowBotModelRow, ModelEngineRail, ModelRow, ModelSearch } from "./ModelPickerFull";
 import { MENU_LABEL, MENU_LINE, MENU_ROW, MENU_SEPARATOR, MENU_STROKE, MENU_TRAILING } from "./menu-recipe";
 import { modelMenuKey, modelMenuPointerMove } from "./model-menu-keys";
@@ -30,7 +31,6 @@ import { lockedWhileBusy, offersReasoning, useRefocusAfterPick, variantChoices, 
 import { BusyModelMenu } from "./ModelPickerBusyMenu";
 import { useAdvancedMode } from "@/lib/interface-mode";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
-
 import { t } from "@/lib/i18n";
 import { COMPACT_SQUARE } from "@/lib/compact-chip";
 import { useAiSwitch } from "@/lib/ai-switch";
@@ -41,8 +41,6 @@ import { USAGE_WARN_WIDENS, UsageBars, UsageMenuRows } from "./EngineUsage";
 import { Select } from "./Select";
 
 const COMPACT_MODEL_COUNT = 5;
-
-
 export function effortLabel(level: EffortLevel): string {
   return t(`model.effort.${level}` as Parameters<typeof t>[0]);
 }
@@ -201,12 +199,8 @@ export const SIMPLE_POPOVER_WIDTH = 324;
 const MENU_ITSELF = ":scope";
 
 export function ModelPicker({
-  bot: shown,
-  threadId,
-  className,
+  bot: shown, threadId, className, label, size = "md",
   contained = false, showReasoning = false,
-  label,
-  size = "md",
 }: {
   bot: Bot;
   threadId?: string;
@@ -537,6 +531,10 @@ export function ModelPicker({
       ),
     }
     : levels.length > 0 && !shown.busy ? { levels, current: selection.effort, onPick: writeEffort, onReset: () => writeEffort(undefined) }
+    : null;
+  const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
+    ? <ModelContextWindow selection={selection} disabled={shown.busy} onChange={(next) =>
+      dispatch({ type: "setModel", botId: bot.id, threadId, updateBotDefault: Boolean(threadId && simpleUpdatesBotDefault && (simpleView || scope === "bot")), selection: next })} />
     : null;
 
   const botModelSelection = follows !== undefined && profile.modelSelection.instanceId === railInstance?.instanceId
@@ -891,6 +889,7 @@ export function ModelPicker({
                   label={<span className="text-[13px] leading-[18px] text-ink">{active?.capabilities?.modelVariants ? t("model.simple.reasoning") : t("model.section.effort")}</span>}
                 />
               )}
+              {contextWindow}
 
               {pane === "main" && offersLocalModels(railInstance, custom.length) && (
                 <button
@@ -969,6 +968,7 @@ export function ModelPicker({
           bot={profile}
           botModel={{ label: modelName(botModelInstance, profile.modelSelection.model, profile.modelSelection.variant), title: botModelName }}
           thinking={thinking}
+          contextWindow={contextWindow}
           idPrefix={menuId}
           onQuery={setQuery}
           onPick={pick}

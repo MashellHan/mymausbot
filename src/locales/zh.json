@@ -1811,6 +1811,8 @@
   "update.card.idleNote": "现在重启，或者先不管它：下次你不在、也没有任务在运行时，{app} 会自动安装。",
   "update.updatedItself": "{app} 已自动更新到 {version}。",
   "common.save": "保存",
+  "model.context.label": "上下文窗口",
+  "model.context.invalid": "请输入 {min} 到 {max} 之间的整数 token 数。",
   "common.saved": "已保存",
   "common.cancel": "取消",
   "common.ok": "好",
