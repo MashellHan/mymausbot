@@ -7,6 +7,26 @@ import { t } from "@/lib/i18n";
 import { needsCli, needsSignIn } from "./EngineSetup";
 import { Select } from "./Select";
 
+type ModelOption = InstanceInfo["models"]["options"][number];
+type ProviderGroup = {
+  key: string;
+  instance: InstanceInfo;
+  route: NonNullable<ModelOption["providerRoute"]>;
+  options: ModelOption[];
+};
+
+function providerGroups(instances: readonly InstanceInfo[]): ProviderGroup[] {
+  const groups: ProviderGroup[] = [];
+  for (const instance of instances) for (const option of instance.models.options) {
+    const route = option.providerRoute ?? { id: "unknown", provenance: "unknown" as const };
+    const key = JSON.stringify([instance.instanceId, route.id]);
+    let group = groups.find((candidate) => candidate.key === key);
+    if (!group) groups.push(group = { key, instance, route, options: [] });
+    group.options.push(option);
+  }
+  return groups;
+}
+
 export function ModelSettingsPanel({ bot, instances, disabled, attention, summary, busyReason, reasoningWhileBusy, onPick, onManage, children }: {
   bot: Bot;
   instances: InstanceInfo[];
@@ -21,42 +41,60 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
 }) {
   const selection = bot.modelSelection;
   const active = instances.find((instance) => instance.instanceId === selection.instanceId);
-  const [sourceId, setSourceId] = useState(selection.instanceId);
+  const groups = providerGroups(instances);
+  const selectedOption = active && modelChoices(active, active.models.options).find((option) => choiceIsSelected(option, selection));
+  const savedKey = active && selectedOption ? JSON.stringify([active.instanceId, selectedOption.providerRoute?.id ?? "unknown"]) : "current";
+  const [providerKey, setProviderKey] = useState(savedKey);
   const busyReasonId = useId();
-  useEffect(() => setSourceId(selection.instanceId), [bot.id, bot.threadId, selection.instanceId]);
-  const source = instances.find((instance) => instance.instanceId === sourceId);
-  const choices = source ? modelChoices(source, source.models.options).map((option) => ({
-    instance: source,
-    option, value: JSON.stringify([source.instanceId, option.id]),
-    selected: source.instanceId === selection.instanceId && choiceIsSelected(option, selection),
-    disabled: Boolean(source.policy || needsCli(source) || option.orgBlocked || (!option.custom && needsSignIn(source) && !isCustomOnly(source))),
+  useEffect(() => setProviderKey(savedKey), [bot.id, bot.threadId, savedKey]);
+  const source = groups.find((group) => group.key === providerKey);
+  const previewInstance = source?.instance;
+  const choices = source ? modelChoices(source.instance, source.options).map((option) => ({
+    instance: source.instance,
+    option, value: JSON.stringify([source.instance.instanceId, option.id]),
+    selected: source.key === savedKey && choiceIsSelected(option, selection),
+    disabled: Boolean(source.instance.policy || needsCli(source.instance) || option.orgBlocked || (!option.custom && needsSignIn(source.instance) && !isCustomOnly(source.instance))),
   })) : [];
   const selected = choices.find((choice) => choice.selected);
-  const sourceAttention = source?.instanceId === selection.instanceId ? attention
-    : source?.policy ? t("policy.managedBy", { organization: source.policy.organizationName })
-      : needsCli(source) ? t("model.setupRequired")
-        : source && needsSignIn(source) && !isCustomOnly(source) ? t("model.simple.signInForOwn", { name: engineDisplayName(source) }) : undefined;
+  const sourceAttention = source?.key === savedKey ? attention
+    : previewInstance?.policy ? t("policy.managedBy", { organization: previewInstance.policy.organizationName })
+      : needsCli(previewInstance) ? t("model.setupRequired")
+        : previewInstance && needsSignIn(previewInstance) && !isCustomOnly(previewInstance) ? t("model.simple.signInForOwn", { name: engineDisplayName(previewInstance) }) : undefined;
+  const providerName = (group: ProviderGroup) => group.route.label?.trim()
+    || t(group.route.provenance === "local" ? "model.connection.local" : "model.connection.unknown");
 
   return <div data-model-settings className="space-y-3">
     <label className="flex items-center justify-between gap-3">
       <span className="text-[13px] text-ink-secondary">{t("model.source")}</span>
       <Select size="sm" variant="quiet" className="w-[65%]" aria-label={t("model.source")}
-        aria-describedby={busyReason ? busyReasonId : undefined} value={source?.instanceId ?? "current"} disabled={disabled}
-        onChange={(event) => setSourceId(event.target.value)}>
-        {!source && <option value="current" disabled>{selection.instanceId} · {t("model.simple.unavailable")}</option>}
-        {instances.map((instance) => <option key={instance.instanceId} value={instance.instanceId}>{engineDisplayName(instance)}</option>)}
+        aria-describedby={busyReason ? busyReasonId : undefined} value={source?.key ?? "current"} disabled={disabled}
+        onChange={(event) => setProviderKey(event.target.value)}>
+        {!source && <option value="current" disabled>{t("model.connection.unknown")} · {selection.instanceId}</option>}
+        {groups.map((group) => {
+          const label = providerName(group);
+          const repeated = groups.some((other) => other.key !== group.key && providerName(other) === label);
+          return <option key={group.key} value={group.key}>{repeated ? `${label} · ${group.instance.instanceId}/${group.route.id}` : label}</option>;
+        })}
+      </Select>
+    </label>
+    <label className="flex items-center justify-between gap-3">
+      <span className="text-[13px] text-ink-secondary">{t("model.type")}</span>
+      <Select key={source?.key ?? "current"} size="sm" variant="quiet" className="w-[65%]" aria-label={t("model.type")}
+        disabled={disabled || !source}>
+        {previewInstance ? <option value={previewInstance.driverKind}>{previewInstance.driverKind}</option>
+          : <option value="current" disabled>{active?.driverKind ?? t("model.simple.unavailable")}</option>}
       </Select>
     </label>
     <label className="flex items-center justify-between gap-3">
       <span className="text-[13px] text-ink-secondary">{t("model.simple.model")}</span>
       <Select size="sm" variant="quiet" className="w-[65%]" aria-label={t("model.choose")}
-        title={source?.instanceId === selection.instanceId ? summary : undefined}
+        title={source?.key === savedKey ? summary : undefined}
         aria-describedby={busyReason ? busyReasonId : undefined} value={selected?.value ?? "current"} disabled={disabled || !source}
         onChange={(event) => {
           const choice = choices.find((candidate) => candidate.value === event.target.value);
           if (choice && !choice.disabled) onPick(choice.instance, choice.option.nativeModel ?? choice.option.id, choice.option.variant);
         }}>
-        {!selected && <option value="current" disabled>{source?.instanceId === selection.instanceId
+        {!selected && <option value="current" disabled>{providerKey === savedKey
           ? modelName(active, selection.model, selection.variant) : t("model.choose")}</option>}
         {choices.map((choice) => <option key={choice.value} value={choice.value} disabled={choice.disabled}>{choice.option.label}</option>)}
       </Select>
