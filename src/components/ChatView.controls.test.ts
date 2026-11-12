@@ -95,7 +95,7 @@ describe("the header's right side", () => {
     }
   });
 
-  it("puts Computer beside Share in Raw's visible header controls", () => {
+  it("keeps Computer visible without a standalone Share in Raw's header controls", () => {
     fixture.advanced = false;
     fixture.raw = true;
     try {
@@ -103,8 +103,8 @@ describe("the header's right side", () => {
       expect(markup).toContain("data-chathead-pill");
       expect(controls).toContain('data-tour="computer"');
       expect(controls).toContain(">Computer</span>");
-      expect(controls.indexOf('data-tour="computer"')).toBeLessThan(controls.indexOf("Share"));
-      expect(controls).toContain("Share");
+      expect(controls).not.toContain('data-panel-share');
+      expect(controls).not.toContain(">Share");
       expect(controls).not.toContain('data-testid="chat-more"');
       expect(controls).not.toContain("data-test-model-control");
     } finally {
