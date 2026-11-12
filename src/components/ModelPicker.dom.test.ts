@@ -517,23 +517,26 @@ describe("requested context window", () => {
   };
   const section = () => menu()!.querySelector<HTMLElement>("[data-model-context-window]")!;
   const openContext = () => flushSync(() => section().querySelector<HTMLButtonElement>("button")!.click());
-  const save = () => flushSync(() => section().querySelector<HTMLFormElement>("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  const chooseWindow = (value: string) => flushSync(() => {
+    const select = section().querySelector<HTMLSelectElement>("select")!;
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 
   for (const advanced of [false, true]) it(`saves and resets the requested window without changing reasoning in ${advanced ? "full" : "simple"} mode`, async () => {
     fixture.advanced = advanced;
     const bot = setup();
     render(bot, { contained: true, showReasoning: true });
     await openWith("click");
-    expect(section().querySelector("input")).toBeNull();
+    expect(section().querySelector("select")).toBeNull();
     expect(section().textContent).toContain("256,000");
     openContext();
-    type(section().querySelector<HTMLInputElement>("input")!, "1000000");
-    save();
+    chooseWindow("1000000");
     const next = { ...bot.modelSelection, contextWindowTokens: 1_000_000 };
     expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: !advanced, selection: next });
     render({ ...bot, modelSelection: next }, { contained: true, showReasoning: true });
     if (advanced) flushSync(() => [...menu()!.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Thread + bot default")!.click());
-    flushSync(() => section().querySelector<HTMLButtonElement>('button[type="button"]:last-child')!.click());
+    chooseWindow("auto");
     expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: true,
       selection: { instanceId: "codex", model: "fixture-model", effort: "high" } });
   });
@@ -544,23 +547,24 @@ describe("requested context window", () => {
     render(bot);
     await openWith("click");
     openContext();
-    type(section().querySelector<HTMLInputElement>("input")!, "128000");
-    save();
+    chooseWindow("128000");
     expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: bot.threadId, updateBotDefault: false,
       selection: { ...bot.modelSelection, contextWindowTokens: 128_000 } }));
   });
 
-  it.each(["bot", "thread"])("discards an unsaved draft when the %s changes", async (target) => {
-    const bot = setup();
+  it.each(["bot", "thread"])("preserves a saved nonpreset window and follows the selected %s", async (target) => {
+    const initial = setup();
+    const bot = { ...initial, modelSelection: { ...initial.modelSelection, contextWindowTokens: 196_608 } };
     render(bot);
     await openWith("click");
     openContext();
-    type(section().querySelector<HTMLInputElement>("input")!, "1000000");
-    render({ ...bot, ...(target === "bot" ? { id: "other-bot" } : { threadId: "other-thread" }) });
-    expect(section().querySelector("input")).toBeNull();
+    expect(section().querySelector<HTMLSelectElement>("select")!.value).toBe("196608");
+    expect(section().querySelector<HTMLSelectElement>("select")!.selectedOptions[0]!.textContent).toBe("196,608");
+    render({ ...bot, modelSelection: { ...bot.modelSelection, contextWindowTokens: 200_000 },
+      ...(target === "bot" ? { id: "other-bot" } : { threadId: "other-thread" }) });
+    expect(section().querySelector("select")).toBeNull();
     openContext();
-    expect(section().querySelector<HTMLInputElement>("input")!.value).toBe("256000");
-    save();
+    expect(section().querySelector<HTMLSelectElement>("select")!.value).toBe("200000");
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 
@@ -572,8 +576,7 @@ describe("requested context window", () => {
     render(bot);
     await openWith("click");
     openContext();
-    type(section().querySelector<HTMLInputElement>("input")!, "1000000");
-    save();
+    chooseWindow("1000000");
     expect(fixture.dispatch).not.toHaveBeenCalled();
     const dialog = document.querySelector<HTMLElement>('[role="alertdialog"]')!;
     expect(dialog.textContent).toContain("Switch model with Ask permissions?");
@@ -582,15 +585,14 @@ describe("requested context window", () => {
       selection: { ...bot.modelSelection, contextWindowTokens: 1_000_000 }, resetApprovalToAsk: true });
   });
 
-  it("refuses invalid windows before dispatch and does not invent support for another engine", async () => {
+  it("offers only known windows and does not invent support for another engine", async () => {
     const bot = setup();
     render(bot);
     await openWith("click");
     openContext();
+    expect(section().querySelector("input")).toBeNull();
     for (const value of ["4096", "1000001", "12.5", "1e6"]) {
-      type(section().querySelector<HTMLInputElement>("input")!, value);
-      save();
-      expect(section().querySelector('[role="alert"]')).not.toBeNull();
+      chooseWindow(value);
       expect(fixture.dispatch).not.toHaveBeenCalled();
     }
     fixture.instances[0]!.capabilities!.configurableContextWindow = false;
@@ -617,7 +619,8 @@ describe("inline overview model settings", () => {
     expect(select("AI source").value).toBe("claude");
     expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Claude Opus 5.5");
     expect(select("Reasoning effort").value).toBe("high");
-    expect(host.querySelector<HTMLInputElement>('[aria-label="Context window"]')!.value).toBe("256000");
+    expect(select("Context window").value).toBe("256000");
+    expect(host.querySelector('[data-model-context-window] input')).toBeNull();
 
     choose(select("Choose model"), JSON.stringify(["claude", "claude-sonnet-5-5"]));
     expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: true,
@@ -627,15 +630,10 @@ describe("inline overview model settings", () => {
     choose(select("Reasoning effort"), "low");
     expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { ...bot.modelSelection, effort: "low" } }));
 
-    const input = host.querySelector<HTMLInputElement>('[aria-label="Context window"]')!;
-    type(input, "4000");
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(host.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
-    type(input, "200000");
-    flushSync(() => host.querySelector<HTMLFormElement>("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    choose(select("Context window"), "128000");
     expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: true,
-      selection: { ...bot.modelSelection, contextWindowTokens: 200_000 } });
-    flushSync(() => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Auto")!.click());
+      selection: { ...bot.modelSelection, contextWindowTokens: 128_000 } });
+    choose(select("Context window"), "auto");
     expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { instanceId: "claude", model: "claude-sonnet-5-5", effort: "high" } }));
     expect(menu()).toBeNull();
   });
@@ -682,7 +680,7 @@ describe("inline overview model settings", () => {
     expect(host.querySelector('[data-model-busy-reason]')?.textContent).toContain("Stop this thread's turn before changing its model");
     expect(host.querySelector('[data-model-busy-reason]')?.textContent).toContain("Reasoning level applies from the next message");
     expect(host.querySelector<HTMLFieldSetElement>("fieldset")!.disabled).toBe(false);
-    expect(host.querySelector<HTMLInputElement>('[aria-label="Context window"]')!.disabled).toBe(true);
+    expect(select("Context window").disabled).toBe(true);
     choose(select("Reasoning effort"), "high");
     expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel", threadId: "thread-scout",
       selection: { instanceId: "claude", model: "claude-opus-5-5", effort: "high" } }));
