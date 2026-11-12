@@ -40,8 +40,12 @@ function OverviewModel({ bot }: { bot: Bot }) {
 }
 
 function suggestionReason(reason: MiniAppSuggestionReason): string {
-  return reason.kind === "task" ? reason.capability
-    : t(reason.kind === "responsible" ? "computer.miniApps.suggested.responsible" : "computer.miniApps.suggested.developed");
+  switch (reason.kind) {
+    case "task": return reason.capability;
+    case "responsible": return t("computer.miniApps.suggested.responsible");
+    case "developed": return t("computer.miniApps.suggested.developed");
+    case "publisher-grant": return t("computer.miniApps.suggested.publisherGrant");
+  }
 }
 
 export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps }: {

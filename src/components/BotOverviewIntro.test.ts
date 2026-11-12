@@ -81,6 +81,13 @@ describe("Bot overview suggestions", () => {
     expect(onOpenApps).toHaveBeenNthCalledWith(2);
   });
 
+  it("describes a publisher grant as permission rather than completed development", async () => {
+    fixture.api.mockResolvedValue(response(bot(), [suggestion("Publisher app", { kind: "publisher-grant" })]));
+    await render();
+    expect(card("Publisher app")?.textContent).toContain("This Bot can publish this app");
+    expect(card("Publisher app")?.textContent).not.toContain("Developed");
+  });
+
   it("cancels the old Bot request and never shows its late response in the newly selected Bot", async () => {
     const first = bot("first");
     const second = bot("second");
