@@ -112,6 +112,7 @@ export function Composer({
   onConsumeReply,
   onRestoreReply,
   locked: setupLocked = false,
+  needsInputStop = false,
 }: {
   bot?: Bot;
   group?: Group;
@@ -123,6 +124,7 @@ export function Composer({
   onConsumeReply?: () => void;
   onRestoreReply?: (message: Message, threadId: string) => void;
   locked?: boolean;
+  needsInputStop?: boolean;
 }) {
   const bot = profile ? currentTaskBot(profile) : undefined;
   const locked = setupLocked || Boolean(bot?.awaitingThreadSnapshot);
@@ -505,7 +507,7 @@ export function Composer({
   const callTarget = group?.id ?? bot?.id;
   const calling = callTarget !== undefined && (onCall === callTarget || (isLiveCallRunning(media.phase) && media.botId === callTarget));
   const mayAct = useMayAct(), mayStop = !sharedChat || mayAct(profile?.tasks?.find((task) => task.threadId === threadId)?.askedBy);
-  const stoppable = (busy || Boolean(!group && bot?.waitingForTeammates)) && mayStop;
+  const stoppable = (busy || Boolean(!group && bot?.waitingForTeammates) || needsInputStop) && mayStop;
   const stopInSlot = simpleDock && stoppable && !locked && !hasContent && !calling;
   const callShown = !simpleDock || (!hasContent && !stopInSlot);
   const slot = raw && bot?.defaultBot && !group
@@ -931,7 +933,7 @@ export function Composer({
             )}
           />
           <div data-composer-actions className={cn("flex items-center", simpleDock ? "gap-2" : "gap-1", !singleRow && !simpleDock && "@max-[30rem]/composer:ml-auto", stacked && "ml-auto")}>
-          {(simpleDock ? stoppable : busy && mayStop) && !locked && (
+          {(simpleDock ? stoppable : (busy || needsInputStop) && mayStop) && !locked && (
           <button
             onClick={interruptTurn}
             aria-label={t("chat.stopTurn")}

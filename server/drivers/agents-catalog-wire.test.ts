@@ -204,7 +204,7 @@ describe("agents proxy tools/list golden", () => {
       expect(at, name).toBeGreaterThan(-1);
       const waits = PROFILES[name]!.env.OMB_ROOM === "1" ? [] : ["wait_until", "list_waits", "cancel_wait"];
       expect(names.slice(at + 1, at + 1 + waits.length), name).toEqual(waits);
-      expect(names.filter((tool) => /wait/.test(tool) && tool !== "assignment_status"), name).toEqual(waits);
+      expect(names.filter((tool) => ["wait_until", "list_waits", "cancel_wait"].includes(tool)), name).toEqual(waits);
     }
   });
 
@@ -343,13 +343,14 @@ describe("agents proxy tools/list golden", () => {
     const names = (name: string) => toolsOf(wires[name]!).map((tool) => tool.name);
     expect(names("default+no-computer-pick")).toEqual(names("default").filter((tool) => tool !== "select_computer"));
     for (const name of ["default", "non-chief"]) {
-      expect(names(`${name}+room`), name).toEqual(names(name).filter((tool) => !["select_computer", "wait_until", "list_waits", "cancel_wait", "burst"].includes(tool)));
+      expect(names(`${name}+room`), name).toEqual(names(name).filter((tool) => !["select_computer", "wait_until", "list_waits", "cancel_wait", "withdraw_waiting_thread", "burst"].includes(tool)));
     }
     for (const [name, profile] of Object.entries(PROFILES)) {
       expect(names(name).includes("select_computer"), name).toBe(profile.env.OMB_COMPUTER_SELECTION === "1");
       expect(names(name).includes("show_widget"), name).toBe(true);
       expect(names(name).includes("show_html"), name).toBe(true);
       expect(names(name).includes("wait_until"), name).toBe(profile.env.OMB_ROOM !== "1");
+      expect(names(name).includes("withdraw_waiting_thread"), name).toBe(profile.env.OMB_ROOM !== "1");
     }
   });
 

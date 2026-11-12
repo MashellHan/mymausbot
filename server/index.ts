@@ -300,7 +300,7 @@ import { createWebhookRoomPost } from "./host/webhook-room-deps.ts";
 import { createRoomJobs, parallelRoomJobsEnabled, type RoomRoundLine } from "./host/room-jobs.ts";
 import { createDelegatedLevel } from "./host/delegated-level.ts";
 import { createLiveApprovalMode, createRecipientApprovalLevel } from "./host/live-approval.ts";
-import { CONSENT_RULE, continuedOrigin, escapeNotes, labelledLine, OUTSIDE, peerLineText, peerProvenanceNote, quoteInNote, reportNote, requestWorkOrigin, type WorkOrigin } from "./peer-provenance.ts"; import { lineNote, PROVENANCE_PROMPT } from "./provenance-label.ts"; import { openRoomThread } from "./host/room-new-thread.ts"; import { createLineLabels } from "./host/line-labels.ts";
+import { CONSENT_RULE, continuedOrigin, escapeNotes, labelledLine, OUTSIDE, peerLineText, peerProvenanceNote, quoteInNote, reportNote, requestWorkOrigin, workOrigin, type WorkOrigin } from "./peer-provenance.ts"; import { lineNote, PROVENANCE_PROMPT } from "./provenance-label.ts"; import { openRoomThread } from "./host/room-new-thread.ts"; import { createLineLabels } from "./host/line-labels.ts";
 import { decideRoomPost, emptyRoomPostBudget, type RoomPostAttempt, type RoomPostBudget } from "./room-post-budget.ts";
 import { messagePages, pageSize, slimMessage } from "./host/message-pages.ts";
 import { coordinateResultMessage, createAsksActingPerson, createTeammatePrompts } from "./host/teammate-prompts.ts"; import { createPersonalReach } from "./host/personal-reach.ts"; import { createMausBotOwnChat } from "./host/mausbot-own-chat.ts"; import { moveMemoryLayer } from "./memory-move.ts";
@@ -13271,6 +13271,21 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
         ownsThread: (botId, threadId) => Boolean(connectorThread(botId, threadId)),
         shown: (id) => !proactive.fence.confines(id) && !botApiThread(id) && (CLOUD_TEAM ? teamHost.readableFrom(internalCapability.threadId)(id) : cloudLendingView(internalCapability) ? cloudOwnerOnlyThread(id) : true),
         threadBusy, queuedThreadPosition, queuedReason: queuedStatus,
+        personRequestedWithdrawal: () => {
+          const request = directRequestOwners.get(internalCapability.threadId);
+          const line = request?.messageId ? store.messagesFor(internalCapability.threadId).find((row) => row.id === request.messageId) : undefined;
+          return !internalCapability.roomHandoffId && !internalCapability.externalRuntime && request?.generation === internalCapability.generation &&
+            request?.personLine === true && request.automation === undefined && !line?.fromApp &&
+            turnOrigin(internalCapability).kind === "user" && workOrigin(line).kind === "user";
+        },
+        samePerson: (target) => {
+          if (!CLOUD_TEAM) return true;
+          const person = actingPeople.requester(internalCapability.threadId, internalCapability.generation);
+          return person !== null && audienceMember(teamHost.audienceOf(internalCapability.threadId)) === person &&
+            audienceMember(teamHost.audienceOf(target)) === person && runOwners.stopRefusal(target, { person, admin: false }) === null;
+        },
+        waitingForPerson: (target) => coordinator.awaitingAnswer(target) || Boolean(openPersonCard(target)),
+        stopWaiting: (target) => stopThreadForPerson(internalSender.id, target),
       }), createToolTimingRoute(usageTrace, internalCapability.threadId)], { req, res, url, path, method, auth, json, readBody })) return;
       if (method === "POST" && path === "/api/internal/attach-file") {
         const from = internalSender;
