@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppState, Bot, InstanceInfo } from "@/state/store";
 import { setLocale, t } from "@/lib/i18n";
+import { MEMORY_INDEX } from "@/lib/memory";
 
 const fixture = vi.hoisted(() => ({ advanced: true, android: false, browser: false, page: undefined as unknown }));
 
@@ -34,6 +35,7 @@ vi.mock("./data/DataPanel", () => ({ DataPanel: () => createElement("div", { "da
 vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
   api: async (path: string) => {
+    if (path.includes("/memory/file?")) return { path: MEMORY_INDEX, text: "", hash: "", exists: false };
     if (path.startsWith("/api/bots/scout/computer/control")) return { held: false, helpReason: null };
     if (path.startsWith("/api/bots/scout/computer?")) return { surface: "cloud", backend: "box", configured: true, box: { boxId: "bx_23456789", state: "ready" } };
     return {};
