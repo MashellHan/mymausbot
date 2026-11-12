@@ -23,6 +23,7 @@ import { placeManagedBy, worksOnChoices, worksOnSelected } from "./WorksOnGrid";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { BotOverviewIntro } from "./BotOverviewIntro";
+import { BrowserLogins } from "./bot-panel/browser-logins";
 import { renderAdvancedWorks } from "./ComputerWorksAdvanced";
 import { AndroidDevicePanel, useAndroidUsbDevices } from "./AndroidDevicePanel";
 import { BrowserPanel } from "./BrowserPanel";
@@ -54,12 +55,13 @@ import {
   type VpsComputerStatus,
 } from "@/lib/local-computer";
 import { moveBetweenTabs, PANEL_TABS, panelTabProps, revealSelectedTab, scrollTabsWithWheel, TAB_PANEL_FOCUS, tabPanelProps, useAndroidTabFallback } from "./computer-panel-tabs";
-import { releaseComputerPanelFocus, useComputerPanelEntry } from "@/lib/computer-panel-focus";
+import { COMPUTER_PANEL_ID, releaseComputerPanelFocus, useComputerPanelEntry } from "@/lib/computer-panel-focus";
 import { PANEL_MIN_WIDTH, useComputerPanelResize } from "./computer-panel-resize";
 import {
   computerPanelTabs,
   readComputerPanelView,
   resolveComputerPanelView,
+  useComputerPanelViewRequest,
   writeComputerPanelView,
   type ComputerPanelView,
 } from "@/lib/computer-panel-view";
@@ -288,6 +290,7 @@ export function ComputerPanel({
     setPanelView(view);
     writeComputerPanelView(bot.id, view);
   };
+  useComputerPanelViewRequest(bot.id, panelRef, explicitPanelView, setPanelView);
   const [filePreview, setFilePreview] = useState<PanelFilePreview | null>(null);
   usePanelFileRequest(bot.id, bot.threadId, (file) => {
     explicitPanelView.current = true;
@@ -1188,6 +1191,7 @@ export function ComputerPanel({
   return (
     <>
     <aside
+      id={COMPUTER_PANEL_ID}
       className={cn(
         "animate-panel-in relative flex h-full shrink-0 flex-col border-l border-hairline/40 bg-panel",
         "max-2xl:absolute max-2xl:inset-y-0 max-2xl:right-0 max-2xl:z-40",
@@ -1215,19 +1219,17 @@ export function ComputerPanel({
       {/* ml-1.5 keeps the drag region clear of the resize handle: a later drag region in the DOM wins. */}
       <div {...dragProps} className="@container/paneltabs ml-1.5 py-3 pl-2.5 pr-4">
         <div className="relative flex min-h-7 items-center justify-center">
-          {advanced && (
-            <button
-              onClick={() => {
-                releaseComputerPanelFocus(panelRef.current, bot.id);
-                dispatch({ type: "toggleComputer", open: false });
-                dispatch({ type: "toggleSettings", open: true, section: "access" });
-              }}
-              className="absolute left-0 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
-              title={t("computer.botSettings")}
-            >
-              <Settings size={18} />
-            </button>
-          )}
+          <button
+            onClick={() => {
+              releaseComputerPanelFocus(panelRef.current, bot.id);
+              dispatch({ type: "toggleComputer", open: false });
+              dispatch({ type: "toggleSettings", open: true, section: advanced ? "access" : "overview" });
+            }}
+            className="absolute left-0 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+            title={t("computer.botSettings")} aria-label={t("computer.botSettings")}
+          >
+            <Settings size={18} />
+          </button>
           <div ref={tabListRef} className="mx-9 flex min-w-0 touch-pan-x gap-0.5 overflow-x-auto whitespace-nowrap rounded-full bg-inset p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-tour="computer-tabs" data-testid="computer-tabs" role="tablist" aria-label={t("computer.tabsAria")} onWheel={scrollTabsWithWheel} onKeyDown={(event) => moveBetweenTabs(event, panelTabs, chooseTab)}>
             {panelTabs.map((view) => {
               const { Icon, label, tour } = PANEL_TABS[view];
@@ -1748,6 +1750,9 @@ export function ComputerPanel({
               onAutoStart={() => dispatch({ type: "updateBot", botId: bot.id, patch: { autoStartVps: !bot.autoStartVps } })} />}
           </div>
         )}
+        <div className="mt-4 border-t border-hairline/50 pt-3" aria-label={t("settings.sites.title")}><h3 className="text-[13px] font-semibold text-ink-secondary">{t("settings.sites.title")}</h3>
+          <BrowserLogins bot={profileBot} browserEnabled={browserEnabled} onOpenBrowser={() => selectPanelView("browser")} />
+        </div>
           </>}</div>
         </section>
       </div>
