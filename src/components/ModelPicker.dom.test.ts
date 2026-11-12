@@ -57,7 +57,7 @@ function ownModelThread(threadModel: string, botModel: string, others: Array<[st
 let host: HTMLDivElement;
 let root: Root;
 const parentKey = vi.fn();
-const render = (bot = scout(), options: { contained?: boolean; showReasoning?: boolean } = {}) => flushSync(() => root.render(createElement("div", { onKeyDown: (event: { key: string }) => parentKey(event.key) },
+const render = (bot = scout(), options: { contained?: boolean; showReasoning?: boolean; inlineSettings?: boolean } = {}) => flushSync(() => root.render(createElement("div", { onKeyDown: (event: { key: string }) => parentKey(event.key) },
   createElement(ModelPicker, { bot, threadId: bot.threadId, ...options }))));
 const settle = async () => {
   for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -596,5 +596,75 @@ describe("requested context window", () => {
     fixture.instances[0]!.capabilities!.configurableContextWindow = false;
     render(bot);
     expect(menu()!.querySelector("[data-model-context-window]")).toBeNull();
+  });
+});
+
+describe("inline overview model settings", () => {
+  const options = { contained: true, showReasoning: true, inlineSettings: true };
+  const select = (name: string) => host.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`)!;
+  const choose = (control: HTMLSelectElement, value: string) => flushSync(() => {
+    control.value = value;
+    control.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  it("shows native model, effort and context controls together and saves each without a settings popup", async () => {
+    fixture.instances[0]!.capabilities!.configurableContextWindow = true;
+    let bot = { ...scout(), modelSelection: { ...scout().modelSelection, effort: "high" as const, contextWindowTokens: 256_000 } };
+    render(bot, options);
+    await settle();
+    expect(menu()).toBeNull();
+    expect(chip()).toBeNull();
+    expect(select("Choose model").selectedOptions[0]!.textContent).toBe("Claude Opus 5.5");
+    expect(select("Reasoning effort").value).toBe("high");
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Context window"]')!.value).toBe("256000");
+
+    choose(select("Choose model"), JSON.stringify(["claude", "claude-sonnet-5-5"]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: true,
+      selection: { instanceId: "claude", model: "claude-sonnet-5-5", effort: "high" } });
+    bot = { ...bot, modelSelection: { ...bot.modelSelection, model: "claude-sonnet-5-5" } };
+    render(bot, options);
+    choose(select("Reasoning effort"), "low");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { ...bot.modelSelection, effort: "low" } }));
+
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Context window"]')!;
+    type(input, "4000");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(host.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
+    type(input, "200000");
+    flushSync(() => host.querySelector<HTMLFormElement>("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: bot.id, threadId: bot.threadId, updateBotDefault: true,
+      selection: { ...bot.modelSelection, contextWindowTokens: 200_000 } });
+    flushSync(() => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Auto")!.click());
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { instanceId: "claude", model: "claude-sonnet-5-5", effort: "high" } }));
+    expect(menu()).toBeNull();
+  });
+
+  it("keeps guest changes on their thread and exposes only supported model settings", async () => {
+    fixture.owner = false;
+    fixture.instances[0]!.capabilities = {};
+    render(scout(), options);
+    await settle();
+    choose(select("Choose model"), JSON.stringify(["claude", "claude-sonnet-5-5"]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ updateBotDefault: false }));
+    expect(select("Reasoning effort")).toBeNull();
+    expect(host.querySelector('[data-model-context-window]')).toBeNull();
+    render({ ...scout(), busy: true }, options);
+    expect(select("Choose model").disabled).toBe(true);
+    expect(host.querySelector<HTMLFieldSetElement>("fieldset")!.disabled).toBe(true);
+  });
+
+  it("keeps signed-out and blocked catalog options unavailable while allowing configured custom models", async () => {
+    fixture.instances = [claude([...three, { id: "local", label: "Local model", custom: true }, { id: "blocked", label: "Blocked model", custom: true, orgBlocked: true }], false)];
+    render(scout(), options);
+    await settle();
+    const control = select("Choose model");
+    const option = (id: string) => [...control.options].find((candidate) => candidate.value === JSON.stringify(["claude", id]))!;
+    expect(option("claude-sonnet-5-5").disabled).toBe(true);
+    expect(option("blocked").disabled).toBe(true);
+    expect(option("local").disabled).toBe(false);
+    choose(control, option("blocked").value);
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    choose(control, option("local").value);
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ selection: { instanceId: "claude", model: "local" } }));
   });
 });

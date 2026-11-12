@@ -24,6 +24,7 @@ import { cn } from "@/lib/cn";
 import { useMenuMotion } from "./MenuMotion";
 import { SimpleModelMenu, type SimpleThinking } from "./SimpleModelMenu";
 import { ModelContextWindow } from "./ModelContextWindow";
+import { ModelSettingsPanel } from "./ModelSettingsPanel";
 import { apiKeysLabel, ClaudeAccountSelect, engineStatus, FollowBotModelRow, ModelEngineRail, ModelRow, ModelSearch } from "./ModelPickerFull";
 import { MENU_LABEL, MENU_LINE, MENU_ROW, MENU_SEPARATOR, MENU_STROKE, MENU_TRAILING } from "./menu-recipe";
 import { modelMenuKey, modelMenuPointerMove } from "./model-menu-keys";
@@ -38,161 +39,10 @@ import { usePickerPane } from "@/lib/model-picker-pane";
 import { threadsOnOwnModel } from "../../shared/thread-model";
 import { ThreadModelsLine } from "./ThreadModelsLine";
 import { USAGE_WARN_WIDENS, UsageBars, UsageMenuRows } from "./EngineUsage";
-import { Select } from "./Select";
+import { EffortRow, ModelVariantRow, effortLabel } from "./ModelReasoningControls";
+export { EffortRow, ModelVariantRow, effortLabel } from "./ModelReasoningControls";
 
 const COMPACT_MODEL_COUNT = 5;
-export function effortLabel(level: EffortLevel): string {
-  return t(`model.effort.${level}` as Parameters<typeof t>[0]);
-}
-
-/**
- * Default (undefined) sends nothing and lets the engine decide; `none` is a level the engine is told to use. Only pi
- * offers both.
- */
-export function EffortRow({
-  bot,
-  threadId,
-  updateBotDefault,
-  className,
-  label,
-  compact = false,
-}: {
-  bot: Bot;
-  threadId?: string;
-  updateBotDefault?: boolean;
-  className?: string;
-  label?: ReactNode;
-  compact?: boolean;
-}) {
-  const { state, dispatch } = useStore();
-  const selection = bot.modelSelection;
-  const instance = state.instances.find((candidate) => candidate.instanceId === selection.instanceId);
-  if (instance?.capabilities?.modelVariants) {
-    return <ModelVariantRow bot={bot} threadId={threadId} updateBotDefault={updateBotDefault} className={className} label={label} compact={compact} quiet={compact} />;
-  }
-  const levels = instance?.capabilities?.effortLevels;
-  if (!levels?.length) return null;
-
-  if (compact) return (
-    <label className={cn("flex items-center justify-between gap-3", className)}>
-      {label}
-      <Select size="sm" variant="quiet" className="max-w-[65%]" aria-label={t("model.effort.label")} value={selection.effort ?? ""}
-        onChange={(event) => dispatch({ type: "setModel", botId: bot.id, threadId, ...(updateBotDefault ? { updateBotDefault: true } : {}),
-          selection: { ...selection, effort: levels.find((level) => level === event.target.value) } })}>
-        <option value="">{t("model.effort.default")}</option>
-        {levels.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}
-      </Select>
-    </label>
-  );
-
-  return (
-    <div className={className}>
-      {label}
-      <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label={t("model.effort.label")}>
-        {[undefined, ...levels].map((level) => (
-          <button
-            key={level ?? "default"}
-            type="button"
-            aria-pressed={selection.effort === level}
-            title={
-              level === undefined
-                ? t("model.effort.noLevel")
-                : t("model.effort.ask", { level: effortLabel(level) })
-            }
-            onClick={() => dispatch({ type: "setModel", botId: bot.id, threadId, ...(updateBotDefault ? { updateBotDefault: true } : {}), selection: { ...selection, effort: level } })}
-            className={cn(
-              "rounded-full border px-2.5 py-1 text-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70",
-              selection.effort === level
-                ? "border-accent/60 bg-control text-ink"
-                : "border-hairline/40 text-ink-secondary hover:bg-control/60 hover:text-ink",
-            )}
-          >
-            {level === undefined ? t("model.effort.default") : effortLabel(level)}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export function ModelVariantRow({ bot, threadId, updateBotDefault, className, label, compact = false, wide = false, quiet = false }: {
-  bot: Bot;
-  threadId?: string;
-  updateBotDefault?: boolean;
-  className?: string;
-  label?: ReactNode;
-  compact?: boolean;
-  wide?: boolean;
-  quiet?: boolean;
-}) {
-  const { state, dispatch } = useStore();
-  const selection = bot.modelSelection;
-  const choices = variantChoices(state, selection, threadId ?? bot.threadId);
-  if (!choices) return null;
-  const { instance, reported, options } = choices;
-  const missing = selection.variant !== undefined && !options.some((option) => option.id === selection.variant);
-  const unavailable = missing && reported !== undefined;
-  const current = reported?.currentValue;
-  const choose = (variant?: string) => {
-    const { effort: _effort, variant: _variant, ...model } = selection;
-    dispatch({ type: "setModel", botId: bot.id, threadId, ...(updateBotDefault ? { updateBotDefault: true } : {}),
-      selection: { ...model, ...(variant !== undefined ? { variant } : {}) } });
-  };
-  if (compact) return (
-    <div className={className}>
-      <label className="flex items-center justify-between gap-3">
-        {label}
-        <Select size="sm" variant={quiet ? "quiet" : "field"} aria-label={t("model.variant.label")} className={wide ? "flex-1" : "max-w-[65%]"}
-          value={selection.variant === undefined ? "unset" : missing ? "missing" : String(options.findIndex((option) => option.id === selection.variant))}
-          onChange={(event) => choose(options[Number(event.target.value)]?.id)}>
-          <option value="unset">{t("model.variant.session")}</option>
-          {missing && <option value="missing" disabled>{selection.variant} ({unavailable ? t("model.variant.unavailable") : t("model.variant.unverified")})</option>}
-          {options.map((option, index) => <option key={option.id} value={String(index)}>{variantLabel(option, instance.driverKind)}</option>)}
-        </Select>
-      </label>
-      {missing && <p className={cn("mt-1 text-ink-secondary", quiet ? "text-[12px] leading-4 text-ink-tertiary" : "text-[11px]")}>{unavailable ? t("model.variant.unavailableHelp") : t("model.variant.unverifiedHelp")}</p>}
-    </div>
-  );
-  return (
-    <div className={className}>
-      {label}
-      {(selection.variant === undefined || missing) && (
-        <p className="mt-2 text-[12px] text-ink-secondary">
-          {unavailable ? t("model.variant.unavailableChoice", { variant: selection.variant ?? "" })
-            : missing ? t("model.variant.unverifiedChoice", { variant: selection.variant ?? "" }) : t("model.variant.none")}
-          {current !== undefined && ` ${t("model.variant.sessionValue", { variant: variantLabel(options.find((option) => option.id === current) ?? { id: current, label: current }, instance.driverKind) })}`}
-        </p>
-      )}
-      {selection.variant !== undefined && (
-        <button type="button" onClick={() => choose()}
-          title={t("model.variant.clearHint")}
-          className="mt-2 block text-[12px] text-ink-secondary underline underline-offset-2 hover:text-ink">
-          {t("model.variant.clear")}
-        </button>
-      )}
-      {options.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label={t("model.variant.label")}>
-          {options.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              aria-pressed={selection.variant === option.id}
-              title={t("model.variant.use", { variant: variantLabel(option, instance.driverKind) })}
-              onClick={() => choose(option.id)}
-              className={cn(
-                "rounded-full border px-2.5 py-1 text-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70",
-                selection.variant === option.id ? "border-accent/60 bg-control text-ink" : "border-hairline/40 text-ink-secondary hover:bg-control/60 hover:text-ink",
-              )}
-            >
-              {variantLabel(option, instance.driverKind)}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 const POPOVER_WIDTH = 420;
 const POPOVER_HEIGHT = 600;
 export const SIMPLE_POPOVER_WIDTH = 324;
@@ -200,12 +50,13 @@ const MENU_ITSELF = ":scope";
 
 export function ModelPicker({
   bot: shown, threadId, className, label, size = "md",
-  contained = false, showReasoning = false,
+  contained = false, showReasoning = false, inlineSettings = false,
 }: {
   bot: Bot;
   threadId?: string;
   className?: string;
   contained?: boolean; showReasoning?: boolean;
+  inlineSettings?: boolean;
   label?: ReactNode;
   size?: "sm" | "md";
 }) {
@@ -338,8 +189,8 @@ export function ModelPicker({
 
   // An engine with no models listed yet, or only a list it never confirmed, is asked for them, then they are shown.
   useEffect(() => {
-    if (open) ((hasOfficialModels || customOnly) && !modelsAwaitEngine(railInstance) ? refreshLocalInstances : () => refreshModels(displayedInstanceId))();
-  }, [open, refreshLocalInstances]);
+    if (open || inlineSettings) ((hasOfficialModels || customOnly) && !modelsAwaitEngine(railInstance) ? refreshLocalInstances : () => refreshModels(displayedInstanceId))();
+  }, [open, inlineSettings, refreshLocalInstances]);
 
   useEffect(() => {
     if (bot.busy) setOpen(false);
@@ -528,7 +379,7 @@ export function ModelPicker({
     : levels.length > 0 && !shown.busy ? { levels, current: selection.effort, onPick: writeEffort, onReset: () => writeEffort(undefined) }
     : null;
   const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
-    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy}
+    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
       onChange={(next) => applySelection(active, next)} />
     : null;
 
@@ -990,7 +841,13 @@ export function ModelPicker({
 
   return (
     <div ref={rootRef} className={cn(contained ? "w-full" : "relative", className)}>
-      {contained ? (
+      {inlineSettings ? <ModelSettingsPanel bot={shown} instances={pickerInstances} summary={summary} attention={attention}
+        disabled={locked || loadingInstances || refreshingId !== null} onPick={pick} onManage={remote ? undefined : openEngines}>
+        <EffortRow compact wide bot={shown} threadId={threadId}
+          updateBotDefault={Boolean(threadId && simpleUpdatesBotDefault && (simpleView || scope === "bot"))}
+          label={<span className="text-[13px] text-ink-secondary">{active?.capabilities?.modelVariants ? t("model.simple.reasoning") : t("model.effort.label")}</span>} />
+        {contextWindow}
+      </ModelSettingsPanel> : contained ? (
         <div className="flex items-center justify-between gap-4">
           {label}
           {trigger}
@@ -998,7 +855,7 @@ export function ModelPicker({
       ) : (
         trigger
       )}
-      {menu && floating ? createPortal(menu, document.body) : menu}
+      {!inlineSettings && (menu && floating ? createPortal(menu, document.body) : menu)}
       {!contained && changedBotModel && !open && ownModelThreads > 0 && (
         <div data-thread-models-notice role="status"
           className="menu-surface absolute right-0 top-full z-30 mt-1 flex w-max max-w-[min(300px,calc(100vw-2rem))] items-center gap-2 py-1.5 pl-3 pr-1.5 text-[13px] leading-[18px]">
