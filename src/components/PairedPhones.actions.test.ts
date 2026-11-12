@@ -43,7 +43,11 @@ it("keeps a phone visible after a failed or unavailable revoke and announces onl
   flushSync(() => root.render(createElement(View)));
   await vi.waitFor(() => expect(host.textContent).toContain("Ada"));
   flushSync(() => (host.querySelector("button[aria-expanded]") as HTMLButtonElement).click());
-  const remove = () => [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Remove phone") as HTMLButtonElement;
+  const remove = () => {
+    const button = host.querySelector<HTMLButtonElement>('[data-phone-row="phone-1"] button[data-phone-remove]');
+    expect(button?.getAttribute("aria-label")).toBe("Remove Ada");
+    return button!;
+  };
 
   remove().click();
   await vi.waitFor(() => expect(host.querySelector('[role="alert"]')?.textContent).toContain("Remote access could not be updated"));
