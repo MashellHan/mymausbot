@@ -209,12 +209,7 @@ export interface GroupTask {
   busyBotId?: string | null;
 }
 
-export interface ModelSelection {
-  instanceId: string;
-  model: string;
-  effort?: EffortLevel;
-  variant?: string;
-}
+export type ModelSelection = import("../../shared/model-selection").ModelSelection;
 
 export interface Task extends Pick<WireTask, "private" | "setupRequest" | "inbox" | "openAsks" | "askedBy"> {
   waitingForTeammates?: boolean; sharedChat?: true;
