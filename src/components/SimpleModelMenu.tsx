@@ -34,6 +34,7 @@ export interface SimpleModelMenuProps extends SimpleMenuActions {
   bot: Pick<Bot, "name" | "color" | "avatarUrl" | "avatarCrop" | "avatarZoom" | "avatarFocusX" | "avatarFocusY" | "mascotBody">;
   botModel: { label: string; title: string };
   thinking?: SimpleThinking | null;
+  contextWindow?: ReactNode;
   idPrefix: string;
 }
 
@@ -300,7 +301,7 @@ export function SimpleModelMenu(props: SimpleModelMenuProps) {
         </div>
       </div>
 
-      {(props.thinking || props.onResetVariant || props.onManage) && (
+      {(props.thinking || props.contextWindow || props.onResetVariant || props.onManage) && (
         <div data-simple-effort-band className="flex shrink-0 flex-col gap-0.5 p-1.5 pt-0">
           <div role="separator" className={MENU_SEPARATOR} />
           {props.thinking && (
@@ -309,6 +310,7 @@ export function SimpleModelMenu(props: SimpleModelMenuProps) {
               {(props.onResetVariant || props.onManage) && <div role="separator" className={MENU_SEPARATOR} />}
             </>
           )}
+          {props.contextWindow}
           {props.onResetVariant && (
             <button type="button" data-menu-row data-simple-variant-default onClick={props.onResetVariant} className={MENU_ROW}>
               <Gutter />

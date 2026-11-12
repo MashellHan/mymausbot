@@ -23,6 +23,7 @@ import { approvalModeFor, modelSwitchNeedsAsk } from "../../shared/approval-mode
 import { cn } from "@/lib/cn";
 import { useMenuMotion } from "./MenuMotion";
 import { SimpleModelMenu, type SimpleThinking } from "./SimpleModelMenu";
+import { ModelContextWindow } from "./ModelContextWindow";
 import { apiKeysLabel, ClaudeAccountSelect, engineStatus, FollowBotModelRow, ModelEngineRail, ModelRow, ModelSearch } from "./ModelPickerFull";
 import { MENU_LABEL, MENU_LINE, MENU_ROW, MENU_SEPARATOR, MENU_STROKE, MENU_TRAILING } from "./menu-recipe";
 import { modelMenuKey, modelMenuPointerMove } from "./model-menu-keys";
@@ -30,7 +31,6 @@ import { lockedWhileBusy, offersReasoning, useRefocusAfterPick, variantChoices, 
 import { BusyModelMenu } from "./ModelPickerBusyMenu";
 import { useAdvancedMode } from "@/lib/interface-mode";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
-
 import { t } from "@/lib/i18n";
 import { COMPACT_SQUARE } from "@/lib/compact-chip";
 import { useAiSwitch } from "@/lib/ai-switch";
@@ -41,8 +41,6 @@ import { USAGE_WARN_WIDENS, UsageBars, UsageMenuRows } from "./EngineUsage";
 import { Select } from "./Select";
 
 const COMPACT_MODEL_COUNT = 5;
-
-
 export function effortLabel(level: EffortLevel): string {
   return t(`model.effort.${level}` as Parameters<typeof t>[0]);
 }
@@ -201,12 +199,8 @@ export const SIMPLE_POPOVER_WIDTH = 324;
 const MENU_ITSELF = ":scope";
 
 export function ModelPicker({
-  bot: shown,
-  threadId,
-  className,
+  bot: shown, threadId, className, label, size = "md",
   contained = false, showReasoning = false,
-  label,
-  size = "md",
 }: {
   bot: Bot;
   threadId?: string;
@@ -462,32 +456,27 @@ export function ModelPicker({
     dispatch({ type: "setModel", botId: bot.id, threadId: threadId ?? bot.threadId, updateBotDefault: false, selection: profile.modelSelection });
   };
 
-  const pick = (instance: InstanceInfo, model: string, variant?: string) => {
+  const applySelection = (instance: InstanceInfo, nextSelection: ModelSelection, variantPicked = false) => {
     if (bot.busy || instance.policy) return;
-    const nextSelection = modelSelectionForPick(selection, instance, model);
-    if (variant !== undefined) nextSelection.variant = variant;
     const updateBotDefault = !threadId || (simpleUpdatesBotDefault && (simpleView || scope === "bot"));
     const targets = [currentTaskBot(profile, threadId ?? bot.threadId), ...(updateBotDefault ? [profile] : [])];
     if (targets.some((target) => modelSwitchNeedsAsk(approvalModeFor(target),
       state.instances.find((candidate) => candidate.instanceId === target.modelSelection.instanceId)?.driverKind,
       instance.driverKind))) {
       setPendingSwitch({ botId: bot.id, threadId: threadId ?? bot.threadId,
-        selection: nextSelection, updateBotDefault, name: modelLabel(instance, model) });
+        selection: nextSelection, updateBotDefault, name: modelLabel(instance, nextSelection.model) });
       close(false);
       return;
     }
-    dispatch({
-      type: "setModel",
-      botId: bot.id,
-      threadId: threadId ?? bot.threadId,
-      updateBotDefault,
-      selection: nextSelection,
-    });
+    dispatch({ type: "setModel", botId: bot.id, threadId: threadId ?? bot.threadId, updateBotDefault, selection: nextSelection });
     if (updateBotDefault && threadId) setChangedBotModel(true);
-    // A model with reasoning levels keeps the menu open, so its level can be set next without opening it again;
-    // picking a variant row already sets that level.
-    if (variant !== undefined || (contained && !showReasoning) || !offersReasoning(state, instance, nextSelection, threadId ?? bot.threadId)) close(true);
+    if (variantPicked || (contained && !showReasoning) || !offersReasoning(state, instance, nextSelection, threadId ?? bot.threadId)) close(true);
     else refocusAfterPick();
+  };
+  const pick = (instance: InstanceInfo, model: string, variant?: string) => {
+    const nextSelection = modelSelectionForPick(selection, instance, model);
+    if (variant !== undefined) nextSelection.variant = variant;
+    applySelection(instance, nextSelection, variant !== undefined);
   };
 
   const resetVariant = contained && selection.variant !== undefined ? () => {
@@ -537,6 +526,10 @@ export function ModelPicker({
       ),
     }
     : levels.length > 0 && !shown.busy ? { levels, current: selection.effort, onPick: writeEffort, onReset: () => writeEffort(undefined) }
+    : null;
+  const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
+    ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy}
+      onChange={(next) => applySelection(active, next)} />
     : null;
 
   const botModelSelection = follows !== undefined && profile.modelSelection.instanceId === railInstance?.instanceId
@@ -891,6 +884,7 @@ export function ModelPicker({
                   label={<span className="text-[13px] leading-[18px] text-ink">{active?.capabilities?.modelVariants ? t("model.simple.reasoning") : t("model.section.effort")}</span>}
                 />
               )}
+              {contextWindow}
 
               {pane === "main" && offersLocalModels(railInstance, custom.length) && (
                 <button
@@ -969,6 +963,7 @@ export function ModelPicker({
           bot={profile}
           botModel={{ label: modelName(botModelInstance, profile.modelSelection.model, profile.modelSelection.variant), title: botModelName }}
           thinking={thinking}
+          contextWindow={contextWindow}
           idPrefix={menuId}
           onQuery={setQuery}
           onPick={pick}
