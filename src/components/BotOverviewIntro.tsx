@@ -28,7 +28,7 @@ function OverviewModel({ bot }: { bot: Bot }) {
       className="flex w-full min-w-0 items-center gap-3 rounded-lg px-1 py-2 text-left hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent">
       <RowIcon icon={Sparkles} />
       <span className="min-w-0 flex-1">
-        <span className="block text-[15px] font-semibold text-ink">{t("model.simple.model")}</span>
+        <span data-panel-model-title="" className="block text-[15px] font-semibold text-ink">{t("model.simple.model")}</span>
         <span className="block truncate text-[12px] text-ink-secondary" title={summary}>{summary}</span>
       </span>
       <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform", expanded && "rotate-180")} aria-hidden="true" />

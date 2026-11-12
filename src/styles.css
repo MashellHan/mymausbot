@@ -3428,12 +3428,12 @@ button:disabled.bg-danger {
   font-size: 17px;
   font-weight: 500;
 }
-[data-interface-mode="raw"] [data-testid="bot-overview-intro"] h2,
+[data-interface-mode="raw"] [data-testid="bot-overview-intro"] :is(h2, [data-panel-model-title]),
 [data-interface-mode="raw"] :is([data-testid="bot-overview-computer"], [data-testid="bot-overview-works"]) > button > span > span:first-child {
   font-size: 13px;
   font-weight: 500;
 }
-[data-interface-mode="raw"] [data-testid="bot-overview-intro"] h2 {
+[data-interface-mode="raw"] [data-testid="bot-overview-intro"] :is(h2, [data-panel-model-title]) {
   color: var(--color-ink-secondary);
 }
 [data-interface-mode="raw"] [data-testid="bot-overview-intro"] article {
