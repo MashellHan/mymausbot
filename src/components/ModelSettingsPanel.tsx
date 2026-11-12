@@ -35,7 +35,7 @@ export function ModelSettingsPanel({ bot, instances, disabled, attention, summar
   const sourceAttention = source?.instanceId === selection.instanceId ? attention
     : source?.policy ? t("policy.managedBy", { organization: source.policy.organizationName })
       : needsCli(source) ? t("model.setupRequired")
-        : needsSignIn(source) && !isCustomOnly(source) ? t("model.simple.signInForOwn", { name: engineDisplayName(source) }) : undefined;
+        : source && needsSignIn(source) && !isCustomOnly(source) ? t("model.simple.signInForOwn", { name: engineDisplayName(source) }) : undefined;
 
   return <div data-model-settings className="space-y-3">
     <label className="flex items-center justify-between gap-3">

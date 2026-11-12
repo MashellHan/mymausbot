@@ -688,6 +688,16 @@ describe("inline overview model settings", () => {
       selection: { instanceId: "claude", model: "claude-opus-5-5", effort: "high" } }));
   });
 
+  it("keeps busy reasoning on an independent task instead of changing the Bot default", async () => {
+    const busy = { ...ownModelThread("claude-sonnet-5-5", "claude-opus-5-5"), busy: true };
+    fixture.bots = fixture.bots.map((bot) => ({ ...bot, busy: true }));
+    render(busy, options);
+    await settle();
+    choose(select("Reasoning effort"), "high");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith({ type: "setModel", botId: "scout", threadId: "thread-scout",
+      selection: { instanceId: "claude", model: "claude-sonnet-5-5", effort: "high" } });
+  });
+
   it("keeps signed-out and blocked catalog options unavailable while allowing configured custom models", async () => {
     fixture.instances = [claude([...three, { id: "local", label: "Local model", custom: true }, { id: "blocked", label: "Blocked model", custom: true, orgBlocked: true }], false)];
     render(scout(), options);
