@@ -94,16 +94,14 @@ describe("bot setup and tools in the real renderer", () => {
       return (await agentBrowser(handle.binary, sessionEnv(handle), ["eval", js], 2_000)).result;
     };
     const snapshot = async () => (await ui("snapshot")).snapshot as string;
-    // The bot's panel opens from the chat header's pill; click it only while closed.
     const openPanel = () => expect.poll(() => evaluate(`(() => {
       if (document.querySelector('[data-chathead-pill][aria-expanded="true"]')) return true;
       document.querySelector('[data-chathead-pill]')?.click();
       return false;
     })()`), { timeout: 10_000 }).toBe(true);
-    // Its MCP servers are on Bot settings → Apps it can use.
     const openApps = async () => {
       await openPanel();
-      // The panel is a lazy chunk; its gear opens Bot settings once it has painted.
+      await click("Bot settings");
       await expect.poll(() => evaluate("(() => { const gear = document.querySelector('[data-panel-gear]'); gear?.click(); return Boolean(gear); })()"), { timeout: 10_000 }).toBe(true);
       await expect.poll(() => evaluate("Boolean(document.querySelector('[data-panel-page=\"apps\"]'))"), { timeout: 10_000 }).toBe(true);
       await evaluate("document.querySelector('[data-panel-page=\"apps\"]').click(); true");
