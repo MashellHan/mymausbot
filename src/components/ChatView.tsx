@@ -97,7 +97,7 @@ import { BotActivityPicker } from "./TaskPicker"; import { ChatHeadPill } from "
 import { ELEVATED_FLOAT, ELEVATED_HOVER } from "./elevated";
 import { ChatComputerButton } from "./ChatComputerButton";
 import { ModelPicker } from "./ModelPicker";
-import { ChatHeaderMenu, ChatMoreMenu, RawChatShareMenu } from "./ChatMoreMenu"; import { TeamOwnHelperHeader, TeamPrivateFirstLine, TeamPrivateHeader, TeamSharedHeader } from "./TeamPrivateChatsLine"; import { ownChatStarted } from "@/state/team-chats";
+import { ChatHeaderMenu, ChatMoreMenu } from "./ChatMoreMenu"; import { TeamOwnHelperHeader, TeamPrivateFirstLine, TeamPrivateHeader, TeamSharedHeader } from "./TeamPrivateChatsLine"; import { ownChatStarted } from "@/state/team-chats";
 import { useChatFindRequests } from "@/lib/chat-find";
 import { CitationSelectionToolbar, SentCitations } from "./CitationUI";
 import { SpeakButton } from "./SpeakButton";
@@ -1114,7 +1114,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           {(!phone || remoteClient) && (!raw || remoteClient) && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
           <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, state, showThreads)} />{!phoneMenu && <WatchScreenButton botId={bot.id} messages={messages} liveTools={liveTools} place={place} />}
           {computerButton}
-          {phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : raw && !remoteClient ? <RawChatShareMenu bot={bot} /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
+          {phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
         </div>
         </div>
       </div>
