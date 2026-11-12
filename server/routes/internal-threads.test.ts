@@ -75,6 +75,17 @@ describe("withdraw_waiting_thread", () => {
     expect(stopped).toEqual([first.threadId]);
   });
 
+  it("refuses a restored card-only wait when Stop leaves the card open, including on repeat", async () => {
+    const openCards = new Set([first.threadId]);
+    const stopped: string[] = [];
+    const deps = { ...base(), waitingForPerson: (id: string) => openCards.has(id), stopWaiting: async (id: string) => { stopped.push(id); } };
+    const refused = { status: 409, body: { error: "that thread is still waiting for the person", withdrawn: false, waiting: true, threadId: first.threadId } };
+    expect(await call(deps, first.threadId)).toEqual(refused);
+    expect(await call(deps, first.threadId)).toEqual(refused);
+    expect(stopped).toEqual([first.threadId, first.threadId]);
+    expect(openCards.has(first.threadId)).toBe(true);
+  });
+
   it("refuses unproved origin, other bots, other people and the current conversation", async () => {
     expect((await call({ ...base(), personRequestedWithdrawal: () => false }, first.threadId)).status).toBe(403);
     expect((await call({ ...base(), ownsThread: () => false }, first.threadId)).status).toBe(403);

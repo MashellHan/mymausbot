@@ -100,6 +100,9 @@ export function createInternalThreadRoutes(deps: {
       }
       if (!deps.waitingForPerson(threadId)) return json(res, 200, { withdrawn: false, waiting: false, threadId });
       await deps.stopWaiting(threadId);
+      if (deps.waitingForPerson(threadId)) {
+        return json(res, 409, { error: "that thread is still waiting for the person", withdrawn: false, waiting: true, threadId });
+      }
       return json(res, 200, { withdrawn: true, waiting: false, threadId });
     }
     // close_thread folds a thread, never deletes it (a person's confirmed action), and never while it runs.

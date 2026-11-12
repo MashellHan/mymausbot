@@ -25,11 +25,12 @@ describe("withdraw_waiting_thread", () => {
   it("uses the exact internal thread route and requires a confirmed state", async () => {
     const calls: string[] = [];
     let body: Record<string, unknown> = { threadId: "old-wait", withdrawn: true, waiting: false };
+    let ok = true;
     const client = {
       api: async () => ({}),
       apiResponse: async (path: string) => {
         calls.push(path);
-        return { ok: true, status: 200, body };
+        return { ok, status: ok ? 200 : 409, body };
       },
     };
     const result = await callTool("withdraw_waiting_thread", { thread_id: "old-wait" }, context({ client }));
@@ -40,6 +41,12 @@ describe("withdraw_waiting_thread", () => {
     expect(calls).toHaveLength(1);
     body = {};
     expect((await callTool("withdraw_waiting_thread", { thread_id: "old-wait" }, context({ client }))).isError).toBe(true);
+    ok = false;
+    body = { error: "that thread is still waiting for the person", withdrawn: false, waiting: true };
+    const refused = await callTool("withdraw_waiting_thread", { thread_id: "old-wait" }, context({ client }));
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("still waiting");
+    expect(refused.text).not.toContain("was withdrawn");
   });
 });
 
