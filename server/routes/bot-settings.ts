@@ -127,7 +127,7 @@ export function createBotSettingsRoutes(deps: BotSettingsRouteDeps): RouteHandle
       const body = await readBody(req);
       if (body && typeof body === "object" && !Array.isArray(body)) {
         const unsupported = Object.keys(body).find(
-          (key) => key !== "instanceId" && key !== "model" && key !== "effort" && key !== "variant",
+          (key) => key !== "instanceId" && key !== "model" && key !== "effort" && key !== "variant" && key !== "contextWindowTokens",
         );
         if (unsupported) return json(res, 400, { error: `unsupported model field: ${unsupported}` });
       }

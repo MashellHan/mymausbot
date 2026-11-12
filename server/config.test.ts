@@ -281,6 +281,14 @@ describe("configuration boundaries", () => {
       .toEqual({ defaultModelSelection: { instanceId: "opencodeGo", model: "provider/model" } });
   });
 
+  it("round-trips an explicit context request and removes it when reset", () => {
+    const selection = { instanceId: "codex", model: "chosen-model", effort: "high", contextWindowTokens: 200_000 };
+    expect(parseConfigPatch({ defaultModelSelection: selection })).toEqual({ defaultModelSelection: selection });
+    expect(parseStoredConfig({ defaultModelSelection: selection })).toEqual({ defaultModelSelection: selection });
+    expect(parseConfigPatch({ defaultModelSelection: { instanceId: "codex", model: "chosen-model", effort: "high" } }))
+      .toEqual({ defaultModelSelection: { instanceId: "codex", model: "chosen-model", effort: "high" } });
+  });
+
   it.each<JsonValue>([
     null,
     "codex/model",
@@ -293,6 +301,9 @@ describe("configuration boundaries", () => {
     { instanceId: "opencodeGo", model: "model", variant: "" },
     { instanceId: "opencodeGo", model: "model", variant: " low " },
     { instanceId: "opencodeGo", model: "model", variant: "low", effort: "high" },
+    { instanceId: "codex", model: "model", contextWindowTokens: 8191 },
+    { instanceId: "codex", model: "model", contextWindowTokens: 1_000_001 },
+    { instanceId: "codex", model: "model", contextWindowTokens: 200_000.5 },
   ])("rejects an invalid default model selection: %j", (defaultModelSelection) => {
     expect(() => parseStoredConfig({ defaultModelSelection })).toThrow("defaultModelSelection");
     expect(() => parseConfigPatch({ defaultModelSelection })).toThrow("defaultModelSelection");

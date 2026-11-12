@@ -215,11 +215,24 @@ describe("ModelRequestService", () => {
       .toThrow("Nothing would change");
     expect(() => service.propose({ botId: bot.id, threadId: bot.threadId, selection: { instanceId: "claude" }, reason: "asked" }))
       .toThrow("model_selection.model is required");
+    expect(() => service.propose({ botId: bot.id, threadId: bot.threadId, selection: { instanceId: "codex", model: "gpt-fixture", contextWindowTokens: "large" }, reason: "asked" }))
+      .toThrow("model_selection.contextWindowTokens");
     expect(() => service.propose({ botId: bot.id, threadId: bot.threadId, selection: { instanceId: "claude", model: "opus" }, reason: "   " }))
       .toThrow("reason is required");
     expect(() => service.propose({ botId: "ghost", threadId: bot.threadId, selection: { instanceId: "claude", model: "opus" }, reason: "asked" }))
       .toThrow("That bot no longer exists");
     expect(store.threads.size).toBe(0);
+  });
+
+  it("treats a context-only proposal as a real selection change", () => {
+    const store = new MemoryStore();
+    const bot = addBot(store, "Scout", { instanceId: "codex", model: "gpt-fixture" });
+    const service = new ModelRequestService({ store });
+    const selection = { ...bot.modelSelection, contextWindowTokens: 200_000 };
+    const proposal = service.propose({ botId: bot.id, threadId: bot.threadId, selection, reason: "asked" });
+    expect(service.resolve({ botId: bot.id, threadId: bot.threadId, requestId: proposal.requestId, behavior: "allow" }))
+      .toMatchObject({ state: "applied" });
+    expect(bot.modelSelection).toEqual(selection);
   });
 });
 

@@ -15,6 +15,7 @@ import { flushNativeLog } from "./native.ts";
 import { ChatGptPlanAuthController } from "./chatgpt-plan-auth.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { CodexDriver, codexNativeIncomingLogMessage, codexUpdateCommand } from "./codex.ts";
+import { codexContextWindowSupported } from "./codex-thread-config.ts";
 import { codexCliOverrides } from "./codex-process.ts";
 import { parseToml } from "../toml-lite.ts";
 import * as codexProcess from "./codex-process.ts";
@@ -52,6 +53,13 @@ const CONTROL_PLANE_FIXTURE = {
 };
 
 describe("CodexDriver.decodeConfig", () => {
+  it("recognizes only a proven stable native context-window version", () => {
+    expect(codexContextWindowSupported("codex-cli 0.167.1")).toBe(true);
+    expect(codexContextWindowSupported("codex-cli 0.168.0")).toBe(true);
+    expect(codexContextWindowSupported("codex-cli 0.167.0")).toBe(false);
+    expect(codexContextWindowSupported("codex-cli 0.167.1-rc.1")).toBe(false);
+    expect(codexContextWindowSupported("other-cli 0.167.1")).toBe(false);
+  });
   it("makes plan/provider failures actionable without changing billing", () => {
     expect(codexUserError("provider_not_configured", "own")).toContain("Continue with ChatGPT");
     expect(codexUserError("provider_not_configured", "plan")).toContain("API billing will not be used");
@@ -2061,6 +2069,47 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       approvalsReviewer: "user",
       sandboxPolicy: { type: "dangerFullAccess" },
     });
+  });
+
+  it("applies an explicit context request on start and resume, while omission leaves the native default", async () => {
+    process.env.FAKE_CODEX_VERSION = "codex-cli 0.167.1";
+    await create({ endpoint: true, mode: "resume" });
+    expect(instance.adapter.capabilities.configurableContextWindow).toBe(false);
+    expect((await instance.snapshot()).version).toBe("codex-cli 0.167.1");
+    expect(instance.adapter.capabilities.configurableContextWindow).toBe(true);
+    const dump = join(scratch, "context-window.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    for (const [index, requested] of [200_000, undefined, 120_000].entries()) {
+      const { turnId } = await instance.adapter.sendTurn({
+        threadId: "t-context-window", text: "Fixture", model: "gateway-model",
+        ...(index ? { resumeCursor: "codex-thread-1" } : {}),
+        ...(requested !== undefined ? { contextWindowTokens: requested } : {}),
+      });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+      const calls = JSON.parse(readFileSync(dump, "utf8")).calls as Array<{ method: string; params: { config?: Record<string, unknown> } }>;
+      const thread = calls.find((call) => call.method === (index ? "thread/resume" : "thread/start"));
+      expect(thread).toBeDefined();
+      if (requested === undefined) expect(thread?.params.config).not.toHaveProperty("model_context_window");
+      else expect(thread?.params.config?.model_context_window).toBe(requested);
+    }
+    process.env.FAKE_CODEX_VERSION = "";
+    await expect(instance.adapter.sendTurn({ threadId: "t-context-window", text: "Fixture", model: "gateway-model", contextWindowTokens: 200_000 }))
+      .rejects.toThrow("cannot set a context window");
+  });
+
+  it("refuses an older or changed Codex CLI before starting a turn with a context override", async () => {
+    process.env.FAKE_CODEX_VERSION = "codex-cli 0.166.0";
+    await create({ endpoint: true, mode: "resume" });
+    expect((await instance.snapshot()).version).toBe("codex-cli 0.166.0");
+    expect(instance.adapter.capabilities.configurableContextWindow).toBe(false);
+    const dump = join(scratch, "unsupported-context-window.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await expect(instance.adapter.sendTurn({ threadId: "old-cli", text: "Fixture", model: "gateway-model", contextWindowTokens: 200_000 }))
+      .rejects.toThrow("cannot set a context window");
+    expect(existsSync(dump)).toBe(false);
+    await expect(instance.adapter.sendTurn({ threadId: "bad-window", text: "Fixture", model: "gateway-model", contextWindowTokens: 1.5 }))
+      .rejects.toThrow("requested context window is invalid");
+    expect(existsSync(dump)).toBe(false);
   });
 
   it.each([
