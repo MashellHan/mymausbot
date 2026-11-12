@@ -4,6 +4,8 @@
  * first render, never by a timer on the opener's side. */
 import { useEffect, useRef, type RefObject } from "react";
 
+export const COMPUTER_PANEL_ID = "computer-panel";
+
 export type ComputerPanelOpen = {
   botId: string;
   opener: HTMLElement | null;
