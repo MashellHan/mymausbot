@@ -112,6 +112,22 @@ describe("the engine list", () => {
     expect(fake.probes).toHaveLength(2);
     expect(await probesAfterList()).toBe(2);
   });
+
+  it("describes exact model routes without joining same-name connections or changing selection IDs", async () => {
+    const cfg = { instances: {
+      a: { driver: "fake", displayName: "Studio Proxy" },
+      b: { driver: "fake", displayName: "Studio Proxy" },
+    } } as unknown as AppConfig;
+    const { call } = await serve({ cfg, describeInstances: async () => ["a", "b"].map((instanceId) => ({
+      instanceId, driverKind: "fake", displayName: "Studio Proxy", snapshot: { state: "available" },
+      models: { default: "M", options: [{ id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }] }] },
+    })) });
+    const { instances } = await call("GET", "/api/instances");
+    expect(instances.map((instance: any) => [instance.instanceId, instance.driverKind, instance.models.options[0]])).toEqual([
+      ["a", "fake", { id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }], providerRoute: { id: "connection", label: "Studio Proxy", provenance: "configured" } }],
+      ["b", "fake", { id: "M", label: "M", variants: [{ id: "fast", label: "Fast" }], providerRoute: { id: "connection", label: "Studio Proxy", provenance: "configured" } }],
+    ]);
+  });
 });
 
 describe("an engine's check", () => {

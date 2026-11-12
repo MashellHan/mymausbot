@@ -131,11 +131,34 @@ name = "oMLX"
       id: local,
       label: "gpt-5.4 (oMLX)",
       custom: true,
+      providerRoute: { id: "local:omlx", label: "oMLX", provenance: "local" },
     });
     expect(decodeCodexSelection(catalog.default)).toEqual({
       model: "gpt-5.4",
       modelProvider: "omlx",
     });
+  });
+
+  it("keeps configured provider identity without exposing its endpoint or credential key", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "proxy_alpha"\nmodel = "Model-A"\n[model_providers.proxy_alpha]\nname = "Studio Proxy"\nbase_url = "https://secret.example.test/token/path"\nenv_key = "PRIVATE_STUDIO_KEY"\n`,
+    });
+    const catalog = await readCodexModelCatalog({ HOME: home }, async () => { throw new Error("offline fixture"); });
+    const option = catalog.options.find((row) => row.id === "proxy_alpha::Model-A");
+    expect(option?.providerRoute).toMatchObject({ label: "Studio Proxy", provenance: "configured" });
+    expect(option?.providerRoute?.id).toMatch(/^configured:[a-f0-9]{16}$/);
+    expect(JSON.stringify(option)).not.toMatch(/secret\.example|PRIVATE_STUDIO_KEY/);
+  });
+
+  it("does not repeat a credential-bearing provider name in a model label", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "proxy_alpha"\nmodel = "Model-A"\n[model_providers.proxy_alpha]\nname = "https://secret.example.test/key=abc"\n`,
+    });
+    const catalog = await readCodexModelCatalog({ HOME: home });
+    const option = catalog.options.find((row) => row.id === "proxy_alpha::Model-A");
+    expect(option?.providerRoute?.label).toBe("proxy_alpha");
+    expect(option?.label).toBe("Model-A");
+    expect(JSON.stringify(option)).not.toContain("secret.example");
   });
 
   it("honors CODEX_HOME over HOME and merges live /v1/models", async () => {

@@ -31,6 +31,7 @@ import { HOSTED_PROVIDER_SETTINGS_ERROR } from "../hosted-models.ts";
 import type { ProviderAuthSessions } from "../provider-auth-sessions.ts";
 import { providerIconPatchSchema, withInstanceIcon } from "../provider-icon.ts";
 import { isLoopbackHost, isProxied } from "../request-auth.ts";
+import { withModelProviderRoutes } from "../model-provider-routes.ts";
 import type { SessionRegistry } from "../sessions.ts";
 import type { Store } from "../store.ts";
 import type { BusyFlag, ConfigStatus } from "./config.ts";
@@ -64,8 +65,12 @@ export function createInstanceRoutes(deps: InstanceRouteDeps): RouteHandler {
     persistProviderInstance, configStatus, broadcast, testCliBinary, cliProbeEnvironment, threadBusy,
     botForThread, activeGroupTurnForBot,
   } = deps;
-  const describeInstances = async () => hostedModels ? deps.describeInstances()
-    : withEndpointUrls(withCodexEndpointInfo(withClaudeEndpointInfo(await deps.describeInstances(), cfg.instances ?? {}), cfg.instances ?? {}), cfg.instances ?? {});
+  const describeInstances = async () => {
+    const configs = persistableInstanceConfigs(cfg);
+    const described = withModelProviderRoutes(await deps.describeInstances(), configs);
+    return hostedModels ? described
+      : withEndpointUrls(withCodexEndpointInfo(withClaudeEndpointInfo(described, configs), configs), configs);
+  };
   /** Bots, their backups and threads, the new-bot default, or a turn running on it: a provider in use can't go away. */
   const providerInUse = (instanceId: string): boolean => cfg.defaultModelSelection?.instanceId === instanceId || store.bots.some((bot) =>
     bot.modelSelection.instanceId === instanceId || bot.fallback?.some(candidate => candidate.instanceId === instanceId) || store.tasks(bot.id).some((task) => task.modelSelection?.instanceId === instanceId)) ||
