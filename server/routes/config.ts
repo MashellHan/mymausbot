@@ -162,7 +162,7 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
           if ("error" in parsed || parsed.name !== skill.name) return json(res, 400, { error: "Skill name does not match its contents" });
         }
       }
-      if (hostedModels && patch.defaultModelSelection) {
+      if (patch.defaultModelSelection && (hostedModels || patch.defaultModelSelection.contextWindowTokens !== undefined)) {
         const checked = checkedModelSelection(patch.defaultModelSelection);
         if (!checked.ok) return json(res, checked.status, refusalBody(checked));
       }

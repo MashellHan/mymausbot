@@ -56,6 +56,14 @@ describe("new bot default model selection", () => {
     expect(selection).not.toBe(preferred);
   });
 
+  it("keeps an explicit window only for a provider that currently supports it", () => {
+    const preferred = { instanceId: "codex", model: "selected-model", effort: "high" as const, contextWindowTokens: 200_000 };
+    expect(selectDefaultModelSelection([{ ...codex, capabilities: { ...codex.capabilities, configurableContextWindow: true } }], preferred))
+      .toEqual(preferred);
+    expect(selectDefaultModelSelection([codex], preferred)).toEqual({ instanceId: "codex", model: "selected-model", effort: "high" });
+    expect(preferred.contextWindowTokens).toBe(200_000);
+  });
+
   it.each([
     { label: "missing capabilities", capabilities: undefined },
     { label: "no effort control", capabilities: {} },

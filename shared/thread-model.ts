@@ -4,10 +4,11 @@
 // app and the phones read one effective model either way.
 import type { ModelSelection } from "./wire.ts";
 
-/** The same engine, model, effort and variant. */
+/** The same engine, model, effort, variant and requested context window. */
 export function sameModelSelection(a: ModelSelection | undefined, b: ModelSelection | undefined): boolean {
   if (!a || !b) return a === b;
-  return a.instanceId === b.instanceId && a.model === b.model && a.effort === b.effort && a.variant === b.variant;
+  return a.instanceId === b.instanceId && a.model === b.model && a.effort === b.effort && a.variant === b.variant &&
+    a.contextWindowTokens === b.contextWindowTokens;
 }
 
 /** A bot's threads that run on a model of their own, different from the
