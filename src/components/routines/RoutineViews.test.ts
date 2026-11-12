@@ -86,6 +86,22 @@ describe("routine list", () => {
     expect(markup).not.toContain("Latest: Completed");
   });
 
+  it("hides only finished one-time schedules in the compact overview", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const finished: Routine = { ...routine, id: "finished", name: "Finished once", schedule: { type: "once", at: 10 }, enabled: false, nextRunAt: null };
+    const future: Routine = { ...routine, id: "future", name: "Future once", schedule: { type: "once", at: 20_000 }, enabled: false, nextRunAt: null };
+    const pending: Routine = { ...routine, id: "pending", name: "Pending once", schedule: { type: "once", at: 10 }, nextRunAt: 11_000 };
+    const recurring: Routine = { ...routine, id: "recurring", name: "Recurring" };
+    const routines = [finished, future, pending, recurring];
+    const overview = list({ compact: true, routines, runs: [], onToggle: vi.fn() });
+    expect(overview).not.toContain("Finished once");
+    for (const name of ["Future once", "Pending once", "Recurring"]) expect(overview).toContain(name);
+    expect(overview.match(/<article/g)).toHaveLength(3);
+    expect(list({ compact: true, routines: [finished], runs: [] })).not.toContain("No schedules yet.");
+    expect(list({ routines, runs: [] })).toContain("Finished once");
+  });
+
   it("keeps the state badge where the list cannot pause, and swaps it for a switch where it can", () => {
     expect(list()).toContain(">Active<");
     expect(list()).not.toContain('role="switch"');
