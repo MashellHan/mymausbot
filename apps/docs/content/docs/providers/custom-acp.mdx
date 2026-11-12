@@ -1,0 +1,43 @@
+---
+title: Custom engines
+description: Run a bot on an agent CLI that speaks the Agent Client Protocol.
+icon: Terminal
+---
+
+An agent CLI that speaks [ACP](https://agentclientprotocol.com) over stdio can run as a MausBot engine without a code change. MausBot starts the configured command and shows the models and approval requests the agent offers. A CLI that only speaks chat completions needs an [OpenAI-compatible provider](./model-providers.mdx) instead.
+
+## Add an instance
+
+Add an entry under `"instances"` in `~/.openmausbot/config.json`, then restart the app. Instances are read at startup.
+
+```json
+{
+  "instances": {
+    "my-agent": {
+      "driver": "customAcp",
+      "displayName": "My Agent",
+      "config": { "cli": "my-agent acp" }
+    }
+  }
+}
+```
+
+`config.cli` includes the command and its arguments. Use an absolute executable path if the app cannot find it on its `PATH`; a desktop launch may have a different path from your terminal. `displayName` sets the name shown in the model picker. You can also use **Settings → Engines → Set CLI…** on the instance's row to set its command.
+
+## Authentication and models
+
+The custom driver has no sign-in flow. Authenticate with the CLI itself, or provide a credential under a CLI-specific name in the instance's `"environment"`. The CLI must be able to read that sign-in where MausBot runs it. A Team Cloud can give each audience a separate engine home, so a terminal sign-in for an arbitrary CLI is not guaranteed to appear in its bot's session.
+
+Choose the instance in a bot's model picker. **Refresh models** reads the models the agent advertises in a temporary ACP session without sending a prompt. A failed refresh keeps the last successful catalog. **Agent default** leaves the model choice to the CLI and remains available when the agent advertises no models. Where the agent offers model-specific thinking levels, the picker lists them. A bot default and a conversation override are saved separately.
+
+## Environment and files
+
+- An instance's `"environment"` values are passed to its chat process after MausBot removes provider credential names, workspace credentials and control-plane secrets. This includes names such as `XAI_API_KEY`, `BOX_TOKEN` and `OMB_CLOUD_*`, even if the instance sets them. A box can filter other names too. `PATH` is set by MausBot, so use an absolute path in `config.cli` when needed. Values saved in `config.json` are plaintext; protect that file.
+- In a bot box, model discovery starts a separate process without the instance-specific environment allowance used for chat turns. Variables outside the box's general allowlist may be unavailable to **Refresh models**, even when the agent can use them during a chat. The box can also replace `HOME` with an audience-specific engine home.
+- The CLI starts in the bot's working folder. That folder does not restrict what an unboxed CLI can read; a boxed CLI sees the paths its box permits. Check the CLI's own configuration and account behavior in the environment where it actually runs.
+
+## Approvals and multiple instances
+
+ACP `session/request_permission` follows the bot's approval mode. In Ask, requests that need a decision show an approval card; Full access can allow supported requests automatically. The agent decides which actions request permission, and existing box and tool-scope rules still apply.
+
+You can add multiple instances with different commands and display names. Instances of the same CLI may share its sign-in and configuration when they use the same home. Separate accounts require a CLI-supported isolated credential location that is available to each runtime.
