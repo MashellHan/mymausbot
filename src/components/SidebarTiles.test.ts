@@ -77,6 +77,9 @@ describe("the sidebar tiles", () => {
     expect(raw).not.toContain('bg-[var(--tile)]');
     expect(raw).toContain('[--tile:var(--color-panel)]');
     expect(raw).toContain('data-testid="chief-badge"');
+    const pinned = renderToStaticMarkup(createElement(SidebarBotTile, { ...props(bot(), true), raw: true }));
+    expect(pinned).toContain('bg-[var(--tile)]');
+    expect(pinned).toContain('[--tile:var(--color-raised)]');
   });
 
   it("opens the bot on Enter and its menu from the ContextMenu key", () => {
