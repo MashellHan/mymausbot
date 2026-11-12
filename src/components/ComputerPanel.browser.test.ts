@@ -20,7 +20,7 @@ vi.mock("@/state/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/store")>(),
   api: vi.fn(async () => ({})),
   useStore: () => ({
-    state: { config: { box: { configured: false }, ...fixture.config }, instances: [], computerControl: {}, routines: [], routineRuns: [] },
+    state: { config: { box: { configured: false }, ...fixture.config }, bots: [bot], instances: [], computerControl: {}, routines: [], routineRuns: [] },
     dispatch: fixture.dispatch,
     flushBotPatches: fixture.flushBotPatches,
   }),
@@ -70,11 +70,13 @@ describe("Browser panel installation access", () => {
 describe("Computer panel on a narrow screen", () => {
   it("covers the chat while the default-width panel and chat cannot fit side by side", () => {
     const markup = render({});
-    const aside = /<aside class="([^"]*)"/.exec(markup)!;
-    expect(aside[1].split(" ")).toEqual(expect.arrayContaining(["max-2xl:absolute", "max-2xl:inset-y-0", "max-2xl:right-0", "max-2xl:z-40"]));
+    const host = document.createElement("div");
+    host.innerHTML = markup;
+    const aside = host.querySelector<HTMLElement>("aside[data-computer-panel]")!;
+    expect(aside.className.split(" ")).toEqual(expect.arrayContaining(["max-2xl:absolute", "max-2xl:inset-y-0", "max-2xl:right-0", "max-2xl:z-40"]));
     expect(markup).toContain("width:960px;max-width:");
-    const separator = /<div role="separator"[^>]*class="([^"]*)"/.exec(markup)!;
-    expect(separator[1].split(" ")).toContain("max-2xl:hidden");
+    const separator = aside.querySelector<HTMLElement>('[role="separator"]')!;
+    expect(separator.className.split(" ")).toContain("max-2xl:hidden");
   });
 });
 

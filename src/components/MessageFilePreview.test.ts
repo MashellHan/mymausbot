@@ -8,6 +8,7 @@ import { parseTableFile, type TextTable } from "@/lib/table-data";
 import { rememberComputerPanelOpen } from "@/lib/computer-panel-focus";
 import { useFilePreviewScope } from "@/lib/file-preview";
 import { setLocale } from "@/lib/i18n";
+import { MEMORY_INDEX } from "@/lib/memory";
 import { AttachedFileChip } from "./AttachmentPreview";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ComputerPanel } from "./ComputerPanel";
@@ -15,7 +16,9 @@ import { MARKDOWN_PREVIEW_MAX_BYTES, MessageFilePreview } from "./MessageFilePre
 
 vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(),
-  api: async () => ({ held: false, helpReason: null }),
+  api: async (path: string) => path.includes("/memory/file?")
+    ? { path: MEMORY_INDEX, text: "", hash: "", exists: false }
+    : { held: false, helpReason: null },
 }));
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => false, setAdvancedMode: () => {} }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
