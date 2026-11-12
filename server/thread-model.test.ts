@@ -66,6 +66,17 @@ describe("threads follow their bot's model", () => {
     expect(ownModel(open(), bot.id, picked.threadId)).toEqual(codex);
   });
 
+  it("keeps a thread's own window request distinct from its bot's default", () => {
+    const store = open();
+    const bot = store.createBot({ modelSelection: codex });
+    const task = store.createTask(bot.id, "Own window")!;
+    const own = { ...codex, contextWindowTokens: 200_000 };
+    store.switchTaskModel(bot.id, task.threadId, own, false, false);
+    expect(ownModel(store, bot.id, task.threadId)).toEqual(own);
+    expect(runsOn(open(), bot.id, task.threadId)).toEqual(own);
+    expect(store.bot(bot.id)?.modelSelection).toEqual(codex);
+  });
+
   it("picking the bot's own model in a thread is following the bot", () => {
     const store = open();
     const bot = store.createBot();

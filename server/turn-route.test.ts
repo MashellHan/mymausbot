@@ -150,4 +150,12 @@ describe("routeDirectTurn", () => {
     expect(routeDirectTurn(bot, { modelSelection: bot.modelSelection }, [], message, instance, false).tier).toBeNull();
     expect(routeDirectTurn(bot, {}, [], message, instance, true).tier).toBeNull();
   });
+
+  it("keeps the explicit window on the selected model but not on a quick replacement", () => {
+    const own = { replyStyle: "conversational" as const,
+      modelSelection: { instanceId: "codex", model: "gpt-5.4", effort: "high" as const, contextWindowTokens: 200_000 } };
+    const hi = { text: "hello", images: [] };
+    expect(routeDirectTurn(own, { modelSelection: own.modelSelection }, [], hi, instance, false).contextWindowTokens).toBe(200_000);
+    expect(routeDirectTurn(own, {}, [], hi, { ...instance, models: mixed }, false).contextWindowTokens).toBeUndefined();
+  });
 });

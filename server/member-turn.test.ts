@@ -30,4 +30,10 @@ describe("memberTurnSelection", () => {
       memberTurnSelection({ instanceId: "qwen", model: "omlx::gemma-4-31b-it-bf16", effort: "high" }),
     ).toEqual({ model: "omlx::gemma-4-31b-it-bf16", effort: "high" });
   });
+
+  it("carries an explicit context window into room turns and omits the native default", () => {
+    expect(memberTurnSelection({ instanceId: "codex", model: "gpt-fixture", effort: "high", contextWindowTokens: 200_000 }))
+      .toEqual({ model: "gpt-fixture", effort: "high", contextWindowTokens: 200_000 });
+    expect(memberTurnSelection({ instanceId: "codex", model: "gpt-fixture" })).not.toHaveProperty("contextWindowTokens");
+  });
 });

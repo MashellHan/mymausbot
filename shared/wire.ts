@@ -34,29 +34,13 @@ import type { WebhookAttempt, WebhookTrigger } from "./webhooks.ts";
 import type { PublishedPageCard } from "./published-page.ts";
 import type { InboxItem, InboxTask } from "./inbox.ts";
 import type { LiveCallRecord, LiveCallState } from "./live-call-wire.ts";
+import type { ModelSelection } from "./model-selection.ts";
 /** What a team bot's main chat is called, beside each person's own chats. */
 export const SHARED_CHAT_TITLE = "Shared chat";
 
 export type { LiveCallRecord, LiveCallState, LiveCallStatus, LiveClient, LiveEndReason, LiveKeySource, LiveProvider, LiveSettings } from "./live-call-wire.ts";
 
-/** Reasoning-effort levels, ascending: a union of what any engine accepts;
- * each driver declares the subset its CLI will take. */
-export const EFFORT_LEVELS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
-export type EffortLevel = (typeof EFFORT_LEVELS)[number];
-
-export function isEffortLevel(value: unknown): value is EffortLevel {
-  return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
-}
-
-/** instanceId is the routing key. */
-export interface ModelSelection {
-  instanceId: string;
-  model: string;
-  /** Optional: no effort means no flag, and the CLI keeps its own default. */
-  effort?: EffortLevel;
-  /** Explicit model-specific variant. Omitted leaves the native session alone. */
-  variant?: string;
-}
+export { EFFORT_LEVELS, isEffortLevel, type EffortLevel, type ModelSelection } from "./model-selection.ts";
 
 /** Which cloud computer backs computer: "cloud"; absent means Boat. */
 export type CloudBackend = "box" | "vps";

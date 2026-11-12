@@ -57,6 +57,7 @@ export interface RouteInput {
   model: string;
   effort?: EffortLevel;
   variant?: string;
+  contextWindowTokens?: number;
   catalog?: ModelCatalog;
   /** Quick models this engine instance refused before. */
   refused?: ReadonlySet<string>;
@@ -68,12 +69,14 @@ export interface RouteResult {
   model: string;
   effort?: EffortLevel;
   variant?: string;
+  contextWindowTokens?: number;
   /** The picker label of the quick model when the turn was moved to it. */
   quickModel?: string;
 }
 
 export function routeTurn(input: RouteInput): RouteResult {
-  const keep: RouteResult = { tier: null, model: input.model, effort: input.effort, variant: input.variant };
+  const keep: RouteResult = { tier: null, model: input.model, effort: input.effort, variant: input.variant,
+    ...(input.contextWindowTokens !== undefined ? { contextWindowTokens: input.contextWindowTokens } : {}) };
   if (!input.conversational || !input.followsBotModel || input.automated) return keep;
   const tier = classifyTurn(input.signals);
   if (tier === "complex") return { ...keep, tier };
@@ -111,6 +114,7 @@ export function routeDirectTurn(
     model: bot.modelSelection.model,
     effort: bot.modelSelection.effort,
     variant: bot.modelSelection.variant,
+    contextWindowTokens: bot.modelSelection.contextWindowTokens,
     catalog: instance.quickModelsUsable?.() === false ? undefined : instance.models,
     refused,
     effortLevels: instance.adapter.capabilities.effortLevels,
