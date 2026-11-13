@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { backlogSlot, beijingDay, planBacklog } from "./backlog.mjs";
 import { drainQueue, queueItems } from "./queue.mjs";
+import { recordCases } from "./scan.mjs";
 
 const start = Date.parse("2026-11-13T00:00:00Z");
 const old = "2026-11-10T00:00:00Z";
@@ -26,7 +27,9 @@ function harness(initial = [issue(1)]) {
     api, now, send: sender, recover: async () => ({ healthy: true }),
     scan: async () => ({ handoffs: [] }), save: () => {},
   });
-  return { tick, send, api, close: (number: number, body: string) => {
+  return { tick, send, api, update: (number: number, body: string) => {
+    open = open.map((item) => item.number === number ? { ...item, body } : item);
+  }, close: (number: number, body: string) => {
     open = open.filter((item) => item.number !== number);
     closed.set(number, { number, state: "closed", closed_at: new Date(start).toISOString(), body });
   } };
@@ -69,6 +72,59 @@ describe("hourly QA backlog", () => {
     h.close(1, "Closed without a verification record");
     await h.tick(state, start + 24 * 60 * 60_000);
     expect(state.backlog.records[1]).toMatchObject({ stage: "closed_evidence_pending", closureEvidence: null });
+  });
+
+  it("fairly rereads more than four closed records and settles only later evidence after restart", async () => {
+    const h = harness(Array.from({ length: 6 }, (_, index) => issue(index + 1)));
+    const state: Record<string, any> = {};
+    const detailReads = () => h.api.mock.calls.filter(([path]) => /^\/issues\/\d+$/.test(path)).map(([path]) => path);
+    await h.tick(state, start);
+    for (let number = 1; number <= 6; number++) h.close(number, "Closed without evidence");
+    await h.tick(state, start + 24 * 60 * 60_000);
+    expect(detailReads()).toEqual(["/issues/1", "/issues/2", "/issues/3", "/issues/4"]);
+    expect([1, 2, 3, 4].map((number) => state.backlog.records[number].stage)).toEqual(Array(4).fill("closed_evidence_pending"));
+    const resumed = JSON.parse(JSON.stringify(state));
+    await h.tick(resumed, start + 48 * 60 * 60_000);
+    expect(detailReads().slice(4)).toEqual(["/issues/5", "/issues/6", "/issues/1", "/issues/2"]);
+    expect([1, 2, 3, 4, 5, 6].map((number) => resumed.backlog.records[number].stage)).toEqual(Array(6).fill("closed_evidence_pending"));
+    expect(h.send.mock.calls[2][0]).toContain("Closed items awaiting exact disposition evidence: #5, #6, #1, #2");
+    h.close(3, "QA-Disposition-Evidence: accepted review and exact integrated report");
+    await h.tick(resumed, start + 72 * 60 * 60_000);
+    expect(detailReads().slice(8)).toEqual(["/issues/3", "/issues/4", "/issues/1", "/issues/2"]);
+    expect(resumed.backlog.records[3]).toMatchObject({ stage: "closed", closureEvidence: "accepted review and exact integrated report" });
+    expect(resumed.backlog.records[4]).toMatchObject({ stage: "closed_evidence_pending", closureEvidence: null });
+    expect(h.send.mock.calls[3][0]).toContain("Closed items awaiting exact disposition evidence: #4");
+    expect(h.send.mock.calls[3][0]).not.toContain("Closed items awaiting exact disposition evidence: #3");
+  });
+
+  it("uses the native process record through assignment and six-hour follow-up", async () => {
+    let generated: ReturnType<typeof issue> | undefined;
+    await recordCases([{ key: "a".repeat(16), rule: "ci-latency", subject: "run:123:1", text: "Inspect the measured CI phase." }], {
+      now: start,
+      api: async (path: string, options?: { method?: string; body?: { body: string; labels: string[] } }) => {
+        if (path.startsWith("/issues?state=all&labels=qa:process")) return [];
+        if (path === "/issues" && options?.method === "POST") {
+          generated = { ...issue(9, options.body!.labels, options.body!.body), created_at: new Date(start).toISOString() };
+          return generated;
+        }
+        throw new Error(`Unexpected process API call: ${path}`);
+      },
+    });
+    const h = harness([generated!]), state: Record<string, any> = {};
+    await h.tick(state, start);
+    expect(state.backlog.records[9]).toMatchObject({ process: true, stage: "assigned", owner: "mausbot-lead",
+      next: expect.stringContaining("assign an existing owner") });
+    const resumed = JSON.parse(JSON.stringify(state));
+    h.update(9, generated!.body.replace(/^Process-Owner: .+$/m, "Process-Owner: mausbot-upstream")
+      .replace(/^Process-Next: .+$/m, "Process-Next: inspect the saved phase trace")
+      + "\nProcess-Evidence: bounded trace accepted");
+    await h.tick(resumed, start + 6 * 60 * 60_000);
+    expect(resumed.backlog.records[9]).toMatchObject({ stage: "assigned", owner: "mausbot-upstream",
+      next: "inspect the saved phase trace", evidence: "bounded trace accepted", lastProgressAt: new Date(start + 6 * 60 * 60_000).toISOString() });
+    expect(resumed.backlog.records[9]).not.toHaveProperty("completedAt");
+    expect(h.send.mock.calls[1][0]).toContain("Unresolved work follow-up");
+    expect(h.send.mock.calls[1][0]).toContain("Process-Next=inspect the saved phase trace");
+    expect(h.send.mock.calls[1][0]).toContain("keep Process-Owner and Process-Next on process cases");
   });
 
   it("recognizes the existing Lead closure marker on an exact closed issue", async () => {

@@ -149,17 +149,21 @@ export async function drainQueue(state, { api = github, recover = recoverQa, sca
     if (daily) {
       const openIds = new Set(plan.observed.map((item) => item.number));
       const missing = Object.values(state.backlog.records).filter((item) => !openIds.has(item.number)
-        && !["closed", "closed_evidence_pending"].includes(item.stage)).slice(0, 4);
+        && item.stage !== "closed")
+        .sort((a, b) => (a.lastClosureCheckedAt ?? "").localeCompare(b.lastClosureCheckedAt ?? "") || a.number - b.number)
+        .slice(0, 4);
+      const needsEvidence = [];
       for (const item of missing) {
         const closed = await api(`/issues/${item.number}`);
+        state.backlog.records[item.number] = { ...item, lastClosureCheckedAt: new Date(now).toISOString() };
         if (closed.state !== "closed" || !closed.closed_at) continue;
         const evidence = closed.body?.match(/^QA-(?:Closure|Disposition)-Evidence:\s*(.+)$/m)?.[1]
           ?? closed.body?.match(/<!-- lead-qa-close:[a-z0-9:-]+ -->/)?.[0];
-        state.backlog.records[item.number] = { ...item, stage: evidence ? "closed" : "closed_evidence_pending",
+        state.backlog.records[item.number] = { ...state.backlog.records[item.number], stage: evidence ? "closed" : "closed_evidence_pending",
           closedAt: closed.closed_at, closureEvidence: evidence ?? null };
+        if (!evidence) needsEvidence.push(item.number);
       }
-      const needsEvidence = Object.values(state.backlog.records).filter((item) => item.stage === "closed_evidence_pending").slice(0, 4);
-      if (needsEvidence.length) plan.items[0].text += `\nClosed items awaiting exact disposition evidence: ${needsEvidence.map((item) => `#${item.number}`).join(", ")}. Verify on the original issue; do not infer completion.`;
+      if (needsEvidence.length) plan.items[0].text += `\nClosed items awaiting exact disposition evidence: ${needsEvidence.map((number) => `#${number}`).join(", ")}. Verify on the original issue; do not infer completion.`;
     }
     state.backlog.lastInventory = plan.inventory;
     if (daily) plan.items[0].text += `\nComplete compact inventory: ${process.env.MAUSBOT_QA_STATE || "the existing queue state file"} -> backlog.records. Lead reviews deferred entries there before selecting later bounded work.`;
@@ -182,7 +186,7 @@ export async function drainQueue(state, { api = github, recover = recoverQa, sca
   state.pending = { fingerprint, items: items.map((item) => item.key), covered: covered.map((item) => item.key),
     status: "submitting", at: new Date(now).toISOString() };
   save(state);
-  const message = `MausBot QA queue ${fingerprint}. Preserve your active task; handle this handoff at the next safe boundary.\n${items.map((item) => `- ${item.text}`).join("\n")}\nFollow docs/MAUSBOT-VALIDATION.md. Triage with priority, classification, scope, QA-Owner, QA-Next and QA-Due; acknowledge in the issue/PR. Assign repairs to an existing developer, dispatch independent review, and close only with verification. This is a role handoff authorized by 大雄, not permission to change the live App.`;
+  const message = `MausBot QA queue ${fingerprint}. Preserve your active task; handle this handoff at the next safe boundary.\n${items.map((item) => `- ${item.text}`).join("\n")}\nFollow docs/MAUSBOT-VALIDATION.md. Triage QA incidents with priority, classification, scope, QA-Owner, QA-Next and QA-Due; keep Process-Owner and Process-Next on process cases. Acknowledge in the original issue/PR. Assign repairs to an existing developer, dispatch independent review, and close only with verification. This is a role handoff authorized by 大雄, not permission to change the live App.`;
   try {
     state.lastDelivery = await send(message);
     state.seen = { ...state.seen, ...Object.fromEntries([...items, ...covered].map((item) => [item.key, new Date(now).toISOString()])) };
