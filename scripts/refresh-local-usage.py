@@ -3,6 +3,7 @@
 
 import argparse
 import datetime as dt
+import hashlib
 import http.client
 import importlib.util
 import importlib
@@ -21,6 +22,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from zoneinfo import ZoneInfo
 
 import local_usage_merged
 import local_usage_github
@@ -29,6 +31,7 @@ import local_usage_contributions
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
 REPOSITORY_TIMEOUT = 15
+SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def child_environment():
@@ -570,6 +573,20 @@ class AzureMemorySession:
                         or not query.get("$top", [""])[0].isdigit() or not 1 <= int(query["$top"][0]) <= 100
                         or not query.get("$skip", [""])[0].isdigit() or int(query["$skip"][0]) > 1_000_000):
                     raise ValueError("Invalid pinned ADO commit page")
+                bounds = {"searchCriteria.fromDate", "searchCriteria.toDate"}
+                if bounds & query.keys():
+                    if not bounds <= query.keys():
+                        raise ValueError("Invalid ADO commit date window")
+                    start, end = (query[key][0] for key in ("searchCriteria.fromDate", "searchCriteria.toDate"))
+                    if not all(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value) for value in (start, end)):
+                        raise ValueError("Invalid ADO commit date window")
+                    try:
+                        start_at, end_at = (dt.datetime.fromisoformat(value[:-1] + "+00:00") for value in (start, end))
+                    except ValueError:
+                        raise ValueError("Invalid ADO commit date window") from None
+                    if start_at > end_at or end_at - start_at > dt.timedelta(days=60):
+                        raise ValueError("Invalid ADO commit date window")
+                    allowed |= bounds
             if set(query) != allowed:
                 raise ValueError("Unexpected ADO request parameters")
         request = urllib.request.Request(
@@ -624,6 +641,47 @@ def primary_config(config):
     return scopes
 
 
+def refresh_scope_hash(config):
+    return hashlib.sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def refresh_window(at, previous, scope_hash):
+    local = at.astimezone(SHANGHAI)
+    yesterday = local.date() - dt.timedelta(days=1)
+    first = local.date() - dt.timedelta(days=59)
+    state = previous.get("refreshState", {}) if previous else {}
+    if state.get("scopeHash") == scope_hash and isinstance(state.get("finalizedThroughDay"), str):
+        finalized = dt.date.fromisoformat(state["finalizedThroughDay"])
+    elif previous and all(previous[provider]["metricDefinition"] == local_usage_contributions.DEFINITIONS[provider][0]
+                          for provider in ("github", "ado")):
+        cutoff = min(local_usage_contributions.instant(previous[provider]["asOfAt"]).astimezone(SHANGHAI).date()
+                     for provider in ("github", "ado"))
+        complete = all(all(source["coverage"]["paginationComplete"] and source["status"] != "stale"
+                           for source in previous[provider]["sources"]) for provider in ("github", "ado"))
+        finalized = cutoff - dt.timedelta(days=1 if complete else 2)
+    else:
+        finalized = yesterday - dt.timedelta(days=1)
+    unpaid = max(first, finalized + dt.timedelta(days=1))
+    if local.time() < dt.time(0, 30):
+        return min(yesterday, unpaid), finalized
+    return (min(local.date(), unpaid)
+            if finalized < yesterday else local.date()), finalized
+
+
+def finalized_day(current, at, focus_start, previous_finalized):
+    yesterday = at.astimezone(SHANGHAI).date() - dt.timedelta(days=1)
+    first = at.astimezone(SHANGHAI).date() - dt.timedelta(days=59)
+    if (focus_start > yesterday or focus_start < first
+            or any(local_usage_contributions.instant(current[provider]["asOfAt"]) != at
+                   or any(source["status"] in ("stale", "unavailable")
+                          or source["coverage"]["identityVerified"] is not True
+                          or source["coverage"]["paginationComplete"] is not True
+                          for source in current[provider]["sources"])
+                   for provider in ("github", "ado"))):
+        return previous_finalized
+    return yesterday
+
+
 def _primary_worker():
     try:
         request = json.load(sys.stdin)
@@ -653,7 +711,8 @@ def _primary_worker():
             return collector.run(args, timeout)
 
         at = dt.datetime.fromisoformat(request["at"])
-        result = module.collect(config, run, collector.remote_category, at=at, days=60, previous=request["previous"])
+        result = module.collect(config, run, collector.remote_category, at=at, days=60,
+                                previous=request["previous"], focus_start=request["focusStart"])
         local_usage_contributions.envelope(result, stage)
         output = Path(request["output"])
         data = (json.dumps(result, separators=(",", ":")) + "\n").encode()
@@ -697,6 +756,8 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
         else:
             previous = None
         at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        scope_hash = refresh_scope_hash(config)
+        focus_start, previous_finalized = refresh_window(at, previous, scope_hash)
         deadline = time.monotonic() + whole_cycle_seconds
         processes = {}
         with tempfile.TemporaryDirectory(prefix="contributions-capture-", dir=target.parent) as temporary:
@@ -704,6 +765,7 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                 for stage in (("github", "ado", "legacy") if include_legacy else ("github", "ado")):
                     request = {"stage": stage, "collector": str(collector_path), "config": config,
                                "azureDir": str(azure_config_dir), "at": at.isoformat(),
+                               "focusStart": focus_start.isoformat() if include_legacy else None,
                                "previous": previous.get(stage) if previous and stage != "legacy" else None,
                                "output": str(Path(temporary) / (stage + ".json")),
                                "publish": publish, "skipApi": False, "reuseSources": reuse_sources}
@@ -714,7 +776,8 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                     process.stdin.write(json.dumps(request).encode())
                     process.stdin.close()
                 results = {}
-                for stage, process in processes.items():
+                for stage in ("github", "ado"):
+                    process = processes[stage]
                     try:
                         process.wait(timeout=max(0.01, deadline - time.monotonic()))
                     except subprocess.TimeoutExpired:
@@ -728,15 +791,29 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                     for stage in ("github", "ado")}}
                 local_usage_contributions.validate_bindings(current, config)
                 local_usage_contributions.preserve_incomplete_github(previous, current)
+                current["refreshState"] = {"version": 1, "scopeHash": scope_hash,
+                    "finalizedThroughDay": finalized_day(current, at, focus_start, previous_finalized).isoformat()}
                 local_usage_contributions.validate_bindings(current, config)
                 local_usage_contributions.write_private(target, current)
-                print(json.dumps({"primary": "published", "legacy": results.get("legacy", "not-run"),
+                print(json.dumps({"primary": "published", "legacy": "pending" if include_legacy else "not-run",
                     "asOfAt": current["github"]["asOfAt"], "sources": len(current["github"]["sources"]) + len(current["ado"]["sources"]),
                     "staleSources": sum(source["status"] == "stale" for stage in ("github", "ado")
                                         for source in current[stage]["sources"]),
-                    "elapsedSeconds": round(whole_cycle_seconds - max(0, deadline - time.monotonic()), 1)}))
+                    "elapsedSeconds": round(whole_cycle_seconds - max(0, deadline - time.monotonic()), 1)}), flush=True)
                 return current
             finally:
+                legacy = processes.get("legacy")
+                if legacy is not None:
+                    try:
+                        legacy.wait(timeout=max(0.01, deadline - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        _stop_worker(legacy)
+                        legacy_status = "timeout"
+                    except Exception:
+                        legacy_status = "unavailable"
+                    else:
+                        legacy_status = "ready" if legacy.returncode == 0 else "unavailable"
+                    print(json.dumps({"legacy": legacy_status}), flush=True)
                 for process in processes.values():
                     if process.poll() is None:
                         _stop_worker(process)

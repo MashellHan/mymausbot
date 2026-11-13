@@ -8,6 +8,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -37,8 +40,10 @@ class ContributionWriterTests(unittest.TestCase):
         (self.fixture / "local_usage_github.py").write_text('DEFINITION = "github-profile-v1"\n')
         (self.fixture / "local_usage_profile.py").write_text('''from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-def collect(config, run, repository_category, *, at, days, previous):
+def collect(config, run, repository_category, *, at, days, previous, focus_start):
     assert days == 60 and config["githubProfiles"][0]["stableId"] == "fixture-stable-id"
+    if config.get("forbidWide") and focus_start is None:
+        raise AssertionError("Unexpected wide provider collection")
     mode = config.get("syntheticMode", "ready")
     end = at.astimezone(ZoneInfo("Asia/Shanghai")).date()
     rows = []
@@ -79,12 +84,14 @@ def collect(config, run, repository_category, *, at, days, previous):
         "activeSourceIds": ["github:fixture"], "sources": [source],
         "collection": {"requestCount": 1, "elapsedSeconds": 0.1, "complete": mode in ("ready", "complete-correction"), "reasons": [] if mode in ("ready", "complete-correction") else [mode]},
         "state": {"schema": 1, "sources": {"github:fixture": {"account": source["account"],
-            "scopeHash": config.get("syntheticScope", "scope-one"), "progress": {"page": old_page + 1}}}}}
+            "scopeHash": config.get("syntheticScope", "scope-one"), "progress": {"page": old_page + 1},
+            "focusStart": focus_start}}}}
 ''')
         (self.fixture / "local_usage_ado.py").write_text('''from local_usage_profile import collect as github
-def collect(config, run, repository_category, *, at, days, previous):
+def collect(config, run, repository_category, *, at, days, previous, focus_start):
     assert config["adoAuthorEmails"] == ["corporate@example.test"]
-    result = github({**config, "syntheticMode": "ready"}, run, repository_category, at=at, days=days, previous=None)
+    result = github({**config, "syntheticMode": "ready"}, run, repository_category,
+                    at=at, days=days, previous=None, focus_start=focus_start)
     result["provider"] = "ado"
     result["metricDefinition"] = "ado-default-head-beijing-v1"
     result["dateBasis"] = {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"}
@@ -98,14 +105,19 @@ def collect(config, run, repository_category, *, at, days, previous):
     return result
 ''')
         self.collector = self.root / "collector.py"
-        self.collector.write_text('''def run(args, timeout=35):
+        self.collector.write_text('''import time
+from pathlib import Path
+def run(args, timeout=35):
     raise AssertionError("Synthetic provider must not call a live API")
 def remote_category(remote, config):
     return "work" if "dev.azure.com" in remote else "personal"
 def refresh(config, **options):
+    if config.get("legacyWaitFor"):
+        deadline = time.monotonic() + 4
+        while not Path(config["legacyWaitFor"]).exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
     if config["failLegacy"]:
         raise ValueError("Missing local clones")
-    from pathlib import Path
     Path(config["legacyResult"]).write_text("tokens preserved")
 ''')
         self.wrapper = load_wrapper(SCRIPT)
@@ -130,6 +142,59 @@ def refresh(config, **options):
             self.wrapper.refresh_primary(self.collector, self.config, self.root, file=self.target, whole_cycle_seconds=10)
             self.assertEqual(lock.stat().st_ino, inode)
             self.assertEqual(json.loads(self.target.read_text())["github"]["sources"][0]["days"][-1]["prs"], 2)
+
+    def test_remote_publication_precedes_delayed_legacy_and_keeps_writer_lock(self):
+        release = self.root / "release-legacy"
+        self.config["legacyWaitFor"] = str(release)
+        outcome = []
+
+        def capture():
+            try:
+                outcome.append(self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                    file=self.target, whole_cycle_seconds=6))
+            except Exception as error:
+                outcome.append(error)
+
+        with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
+            worker = threading.Thread(target=capture)
+            worker.start()
+            try:
+                deadline = time.monotonic() + 3
+                while not self.target.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(self.target.exists())
+                self.assertTrue(worker.is_alive())
+                self.assertEqual(contributions.load_previous(self.target)["version"], 2)
+                with self.assertRaises(BlockingIOError):
+                    self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                 file=self.target, whole_cycle_seconds=6)
+            finally:
+                release.touch()
+                worker.join(timeout=3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(len(outcome), 1)
+            self.assertIsInstance(outcome[0], dict)
+
+    def test_settled_after_midnight_uses_only_today_without_wide_worker(self):
+        class FixedDateTime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 11, 13, 3, 30, tzinfo=dt.timezone.utc).astimezone(tz)
+
+        self.config["forbidWide"] = True
+        clock = SimpleNamespace(datetime=FixedDateTime, date=dt.date, time=dt.time,
+                                timedelta=dt.timedelta, timezone=dt.timezone)
+        with patch.object(self.wrapper, "dt", clock), patch.object(
+                self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
+            first = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                 file=self.target, whole_cycle_seconds=10)
+            self.assertEqual(first["github"]["state"]["sources"]["github:fixture"]["focusStart"], "2026-11-12")
+            self.assertEqual(first["github"]["sources"][0]["status"], "ready")
+            second = self.wrapper.refresh_primary(self.collector, self.config, self.root,
+                                                  file=self.target, whole_cycle_seconds=10)
+            self.assertEqual(second["github"]["state"]["sources"]["github:fixture"]["focusStart"], "2026-11-13")
+            self.assertEqual(second["github"]["sources"][0]["status"], "ready")
+            self.assertEqual(second["refreshState"]["finalizedThroughDay"], "2026-11-12")
 
     def test_private_capture_cli_uses_only_remote_workers_and_private_output(self):
         candidate = self.root / "candidate-config.json"
@@ -213,13 +278,15 @@ def refresh(config, **options):
             self.assertEqual(second["github"]["sources"][0]["days"][-1]["knownCommits"], 2)
             self.assertEqual(second["github"]["sources"][0]["status"], "stale")
             self.assertEqual(second["github"]["sources"][0]["provenance"]["sourceCutoffAt"], original_cutoff)
-            self.assertEqual(second["github"]["state"]["sources"]["github:fixture"]["progress"]["page"], 2)
+            self.assertGreater(second["github"]["state"]["sources"]["github:fixture"]["progress"]["page"],
+                               first["github"]["state"]["sources"]["github:fixture"]["progress"]["page"])
             self.assertEqual(second["ado"]["sources"][0]["status"], "ready")
             self.wrapper = load_wrapper(SCRIPT)
             with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
                 third = self.wrapper.refresh_primary(self.collector, self.config, self.root,
                                                      file=self.target, whole_cycle_seconds=10)
-                self.assertEqual(third["github"]["state"]["sources"]["github:fixture"]["progress"]["page"], 3)
+                self.assertGreater(third["github"]["state"]["sources"]["github:fixture"]["progress"]["page"],
+                                   second["github"]["state"]["sources"]["github:fixture"]["progress"]["page"])
                 self.assertEqual(third["github"]["sources"][0]["provenance"]["sourceCutoffAt"], original_cutoff)
                 self.config["syntheticMode"] = "complete-correction"
                 recovered = self.wrapper.refresh_primary(self.collector, self.config, self.root,

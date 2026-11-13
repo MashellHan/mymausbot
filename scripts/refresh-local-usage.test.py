@@ -14,6 +14,7 @@ import threading
 import types
 import unittest
 import urllib.error
+import urllib.parse
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("usage_memory", Path(__file__).with_name("refresh-local-usage.py"))
@@ -99,6 +100,58 @@ class TokenHistoryTests(unittest.TestCase):
                 retained = {row["day"]: row for row in later["trendHistory"]["daily"]}
                 for row in known:
                     self.assertEqual(retained[row["day"]], {**row, "tokenStatus": "partial"})
+
+
+class RefreshWindowTests(unittest.TestCase):
+    def test_expired_debt_starts_at_retained_window_and_clears_after_complete_capture(self):
+        scope = "a" * 64
+        at = dt.datetime.fromisoformat("2026-11-13T04:00:00+00:00")
+        previous = {"refreshState": {"version": 1, "scopeHash": scope,
+                                     "finalizedThroughDay": "2026-09-01"}}
+        midnight = dt.datetime.fromisoformat("2026-11-12T16:00:00+00:00")
+        self.assertEqual(usage.refresh_window(midnight, previous, scope)[0], dt.date(2026, 9, 15))
+        focus, finalized = usage.refresh_window(at, previous, scope)
+        self.assertEqual(focus, dt.date(2026, 9, 15))
+        self.assertEqual(finalized, dt.date(2026, 9, 1))
+        current = {provider: {"asOfAt": at.isoformat().replace("+00:00", "Z"),
+                              "sources": [{"status": "partial", "coverage": {
+                                  "identityVerified": True, "paginationComplete": False}}]}
+                   for provider in ("github", "ado")}
+        self.assertEqual(usage.finalized_day(current, at, focus, finalized), finalized)
+        self.assertEqual(usage.refresh_window(at + dt.timedelta(minutes=5), previous, scope)[0], focus)
+        for provider in current:
+            current[provider]["sources"][0]["coverage"]["paginationComplete"] = True
+        settled = usage.finalized_day(current, at, focus, finalized)
+        self.assertEqual(settled, dt.date(2026, 11, 12))
+        previous["refreshState"]["finalizedThroughDay"] = settled.isoformat()
+        self.assertEqual(usage.refresh_window(at + dt.timedelta(minutes=5), previous, scope)[0],
+                         dt.date(2026, 11, 13))
+
+    def test_midnight_and_missed_days_use_the_earliest_unpaid_day_across_restart(self):
+        scope = "a" * 64
+        previous = {"refreshState": {"version": 1, "scopeHash": scope,
+                                     "finalizedThroughDay": "2026-11-09"}}
+        for clock, expected in (("2026-11-12T16:00:00+00:00", "2026-11-10"),
+                                ("2026-11-12T16:29:59+00:00", "2026-11-10"),
+                                ("2026-11-12T16:30:00+00:00", "2026-11-10")):
+            at = dt.datetime.fromisoformat(clock)
+            self.assertEqual(usage.refresh_window(at, previous, scope)[0].isoformat(), expected)
+        at = dt.datetime.fromisoformat("2026-11-12T16:29:59+00:00")
+        partial = {"github": {"asOfAt": at.isoformat().replace("+00:00", "Z"), "sources": [{"status": "partial",
+            "coverage": {"identityVerified": True, "paginationComplete": False}}]},
+            "ado": {"asOfAt": at.isoformat().replace("+00:00", "Z"), "sources": [{"status": "ready",
+                "coverage": {"identityVerified": True, "paginationComplete": True}}]}}
+        self.assertEqual(usage.finalized_day(partial, at, dt.date(2026, 11, 10), dt.date(2026, 11, 9)),
+                         dt.date(2026, 11, 9))
+        partial["github"]["sources"][0]["coverage"]["paginationComplete"] = True
+        self.assertEqual(usage.finalized_day(partial, at, dt.date(2026, 11, 10), dt.date(2026, 11, 9)),
+                         dt.date(2026, 11, 12))
+        settled = {"refreshState": {"version": 1, "scopeHash": scope,
+                                    "finalizedThroughDay": "2026-11-12"}}
+        self.assertEqual(usage.refresh_window(dt.datetime.fromisoformat("2026-11-12T16:30:00+00:00"),
+                                               settled, scope)[0].isoformat(), "2026-11-13")
+        self.assertEqual(usage.refresh_window(dt.datetime.fromisoformat("2026-11-12T16:29:59+00:00"),
+                                               settled, scope)[0].isoformat(), "2026-11-12")
 
 
 class MemoryAuthTests(unittest.TestCase):
@@ -250,6 +303,36 @@ class MemoryAuthTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.session.request(url, 7)
         self.assertEqual(len(requests), len(allowed))
+
+    def test_pinned_ado_commit_date_pair_is_bounded_and_validated_before_auth(self):
+        self.session.projects = {("example", "project")}
+        requests = []
+        def open_request(request, timeout):
+            requests.append(request)
+            return io.BytesIO(b'{"value":[],"count":0}')
+        self.session.http = types.SimpleNamespace(open=open_request)
+        base = {"api-version": "7.1", "searchCriteria.itemVersion.version": "a" * 40,
+                "searchCriteria.itemVersion.versionType": "commit", "$top": "100", "$skip": "0"}
+        bounds = {"searchCriteria.fromDate": "2026-11-10T16:00:00Z",
+                  "searchCriteria.toDate": "2026-11-11T00:30:00Z"}
+        path = "https://dev.azure.com/example/project/_apis/git/repositories/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/commits?"
+        url = lambda params: path + urllib.parse.urlencode(params)
+        self.assertEqual(self.session.request(url({**base, **bounds}), 7)[0], '{"value":[],"count":0}')
+        self.assertEqual(requests[0].get_header("Authorization"), "Bearer fixture-access-token")
+        self.session.token = lambda: self.fail("Rejected ADO requests must not authenticate")
+        invalid = [
+            url({**base, "searchCriteria.fromDate": bounds["searchCriteria.fromDate"]}),
+            url({**base, **bounds, "searchCriteria.toDate": "2026-11-11T00:30:00+00:00"}),
+            url({**base, **bounds, "searchCriteria.fromDate": "2026-02-30T00:00:00Z"}),
+            url({**base, **bounds, "searchCriteria.fromDate": "2026-11-12T00:00:00Z"}),
+            url({**base, **bounds, "searchCriteria.fromDate": "2026-09-01T00:00:00Z"}),
+            url({**base, **bounds}) + "&searchCriteria.fromDate=2026-11-10T16%3A00%3A00Z",
+            url({**base, **bounds, "searchCriteria.extra": "x"}),
+            url({**base, **bounds}).replace("/example/project/", "/example/other/")]
+        for target in invalid:
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                self.session.request(target, 7)
+        self.assertEqual(len(requests), 1)
 
     def test_authenticated_redirects_are_not_followed(self):
         paths = []
