@@ -26,8 +26,8 @@ MAX_PAGES = 1000
 PAGE = 100
 REQUESTS_PER_PROJECT = 50
 REQUESTS_PER_REPOSITORY = 8
-SECONDS_PER_PROJECT = 42
-SECONDS_TOTAL = 180
+SECONDS_PER_PROJECT = 25
+SECONDS_TOTAL = 25
 
 
 class BudgetExceeded(Exception):
@@ -212,10 +212,14 @@ def inventory(reader, org, project):
     return [result[key] for key in sorted(result)]
 
 
-def pr_page(reader, org, project, account, offset):
-    body = reader.get(url(org, project, "/_apis/git/pullrequests", **{
+def pr_page(reader, org, project, account, offset, start=None, end=None):
+    criteria = {
         "searchCriteria.status": "all", "searchCriteria.creatorId": account["stableId"],
-        "$top": PAGE, "$skip": offset}))
+        "$top": PAGE, "$skip": offset}
+    if start is not None:
+        criteria.update({"searchCriteria.minTime": start, "searchCriteria.maxTime": end,
+                         "searchCriteria.queryTimeRangeType": "created"})
+    body = reader.get(url(org, project, "/_apis/git/pullrequests", **criteria))
     return rows(body)
 
 
@@ -235,10 +239,20 @@ def add_prs(work, page, account, inventory_ids):
             raise ValueError("Duplicate ADO PR page")
         seen.add(pr_id)
         created = instant(row["creationDate"])
+        query_start = instant(work["prQueryStartAt"]) if work.get("prQueryStartAt") else None
+        if query_start is not None and (created < query_start or created > instant(work["cutoff"])):
+            raise ValueError("ADO PR lies outside requested creation window")
         if work["firstDay"] <= china_day(created) <= work["lastDay"] and created <= instant(work["cutoff"]):
             pending.append({"id": pr_id, "repo": repo_id, "day": china_day(created), "createdAt": stamp(created)})
     work["prs"].extend(pending)
     work["prSeen"] = sorted(seen)
+
+
+def reset_pr_pages(work):
+    start = instant(work["prQueryStartAt"]) if work.get("prQueryStartAt") else None
+    retained = [item for item in work["prs"] if instant(item["createdAt"]) < start] if start else []
+    work.update({"prOffset": 0, "prSeen": [], "prFirst": None,
+                 "prs": retained, "prComplete": False})
 
 
 def default_head(reader, org, project, repo):
@@ -251,11 +265,14 @@ def default_head(reader, org, project, repo):
     return exact[0]["objectId"].lower()
 
 
-def commit_page(reader, org, project, repo_id, head, offset):
+def commit_page(reader, org, project, repo_id, head, offset, start=None, end=None):
     path = "/_apis/git/repositories/" + repo_id + "/commits"
-    body = reader.get(url(org, project, path, **{
+    criteria = {
         "searchCriteria.itemVersion.version": head,
-        "searchCriteria.itemVersion.versionType": "commit", "$top": PAGE, "$skip": offset}))
+        "searchCriteria.itemVersion.versionType": "commit", "$top": PAGE, "$skip": offset}
+    if start is not None:
+        criteria.update({"searchCriteria.fromDate": start, "searchCriteria.toDate": end})
+    body = reader.get(url(org, project, path, **criteria))
     return rows(body)
 
 
@@ -265,8 +282,11 @@ def credited_commit(reader, org, project, repo_id, item, emails, first):
     if day < first:
         return None
     commit_id = item["commitId"].lower()
-    path = "/_apis/git/repositories/" + repo_id + "/commits/" + commit_id
-    detail = reader.get(url(org, project, path))
+    detail = item
+    if (detail.get("commentTruncated") is not False or not isinstance(detail.get("comment"), str)
+            or not isinstance(detail.get("parents"), list)):
+        path = "/_apis/git/repositories/" + repo_id + "/commits/" + commit_id
+        detail = reader.get(url(org, project, path))
     truncated = detail.get("commentTruncated", False)
     if (detail.get("commitId", "").lower() != commit_id
             or type(truncated) is not bool or truncated):
@@ -292,11 +312,14 @@ def credited_commit(reader, org, project, repo_id, item, emails, first):
             "coauthor": author_email not in emails}
 
 
-def new_work(at):
+def new_work(at, focus_start=None, retained_prs=None):
     end = at.astimezone(TZ).date()
     return {"cutoff": stamp(at), "firstDay": (end - dt.timedelta(days=59)).isoformat(),
             "lastDay": end.isoformat(), "inventory": None, "prOffset": 0, "prSeen": [],
-            "prFirst": None, "prs": [], "prComplete": False, "repoIndex": 0,
+            "prFirst": None, "prQueryStartAt": stamp(window_start(focus_start.isoformat())) if focus_start else None,
+            "prs": [item for item in retained_prs or []
+                    if (end - dt.timedelta(days=59)).isoformat() <= item["day"] < focus_start.isoformat()]
+                    if focus_start else [], "prComplete": False, "repoIndex": 0,
             "repoDone": {}, "progress": {}, "repoErrors": {}, "activeCursor": 0,
             "scanComplete": False, "selectedRepoIds": [], "reasons": []}
 
@@ -306,23 +329,22 @@ def advance_prs(reader, org, project, account, work):
         return
     inventory_ids = {row["id"] for row in work["inventory"]}
     while work["prOffset"] // PAGE < MAX_PAGES:
-        page = pr_page(reader, org, project, account, work["prOffset"])
+        page = pr_page(reader, org, project, account, work["prOffset"],
+                       work.get("prQueryStartAt"), work["cutoff"])
         ids = [row["pullRequestId"] for row in page]
         try:
             add_prs(work, page, account, inventory_ids)
         except ValueError as error:
             if str(error) == "Duplicate ADO PR page":
-                work.update({"prOffset": 0, "prSeen": [], "prFirst": None,
-                             "prs": [], "prComplete": False})
+                reset_pr_pages(work)
             raise
         if work["prFirst"] is None:
             work["prFirst"] = ids
         work["prOffset"] += len(page)
         if len(page) < PAGE:
-            check = pr_page(reader, org, project, account, 0)
+            check = pr_page(reader, org, project, account, 0, work.get("prQueryStartAt"), work["cutoff"])
             if [row["pullRequestId"] for row in check] != work["prFirst"]:
-                work.update({"prOffset": 0, "prSeen": [], "prFirst": None,
-                             "prs": [], "prComplete": False})
+                reset_pr_pages(work)
                 raise ValueError("ADO PR pages changed during scan")
             work["prComplete"] = True
             return
@@ -345,11 +367,36 @@ def advance_repository(reader, org, project, repo, work, cache, emails):
             return
         progress = {"branch": repo["defaultBranch"], "head": head,
                     "offset": 0, "seen": [], "pending": [], "items": [], "checked": [],
-                    "endPage": False, "pinnedAt": stamp(dt.datetime.now(dt.timezone.utc))}
+                    "endPage": False, "pinnedAt": stamp(dt.datetime.now(dt.timezone.utc)),
+                    "focusOffset": 0, "focusSeen": [], "focusComplete": False}
         work["progress"][repo_id] = progress
     if progress["branch"] != repo["defaultBranch"]:
         work["progress"].pop(repo_id)
         raise ValueError("Incompatible ADO repository continuation")
+    if (prior and progress["offset"] == 0 and not progress["pending"]
+            and work.get("prQueryStartAt") and not progress.get("focusComplete")):
+        focus_seen = set(progress.get("focusSeen", []))
+        for _ in range(4):
+            page = commit_page(reader, org, project, repo_id, progress["head"], progress["focusOffset"],
+                               work["prQueryStartAt"], work["cutoff"])
+            for row in page:
+                oid = row["commitId"].lower()
+                if not SHA.fullmatch(oid) or oid in focus_seen:
+                    raise ValueError("Invalid or duplicate ADO focus commit")
+                focus_seen.add(oid)
+                if (row.get("commentTruncated") is False and isinstance(row.get("comment"), str)
+                        and isinstance(row.get("parents"), list)):
+                    credited = credited_commit(reader, org, project, repo_id, row, emails, work["firstDay"])
+                    if credited:
+                        progress["items"].append(credited)
+            progress["focusSeen"] = sorted(focus_seen)
+            progress["focusOffset"] += len(page)
+            if len(page) < PAGE:
+                progress["focusComplete"] = True
+                break
+        if not progress["focusComplete"]:
+            return
+    prefetched = {item["id"]: item for item in progress["items"]}
     while True:
         if not progress["pending"] and not progress["endPage"]:
             if progress["offset"] // PAGE >= MAX_PAGES:
@@ -362,7 +409,13 @@ def advance_repository(reader, org, project, repo, work, cache, emails):
                 if not SHA.fullmatch(oid) or oid in known:
                     raise ValueError("Invalid or duplicate ADO commit")
                 known.add(oid)
-                pending.append({"commitId": oid, "author": {"date": row["author"]["date"]}})
+                entry = {"commitId": oid, "author": {"date": row["author"]["date"]}}
+                if (row.get("commentTruncated") is False and isinstance(row.get("comment"), str)
+                        and isinstance(row.get("parents"), list)
+                        and china_day(instant(row["author"]["date"])) >= work["firstDay"]):
+                    entry["credited"] = credited_commit(reader, org, project, repo_id, row, emails,
+                                                         work["firstDay"])
+                pending.append(entry)
             progress["seen"] = sorted(known)
             progress["pending"] = pending
             progress["offset"] += len(page)
@@ -373,16 +426,20 @@ def advance_repository(reader, org, project, repo, work, cache, emails):
             candidate = china_day(instant(item["author"]["date"])) >= work["firstDay"]
             if candidate and oid in prior_checked:
                 credited = prior_items.get(oid)
+            elif oid in prefetched:
+                credited = prefetched[oid]
+            elif "credited" in item:
+                credited = item["credited"]
             else:
                 credited = credited_commit(reader, org, project, repo_id, item, emails, work["firstDay"])
-            if credited:
+            if credited and oid not in prefetched:
                 progress["items"].append(credited)
             if candidate:
                 progress["checked"].append(oid)
             progress["pending"].pop(0)
         if progress["endPage"]:
             items = progress["items"]
-            if len({item["id"] for item in items}) != len(items):
+            if len({item["id"] for item in items}) != len(items) or not set(prefetched).issubset(progress["seen"]):
                 raise ValueError("Duplicate ADO commit attribution")
             relation = ("descendant" if prior["head"] in progress["seen"] else "rewritten") if prior else "initial"
             proof = {"head": progress["head"], "branch": repo["defaultBranch"],
@@ -507,13 +564,17 @@ def source_days(work, cache, org, project, categories, captured_at, complete, ve
     return output
 
 
-def collect(config, run, repository_category, *, at=None, days=60, previous=None):
+def collect(config, run, repository_category, *, at=None, days=60, previous=None, focus_start=None):
     if type(days) is not int or days != 60:
         raise ValueError("ADO collection requires exactly 60 Beijing dates")
     at = at or dt.datetime.now(dt.timezone.utc)
     if at.tzinfo is None:
         raise ValueError("ADO capture time requires an offset")
     at = at.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if focus_start is not None:
+        focus_start = dt.date.fromisoformat(focus_start) if isinstance(focus_start, str) else focus_start
+        if not isinstance(focus_start, dt.date) or focus_start > at.astimezone(TZ).date():
+            raise ValueError("Invalid ADO focus window")
     configured = projects(config)
     old_state = {}
     compatible_state = False
@@ -586,15 +647,23 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         work = None if legacy_basis else prior_work
         rollover_progress = {}
         new_first = (at.astimezone(TZ).date() - dt.timedelta(days=59)).isoformat()
+        reset_for_full = isinstance(work, dict) and focus_start is None and work.get("prQueryStartAt") is not None
+        reset_for_focus = (isinstance(work, dict) and focus_start is not None
+            and work.get("prQueryStartAt") is None and work.get("prComplete") is True
+            and not work.get("scanComplete"))
         if (isinstance(work, dict) and not work.get("scanComplete")
                 and isinstance(work.get("firstDay"), str)
                 and work["firstDay"] <= new_first
-                and (work["firstDay"] < new_first or not same_scope)):
+                and (work["firstDay"] < new_first or not same_scope or reset_for_full or reset_for_focus)):
             rollover_progress = work["progress"]
             active_cursor = work["activeCursor"]
         if (not isinstance(work, dict) or work.get("firstDay") != new_first
-                or work.get("scanComplete") or not same_scope):
-            work = new_work(at)
+                or work.get("scanComplete") or not same_scope or reset_for_full or reset_for_focus):
+            can_focus = (focus_start is not None and focus_start.isoformat() >= new_first
+                         and same_scope and isinstance(prior_work, dict) and prior_work.get("prComplete") is True
+                         and isinstance(prior_work.get("prs"), list))
+            work = new_work(at, focus_start if can_focus else None,
+                            prior_work["prs"] if can_focus else None)
         reader.source_calls = 0
         reader.source_end = min(reader.end, time.monotonic() + SECONDS_PER_PROJECT)
         reasons = ["legacy-repository-scope-unresolved"] if unresolved_scope else []

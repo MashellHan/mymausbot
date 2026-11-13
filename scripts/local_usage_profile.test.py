@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import unittest
+import urllib.parse
 from unittest.mock import patch
 
 import local_usage_profile as profile
@@ -43,6 +44,7 @@ class Api:
         self.commit_dates = ("2026-09-11T08:00:00Z", "2026-11-09T11:00:00Z")
         self.profile_commit_at = "2026-11-09T08:00:00Z"
         self.private_pr_date = "2026-11-09T10:00:00Z"
+        self.private_pr_rows = None
         self.repo_name = PRIVATE["nameWithOwner"]
         self.owner_id = ACCOUNT["stableId"]
         self.owner_login = ACCOUNT["login"]
@@ -55,12 +57,42 @@ class Api:
         self.public_history = None
         self.public_page_size = 100
         self.commit_details = {}
+        self.enforce_query_window = False
+        self.duplicate_compare_page = False
+        self.profile_pr_rows = None
 
     def __call__(self, args, timeout):
         self.calls.append(args)
         assert 0 < timeout <= 30
         if self.fail:
             raise OSError("synthetic expired credential")
+        if "/compare/" in args[-1]:
+            path = urllib.parse.urlsplit(args[-1])
+            refs = path.path.split("/compare/")[1]
+            base, head = refs.split("...")
+            base_known = {oid for oid, _, _ in self.public_history.get(base, [])} if self.public_history else {base, "1" * 40, "2" * 40}
+            frontier, changed, reached = [head], {}, False
+            while frontier:
+                oid = frontier.pop()
+                if oid == base:
+                    reached = True
+                    continue
+                if oid in changed or oid in base_known:
+                    continue
+                if oid not in self.commit_details:
+                    continue
+                authored, parents = self.commit_details[oid]
+                changed[oid] = parents
+                frontier.extend(parents)
+            page = int(urllib.parse.parse_qs(path.query)["page"][0])
+            rows = list(changed.items())[(page - 1) * 100:page * 100]
+            if self.duplicate_compare_page and page == 2 and rows:
+                rows[0] = list(changed.items())[0]
+            return json.dumps({"status": "ahead" if reached else "diverged",
+                "merge_base_commit": {"sha": base if reached else "0" * 40},
+                "base_commit": {"sha": base}, "total_commits": len(changed),
+                "commits": [{"sha": oid, "parents": [{"sha": parent} for parent in parents]}
+                            for oid, parents in rows]})
         values = {args[i+1].split("=", 1)[0]: args[i+1].split("=", 1)[1]
                   for i, value in enumerate(args[:-1]) if value == "-f"}
         document = values["query"]
@@ -72,24 +104,32 @@ class Api:
         if "contributionsCollection" not in document and self.private_viewer_id:
             viewer["id"] = self.private_viewer_id
         if "contributionsCollection" in document:
-            nodes = [{"occurredAt": f"2026-11-09T09:0{i}:00Z", "pullRequest": {
-                "id": f"public-pr-{i}", "createdAt": f"2026-11-09T09:0{i}:00Z",
-                "author": {"id": viewer["id"], "login": viewer["login"]}, "repository": PUBLIC}}
-                for i in (1, 2)]
+            records = (self.profile_pr_rows if self.profile_pr_rows is not None else
+                       [(f"public-pr-{i}", f"2026-11-09T09:0{i}:00Z", PUBLIC) for i in (1, 2)])
+            nodes = [{"occurredAt": when, "pullRequest": {
+                "id": key, "createdAt": when,
+                "author": {"id": viewer["id"], "login": viewer["login"]}, "repository": repo}}
+                for key, when, repo in records]
+            if self.enforce_query_window:
+                nodes = [node for node in nodes if values["from"] <= node["occurredAt"] <= values["to"]]
             after = values.get("after")
             page_nodes = nodes[1:] if after else nodes[:1]
-            more = not after and not self.truncate_prs
+            more = len(nodes) > 1 and not after and not self.truncate_prs
+            groups = [{"repository": {**PUBLIC,
+                "createdAt": self.public_created_at,
+                "defaultBranchRef": {"name": "main", "target": {"oid": self.public_head}}}, "contributions": {
+                "totalCount": 2, "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [{"occurredAt": self.profile_commit_at, "commitCount": 2}]}}]
+            if self.enforce_query_window and not values["from"] <= self.profile_commit_at <= values["to"]:
+                groups = []
             viewer["contributionsCollection"] = {
                 "startedAt": values["from"], "endedAt": values["to"],
                 "hasAnyRestrictedContributions": False, "restrictedContributionsCount": 0,
-                "totalCommitContributions": 2, "totalRepositoriesWithContributedCommits": 1,
-                "totalPullRequestContributions": 2,
-                "commitContributionsByRepository": [{"repository": {**PUBLIC,
-                    "createdAt": self.public_created_at,
-                    "defaultBranchRef": {"name": "main", "target": {"oid": self.public_head}}}, "contributions": {
-                    "totalCount": 2, "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [{"occurredAt": self.profile_commit_at, "commitCount": 2}]}}],
-                "pullRequestContributions": {"totalCount": 2, "nodes": page_nodes,
+                "totalCommitContributions": 2 if groups else 0,
+                "totalRepositoriesWithContributedCommits": len(groups),
+                "totalPullRequestContributions": len(nodes),
+                "commitContributionsByRepository": groups,
+                "pullRequestContributions": {"totalCount": len(nodes), "nodes": page_nodes,
                     "pageInfo": {"hasNextPage": more, "endCursor": "profile-next" if more else None}}}
             data = {"viewer": viewer}
         elif "defaultBranchRef" in document:
@@ -101,12 +141,22 @@ class Api:
                 "owner": {"id": self.owner_id, "login": self.owner_login},
                 "createdAt": self.public_created_at if raw is PUBLIC else PRIVATE["createdAt"],
                 "defaultBranchRef": {"name": "main", "target": {"oid": head}}}}
+        elif "search(query:" in document:
+            query = values["q"]
+            start, end = query.split("created:", 1)[1].split("..", 1)
+            rows = self.private_pr_rows if self.private_pr_rows is not None else [("private-pr-1", self.private_pr_date)]
+            nodes = ([{"id": key, "createdAt": when,
+                       "author": {"id": viewer["id"], "login": viewer["login"]},
+                       "repository": {"id": PRIVATE["id"]}} for key, when in rows if start <= when <= end])
+            data = {"viewer": viewer, "search": {"issueCount": len(nodes), "nodes": nodes,
+                    "pageInfo": {"hasNextPage": False, "endCursor": None}}}
         elif "pullRequests(first:" in document:
+            rows = self.private_pr_rows if self.private_pr_rows is not None else [("private-pr-1", self.private_pr_date)]
             data = {"viewer": viewer, "repository": {"id": PRIVATE["id"],
-                "pullRequests": {"totalCount": 1, "pageInfo": {"hasNextPage": False,
-                    "endCursor": None}, "nodes": [{"id": "public-pr-1" if self.duplicate_private else "private-pr-1",
-                    "createdAt": self.private_pr_date, "author": {"id": viewer["id"],
-                    "login": viewer["login"]}}]}}}
+                "pullRequests": {"totalCount": len(rows), "pageInfo": {"hasNextPage": False,
+                    "endCursor": None}, "nodes": [{"id": "public-pr-1" if self.duplicate_private else key,
+                    "createdAt": when, "author": {"id": viewer["id"],
+                    "login": viewer["login"]}} for key, when in rows]}}}
         elif "history(first:" in document:
             after = values.get("after")
             is_public = values.get("name") == "public-repo"
@@ -124,15 +174,17 @@ class Api:
                     "nodes": [{"oid": oid, "authoredDate": authored, "parents": {"totalCount": parents},
                         "authors": {"totalCount": 1, "pageInfo": {"hasNextPage": False},
                                     "nodes": [{"user": {"id": viewer["id"]}}]}} for oid, authored, parents in page_rows]}}}}
-        elif "parents(first: 100)" in document:
-            oid = values["oid"]
-            authored, parents = self.commit_details[oid]
-            data = {"viewer": viewer, "repository": {"id": PUBLIC["id"], "object": {
-                "oid": oid, "authoredDate": authored,
-                "authors": {"totalCount": 1, "pageInfo": {"hasNextPage": False},
-                            "nodes": [{"user": {"id": viewer["id"]}}]},
-                "parents": {"totalCount": len(parents), "pageInfo": {"hasNextPage": False},
-                            "nodes": [{"oid": parent} for parent in parents]}}}}
+        elif "c0: object" in document:
+            objects = {}
+            for key, oid in values.items():
+                if not key.startswith("oid"):
+                    continue
+                authored, parents = self.commit_details[oid]
+                objects["c" + key[3:]] = {"oid": oid, "authoredDate": authored,
+                    "authors": {"totalCount": 1, "pageInfo": {"hasNextPage": False},
+                                "nodes": [{"user": {"id": viewer["id"]}}]},
+                    "parents": {"totalCount": len(parents)}}
+            data = {"viewer": viewer, "repository": {"id": PUBLIC["id"], **objects}}
         else:
             raise AssertionError("Unexpected GraphQL document")
         data["rateLimit"] = {"cost": 1, "remaining": 4999 - len(self.calls),
@@ -140,10 +192,11 @@ class Api:
         return json.dumps({"data": data})
 
 
-def collect(api=None, account=None, at=AT, previous=None):
+def collect(api=None, account=None, at=AT, previous=None, focus_start=None):
     configured = copy.deepcopy(account or ACCOUNT)
     return profile.collect({**CONFIG, "githubProfiles": [configured]}, api or Api(),
-                           lambda remote, config: "personal", at=at, previous=previous)
+                           lambda remote, config: "personal", at=at, previous=previous,
+                           focus_start=focus_start)
 
 
 class ProfileBeijingTests(unittest.TestCase):
@@ -290,6 +343,163 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assert_same_days_except_capture_time(first["sources"][0]["days"], second["sources"][0]["days"])
         self.assertEqual(first["activeSourceIds"], second["activeSourceIds"])
 
+    def test_warm_focus_queries_only_the_requested_beijing_day_and_keeps_old_events(self):
+        api = Api()
+        api.enforce_query_window = True
+        account = {**ACCOUNT, "privateRepositories": []}
+        previous = collect(api, account)
+        api.calls.clear()
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        current = collect(api, account, at=at, previous=previous, focus_start="2026-11-10")
+        profile_calls = [call for call in api.calls if any("contributionsCollection" in arg for arg in call)]
+        self.assertEqual(len(profile_calls), 1)
+        self.assertIn("from=2026-11-09T16:00:00Z", profile_calls[0])
+        self.assertIn("to=2026-11-10T12:00:00Z", profile_calls[0])
+        self.assertEqual(next(row for row in current["sources"][0]["days"]
+                              if row["day"] == "2026-11-09")["knownPrs"], 2)
+        self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
+        self.assertFalse(any("history(first:" in arg for call in api.calls for arg in call))
+
+    def test_private_pr_discovery_uses_the_same_focus_and_retains_older_known_pr(self):
+        api = Api()
+        api.enforce_query_window = True
+        previous = collect(api)
+        api.calls.clear()
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        current = collect(api, at=at, previous=previous, focus_start="2026-11-10")
+        queries = [item.split("=", 1)[1] for call in api.calls for item in call
+                   if item.startswith("q=repo:")]
+        self.assertEqual(len(queries), 1)
+        self.assertIn("created:2026-11-09T16:00:00Z..2026-11-10T12:00:00Z", queries[0])
+        prior_day = next(row for row in current["sources"][0]["days"] if row["day"] == "2026-11-09")
+        self.assertEqual(prior_day["knownPrs"], 3)
+        self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
+
+    def test_new_typed_private_pr_does_not_remove_older_supplemented_pr(self):
+        api = Api()
+        previous = collect(api)
+        api.enforce_query_window = True
+        api.profile_pr_rows = [(f"new-private-pr-{index}", f"2026-11-10T09:0{index}:00Z", PRIVATE)
+                               for index in (1, 2)]
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        current = collect(api, at=at, previous=previous, focus_start="2026-11-10")
+        days = {row["day"]: row for row in current["sources"][0]["days"]}
+        self.assertEqual(days["2026-11-09"]["knownPrs"], 3)
+        self.assertEqual(days["2026-11-10"]["knownPrs"], 2)
+        self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
+
+    def test_failed_cold_private_pr_page_restarts_full_inventory_before_focusing(self):
+        api = Api()
+        api.private_pr_date = "2026-10-10T10:00:00Z"
+        api.fail_private_owner = "fixture-owner"
+        api.fail_private_phase = "pullRequests(first:"
+        api.fail_private_error = OSError("synthetic private page failure")
+        failed = collect(api)
+        state_id = profile.source_id(profile.profile_config(ACCOUNT))
+        self.assertFalse(failed["sources"][0]["coverage"]["paginationComplete"])
+        self.assertIsNone(failed["state"]["sources"][state_id]["prCoverageStartAt"])
+        api.fail_private_owner = None
+        api.calls.clear()
+        api.enforce_query_window = True
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        recovered = collect(api, at=at, previous=failed, focus_start="2026-11-10")
+        self.assertTrue(any("pullRequests(first:" in arg for call in api.calls for arg in call))
+        self.assertFalse(any("search(query:" in arg for call in api.calls for arg in call))
+        day = next(row for row in recovered["sources"][0]["days"] if row["day"] == "2026-10-10")
+        self.assertEqual(day["knownPrs"], 1)
+        self.assertTrue(recovered["sources"][0]["coverage"]["paginationComplete"])
+
+    def test_failed_full_private_repair_clears_an_older_successful_baseline(self):
+        api = Api()
+        previous = collect(api)
+        state_id = profile.source_id(profile.profile_config(ACCOUNT))
+        self.assertIsNotNone(previous["state"]["sources"][state_id]["prCoverageStartAt"])
+        api.private_pr_date = "2026-10-10T10:00:00Z"
+        api.fail_private_owner = "fixture-owner"
+        api.fail_private_phase = "pullRequests(first:"
+        api.fail_private_error = OSError("synthetic full repair failure")
+        failed = collect(api, previous=previous)
+        self.assertIsNone(failed["state"]["sources"][state_id]["prCoverageStartAt"])
+        api.fail_private_owner = None
+        api.calls.clear()
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        recovered = collect(api, at=at, previous=failed, focus_start="2026-11-10")
+        self.assertTrue(any("pullRequests(first:" in arg for call in api.calls for arg in call))
+        old = next(row for row in recovered["sources"][0]["days"] if row["day"] == "2026-10-10")
+        self.assertEqual(old["knownPrs"], 1)
+
+    def test_complete_private_pr_zero_survives_restart_and_next_day_focus(self):
+        api = Api()
+        previous = collect(api)
+        state_id = profile.source_id(profile.profile_config(ACCOUNT))
+        self.assertEqual(len(previous["state"]["sources"][state_id]["privatePrs"]), 1)
+        api.private_pr_rows = []
+        corrected = collect(api, previous=previous)
+        self.assertEqual(corrected["state"]["sources"][state_id]["privatePrs"], [])
+        self.assertEqual(corrected["sources"][0]["days"][-1]["knownPrs"], 2)
+        api.enforce_query_window = True
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        next_day = collect(api, at=at, previous=corrected, focus_start="2026-11-10")
+        old = next(row for row in next_day["sources"][0]["days"] if row["day"] == "2026-11-09")
+        self.assertEqual(old["knownPrs"], 2)
+        self.assertEqual(next_day["state"]["sources"][state_id]["privatePrs"], [])
+        self.assertTrue(next_day["sources"][0]["coverage"]["paginationComplete"])
+
+    def test_incomplete_private_pr_scope_retains_its_previous_list(self):
+        api = Api()
+        previous = collect(api)
+        state_id = profile.source_id(profile.profile_config(ACCOUNT))
+        api.fail_private_owner = "fixture-owner"
+        api.fail_private_phase = "pullRequests(first:"
+        api.fail_private_error = OSError("synthetic private page failure")
+        failed = collect(api, previous=previous)
+        self.assertFalse(failed["sources"][0]["coverage"]["paginationComplete"])
+        self.assertEqual(failed["state"]["sources"][state_id]["privatePrs"],
+                         previous["state"]["sources"][state_id]["privatePrs"])
+
+    def test_completed_empty_private_scope_retains_only_failed_sibling(self):
+        account = {**ACCOUNT, "privateRepositories": ["fixture-owner/private-repo", "failure-owner/private-repo"]}
+        api = Api()
+        api.fail_private_owner = "failure-owner"
+        api.fail_private_error = OSError("synthetic sibling failure")
+        previous = collect(api, account)
+        state_id = profile.source_id(profile.profile_config(account))
+        saved = previous["state"]["sources"][state_id]["privatePrs"]
+        self.assertEqual(len(saved), 1)
+        sibling = copy.deepcopy(saved[0])
+        sibling["repository"].update({"id": "synthetic-second-repo", "name": "failure-owner/private-repo"})
+        sibling["key"] = "f" * 64
+        saved.append(sibling)
+        api.private_pr_rows = []
+        current = collect(api, account, previous=previous)
+        self.assertFalse(current["sources"][0]["coverage"]["paginationComplete"])
+        self.assertEqual(current["state"]["sources"][state_id]["privatePrs"], [sibling])
+
+    def test_compare_batches_more_than_one_page_without_losing_author_day(self):
+        api = Api()
+        account = {**ACCOUNT, "privateRepositories": []}
+        previous = collect(api, account)
+        previous_id = previous["state"]["sources"][profile.source_id(profile.profile_config(account))]
+        self.assertTrue(previous_id["cache"])
+        chain = [f"{index:040x}" for index in range(1000, 1151)]
+        for index, oid in enumerate(chain):
+            parent = HEAD if index == 0 else chain[index - 1]
+            api.commit_details[oid] = ("2026-11-08T15:59:59Z" if index == 0 else
+                                       "2026-11-09T10:00:00Z", [parent])
+        api.public_head = chain[-1]
+        result = collect(api, account, previous=previous)
+        rows = {row["day"]: row for row in result["sources"][0]["days"]}
+        self.assertTrue(result["sources"][0]["coverage"]["paginationComplete"])
+        self.assertEqual(rows["2026-11-08"]["knownCommits"], 1)
+        self.assertEqual(sum(row["knownCommits"] or 0 for row in rows.values()), 153)
+        self.assertEqual(sum("/compare/" in call[-1] for call in api.calls), 2)
+        self.assertLessEqual(sum("c0: object" in arg for call in api.calls for arg in call), 8)
+        api.duplicate_compare_page = True
+        api.public_head = f"{2000:040x}"
+        api.commit_details[api.public_head] = ("2026-11-09T11:00:00Z", [chain[-1]])
+        duplicate = collect(api, account, previous=previous)
+        self.assertFalse(duplicate["sources"][0]["coverage"]["paginationComplete"])
+
     def test_partial_pinned_history_survives_head_advance_then_reconciles_older_side_merge(self):
         api = Api()
         api.public_page_size = 1
@@ -319,7 +529,7 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assertEqual(sum(row["knownCommits"] or 0 for row in settled["sources"][0]["days"]), 5)
         self.assertEqual(sum("history(first:" in arg and "head=" + advanced in call
                              for call in api.calls for arg in call), 0)
-        self.assertEqual(sum("parents(first: 100)" in arg for call in api.calls for arg in call), 2)
+        self.assertEqual(sum("c0: object" in arg for call in api.calls for arg in call), 1)
 
     def test_precreation_history_page_keeps_newer_events_and_progress_through_head_advance(self):
         api = Api()
@@ -667,9 +877,9 @@ class ProfileBeijingTests(unittest.TestCase):
 
                 def mismatched(args, timeout):
                     result = json.loads(api(args, timeout))
-                    document = next(value[6:] for value in args if value.startswith("query="))
+                    document = next((value[6:] for value in args if value.startswith("query=")), "")
                     target = (phase == "history" and "history(first:" in document
-                              or phase == "delta" and "parents(first: 100)" in document
+                              or phase == "delta" and "c0: object" in document
                               or phase == "final-head" and "defaultBranchRef" in document
                                   and "contributionsCollection" not in document)
                     if target:

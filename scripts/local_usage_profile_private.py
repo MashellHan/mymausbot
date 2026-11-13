@@ -1,5 +1,6 @@
 """Qualify private GitHub Profile supplements against pinned remote history."""
 
+import datetime as dt
 import re
 import subprocess
 from zoneinfo import ZoneInfo
@@ -36,6 +37,18 @@ PULL_REQUESTS_QUERY = """query($owner: String!, $name: String!, $after: String) 
       totalCount pageInfo { hasNextPage endCursor }
       nodes { id createdAt author { login ... on User { id } } }
     }
+  }
+  rateLimit { cost remaining resetAt }
+}"""
+
+FOCUSED_PULL_REQUESTS_QUERY = """query($q: String!, $after: String) {
+  viewer { id login url }
+  search(query: $q, type: ISSUE, first: 100, after: $after) {
+    issueCount pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest {
+      id createdAt author { login ... on User { id } }
+      repository { id }
+    } }
   }
   rateLimit { cost remaining resetAt }
 }"""
@@ -133,8 +146,46 @@ def _private_prs(budget, profile, owner, name, repo, created, at, first, info, i
     raise ValueError("private_pr_page_budget_exhausted")
 
 
+def _focused_private_prs(budget, profile, owner, name, repo, created, at, first, focus_start,
+                         info, retained, instant, digest):
+    start = dt.datetime.combine(focus_start, dt.time.min, TZ).astimezone(dt.timezone.utc)
+    query = (f"repo:{owner}/{name} is:pr author:{profile['login']} "
+             f"created:{start.isoformat().replace('+00:00', 'Z')}..{at.isoformat().replace('+00:00', 'Z')}")
+    events = {item["key"]: {**item, "repository": info} for item in retained
+              if item["repository"]["id"] == info["id"] and first.isoformat() <= item["day"] < focus_start.isoformat()}
+    seen, cursors, after, total = set(), set(), None, None
+    for _ in range(MAX_PRIVATE_PAGES):
+        data = budget.query(profile, FOCUSED_PULL_REQUESTS_QUERY, {"q": query, "after": after})
+        connection = data["search"]
+        value, nodes = connection["issueCount"], connection["nodes"]
+        if (type(value) is not int or not 0 <= value <= 1000 or total is not None and value != total
+                or not isinstance(nodes, list) or len(nodes) > 100):
+            raise ValueError("invalid_private_pr_page")
+        total = value
+        for node in nodes:
+            key = node["id"]
+            when = instant(node["createdAt"])
+            author = node.get("author")
+            if (not isinstance(key, str) or not key or key in seen or node["repository"]["id"] != repo["id"]
+                    or not start <= when <= at or when < created
+                    or not isinstance(author, dict) or author.get("id") != profile["stableId"]
+                    or author.get("login", "").casefold() != profile["login"].casefold()):
+                raise ValueError("invalid_private_pr")
+            seen.add(key)
+            event_key = digest("github-pr", profile["host"], key)
+            events[event_key] = {"day": when.astimezone(TZ).date().isoformat(),
+                                 "createdAt": when.isoformat().replace("+00:00", "Z"),
+                                 "repository": info, "key": event_key}
+        after = _cursor(connection["pageInfo"], cursors)
+        if after is None:
+            if len(seen) != total:
+                raise ValueError("incomplete_private_pr_inventory")
+            return list(events.values())
+    raise ValueError("private_pr_page_budget_exhausted")
+
+
 def supplement_private(config, profile, budget, typed, first, at, repository_category,
-                       repository_info, instant, count, digest):
+                       repository_info, instant, count, digest, focus_start=None, retained_prs=None):
     configured_candidates = profile["privateRepositories"]
     if not isinstance(configured_candidates, list) or len(configured_candidates) > MAX_PRIVATE_REPOSITORIES:
         raise ValueError("invalid_private_repository_config")
@@ -146,6 +197,7 @@ def supplement_private(config, profile, budget, typed, first, at, repository_cat
             raise ValueError("invalid_private_repository_config")
         names.add(candidate.casefold())
     result, reasons, heads, history_candidates, seen_repositories = {"prs": [], "commits": []}, [], [], [], set()
+    completed_pr_names = set()
     for candidate in configured_candidates:
         owner, name = candidate.split("/")
         try:
@@ -154,14 +206,25 @@ def supplement_private(config, profile, budget, typed, first, at, repository_cat
             if info["id"] in seen_repositories:
                 raise ValueError("duplicate_private_repository")
             seen_repositories.add(info["id"])
-            pending_prs = [] if info["id"] in typed["prRepositoryIds"] else _private_prs(
-                budget, profile, owner, name, repo, created, at, first, info, instant, digest)
+            if info["id"] in typed["prRepositoryIds"]:
+                retained = {item["key"]: {**item, "repository": info} for item in retained_prs or []
+                    if focus_start is not None and item["repository"]["id"] == info["id"]
+                    and first.isoformat() <= item["day"] < focus_start.isoformat()
+                    and item["key"] not in typed["prKeys"]}
+                pending_prs = list(retained.values())
+            elif focus_start is not None and retained_prs is not None:
+                pending_prs = _focused_private_prs(budget, profile, owner, name, repo, created, at, first,
+                                                   focus_start, info, retained_prs, instant, digest)
+            else:
+                pending_prs = _private_prs(budget, profile, owner, name, repo, created, at, first,
+                                           info, instant, digest)
             latest, _, latest_head, _ = _repository(budget, profile, owner, name, instant)
             if latest["id"] != repo["id"] or latest_head != head:
                 raise ValueError("private_default_head_changed")
             if any(event["key"] in typed["prKeys"] for event in pending_prs):
                 raise ValueError("private_pr_overlap")
             result["prs"].extend(pending_prs)
+            completed_pr_names.add(candidate.casefold())
             history_candidates.append({"repository": info, "owner": owner, "name": name,
                                "createdAt": created.isoformat().replace("+00:00", "Z"),
                                "branch": branch, "head": head})
@@ -173,4 +236,4 @@ def supplement_private(config, profile, budget, typed, first, at, repository_cat
             reasons.append("private_" + (str(error) if str(error) in PRIVATE_CODES else "invalid_response"))
         except (OSError, subprocess.SubprocessError, TimeoutError, KeyError, TypeError, IndexError, AttributeError) as error:
             reasons.append("private_" + type(error).__name__)
-    return result, reasons, heads, history_candidates
+    return result, reasons, heads, history_candidates, completed_pr_names

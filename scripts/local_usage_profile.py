@@ -18,7 +18,7 @@ DEFINITION = "github-profile-beijing-v1"
 DATE_BASIS = {"prs": "created-at/Asia-Shanghai", "commits": "author-at/Asia-Shanghai"}
 MAX_ACCOUNTS = 24
 MAX_REQUESTS = 120
-MAX_SECONDS = 180
+MAX_SECONDS = 25
 MAX_PROFILE_PAGES = 100
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_COUNT = 2**53 - 1
@@ -26,6 +26,8 @@ UTC = dt.timezone.utc
 TZ = ZoneInfo("Asia/Shanghai")
 HISTORY_PAGES_PER_REPOSITORY = 8
 MAX_HISTORY_PAGES = 1000
+COMPARE_PAGES_PER_REPOSITORY = 4
+COMMIT_BATCH_SIZE = 25
 
 PROFILE_QUERY = """query($from: DateTime!, $to: DateTime!, $after: String) {
   viewer {
@@ -57,18 +59,16 @@ PROFILE_QUERY = """query($from: DateTime!, $to: DateTime!, $after: String) {
   rateLimit { cost remaining resetAt }
 }"""
 
-COMMIT_QUERY = """query($owner: String!, $name: String!, $oid: GitObjectID!) {
-  viewer { id login url }
-  repository(owner: $owner, name: $name) {
-    id
-    object(oid: $oid) { ... on Commit {
-      oid authoredDate
-      authors(first: 100) { totalCount pageInfo { hasNextPage } nodes { user { id } } }
-      parents(first: 100) { totalCount pageInfo { hasNextPage } nodes { oid } }
-    } }
-  }
-  rateLimit { cost remaining resetAt }
-}"""
+def commit_batch_query(size):
+    variables = ", ".join(f"$oid{index}: GitObjectID!" for index in range(size))
+    objects = " ".join(f"c{index}: object(oid: $oid{index}) {{ ... on Commit {{\n"
+        "oid authoredDate parents(first: 2) { totalCount }\n"
+        "authors(first: 100) { totalCount pageInfo { hasNextPage } nodes { user { id } } }\n"
+        "} }" for index in range(size))
+    return (f"query($owner: String!, $name: String!, {variables}) {{\n"
+            "viewer { id login url }\n"
+            f"repository(owner: $owner, name: $name) {{ id {objects} }}\n"
+            "rateLimit { cost remaining resetAt }\n}")
 
 
 def instant(value):
@@ -180,12 +180,30 @@ class Budget:
                 self.rate_limit = None
         return data
 
+    def compare(self, profile, candidate, base, head, page):
+        remaining = MAX_SECONDS - (time.monotonic() - self.started)
+        if self.requests >= MAX_REQUESTS or remaining <= 0:
+            raise TimeoutError("collection_budget_exhausted")
+        endpoint = ("repos/" + candidate["repository"]["name"] + "/compare/" + base + "..." + head
+                    + "?per_page=100&page=" + str(page))
+        args = [sys.executable, self.helper, "gh", profile["profile"], "api", endpoint]
+        self.requests += 1
+        raw = self.run(args, timeout=min(30, remaining))
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf8")
+        if not isinstance(raw, str) or len(raw.encode("utf8")) > MAX_RESPONSE_BYTES:
+            raise ValueError("invalid_response_size")
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError("invalid_compare_response")
+        return value
+
     def elapsed(self):
         return round(time.monotonic() - self.started, 3)
 
 
-def profile_records(config, profile, budget, first, at, repository_category):
-    start = window_start(first) - dt.timedelta(days=1)
+def profile_records(config, profile, budget, first, at, repository_category, query_first=None):
+    start = window_start(query_first) if query_first is not None else window_start(first) - dt.timedelta(days=1)
     after, seen_cursors, prs, repositories, commit_repositories = None, set(), {}, {}, []
     signature = None
     for _ in range(MAX_PROFILE_PAGES):
@@ -321,16 +339,9 @@ def delta_events(config, profile, budget, candidate, first, cache, progress, cur
             or any(not isinstance(oid, str) or not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", oid)
                    for oid in base["checked"])):
         raise ValueError("incompatible_history_delta")
-    known, seen = set(base["checked"]), set(current["seen"])
-    for _ in range(HISTORY_PAGES_PER_REPOSITORY):
-        while current["frontier"] and (current["frontier"][-1] in known or current["frontier"][-1] in seen):
-            oid = current["frontier"].pop()
-            if oid == base["head"]:
-                current["reachedBase"] = True
-        if not current["frontier"]:
-            if not current["reachedBase"]:
-                progress[repo_id] = full_progress({**candidate, "head": current["head"]}, first)
-                raise ValueError("rewritten_history_requires_full_scan")
+    seen = set(current["seen"])
+    for iteration in range(COMPARE_PAGES_PER_REPOSITORY + 1):
+        if not current["pending"] and current["total"] is not None and len(seen) == current["total"]:
             observed = observed_head(config, profile, budget, candidate, repository_category)
             items = {item["oid"]: item for item in base["items"]}
             for item in current["items"]:
@@ -339,48 +350,72 @@ def delta_events(config, profile, budget, candidate, first, cache, progress, cur
                 items[item["oid"]] = item
             cache[repo_id] = {"head": current["head"], "branch": current["branch"],
                               "repositoryId": repo["providerId"], "coverageStartAt": base["coverageStartAt"],
-                              "items": list(items.values()), "checked": sorted(known | seen),
+                              "items": list(items.values()), "checked": sorted(set(base["checked"]) | seen),
                               "eligibilityUncertainDays": sorted(set(base.get("eligibilityUncertainDays", [])
                                   + current.get("eligibilityUncertainDays", [])))}
             progress.pop(repo_id, None)
             if observed != current["head"]:
                 raise ValueError("head_drift_after_delta")
             return cache[repo_id]["items"], True
-        oid = current["frontier"][-1]
-        data = budget.query(profile, COMMIT_QUERY, {"owner": candidate["owner"], "name": candidate["name"], "oid": oid})
-        response_repo = data["repository"]
-        if not isinstance(response_repo, dict) or response_repo.get("id") != repo["providerId"]:
-            raise ValueError("history_repository_changed")
-        node = response_repo["object"]
-        if not isinstance(node, dict) or node.get("oid", "").lower() != oid:
-            raise ValueError("history_commit_changed")
-        authored = instant(node["authoredDate"])
-        authors, parents = node["authors"], node["parents"]
-        actors, parent_nodes = authors["nodes"], parents["nodes"]
-        if (not isinstance(actors, list) or len(actors) > 100
-                or authors["pageInfo"]["hasNextPage"] is not False
-                or count(authors["totalCount"]) != len(actors)
-                or not isinstance(parent_nodes, list) or len(parent_nodes) > 100
-                or parents["pageInfo"]["hasNextPage"] is not False
-                or count(parents["totalCount"]) != len(parent_nodes)):
-            raise ValueError("incomplete_history_commit_detail")
-        parent_ids = [parent["oid"].lower() for parent in parent_nodes]
-        if any(not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", parent) for parent in parent_ids):
-            raise ValueError("invalid_history_parent")
-        item = None
-        if any(isinstance(actor, dict) and isinstance(actor.get("user"), dict)
-               and actor["user"].get("id") == profile["stableId"] for actor in actors):
-            day = china_day(authored)
-            if day >= first.isoformat():
-                item = {"day": day, "authoredAt": stamp(authored), "repository": repo,
-                        "key": digest("github-commit", profile["host"], repo["providerId"], oid),
-                        "oid": oid, "count": 1, "merge": len(parent_ids) > 1}
-        current["frontier"].pop()
-        current["frontier"].extend(parent_ids)
-        current["seen"].append(oid)
-        seen.add(oid)
-        if item:
-            current["items"].append(item)
+        if not current["pending"]:
+            if iteration == COMPARE_PAGES_PER_REPOSITORY:
+                break
+            page = budget.compare(profile, candidate, base["head"], current["head"], current["page"])
+            if (page.get("status") != "ahead"
+                    or page.get("merge_base_commit", {}).get("sha", "").lower() != base["head"]):
+                progress[repo_id] = full_progress(candidate, first)
+                raise ValueError("rewritten_history_requires_full_scan")
+            total, rows = count(page["total_commits"]), page["commits"]
+            if (total == 0 or total > MAX_HISTORY_PAGES * 100
+                    or current["total"] is not None and current["total"] != total
+                    or page.get("base_commit", {}).get("sha", "").lower() != base["head"]
+                    or not isinstance(rows, list) or not 0 < len(rows) <= 100
+                    or len(seen) + len(rows) > total):
+                raise ValueError("invalid_history_compare_page")
+            pending = []
+            for row in rows:
+                oid = row["sha"].lower()
+                parents = row["parents"]
+                if (not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", oid) or oid in seen
+                        or oid in base["checked"] or not isinstance(parents, list)
+                        or any(not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", parent.get("sha", ""), re.I)
+                               for parent in parents)):
+                    raise ValueError("invalid_history_compare_commit")
+                seen.add(oid)
+                pending.append({"oid": oid, "parents": len(parents)})
+            current["seen"] = sorted(seen)
+            current["pending"] = pending
+            current["total"] = total
+            current["page"] += 1
+        while current["pending"]:
+            batch = current["pending"][:COMMIT_BATCH_SIZE]
+            variables = {"owner": candidate["owner"], "name": candidate["name"],
+                         **{f"oid{index}": item["oid"] for index, item in enumerate(batch)}}
+            data = budget.query(profile, commit_batch_query(len(batch)), variables)
+            response_repo = data["repository"]
+            if not isinstance(response_repo, dict) or response_repo.get("id") != repo["providerId"]:
+                raise ValueError("history_repository_changed")
+            events = []
+            for index, expected in enumerate(batch):
+                node = response_repo[f"c{index}"]
+                if not isinstance(node, dict) or node.get("oid", "").lower() != expected["oid"]:
+                    raise ValueError("history_commit_changed")
+                authored = instant(node["authoredDate"])
+                authors = node["authors"]
+                actors = authors["nodes"]
+                if (not isinstance(actors, list) or len(actors) > 100
+                        or authors["pageInfo"]["hasNextPage"] is not False
+                        or count(authors["totalCount"]) != len(actors)
+                        or count(node["parents"]["totalCount"]) != expected["parents"]):
+                    raise ValueError("incomplete_history_commit_detail")
+                if (china_day(authored) >= first.isoformat()
+                        and any(isinstance(actor, dict) and isinstance(actor.get("user"), dict)
+                                and actor["user"].get("id") == profile["stableId"] for actor in actors)):
+                    events.append({"day": china_day(authored), "authoredAt": stamp(authored), "repository": repo,
+                                   "key": digest("github-commit", profile["host"], repo["providerId"], expected["oid"]),
+                                   "oid": expected["oid"], "count": 1, "merge": expected["parents"] > 1})
+            current["items"].extend(events)
+            del current["pending"][:len(batch)]
     return current["items"], False
 
 
@@ -415,13 +450,16 @@ def history_events(config, profile, budget, candidate, first, at, cache, progres
         if proof_usable:
             current = {"mode": "delta", "head": head, "baseHead": proof["head"],
                        "branch": branch, "repositoryId": repo["providerId"],
-                       "coverageStartAt": proof["coverageStartAt"], "frontier": [head],
-                       "seen": [], "items": [], "reachedBase": False,
+                       "coverageStartAt": proof["coverageStartAt"], "page": 1, "total": None,
+                       "seen": [], "pending": [], "items": [],
                        "eligibilityUncertainDays": list(proof.get("eligibilityUncertainDays", []))}
         else:
             current = full_progress(candidate, first)
         progress[repo_id] = current
     if current.get("mode") == "delta":
+        if "page" not in current:
+            progress.pop(repo_id, None)
+            return history_events(config, profile, budget, candidate, first, at, cache, progress, repository_category)
         return delta_events(config, profile, budget, candidate, first, cache, progress, current, repository_category)
     head = current["head"]
     for _ in range(HISTORY_PAGES_PER_REPOSITORY):
@@ -553,7 +591,7 @@ def visibility_proven(profile, first, at, totals):
         return False
 
 
-def collect(config, run, repository_category, *, at=None, days=60, previous=None):
+def collect(config, run, repository_category, *, at=None, days=60, previous=None, focus_start=None):
     if type(days) is not int or days != 60:
         raise ValueError("profile_window_must_be_60_days")
     at = at or dt.datetime.now(UTC)
@@ -568,6 +606,10 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
     if len(set(identities)) != len(identities):
         raise ValueError("duplicate_account_scope")
     first = at.astimezone(TZ).date() - dt.timedelta(days=59)
+    if focus_start is not None:
+        focus_start = dt.date.fromisoformat(focus_start) if isinstance(focus_start, str) else focus_start
+        if not isinstance(focus_start, dt.date) or focus_start > at.astimezone(TZ).date():
+            raise ValueError("invalid_profile_focus_window")
     budget = Budget(config, run)
     sources, reasons, states = [], [], {}
     retained = {}
@@ -587,16 +629,56 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         progress = prior.get("progress", {})
         if not isinstance(cache, dict) or not isinstance(progress, dict):
             raise ValueError("Invalid GitHub event continuation")
+        completed_private_pr_names = set()
         try:
-            typed = profile_records(config, profile, budget, first, at, repository_category)
-            supplemental, supplement_reasons, heads, private_candidates = supplement_private(
-                config, profile, budget, typed, first, at, repository_category, repository_info, instant, count, digest)
+            incremental = (focus_start is not None and focus_start >= first
+                and isinstance(prior.get("prs"), list) and isinstance(prior.get("candidates"), dict)
+                and isinstance(prior.get("prCoverageStartAt"), str)
+                and instant(prior["prCoverageStartAt"]) <= window_start(first))
+            typed = profile_records(config, profile, budget, first, at, repository_category,
+                                    focus_start if incremental else None)
+            if incremental:
+                current_ids = set(typed["prRepositoryIds"])
+                private_names = {name.casefold() for name in profile["privateRepositories"]}
+                retained_private_prs = [*prior.get("privatePrs", []),
+                    *(item for item in prior["prs"]
+                      if item["repository"]["name"].casefold() in private_names)]
+                events = {}
+                for item in prior["prs"]:
+                    saved_repo = item["repository"]
+                    if (not first.isoformat() <= item["day"] < focus_start.isoformat()
+                            or saved_repo["name"].casefold() in private_names
+                            and saved_repo["id"] not in current_ids):
+                        continue
+                    category = repository_category(f"https://{profile['host']}/{saved_repo['name']}", config)
+                    if category not in ("work", "personal", "unclassified"):
+                        raise ValueError("invalid_repository_category")
+                    events[item["key"]] = {**item, "repository": {**saved_repo, "category": category}}
+                events.update({item["key"]: item for item in typed["prs"]})
+                typed["prs"] = list(events.values())
+                typed["prKeys"] = set(events)
+                typed["prRepositoryIds"] = {item["repository"]["id"] for item in events.values()}
+            supplemental, supplement_reasons, heads, private_candidates, completed_private_pr_names = supplement_private(
+                config, profile, budget, typed, first, at, repository_category, repository_info, instant, count, digest,
+                focus_start if incremental else None,
+                retained_private_prs if incremental else None)
             candidates = {item["repository"]["id"]: item for item in typed["commitRepositories"]}
             for item in private_candidates:
                 repo_id = item["repository"]["id"]
                 if repo_id in candidates and candidates[repo_id] != item:
                     raise ValueError("conflicting_profile_repository_head")
                 candidates[repo_id] = item
+            if incremental:
+                for repo_id, saved in prior["candidates"].items():
+                    if repo_id in candidates or saved["repository"]["name"].casefold() in private_names:
+                        continue
+                    category = repository_category(
+                        f"https://{profile['host']}/{saved['repository']['name']}", config)
+                    if category not in ("work", "personal", "unclassified"):
+                        raise ValueError("invalid_repository_category")
+                    updated = {**saved, "repository": {**saved["repository"], "category": category}}
+                    updated["head"] = observed_head(config, profile, budget, updated, repository_category)
+                    candidates[repo_id] = updated
             history_reasons, drifted, eligibility_days = [], set(), set()
             eligibility_by_category = {category: set() for category in ("work", "personal", "unclassified")}
             for candidate in candidates.values():
@@ -673,7 +755,21 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                       "days": empty_days(first, at, "unavailable", captured)}
         sources.append(source)
         reasons.extend(source["coverage"]["reasons"])
-        states[identity] = {"account": account, "scopeHash": scope_hash, "cache": cache, "progress": progress}
+        private_prs = prior.get("privatePrs", [])
+        pr_coverage_start_at = prior.get("prCoverageStartAt")
+        if source["status"] != "unavailable":
+            private_prs = [item for item in private_prs
+                if item["repository"]["name"].casefold() not in completed_private_pr_names]
+            private_prs.extend(supplemental["prs"])
+            if not supplement_reasons:
+                pr_coverage_start_at = stamp(window_start(first))
+            elif not incremental:
+                pr_coverage_start_at = None
+        states[identity] = {"account": account, "scopeHash": scope_hash, "cache": cache, "progress": progress,
+                            "prs": typed["prs"] if source["status"] != "unavailable" else prior.get("prs", []),
+                            "privatePrs": private_prs,
+                            "candidates": candidates if source["status"] != "unavailable" else prior.get("candidates", {}),
+                            "prCoverageStartAt": pr_coverage_start_at}
     result = {"version": 2, "metricDefinition": DEFINITION, "provider": "github",
               "asOfAt": stamp(at), "capturedAt": stamp(dt.datetime.now(UTC)), "dateBasis": DATE_BASIS,
               "operationWindow": {"startDay": first.isoformat(), "endDay": china_day(at),
