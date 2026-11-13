@@ -212,21 +212,23 @@ export async function generateImageWith(
 
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const cancelled = () => cancel?.aborted === true && !timeoutSignal.aborted;
-  let response: Response;
-  try {
-    response = await fetchImpl(provider.url(cfg), {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      redirect: "error",
-      signal: cancel ? AbortSignal.any([timeoutSignal, cancel]) : timeoutSignal,
-    });
-  } catch (error) {
-    if (cancelled()) fail("Image generation was cancelled", 409);
-    const timedOut = timeoutSignal.aborted || (error instanceof Error && error.name === "TimeoutError");
-    if (timedOut) fail("Image generation timed out", 502);
-    fail(`Could not reach ${provider.name} image generation`, 502, unreached(error));
-  }
+  const send = async (payload: Record<string, unknown>): Promise<Response> => {
+    try {
+      return await fetchImpl(provider.url(cfg), {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        redirect: "error",
+        signal: cancel ? AbortSignal.any([timeoutSignal, cancel]) : timeoutSignal,
+      });
+    } catch (error) {
+      if (cancelled()) fail("Image generation was cancelled", 409);
+      const timedOut = timeoutSignal.aborted || (error instanceof Error && error.name === "TimeoutError");
+      if (timedOut) fail("Image generation timed out", 502);
+      fail(`Could not reach ${provider.name} image generation`, 502, unreached(error));
+    }
+  };
+  const response = await send(body);
 
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);

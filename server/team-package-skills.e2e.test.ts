@@ -78,7 +78,9 @@ it("transfers only selected skills disabled, preserves originals, and rolls back
     expect(JSON.stringify(messages)).toContain("hello from fake claude");
     expect(readFileSync(fixture.fixtureDumpPath, "utf8")).not.toContain("SKILL_FIXTURE_MARKER");
     const after = await request("/api/bots", {}, url);
-    for (const bot of before.bots) expect(after.bots.find((value: { id: string }) => value.id === bot.id)).toEqual(bot);
+    expect(before.bots.filter((bot: { chiefOfStaff?: boolean }) => bot.chiefOfStaff)).toHaveLength(1);
+    for (const bot of before.bots) expect(after.bots.find((value: { id: string }) => value.id === bot.id))
+      .toEqual(bot);
     const backup = await post("/api/teams/export", { format: "backup" });
     expect(JSON.stringify(backup)).not.toContain("SKILL_FIXTURE_MARKER");
     console.log(JSON.stringify({ ok: true, rollback: true, explicitSelection: true, importedSkillsDisabled: true, messages, logPath: fixture.info.logPath }));

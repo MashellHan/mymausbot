@@ -217,3 +217,40 @@ describe("what the person learns when a provider fails", () => {
     expect(imageSlots({ openrouter: { key: "or-key" }, imageGen: { primary: { provider: "openrouter", model: "or-key" } } }).primary.model).toBe(IMAGE_DEFAULT_MODELS.openrouter);
   });
 });
+
+describe("Custom gateway requests", () => {
+  const CUSTOM = { imageGen: { customUrl: "http://127.0.0.1:4711/v1", customApiKey: "custom-secret", customModel: "vendor/image-model", primary: { provider: "custom" as const } } };
+  const sizes = (fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) => fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).size);
+
+  it.each([500, 502, 504])("does not replay an ambiguous HTTP %i result", async (status) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("{}", { status }));
+    await expect(generateImage(CUSTOM, { prompt: "owl", aspect: "16:9" }, { fetchImpl: fetchMock }))
+      .rejects.toThrow(`Custom image generation failed (HTTP ${status}, model vendor/image-model)`);
+    expect(sizes(fetchMock)).toEqual(["1536x1024"]);
+  });
+
+  it("does not treat a generic size refusal as a proven pre-work rejection", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { message: "size must be auto" } }), { status: 400 }));
+    await expect(generateImage(CUSTOM, { prompt: "owl" }, { fetchImpl: fetchMock }))
+      .rejects.toThrow("Custom image generation failed (HTTP 400, model vendor/image-model)");
+    expect(sizes(fetchMock)).toEqual(["1024x1024"]);
+  });
+
+  it.each([401, 402, 403, 429])("does not retry when the gateway refuses the key or quota (HTTP %i)", async (status) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("{}", { status }));
+    await expect(generateImage(CUSTOM, { prompt: "owl" }, { fetchImpl: fetchMock })).rejects.toThrow(`HTTP ${status}`);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the exact size when it works", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => imageResponse());
+    await generateImage(CUSTOM, { prompt: "owl", aspect: "9:16" }, { fetchImpl: fetchMock });
+    expect(sizes(fetchMock)).toEqual(["1024x1536"]);
+  });
+
+  it("does not replay other providers either", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response("{}", { status: 502 }));
+    await expect(generateImage({ imageGen: { key: "openai-secret" } }, { prompt: "owl" }, { fetchImpl: fetchMock })).rejects.toThrow("HTTP 502");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});

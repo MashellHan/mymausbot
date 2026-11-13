@@ -164,6 +164,7 @@ export const VITEST_SUBSETS = {
       "server/team-small-fixes.e2e.test.ts",
       "server/team-mausbot-followup.e2e.test.ts",
       "server/team-no-ai.e2e.test.ts",
+      "server/team-phone-data.e2e.test.ts",
       "server/team-refused-handoff.e2e.test.ts",
       "server/two-places.e2e.test.ts",
       "scripts/ci-workflow.test.ts",
@@ -176,6 +177,7 @@ export const VITEST_SUBSETS = {
       "server/cloud-team-mausbot-own-chat.e2e.test.ts",
       "server/connector-stayed.e2e.test.ts",
       "server/email/host.test.ts",
+      "server/email/inline-images.test.ts",
       "server/host/outside-lineage.test.ts",
       "server/memory-move.test.ts",
       "server/outside-lineage.e2e.test.ts",
@@ -261,6 +263,7 @@ const SENSITIVE_LINE = /\b(?:auth|authorization|permission|credential|secret|red
 export const SAFE_TEST_PATH = /^(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.test\.[cm]?[jt]sx?$/;
 export const FAST_AFFECTED_LIMIT = 4;
 const RELAY_NATIVE_TEST = /^relay\/test\/.*\.test\.ts$/;
+const BROKER_OWN_TEST = /^cloudflare\/composio-broker\/src\/.*\.test\.ts$/;
 const FAST_EXPENSIVE_TEST = /^(?:scripts\/testing\/.*\.e2e\.test\.ts|server\/browser\/.*\.e2e\.test\.ts|electron\/.*\.electron\.test\.mjs|server\/index\.test\.ts|relay\/test\/.*\.test\.ts)$/;
 const unique = (values) => [...new Set(values)].sort();
 
@@ -289,7 +292,7 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   });
   const affected = unique([...areas.flatMap((area) => area.tests), ...direct]);
   const nativeRelay = changed.some((file) => file.startsWith("relay/"));
-  const vitestAffected = affected.filter((file) => !RELAY_NATIVE_TEST.test(file));
+  const vitestAffected = affected.filter((file) => !RELAY_NATIVE_TEST.test(file) && !BROKER_OWN_TEST.test(file));
   const reasons = [];
   if (forceFull) reasons.push("full main validation after integration");
   if (["ci:full", "qa:repair", "windows"].some((label) => labels.includes(label))) reasons.push("explicit full validation request");
@@ -314,14 +317,16 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   const filesToRun = unique([...policy.core, ...vitestAffected]);
   if (filesToRun.some((file) => !SAFE_TEST_PATH.test(file) || !present(file))) throw new Error("Unsafe or missing selected test");
   const additional = affected.filter((file) => !policy.core.includes(file));
-  const portable = additional.filter((file) => !FAST_EXPENSIVE_TEST.test(file));
+  const portable = additional.filter((file) => !FAST_EXPENSIVE_TEST.test(file) && !BROKER_OWN_TEST.test(file));
   const fastFiles = unique([...policy.core, ...portable.slice(0, FAST_AFFECTED_LIMIT)]);
-  const deferred = additional.filter((file) => !fastFiles.includes(file));
+  const deferred = additional.filter((file) => !fastFiles.includes(file) && !BROKER_OWN_TEST.test(file));
+  const fastChecks = changed.some((file) => file.startsWith("cloudflare/composio-broker/")) || affected.some((file) => BROKER_OWN_TEST.test(file))
+    ? ["build", "control-plane"] : ["build"];
   return {
     version: policy.version, mode, files: changed, areas: baseline.areas, fastAreas: areas.map((area) => area.id),
     holdAreas: !full && mappedArea ? areas.map((area) => area.id) : ["global"],
     full, candidate, admitted, reduced, fast: fastPr, reasons,
-    scope: fastPr ? { areas: baseline.areas, checks: ["build"], files: fastFiles }
+    scope: fastPr ? { areas: baseline.areas, checks: fastChecks, files: fastFiles }
       : full ? FULL_SCOPE : reduced ? { areas: areas.map((area) => area.id), checks: ["build", "core-tests"], files: filesToRun } : baseline,
     edit: docs ? [...VITEST_SUBSETS["docs-tests"].files, ...policy.guards] : vitestAffected,
     ready: docs ? unique([...VITEST_SUBSETS["docs-tests"].files, ...policy.guards]) : unique([...filesToRun, ...policy.guards]),

@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-const compiler = createRequire(import.meta.url).resolve("typescript/bin/tsc");
+const compiler = join(dirname(createRequire(import.meta.url).resolve("typescript/package.json")), "bin", "tsc");
 const configs = { ui: "tsconfig.json", server: "tsconfig.server.json" };
 const args = process.argv.slice(2);
 let projects = Object.keys(configs);

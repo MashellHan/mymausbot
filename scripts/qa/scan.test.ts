@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { holdsFor } from "./contracts.mjs";
+import { ciOutputs } from "../ci-scope.mjs";
+import { expectedJobs, holdsFor } from "./contracts.mjs";
 import { verifyGate } from "./gate.mjs";
 import { drainQueue } from "./queue.mjs";
 import { ciCase, closureCases, queueCases, recordCases, scanProcesses } from "./scan.mjs";
@@ -13,8 +14,9 @@ import { ciCase, closureCases, queueCases, recordCases, scanProcesses } from "./
 const start = Date.parse("2026-11-09T01:00:00Z"), now = start + 400_000;
 const run = { id: 100, run_attempt: 1, event: "pull_request", path: ".github/workflows/ci.yml", repository: { full_name: "example/mausbot" },
   head_sha: "a".repeat(40), status: "completed", created_at: new Date(start).toISOString(), updated_at: new Date(now).toISOString() };
-const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
-  expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+const selected = { ...ciOutputs({ checks: ["build"] }, ["ubuntu-latest"]), fast_pr: true };
+const outputs = { ...selected, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
+  expected_jobs: expectedJobs(selected, false) };
 const jobs = [
   { name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success", started_at: new Date(start + 3_000).toISOString(),
     completed_at: new Date(start + 307_000).toISOString(), steps: [{ name: "Security, data and dispatch core with bounded affected tests", status: "completed", conclusion: "success", started_at: new Date(start + 93_000).toISOString(), completed_at: new Date(start + 307_000).toISOString() }] },

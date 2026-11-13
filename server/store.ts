@@ -4,7 +4,7 @@ import { join } from "node:path"; import { isDeepStrictEqual } from "node:util";
 import { OwnedFile, writeFileAtomic } from "./atomic.ts"; import { saveSoon } from "./save-batch.ts"; import { discardNativeLog } from "./drivers/native.ts";
 import { commitRegistryChange, keptRevocation, saveRegistryFor, touchesPermissions } from "./registry-save.ts";
 import { parseToolScope, toolScopeWidens } from "../shared/tool-scope.ts"; import { grantScopedApps } from "../shared/connector-scopes.ts"; import { dropRetiredApps } from "./retired-apps.ts";
-import { reorderStable } from "../shared/bot-order.ts"; import { trimOutboundPolicy } from "../shared/outbound.ts";
+import { reorderInPlace } from "../shared/bot-order.ts"; import { trimOutboundPolicy } from "../shared/outbound.ts";
 import { botOwner, chiefConflict, chiefScope, ownerEmail } from "../shared/bot-owner.ts"; import { reshowWhenMoved } from "../shared/default-bot.ts";
 import { ensureSections, readSections, changeEmptySection } from "./section-context.ts";
 import type { TeamComputers } from "./team-computers.ts";
@@ -133,8 +133,8 @@ export type StoreChange =
   | { type: "thread.deleted"; threadId: string }
   | { type: "bot"; botId: string }
   | { type: "bot.deleted"; botId: string }
-  /** The fleet was reordered as a whole; the broadcast carries every id in its new place. */
-  | { type: "bots.order" }
+  /** The fleet or the rooms were reordered as a whole; the broadcast carries every id in its new place. */
+  | { type: "bots.order" } | { type: "groups.order" }
   | { type: "group"; groupId: string }
   | { type: "group.deleted"; groupId: string };
 
@@ -709,7 +709,7 @@ export class Store {
 
   private rememberSections(names: (string | undefined)[]) {
     try {
-      if (ensureSections(names)) this.emit({ type: "sections" });
+      if (ensureSections(names).length) this.emit({ type: "sections" });
     } catch (error) {
       if (!this.registeringInitialSections) throw error;
       console.warn(`[teams] Startup could not register team names; saved teams and shared instructions were left unchanged: ${(error as Error).message}`);
@@ -1690,8 +1690,7 @@ export class Store {
       const next = bot.id === id;
       if (Boolean(bot.chiefOfStaff) === next && !(next && bot.hidden)) continue;
       if (next) {
-        bot.chiefOfStaff = true;
-        bot.hidden = false;
+        bot.chiefOfStaff = true; bot.hidden = false;
       } else {
         bot.chiefOfStaff = false;
         delete bot.managedSections;
@@ -1981,18 +1980,18 @@ export class Store {
     return bot.projects;
   }
 
-  /** A stable partial reorder of the fleet (shared/bot-order.ts): the listed bots take, in the order given, the positions
+  /** A stable partial reorder of the fleet, or with reorderGroups of the rooms (shared/bot-order.ts): the listed bots take, in the order given, the positions
    * they already share; every other bot stays put. Empty, repeated or unknown ids change nothing and give null. */
   reorderBots(botIds: string[]): BotRecord[] | null {
-    if (!botIds.length || new Set(botIds).size !== botIds.length) return null;
-    const byId = new Map(this.bots.map((bot) => [bot.id, bot]));
-    if (botIds.some((id) => !byId.has(id))) return null;
-    const next = reorderStable(this.bots, botIds);
-    // Mutate in place: schedulers and other consumers hold this array and its records.
-    this.bots.splice(0, this.bots.length, ...next);
+    if (!reorderInPlace(this.bots, botIds)) return null;
     this.saveBots();
     this.emit({ type: "bots.order" });
     return this.bots;
+  }
+
+  reorderGroups(groupIds: string[]): GroupRecord[] | null {
+    const next = [...this.groups]; if (!reorderInPlace(next, groupIds)) return null; // saved before the live list changes
+    this.saveGroups(next, false); this.groups.splice(0, this.groups.length, ...next); this.emit({ type: "groups.order" }); return this.groups;
   }
 
   deleteProject(botId: string, projectId: string): BotRecord | null {

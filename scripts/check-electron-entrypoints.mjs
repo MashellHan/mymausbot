@@ -1,37 +1,42 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import { createRequire } from "node:module";
+
+// TypeScript 7 does not export its old source parser; the Vite React plugin already depends on Babel.
+const require = createRequire(import.meta.url);
+const { parseSync } = createRequire(require.resolve("@vitejs/plugin-react"))("@babel/core");
+const children = (node) => Object.values(node).flatMap((value) => Array.isArray(value) ? value : [value])
+  .filter((value) => value && typeof value === "object" && typeof value.type === "string");
+const functionTypes = new Set(["FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression", "ObjectMethod", "ClassMethod", "ClassPrivateMethod"]);
 
 export function electronReadyAwaits(source, filename = "entry.mjs") {
-  const tree = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const tree = parseSync(source, { filename, babelrc: false, configFile: false, parserOpts: { sourceType: "module" } });
   const apps = new Set();
   const modules = new Set();
-  for (const statement of tree.statements) {
-    if (!ts.isImportDeclaration(statement) || statement.moduleSpecifier.text !== "electron") continue;
-    if (statement.importClause?.name) modules.add(statement.importClause.name.text);
-    const bindings = statement.importClause?.namedBindings;
-    if (bindings && ts.isNamespaceImport(bindings)) modules.add(bindings.name.text);
-    if (bindings && ts.isNamedImports(bindings)) {
-      for (const binding of bindings.elements) if ((binding.propertyName ?? binding.name).text === "app") apps.add(binding.name.text);
+  for (const statement of tree.program.body) {
+    if (statement.type !== "ImportDeclaration" || statement.source.value !== "electron") continue;
+    for (const binding of statement.specifiers) {
+      if (binding.type === "ImportDefaultSpecifier" || binding.type === "ImportNamespaceSpecifier") modules.add(binding.local.name);
+      if (binding.type === "ImportSpecifier" && (binding.imported.name ?? binding.imported.value) === "app") apps.add(binding.local.name);
     }
   }
-  const isApp = (node) => (ts.isIdentifier(node) && apps.has(node.text))
-    || (ts.isPropertyAccessExpression(node) && node.name.text === "app"
-      && ts.isIdentifier(node.expression) && modules.has(node.expression.text));
-  const readyCall = (node) => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
-    && isApp(node.expression.expression) && node.expression.name.text === "whenReady";
-  const containsReady = (node) => readyCall(node) || Boolean(ts.forEachChild(node, containsReady));
+  const isName = (node, name) => node?.type === "Identifier" && node.name === name;
+  const isApp = (node) => (node?.type === "Identifier" && apps.has(node.name))
+    || (node?.type === "MemberExpression" && !node.computed && isName(node.property, "app")
+      && node.object.type === "Identifier" && modules.has(node.object.name));
+  const readyCall = (node) => node?.type === "CallExpression" && node.callee.type === "MemberExpression"
+    && !node.callee.computed && isApp(node.callee.object) && isName(node.callee.property, "whenReady");
+  const containsReady = (node) => readyCall(node) || children(node).some(containsReady);
   const errors = [];
   const visit = (node) => {
-    if (ts.isFunctionLike(node)) return;
-    if (ts.isAwaitExpression(node) && containsReady(node.expression)) {
-      const { line } = tree.getLineAndCharacterOfPosition(node.getStart(tree));
-      errors.push(`${filename}:${line + 1}: await app.whenReady() inside an async function invoked without a top-level await`);
+    if (functionTypes.has(node.type)) return;
+    if (node.type === "AwaitExpression" && containsReady(node.argument)) {
+      errors.push(`${filename}:${node.loc.start.line}: await app.whenReady() inside an async function invoked without a top-level await`);
     }
-    ts.forEachChild(node, visit);
+    for (const child of children(node)) visit(child);
   };
-  visit(tree);
+  visit(tree.program);
   return errors;
 }
 

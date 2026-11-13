@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
-import { holdsFor, inspectJobs, preflightJob } from "./contracts.mjs";
+import { expectedJobs, holdsFor, inspectJobs, preflightJob } from "./contracts.mjs";
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -20,8 +21,16 @@ export async function verifyGate(outputs, { api = github, runId = process.env.GI
   const expected = outputs.expected_jobs;
   if (!Array.isArray(areas) || !areas.length || !Array.isArray(expected) || !expected.some((item) => item.id === "static")
     || !Array.isArray(outputs.required_jobs) || outputs.required_jobs.some((id) => !expected.some((item) => item.id === id))) throw new Error("Missing required validation plan");
-  if (outputs.fast_pr && (!Number.isFinite(createdAt) || outputs.full_required || outputs.reduced || outputs.required_jobs.length
-    || expected.length !== 1 || expected[0].fast !== true || expected[0].name !== "typecheck + lint")) throw new Error("Invalid fast PR validation plan");
+  if (outputs.fast_pr) {
+    const jobs = outputs.jobs;
+    const selected = Array.isArray(jobs) && (jobs.length === 0 || isDeepStrictEqual(jobs, ["control-plane"]));
+    if (outputs.fast_pr !== true || !Number.isFinite(createdAt) || outputs.full_required !== false || outputs.reduced !== false
+      || outputs.build !== true || !selected || outputs.boat_static || outputs.linux_lanes
+      || !isDeepStrictEqual(outputs.required_jobs, jobs)
+      || !isDeepStrictEqual(expected, expectedJobs(outputs, false, "typecheck + lint"))) {
+      throw new Error("Invalid fast PR validation plan");
+    }
+  }
   const checkControls = async () => {
     let repairs = [];
     if (outputs.pr_number) {

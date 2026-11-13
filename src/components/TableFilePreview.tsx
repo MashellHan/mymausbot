@@ -5,8 +5,10 @@ import { RichTable } from "./RichTable";
 import { TABLE_FILE_MAX_BYTES, type TextTable } from "@/lib/table-data";
 import { t } from "@/lib/i18n";
 
-/** A preview limit, not a download limit: chunked responses are bounded too. */
-export async function readTableResponse(response: Response, signal: AbortSignal, maxBytes = TABLE_FILE_MAX_BYTES): Promise<string> {
+/** A preview limit, not a download limit: chunked responses are bounded too. Text that is not UTF-8 is refused, unless
+ * `fallback` names a single-byte encoding to read it in instead; a NUL byte (UTF-16, binary) is refused even
+ * then, since such an encoding would only show it as garbage. */
+export async function readTableResponse(response: Response, signal: AbortSignal, maxBytes = TABLE_FILE_MAX_BYTES, fallback?: string): Promise<string> {
   if (Number(response.headers.get("content-length")) > maxBytes) {
     await response.body?.cancel().catch(() => {}); throw new Error("size"); // A body that already errored must not hide "size".
   }
@@ -17,6 +19,7 @@ export async function readTableResponse(response: Response, signal: AbortSignal,
     try { return decoder.decode(value, { stream }); }
     catch { throw new Error("format"); }
   };
+  const parts: Uint8Array[] = [];
   let size = 0, text = "";
   try {
     while (true) {
@@ -25,10 +28,16 @@ export async function readTableResponse(response: Response, signal: AbortSignal,
       if (part.done) break;
       size += part.value.byteLength;
       if (size > maxBytes) throw new Error("size");
-      text += decode(part.value, true);
+      if (fallback) parts.push(part.value); else text += decode(part.value, true);
     }
-    return text + decode();
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  if (!fallback) return text + decode();
+  const bytes = new Uint8Array(await new Blob(parts as BlobPart[]).arrayBuffer());
+  // NUL is valid UTF-8, so UTF-16 without a byte order mark would pass the UTF-8 check: look for it first.
+  if (fallback && bytes.includes(0)) throw new Error("encoding");
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch {
+    return new TextDecoder(fallback).decode(bytes);
+  }
 }
 
 export function TableFileContent({ path, name, message, delimiter }: {

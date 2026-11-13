@@ -39,6 +39,7 @@ export const brandSchema = z
 export type Brand = z.infer<typeof brandSchema>;
 
 export const DEFAULT_BRAND: Brand = { name: "mymausbot" };
+export const PRODUCT_NAME = "mymausbot";
 
 export interface BrandStatus {
   brand: Brand;
@@ -82,4 +83,9 @@ export function loadBrand(options: { file?: string; isEntitled?: (feature: strin
 export function describeBrand(status: BrandStatus): string {
   if (status.source === "file") return `brand: ${status.brand.name} (from ${status.file})`;
   return `brand: default${status.notice ? ` (${status.notice})` : ""}`;
+}
+
+/** The displayed product name uses a licensed brand file or the fork default. */
+export function productName(status: BrandStatus = loadBrand()): string {
+  return status.source === "file" ? status.brand.name : PRODUCT_NAME;
 }

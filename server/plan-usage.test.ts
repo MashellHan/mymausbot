@@ -653,22 +653,37 @@ describe("plan usage fetcher", () => {
     expect(report.providers.map((row) => row.id)).toEqual(["codex"]);
   });
 
-  it("never reads a Claude Code login, on any Claude instance, and still reads the other engines", async () => {
+  it("keeps every configured Claude login unread while reading other accounts", async () => {
     const accounts = planAccountsFromInstances({
       claude: { driver: "claudeAgent" },
       work: { driver: "claudeAgent", displayName: "Work", config: { configDir: "/tmp/claude-work" } },
+      quiet: { driver: "claudeAgent", displayName: "Quiet", config: { usageMeter: false } },
       codex: { driver: "codex" },
     });
     // Still listed, so a refused turn's hold names the account and fails over.
     expect(accounts).toEqual([
       { id: "claude", name: "Claude", driver: "claude", environment: {}, noUsage: true },
       { id: "work", name: "Work", driver: "claude", environment: {}, configDir: "/tmp/claude-work", noUsage: true },
+      { id: "quiet", name: "Quiet", driver: "claude", environment: {}, noUsage: true },
       { id: "codex", name: "Codex", driver: "codex", environment: {} },
     ]);
     const read = vi.fn((_account: PlanAccount) => ({ token: SECRET, accountId: null, expired: false }));
     const fetchImpl = vi.fn<PlanFetch>(async () => jsonResponse({ rate_limit: { primary_window: { used_percent: 10 } } }));
     const report = await fetchPlanUsage(accounts, { fetch: fetchImpl, now: () => NOW, credentials: { read } });
     expect(read.mock.calls.map(([account]) => account.id)).toEqual(["codex"]);
-    expect(report.providers.map((row) => row.id)).toEqual(["codex"]);
+    expect(report.providers.map((row) => [row.id, row.ok])).toEqual([["codex", true]]);
+    expect(JSON.stringify(report)).not.toContain(SECRET);
+  });
+
+  it("never serves a cached report across a Codex auth mode change", async () => {
+    const read = vi.fn((_account: PlanAccount) => ({ token: SECRET, accountId: null, expired: false }));
+    const fetchImpl = vi.fn<PlanFetch>(async () => jsonResponse({}));
+    const load = (config: Record<string, unknown>) => loadPlanUsage({
+      accounts: planAccountsFromInstances({ codex: { driver: "codex", config } }),
+      fetch: fetchImpl, now: NOW, credentials: { read },
+    });
+    expect((await load({})).providers.map((row) => row.id)).toEqual(["codex"]);
+    expect((await load({ authMode: "chatgpt-plan" })).providers).toEqual([]);
+    expect((await load({})).providers.map((row) => row.id)).toEqual(["codex"]);
   });
 });

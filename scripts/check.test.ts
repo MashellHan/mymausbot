@@ -63,6 +63,31 @@ describe("shared local and CI check policy", () => {
     expect(selected.deferred).toEqual(expensive.sort());
   });
 
+  it("runs broker tests in their own lane without counting them as root Vitest coverage", () => {
+    const broker = "cloudflare/composio-broker/src/app-events.test.ts";
+    const portable = "server/forwarded-json.e2e.test.ts";
+    const selected = plan([broker, portable], { policy, fastPr: true });
+    expect(selected.fastFiles).toEqual([...policy.core, portable].sort());
+    expect(selected.deferred).toEqual([]);
+    for (const files of [selected.edit, selected.ready, selected.core]) expect(files).not.toContain(broker);
+    expect(selected.scope.checks).toEqual(["build", "control-plane"]);
+    expect(ciOutputs(selected.scope, ["ubuntu-latest"]).jobs).toEqual(["control-plane"]);
+    expect(plan(["cloudflare/composio-broker/src/triggers.ts"], { policy, fastPr: true }).scope.checks)
+      .toEqual(["build", "control-plane"]);
+    const broad = plan([broker, portable, "unknown/runtime.conf"], { policy, fastPr: true });
+    expect(broad.areas).toEqual(["everything"]);
+    expect(broad.scope.checks).toEqual(["build", "control-plane"]);
+    expect(broad.fastFiles).toEqual([...policy.core, portable].sort());
+    for (const extra of ["package.json", "unknown/runtime.conf"]) {
+      const sourceOnly = plan(["cloudflare/composio-broker/src/triggers.ts", extra], { policy, fastPr: true });
+      expect(sourceOnly.areas).toEqual(["everything"]);
+      expect(sourceOnly.scope.checks).toEqual(["build", "control-plane"]);
+      expect(sourceOnly.fastFiles).toEqual([...policy.core].sort());
+      expect(ciOutputs(sourceOnly.scope, ["ubuntu-latest"]).jobs).toEqual(["control-plane"]);
+      for (const files of [sourceOnly.edit, sourceOnly.ready, sourceOnly.core]) expect(files).not.toContain(broker);
+    }
+  });
+
   it("routes Relay's node:test suite away from Vitest while reporting fast deferral", () => {
     const file = "relay/test/fuzz.test.ts";
     const selected = plan([file], { policy, fastPr: true });

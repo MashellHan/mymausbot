@@ -324,7 +324,7 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.copies().filter((name) => name !== EARLIER_COPY)).toHaveLength(2);
   });
 
-  it("never tries a stable image again after it rolled back from it, until a person runs update.sh or another is out", async () => {
+  it("keeps a rolled-back stable image blocked until a person runs update.sh", async () => {
     const failing = { ...NEW, behaviour: "crashes", lastWords: "Error: cannot read the data" };
     const box = await install({ stable: failing });
     box.ask({ OMB_RUNNER_GAP_S: "0" });
@@ -343,7 +343,10 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.blocked()).toBe(true);
     box.personRun();
     expect(box.blocked()).toBe(false);
-    // Another stable image is tried at once.
+  });
+
+  it("tries a different stable image after the previous one rolled back", async () => {
+    const failing = { ...NEW, behaviour: "crashes", lastWords: "Error: cannot read the data" };
     const fresh = await install({ stable: failing });
     fresh.ask({ OMB_RUNNER_GAP_S: "0" });
     fresh.setStable(NEXT);
@@ -469,7 +472,7 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     expect(box.fakeState().containers.omb.image).toBe(OLD.id);
   });
 
-  it("lets runs that change nothing pass freely, and keeps updates that change something four minutes apart", async () => {
+  it("lets runs that change nothing pass freely without delaying a later update", async () => {
     const box = await install({ stable: OLD });
     // A hostile requester's runs while there is nothing to update to: they stop nothing, and use up no gap.
     for (let at = 1; at <= 3; at += 1) {
@@ -481,12 +484,28 @@ describe.skipIf(!posix)("deploy/update-runner.sh", () => {
     box.ask();
     expect(box.last()).toMatchObject({ run: 4, result: "updated" });
     expect(box.fakeState().containers.omb.image).toBe(NEW.id);
+  });
+
+  it("keeps updates that change something four minutes apart", async () => {
+    const box = await install({ stable: NEW });
+    box.ask();
+    expect(box.last()).toMatchObject({ run: 1, result: "updated" });
+    expect(box.fakeState().containers.omb.image).toBe(NEW.id);
     // The run that changed something counts: the next one with something to change waits for the gap.
     box.setStable(NEXT);
     box.ask();
-    expect(box.last()).toMatchObject({ run: 5, result: "too-soon" });
+    expect(box.last()).toMatchObject({ run: 2, result: "too-soon" });
     expect(box.fakeState().containers.omb.image).toBe(NEW.id);
-    box.ask({ OMB_RUNNER_GAP_S: "0" });
+    // Four minutes by the runner's own record, not by waiting: that update dated 230 seconds back still waits, 250 back
+    // goes ahead (the seconds either side leave room for the clock to tick between here and the run).
+    const ranAgo = (seconds: number) => writeFileSync(join(box.state, "status", "last"), box.lastText().replace(/^ran=\d+$/m, `ran=${Math.floor(Date.now() / 1000) - seconds}`));
+    ranAgo(230);
+    box.ask();
+    expect(box.last()).toMatchObject({ run: 3, result: "too-soon" });
+    expect(box.fakeState().containers.omb.image).toBe(NEW.id);
+    ranAgo(250);
+    box.ask();
+    expect(box.last()).toMatchObject({ run: 4, result: "updated" });
     expect(box.fakeState().containers.omb.image).toBe(NEXT.id);
   });
 

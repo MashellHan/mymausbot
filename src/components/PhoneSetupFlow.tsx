@@ -154,7 +154,7 @@ export interface PhoneSetupController {
   refreshCode: () => void;
   renewPairing: () => Promise<void>;
   finish: () => void;
-  act: (call: (companion: CompanionBridge) => Promise<CompanionState>) => Promise<CompanionState | void>;
+  act: (call: (companion: CompanionBridge) => Promise<CompanionState>) => Promise<CompanionState | null>;
   accountAct: (call: (remote: AccountBridge) => Promise<CompanionAccountState>) => Promise<void>;
 }
 
@@ -242,7 +242,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
     const companion = companionBridge();
     if (!companion) {
       setError(t("phone.error.desktopOnly"));
-      return;
+      return null;
     }
     setActionBusy(true);
     setError(null);
@@ -260,6 +260,7 @@ export function usePhoneSetupController(profileEmail = ""): PhoneSetupController
           t("phone.error.remoteUpdate"),
         ),
       );
+      return null;
     } finally {
       if (mounted.current) setActionBusy(false);
     }
