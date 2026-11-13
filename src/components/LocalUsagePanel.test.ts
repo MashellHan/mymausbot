@@ -9,14 +9,14 @@ import { setLocale } from "@/lib/i18n";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
 import { primaryUsageFixture } from "../../scripts/testing/primary-usage-fixture";
 
-const calls = vi.hoisted(() => ({ api: vi.fn() }));
+const calls = vi.hoisted(() => ({ api: vi.fn(), visible: true }));
 vi.mock("@/state/store", () => ({
   api: calls.api,
   ApiError: class ApiError extends Error {
     constructor(message: string, readonly status: number) { super(message); }
   },
 }));
-vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => true }));
+vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => calls.visible }));
 
 const { LocalUsagePanel, LocalUsageView } = await import("./LocalUsagePanel");
 const { ApiError } = await import("@/state/store");
@@ -99,6 +99,7 @@ beforeEach(() => {
   root = createRoot(host);
   setLocale("en");
   calls.api.mockReset();
+  calls.visible = true;
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -533,18 +534,42 @@ describe("local Usage panel", () => {
     expect([...host.querySelector<HTMLElement>("section")!.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["0", "0", "0"]);
   });
 
-  it("refreshes the local summary every five minutes and keeps the last good response on failure", async () => {
+  it("refreshes the local summary every five seconds and keeps the last good response on failure", async () => {
     vi.useFakeTimers();
     calls.api.mockResolvedValueOnce(withPrimaryFixture(withGithubUsageFixture(sample))).mockRejectedValueOnce(new Error("offline"));
     await render(null, true);
     expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/usage", expect.objectContaining({ background: true, signal: expect.any(AbortSignal) }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000 - 1); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
     expect(calls.api).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(calls.api).toHaveBeenCalledTimes(2);
     await showSummaryInfo();
     expect(infoText()).toContain("Showing the last captured snapshot");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
+  });
+
+  it("shows new primary contributions with older tokens and reads immediately on visibility return", async () => {
+    vi.useFakeTimers();
+    const local = withGithubUsageFixture(sample);
+    const first = { ...local, contributions: primaryUsageFixture("2026-11-03") };
+    const next = { ...local, contributions: primaryUsageFixture("2026-11-03", false, "2026-11-03T08:31:00Z",
+      { github: { prs: 4, commits: 6 }, ado: { prs: 2, commits: 5 } }) };
+    calls.api.mockResolvedValueOnce(first).mockResolvedValue(next);
+    const values = () => [...host.querySelectorAll("section dd > span:first-child")].slice(0, 3).map((value) => value.textContent);
+    await renderRaw(null, true);
+    expect(values()).toEqual(["5", "9", "150"]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
+    expect(calls.api).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(values()).toEqual(["6", "11", "150"]);
+    calls.visible = false;
+    await renderRaw(null, true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(calls.api).toHaveBeenCalledTimes(2);
+    calls.visible = true;
+    await renderRaw(null, true);
+    expect(calls.api).toHaveBeenCalledTimes(3);
+    expect(calls.api.mock.calls.every(([path]) => path === "/api/local-dashboard/usage")).toBe(true);
   });
 
   it("keeps daily details collapsed initially and changes repository windows with keyboard tabs", async () => {
@@ -588,7 +613,7 @@ describe("local Usage panel", () => {
     vi.useFakeTimers();
     calls.api.mockResolvedValueOnce(withGithubUsageFixture(sample)).mockRejectedValueOnce(new ApiError("forbidden", status));
     await render(null, true);
-    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(text()).toContain("Activity summary unavailable");
     expect(text()).not.toContain("2026-10-05 – 2026-11-03");
   });
@@ -616,7 +641,7 @@ describe("local Usage panel", () => {
     calls.api.mockResolvedValueOnce(withPrimaryFixture(sample)).mockResolvedValueOnce(sample);
     await renderRaw(null, true);
     expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("1");
-    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(text()).toContain("Contribution sources are unavailable");
     expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("Unavailable");
     expect([...host.querySelectorAll("section dd")][2]?.firstElementChild?.textContent).toBe("150");
@@ -630,9 +655,9 @@ describe("local Usage panel", () => {
     await renderRaw(null, true);
     expect(text()).toContain("Contribution sources are unavailable");
     expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("Unavailable");
-    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(text()).toContain("Contribution sources are unavailable");
-    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(text()).toContain("Activity summary unavailable");
     expect(host.querySelectorAll("section dd")).toHaveLength(0);
   });

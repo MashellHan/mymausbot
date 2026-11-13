@@ -83,7 +83,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("installed native Mini App dashboards", () => {
   it("reads team metadata and folded member activity only through the app-scoped revision", async () => {
@@ -136,6 +136,32 @@ describe("installed native Mini App dashboards", () => {
     expect(host.querySelector('[data-usage-weekend-tick]')).toBeNull();
     expect(calls.api.mock.calls[0]![0]).toBe(`/api/mini-apps/${appId}/dashboard`);
     expect(JSON.parse(calls.api.mock.calls[0]![1].body)).toEqual({ resource: "usage", expectedRevision: 3 });
+  });
+
+  it("refreshes visible contributions in five seconds without waiting for older tokens or changing its app scope", async () => {
+    vi.useFakeTimers();
+    const local = withGithubUsageFixture(usage);
+    const first = { ...local, contributions: primaryUsageFixture("2026-11-07") };
+    const next = { ...local, contributions: primaryUsageFixture("2026-11-07", false, "2026-11-07T08:31:00Z",
+      { github: { prs: 4, commits: 6 }, ado: { prs: 2, commits: 5 } }) };
+    calls.api.mockResolvedValueOnce({ appId, revision: 3, resource: "usage", snapshot: first })
+      .mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot: next });
+    const values = () => [...host.querySelectorAll("section dd > span:first-child")].slice(0, 3).map((value) => value.textContent);
+    await render("usage");
+    expect(values()).toEqual(["5", "9", "100"]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
+    expect(calls.api).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(values()).toEqual(["6", "11", "100"]);
+    calls.visible = false;
+    await render("usage");
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(calls.api).toHaveBeenCalledTimes(2);
+    calls.visible = true;
+    await render("usage");
+    expect(calls.api).toHaveBeenCalledTimes(3);
+    expect(calls.api.mock.calls.every(([path, options]) => path === `/api/mini-apps/${appId}/dashboard`
+      && options.method === "POST" && JSON.parse(options.body).expectedRevision === 3)).toBe(true);
   });
 
   it("aborts an in-flight read when hidden or when its installed revision changes", async () => {

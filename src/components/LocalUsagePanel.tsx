@@ -13,7 +13,7 @@ import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
 
 const ROUTE = "/api/local-dashboard/usage";
-const REFRESH_MS = 5 * 60 * 1_000;
+const REFRESH_MS = 5_000;
 const unavailable: LocalUsageResponse = {
   status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
   prSourceCoverage: null, prCoverage: null, windows: null, trend: [],
@@ -302,6 +302,7 @@ export function LocalUsagePanel() {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
+      const started = Date.now();
       try {
         const next = await api<LocalUsageResponse>(ROUTE, { background: true, signal: controller.signal, timeoutMs: 5_000 });
         if (active) setSnapshot((previous) => retainUsageSnapshot(previous, next));
@@ -309,7 +310,7 @@ export function LocalUsagePanel() {
         if (active) setSnapshot((previous) => error instanceof ApiError && (error.status === 401 || error.status === 403) ? unavailable
           : retainUsageSnapshot(previous, unavailable, true));
       } finally {
-        if (active) timer = setTimeout(refresh, REFRESH_MS);
+        if (active) timer = setTimeout(refresh, Math.max(0, REFRESH_MS - (Date.now() - started)));
       }
     };
     void refresh();

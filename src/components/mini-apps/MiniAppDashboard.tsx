@@ -9,7 +9,7 @@ import { LocalUsageView } from "../LocalUsagePanel";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 
 const TEAM_REFRESH_MS = 2_000;
-const USAGE_REFRESH_MS = 5 * 60_000;
+const USAGE_REFRESH_MS = 5_000;
 const unavailableTeams: LocalAgentTeamsResponse = { status: "unavailable", updatedAt: null, teamCount: null, teams: [] };
 const unavailableUsage: LocalUsageResponse = {
   status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
@@ -72,7 +72,7 @@ export function MiniAppDashboard({ document, state, refreshKey, onRevoked, onCha
         if (resource === "teams") setTeams((previous) => previous?.updatedAt != null ? { ...previous, status: "stale" } : unavailableTeams);
         else setUsage((previous) => retainUsageSnapshot(previous, unavailableUsage));
       } finally {
-        if (active) timer = setTimeout(refresh, resource === "teams" ? Math.max(0, TEAM_REFRESH_MS - (Date.now() - started)) : USAGE_REFRESH_MS);
+        if (active) timer = setTimeout(refresh, Math.max(0, (resource === "teams" ? TEAM_REFRESH_MS : USAGE_REFRESH_MS) - (Date.now() - started)));
       }
     };
     void refresh();
