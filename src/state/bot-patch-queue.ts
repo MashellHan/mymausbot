@@ -52,6 +52,8 @@ export type BotUpdatePatch = Partial<
   phoneApps?: Bot["phoneApps"] | null;
   /** null: talks to every bot again. */
   peers?: string[] | null;
+  /** null demotes a default bot to a regular one; the server clears the mark. Body only: bot state drops the field. */
+  defaultBot?: Bot["defaultBot"] | null;
   /** The server's proof the local-auto warning was shown: wire-only, never folded into bot state. */
   acknowledgeLocalAuto?: boolean;
   applyToAllThreads?: boolean;
@@ -64,7 +66,7 @@ export type BotUpdatePatch = Partial<
 
 export type BotStatePatch = Omit<
   BotUpdatePatch,
-  "computer" | "connectorTools" | "connectorScopes" | "phoneApps" | "peers" | "acknowledgeLocalAuto" | "applyToAllThreads" | "keepThreadModels" | "threadId" | "mainThreadChoice"
+  "computer" | "connectorTools" | "connectorScopes" | "phoneApps" | "peers" | "defaultBot" | "acknowledgeLocalAuto" | "applyToAllThreads" | "keepThreadModels" | "threadId" | "mainThreadChoice"
 > & {
   mainThreadId?: string;
   peers?: string[];
@@ -72,6 +74,7 @@ export type BotStatePatch = Omit<
   connectorTools?: Bot["connectorTools"];
   connectorScopes?: Bot["connectorScopes"];
   phoneApps?: Bot["phoneApps"];
+  defaultBot?: Bot["defaultBot"];
 };
 
 interface BotPatchQueueEntry {
@@ -131,11 +134,14 @@ const stateOverlay = (patch: BotUpdatePatch): BotStatePatch => {
     connectorScopes,
     phoneApps,
     peers,
+    defaultBot,
     ...fields
   } = patch;
   const normalized: BotStatePatch = { ...fields };
   if (computer === null) normalized.computer = undefined;
   else if (computer !== undefined) normalized.computer = computer;
+  if (defaultBot === null) normalized.defaultBot = undefined;
+  else if (defaultBot !== undefined) normalized.defaultBot = defaultBot;
   if (connectorTools === null) normalized.connectorTools = undefined;
   else if (connectorTools !== undefined) normalized.connectorTools = connectorTools;
   if (connectorScopes === null) normalized.connectorScopes = undefined;
