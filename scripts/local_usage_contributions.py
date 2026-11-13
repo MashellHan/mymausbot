@@ -7,6 +7,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 import urllib.parse
@@ -221,6 +222,15 @@ def snapshot(value, legacy=False):
     github, ado = envelope(value.get("github"), "github", legacy), envelope(value.get("ado"), "ado", legacy)
     if github["operationWindow"] != ado["operationWindow"]:
         raise ValueError("Contribution source windows do not align")
+    refresh_state = value.get("refreshState")
+    if refresh_state is not None:
+        state = obj(refresh_state)
+        if (state.get("version") != 1 or not isinstance(state.get("scopeHash"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", state["scopeHash"])):
+            raise ValueError("Invalid contribution refresh state")
+        finalized = state.get("finalizedThroughDay")
+        if finalized is not None and day(finalized) >= day(github["operationWindow"]["endDay"]):
+            raise ValueError("Contribution finalization cannot include the current day")
     return value
 
 

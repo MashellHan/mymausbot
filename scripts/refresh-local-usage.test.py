@@ -101,6 +101,34 @@ class TokenHistoryTests(unittest.TestCase):
                     self.assertEqual(retained[row["day"]], {**row, "tokenStatus": "partial"})
 
 
+class RefreshWindowTests(unittest.TestCase):
+    def test_midnight_and_missed_days_use_the_earliest_unpaid_day_across_restart(self):
+        scope = "a" * 64
+        previous = {"refreshState": {"version": 1, "scopeHash": scope,
+                                     "finalizedThroughDay": "2026-11-09"}}
+        for clock, expected in (("2026-11-12T16:00:00+00:00", "2026-11-10"),
+                                ("2026-11-12T16:29:59+00:00", "2026-11-10"),
+                                ("2026-11-12T16:30:00+00:00", "2026-11-10")):
+            at = dt.datetime.fromisoformat(clock)
+            self.assertEqual(usage.refresh_window(at, previous, scope)[0].isoformat(), expected)
+        at = dt.datetime.fromisoformat("2026-11-12T16:29:59+00:00")
+        partial = {"github": {"asOfAt": at.isoformat().replace("+00:00", "Z"), "sources": [{"status": "partial",
+            "coverage": {"identityVerified": True, "paginationComplete": False}}]},
+            "ado": {"asOfAt": at.isoformat().replace("+00:00", "Z"), "sources": [{"status": "ready",
+                "coverage": {"identityVerified": True, "paginationComplete": True}}]}}
+        self.assertEqual(usage.finalized_day(partial, at, dt.date(2026, 11, 10), dt.date(2026, 11, 9)),
+                         dt.date(2026, 11, 9))
+        partial["github"]["sources"][0]["coverage"]["paginationComplete"] = True
+        self.assertEqual(usage.finalized_day(partial, at, dt.date(2026, 11, 10), dt.date(2026, 11, 9)),
+                         dt.date(2026, 11, 12))
+        settled = {"refreshState": {"version": 1, "scopeHash": scope,
+                                    "finalizedThroughDay": "2026-11-12"}}
+        self.assertEqual(usage.refresh_window(dt.datetime.fromisoformat("2026-11-12T16:30:00+00:00"),
+                                               settled, scope)[0].isoformat(), "2026-11-13")
+        self.assertEqual(usage.refresh_window(dt.datetime.fromisoformat("2026-11-12T16:29:59+00:00"),
+                                               settled, scope)[0].isoformat(), "2026-11-12")
+
+
 class MemoryAuthTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

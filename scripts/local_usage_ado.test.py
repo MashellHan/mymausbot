@@ -57,6 +57,8 @@ class Api:
             commit(OTHER, "2026-11-10T00:01:00Z", "other@example.test")],
             }
         self.details = {row["commitId"]: row for rows in self.histories.values() for row in rows}
+        self.list_details_complete = False
+        self.enforce_query_window = False
 
     def __call__(self, args, timeout):
         self.calls.append(args)
@@ -86,8 +88,12 @@ class Api:
         elif path.endswith("/_apis/git/pullrequests"):
             assert query["searchCriteria.status"] == ["all"]
             assert query["searchCriteria.creatorId"] == [OWNER]
+            candidates = self.prs
+            if self.enforce_query_window and "searchCriteria.minTime" in query:
+                candidates = [row for row in candidates
+                    if query["searchCriteria.minTime"][0] <= row["creationDate"] <= query["searchCriteria.maxTime"][0]]
             start = int(query["$skip"][0])
-            page = self.prs[start:start + int(query["$top"][0])]
+            page = candidates[start:start + int(query["$top"][0])]
             result = {"value": page, "count": len(page)}
         elif path.endswith("/refs"):
             repo = path.split("/")[-2]
@@ -97,8 +103,16 @@ class Api:
         elif path.endswith("/commits"):
             head = query["searchCriteria.itemVersion.version"][0]
             assert query["searchCriteria.itemVersion.versionType"] == ["commit"]
+            candidates = self.histories[head]
+            if self.enforce_query_window and "searchCriteria.fromDate" in query:
+                candidates = [row for row in candidates
+                    if query["searchCriteria.fromDate"][0] <= row["committer"]["date"] <=
+                       query["searchCriteria.toDate"][0]]
             start = int(query["$skip"][0])
-            page = self.histories[head][start:start + int(query["$top"][0])]
+            page = candidates[start:start + int(query["$top"][0])]
+            if not self.list_details_complete:
+                page = [{key: value for key, value in row.items() if key not in ("comment", "parents")}
+                        for row in page]
             result = {"value": page, "count": len(page)}
         elif "/commits/" in path:
             result = self.details[path.split("/")[-1]]
@@ -107,15 +121,68 @@ class Api:
         return json.dumps(result)
 
 
-def collect(api, *, previous=None, at=AT, config=CONFIG):
-    return ado.collect(config, api, lambda remote, cfg: "work", at=at, previous=previous)
+def collect(api, *, previous=None, at=AT, config=CONFIG, focus_start=None):
+    return ado.collect(config, api, lambda remote, cfg: "work", at=at, previous=previous,
+                       focus_start=focus_start)
 
 
 class AdoTests(unittest.TestCase):
+    def test_warm_focus_bounds_pr_and_commit_queries_and_keeps_coauthor_author_day(self):
+        api = Api()
+        api.enforce_query_window = True
+        previous = collect(api)
+        api.calls.clear()
+        new_head = "d" * 40
+        imported = commit(new_head, "2026-11-10T15:59:59Z", "other@example.test",
+                          comment="Co-authored-by: Owner <alias@example.test>")
+        imported["committer"]["date"] = "2026-11-10T16:01:00Z"
+        api.histories[new_head] = [imported, *api.histories[HEAD]]
+        api.details[new_head] = imported
+        api.heads[REPO] = new_head
+        api.list_details_complete = True
+        at = dt.datetime.fromisoformat("2026-11-11T00:30:00+00:00")
+        current = collect(api, previous=previous, at=at, focus_start="2026-11-11")
+        urls = [urllib.parse.urlsplit(call[5]) for call in api.calls]
+        prs = [urllib.parse.parse_qs(url.query) for url in urls if url.path.endswith("/pullrequests")]
+        commits = [urllib.parse.parse_qs(url.query) for url in urls if url.path.endswith("/commits")]
+        self.assertTrue(prs)
+        self.assertEqual(prs[0]["searchCriteria.minTime"], ["2026-11-10T16:00:00Z"])
+        self.assertEqual(prs[0]["searchCriteria.maxTime"], ["2026-11-11T00:30:00Z"])
+        self.assertEqual(prs[0]["searchCriteria.queryTimeRangeType"], ["created"])
+        self.assertTrue(any(query.get("searchCriteria.fromDate") == ["2026-11-10T16:00:00Z"]
+                            and query.get("searchCriteria.toDate") == ["2026-11-11T00:30:00Z"]
+                            for query in commits))
+        self.assertFalse(any("/commits/" in url.path for url in urls))
+        days = {row["day"]: row for row in current["sources"][0]["days"]}
+        self.assertGreaterEqual(days["2026-11-10"]["knownCommits"], 1)
+        self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
+
+    def test_failed_focused_pr_page_restart_keeps_older_baseline(self):
+        api = Api()
+        api.enforce_query_window = True
+        old = pr(9000, "2026-11-09T12:00:00Z")
+        api.prs = [old]
+        previous = collect(api)
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        current = [pr(number, "2026-11-10T00:01:00Z") for number in range(1, 101)]
+        api.prs = [*current, pr(50, "2026-11-10T00:01:00Z"), old]
+        failed = collect(api, previous=previous, at=at, focus_start="2026-11-10")
+        work = failed["state"]["projects"]["example/project"]["work"]
+        self.assertEqual([item["id"] for item in work["prs"]], [9000])
+        self.assertFalse(work["prComplete"])
+        api.prs = [*current, pr(101, "2026-11-10T00:01:00Z"), old]
+        recovered = collect(api, previous=failed, at=at + dt.timedelta(minutes=5),
+                            focus_start="2026-11-10")
+        days = {row["day"]: row for row in recovered["sources"][0]["days"]}
+        self.assertEqual(days["2026-11-09"]["knownPrs"], 1)
+        self.assertEqual(days["2026-11-10"]["knownPrs"], 101)
+        self.assertTrue(recovered["sources"][0]["coverage"]["paginationComplete"])
+
     def test_beijing_midnight_year_rollover_uses_original_offset_instants(self):
         api = Api()
         edge = "6" * 40
-        api.prs = [pr(1, "2026-12-31T15:59:59Z"), pr(2, "2027-01-01T00:00:00+08:00")]
+        api.prs = [pr(1, "2026-12-31T15:59:59Z"), pr(2, "2027-01-01T00:00:00+08:00"),
+                   pr(3, "2027-01-01T00:01:00+08:00")]
         api.histories[HEAD] = [commit(HEAD, "2026-12-31T15:59:59Z"),
                                commit(edge, "2027-01-01T00:00:00+08:00")]
         api.details = {row["commitId"]: row for row in api.histories[HEAD]}
