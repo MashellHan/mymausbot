@@ -220,9 +220,10 @@ export class TeamSetupRequestService {
         if (requested.soul !== undefined) throw new TeamSetupError("Use either soul or soulAppend for a bot, not both");
         if (target && !target.hidden && this.options.hasTeamAuthority(chief, target.section) &&
             (target.id === chief.id || !Array.isArray(chief.peers) || chief.peers.includes(target.id))) {
-          const current = target.soul ?? "";
-          if (redactSecretsInText(current) !== current) throw new TeamSetupError(`@${target.name}'s instructions hold credential-like text; change them with a full soul instead`);
-          requested.soul = current.trim() ? `${current.trimEnd()}\n\n${soulAppend}` : soulAppend;
+          const kept = (target.soul ?? "").trimEnd();
+          const joined = kept ? `${kept}\n\n${soulAppend}` : soulAppend;
+          if (!redactSecretsInText(joined).startsWith(kept)) throw new TeamSetupError(`@${target.name}'s instructions hold credential-like text; change them with a full soul instead`);
+          requested.soul = joined;
         }
       }
       const fields = this.fields({ ...requested, section: requested.section ?? target?.section ?? chief.section ?? "" }, target ?? undefined);

@@ -422,6 +422,8 @@ describe("reviewed Chief team setup", () => {
     expect(() => h.propose([{ action: "update", botId: unlisted.id, fields: { soulAppend: "More." } }])).toThrow(/peer scope/);
     h.peer.soul = `Use key sk-${"a".repeat(24)} for the API.`;
     expect(() => h.propose([{ action: "update", botId: h.peer.id, fields: { soulAppend: "More." } }])).toThrow(/credential-like text/);
+    h.peer.soul = "Paste keys after -----BEGIN RSA PRIVATE KEY----- and keep them out of chat.";
+    expect(() => h.propose([{ action: "update", botId: h.peer.id, fields: { soulAppend: "Stop at -----END RSA PRIVATE KEY-----." } }])).toThrow(/credential-like text/);
   });
 });
 
