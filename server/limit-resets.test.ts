@@ -35,11 +35,12 @@ const codex = (primary: [number, number], secondary: [number, number]) => row("c
 const report = (...providers: PlanProviderRow[]): PlanUsageReport => ({ fetchedAt: iso(NOW), providers });
 
 describe("a Claude account's usage", () => {
-  it("reaches the app's limits for a Claude instance with no setting, beside the other engines", () => {
+  it("keeps a configured Claude login unread while reporting other engines", () => {
     const accounts = planAccountsFromInstances({ claude: { driver: "claudeAgent" }, codex: { driver: "codex" } });
+    expect(accounts[0]?.noUsage).toBe(true);
     const instance = new LimitResetClock({ accounts: () => accounts, now: () => NOW });
     instance.noteUsage(report(claude([38, NOW + 2 * HOUR], [12, NOW + 50 * HOUR]), codex([20, NOW + HOUR], [5, NOW + 90 * HOUR])));
-    expect(instance.report().engines.map((limit) => [limit.engine, limit.usedPercent])).toEqual([["claude", 38], ["codex", 20]]);
+    expect(instance.report().engines.map((limit) => [limit.engine, limit.usedPercent])).toEqual([["codex", 20]]);
   });
 
   it("stops a full reading from holding it once its config sets usageMeter to false, and keeps a refusal's hold", () => {
