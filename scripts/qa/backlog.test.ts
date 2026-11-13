@@ -71,6 +71,14 @@ describe("hourly QA backlog", () => {
     expect(state.backlog.records[1]).toMatchObject({ stage: "closed_evidence_pending", closureEvidence: null });
   });
 
+  it("recognizes the existing Lead closure marker on an exact closed issue", async () => {
+    const h = harness(), state: Record<string, any> = {};
+    await h.tick(state, start);
+    h.close(1, "<!-- lead-qa-close:ac79:1 -->\nOriginal review and exact integrated report are retained below.");
+    await h.tick(state, start + 24 * 60 * 60_000);
+    expect(state.backlog.records[1]).toMatchObject({ stage: "closed", closureEvidence: "<!-- lead-qa-close:ac79:1 -->" });
+  });
+
   it("keeps ambiguous submission pending and retries only a known preflight rejection", async () => {
     const h = harness(), uncertain: Record<string, any> = {};
     const unknown = vi.fn(() => { throw new Error("possible submission"); });

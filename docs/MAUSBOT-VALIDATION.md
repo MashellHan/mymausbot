@@ -279,7 +279,8 @@ queue state records inventory, delivery, assignment, fixing, review, verificatio
 and closure evidence separately. A prompt receipt proves only delivery; Lead
 records actual work and exact accepted completion on the original issue or PR.
 For a closed issue, `QA-Disposition-Evidence: <accepted evidence link>` or
-`QA-Closure-Evidence: <accepted evidence link>` in its body binds the queue's
+`QA-Closure-Evidence: <accepted evidence link>` or an existing Lead closure
+marker in its body binds the queue's
 closed record; missing closure evidence remains pending. The queue never resumes paused work,
 reassigns an active repair or closes an issue automatically.
 

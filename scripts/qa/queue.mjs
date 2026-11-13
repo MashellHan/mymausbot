@@ -153,7 +153,8 @@ export async function drainQueue(state, { api = github, recover = recoverQa, sca
       for (const item of missing) {
         const closed = await api(`/issues/${item.number}`);
         if (closed.state !== "closed" || !closed.closed_at) continue;
-        const evidence = closed.body?.match(/^QA-(?:Closure|Disposition)-Evidence:\s*(.+)$/m)?.[1];
+        const evidence = closed.body?.match(/^QA-(?:Closure|Disposition)-Evidence:\s*(.+)$/m)?.[1]
+          ?? closed.body?.match(/<!-- lead-qa-close:[a-z0-9:-]+ -->/)?.[0];
         state.backlog.records[item.number] = { ...item, stage: evidence ? "closed" : "closed_evidence_pending",
           closedAt: closed.closed_at, closureEvidence: evidence ?? null };
       }
