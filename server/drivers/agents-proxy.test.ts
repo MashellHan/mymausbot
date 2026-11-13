@@ -647,6 +647,7 @@ describe("agents-proxy MCP surface", () => {
       "select_computer",
       "list_threads",
       "close_thread",
+      "withdraw_waiting_thread",
       "start_thread",
       "burst",
       "list_models",
