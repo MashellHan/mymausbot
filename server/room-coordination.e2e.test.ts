@@ -167,10 +167,10 @@ it("returns a provider failure to the sender and resumes it to handle the failur
 it("receipts a retried duplicate of a failed hand-off as failed, not queued behind a resume that never comes", () => withRooms(async f => {
   f.plan[f.target.id].fail = true;
   f.plan[f.sender.id].resumeSteps = [{ arguments: f.plan[f.sender.id].steps[0].arguments, expectError: true }];
-  await f.start(); expect((await f.wait()).status).toBe("settled");
-  // The main Chief got department A when it was made, so it also hears of the failed run, in a turn of its own.
   const chief = (await f.api("/api/bots")).bots.find((bot: any) => bot.chiefOfStaff);
-  expect(chief.managedSections).toEqual(["A"]);
+  await f.api(`/api/bots/${chief.id}`, { managedSections: ["A"], acknowledgePeerScope: true }, "PATCH");
+  await f.start(); expect((await f.wait()).status).toBe("settled");
+  expect((await f.api("/api/bots")).bots.find((bot: any) => bot.id === chief.id).managedSections).toEqual(["A"]);
   await expect.poll(() => f.provider().filter((turn: any) => turn.botId === chief.id)
     .map((turn: any) => /incident report.*Engineer's run in the room \\"Engineering\\" failed/.test(JSON.stringify(turn.prompt))), { timeout: 15_000 }).toEqual([true]);
   expect(f.provider().map((turn: any) => turn.botId).filter((id: string) => id !== chief.id)).toEqual([f.sender.id, f.target.id, f.sender.id]);

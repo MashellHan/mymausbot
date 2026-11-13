@@ -309,10 +309,10 @@ describe("openPhoneSession", () => {
     ["the phone never sends a byte", "silent", "The phone sent no video within 0.3 seconds.", ["push", "forward", "remove forward", "remove files"]],
   ])("fails to open when %s, and leaves nothing behind", async (_what, mode, reason, steps) => {
     const phone = fakePhone(mode);
+    const deps = mode === "silent" ? { ...phone.deps, startTimeoutMs: 300 } : phone.deps;
 
-    await expect(openPhoneSession({ ...phone.deps, startTimeoutMs: 300 }, SERIAL)).rejects.toThrow(`Could not open the phone's screen. ${reason}`);
+    await expect(openPhoneSession(deps, SERIAL)).rejects.toThrow(`Could not open the phone's screen. ${reason}`);
 
-    // The time limit can end a server that had not yet logged its start.
     const calls = phone.calls().filter((call) => step(call) !== "start server");
     expect(calls.map(step)).toEqual(steps);
     expect(calls.at(-1)).toEqual(removal(phone.scids()[0]));

@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startFakeDocker } from "./fake-compose-fixture.ts";
 
 import { parseRun, parseRunner } from "../../server/server-update.ts";
-import { hostTimeout } from "../../server/testing/host-timeout.ts";
 
 const DEPLOY = join(import.meta.dirname, "..", "..", "deploy");
 const RUNNER = join(DEPLOY, "update-runner.sh");

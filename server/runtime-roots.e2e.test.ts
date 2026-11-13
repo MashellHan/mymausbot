@@ -784,7 +784,7 @@ type StallFixture = {
   dataDir: string;
   clive: { id: string };
   roots(): Array<{ status: string; outcome?: string; executions: number; cards?: string[]; assignee: { botId: string } }>;
-  api(method: string, path: string): Promise<{ body: { bots: Array<{ id: string; chiefOfStaff?: boolean; managedSections?: string[] }> } }>;
+  api(method: string, path: string, body?: unknown): Promise<{ status: number; body: { bots: Array<{ id: string; chiefOfStaff?: boolean; managedSections?: string[] }> } }>;
   own(record: unknown): string;
   messages(threadId: string): Promise<Array<{ id: string; kind: string; tool?: { name: string }; secret?: CardState; connector?: CardState; signIn?: CardState }>>;
   turns(botId: string): Array<{ planKey?: string }>;
@@ -804,11 +804,15 @@ const stallOverCards = async (f: StallFixture, job: string, ids: string[]) => {
     .toEqual(["error: no activity for 20 minutes — the turn was stopped"]);
   const cards = (await f.messages(job)).filter((message) => ids.includes(message.id));
   expect(cards.map((message) => (message.secret ?? message.connector ?? message.signIn)?.stopped)).toEqual(ids.map(() => true));
-  // The main Chief got Clive's department when it was made, so it also hears of the stall, in a run of its own.
   const chief = (await f.api("GET", "/api/bots?messages=0")).body.bots.find((bot) => bot.chiefOfStaff)!;
   expect(chief.managedSections).toEqual(["Leadership"]);
   await expect.poll(() => f.roots().filter((row) => row.assignee.botId === chief.id).map((row) => row.status), { timeout: 30_000 }).toEqual(["completed"]);
   expect(f.turns(chief.id).map((record) => /incident report[\s\S]*Clive's run .* stopped after showing no activity/.test(f.own(record)))).toEqual([true]);
+};
+
+const authorizeStallChief = async (f: StallFixture) => {
+  const chief = (await f.api("GET", "/api/bots?messages=0")).body.bots.find((bot) => bot.chiefOfStaff)!;
+  expect((await f.api("PATCH", `/api/bots/${chief.id}`, { managedSections: ["Leadership"], acknowledgePeerScope: true })).status).toBe(200);
 };
 
 const answerStartsNothing = async (f: StallFixture, job: string) => {
@@ -823,6 +827,7 @@ const answerStartsNothing = async (f: StallFixture, job: string) => {
 };
 
 it("T12 a turn the watchdog stops after it posted a credential card fails as stalled and stops the card", () => scenario(async (f) => {
+  await authorizeStallChief(f);
   f.script(f.clive.id, { key: "C0", match: ["T12-JOB"], steps: [{ tool: "request_credential", arguments: { credential_id: "xaiApiKey", reason: "T12 fixture model" } }],
     gateFile: f.gate("c0"), reply: "T12-LATE: never shown." });
   const job = f.clive.activeTaskId;
@@ -841,6 +846,7 @@ it("T12 a turn the watchdog stops after it posted connector cards fails as stall
   const composio = await composioStub();
   try {
     await scenario(async (f) => {
+      await authorizeStallChief(f);
       expect((await f.api("PUT", "/api/config", { composio: { apiKey: "ak_good" } })).status).toBe(200);
       f.script(f.clive.id, { key: "C0", match: ["T12C-JOB"], readyFile: f.ready("c0"), gateFile: f.gate("c0"), reply: "T12C-LATE: never shown." });
       const job = f.clive.activeTaskId;
@@ -864,6 +870,7 @@ it("T12 a turn the watchdog stops after it posted connector cards fails as stall
 }, hostTimeout(90_000));
 
 it("T12 a turn the watchdog stops after it posted a sign-in card fails as stalled and stops the card", () => scenario(async (f) => {
+  await authorizeStallChief(f);
   await browserPlace(f);
   f.script(f.clive.id, { key: "C0", match: ["T12S-JOB"], steps: [{ tool: "request_sign_in", arguments: { site: "https://example.com/dashboard", reason: "The dashboard is behind a login." } }],
     gateFile: f.gate("c0"), reply: "T12S-LATE: never shown." });
