@@ -44,6 +44,7 @@ class Api:
         self.commit_dates = ("2026-09-11T08:00:00Z", "2026-11-09T11:00:00Z")
         self.profile_commit_at = "2026-11-09T08:00:00Z"
         self.private_pr_date = "2026-11-09T10:00:00Z"
+        self.private_pr_rows = None
         self.repo_name = PRIVATE["nameWithOwner"]
         self.owner_id = ACCOUNT["stableId"]
         self.owner_login = ACCOUNT["login"]
@@ -143,18 +144,19 @@ class Api:
         elif "search(query:" in document:
             query = values["q"]
             start, end = query.split("created:", 1)[1].split("..", 1)
-            matches = start <= self.private_pr_date <= end
-            nodes = ([{"id": "private-pr-1", "createdAt": self.private_pr_date,
+            rows = self.private_pr_rows if self.private_pr_rows is not None else [("private-pr-1", self.private_pr_date)]
+            nodes = ([{"id": key, "createdAt": when,
                        "author": {"id": viewer["id"], "login": viewer["login"]},
-                       "repository": {"id": PRIVATE["id"]}}] if matches else [])
+                       "repository": {"id": PRIVATE["id"]}} for key, when in rows if start <= when <= end])
             data = {"viewer": viewer, "search": {"issueCount": len(nodes), "nodes": nodes,
                     "pageInfo": {"hasNextPage": False, "endCursor": None}}}
         elif "pullRequests(first:" in document:
+            rows = self.private_pr_rows if self.private_pr_rows is not None else [("private-pr-1", self.private_pr_date)]
             data = {"viewer": viewer, "repository": {"id": PRIVATE["id"],
-                "pullRequests": {"totalCount": 1, "pageInfo": {"hasNextPage": False,
-                    "endCursor": None}, "nodes": [{"id": "public-pr-1" if self.duplicate_private else "private-pr-1",
-                    "createdAt": self.private_pr_date, "author": {"id": viewer["id"],
-                    "login": viewer["login"]}}]}}}
+                "pullRequests": {"totalCount": len(rows), "pageInfo": {"hasNextPage": False,
+                    "endCursor": None}, "nodes": [{"id": "public-pr-1" if self.duplicate_private else key,
+                    "createdAt": when, "author": {"id": viewer["id"],
+                    "login": viewer["login"]}} for key, when in rows]}}}
         elif "history(first:" in document:
             after = values.get("after")
             is_public = values.get("name") == "public-repo"
@@ -385,6 +387,93 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assertEqual(days["2026-11-09"]["knownPrs"], 3)
         self.assertEqual(days["2026-11-10"]["knownPrs"], 2)
         self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
+
+    def test_failed_cold_private_pr_page_restarts_full_inventory_before_focusing(self):
+        api = Api()
+        api.private_pr_date = "2026-10-10T10:00:00Z"
+        api.fail_private_owner = "fixture-owner"
+        api.fail_private_phase = "pullRequests(first:"
+        api.fail_private_error = OSError("synthetic private page failure")
+        failed = collect(api)
+        state_id = profile.source_id(profile.profile_config(ACCOUNT))
+        self.assertFalse(failed["sources"][0]["coverage"]["paginationComplete"])
+        self.assertIsNone(failed["state"]["sources"][state_id]["prCoverageStartAt"])
+        api.fail_private_owner = None
+        api.calls.clear()
+        api.enforce_query_window = True
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        recovered = collect(api, at=at, previous=failed, focus_start="2026-11-10")
+        self.assertTrue(any("pullRequests(first:" in arg for call in api.calls for arg in call))
+        self.assertFalse(any("search(query:" in arg for call in api.calls for arg in call))
+        day = next(row for row in recovered["sources"][0]["days"] if row["day"] == "2026-10-10")
+        self.assertEqual(day["knownPrs"], 1)
+        self.assertTrue(recovered["sources"][0]["coverage"]["paginationComplete"])
+
+    def test_failed_full_private_repair_clears_an_older_successful_baseline(self):
+        api = Api()
+        previous = collect(api)
+        state_id = profile.source_id(profile.profile_config(ACCOUNT))
+        self.assertIsNotNone(previous["state"]["sources"][state_id]["prCoverageStartAt"])
+        api.private_pr_date = "2026-10-10T10:00:00Z"
+        api.fail_private_owner = "fixture-owner"
+        api.fail_private_phase = "pullRequests(first:"
+        api.fail_private_error = OSError("synthetic full repair failure")
+        failed = collect(api, previous=previous)
+        self.assertIsNone(failed["state"]["sources"][state_id]["prCoverageStartAt"])
+        api.fail_private_owner = None
+        api.calls.clear()
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        recovered = collect(api, at=at, previous=failed, focus_start="2026-11-10")
+        self.assertTrue(any("pullRequests(first:" in arg for call in api.calls for arg in call))
+        old = next(row for row in recovered["sources"][0]["days"] if row["day"] == "2026-10-10")
+        self.assertEqual(old["knownPrs"], 1)
+
+    def test_complete_private_pr_zero_survives_restart_and_next_day_focus(self):
+        api = Api()
+        previous = collect(api)
+        state_id = profile.source_id(profile.profile_config(ACCOUNT))
+        self.assertEqual(len(previous["state"]["sources"][state_id]["privatePrs"]), 1)
+        api.private_pr_rows = []
+        corrected = collect(api, previous=previous)
+        self.assertEqual(corrected["state"]["sources"][state_id]["privatePrs"], [])
+        self.assertEqual(corrected["sources"][0]["days"][-1]["knownPrs"], 2)
+        api.enforce_query_window = True
+        at = dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+        next_day = collect(api, at=at, previous=corrected, focus_start="2026-11-10")
+        old = next(row for row in next_day["sources"][0]["days"] if row["day"] == "2026-11-09")
+        self.assertEqual(old["knownPrs"], 2)
+        self.assertEqual(next_day["state"]["sources"][state_id]["privatePrs"], [])
+        self.assertTrue(next_day["sources"][0]["coverage"]["paginationComplete"])
+
+    def test_incomplete_private_pr_scope_retains_its_previous_list(self):
+        api = Api()
+        previous = collect(api)
+        state_id = profile.source_id(profile.profile_config(ACCOUNT))
+        api.fail_private_owner = "fixture-owner"
+        api.fail_private_phase = "pullRequests(first:"
+        api.fail_private_error = OSError("synthetic private page failure")
+        failed = collect(api, previous=previous)
+        self.assertFalse(failed["sources"][0]["coverage"]["paginationComplete"])
+        self.assertEqual(failed["state"]["sources"][state_id]["privatePrs"],
+                         previous["state"]["sources"][state_id]["privatePrs"])
+
+    def test_completed_empty_private_scope_retains_only_failed_sibling(self):
+        account = {**ACCOUNT, "privateRepositories": ["fixture-owner/private-repo", "failure-owner/private-repo"]}
+        api = Api()
+        api.fail_private_owner = "failure-owner"
+        api.fail_private_error = OSError("synthetic sibling failure")
+        previous = collect(api, account)
+        state_id = profile.source_id(profile.profile_config(account))
+        saved = previous["state"]["sources"][state_id]["privatePrs"]
+        self.assertEqual(len(saved), 1)
+        sibling = copy.deepcopy(saved[0])
+        sibling["repository"].update({"id": "synthetic-second-repo", "name": "failure-owner/private-repo"})
+        sibling["key"] = "f" * 64
+        saved.append(sibling)
+        api.private_pr_rows = []
+        current = collect(api, account, previous=previous)
+        self.assertFalse(current["sources"][0]["coverage"]["paginationComplete"])
+        self.assertEqual(current["state"]["sources"][state_id]["privatePrs"], [sibling])
 
     def test_compare_batches_more_than_one_page_without_losing_author_day(self):
         api = Api()

@@ -573,6 +573,20 @@ class AzureMemorySession:
                         or not query.get("$top", [""])[0].isdigit() or not 1 <= int(query["$top"][0]) <= 100
                         or not query.get("$skip", [""])[0].isdigit() or int(query["$skip"][0]) > 1_000_000):
                     raise ValueError("Invalid pinned ADO commit page")
+                bounds = {"searchCriteria.fromDate", "searchCriteria.toDate"}
+                if bounds & query.keys():
+                    if not bounds <= query.keys():
+                        raise ValueError("Invalid ADO commit date window")
+                    start, end = (query[key][0] for key in ("searchCriteria.fromDate", "searchCriteria.toDate"))
+                    if not all(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value) for value in (start, end)):
+                        raise ValueError("Invalid ADO commit date window")
+                    try:
+                        start_at, end_at = (dt.datetime.fromisoformat(value[:-1] + "+00:00") for value in (start, end))
+                    except ValueError:
+                        raise ValueError("Invalid ADO commit date window") from None
+                    if start_at > end_at or end_at - start_at > dt.timedelta(days=60):
+                        raise ValueError("Invalid ADO commit date window")
+                    allowed |= bounds
             if set(query) != allowed:
                 raise ValueError("Unexpected ADO request parameters")
         request = urllib.request.Request(
@@ -634,6 +648,7 @@ def refresh_scope_hash(config):
 def refresh_window(at, previous, scope_hash):
     local = at.astimezone(SHANGHAI)
     yesterday = local.date() - dt.timedelta(days=1)
+    first = local.date() - dt.timedelta(days=59)
     state = previous.get("refreshState", {}) if previous else {}
     if state.get("scopeHash") == scope_hash and isinstance(state.get("finalizedThroughDay"), str):
         finalized = dt.date.fromisoformat(state["finalizedThroughDay"])
@@ -646,9 +661,10 @@ def refresh_window(at, previous, scope_hash):
         finalized = cutoff - dt.timedelta(days=1 if complete else 2)
     else:
         finalized = yesterday - dt.timedelta(days=1)
+    unpaid = max(first, finalized + dt.timedelta(days=1))
     if local.time() < dt.time(0, 30):
-        return min(yesterday, finalized + dt.timedelta(days=1)), finalized
-    return (min(local.date(), finalized + dt.timedelta(days=1))
+        return min(yesterday, unpaid), finalized
+    return (min(local.date(), unpaid)
             if finalized < yesterday else local.date()), finalized
 
 

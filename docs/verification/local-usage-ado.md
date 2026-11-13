@@ -105,7 +105,7 @@ after it in the API's commit sequence. The changed-head result replaces the
 old result only after the full traversal finishes. This catches late merges,
 old author dates and force pushes without relying on `fromDate`/`toDate`
 server filtering for reachability. An ordinary warm query uses those bounds for
-early candidate discovery, then reconciles the complete pinned graph. A resumed scan finishes its immutable pin even if the branch
+early candidate discovery through the scoped HTTPS adapter, which accepts only a paired canonical UTC interval of at most 60 days, then reconciles the complete pinned graph. A resumed scan finishes its immutable pin even if the branch
 advances. A final ref mismatch keeps the complete pinned DAG proof privately,
 marks current coverage incomplete, and starts a full traversal of the new head.
 Only previously checked immutable commit details are reused during that full
@@ -149,14 +149,15 @@ the fast PR/commit snapshot before waiting for legacy Token work. Incomplete
 pinned-history progress remains in the provider's private state for later cycles;
 an unchanged, settled day does not start a full-window worker. Shanghai midnight
 queries cover unpaid yesterday plus today until 00:30; an unpublished day remains
-debt afterward. The 30-second end-to-end publication target is unmeasured until
+debt afterward while it is within the retained 60-day window. Older debt expires.
+The 30-second end-to-end publication target is unmeasured until
 the reviewed helper is delivered and a natural capture is read back.
 
 ## Verification
 
 `scripts/local_usage_ado.py.test.ts` invokes the Python suite through normal
 Vitest selection; `python3 scripts/local_usage_ado.test.py` runs it directly.
-The suite uses a pure synthetic argv transport.
+The suite uses a synthetic argv transport and exercises the real protected adapter with synthetic HTTP for warm changed-head requests.
 It covers all PR states, Beijing boundary, author and coauthor attribution, merge
 commits, budget resumption, pinned-head reuse, force push, identity mismatch,
 disabled/missing repositories and malformed creator/trailer evidence. The

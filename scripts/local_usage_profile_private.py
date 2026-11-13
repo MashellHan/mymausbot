@@ -197,6 +197,7 @@ def supplement_private(config, profile, budget, typed, first, at, repository_cat
             raise ValueError("invalid_private_repository_config")
         names.add(candidate.casefold())
     result, reasons, heads, history_candidates, seen_repositories = {"prs": [], "commits": []}, [], [], [], set()
+    completed_pr_names = set()
     for candidate in configured_candidates:
         owner, name = candidate.split("/")
         try:
@@ -223,6 +224,7 @@ def supplement_private(config, profile, budget, typed, first, at, repository_cat
             if any(event["key"] in typed["prKeys"] for event in pending_prs):
                 raise ValueError("private_pr_overlap")
             result["prs"].extend(pending_prs)
+            completed_pr_names.add(candidate.casefold())
             history_candidates.append({"repository": info, "owner": owner, "name": name,
                                "createdAt": created.isoformat().replace("+00:00", "Z"),
                                "branch": branch, "head": head})
@@ -234,4 +236,4 @@ def supplement_private(config, profile, budget, typed, first, at, repository_cat
             reasons.append("private_" + (str(error) if str(error) in PRIVATE_CODES else "invalid_response"))
         except (OSError, subprocess.SubprocessError, TimeoutError, KeyError, TypeError, IndexError, AttributeError) as error:
             reasons.append("private_" + type(error).__name__)
-    return result, reasons, heads, history_candidates
+    return result, reasons, heads, history_candidates, completed_pr_names

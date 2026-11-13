@@ -629,6 +629,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         progress = prior.get("progress", {})
         if not isinstance(cache, dict) or not isinstance(progress, dict):
             raise ValueError("Invalid GitHub event continuation")
+        completed_private_pr_names = set()
         try:
             incremental = (focus_start is not None and focus_start >= first
                 and isinstance(prior.get("prs"), list) and isinstance(prior.get("candidates"), dict)
@@ -657,7 +658,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 typed["prs"] = list(events.values())
                 typed["prKeys"] = set(events)
                 typed["prRepositoryIds"] = {item["repository"]["id"] for item in events.values()}
-            supplemental, supplement_reasons, heads, private_candidates = supplement_private(
+            supplemental, supplement_reasons, heads, private_candidates, completed_private_pr_names = supplement_private(
                 config, profile, budget, typed, first, at, repository_category, repository_info, instant, count, digest,
                 focus_start if incremental else None,
                 retained_private_prs if incremental else None)
@@ -754,14 +755,21 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                       "days": empty_days(first, at, "unavailable", captured)}
         sources.append(source)
         reasons.extend(source["coverage"]["reasons"])
+        private_prs = prior.get("privatePrs", [])
+        pr_coverage_start_at = prior.get("prCoverageStartAt")
+        if source["status"] != "unavailable":
+            private_prs = [item for item in private_prs
+                if item["repository"]["name"].casefold() not in completed_private_pr_names]
+            private_prs.extend(supplemental["prs"])
+            if not supplement_reasons:
+                pr_coverage_start_at = stamp(window_start(first))
+            elif not incremental:
+                pr_coverage_start_at = None
         states[identity] = {"account": account, "scopeHash": scope_hash, "cache": cache, "progress": progress,
                             "prs": typed["prs"] if source["status"] != "unavailable" else prior.get("prs", []),
-                            "privatePrs": (supplemental["prs"] or prior.get("privatePrs", []))
-                                if source["status"] != "unavailable" and not supplement_reasons
-                                else prior.get("privatePrs", []),
+                            "privatePrs": private_prs,
                             "candidates": candidates if source["status"] != "unavailable" else prior.get("candidates", {}),
-                            "prCoverageStartAt": stamp(window_start(first)) if source["status"] != "unavailable"
-                                else prior.get("prCoverageStartAt")}
+                            "prCoverageStartAt": pr_coverage_start_at}
     result = {"version": 2, "metricDefinition": DEFINITION, "provider": "github",
               "asOfAt": stamp(at), "capturedAt": stamp(dt.datetime.now(UTC)), "dateBasis": DATE_BASIS,
               "operationWindow": {"startDay": first.isoformat(), "endDay": china_day(at),

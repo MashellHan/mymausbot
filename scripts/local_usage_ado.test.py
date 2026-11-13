@@ -1,12 +1,20 @@
 import copy
 import datetime as dt
+import importlib.util
+import io
 import json
+from pathlib import Path
+import types
 import unittest
 import urllib.parse
 from unittest.mock import patch
 
 import local_usage_ado as ado
 import local_usage_contributions as contributions
+
+USAGE_SPEC = importlib.util.spec_from_file_location("usage_memory", Path(__file__).with_name("refresh-local-usage.py"))
+usage = importlib.util.module_from_spec(USAGE_SPEC)
+USAGE_SPEC.loader.exec_module(usage)
 
 
 AT = dt.datetime.fromisoformat("2026-11-10T00:30:00+00:00")
@@ -127,6 +135,33 @@ def collect(api, *, previous=None, at=AT, config=CONFIG, focus_start=None):
 
 
 class AdoTests(unittest.TestCase):
+    def test_warm_changed_head_reaches_synthetic_http_through_protected_adapter(self):
+        api = Api()
+        api.enforce_query_window = True
+        previous = collect(api)
+        head = "d" * 40
+        api.histories[head] = [commit(head, "2026-11-11T00:01:00Z"), *api.histories[HEAD]]
+        api.details[head] = api.histories[head][0]
+        api.heads[REPO] = head
+        session = usage.AzureMemorySession(Path("/fixture/unused-auth"), [EMAIL], projects={("example", "project")})
+        session.token = lambda: "fixture-token"
+        requests = []
+        def open_request(request, timeout):
+            self.assertEqual(request.get_header("Authorization"), "Bearer fixture-token")
+            requests.append(request.full_url)
+            args = ["/fixture/az", "rest", "--method", "get", "--url", request.full_url,
+                    "--resource", ado.RESOURCE, "-o", "json"]
+            return io.BytesIO(api(args, timeout).encode())
+        session.http = types.SimpleNamespace(open=open_request)
+        at = dt.datetime.fromisoformat("2026-11-11T00:30:00+00:00")
+        current = collect(session.run, previous=previous, at=at, focus_start="2026-11-11")
+        queries = [urllib.parse.parse_qs(urllib.parse.urlsplit(url).query) for url in requests
+                   if urllib.parse.urlsplit(url).path.endswith("/commits")]
+        self.assertTrue(any(query.get("searchCriteria.fromDate") == ["2026-11-10T16:00:00Z"]
+                            and query.get("searchCriteria.toDate") == ["2026-11-11T00:30:00Z"]
+                            for query in queries))
+        self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
+
     def test_warm_focus_bounds_pr_and_commit_queries_and_keeps_coauthor_author_day(self):
         api = Api()
         api.enforce_query_window = True
