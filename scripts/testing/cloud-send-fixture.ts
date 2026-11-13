@@ -54,16 +54,44 @@ export async function withCloudSendFixtureCleanup<T>(setup: () => Promise<T>, cl
   }
 }
 
-export async function ownConcurrentCloudSendFixtures<T extends { close(): Promise<void> }>(first: Promise<T>, second: Promise<T>): Promise<[T, T]> {
-  try { return await Promise.all([first, second]); } catch (setupError) {
-    const settled = await Promise.allSettled([first, second]);
-    const cleanupErrors: unknown[] = [];
-    for (const result of settled) {
+export function awaitCloudFixtureSetup<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) {
+    void work.catch(() => {});
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(
+      (value) => { signal.removeEventListener("abort", abort); resolve(value); },
+      (error) => { signal.removeEventListener("abort", abort); reject(error); },
+    );
+  });
+}
+
+export async function ownConcurrentCloudSendFixtures<T extends { close(): Promise<void> }>(
+  first: (signal: AbortSignal) => Promise<T>, second: (signal: AbortSignal) => Promise<T>,
+): Promise<[T, T]> {
+  const controller = new AbortController();
+  const cancelled = new Error("Cloud companion setup cancelled");
+  let firstFailure = -1;
+  const pending = [first, second].map((start, index) => Promise.resolve().then(() => start(controller.signal)).catch((error) => {
+    if (firstFailure < 0) firstFailure = index;
+    throw error;
+  }));
+  try { const [a, b] = await Promise.all(pending); return [a, b]; } catch (setupError) {
+    controller.abort(cancelled);
+    const settled = await Promise.allSettled(pending);
+    const laterErrors: unknown[] = [];
+    for (const [index, result] of settled.entries()) {
       if (result.status === "fulfilled") {
-        try { await result.value.close(); } catch (error) { cleanupErrors.push(error); }
+        try { await result.value.close(); } catch (error) { laterErrors.push(error); }
+      } else if (index !== firstFailure && result.reason !== cancelled) {
+        laterErrors.push(result.reason);
       }
     }
-    if (cleanupErrors.length) throw new AggregateError([setupError, ...cleanupErrors], "Cloud fixture setup and cleanup failed");
+    if (laterErrors.length) throw new AggregateError([setupError, ...laterErrors], "Cloud fixture setup and cleanup failed");
     throw setupError;
   }
 }
@@ -219,11 +247,13 @@ export async function launchCloudSendFixture({ onePasswordToken, cloudOnePasswor
   space?: { disk(): unknown; grow(sizeGb: number): Promise<unknown> };
   /** False: My Cloud's own Claude is signed out, as on a new Cloud. */
   cloudSignedIn?: boolean;
-}): Promise<CloudSendFixture> {
+}, signal?: AbortSignal): Promise<CloudSendFixture> {
   const root = mkdtempSync(join(tmpdir(), "omb-cloud-send-"));
   const children = new Set<ChildProcess>();
+  let constructionSignal = signal;
+  const duringSetup = <T>(work: Promise<T>) => awaitCloudFixtureSetup(work, constructionSignal);
   const closeOwned = () => closeOwnedCloudSendFixture(root, children);
-  return withCloudSendFixtureCleanup(async () => {
+  const launched = await withCloudSendFixtureCleanup<CloudSendFixture>(async () => {
   const secret = randomBytes(32).toString("base64url");
   const ownerCapability = randomBytes(32).toString("base64url");
   const answers: string[] = [];
@@ -232,6 +262,7 @@ export async function launchCloudSendFixture({ onePasswordToken, cloudOnePasswor
   const remember = async (response: Response) => { answers.push(await response.clone().text()); return response; };
 
   async function start(name: string, own: NodeJS.ProcessEnv, port: number, extra: string[] = [], ipc = false, acceptedToken = onePasswordToken, calls = 0, engine = "", signedIn = true): Promise<ChildProcess> {
+    constructionSignal?.throwIfAborted();
     const home = join(root, name);
     const dataDir = join(home, ".openmausbot");
     mkdirSync(dataDir, { recursive: true });
@@ -262,10 +293,12 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     child.stderr?.on("data", (chunk) => { logs += chunk; });
     const deadline = Date.now() + 30_000;
     for (;;) {
+      constructionSignal?.throwIfAborted();
       if (child.exitCode !== null) throw new Error(`${name} exited:\n${logs}`);
-      try { if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) return child; } catch {}
+      try { if ((await duringSetup(fetch(`http://127.0.0.1:${port}/api/health`, { signal: constructionSignal }))).ok) return child; }
+      catch { constructionSignal?.throwIfAborted(); }
       if (Date.now() > deadline) throw new Error(`${name} did not start:\n${logs}`);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await duringSetup(new Promise((resolve) => setTimeout(resolve, 100)));
     }
   }
 
@@ -278,9 +311,9 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     process.on("message", (data) => { for (const listener of listeners) listener({ data }); });
     process.channel?.unref();
   `)}`;
-  const desktopPort = await freePortBlock([0, 1]);
+  const desktopPort = await duringSetup(freePortBlock([0, 1]));
   const desktopBase = `http://127.0.0.1:${desktopPort}`;
-  const desktopInstallation = broker ? await broker.install() : null;
+  const desktopInstallation = broker ? await duringSetup(broker.install()) : null;
   const startDesktop = async (dataDir?: string) => {
     const child = await start("desktop", { OMB_DESKTOP_PARENT: "1", ...(dataDir ? { OMB_DATA_DIR: dataDir } : {}),
       ...(broker && desktopInstallation ? { OMB_COMPOSIO_BROKER_URL: broker.url, OMB_COMPOSIO_BROKER_TOKEN: desktopInstallation.token } : {}) }, desktopPort, ["--import", parentPort], true, onePasswordToken, toolCalls, desktopEngine);
@@ -288,7 +321,7 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     return child;
   };
   let desktop = await startDesktop();
-  const cloudPort = await freePortBlock([0, 1]);
+  const cloudPort = await duringSetup(freePortBlock([0, 1]));
   const cloudBase = `http://127.0.0.1:${cloudPort}`;
   const startCloud = (more: NodeJS.ProcessEnv = {}) => start("cloud", { OMB_CLOUD_ROLE: "home", OMB_CLOUD_MACHINE_ID: "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", OMB_CLOUD_ADMIN_URL: "https://cloud.example.test",
     OMB_CLOUD_BOOTSTRAP_SECRET: secret, OMB_PUBLIC_URL: `https://${CLOUD_HOST}`, ...(broker ? { OMB_COMPOSIO_BROKER_URL: broker.url } : {}), ...cloudEnv, ...more }, cloudPort, [], false, cloudOnePasswordToken, 0, cloudEngine, cloudSignedIn);
@@ -297,9 +330,9 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
   const mintCode = async (label: string) => {
     const body = JSON.stringify({ label, ttlSeconds: 300 });
     const timestamp = String(Math.floor(Date.now() / 1000)), nonce = randomBytes(16).toString("base64url");
-    const response = await fetch(`${cloudBase}/api/cloud/pairing`, { method: "POST", headers: { ...EDGE, "content-type": "application/json",
-      "x-omb-cloud-timestamp": timestamp, "x-omb-cloud-nonce": nonce, "x-omb-cloud-signature": `v1=${cloudPairingSignature(secret, timestamp, nonce, body)}` }, body });
-    const reply: unknown = await response.json().catch(() => null);
+    const response = await duringSetup(fetch(`${cloudBase}/api/cloud/pairing`, { method: "POST", headers: { ...EDGE, "content-type": "application/json",
+      "x-omb-cloud-timestamp": timestamp, "x-omb-cloud-nonce": nonce, "x-omb-cloud-signature": `v1=${cloudPairingSignature(secret, timestamp, nonce, body)}` }, body, signal: constructionSignal }));
+    const reply: unknown = await duringSetup(response.json().catch(() => null));
     const code = reply && typeof reply === "object" && !Array.isArray(reply) ? (reply as { code?: unknown }).code : undefined;
     if (!response.ok || typeof code !== "string" || !code) {
       throw new Error(`Cloud fixture pairing returned HTTP ${response.status} (refusal ${cloudPairingRefusalCategory(reply)})`);
@@ -307,8 +340,8 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     return code;
   };
   const pairOwner = async () => {
-    const paired = await fetch(`${cloudBase}/api/auth/pair`, { method: "POST", headers: { ...EDGE, "content-type": "application/json" }, body: JSON.stringify({ code: await mintCode("OpenMausBot app (Cloud)") }) });
-    return ((await paired.json()) as { token: string }).token;
+    const paired = await duringSetup(fetch(`${cloudBase}/api/auth/pair`, { method: "POST", headers: { ...EDGE, "content-type": "application/json" }, body: JSON.stringify({ code: await mintCode("OpenMausBot app (Cloud)") }), signal: constructionSignal }));
+    return ((await duringSetup(paired.json())) as { token: string }).token;
   };
   let owner = await pairOwner();
   const signedRequest = async (base: string, method: string, path: string, body: string) => {
@@ -322,7 +355,7 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
   const CAPABILITY_KEY = randomBytes(16).toString("hex");
   let teamFixture: CloudTeamFixture | null = null;
   if (team) {
-    const teamPort = await freePortBlock([0, 1]);
+    const teamPort = await duringSetup(freePortBlock([0, 1]));
     const teamBase = `http://127.0.0.1:${teamPort}`;
     // Windows' child.kill("SIGTERM") ends a process at once, without Node's signal handlers, so the server never closes
     // its session registry and its next start drops every member's session, as after a crash. There the team server is
@@ -401,7 +434,7 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
   }
 
   const local = async (method: string, path: string, body?: unknown) => {
-    const response = await remember(await fetch(`${desktopBase}${path}`, { method, headers: {
+    const response = await remember(await fetch(`${desktopBase}${path}`, { method, signal: constructionSignal, headers: {
       "x-openmausbot-desktop-owner": ownerCapability, ...(body === undefined ? {} : { "content-type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body) }));
     return { status: response.status, body: parse(await response.text()) };
@@ -411,7 +444,9 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
       ...(body === undefined ? {} : { "content-type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) }));
     return { status: response.status, body: parse(await response.text()) };
   };
-  for (let tries = 0; (await local("GET", "/api/bots")).status !== 200 && tries < 50; tries++) await new Promise((resolve) => setTimeout(resolve, 100));
+  for (let tries = 0; (await duringSetup(local("GET", "/api/bots"))).status !== 200 && tries < 50; tries++) {
+    await duringSetup(new Promise((resolve) => setTimeout(resolve, 100)));
+  }
 
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const port = { postMessage: (message: unknown) => { desktop.send(message as object); } };
@@ -628,4 +663,6 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     },
   };
   }, closeOwned);
+  constructionSignal = undefined;
+  return launched;
 }

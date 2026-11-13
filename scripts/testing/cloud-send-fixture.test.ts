@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { cloudPairingRefusalCategory, closeOwnedCloudSendFixture, ownConcurrentCloudSendFixtures, withCloudSendFixtureCleanup } from "./cloud-send-fixture.ts";
+import { awaitCloudFixtureSetup, cloudPairingRefusalCategory, closeOwnedCloudSendFixture, ownConcurrentCloudSendFixtures, withCloudSendFixtureCleanup } from "./cloud-send-fixture.ts";
 
 import type { ChildProcess } from "node:child_process";
 
@@ -87,7 +87,7 @@ it("waits for and closes a fulfilled companion before rethrowing the first setup
   const setupError = new Error("first setup failed");
   let finishSecond!: (value: { close(): Promise<void> }) => void;
   const second = new Promise<{ close(): Promise<void> }>((resolve) => { finishSecond = resolve; });
-  const result = ownConcurrentCloudSendFixtures(Promise.reject(setupError), second);
+  const result = ownConcurrentCloudSendFixtures(() => Promise.reject(setupError), () => second);
   let closed = false;
   finishSecond({ close: async () => { closed = true; } });
   let caught: unknown;
@@ -100,8 +100,50 @@ it("keeps companion cleanup failure evidence beside the first setup failure", as
   const setupError = new Error("setup failed"), cleanupError = new Error("companion cleanup failed");
   let caught: unknown;
   try {
-    await ownConcurrentCloudSendFixtures(Promise.reject(setupError), Promise.resolve({ close: async () => { throw cleanupError; } }));
+    await ownConcurrentCloudSendFixtures(() => Promise.reject(setupError), () => Promise.resolve({ close: async () => { throw cleanupError; } }));
   } catch (error) { caught = error; }
   expect(caught).toBeInstanceOf(AggregateError);
   expect((caught as AggregateError).errors).toEqual([setupError, cleanupError]);
+});
+
+it("keeps a second constructor failure and its cleanup error after the first setup failure", async () => {
+  const firstError = new Error("first setup failed");
+  const secondError = new AggregateError([new Error("second setup failed"), new Error("second cleanup failed")], "second constructor failed");
+  let caught: unknown;
+  try {
+    await ownConcurrentCloudSendFixtures(() => Promise.reject(firstError), () => Promise.reject(secondError));
+  } catch (error) { caught = error; }
+  expect(caught).toBeInstanceOf(AggregateError);
+  expect((caught as AggregateError).errors).toEqual([firstError, secondError]);
+});
+
+it("aborts a stalled companion and finishes its owned cleanup before returning the original failure", async () => {
+  const setupError = new Error("first setup failed");
+  const stalled = new Promise<{ close(): Promise<void> }>(() => {});
+  let companionSignal: AbortSignal | undefined;
+  let cleaned = false;
+  let caught: unknown;
+  try {
+    await ownConcurrentCloudSendFixtures(
+      () => Promise.reject(setupError),
+      (signal) => {
+        companionSignal = signal;
+        return withCloudSendFixtureCleanup(() => awaitCloudFixtureSetup(stalled, signal), async () => { cleaned = true; });
+      },
+    );
+  } catch (error) { caught = error; }
+  expect(caught).toBe(setupError);
+  expect(companionSignal?.aborted).toBe(true);
+  expect(cleaned).toBe(true);
+});
+
+it("keeps a late operation rejection handled when setup was already cancelled", async () => {
+  const controller = new AbortController();
+  const cancellation = new Error("setup cancelled");
+  let rejectWork!: (reason: Error) => void;
+  const work = new Promise<void>((_resolve, reject) => { rejectWork = reject; });
+  controller.abort(cancellation);
+  await expect(awaitCloudFixtureSetup(work, controller.signal)).rejects.toBe(cancellation);
+  rejectWork(new Error("late work failed"));
+  await new Promise((resolve) => setImmediate(resolve));
 });

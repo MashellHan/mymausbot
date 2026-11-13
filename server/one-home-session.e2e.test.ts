@@ -31,7 +31,10 @@ function throughAdmin(fx: CloudSendFixture, device: string) {
 
 let laptop: CloudSendFixture, desk: CloudSendFixture;
 beforeAll(async () => {
-  [laptop, desk] = await ownConcurrentCloudSendFixtures(launchCloudSendFixture({ onePasswordToken: TOKEN }), launchCloudSendFixture({ onePasswordToken: TOKEN }));
+  [laptop, desk] = await ownConcurrentCloudSendFixtures(
+    (signal) => launchCloudSendFixture({ onePasswordToken: TOKEN }, signal),
+    (signal) => launchCloudSendFixture({ onePasswordToken: TOKEN }, signal),
+  );
   throughAdmin(laptop, "laptop");
   throughAdmin(desk, "desk");
 }, hostTimeout(180_000));
