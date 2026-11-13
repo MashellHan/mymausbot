@@ -1,7 +1,7 @@
 # Remote Azure DevOps contribution source
 
 `scripts/local_usage_ado.py` exports `collect(config, run, repository_category,
-*, at=None, days=60, previous=None)`. It returns an `ado-default-head-beijing-v1`
+*, at=None, days=60, previous=None, focus_start=None)`. It returns an `ado-default-head-beijing-v1`
 version 2 envelope. It reads remote Azure DevOps data only. It never uses local
 clones, writes a cache, changes authentication, or starts a scheduler.
 
@@ -35,7 +35,9 @@ The window contains exactly 60 Beijing dates ending on the Beijing date of the U
 `todayPartial` marks the current day as observed only through the source
 cutoff. Created PRs count in active, completed and abandoned states; PRs are
 bucketed by creation instant. The collector pages all creator-filtered PR
-states without trusting a server-side date filter. It locally verifies creator,
+states within the requested creation-date window on a warm focus, while retaining
+older same-scope PR observations. A cold or explicit full repair scans the full
+window and can authoritatively lower an old count. It locally verifies creator,
 repository, status and Beijing creation date, then rechecks the first page before
 certifying pagination. A failed page admits no prefix; duplicate or drifting
 pagination restarts before any exact PR count is published.
@@ -86,7 +88,7 @@ the incomplete reason; a stale row is not a current pass.
 
 ## Bounded continuation
 
-Each refresh uses at most 180 seconds overall, 42 seconds and 50 GETs per
+Each invocation uses at most 25 seconds overall, 25 seconds and 50 GETs per
 project, 8 GETs per repository slice, and 20 seconds per request. Existing
 pinned scans receive rotating slices before a newly selected repository opens;
 remaining project budget can give them further slices in the same call. A
@@ -102,7 +104,8 @@ previous head cannot bound reachability: a newly merged side branch may appear
 after it in the API's commit sequence. The changed-head result replaces the
 old result only after the full traversal finishes. This catches late merges,
 old author dates and force pushes without relying on `fromDate`/`toDate`
-server filtering. A resumed scan finishes its immutable pin even if the branch
+server filtering for reachability. An ordinary warm query uses those bounds for
+early candidate discovery through the scoped HTTPS adapter, which accepts only a paired canonical UTC interval of at most 60 days, then reconciles the complete pinned graph. A resumed scan finishes its immutable pin even if the branch
 advances. A final ref mismatch keeps the complete pinned DAG proof privately,
 marks current coverage incomplete, and starts a full traversal of the new head.
 Only previously checked immutable commit details are reused during that full
@@ -141,15 +144,20 @@ The private state, account identities and repository names stay in the local
 usage snapshot. Public PR text and logs must not include the user's private
 organization data. The separate canonical Activities reader validates the
 version, identities, dates, counts and coverage before showing totals.
-The existing 300-second refresh cadence stays serialized. A warm refresh under
-60 seconds is an advisory target, requiring measured cold, unchanged-head and
-small-new-commit runs on the reviewed scoped source.
+The existing 300-second refresh cadence stays serialized. The wrapper publishes
+the fast PR/commit snapshot before waiting for legacy Token work. Incomplete
+pinned-history progress remains in the provider's private state for later cycles;
+an unchanged, settled day does not start a full-window worker. Shanghai midnight
+queries cover unpaid yesterday plus today until 00:30; an unpublished day remains
+debt afterward while it is within the retained 60-day window. Older debt expires.
+The 30-second end-to-end publication target is unmeasured until
+the reviewed helper is delivered and a natural capture is read back.
 
 ## Verification
 
 `scripts/local_usage_ado.py.test.ts` invokes the Python suite through normal
 Vitest selection; `python3 scripts/local_usage_ado.test.py` runs it directly.
-The suite uses a pure synthetic argv transport.
+The suite uses a synthetic argv transport and exercises the real protected adapter with synthetic HTTP for warm changed-head requests.
 It covers all PR states, Beijing boundary, author and coauthor attribution, merge
 commits, budget resumption, pinned-head reuse, force push, identity mismatch,
 disabled/missing repositories and malformed creator/trailer evidence. The
