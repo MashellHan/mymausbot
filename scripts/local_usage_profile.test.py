@@ -69,6 +69,8 @@ class Api:
         self.enforce_query_window = False
         self.duplicate_compare_page = False
         self.profile_pr_rows = None
+        self.profile_page_size = 1
+        self.profile_occurrence_override = None
 
     def __call__(self, args, timeout):
         self.calls.append(args)
@@ -115,15 +117,15 @@ class Api:
         if "contributionsCollection" in document:
             records = (self.profile_pr_rows if self.profile_pr_rows is not None else
                        [(f"public-pr-{i}", f"2026-11-09T09:0{i}:00Z", PUBLIC) for i in (1, 2)])
-            nodes = [{"occurredAt": when, "pullRequest": {
+            nodes = [{"occurredAt": self.profile_occurrence_override or when, "pullRequest": {
                 "id": key, "createdAt": when,
                 "author": {"id": viewer["id"], "login": viewer["login"]}, "repository": repo}}
                 for key, when, repo in records]
             if self.enforce_query_window:
                 nodes = [node for node in nodes if values["from"] <= node["occurredAt"] <= values["to"]]
             after = values.get("after")
-            page_nodes = nodes[1:] if after else nodes[:1]
-            more = len(nodes) > 1 and not after and not self.truncate_prs
+            page_nodes = nodes[self.profile_page_size:] if after else nodes[:self.profile_page_size]
+            more = len(nodes) > self.profile_page_size and not after and not self.truncate_prs
             groups = [{"repository": {**PUBLIC,
                 "createdAt": self.public_created_at,
                 "defaultBranchRef": {"name": "main", "target": {"oid": self.public_head}}}, "contributions": {
@@ -260,6 +262,59 @@ class ProfileBeijingTests(unittest.TestCase):
                                     dt.date(2026, 9, 15), at,
                                     lambda remote, configured: "personal", dt.date(2026, 11, 13))
 
+    def test_real_file_adapter_retains_prior_day_when_focused_profile_returns_older_utc_rows(self):
+        account = {**ACCOUNT, "privateRepositories": []}
+        previous = collect(Api(), account)
+        at = dt.datetime.fromisoformat("2026-11-13T05:37:53+00:00")
+        config = {**CONFIG, "githubProfiles": [account], "githubHelper": str(Path(usage.__file__).resolve())}
+        for inside_count, after_cutoff in ((9, True), (10, False)):
+            with self.subTest(inside_count=inside_count, after_cutoff=after_cutoff):
+                api = Api()
+                api.profile_page_size = 100
+                api.profile_commit_at = "2026-11-13T08:00:00Z"
+                api.profile_pr_rows = (
+                    [(f"early-{index}", "2026-11-11T16:41:28Z", PUBLIC) for index in range(3)]
+                    + [(f"before-{index}", "2026-11-12T15:33:32Z", PUBLIC) for index in range(34)]
+                    + [(f"today-{index}", "2026-11-13T01:00:00Z", PUBLIC) for index in range(inside_count)]
+                    + ([("after-cutoff", "2026-11-13T06:00:00Z", PUBLIC)] if after_cutoff else []))
+                session = usage.GitHubFileSession(config, Path("/fixture/no-auth"))
+                session._credential = lambda name: {"token": "synthetic-token", "login": account["login"],
+                                                     "stableId": account["stableId"]}
+                requests = []
+
+                def open_request(request, timeout):
+                    requests.append(request)
+                    if request.full_url.endswith("/user"):
+                        return io.BytesIO(json.dumps({"node_id": account["stableId"], "login": account["login"],
+                            "html_url": "https://github.com/" + account["login"]}).encode())
+                    self.assertTrue(request.full_url.endswith("/graphql"))
+                    body = json.loads(request.data)
+                    self.assertEqual(body["query"], profile.PROFILE_QUERY)
+                    self.assertEqual(body["variables"]["from"], "2026-11-12T16:00:00Z")
+                    self.assertEqual(body["variables"]["to"], "2026-11-13T05:37:53Z")
+                    args = [sys.executable, config["githubHelper"], "gh", account["profile"], "api", "graphql"]
+                    for key, value in body["variables"].items():
+                        if value is not None:
+                            args.extend(("-f", f"{key}={value}"))
+                    args.extend(("-f", "query=" + body["query"]))
+                    return io.BytesIO(api(args, timeout).encode())
+
+                session.http = types.SimpleNamespace(open=open_request)
+                current = profile.collect(config, session.run, lambda remote, configured: "personal",
+                                          at=at, previous=previous, focus_start="2026-11-13")
+                source = current["sources"][0]
+                days = {row["day"]: row for row in source["days"]}
+                self.assertEqual(source["coverage"]["reasons"], ["profile_visibility_unverified"])
+                self.assertTrue(source["coverage"]["paginationComplete"])
+                self.assertEqual(source["provenance"]["typedProfileTotals"]["prs"], 47)
+                self.assertEqual(days["2026-11-09"]["knownPrs"], 2)
+                self.assertEqual(days["2026-11-13"]["knownPrs"], inside_count)
+                state_id = profile.source_id(profile.profile_config(account))
+                self.assertEqual(current["state"]["sources"][state_id]["cache"],
+                                 previous["state"]["sources"][state_id]["cache"])
+                self.assertEqual(current["collection"]["requestCount"], 1)
+                self.assertEqual(len(requests), 2)
+
     def assert_same_days_except_capture_time(self, first, second):
         for days in (first, second):
             captured = {day["capturedAt"] for day in days}
@@ -367,7 +422,9 @@ class ProfileBeijingTests(unittest.TestCase):
     def test_incomplete_profile_and_private_overlap_fail_closed(self):
         api = Api()
         api.truncate_prs = True
-        self.assertEqual(collect(api)["sources"][0]["status"], "unavailable")
+        invalid = collect(api)["sources"][0]
+        self.assertEqual(invalid["status"], "unavailable")
+        self.assertEqual(invalid["coverage"]["reasons"], ["source_incomplete_pr_pages"])
         api = Api()
         api.duplicate_private = True
         source = collect(api, {**ACCOUNT, "visibilityProof": proof()})["sources"][0]
@@ -375,6 +432,19 @@ class ProfileBeijingTests(unittest.TestCase):
         self.assertFalse(source["coverage"]["paginationComplete"])
         self.assertEqual(source["days"][-1]["knownPrs"], 2)
         self.assertIsNone(source["days"][-1]["prs"])
+
+    def test_profile_occurrence_still_requires_a_valid_instant(self):
+        invalid_time = Api()
+        invalid_time.profile_occurrence_override = "not-an-instant"
+        self.assertEqual(collect(invalid_time)["sources"][0]["coverage"]["reasons"], ["source_invalid_instant"])
+
+    def test_external_value_error_text_never_enters_source_reason(self):
+        def failed_read(args, timeout):
+            raise ValueError("synthetic_private_credential_value")
+
+        source = collect(failed_read)["sources"][0]
+        self.assertEqual(source["status"], "unavailable")
+        self.assertEqual(source["coverage"]["reasons"], ["source_ValueError"])
 
     def test_changed_default_head_and_budget_keep_typed_subtotal(self):
         api = Api()
