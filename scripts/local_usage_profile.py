@@ -204,7 +204,7 @@ class Budget:
 
 def profile_records(config, profile, budget, first, at, repository_category, query_first=None):
     start = window_start(query_first) if query_first is not None else window_start(first) - dt.timedelta(days=1)
-    after, seen_cursors, prs, repositories, commit_repositories = None, set(), {}, {}, []
+    after, seen_cursors, seen_prs, prs, repositories, commit_repositories = None, set(), set(), {}, {}, []
     signature = None
     for _ in range(MAX_PROFILE_PAGES):
         data = budget.query(profile, PROFILE_QUERY, {"from": stamp(start), "to": stamp(at), "after": after})
@@ -267,7 +267,7 @@ def profile_records(config, profile, budget, first, at, repository_category, que
             pr = node["pullRequest"]
             occurred = instant(node["occurredAt"])
             created = instant(pr["createdAt"])
-            if (occurred < start or occurred > at or created > at
+            if (not start.date() <= occurred.date() <= at.date()
                     or not isinstance(pr.get("author"), dict)
                     or pr["author"].get("id") != profile["stableId"]
                     or pr["author"].get("login", "").casefold() != profile["login"].casefold()
@@ -279,13 +279,15 @@ def profile_records(config, profile, budget, first, at, repository_category, que
                 raise ValueError("conflicting_profile_repository")
             repositories[repo["id"]] = repo
             key = digest("github-pr", profile["host"], pr["id"])
-            if key in prs:
+            if key in seen_prs:
                 raise ValueError("duplicate_profile_pr")
-            prs[key] = {"day": china_day(created), "createdAt": stamp(created),
-                        "repository": repo, "key": key}
+            seen_prs.add(key)
+            if start <= created <= at:
+                prs[key] = {"day": china_day(created), "createdAt": stamp(created),
+                            "repository": repo, "key": key}
         page = connection["pageInfo"]
         if page["hasNextPage"] is False:
-            if len(prs) != total:
+            if len(seen_prs) != total:
                 raise ValueError("incomplete_pr_pages")
             return {"prs": list(prs.values()), "commits": [], "commitRepositories": commit_repositories,
                     "prKeys": set(prs), "prRepositoryIds": {pr["repository"]["id"] for pr in prs.values()},

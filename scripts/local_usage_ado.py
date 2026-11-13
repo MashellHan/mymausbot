@@ -38,6 +38,17 @@ class RepositoryQuantum(Exception):
     pass
 
 
+class ReadInterrupted(Exception):
+    def __init__(self, stage, status=None):
+        self.stage = stage
+        self.status = status
+
+
+class HttpReadError(OSError):
+    def __init__(self, status):
+        self.status = status
+
+
 def stamp(value):
     return value.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -154,7 +165,7 @@ class Reader:
         self.source_calls = 0
         self.repo_limit = None
 
-    def get(self, target):
+    def get(self, target, stage="authenticated"):
         remaining = min(self.end, self.source_end) - time.monotonic()
         if self.source_calls >= REQUESTS_PER_PROJECT or remaining <= 0:
             raise BudgetExceeded("ADO request budget exhausted")
@@ -165,9 +176,19 @@ class Reader:
         self.calls += 1
         self.source_calls += 1
         try:
-            body = json.loads(self.run(args, timeout=min(20, remaining)))
-        except (OSError, ValueError, TypeError, subprocess.SubprocessError):
-            raise ValueError("ADO authenticated read unavailable") from None
+            raw = self.run(args, timeout=min(20, remaining))
+        except HttpReadError as error:
+            if error.status in (408, 429) or 500 <= error.status <= 599:
+                raise ReadInterrupted(stage, error.status) from None
+            raise ValueError(f"ADO {stage} HTTP {error.status}") from None
+        except (OSError, subprocess.SubprocessError):
+            raise ReadInterrupted(stage) from None
+        except (ValueError, TypeError):
+            raise ValueError(f"ADO {stage} read unavailable") from None
+        try:
+            body = json.loads(raw)
+        except (ValueError, TypeError):
+            raise ValueError("Invalid ADO response") from None
         if not isinstance(body, dict) or body.get("errors") or body.get("continuationToken"):
             raise ValueError("Invalid or unpaged ADO response")
         return body
@@ -258,7 +279,7 @@ def reset_pr_pages(work):
 def default_head(reader, org, project, repo):
     branch = repo["defaultBranch"]
     path = "/_apis/git/repositories/" + repo["id"] + "/refs"
-    page = rows(reader.get(url(org, project, path, filter=branch[len("refs/"):])), 100)
+    page = rows(reader.get(url(org, project, path, filter=branch[len("refs/"):]), "default-head"), 100)
     exact = [row for row in page if row.get("name") == branch]
     if len(exact) != 1 or not SHA.fullmatch(exact[0].get("objectId", "")):
         raise ValueError("ADO default branch head unavailable")
@@ -272,7 +293,7 @@ def commit_page(reader, org, project, repo_id, head, offset, start=None, end=Non
         "searchCriteria.itemVersion.versionType": "commit", "$top": PAGE, "$skip": offset}
     if start is not None:
         criteria.update({"searchCriteria.fromDate": start, "searchCriteria.toDate": end})
-    body = reader.get(url(org, project, path, **criteria))
+    body = reader.get(url(org, project, path, **criteria), "focused-commits" if start else "pinned-commits")
     return rows(body)
 
 
@@ -286,7 +307,7 @@ def credited_commit(reader, org, project, repo_id, item, emails, first):
     if (detail.get("commentTruncated") is not False or not isinstance(detail.get("comment"), str)
             or not isinstance(detail.get("parents"), list)):
         path = "/_apis/git/repositories/" + repo_id + "/commits/" + commit_id
-        detail = reader.get(url(org, project, path))
+        detail = reader.get(url(org, project, path), "commit-detail")
     truncated = detail.get("commentTruncated", False)
     if (detail.get("commitId", "").lower() != commit_id
             or type(truncated) is not bool or truncated):
@@ -609,7 +630,7 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
         raise ValueError("Duplicate retained ADO source")
     emails = author_aliases(config)
     email_hash = digest("ado-author-aliases", sorted(emails)) if emails else None
-    for org, project, configured_names in configured:
+    for source_index, (org, project, configured_names) in enumerate(configured):
         account = principal(config, org)
         scope = org.casefold() + "/" + project.casefold()
         scope_hash = digest("ado-remotes", scope, configured_names)
@@ -665,7 +686,10 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
             work = new_work(at, focus_start if can_focus else None,
                             prior_work["prs"] if can_focus else None)
         reader.source_calls = 0
-        reader.source_end = min(reader.end, time.monotonic() + SECONDS_PER_PROJECT)
+        source_started = time.monotonic()
+        remaining_sources = len(configured) - source_index
+        reader.source_end = min(reader.end, source_started + SECONDS_PER_PROJECT,
+                                source_started + max(0, reader.end - source_started) / remaining_sources)
         reasons = ["legacy-repository-scope-unresolved"] if unresolved_scope else []
         verified = False
         try:
@@ -723,8 +747,11 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                 work["reasons"].append("disabled-repository")
             advance_prs(reader, org, project, account, work)
             advance_repos(reader, org, project, work, cache, emails)
-        except (BudgetExceeded, OSError, KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
+        except (BudgetExceeded, ReadInterrupted, OSError, KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
             reasons.append("request-budget" if isinstance(error, BudgetExceeded)
+                           else (f"{error.stage}-read-interrupted" +
+                                 (f"-http-{error.status}" if error.status is not None else ""))
+                           if isinstance(error, ReadInterrupted)
                            else str(error) if isinstance(error, ValueError) else "read-failure")
         cache = {**cache, **work["repoDone"]}
         reasons += work["reasons"] + list(work["repoErrors"].values())

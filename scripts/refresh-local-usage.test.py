@@ -376,9 +376,22 @@ class MemoryAuthTests(unittest.TestCase):
                 return response
 
             self.session.http = types.SimpleNamespace(open=open_response)
-            with self.subTest(wire=wire), self.assertRaises(ValueError) as error:
+            with self.subTest(wire=wire), self.assertRaises(OSError) as error:
                 self.session.run(command(), 7)
             self.assertEqual(str(error.exception), "The Azure DevOps response could not be read")
+
+    def test_http_status_is_bounded_for_repository_read_classification(self):
+        self.session.token = lambda: "fixture-access-token"
+        for status in (401, 429, 503):
+            def open_request(request, timeout):
+                raise urllib.error.HTTPError(request.full_url, status, "synthetic private response", {}, None)
+
+            self.session.http = types.SimpleNamespace(open=open_request)
+            with self.subTest(status=status), self.assertRaises(usage.local_usage_ado.HttpReadError) as error:
+                self.session.run(command(), 7)
+            self.assertEqual(error.exception.status, status)
+            self.assertIsInstance(error.exception, OSError)
+            self.assertNotIn("private", str(error.exception))
 
     def test_refresh_reuses_collector_without_azure_cli_or_direct_gh(self):
         collector = self.root / "collector.py"

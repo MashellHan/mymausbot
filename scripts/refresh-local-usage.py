@@ -20,6 +20,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
@@ -27,6 +28,7 @@ from zoneinfo import ZoneInfo
 import local_usage_merged
 import local_usage_github
 import local_usage_contributions
+import local_usage_ado
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
@@ -599,8 +601,12 @@ class AzureMemorySession:
                 headers = getattr(response, "headers", None)
                 continuation = headers.get("x-ms-continuationtoken") if headers else None
                 return response.read().decode("utf-8"), continuation
+        except urllib.error.HTTPError as error:
+            if type(error.code) is not int or not 100 <= error.code <= 599:
+                raise ValueError("The Azure DevOps HTTP status is unavailable") from None
+            raise local_usage_ado.HttpReadError(error.code) from None
         except http.client.HTTPException:
-            raise ValueError("The Azure DevOps response could not be read") from None
+            raise OSError("The Azure DevOps response could not be read") from None
 
 
 def ado_project_scopes(config):
