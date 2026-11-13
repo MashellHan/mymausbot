@@ -320,7 +320,7 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   const portable = additional.filter((file) => !FAST_EXPENSIVE_TEST.test(file) && !BROKER_OWN_TEST.test(file));
   const fastFiles = unique([...policy.core, ...portable.slice(0, FAST_AFFECTED_LIMIT)]);
   const deferred = additional.filter((file) => !fastFiles.includes(file) && !BROKER_OWN_TEST.test(file));
-  const fastChecks = baseline.areas.includes("broker") || affected.some((file) => BROKER_OWN_TEST.test(file))
+  const fastChecks = changed.some((file) => file.startsWith("cloudflare/composio-broker/")) || affected.some((file) => BROKER_OWN_TEST.test(file))
     ? ["build", "control-plane"] : ["build"];
   return {
     version: policy.version, mode, files: changed, areas: baseline.areas, fastAreas: areas.map((area) => area.id),

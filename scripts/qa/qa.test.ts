@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY } from "../ci-scope.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY, readCheckPolicy, selectCheckPlan } from "../ci-scope.mjs";
 import { executionComplete, expectedJobs, fullPushPlan, inspectJobs, eligibleRun, holdsFor, MERGE_JOBS, narrowPushPlan, triageOf } from "./contracts.mjs";
 import { fullRunEvidence, github, runJobs } from "./github.mjs";
 import { qaHealth } from "./health.mjs";
@@ -19,6 +19,11 @@ const job = { ...expected[0], id: 77, run_attempt: 1, status: "completed", concl
 const firstExecution = { created_at: "2026-11-05T12:18:00Z", started_at: "2026-11-05T12:18:19Z", completed_at: "2026-11-05T12:22:32Z" };
 const nextExecution = { created_at: "2026-11-05T12:47:31Z", started_at: "2026-11-05T12:47:32Z", completed_at: "2026-11-05T12:47:34Z" };
 const pushRun = { ...run, event: "push", status: "in_progress", created_at: new Date(now - 120_000).toISOString() };
+function fastOutputs() {
+  const selected = { ...ciOutputs({ checks: ["build"] }, ["ubuntu-latest"]), fast_pr: true };
+  return { ...selected, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
+    expected_jobs: expectedJobs(selected, false) };
+}
 function pushPlan(selected = ciOutputs(FULL_SCOPE, ALL_OS), source = pushRun) {
   return { version: 1, runId: source.id, attempt: 1, sha: source.head_sha,
     plan: { full: true, reduced: false, scope: FULL_SCOPE, candidate: false, admitted: false },
@@ -166,9 +171,52 @@ describe("complete CI and trusted QA health", () => {
     expect(executionComplete([staticJob], [{ ...observed[0], steps: observed[0].steps.slice(0, -2) }], new Set())).toBe(false);
   });
 
+  it("requires the broker owning lane for a broad source-only fast PR", async () => {
+    const policy = readCheckPolicy();
+    const selected = selectCheckPlan({ files: ["cloudflare/composio-broker/src/triggers.ts", "package.json"], policy, fastPr: true });
+    expect(selected.areas).toEqual(["everything"]);
+    expect(selected.scope.checks).toEqual(["build", "control-plane"]);
+    expect(selected.fastFiles).toEqual([...policy.core].sort());
+    const ci = ciOutputs(selected.scope, ["ubuntu-latest"]);
+    const prHead = "b".repeat(40);
+    const outputs = { ...ci, fast_pr: true, full_required: false, reduced: false, required_jobs: ci.jobs,
+      expected_jobs: expectedJobs({ ...ci, fast_pr: true }, false), qa_areas: selected.holdAreas, pr_number: 7, pr_head: prHead };
+    expect(outputs.required_jobs).toEqual(["control-plane"]);
+    expect(outputs.expected_jobs.map((item) => item.id)).toEqual(["static", "control-plane"]);
+
+    const staticJob = { name: outputs.expected_jobs[0].name, run_attempt: 1, status: "completed", conclusion: "success" };
+    const control = { name: outputs.expected_jobs[1].name, run_attempt: 1, status: "in_progress", conclusion: null as string | null };
+    let jobs = [staticJob], currentHead = prHead, labels: string[] = [], issues: object[] = [];
+    const api = async (path: string) => path === "/pulls/7" ? { head: { sha: currentHead }, labels: labels.map((name) => ({ name })) }
+      : path.startsWith("/issues?") ? issues : { jobs };
+    const check = (plan = outputs) => verifyGate(plan, { api, runId: 100, attempt: 1, createdAt: 1_000_000, deadlineMs: 0 });
+    await expect(check()).rejects.toThrow("Incomplete required validation");
+    jobs = [staticJob, control];
+    await expect(check()).rejects.toThrow("Incomplete required validation");
+    for (const conclusion of ["failure", "skipped", "cancelled"]) {
+      jobs = [staticJob, { ...control, status: "completed", conclusion }];
+      await expect(check()).rejects.toThrow("Required validation failed");
+    }
+    jobs = [staticJob, { ...control, status: "completed", conclusion: "success" }];
+    await expect(check()).resolves.toBeUndefined();
+    for (const invalid of [
+      { ...outputs, required_jobs: [] },
+      { ...outputs, jobs: ["relay"], required_jobs: ["relay"] },
+      { ...outputs, expected_jobs: [...outputs.expected_jobs, { id: "relay", name: "unexpected" }] },
+      { ...outputs, build: false },
+    ]) await expect(check(invalid)).rejects.toThrow(/(?:Invalid fast PR validation plan|Missing required validation plan)/);
+    currentHead = "c".repeat(40);
+    await expect(check()).rejects.toThrow("PR head changed");
+    currentHead = prHead;
+    labels = ["ci:full"];
+    await expect(check()).rejects.toThrow("Current PR controls require a fresh full CI run");
+    labels = [];
+    issues = [{ number: 9, labels: ["qa:p1", "qa:scope:global"], body: "" }];
+    await expect(check()).rejects.toThrow("QA hold: #9");
+  });
+
   it("keeps successful fast PR validation green after the timing target", async () => {
-    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
-      expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const outputs = fastOutputs();
     const createdAt = 1_000_000;
     const staticJob = { name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success",
       started_at: new Date(createdAt + 90_000).toISOString(), completed_at: new Date(createdAt + 290_000).toISOString() };
@@ -182,8 +230,7 @@ describe("complete CI and trusted QA health", () => {
 
   it("reports a failed required core step while static is still uploading its result", async () => {
     const createdAt = 1_000_000;
-    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
-      expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const outputs = fastOutputs();
     const preflight = { name: "typecheck + lint", run_attempt: 1, status: "in_progress", conclusion: null,
       steps: [{ name: "Security, data and dispatch core with bounded affected tests", conclusion: "failure" },
         { name: "Upload fast results", conclusion: null }] };
@@ -240,8 +287,7 @@ describe("complete CI and trusted QA health", () => {
 
   it("binds the PR API head to the event while the plan uses the merge SHA", async () => {
     const prHead = "b".repeat(40), mergeSha = "c".repeat(40), createdAt = 1_000_000;
-    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
-      pr_number: 7, pr_head: prHead, expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const outputs = { ...fastOutputs(), pr_number: 7, pr_head: prHead };
     const plan = { version: 1, runId: run.id, attempt: 1, sha: mergeSha, outputs };
     let apiHead = prHead;
     const api = async (path: string) => path === "/actions/runs/100"
@@ -260,8 +306,7 @@ describe("complete CI and trusted QA health", () => {
 
   it("keeps a successful rerun green independently of original and attempt age", async () => {
     const prHead = "b".repeat(40), mergeSha = "c".repeat(40), original = 1_000_000, rerun = 10_000_000;
-    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"],
-      expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const outputs = fastOutputs();
     const plan = { version: 1, runId: run.id, attempt: 2, sha: mergeSha, outputs };
     const staticJob = { name: "typecheck + lint", run_attempt: 2, status: "completed", conclusion: "success",
       created_at: new Date(rerun).toISOString(), started_at: new Date(rerun + 30_000).toISOString(), completed_at: new Date(rerun + 100_000).toISOString() };
@@ -279,8 +324,7 @@ describe("complete CI and trusted QA health", () => {
 
   it("invalidates a fast plan when the Windows request is added after selection", async () => {
     const prHead = "b".repeat(40);
-    const outputs = { fast_pr: true, full_required: false, reduced: false, required_jobs: [], qa_areas: ["global"], pr_number: 7, pr_head: prHead,
-      expected_jobs: [{ id: "static", name: "typecheck + lint", fast: true }] };
+    const outputs = { ...fastOutputs(), pr_number: 7, pr_head: prHead };
     const api = async (path: string) => path === "/pulls/7" ? { head: { sha: prHead }, labels: [{ name: "windows" }] } : [];
     await expect(verifyGate(outputs, { api, createdAt: 1_000_000, now: () => 1_120_000 })).rejects.toThrow("Current PR controls require a fresh full CI run");
   });

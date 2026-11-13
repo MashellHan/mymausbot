@@ -78,6 +78,14 @@ describe("shared local and CI check policy", () => {
     expect(broad.areas).toEqual(["everything"]);
     expect(broad.scope.checks).toEqual(["build", "control-plane"]);
     expect(broad.fastFiles).toEqual([...policy.core, portable].sort());
+    for (const extra of ["package.json", "unknown/runtime.conf"]) {
+      const sourceOnly = plan(["cloudflare/composio-broker/src/triggers.ts", extra], { policy, fastPr: true });
+      expect(sourceOnly.areas).toEqual(["everything"]);
+      expect(sourceOnly.scope.checks).toEqual(["build", "control-plane"]);
+      expect(sourceOnly.fastFiles).toEqual([...policy.core].sort());
+      expect(ciOutputs(sourceOnly.scope, ["ubuntu-latest"]).jobs).toEqual(["control-plane"]);
+      for (const files of [sourceOnly.edit, sourceOnly.ready, sourceOnly.core]) expect(files).not.toContain(broker);
+    }
   });
 
   it("routes Relay's node:test suite away from Vitest while reporting fast deferral", () => {
