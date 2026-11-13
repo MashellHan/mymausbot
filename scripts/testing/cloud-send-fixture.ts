@@ -26,6 +26,48 @@ export const CLOUD_HOST = "omb-t-5e6d7c8b9a0f.fly.dev";
 const EDGE = { host: CLOUD_HOST, "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https", origin: `https://${CLOUD_HOST}` };
 const parse = (text: string) => { try { return JSON.parse(text); } catch { return null; } };
 
+export function cloudPairingRefusalCategory(reply: unknown): "invalid_signature" | "stale_request" | "replayed_request" | "unknown" {
+  const error = reply && typeof reply === "object" && !Array.isArray(reply) ? (reply as { error?: unknown }).error : undefined;
+  switch (error) {
+    case "invalid_signature":
+    case "stale_request":
+    case "replayed_request": return error;
+    default: return "unknown";
+  }
+}
+
+export async function closeOwnedCloudSendFixture(root: string, children: Iterable<ChildProcess>): Promise<void> {
+  const errors: unknown[] = [];
+  for (const child of children) {
+    try { await waitForExit(child, { signal: "SIGTERM" }); } catch (error) { errors.push(error); }
+  }
+  if (errors.length) throw new AggregateError(errors, "Cloud fixture child cleanup failed");
+  await removeTempDir(root);
+}
+
+export async function withCloudSendFixtureCleanup<T>(setup: () => Promise<T>, cleanup: () => Promise<void>): Promise<T> {
+  try { return await setup(); } catch (setupError) {
+    try { await cleanup(); } catch (cleanupError) {
+      throw new AggregateError([setupError, cleanupError], "Cloud fixture setup and cleanup failed");
+    }
+    throw setupError;
+  }
+}
+
+export async function ownConcurrentCloudSendFixtures<T extends { close(): Promise<void> }>(first: Promise<T>, second: Promise<T>): Promise<[T, T]> {
+  try { return await Promise.all([first, second]); } catch (setupError) {
+    const settled = await Promise.allSettled([first, second]);
+    const cleanupErrors: unknown[] = [];
+    for (const result of settled) {
+      if (result.status === "fulfilled") {
+        try { await result.value.close(); } catch (error) { cleanupErrors.push(error); }
+      }
+    }
+    if (cleanupErrors.length) throw new AggregateError([setupError, ...cleanupErrors], "Cloud fixture setup and cleanup failed");
+    throw setupError;
+  }
+}
+
 export interface CloudSendFixture {
   root: string;
   desktopBase: string;
@@ -179,12 +221,14 @@ export async function launchCloudSendFixture({ onePasswordToken, cloudOnePasswor
   cloudSignedIn?: boolean;
 }): Promise<CloudSendFixture> {
   const root = mkdtempSync(join(tmpdir(), "omb-cloud-send-"));
+  const children = new Set<ChildProcess>();
+  const closeOwned = () => closeOwnedCloudSendFixture(root, children);
+  return withCloudSendFixtureCleanup(async () => {
   const secret = randomBytes(32).toString("base64url");
   const ownerCapability = randomBytes(32).toString("base64url");
   const answers: string[] = [];
   const labels: string[] = [];
   let logs = "";
-  const children = new Set<ChildProcess>();
   const remember = async (response: Response) => { answers.push(await response.clone().text()); return response; };
 
   async function start(name: string, own: NodeJS.ProcessEnv, port: number, extra: string[] = [], ipc = false, acceptedToken = onePasswordToken, calls = 0, engine = "", signedIn = true): Promise<ChildProcess> {
@@ -258,8 +302,7 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     const reply: unknown = await response.json().catch(() => null);
     const code = reply && typeof reply === "object" && !Array.isArray(reply) ? (reply as { code?: unknown }).code : undefined;
     if (!response.ok || typeof code !== "string" || !code) {
-      const shape = reply === null ? "null" : Array.isArray(reply) ? "array" : typeof reply;
-      throw new Error(`Cloud fixture pairing returned HTTP ${response.status} (body ${shape}, code ${typeof code === "string" ? (code ? "present" : "empty") : typeof code})`);
+      throw new Error(`Cloud fixture pairing returned HTTP ${response.status} (refusal ${cloudPairingRefusalCategory(reply)})`);
     }
     return code;
   };
@@ -581,8 +624,8 @@ await import(${JSON.stringify(pathToFileURL(join(SERVER_DIR, "testing", "fake-cl
     async close() {
       main.close();
       for (const desk of desks) desk.close();
-      for (const child of children) await waitForExit(child, { signal: "SIGTERM" });
-      await removeTempDir(root);
+      await closeOwned();
     },
   };
+  }, closeOwned);
 }

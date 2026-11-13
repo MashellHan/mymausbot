@@ -5,7 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { launchCloudSendFixture, type CloudSendFixture } from "../scripts/testing/cloud-send-fixture.ts";
+import { launchCloudSendFixture, ownConcurrentCloudSendFixtures, type CloudSendFixture } from "../scripts/testing/cloud-send-fixture.ts";
 import { hostTimeout } from "./testing/host-timeout.ts";
 
 const TOKEN = `ops_fake-one-session-${randomBytes(8).toString("hex")}`;
@@ -31,7 +31,7 @@ function throughAdmin(fx: CloudSendFixture, device: string) {
 
 let laptop: CloudSendFixture, desk: CloudSendFixture;
 beforeAll(async () => {
-  [laptop, desk] = await Promise.all([launchCloudSendFixture({ onePasswordToken: TOKEN }), launchCloudSendFixture({ onePasswordToken: TOKEN })]);
+  [laptop, desk] = await ownConcurrentCloudSendFixtures(launchCloudSendFixture({ onePasswordToken: TOKEN }), launchCloudSendFixture({ onePasswordToken: TOKEN }));
   throughAdmin(laptop, "laptop");
   throughAdmin(desk, "desk");
 }, hostTimeout(180_000));
