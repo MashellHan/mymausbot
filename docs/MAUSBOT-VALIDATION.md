@@ -268,6 +268,22 @@ retried. Preflight outages before any prompt attempt retry on the next tick.
 The schedule requires this Mac and Herdr to be available; CI's coverage
 fallback does not depend on them.
 
+At the first available hourly tick of each Asia/Shanghai day, the same queue
+reads the complete open issue inventory and hands Lead a bounded review. It
+separates QA, process and other requests, prioritizes verified closure and stale
+defects, and includes paused or product requests only for an explicit disposition.
+Unresolved QA and process work can return on a six-hour cadence without a new
+issue or changed action key. Each handoff states its current owner, next action,
+recorded evidence or blocker, and existing repair PR when present. The durable
+queue state records inventory, delivery, assignment, fixing, review, verification
+and closure evidence separately. A prompt receipt proves only delivery; Lead
+records actual work and exact accepted completion on the original issue or PR.
+For a closed issue, `QA-Disposition-Evidence: <accepted evidence link>` or
+`QA-Closure-Evidence: <accepted evidence link>` or an existing Lead closure
+marker in its body binds the queue's
+closed record; missing closure evidence remains pending. The queue never resumes paused work,
+reassigns an active repair or closes an issue automatically.
+
 Lead targets triage within 30 minutes and sets `qa:triaged`, removes `qa:untriaged`, chooses
 `qa:p0`, `qa:p1` or `qa:p2`, selects a `qa:kind:*` and `qa:scope:*`, and records:
 
