@@ -10,7 +10,11 @@ Selection alone changes nothing before Save. Specialists do not inherit their
 Chief's authority or permissions. Persisted empty departments are selectable
 too, as is General. A new grant must name an existing department exactly.
 Renaming or deleting an empty department revokes its old grants; recreating
-its name never restores them. A no-op rename preserves them.
+its name never restores them. A no-op rename preserves them. A Chief in charge
+of every current department (General and every other one selected) keeps only
+those explicit grants when a new department is created. The owner must select
+and save that new department separately. This also applies to a Chief someone
+owns on a Team Cloud.
 
 A bot's own peers list is the one setting that narrows reach. When it is set
 (for example by a template), **Permissions** names the bots in it and offers

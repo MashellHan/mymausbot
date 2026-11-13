@@ -1265,6 +1265,34 @@ describe("Store", () => {
     }
   });
 
+  it("keeps existing Chief grants unchanged when team setup creates a department", () => {
+    const store = new Store(selection);
+    const lead = store.createBot({ name: "Lead", section: "Ops" });
+    store.patchBot(lead.id, { chiefOfStaff: true, managedSections: [""] });
+    const planner = store.createBot({ name: "Planner" });
+    store.setChiefOfStaff(planner.id);
+    store.applyTeamSetup({ version: 1, requestId: "setup-new-team", botId: planner.id, threadId: planner.threadId,
+      reason: "Requested", createdAt: 1, requesterRevision: "fixture", newTeams: ["Research"], operations: [
+        { action: "create", botId: "researcher", threadId: "researcher-thread", fields: { name: "Researcher", section: "Research", modelSelection: selection() } },
+      ] });
+    expect(store.bot(lead.id)?.managedSections).toEqual([""]);
+    expect(store.bot(planner.id)?.managedSections).toEqual(["Research"]);
+    const restored = new Store(selection);
+    expect(restored.bot("researcher")?.section).toBe("Research");
+    expect(restored.bot(lead.id)?.managedSections).toEqual([""]);
+  });
+
+  it("does not infer future grants from a Chief covering all current departments", async () => {
+    const store = new Store(selection);
+    const chief = store.createBot({ name: "Chief" });
+    store.setChiefOfStaff(chief.id);
+    store.createBot({ name: "First", section: "First team" });
+    store.createBot({ name: "Second", section: "Second team" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(store.bot(chief.id)?.managedSections).toBeUndefined();
+    expect(new Store(selection).bot(chief.id)?.managedSections).toBeUndefined();
+  });
+
   it("lands a created specialist in its proposed working folder, keeping the private workspace clean", () => {
     const store = new Store(selection);
     const chief = store.createBot({ name: "Chief", section: "Ops" });

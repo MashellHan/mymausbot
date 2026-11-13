@@ -118,6 +118,7 @@ const TEAM_ACTION_KEYS: Record<string, string> = {
   mini_app_rollback: "activity.tool.team.miniAppRollback",
   message_person: "activity.tool.team.messagePerson",
   post_to_room: "activity.tool.team.postToRoom",
+  post_to_thread: "activity.tool.team.postToThread",
   propose_bot_deletion: "activity.tool.team.proposeBotDeletion",
   propose_model: "activity.tool.team.proposeModel",
   propose_profile: "activity.tool.team.proposeProfile",

@@ -31,7 +31,7 @@ it("a bot's turn reads its accounts' usage limits through its own capability, an
     const { text } = await answer.json() as { text: string };
     const accounts = JSON.parse(text).accounts as Array<{ engine: string; status: string; windows: unknown[]; why?: string }>;
     const claude = accounts.find((account) => account.engine === "claudeAgent");
-    expect(claude, text).toMatchObject({ status: "unsupported", windows: [] });
+    expect(claude, text).toMatchObject({ status: "unknown", windows: [] });
     expect(claude!.why, text).toBeTruthy();
     writeFileSync(gate, "finish");
   } finally {

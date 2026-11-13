@@ -62,6 +62,7 @@ export interface OverviewFacts {
     | "chiefOfStaff"
     | "managedSections"
   >;
+  /** A Chief in charge of every department, which therefore also gets each new one (server/department-grants.ts). */
   routines: Array<{
     id: string;
     name: string;
