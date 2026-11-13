@@ -135,6 +135,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     openedRequest.current = requestedApp.nonce;
     focusAfter.current = "selected";
     rememberApp(storageKey, requestedApp.id);
+    if (requestedApp.id === selectedRef.current) return;
     setSelectedId(requestedApp.id);
     setDocument(null);
     setAppState(null);
@@ -231,6 +232,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
 
   const choose = (id: string) => {
     rememberApp(storageKey, id);
+    if (id === selectedRef.current) return;
     setSelectedId(id);
     setDocument(null);
     setAppState(null);
