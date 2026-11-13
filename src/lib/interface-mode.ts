@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { SIMPLE_ONLY } from "./simple-only";
-import { reportWindowPrefs } from "./window-prefs";
+import { windowPrefChanged } from "./window-pref-changes";
 
 export const ADVANCED_MODE_KEY = "omb-advanced-mode";
 export const INTERFACE_MODE_KEY = "omb-interface-mode";
@@ -75,7 +75,7 @@ export function setInterfaceMode(mode: InterfaceMode): void {
   } catch {
   }
   notify();
-  reportWindowPrefs();
+  windowPrefChanged();
 }
 
 export const setAdvancedMode = (enabled: boolean): void => setInterfaceMode(enabled ? "advanced" : "simple");

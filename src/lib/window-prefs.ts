@@ -7,14 +7,15 @@ import { readAdvancedMode, setAdvancedMode } from "./interface-mode";
 import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
 import { readSendKey, setSendKey } from "./send-key";
 import { applySkinChoice, readSkinChoice } from "./skins";
+import { onWindowPrefChanged } from "./window-pref-changes";
 
 const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }> = {
-  "appearance.skin": { read: readSkinChoice, write: applySkinChoice },
-  "appearance.advanced": { read: readAdvancedMode, write: setAdvancedMode },
-  "appearance.font": { read: readFont, write: applyFont },
-  "appearance.chatWidth": { read: readChatWidth, write: applyChatWidth },
-  "general.sendKey": { read: readSendKey, write: setSendKey },
-  "general.notificationSounds": { read: notificationSoundsEnabled, write: setNotificationSounds },
+  "appearance.skin": { read: () => readSkinChoice(), write: (choice) => applySkinChoice(choice) },
+  "appearance.advanced": { read: () => readAdvancedMode(), write: (on) => setAdvancedMode(on) },
+  "appearance.font": { read: () => readFont(), write: (font) => applyFont(font) },
+  "appearance.chatWidth": { read: () => readChatWidth(), write: (width) => applyChatWidth(width) },
+  "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
+  "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
 };
 
 export function applyWindowPref(frame: WindowPrefFrame): void {
@@ -38,3 +39,5 @@ export function reportWindowPrefs(): void {
     fetch("/api/window-prefs", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ values: windowPrefValues() }) }).catch(() => undefined);
   }, 200);
 }
+
+onWindowPrefChanged(reportWindowPrefs);
