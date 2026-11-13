@@ -180,6 +180,16 @@ beforeEach(() => {
 afterEach(() => { root.unmount(); host.remove(); vi.unstubAllGlobals(); setLocale("en"); });
 
 describe("Mini Apps panel", () => {
+  it("keeps the current app visible when its icon is selected again", async () => {
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+    const currentFrame = frame();
+    const stateReads = fixture.api.mock.calls.filter(([path]) => path === "/api/mini-apps/app_a/state").length;
+    await act(async () => { selected()!.click(); });
+    expect(frame()).toBe(currentFrame);
+    expect(fixture.api.mock.calls.filter(([path]) => path === "/api/mini-apps/app_a/state")).toHaveLength(stateReads);
+  });
+
   it("opens a suggested installed app over the saved app without locking later choices", async () => {
     stored.set("omb-mini-app:fixture-environment", "app_a");
     await render({ id: "app_b", nonce: 1 });
