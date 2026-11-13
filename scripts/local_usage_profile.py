@@ -28,6 +28,17 @@ HISTORY_PAGES_PER_REPOSITORY = 8
 MAX_HISTORY_PAGES = 1000
 COMPARE_PAGES_PER_REPOSITORY = 4
 COMMIT_BATCH_SIZE = 25
+SOURCE_VALIDATION_CODES = frozenset({
+    "account_identity_mismatch", "conflicting_profile_repository", "conflicting_profile_repository_head",
+    "conflicting_repository_day", "duplicate_profile_commit", "duplicate_profile_pr",
+    "duplicate_profile_repository", "incomplete_commit_buckets", "incomplete_commit_total",
+    "incomplete_graphql_response", "incomplete_pr_pages", "incomplete_profile_repositories",
+    "invalid_commit_bucket", "invalid_count", "invalid_instant", "invalid_pr_cursor",
+    "invalid_pr_page", "invalid_private_repository_config", "invalid_profile_default_branch",
+    "invalid_profile_default_head", "invalid_profile_pr", "invalid_profile_window",
+    "invalid_repository", "invalid_repository_category", "invalid_response_size",
+    "profile_changed_during_pagination", "profile_page_budget_exhausted",
+})
 
 PROFILE_QUERY = """query($from: DateTime!, $to: DateTime!, $after: String) {
   viewer {
@@ -265,10 +276,9 @@ def profile_records(config, profile, budget, first, at, repository_category, que
             raise ValueError("invalid_pr_page")
         for node in nodes:
             pr = node["pullRequest"]
-            occurred = instant(node["occurredAt"])
+            instant(node["occurredAt"])
             created = instant(pr["createdAt"])
-            if (not start.date() <= occurred.date() <= at.date()
-                    or not isinstance(pr.get("author"), dict)
+            if (not isinstance(pr.get("author"), dict)
                     or pr["author"].get("id") != profile["stableId"]
                     or pr["author"].get("login", "").casefold() != profile["login"].casefold()
                     or not isinstance(pr.get("id"), str) or not pr["id"]):
@@ -750,7 +760,10 @@ def collect(config, run, repository_category, *, at=None, days=60, previous=None
                                          and cache[item["repository"]["id"]].get("head") == item["head"]
                                          for item in candidates.values())}}
         except (OSError, subprocess.SubprocessError, TimeoutError, KeyError, TypeError, ValueError, IndexError, AttributeError) as error:
-            reason = "source_" + type(error).__name__
+            code = error.args[0] if isinstance(error, ValueError) and len(error.args) == 1 else None
+            safe_code = (code if isinstance(code, str) and len(code) <= 80
+                         and code in SOURCE_VALIDATION_CODES else type(error).__name__)
+            reason = "source_" + safe_code
             source = {"id": identity, "account": account, "status": "unavailable",
                       "coverage": {"identityVerified": False, "paginationComplete": False,
                                    "visibilityComplete": False, "reasons": [reason]},
