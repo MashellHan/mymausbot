@@ -1,8 +1,13 @@
 import copy
 import datetime as dt
+import importlib.util
+import io
 import json
+from pathlib import Path
 import re
 import subprocess
+import sys
+import types
 import unittest
 import urllib.parse
 from unittest.mock import patch
@@ -10,6 +15,10 @@ from unittest.mock import patch
 import local_usage_profile as profile
 import local_usage_profile_private as private
 import local_usage_ado as ado
+
+SPEC = importlib.util.spec_from_file_location("usage_memory", Path(__file__).with_name("refresh-local-usage.py"))
+usage = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(usage)
 
 
 AT = dt.datetime.fromisoformat("2026-11-09T12:00:00+00:00")
@@ -200,6 +209,57 @@ def collect(api=None, account=None, at=AT, previous=None, focus_start=None):
 
 
 class ProfileBeijingTests(unittest.TestCase):
+    def test_partial_day_profile_validates_raw_pages_but_credits_only_created_at_inside_window(self):
+        api = Api()
+        api.profile_commit_at = "2026-11-13T00:00:00Z"
+        api.profile_pr_rows = [
+            ("before-focus", "2026-11-12T15:33:32Z", PUBLIC),
+            ("inside-focus", "2026-11-13T01:00:00Z", PUBLIC),
+            ("after-cutoff", "2026-11-13T05:00:00Z", PUBLIC),
+        ]
+        at = dt.datetime.fromisoformat("2026-11-13T04:44:46+00:00")
+        config = {**CONFIG, "githubHelper": str(Path(usage.__file__).resolve())}
+        session = usage.GitHubFileSession({**config, "githubProfiles": [ACCOUNT]}, Path("/fixture/no-auth"))
+        session._credential = lambda name: {"token": "synthetic-token", "login": ACCOUNT["login"],
+                                             "stableId": ACCOUNT["stableId"]}
+        requests = []
+
+        def open_request(request, timeout):
+            self.assertEqual(request.get_header("Authorization"), "Bearer synthetic-token")
+            requests.append(request)
+            if request.full_url.endswith("/user"):
+                return io.BytesIO(json.dumps({"node_id": ACCOUNT["stableId"],
+                    "login": ACCOUNT["login"],
+                    "html_url": "https://github.com/" + ACCOUNT["login"]}).encode())
+            self.assertTrue(request.full_url.endswith("/graphql"))
+            body = json.loads(request.data)
+            self.assertEqual(body["query"], profile.PROFILE_QUERY)
+            self.assertEqual(body["variables"]["from"], "2026-11-12T16:00:00Z")
+            self.assertEqual(body["variables"]["to"], "2026-11-13T04:44:46Z")
+            args = [sys.executable, config["githubHelper"], "gh", ACCOUNT["profile"], "api", "graphql"]
+            for key, value in body["variables"].items():
+                if value is not None:
+                    args.extend(("-f", f"{key}={value}"))
+            args.extend(("-f", "query=" + body["query"]))
+            return io.BytesIO(api(args, timeout).encode())
+
+        session.http = types.SimpleNamespace(open=open_request)
+        typed = profile.profile_records(config, ACCOUNT, profile.Budget(config, session.run),
+                                        dt.date(2026, 9, 15), at,
+                                        lambda remote, configured: "personal", dt.date(2026, 11, 13))
+        self.assertEqual(typed["typedTotals"]["prs"], 3)
+        self.assertEqual([row["day"] for row in typed["prs"]], ["2026-11-13"])
+        self.assertEqual(len(typed["prKeys"]), 1)
+        self.assertEqual(len(requests), 3)
+
+        duplicate = Api()
+        duplicate.profile_commit_at = api.profile_commit_at
+        duplicate.profile_pr_rows = [api.profile_pr_rows[0], api.profile_pr_rows[0]]
+        with self.assertRaisesRegex(ValueError, "duplicate_profile_pr"):
+            profile.profile_records(CONFIG, ACCOUNT, profile.Budget(CONFIG, duplicate),
+                                    dt.date(2026, 9, 15), at,
+                                    lambda remote, configured: "personal", dt.date(2026, 11, 13))
+
     def assert_same_days_except_capture_time(self, first, second):
         for days in (first, second):
             captured = {day["capturedAt"] for day in days}
@@ -359,6 +419,23 @@ class ProfileBeijingTests(unittest.TestCase):
                               if row["day"] == "2026-11-09")["knownPrs"], 2)
         self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
         self.assertFalse(any("history(first:" in arg for call in api.calls for arg in call))
+
+    def test_calendar_wide_profile_rows_keep_old_day_and_allow_empty_focus_correction(self):
+        api = Api()
+        api.profile_commit_at = "2026-11-10T08:00:00Z"
+        api.profile_pr_rows = [("old", "2026-11-09T15:00:00Z", PUBLIC),
+                               ("today", "2026-11-10T09:00:00Z", PUBLIC)]
+        account = {**ACCOUNT, "privateRepositories": []}
+        initial = collect(api, account, at=dt.datetime.fromisoformat("2026-11-10T10:00:00+00:00"))
+        self.assertEqual(initial["sources"][0]["days"][-1]["knownPrs"], 1)
+        api.profile_pr_rows = [("old", "2026-11-09T15:00:00Z", PUBLIC),
+                               ("after-cutoff", "2026-11-10T13:00:00Z", PUBLIC)]
+        current = collect(api, account, at=dt.datetime.fromisoformat("2026-11-10T12:00:00+00:00"),
+                          previous=initial, focus_start="2026-11-10")
+        days = {row["day"]: row for row in current["sources"][0]["days"]}
+        self.assertEqual(days["2026-11-09"]["knownPrs"], 1)
+        self.assertEqual(days["2026-11-10"]["knownPrs"], 0)
+        self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
 
     def test_private_pr_discovery_uses_the_same_focus_and_retains_older_known_pr(self):
         api = Api()

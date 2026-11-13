@@ -162,6 +162,101 @@ class AdoTests(unittest.TestCase):
                             for query in queries))
         self.assertTrue(current["sources"][0]["coverage"]["paginationComplete"])
 
+    def test_detail_transport_timeout_persists_pinned_prefix_and_resumes_through_protected_adapter(self):
+        api = Api()
+        requests = []
+        interrupted = [False]
+
+        def session():
+            protected = usage.AzureMemorySession(Path("/fixture/unused-auth"), [EMAIL],
+                                                 projects={("example", "project")})
+            protected.token = lambda: "fixture-token"
+
+            def open_request(request, timeout):
+                self.assertEqual(request.get_header("Authorization"), "Bearer fixture-token")
+                requests.append(request.full_url)
+                if request.full_url.split("?")[0].endswith("/commits/" + OLDER) and not interrupted[0]:
+                    interrupted[0] = True
+                    raise TimeoutError("synthetic transport timeout: secret")
+                args = ["/fixture/az", "rest", "--method", "get", "--url", request.full_url,
+                        "--resource", ado.RESOURCE, "-o", "json"]
+                return io.BytesIO(api(args, timeout).encode())
+
+            protected.http = types.SimpleNamespace(open=open_request)
+            return protected
+
+        failed = collect(session().run)
+        work = failed["state"]["projects"]["example/project"]["work"]
+        self.assertEqual(failed["sources"][0]["status"], "partial")
+        self.assertIn("commit-detail-read-interrupted", failed["sources"][0]["coverage"]["reasons"])
+        self.assertNotIn("secret", json.dumps(failed))
+        self.assertFalse(work["scanComplete"])
+        self.assertEqual(len(work["progress"][REPO]["items"]), 1)
+        self.assertNotIn(REPO, work["repoErrors"])
+        resumed = collect(session().run, previous=failed)
+        self.assertEqual(resumed["sources"][0]["status"], "ready")
+        self.assertEqual(resumed["sources"][0]["days"][-2]["commits"], 1)
+        self.assertEqual(sum(url.split("?")[0].endswith("/commits/" + HEAD) for url in requests), 1)
+
+    def test_interrupted_final_head_check_retains_pinned_proof_but_requires_remote_recheck(self):
+        api = Api()
+        previous = collect(api)
+        newer = "d" * 40
+        api.heads[REPO] = newer
+        api.histories[newer] = [commit(newer, "2026-11-10T00:01:00Z"), *api.histories[HEAD]]
+        api.details[newer] = api.histories[newer][0]
+        api.enforce_query_window = True
+        refs = [0]
+
+        def interrupted(args, timeout):
+            if "/refs?" in args[5]:
+                refs[0] += 1
+                if refs[0] == 2:
+                    raise TimeoutError("synthetic final head check interrupted")
+            return api(args, timeout)
+
+        at = AT + dt.timedelta(minutes=5)
+        failed = collect(interrupted, previous=previous, at=at, focus_start="2026-11-10")
+        state = failed["state"]["projects"]["example/project"]
+        self.assertIn("default-head-read-interrupted", failed["sources"][0]["coverage"]["reasons"])
+        self.assertEqual(state["cache"][REPO]["head"], newer)
+        self.assertEqual(state["work"]["progress"][REPO]["head"], newer)
+        self.assertFalse(state["work"]["scanComplete"])
+        resumed = collect(api, previous=failed, at=at, focus_start="2026-11-10")
+        self.assertEqual(resumed["sources"][0]["status"], "ready")
+        self.assertEqual(resumed["state"]["projects"]["example/project"]["cache"][REPO]["head"], newer)
+
+    def test_one_slow_project_leaves_the_second_project_a_bounded_read_slice(self):
+        first = Api()
+        second = Api()
+        second.repos[0]["name"] = "other"
+        second.repos[0]["defaultBranch"] = None
+        second.prs = []
+        config = copy.deepcopy(CONFIG)
+        config["adoRemotes"].append("https://dev.azure.com/other/project/_git/other")
+        config["adoPrincipals"]["other"] = {"stableId": OWNER, "alias": EMAIL}
+        elapsed = [0.0]
+        calls = []
+
+        def run(args, timeout):
+            target = args[5]
+            other = "/other/" in target
+            calls.append((other, target))
+            elapsed[0] += 0.015 if not other else 0.005
+            if other:
+                mapped = list(args)
+                mapped[5] = target.replace("/other/project/", "/example/project/").replace(
+                    "/other/_apis/", "/example/_apis/")
+                return second(mapped, timeout)
+            return first(args, timeout)
+
+        with patch.object(ado.time, "monotonic", lambda: elapsed[0]), \
+                patch.object(ado, "SECONDS_TOTAL", 0.15), patch.object(ado, "SECONDS_PER_PROJECT", 0.15):
+            result = ado.collect(config, run, lambda remote, cfg: "work", at=AT)
+        self.assertIn("request-budget", result["sources"][0]["coverage"]["reasons"])
+        self.assertEqual(result["sources"][1]["status"], "ready")
+        self.assertTrue(any(other for other, _ in calls))
+
     def test_warm_focus_bounds_pr_and_commit_queries_and_keeps_coauthor_author_day(self):
         api = Api()
         api.enforce_query_window = True
