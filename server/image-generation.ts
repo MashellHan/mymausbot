@@ -228,19 +228,7 @@ export async function generateImageWith(
       fail(`Could not reach ${provider.name} image generation`, 502, unreached(error));
     }
   };
-  let response = await send(body);
-
-  // Some Custom gateways accept only size "auto" and reject every exact size, so a failed exact size gets one retry with "auto".
-  if (!response.ok && slot.provider === "custom" && !NOT_STARTED_STATUSES.has(response.status)) {
-    await response.body?.cancel().catch(() => undefined);
-    // A retry that cannot connect keeps the exact size's error; only cancel and timeout end the call there.
-    const retry = await send({ ...body, size: "auto" }).catch((error: unknown) => {
-      if (cancel?.aborted || timeoutSignal.aborted) throw error;
-      return undefined;
-    });
-    if (retry?.ok) response = retry;
-    else await retry?.body?.cancel().catch(() => undefined);
-  }
+  const response = await send(body);
 
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);

@@ -69,4 +69,27 @@ describe("resetting a bot's cloud computer", () => {
     deleteManagedBoat.mockRejectedValue(Object.assign(new Error("this cloud computer is in use — stop its bot's work first"), { status: 409 }));
     await expect(resetBotCloudComputer(cfg, "bot-a", owners, vi.fn())).rejects.toMatchObject({ status: 409 });
   });
+
+  it("keeps the authority check at the final deletion claim after deferred inventory", async () => {
+    listManagedBoats.mockResolvedValue({ configured: true, available: true, problem: null, instances: [instance("bx_mine", "bot-a")] });
+    let finishInventory!: () => void;
+    const inventory = new Promise<void>((resolve) => { finishInventory = resolve; });
+    let allowed = true;
+    const providerDelete = vi.fn();
+    deleteManagedBoat.mockImplementation(async (_cfg, _owners, _id, _name, claim) => {
+      await inventory;
+      claim(instance("bx_mine", "bot-a"));
+      providerDelete();
+      return { ok: true };
+    });
+    const pending = resetBotCloudComputer(cfg, "bot-a", owners, () => {
+      if (!allowed) throw new Error("not yours");
+      return () => {};
+    }, "bx_mine");
+    await Promise.resolve();
+    allowed = false;
+    finishInventory();
+    await expect(pending).rejects.toThrow("not yours");
+    expect(providerDelete).not.toHaveBeenCalled();
+  });
 });

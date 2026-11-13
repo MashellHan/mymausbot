@@ -9,7 +9,7 @@ const bot = (id: string, name: string) => ({ id, name, color: "blue" }) as unkno
 const ada = bot("bot-a", "Ada"), chief = bot("chief", "Chief"), bea = bot("bot-b", "Bea");
 const IN_USE = () => Object.assign(new Error("this cloud computer is in use — stop its bot's work first"), { status: 409 });
 
-function setup(options: { refusal?: (from: BotRecord, target: BotRecord) => string | null; reset?: () => Promise<any>; computer?: () => Promise<string | null> } = {}) {
+function setup(options: { refusal?: (from: BotRecord, target: BotRecord) => string | null; reset?: (botId: string, boxId: string | null, requireAuthority: () => void) => Promise<any>; computer?: () => Promise<string | null> } = {}) {
   const lines = new Map<string, Line[]>();
   const roster = [ada, chief, bea];
   const store = {
@@ -29,6 +29,8 @@ function setup(options: { refusal?: (from: BotRecord, target: BotRecord) => stri
   const timers: Array<() => void> = [];
   const reset = vi.fn(options.reset ?? (async () => ({ ok: true })));
   const computer = vi.fn(options.computer ?? (async () => "bx_1"));
+  const active = { value: true };
+  const owner = new AbortController();
   const resets = createCloudComputerResetAsks({
     store: store as never,
     refusal: options.refusal ?? (() => null),
@@ -40,13 +42,14 @@ function setup(options: { refusal?: (from: BotRecord, target: BotRecord) => stri
     const res = { status: 0, body: {} as Record<string, any> };
     await resets.internal({
       method: "POST", path: "/api/internal/cloud-computer/reset", res: {} as never, sender, threadId: "t1", readBody: async () => ({ why: "Stuck starting.", ...body }),
+      requireActive: () => { if (!active.value) throw Object.assign(new Error("The turn ended"), { status: 401 }); }, signal: owner.signal,
       json: ((_res: unknown, status: number, sent: Record<string, unknown>) => { res.status = status; res.body = sent; }) as never,
     });
     return res;
   };
   const line = () => lines.get("t1")?.at(-1);
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-  return { call, line, reset, computer, timers, flush, lines, roster };
+  return { call, line, reset, computer, timers, flush, lines, roster, active, owner };
 }
 
 describe("a bot resetting its stuck cloud computer", () => {
@@ -59,7 +62,7 @@ describe("a bot resetting its stuck cloud computer", () => {
     expect(line()).not.toHaveProperty("card");
     expect(line()?.text).toMatch(/^Resetting Ada's cloud desktop: It has been starting for 20 minutes\./);
     await flush();
-    expect(reset).toHaveBeenCalledWith("bot-a", "bx_1");
+    expect(reset).toHaveBeenCalledWith("bot-a", "bx_1", expect.any(Function));
     expect(line()?.text).toContain("Reset: a fresh cloud desktop starts with Ada's next message.");
   });
 
@@ -76,11 +79,13 @@ describe("a bot resetting its stuck cloud computer", () => {
 
   it("waits for the calling turn to end: a computer in use is retried, then reset", async () => {
     let busy = true;
-    const { call, line, reset, timers, flush } = setup({ reset: async () => { if (busy) throw IN_USE(); return { ok: true }; } });
+    const { call, line, reset, timers, flush, active, owner } = setup({ reset: async () => { if (busy) throw IN_USE(); return { ok: true }; } });
     await call(ada, {});
     await flush();
     expect(line()?.text).toContain("Waiting for Ada to finish its work");
     expect(timers).toHaveLength(1);
+    active.value = false;
+    owner.abort();
     busy = false;
     timers.shift()!();
     await flush();
@@ -116,7 +121,7 @@ describe("a bot resetting its stuck cloud computer", () => {
     expect(asked.status).toBe(200);
     expect(asked.body.text).toContain("Ada's cloud computer is being reset");
     await flush();
-    expect(reset).toHaveBeenCalledWith("bot-a", "bx_1");
+    expect(reset).toHaveBeenCalledWith("bot-a", "bx_1", expect.any(Function));
     expect((await call(chief, { targetBotId: "nobody" })).status).toBe(404);
   });
 
@@ -135,6 +140,62 @@ describe("a bot resetting its stuck cloud computer", () => {
     await flush();
     expect(reset).toHaveBeenCalledTimes(1);
     expect(timers).toHaveLength(0);
+    expect(line()?.text).toContain("Not reset: not yours");
+  });
+
+  it.each(["stopped turn", "aborted request"])("does not accept after deferred inventory when the %s ends", async (reason) => {
+    let finishInventory!: (boxId: string | null) => void;
+    const inventory = new Promise<string | null>((resolve) => { finishInventory = resolve; });
+    const { call, computer, reset, lines, flush, active, owner } = setup({ computer: async () => inventory });
+    const pending = call(ada, {});
+    await flush();
+    expect(computer).toHaveBeenCalledOnce();
+    if (reason === "stopped turn") active.value = false;
+    else owner.abort();
+    finishInventory("bx_1");
+    await expect(pending).rejects.toMatchObject({ status: 401 });
+    expect(lines.has("t1")).toBe(false);
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Chief whose authority changes during initial inventory before recording a reset", async () => {
+    let finishInventory!: (boxId: string | null) => void;
+    const inventory = new Promise<string | null>((resolve) => { finishInventory = resolve; });
+    let allowed = true;
+    const { call, computer, reset, lines, flush } = setup({
+      computer: async () => inventory,
+      refusal: () => allowed ? null : "not yours",
+    });
+    const pending = call(chief, { targetBotId: "bot-a" });
+    await flush();
+    expect(computer).toHaveBeenCalledOnce();
+    allowed = false;
+    finishInventory("bx_1");
+    await expect(pending).resolves.toMatchObject({ status: 403, body: { error: "not yours" } });
+    expect(lines.has("t1")).toBe(false);
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it("rechecks a Chief's authority after the accepted reset's deferred prerequisite before deletion", async () => {
+    let finishPrerequisite!: () => void;
+    const prerequisite = new Promise<void>((resolve) => { finishPrerequisite = resolve; });
+    let allowed = true;
+    const deletion = vi.fn();
+    const { call, line, reset, flush } = setup({
+      refusal: () => allowed ? null : "not yours",
+      reset: async (_botId, _boxId, requireAuthority) => {
+        await prerequisite;
+        requireAuthority();
+        deletion();
+        return { ok: true };
+      },
+    });
+    expect((await call(chief, { targetBotId: "bot-a" })).status).toBe(200);
+    expect(reset).toHaveBeenCalledOnce();
+    allowed = false;
+    finishPrerequisite();
+    await flush();
+    expect(deletion).not.toHaveBeenCalled();
     expect(line()?.text).toContain("Not reset: not yours");
   });
 
@@ -174,7 +235,7 @@ describe("a bot resetting its stuck cloud computer", () => {
     const { call, reset, flush } = setup({ computer: async () => null });
     await call(ada, {});
     await flush();
-    expect(reset).toHaveBeenCalledWith("bot-a", null);
+    expect(reset).toHaveBeenCalledWith("bot-a", null, expect.any(Function));
   });
 
   it("posts nothing and resets nothing when it cannot tell which computer runs now", async () => {

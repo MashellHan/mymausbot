@@ -44,9 +44,9 @@ export function hasTeamAuthority(
       typeof value === "string" && sectionKey(value) === target));
 }
 
-/** A Chief the owner put in charge of every department there is (General and each one ticked under "Also in charge of"),
- * which is why it also gets each new one (server/department-grants.ts). Never a Chief someone owns on a Team Cloud: it
- * answers for its person's bots, not for departments. */
+/** A Chief the owner put in charge of every department there is (General and each one ticked under "Also in charge of").
+ * Newly registered departments still need an explicit grant. A Chief someone owns on a Team Cloud answers for its
+ * person's bots, not for departments. */
 export function inChargeOfEvery(
   bot: Pick<RosterMember, "section" | "chiefOfStaff" | "managedSections" | "createdBy" | "reportsTo" | "defaultBot">,
   departments: readonly string[],

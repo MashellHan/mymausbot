@@ -24,7 +24,7 @@ export interface CloudComputerResetAsksDeps {
   /** The id of the bot's own cloud computer now, null when it has none; throws when that cannot be read. */
   computer(botId: string): Promise<string | null>;
   /** Deletes the bot's own cloud computer, only while it is still `boxId`; throws with status 409 while it is in use. */
-  reset(botId: string, boxId: string | null): Promise<Reset>;
+  reset(botId: string, boxId: string | null, requireAuthority: () => void): Promise<Reset>;
   setTimer?(run: () => void, ms: number): void;
   /** The language of the person the conversation is for. */
   language?(threadId: string): string | undefined;
@@ -64,7 +64,13 @@ export function createCloudComputerResetAsks(deps: CloudComputerResetAsksDeps) {
       if (!from || !target) { finish(run, words(run.threadId, "server.cloudReset.gone", { name: run.targetName })); return; }
       const refused = deps.refusal(from, target);
       if (refused) { finish(run, words(run.threadId, "server.cloudReset.failed", { reason: refused })); return; }
-      const result = await deps.reset(run.targetId, run.boxId);
+      const requireAuthority = () => {
+        const currentFrom = store.bot(run.fromId), currentTarget = store.bot(run.targetId);
+        if (!currentFrom || !currentTarget) throw new Error(`${run.targetName} or the bot that asked no longer exists.`);
+        const currentRefusal = deps.refusal(currentFrom, currentTarget);
+        if (currentRefusal) throw new Error(currentRefusal);
+      };
+      const result = await deps.reset(run.targetId, run.boxId, requireAuthority);
       const key = result.missing ? "server.cloudReset.missing" : result.pending ? "server.cloudReset.pending" : "server.cloudReset.done";
       finish(run, words(run.threadId, key, { name: run.targetName }));
     } catch (error) {
@@ -78,7 +84,8 @@ export function createCloudComputerResetAsks(deps: CloudComputerResetAsksDeps) {
   }
 
   /** A bot's call: says so in the chat and starts the reset. `targetBotId` names another bot, for a Chief. */
-  async function start(from: BotRecord, threadId: string, body: Record<string, unknown>): Promise<Reply> {
+  async function start(from: BotRecord, threadId: string, body: Record<string, unknown>, requireRequest: () => void): Promise<Reply> {
+    requireRequest();
     const targetId = typeof body.targetBotId === "string" && body.targetBotId.trim() ? body.targetBotId.trim() : from.id;
     const target = store.bot(targetId);
     if (!target) return { status: 404, body: { error: "No bot has that id. Use list_bots for teammate ids." } };
@@ -91,31 +98,41 @@ export function createCloudComputerResetAsks(deps: CloudComputerResetAsksDeps) {
     // The reset deletes the computer there is now, never a newer one made after this call.
     let boxId: string | null;
     try { boxId = await deps.computer(target.id); } catch (error) {
+      requireRequest();
       return { status: 503, body: { error: `Could not check ${target.name}'s cloud computer: ${error instanceof Error ? error.message : String(error)}` } };
     }
+    requireRequest();
+    const currentFrom = store.bot(from.id), currentTarget = store.bot(target.id);
+    if (!currentFrom || !currentTarget) return { status: 404, body: { error: "The bot that asked or the target bot no longer exists." } };
+    const currentRefusal = deps.refusal(currentFrom, currentTarget);
+    if (currentRefusal) return { status: 403, body: { error: currentRefusal } };
     if (running.has(target.id)) return already;
-    const text = words(threadId, "server.cloudReset.resetting", { name: target.name, why });
+    const text = words(threadId, "server.cloudReset.resetting", { name: currentTarget.name, why });
     const room = store.groupByThread(threadId);
     const message = store.appendMessage(threadId, {
       role: "bot",
       kind: "text",
       text,
-      ...(room ? { from: { botId: from.id, name: from.name, color: from.color } } : {}),
+      ...(room ? { from: { botId: currentFrom.id, name: currentFrom.name, color: currentFrom.color } } : {}),
     });
-    const run: Run = { threadId, messageId: message.id, fromId: from.id, targetId: target.id, targetName: target.name, text, boxId };
+    const run: Run = { threadId, messageId: message.id, fromId: currentFrom.id, targetId: currentTarget.id, targetName: currentTarget.name, text, boxId };
     running.set(target.id, run);
     void attempt(run, 0);
-    const whose = target.id === from.id ? "Your" : `${target.name}'s`;
-    return { status: 200, body: { text: `${whose} cloud computer is being reset: it is deleted, with everything on it, once ${target.name} is not working, and ${target.name}'s next turn makes a fresh one. End this turn now. You are not resumed: a line in this conversation shows how it went.` } };
+    const whose = currentTarget.id === currentFrom.id ? "Your" : `${currentTarget.name}'s`;
+    return { status: 200, body: { text: `${whose} cloud computer is being reset: it is deleted, with everything on it, once ${currentTarget.name} is not working, and ${currentTarget.name}'s next turn makes a fresh one. End this turn now. You are not resumed: a line in this conversation shows how it went.` } };
   }
 
   return {
     /** POST /api/internal/cloud-computer/reset: { targetBotId?, why? } from a bot's turn. */
-    async internal(args: { method: string; path: string; res: ServerResponse; json: typeof sendJson; sender: BotRecord; threadId: string; readBody(): Promise<unknown> }): Promise<typeof PASS | void> {
+    async internal(args: { method: string; path: string; res: ServerResponse; json: typeof sendJson; sender: BotRecord; threadId: string; readBody(): Promise<unknown>; requireActive(): void; signal: AbortSignal }): Promise<typeof PASS | void> {
       if (args.path !== PATH) return PASS;
       if (args.method !== "POST") return void args.json(args.res, 405, { error: "POST only" });
       const body = await args.readBody();
-      const reply = await start(args.sender, args.threadId, body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {});
+      const requireRequest = () => {
+        args.requireActive();
+        if (args.signal.aborted) throw Object.assign(new Error("The reset request ended before it was accepted."), { status: 401 });
+      };
+      const reply = await start(args.sender, args.threadId, body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {}, requireRequest);
       return void args.json(args.res, reply.status, reply.body);
     },
   };
