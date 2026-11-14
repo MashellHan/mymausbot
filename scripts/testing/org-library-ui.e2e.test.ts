@@ -113,14 +113,22 @@ describe("the organization library in the real renderer", () => {
     expect(beforeAdd).not.toContain('button "Back to templates"');
     await ui("eval", "--js", `(() => {
       const original = window.fetch.bind(window);
-      window.__orgLibraryAdd = null;
+      const trace = { clicks: [], requests: [] };
+      window.__orgLibraryAdd = trace;
+      const record = (phase) => (event) => {
+        const button = event.target instanceof Element ? event.target.closest('button[aria-label="Add Sales desk"]') : null;
+        if (button && trace.clicks.length < 4) trace.clicks.push({ at: performance.now(), phase, disabled: button.disabled });
+      };
+      document.addEventListener('click', record('capture'), true);
+      document.addEventListener('click', record('bubble'));
       window.fetch = async (...args) => {
         const url = typeof args[0] === 'string' ? args[0] : args[0].url;
         if (new URL(url, location.href).pathname !== '/api/org-library/add') return original(...args);
+        const result = { at: performance.now(), phase: 'requested', body: 'pending' };
+        trace.requests.push(result);
         try {
           const response = await original(...args);
-          const result = { status: response.status, body: 'pending' };
-          window.__orgLibraryAdd = result;
+          Object.assign(result, { phase: 'responded', status: response.status });
           const timer = setTimeout(() => { result.body = 'timeout'; }, 2_000);
           void response.clone().json().then((body) => {
             if (result.body !== 'pending') return;
@@ -130,7 +138,7 @@ describe("the organization library in the real renderer", () => {
           }, () => { clearTimeout(timer); result.body = 'unavailable'; });
           return response;
         } catch (error) {
-          window.__orgLibraryAdd = { error: String(error) };
+          Object.assign(result, { phase: 'failed', error: String(error) });
           throw error;
         }
       };
@@ -153,6 +161,13 @@ describe("the organization library in the real renderer", () => {
         packages: listing.status === "fulfilled" ? listing.value : null, botIds: imported.status === "fulfilled" ? imported.value : null }));
       throw error;
     }
+    const addTrace = (await ui("eval", "--js", "window.__orgLibraryAdd")).result as {
+      clicks: Array<{ phase: string; disabled: boolean }>;
+      requests: Array<{ phase: string; status?: number }>;
+    };
+    console.log("Organization library Add trace:", JSON.stringify(addTrace));
+    expect(addTrace.clicks.some((event) => event.phase === "capture" && !event.disabled)).toBe(true);
+    expect(addTrace.requests).toMatchObject([{ phase: "responded", status: 201 }]);
     const bots = (await api("/api/bots")).bots.filter((bot: { section?: string }) => bot.section === "Sales desk");
     expect(bots).toHaveLength(3);
     for (const bot of bots) {
@@ -250,6 +265,7 @@ describe("the organization library in the real renderer", () => {
         const current = settled.current as { selected: string | null; skillsRow: boolean };
         return current.selected === "library" && current.skillsRow;
       }, { timeout: 10_000 }).toBe(true);
+      console.log("Organization library navigation trace:", JSON.stringify(settled));
       await ui("eval", "--js", "document.querySelector('[data-panel-page=\"skills\"]').click(); true");
     } catch (error) {
       const page = await agentBrowser(browser.binary, sessionEnv(browser), ["eval", `(() => {
