@@ -1183,7 +1183,7 @@ export function ComputerPanel({
     error: bot.computer === "cloud" && (cloudRefused || placeBlocked(cloudView)) ? cloudView.line : t("computer.phase.error"),
   } satisfies Record<Exclude<Phase, "ready" | "local" | "vm">, string>;
   const screenSummary = errorText ? t("computer.phase.error")
-    : control.held ? t("computer.inControl")
+    : control.held ? t(phase === "vm" && !takeover.here ? "canvasComputers.inUseTitle" : "computer.inControl")
       : signInHelp?.place !== "browser" && signInHelp ? t("signIn.title")
         : phase === "ready" || phase === "vm" || phase === "local" ? worksOnView.line : emptyState[phase];
 

@@ -370,6 +370,7 @@ describe("taking control of a Local VM", () => {
     heldElsewhere(true);
     await open(makeBot({ computer: "vm" }));
     expect(document.body.textContent).toContain("Another viewer has paused bot control on this desktop");
+    expect(document.querySelector('[data-testid="bot-overview-computer"] > button')?.textContent).toContain("Another viewer has paused bot control on this desktop");
     expect(document.body.textContent).not.toContain("You're in control");
     expect(button("Hand control back")).toBeDefined();
   });
