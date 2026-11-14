@@ -153,6 +153,24 @@ describe("the runner", () => {
     expect(existsSync(join(directory, "retries.jsonl"))).toBe(false);
   }, 30_000);
 
+  it.each(["collection failure", "skip", "todo"])("completes a %s file without executing its test body", async (mode) => {
+    const directory = project();
+    const source = mode === "collection failure" ? 'throw new Error("fixture collection failed");' :
+      `import { writeFileSync } from "node:fs"; it.${mode}("unreached", () => writeFileSync(new URL("./body-ran", import.meta.url), ""));`;
+    writeFileSync(join(directory, "flaky.test.mjs"), `${source}\n`);
+    if (mode === "todo") {
+      const runner = join(directory, "todo-runner.mjs");
+      writeFileSync(runner, `import Runner from ${JSON.stringify(RUNNER)}; export default class extends Runner { onBeforeRunFiles(files) { for (const file of files) file.mode = "todo"; } }\n`);
+      writeFileSync(join(directory, "vitest.config.mjs"), `export default { test: { globals: true, include: ["flaky.test.mjs"], runner: ${JSON.stringify(runner)} } };\n`);
+    }
+    const { code, output } = await vitest(directory, { CI: "true" });
+    expect(code).toBe(mode === "collection failure" ? 1 : 0);
+    if (mode === "collection failure") expect(output).toContain("fixture collection failed");
+    expect(filePhases(output).map(({ phase, file }) => [phase, file])).toEqual(["collect", "run", "complete"].map((phase) => [phase, "flaky.test.mjs"]));
+    expect(existsSync(join(directory, "body-ran"))).toBe(false);
+    expect(existsSync(join(directory, "retries.jsonl"))).toBe(false);
+  }, 60_000);
+
   it("stops retrying a file's listed tests once one of them fails every attempt", async () => {
     // A broken fixture, not a flake: three attempts of every listed test
     // would multiply the shard's time past its job cap.
