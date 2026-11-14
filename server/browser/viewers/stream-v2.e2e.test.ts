@@ -39,17 +39,14 @@ const FORM = `<!doctype html><title>form</title><style>body{margin:0}#f{position
 <p id="p">copy these words</p>
 <script>document.getElementById("s").addEventListener("change", (event) => { document.title = "chose " + event.target.value; });</script>`;
 
-async function limitedObservation(read: () => Promise<Record<string, unknown>>, unavailable: Record<string, unknown>, budgetMs: number): Promise<Record<string, unknown>> {
-  if (budgetMs <= 0) return unavailable;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      Promise.resolve().then(read).catch((error) => ({ ...unavailable, unavailable: "diagnostic failed", metricsError: String(error) })),
-      new Promise<Record<string, unknown>>((resolve) => { timer = setTimeout(() => resolve(unavailable), budgetMs); }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+function passiveFrameState(phase: string, pageSizes: Array<{ at: number; phase: string; size: [number, number, number] }>) {
+  return {
+    at: Date.now(), phase, pageSizes: pageSizes.slice(),
+    activeSnapshot: { unavailable: "no diagnostic CDP read" },
+    css: { unavailable: "computed styles not passively captured" },
+    layout: { unavailable: "layout metrics not passively captured" },
+    window: { unavailable: "window bounds not passively captured" },
+  };
 }
 
 function emitFrameDiagnostic(diagnostic: Record<string, unknown>, receipt: string | undefined, failure: unknown,
@@ -70,24 +67,32 @@ function emitFrameDiagnostic(diagnostic: Record<string, unknown>, receipt: strin
   if (failure) console.error("QA53 frame state", compact);
 }
 
-it("keeps a stalled frame observation and failed receipt separate from the primary failure", async () => {
+it("keeps passive frame state and failed receipt separate from the primary failure", async () => {
   const primary = new Error("frame assertion");
   const output = vi.spyOn(console, "error").mockImplementation(() => {});
+  const dispatch = vi.spyOn(CdpConnection.prototype, "dispatch").mockImplementation(() => { throw new Error("late diagnostic dispatch"); });
   let caught: unknown;
   let emitted: unknown[] = [];
+  let dispatchCalls = -1;
+  let state: ReturnType<typeof passiveFrameState> | undefined;
   try {
     try { throw primary; }
     finally {
-      const state = await limitedObservation(() => new Promise<never>(() => {}), { unavailable: "budget" }, 10);
+      state = passiveFrameState("return", [{ at: 1, phase: "tall-resize", size: [1280, 2400, 2] }]);
       emitFrameDiagnostic({ state }, "/unwritable/receipt.json", primary, () => { throw new Error("sink failed"); });
     }
   } catch (error) {
     caught = error;
   } finally {
+    await Promise.resolve();
     emitted = output.mock.calls.map((call) => call[0]);
+    dispatchCalls = dispatch.mock.calls.length;
     output.mockRestore();
+    dispatch.mockRestore();
   }
   expect(caught).toBe(primary);
+  expect(state).toMatchObject({ pageSizes: [{ phase: "tall-resize", size: [1280, 2400, 2] }], activeSnapshot: { unavailable: "no diagnostic CDP read" } });
+  expect(dispatchCalls).toBe(0);
   expect(emitted).toEqual(["QA53 diagnostic receipt:", "QA53 frame state"]);
 });
 
@@ -204,13 +209,12 @@ suite("the v2 stream on real Chrome", () => {
   };
 
   it("fills the panel: a 1600x1000 panel gets a 1600x1000 page and 3200x2000 frames on a 2x screen, and follows its resizes", async () => {
-    const observationDeadline = Date.now() + hostTimeout(90_000) - 2_000;
     const frames: Array<Record<string, unknown>> = [];
     const commands: Array<Record<string, unknown>> = [];
+    const pageSizes: Array<{ at: number; phase: string; size: [number, number, number] }> = [];
     let phase = "open";
     let client: Client | undefined;
     let failure: unknown;
-    let finalState: Record<string, unknown> | undefined;
     const originalPush = Viewer.prototype.push;
     const originalDispatch = CdpConnection.prototype.dispatch;
     Viewer.prototype.push = function (output) {
@@ -227,53 +231,41 @@ suite("the v2 stream on real Chrome", () => {
       }
       return originalDispatch.call(this, session, method, params, options);
     };
-    const snapshot = async (): Promise<Record<string, unknown>> => {
-      const state: Record<string, unknown> = { at: Date.now(), phase };
-      const profile = real.service.profiles().find((item) => item.key === target?.key);
-      const page = profile?.active()?.page;
-      if (!page) return { ...state, unavailable: "page closed" };
-      try {
-        state.css = await page.evaluate("({innerWidth,innerHeight,outerWidth,outerHeight,devicePixelRatio,html:getComputedStyle(document.documentElement).cssText,bodyWidth:getComputedStyle(document.body).width,bodyHeight:getComputedStyle(document.body).height})", { world: "isolated", timeoutMs: 250 });
-        state.layout = await page.session.send("Page.getLayoutMetrics", {}, { timeoutMs: 250 });
-        const root = profile!.run!.browser.connection.root;
-        const { windowId } = await root.send<{ windowId: number }>("Browser.getWindowForTarget", { targetId: page.targetId }, { timeoutMs: 250 });
-        state.window = await root.send("Browser.getWindowBounds", { windowId }, { timeoutMs: 250 });
-      } catch (error) {
-        state.metricsError = String(error);
-      }
-      return state;
+    const observedPageSize = async () => {
+      const size = await pageSize();
+      pageSizes.push({ at: Date.now(), phase, size });
+      if (pageSizes.length > 16) pageSizes.shift();
+      return size;
     };
     try {
       await opened("/animated", ANIMATED);
-      expect(await pageSize()).toEqual([1280, 800, 2]);
+      expect(await observedPageSize()).toEqual([1280, 800, 2]);
       client = await connect("width=1600&height=1000&maxWidth=3200&maxHeight=2000");
-      await until(pageSize, same([1600, 1000, 2]));
+      await until(observedPageSize, same([1600, 1000, 2]));
       await until(() => client!.frames.at(-1), (frame) => frame?.width === 3200 && frame.height === 2000);
       expect(client.messages).toContainEqual(expect.objectContaining({ type: "viewport", width: 1600, height: 1000 }));
       phase = "wide-resize";
       client.send({ type: "resize", width: 1200, height: 900 });
-      await until(pageSize, same([1280, 960, 2]));
+      await until(observedPageSize, same([1280, 960, 2]));
       await until(() => client!.frames.at(-1), (frame) => frame?.width === 2560 && frame.height === 1920);
       phase = "tall-resize";
       client.send({ type: "resize", width: 400, height: 750 });
-      await until(pageSize, same([1280, 2400, 2]));
+      await until(observedPageSize, same([1280, 2400, 2]));
       await until(() => client!.frames.at(-1), (frame) => frame?.height === 2000 && Math.abs(frame.width - 1067) <= 1);
       expect(client.messages.filter((message) => message.type === "viewport").at(-1)).toMatchObject({ width: 1280, height: 2400 });
       phase = "return";
       await client.close();
-      await until(pageSize, same([1280, 800, 2]));
+      await until(observedPageSize, same([1280, 800, 2]));
     } catch (error) {
       failure = error;
       throw error;
     } finally {
       try { Viewer.prototype.push = originalPush; }
       finally { CdpConnection.prototype.dispatch = originalDispatch; }
-      const budgetMs = Math.max(0, Math.min(750, observationDeadline - Date.now()));
-      finalState = await limitedObservation(snapshot, { at: Date.now(), phase, unavailable: "diagnostic budget expired" }, budgetMs);
       const diagnostic = {
         phase, failure: failure instanceof Error ? failure.message : String(failure ?? ""),
         panel: { requested: phase === "open" ? [1600, 1000] : phase === "wide-resize" ? [1200, 900] : [400, 750], maxFrame: [3200, 2000] },
-        state: finalState, frames, commands,
+        state: passiveFrameState(phase, pageSizes), frames, commands,
         viewportMessages: client?.messages.filter((message) => message.type === "viewport").slice(-4),
       };
       emitFrameDiagnostic(diagnostic, process.env.OMB_QA53_RECEIPT, failure);
