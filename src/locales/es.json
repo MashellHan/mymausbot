@@ -2962,6 +2962,7 @@
   "inbox.empty": "Aún nada para ti.",
   "inbox.from": "De {name}",
   "inbox.in": "en {title}",
+  "inbox.markAllRead": "Marcar todo como leído",
   "inbox.openOrigin": "Abrir {title}",
   "inbox.panel.title": "Bandeja de entrada",
   "inbox.reply.placeholder": "Escribe tu respuesta",

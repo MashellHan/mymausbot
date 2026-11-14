@@ -3695,6 +3695,7 @@
   "inbox.empty": "あなた宛てのものはまだありません。",
   "inbox.from": "{name}さんから",
   "inbox.in": "{title}で",
+  "inbox.markAllRead": "すべて既読にする",
   "inbox.openOrigin": "{title}を開く",
   "inbox.panel.title": "受信トレイ",
   "inbox.reply.placeholder": "返信を書く",

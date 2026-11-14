@@ -3261,6 +3261,7 @@
   "inbox.empty": "Ancora niente per te.",
   "inbox.from": "Da {name}",
   "inbox.in": "in {title}",
+  "inbox.markAllRead": "Segna tutto come letto",
   "inbox.openOrigin": "Apri {title}",
   "inbox.panel.title": "Posta in arrivo",
   "inbox.reply.placeholder": "Scrivi la tua risposta",

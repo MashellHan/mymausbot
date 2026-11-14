@@ -3303,6 +3303,7 @@
   "inbox.empty": "Na razie nic dla ciebie.",
   "inbox.from": "Od: {name}",
   "inbox.in": "w: {title}",
+  "inbox.markAllRead": "Oznacz wszystko jako przeczytane",
   "inbox.openOrigin": "Otwórz: {title}",
   "inbox.panel.title": "Skrzynka",
   "inbox.reply.placeholder": "Napisz odpowiedź",

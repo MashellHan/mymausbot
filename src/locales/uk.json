@@ -1663,6 +1663,7 @@
   "inbox.empty": "Поки що для вас нічого немає.",
   "inbox.from": "Від: {name}",
   "inbox.in": "у «{title}»",
+  "inbox.markAllRead": "Позначити все як прочитане",
   "inbox.openOrigin": "Відкрити «{title}»",
   "inbox.panel.title": "Вхідні",
   "inbox.reply.placeholder": "Напишіть відповідь",

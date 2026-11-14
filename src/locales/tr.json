@@ -2548,6 +2548,7 @@
   "inbox.empty": "Henüz sizin için bir şey yok.",
   "inbox.from": "Gönderen: {name}",
   "inbox.in": "{title} içinde",
+  "inbox.markAllRead": "Tümünü okundu olarak işaretle",
   "inbox.openOrigin": "{title} aç",
   "inbox.panel.title": "Gelen kutusu",
   "inbox.reply.placeholder": "Yanıtını yaz",

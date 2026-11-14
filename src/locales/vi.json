@@ -2548,6 +2548,7 @@
   "inbox.empty": "Chưa có gì cho bạn.",
   "inbox.from": "Từ {name}",
   "inbox.in": "trong {title}",
+  "inbox.markAllRead": "Đánh dấu tất cả là đã đọc",
   "inbox.openOrigin": "Mở {title}",
   "inbox.panel.title": "Hộp thư",
   "inbox.reply.placeholder": "Viết câu trả lời",

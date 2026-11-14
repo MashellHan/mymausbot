@@ -4852,6 +4852,7 @@
   "inbox.headline.connect": "连接 {app}",
   "inbox.headline.signIn": "登录 {site}",
   "inbox.in": "在 {title}",
+  "inbox.markAllRead": "全部标为已读",
   "inbox.noMatch": "收件箱里没有匹配的内容。",
   "inbox.note": "添加笔记",
   "inbox.openOrigin": "打开 {title}",

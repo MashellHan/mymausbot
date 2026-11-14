@@ -1535,6 +1535,7 @@
   "inbox.empty": "अभी आपके लिए कुछ नहीं है।",
   "inbox.from": "{name} की ओर से",
   "inbox.in": "{title} में",
+  "inbox.markAllRead": "सभी को पढ़ा हुआ चिह्नित करें",
   "inbox.openOrigin": "{title} खोलें",
   "inbox.panel.title": "इनबॉक्स",
   "inbox.reply.placeholder": "अपना जवाब लिखें",
