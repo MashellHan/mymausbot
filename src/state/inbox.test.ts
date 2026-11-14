@@ -89,11 +89,11 @@ it.each(["done", "read"] as const)("puts the row back when %s fails and the read
   expect(currentInbox()?.rows[0]).toMatchObject({ tab: "info", unread: false, text: "Reconciled text" });
 });
 
-it("restores eligible unread rows after a bulk POST and fallback GET both fail", async () => {
+it("keeps eligible rows unread until bulk succeeds, including when POST and fallback GET both fail", async () => {
   setInboxView(inboxView([messageRow, { ...settledRow, unread: true }]));
   markAllInboxRead();
   expect(requests[0]?.path).toBe("/api/inbox/read-all");
-  expect(currentInbox()?.rows.map((row) => row.unread)).toEqual([false, true]);
+  expect(currentInbox()?.rows.map((row) => row.unread)).toEqual([true, true]);
   await fail(0);
   expect(requests[1]?.path).toBe("/api/inbox");
   await fail(1);
@@ -101,9 +101,10 @@ it("restores eligible unread rows after a bulk POST and fallback GET both fail",
   markAllInboxRead();
   expect(requests[2]?.path).toBe("/api/inbox/read-all");
   await reply(2, inboxView([{ ...messageRow, unread: false }, { ...settledRow, unread: true }]));
+  expect(currentInbox()?.rows.map((row) => row.unread)).toEqual([false, true]);
 });
 
-it("restores only its still-optimistic rows after a newer decision and arrival", async () => {
+it("keeps a newer successful decision and arrival when bulk fails", async () => {
   setInboxView(inboxView([messageRow, approvalRow]));
   markAllInboxRead();
   doneInboxRow(messageRow);
@@ -117,6 +118,21 @@ it("restores only its still-optimistic rows after a newer decision and arrival",
   expect(requests[2]?.path).toBe("/api/inbox");
   await fail(2);
   expect(currentInbox()?.rows[1]?.unread).toBe(true);
+  await reply(1, done);
+  expect(currentInbox()?.rows[0]).toMatchObject({ tab: "done", unread: false });
+});
+
+it("keeps the original unread state when bulk and a later Done both fail", async () => {
+  markAllInboxRead();
+  doneInboxRow(messageRow);
+  expect(currentInbox()?.rows[0]).toMatchObject({ tab: "done", unread: false });
+  await fail(0);
+  expect(requests[2]?.path).toBe("/api/inbox");
+  await fail(2);
+  await fail(1);
+  expect(requests[3]?.path).toBe("/api/inbox");
+  await fail(3);
+  expect(currentInbox()?.rows[0]).toMatchObject({ tab: "info", unread: true });
 });
 
 it("does not undo a refreshed row when an older bulk POST fails", async () => {
