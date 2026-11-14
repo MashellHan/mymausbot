@@ -2,8 +2,10 @@
 // ci-retry-list.json; a test that needed a retry is logged to
 // OMB_VITEST_RETRY_LOG for the job summary. Retries are bounded per file: once
 // a listed test fails every attempt, the file's later listed tests get none.
-import { appendFileSync } from "node:fs";
-import type { RunnerTask, RunnerTestCase } from "vitest";
+import { appendFileSync, writeSync } from "node:fs";
+import { relative } from "node:path";
+import { performance } from "node:perf_hooks";
+import type { RunnerTask, RunnerTaskEventPack, RunnerTaskResultPack, RunnerTestCase, RunnerTestFile, RunnerTestSuite } from "vitest";
 import { VitestTestRunner } from "vitest/runners";
 import { CI_RETRIES, findRetryEntry, loadRetryList, retriesInCi, testIdentity } from "./ci-retry-list.mjs";
 import { productNameMismatch } from "./product-name-mismatch.mjs";
@@ -30,6 +32,39 @@ function safeRetryList() {
 export default class CiRetryRunner extends VitestTestRunner {
   /** Files where a listed test failed every attempt: no more retries there. */
   private readonly exhausted = new Set<string>();
+  private readonly collecting = new Map<string, { file: RunnerTestFile; started: number }>();
+
+  override onCollectStart(file: RunnerTestFile) {
+    super.onCollectStart(file);
+    if (retriesInCi()) {
+      this.collecting.set(file.id, { file, started: performance.now() });
+      this.writeFilePhase(file, "collect");
+    }
+  }
+
+  override onBeforeRunSuite(suite: RunnerTestSuite) {
+    if ("filepath" in suite) this.writeFilePhase(suite.file, "run");
+    return super.onBeforeRunSuite(suite);
+  }
+
+  // Vitest 4.1.11 omits onAfterRunSuite for failed collection and skip/todo files.
+  async onTaskUpdate(_tasks: RunnerTaskResultPack[], events: RunnerTaskEventPack[]) {
+    for (const [id, event] of events) {
+      const tracked = this.collecting.get(id);
+      if (tracked && (event === "suite-failed-early" || event === "suite-finished")) this.writeFilePhase(tracked.file, "complete");
+    }
+  }
+
+  private writeFilePhase(file: RunnerTestFile, phase: "collect" | "run" | "complete") {
+    const tracked = this.collecting.get(file.id);
+    if (!tracked) return;
+    if (phase === "complete") this.collecting.delete(file.id);
+    const name = relative(this.config.root, file.filepath).replaceAll("\\", "/");
+    if (name.startsWith("../") || !/^[a-zA-Z0-9_./-]{1,240}$/.test(name)) return;
+    try {
+      writeSync(2, `[ci-file] ${phase} ${name} ${Math.round(performance.now() - tracked.started)}ms\n`);
+    } catch { return; }
+  }
 
   override onBeforeRunTask(test: RunnerTestCase) {
     if (list.length > 0 && !this.exhausted.has(test.file.filepath) && findRetryEntry(list, testIdentity(this.config.root, test))) test.retry = CI_RETRIES;
