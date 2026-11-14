@@ -86,7 +86,7 @@ const isAccountError = (code: ProviderErrorCode | undefined): code is AccountErr
 export interface AcpConfig {
   cli: string;
   fullAuto: boolean;
-  workspace?: string;
+  workspace?: string; steer?: boolean;
 }
 
 /** Per-CLI specifics plugged into the shared ACP runtime; `askTool` is the native tool `questionRequests` come from. */
