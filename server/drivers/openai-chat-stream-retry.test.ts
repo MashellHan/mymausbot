@@ -75,6 +75,18 @@ describe("createOpenAIChatRuntime stream truncation retry", () => {
     expect(requests).toBe(1);
   });
 
+  it("does not resend a provider error that mentions stream truncation", async () => {
+    const { events, requests } = await runTurn([
+      () => sse('data: {"error":"Stream ended before completion"}\n\n'),
+      answer,
+    ]);
+    expect(events.some((event) => event.type === "turn.retrying")).toBe(false);
+    expect(events.find((event) => event.type === "runtime.error")).toMatchObject({
+      message: "provider returned a streaming completion error: Stream ended before completion",
+    });
+    expect(requests).toBe(1);
+  });
+
   it("does not resend a truncation after a tool call ran, so its effect happens once", async () => {
     const dir = mkdtempSync(join(tmpdir(), "omb-chat-trunc-tool-"));
     const script = join(dir, "fake-mcp.mjs");
