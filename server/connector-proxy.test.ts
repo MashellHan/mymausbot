@@ -710,6 +710,39 @@ describe("connected-app tools by name", () => {
     expect(calls.at(-1).params).toEqual({ name: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: [{ tool_slug: "GMAIL_FETCH_EMAILS", arguments: { user_id: "me", query: "from:ada", max_results: 10, include_payload: false, verbose: false } }] } });
     expect(reply).toEqual({ jsonrpc: "2.0", id: 4, result: { content: [{ type: "text", text: JSON.stringify({ messages: [{ messageId: "m1", subject: "Q3" }] }) }] } });
   });
+
+  it("refuses an unsafe root JSON argument for a named app tool before forwarding or defaulting it", async () => {
+    const calls: any[] = [];
+    const upstream = await upstreamFor(calls);
+    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream, OMB_CONNECTOR_APP_TOOLS: JSON.stringify(["gmail.search_emails"]) });
+    const listed = nextJson(lines);
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
+    expect((await listed).result.tools.map((tool: { name: string }) => tool.name)).toContain("gmail_search_emails");
+
+    const unsafe = nextJson(lines);
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {
+      name: "gmail_search_emails", arguments: '{"query":"from:ada","max_results":9007199254740993}',
+    } })}\n`);
+    const refused = await unsafe;
+    expect(refused.id).toBe(2);
+    expect(refused.result.isError).toBe(true);
+    expect(refused.result.content[0].text).toMatch(/not sent.*numeric literal/);
+    expect(calls.filter((call) => call.method === "tools/call")).toEqual([]);
+
+    const safe = nextJson(lines);
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: {
+      name: "gmail_search_emails", arguments: '{"query":"from:ada","max_results":"4"}',
+    } })}\n`);
+    expect((await safe).result.isError).toBeUndefined();
+    expect(calls.filter((call) => call.method === "tools/call").map((call) => call.params)).toEqual([
+      { name: "COMPOSIO_MULTI_EXECUTE_TOOL", arguments: { tools: [{
+        tool_slug: "GMAIL_FETCH_EMAILS", arguments: {
+          user_id: "me", query: "from:ada", max_results: 4, include_payload: false, verbose: false,
+        },
+      }] } },
+    ]);
+  });
+
   it("fits a call's arguments to the schema its tool listed, and on a refusal says how to call again and which apps are connected", async () => {
     const SEARCH = { type: "object", properties: { queries: { type: "array", items: { type: "object", properties: { use_case: { type: "string" } }, required: ["use_case"] } } }, required: ["queries"] };
     const WORKBENCH = { type: "object", properties: { code_to_execute: { type: "string" } }, required: ["code_to_execute"] };

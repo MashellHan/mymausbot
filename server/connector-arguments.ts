@@ -71,6 +71,10 @@ function parsedJson(text: string, expectedShape: "object" | "array"): unknown {
   }
 }
 
+export function hasUnsafeNumericObjectText(value: unknown): boolean {
+  return typeof value === "string" && parsedJson(value, "object") === UNSAFE_JSON_NUMBER;
+}
+
 /** `value` as `node` asks for it when that is plainly what was meant, else `value` itself; `changed` names the change. */
 function coerce(value: unknown, node: Json | null, root: Json, path: string, changed: string[]): unknown {
   const type = typeOf(node);
