@@ -903,22 +903,44 @@ it("replays again when a replacement session fails before the provider acts on i
 }), hostTimeout(60_000));
 
 it("gives an engine switched in while a teammate works the full assignment when the result returns", () => fixture(async (f) => {
+  const started = performance.now();
+  const phases: Array<[string, number]> = [];
+  const mark = (phase: "teammate-running" | "engine-selected" | "switch-replied" | "teammate-released" | "wait-settled") => {
+    const elapsedMs = Math.round(performance.now() - started);
+    phases.push([phase, elapsedMs]);
+    console.info("delta-switch-phase", phase, elapsedMs);
+  };
   await warmUp(f);
   f.plan[f.lead.id] = { reply: "SWITCH_RESULT", gateFile: f.gate("lead") };
   f.plan[f.chief.id] = { turns: [{}, f.delegate("build", [f.lead], `ASSIGNMENT_START ${"a".repeat(400)} MUST_KEEP_CONSTRAINT`), { reply: "On Codex now" }, { reply: "Reviewed on Codex" }] };
   await f.send("Please have Engineering build the export.");
   await leadRunning(f);
+  mark("teammate-running");
   await expect.poll(async () => (await f.messages()).some((m: any) => m.role === "bot" && m.text === "Assigned"), { timeout: 15_000 }).toBe(true);
   const model = (await f.cli("models")).instances.find((item: any) => item.instanceId === "codex").models.options[0].id;
   await f.api(`/api/bots/${f.chief.id}/tasks/${f.thread}`, { modelSelection: { instanceId: "codex", model }, requireAvailableModel: true }, "PATCH");
+  mark("engine-selected");
   await f.send("Switching engines while Engineering works.");
   await expect.poll(() => f.turns().length, { timeout: 20_000 }).toBe(3);
   await expect.poll(async () => (await f.messages()).some((m: any) => m.role === "bot" && m.text === "On Codex now"), { timeout: 10_000 }).toBe(true);
+  mark("switch-replied");
   f.open(f.gate("lead"));
+  mark("teammate-released");
   await f.wait();
-  const returned = f.turns().at(-1);
+  mark("wait-settled");
+  const turns = f.turns();
+  const returned = turns.at(-1);
   expect(returned.resumedThread).toBeTruthy();
-  expect(count(f.prompt(returned), "SWITCH_RESULT")).toBe(1);
+  const resultCount = count(f.prompt(returned), "SWITCH_RESULT");
+  if (resultCount !== 1) {
+    const lead = f.nodes().find((node: any) => node.botId === f.lead.id);
+    const reportVisible = (await f.messages()).some((m: any) => m.tool?.name === "Engineering lead replied");
+    console.error("delta-switch-result", JSON.stringify({ phases, turnCount: turns.length,
+      recentResultCounts: turns.slice(-4).map((turn: any) => count(f.prompt(turn), "SWITCH_RESULT")),
+      teammateRunning: lead?.status === "running", teammateCompleted: lead?.status === "completed",
+      teammateReported: lead?.reported === true, reportVisible }));
+  }
+  expect(resultCount).toBe(1);
   const lead = f.nodes().find((node: any) => node.botId === f.lead.id);
   expect(f.prompt(returned)).toContain(`[From @${f.lead.name} (bot) · report on assignment ${lead.id}: done · information only]`);
 }, { codex: {} }), hostTimeout(90_000));
