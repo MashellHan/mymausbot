@@ -198,6 +198,23 @@ describe("independent bot threads", () => {
     expect(open.bots[0]?.onlyPeopleAdded).toBeUndefined();
   });
 
+  it("keeps default-bot protection until the server confirms demotion", () => {
+    const marked = { ...bot, defaultBot: {} };
+    const state = { ...start(), bots: [marked] };
+    const pending = reducer(state, { type: "updateBot", botId: bot.id, patch: { defaultBot: null } });
+    expect(pending.bots[0]?.defaultBot).toEqual({});
+    expect(pending.notice).toBe(state.notice);
+
+    const confirmed = reducer(pending, { type: "botPatched", bot: { ...bot, defaultBot: undefined } });
+    expect(confirmed.bots[0]?.defaultBot).toBeUndefined();
+    expect(confirmed.notice).toMatchObject({ kind: "note", text: expect.stringContaining("regular bot") });
+    const repeated = reducer(confirmed, { type: "botPatched", bot: { ...bot, defaultBot: undefined } });
+    expect(repeated.notice).toBe(confirmed.notice);
+    const switched = reducer(pending, { type: "botPatched", bot: { ...bot, threadId: "replacement", messages: [], defaultBot: undefined } });
+    expect(switched.bots[0]?.defaultBot).toBeUndefined();
+    expect(switched.notice).toMatchObject({ kind: "note", text: expect.stringContaining("regular bot") });
+  });
+
   it("keeps background bot frames from switching the visible transcript or clearing unread", () => {
     const patched = reducer(start(), { type: "botPatched", bot: { ...bot, threadId: "second", messages: [], activeLeafId: "other" } });
     expect(patched.bots[0]?.threadId).toBe("first");

@@ -30,7 +30,6 @@ export function HideDefaultBotItem({ bot, onDone, className = "flex w-full items
   );
 }
 
-/** Demotes the default bot to a regular bot: the mark is cleared server-side, so it can then be archived or deleted. */
 export function DemoteDefaultBotItem({ bot, onDone, className = "flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px]" }: { bot: Bot; onDone: () => void; className?: string }) {
   const { dispatch } = useStore();
   return (
@@ -69,7 +68,6 @@ export function DefaultBotSidebarRow({ simple = false }: { simple?: boolean }) {
   );
 }
 
-/** Bot settings: MausBot is never deleted, only taken off the sidebar. */
 export function DefaultBotHideRow({ bot }: { bot: Bot }) {
   const { dispatch } = useStore();
   if (!bot.defaultBot || bot.sidebarHidden) return null;
