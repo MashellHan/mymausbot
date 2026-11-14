@@ -4,6 +4,7 @@
 import { isReadOnlyAction, type ConnectorScopes } from "../shared/connector-scopes.ts";
 import type { ConnectorToolGrant } from "../shared/wire.ts";
 import { toolData } from "./connected-reads.ts";
+import { hasUnsafeNumericObjectText } from "./connector-arguments.ts";
 
 /** JSON list of the app tools a bridge offers, by their dotted names. */
 export const APP_TOOLS_ENV = "OMB_CONNECTOR_APP_TOOLS";
@@ -219,6 +220,7 @@ export function appToolEntries(names: readonly string[], style: "dotted" | "plai
 export function appToolCall(name: string, input: unknown): { slug: string; frame(id: unknown): Record<string, unknown> } | null {
   const tool = BY_NAME.get(name.trim().toLowerCase());
   if (!tool) return null;
+  if (hasUnsafeNumericObjectText(input)) throw new Error("This connected-app call was not sent: an argument contains a numeric literal that cannot be preserved.");
   const args = tool.args(input && typeof input === "object" && !Array.isArray(input) ? input as Input : {});
   return {
     slug: tool.slug,
