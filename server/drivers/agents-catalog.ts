@@ -467,8 +467,7 @@ const TOOL_DEFINITIONS = [
             fields: { type: "object", additionalProperties: false, properties: {
               name: { type: "string", maxLength: 100 }, title: { type: "string", maxLength: 200 },
               chiefOfStaff: { type: "boolean", description: "Appoint or remove this team's Chief. At most one Chief per team: explicitly demote the current Chief in the same plan when replacing them. Does not grant access to other teams or change execution permissions." },
-              description: { type: "string", maxLength: 4000 }, soul: { type: "string", description: "Standing instructions; required with name/title/modelSelection for every new bot." },
-              soulAppend: { type: "string", description: "Update only, instead of soul: text appended to its current instructions." },
+              description: { type: "string", maxLength: 4000 }, soul: { type: "string", description: "Standing instructions; required with name/title/modelSelection for every new bot." }, soulAppend: { type: "string", description: "Update only, instead of soul: text appended to its current instructions." },
               cwd: { type: "string", maxLength: 1024, description: "Create only: absolute path of the folder the new bot's tools read and write in. It must already exist. Leave it out for a private workspace." },
               section: { type: "string", maxLength: 60, description: "Exact authorized existing team, or a team explicitly named in newTeams. Empty string means General." },
               modelSelection: { type: "object", additionalProperties: false, properties: {
