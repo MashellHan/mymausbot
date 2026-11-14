@@ -275,19 +275,43 @@ suite("the v2 stream on real Chrome", () => {
   it("ends every drag of the panel on a sharp frame of the final size, on a page that never repaints by itself", async () => {
     await opened("/still", STILL);
     const client = await connect("width=1200&height=800&maxWidth=3200&maxHeight=2000");
-    await until(pageSize, same([1280, 853, 2]));
-    for (let trial = 0; trial < 6; trial++) {
-      const grow = trial % 2 === 0;
-      const sizes = Array.from({ length: 10 }, (_, step) => (grow ? [1240 + step * 40, 820 + step * 20] : [1560 - step * 40, 980 - step * 20]));
-      for (const [width, height] of sizes) {
-        client.send({ type: "resize", width, height });
-        await sleep(150);
+    let trial = 0;
+    let phase = "initial page";
+    let sentCount = 0;
+    let lastSent: { at: number; width: number; height: number } | null = null;
+    let expectedPage: { width: number; height: number } | null = null;
+    let lastPage: [number, number, number] | null = null;
+    const observedPageSize = async () => (lastPage = await pageSize());
+    try {
+      await until(observedPageSize, same([1280, 853, 2]));
+      for (let index = 0; index < 6; index++) {
+        trial = index + 1;
+        phase = "resize sends";
+        sentCount = 0;
+        const grow = index % 2 === 0;
+        const sizes = Array.from({ length: 10 }, (_, step) => (grow ? [1240 + step * 40, 820 + step * 20] : [1560 - step * 40, 980 - step * 20]));
+        for (const [width, height] of sizes) {
+          client.send({ type: "resize", width, height });
+          sentCount++;
+          lastSent = { at: Date.now(), width, height };
+          await sleep(150);
+        }
+        const page = fillPage({ width: sizes.at(-1)![0]!, height: sizes.at(-1)![1]! });
+        expectedPage = page;
+        phase = "page size";
+        await until(observedPageSize, same([page.width, page.height, 2]));
+        phase = "frame size";
+        await until(() => client.frames.at(-1), (frame) => frame?.width === page.width * 2 && frame.height === page.height * 2, 3_000);
       }
-      const page = fillPage({ width: sizes.at(-1)![0]!, height: sizes.at(-1)![1]! });
-      await until(pageSize, same([page.width, page.height, 2]));
-      await until(() => client.frames.at(-1), (frame) => frame?.width === page.width * 2 && frame.height === page.height * 2, 3_000);
+      phase = "close";
+      await client.close();
+    } catch (error) {
+      emitFrameDiagnostic({ kind: "drag final size", trial, phase, sentCount, lastSent, expectedPage, lastPage,
+        socketState: client.socket.readyState,
+        viewportMessages: client.messages.filter((message) => message.type === "viewport").slice(-4),
+        frames: client.frames.slice(-4) }, undefined, error);
+      throw error;
     }
-    await client.close();
   }, hostTimeout(120_000));
 
   it("keeps the page of the person holding the browser when another view opens, and raises a frame cap in place", async () => {
