@@ -387,13 +387,13 @@ describe("OpenCode catalog", () => {
   // OpenCode Go's weekly allowance is the Go subscription's alone: Zen's free models on the same login keep working, so a
   // free model there is still a backup when a Go model runs out.
   it("holds only the Go models when a Go model meets the Go allowance, never Zen's free models", () => {
-    parseOpenCodeModelsOutput([
+    const catalog = parseOpenCodeModelsOutput([
       "opencode/deepseek-v4.1-flash-free", JSON.stringify({ cost: { input: 0, output: 0 } }),
       "opencode-go/glm-5.3", JSON.stringify({ cost: { input: 1, output: 2 } }),
       "opencode-go/minimax-m3", JSON.stringify({ cost: { input: 1, output: 2 } }),
     ].join("\n"));
     for (const said of ["OpenCode Go weekly usage limit reached", "Internal error: GoUsageLimitError: the Go allowance is used up"]) {
-      const facts = openCodeLimitFacts(said, "opencode-go/minimax-m3");
+      const facts = openCodeLimitFacts(said, "opencode-go/minimax-m3", catalog!);
       expect(facts.limit, said).toBe("model");
       expect(facts.limitModels).toEqual(expect.arrayContaining(["opencode-go/minimax-m3", "opencode-go/glm-5.3"]));
       expect(facts.limitModels).not.toContain("opencode/deepseek-v4.1-flash-free");
