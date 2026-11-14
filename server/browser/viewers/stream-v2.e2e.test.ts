@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { json, readBody } from "../../harness/http.ts";
 import type { RequestAuth } from "../../request-auth.ts";
@@ -38,6 +38,58 @@ const FORM = `<!doctype html><title>form</title><style>body{margin:0}#f{position
 <a id="d" href="/report.csv">report</a>
 <p id="p">copy these words</p>
 <script>document.getElementById("s").addEventListener("change", (event) => { document.title = "chose " + event.target.value; });</script>`;
+
+async function limitedObservation(read: () => Promise<Record<string, unknown>>, unavailable: Record<string, unknown>, budgetMs: number): Promise<Record<string, unknown>> {
+  if (budgetMs <= 0) return unavailable;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(read).catch((error) => ({ ...unavailable, unavailable: "diagnostic failed", metricsError: String(error) })),
+      new Promise<Record<string, unknown>>((resolve) => { timer = setTimeout(() => resolve(unavailable), budgetMs); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function emitFrameDiagnostic(diagnostic: Record<string, unknown>, receipt: string | undefined, failure: unknown,
+  write: (path: string, value: string) => void = writeFileSync): void {
+  let compact: string;
+  let formatted: string;
+  try {
+    compact = JSON.stringify(diagnostic);
+    formatted = JSON.stringify(diagnostic, null, 2);
+  } catch (error) {
+    console.error("QA53 diagnostic serialization:", String(error));
+    return;
+  }
+  if (receipt) {
+    try { write(receipt, `${formatted}\n`); }
+    catch (error) { console.error("QA53 diagnostic receipt:", String(error)); }
+  }
+  if (failure) console.error("QA53 frame state", compact);
+}
+
+it("keeps a stalled frame observation and failed receipt separate from the primary failure", async () => {
+  const primary = new Error("frame assertion");
+  const output = vi.spyOn(console, "error").mockImplementation(() => {});
+  let caught: unknown;
+  let emitted: unknown[] = [];
+  try {
+    try { throw primary; }
+    finally {
+      const state = await limitedObservation(() => new Promise<never>(() => {}), { unavailable: "budget" }, 10);
+      emitFrameDiagnostic({ state }, "/unwritable/receipt.json", primary, () => { throw new Error("sink failed"); });
+    }
+  } catch (error) {
+    caught = error;
+  } finally {
+    emitted = output.mock.calls.map((call) => call[0]);
+    output.mockRestore();
+  }
+  expect(caught).toBe(primary);
+  expect(emitted).toEqual(["QA53 diagnostic receipt:", "QA53 frame state"]);
+});
 
 interface Client {
   socket: WebSocket;
@@ -152,6 +204,7 @@ suite("the v2 stream on real Chrome", () => {
   };
 
   it("fills the panel: a 1600x1000 panel gets a 1600x1000 page and 3200x2000 frames on a 2x screen, and follows its resizes", async () => {
+    const observationDeadline = Date.now() + hostTimeout(90_000) - 2_000;
     const frames: Array<Record<string, unknown>> = [];
     const commands: Array<Record<string, unknown>> = [];
     let phase = "open";
@@ -178,13 +231,13 @@ suite("the v2 stream on real Chrome", () => {
       const state: Record<string, unknown> = { at: Date.now(), phase };
       const profile = real.service.profiles().find((item) => item.key === target?.key);
       const page = profile?.active()?.page;
-      if (!page) return state;
+      if (!page) return { ...state, unavailable: "page closed" };
       try {
-        state.css = await real.peek(target, "({innerWidth,innerHeight,outerWidth,outerHeight,devicePixelRatio,html:getComputedStyle(document.documentElement).cssText,bodyWidth:getComputedStyle(document.body).width,bodyHeight:getComputedStyle(document.body).height})");
-        state.layout = await page.session.send("Page.getLayoutMetrics", {}, { timeoutMs: 2_000 });
+        state.css = await page.evaluate("({innerWidth,innerHeight,outerWidth,outerHeight,devicePixelRatio,html:getComputedStyle(document.documentElement).cssText,bodyWidth:getComputedStyle(document.body).width,bodyHeight:getComputedStyle(document.body).height})", { world: "isolated", timeoutMs: 250 });
+        state.layout = await page.session.send("Page.getLayoutMetrics", {}, { timeoutMs: 250 });
         const root = profile!.run!.browser.connection.root;
-        const { windowId } = await root.send<{ windowId: number }>("Browser.getWindowForTarget", { targetId: page.targetId }, { timeoutMs: 2_000 });
-        state.window = await root.send("Browser.getWindowBounds", { windowId }, { timeoutMs: 2_000 });
+        const { windowId } = await root.send<{ windowId: number }>("Browser.getWindowForTarget", { targetId: page.targetId }, { timeoutMs: 250 });
+        state.window = await root.send("Browser.getWindowBounds", { windowId }, { timeoutMs: 250 });
       } catch (error) {
         state.metricsError = String(error);
       }
@@ -206,7 +259,6 @@ suite("the v2 stream on real Chrome", () => {
       await until(pageSize, same([1280, 2400, 2]));
       await until(() => client!.frames.at(-1), (frame) => frame?.height === 2000 && Math.abs(frame.width - 1067) <= 1);
       expect(client.messages.filter((message) => message.type === "viewport").at(-1)).toMatchObject({ width: 1280, height: 2400 });
-      finalState = await snapshot();
       phase = "return";
       await client.close();
       await until(pageSize, same([1280, 800, 2]));
@@ -214,17 +266,17 @@ suite("the v2 stream on real Chrome", () => {
       failure = error;
       throw error;
     } finally {
-      if (!finalState) finalState = await snapshot();
-      Viewer.prototype.push = originalPush;
-      CdpConnection.prototype.dispatch = originalDispatch;
+      try { Viewer.prototype.push = originalPush; }
+      finally { CdpConnection.prototype.dispatch = originalDispatch; }
+      const budgetMs = Math.max(0, Math.min(750, observationDeadline - Date.now()));
+      finalState = await limitedObservation(snapshot, { at: Date.now(), phase, unavailable: "diagnostic budget expired" }, budgetMs);
       const diagnostic = {
         phase, failure: failure instanceof Error ? failure.message : String(failure ?? ""),
         panel: { requested: phase === "open" ? [1600, 1000] : phase === "wide-resize" ? [1200, 900] : [400, 750], maxFrame: [3200, 2000] },
         state: finalState, frames, commands,
         viewportMessages: client?.messages.filter((message) => message.type === "viewport").slice(-4),
       };
-      if (process.env.OMB_QA53_RECEIPT) writeFileSync(process.env.OMB_QA53_RECEIPT, `${JSON.stringify(diagnostic, null, 2)}\n`);
-      if (failure) console.error("QA53 frame state", JSON.stringify(diagnostic));
+      emitFrameDiagnostic(diagnostic, process.env.OMB_QA53_RECEIPT, failure);
     }
   }, hostTimeout(90_000));
 
