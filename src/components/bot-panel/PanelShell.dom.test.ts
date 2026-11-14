@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The Simple bot panel in a real DOM, where effects run and focus moves: named links, Escape and focus, and the chat
 // header's pill that opens it.
-import { createElement } from "react";
+import { createElement, useLayoutEffect } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -103,6 +103,18 @@ afterEach(() => {
 });
 
 describe("named links into the bot panel", () => {
+  it("keeps a gear click made as the panel opens on Bot settings", async () => {
+    function ImmediateGearClick() {
+      useLayoutEffect(() => {
+        host.querySelector<HTMLElement>("[data-panel-gear]")!.click();
+      }, []);
+      return createElement(BotPanel, { bot, derived, linkedSection: "overview", onClose });
+    }
+    flushSync(() => root.render(createElement("aside", { role: "dialog" }, createElement(ImmediateGearClick))));
+    await settle();
+    expect(page()).toBe("settings");
+  });
+
   it("opens on the page a link names, and moves there when a link arrives while it is open", async () => {
     openBotSettings(fixture.dispatch, "access", { page: "apps" });
     render("access");

@@ -39,6 +39,7 @@ export function BotPanel({ bot, derived, linkedSection, onClose }: {
   const [editingInstructions, setEditingInstructions] = useState(() => Boolean(initialTarget(linkedSection, link).editInstructions));
   const bodyRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const previousLink = useRef({ linkedSection, link });
   const page = stack.at(-1) ?? null;
 
   const scrollTop = () => bodyRef.current?.scrollTo({ top: 0 });
@@ -68,7 +69,9 @@ export function BotPanel({ bot, derived, linkedSection, onClose }: {
 
   // A new link re-runs this even when it names the section already linked, so a repeated link lands there again.
   useEffect(() => {
-    if (linkedSection) go(linkTarget(linkedSection, link));
+    const previous = previousLink.current;
+    previousLink.current = { linkedSection, link };
+    if (linkedSection && (linkedSection !== previous.linkedSection || link !== previous.link)) go(linkTarget(linkedSection, link));
   }, [linkedSection, link]);
 
   useEffect(() => {
