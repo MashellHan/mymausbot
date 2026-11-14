@@ -60,6 +60,8 @@ export interface ConnectOptions {
   ip?: string;
   headers?: Record<string, string>;
   protocols?: string[];
+  signal?: AbortSignal;
+  handshakeTimeoutMs?: number;
 }
 
 /** A WebSocket client that queues what it receives, so a test can await each message and the close in order. */
@@ -82,18 +84,33 @@ export class Client {
   }
 
   static async open(url: string, path: string, options: ConnectOptions = {}): Promise<Client> {
+    if (options.signal?.aborted) throw options.signal.reason;
     const ws = new WebSocket(`${url}${path}`, options.protocols ?? [SUBPROTOCOL], {
       headers: { "x-forwarded-for": options.ip ?? freshIp(), ...options.headers },
       perMessageDeflate: false,
       maxPayload: 1 << 30,
+      handshakeTimeout: options.handshakeTimeoutMs,
     });
     const client = new Client(ws);
-    await new Promise<void>((resolve, reject) => {
-      ws.once("open", () => resolve());
-      ws.once("unexpected-response", (_req, res) => reject(Object.assign(new Error(`HTTP ${res.statusCode}`), { status: res.statusCode })));
-      ws.once("error", reject);
-    });
-    return client;
+    const abort = () => ws.terminate();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("unexpected-response", (_req, res) => reject(Object.assign(new Error(`HTTP ${res.statusCode}`), { status: res.statusCode })));
+        ws.once("error", reject);
+      });
+      if (options.signal?.aborted) throw options.signal.reason;
+      return client;
+    } catch (error) {
+      if (options.signal || options.handshakeTimeoutMs) {
+        ws.terminate();
+        await client.closed;
+      }
+      throw error;
+    } finally {
+      options.signal?.removeEventListener("abort", abort);
+    }
   }
 
   /** The HTTP status a refused upgrade answers with. */
@@ -142,10 +159,13 @@ export class Client {
   }
 
   closedWithin(timeoutMs = 5_000): Promise<Closed> {
-    return Promise.race([
-      this.closed,
-      new Promise<Closed>((_, reject) => setTimeout(() => reject(new Error(`still open after ${timeoutMs} ms`)), timeoutMs).unref()),
-    ]);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`still open after ${timeoutMs} ms`)), timeoutMs).unref();
+      void this.closed.then((closed) => {
+        clearTimeout(timer);
+        resolve(closed);
+      });
+    });
   }
 }
 

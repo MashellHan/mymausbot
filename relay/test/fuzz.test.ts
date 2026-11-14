@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { connect, type Socket } from "node:net";
+import { once } from "node:events";
+import { connect, createServer, type AddressInfo, type Socket } from "node:net";
 import { performance } from "node:perf_hooks";
 import { after, before, describe, test } from "node:test";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import { Close, SUBPROTOCOL } from "../src/wire.ts";
 import { Client, fakeHost, freshIp, mintToken, phoneHello, sleep, splicedPair, startTestRelay, type TestRelay } from "./helpers.ts";
 import { captureTcpState } from "./tcp-snapshot.ts";
@@ -77,15 +78,24 @@ interface FuzzProgress {
 }
 
 /** One random socket: a first message that is never valid, then (sometimes) more. Returns how the relay closed it. */
-async function fuzzOne(progress: FuzzProgress): Promise<number> {
+async function terminateAndJoin(client: Client): Promise<void> {
+  if (client.ws.readyState !== WebSocket.CLOSED) client.ws.terminate();
+  await client.closed;
+}
+
+async function fuzzOne(progress: FuzzProgress, signal: AbortSignal): Promise<number> {
   progress.attempted++;
   progress.inFlight++;
+  let client: Client | undefined;
+  const cancel = () => client?.ws.terminate();
+  signal.addEventListener("abort", cancel, { once: true });
   try {
-    let client: Client;
     try {
-      client = await Client.open(t.url, pick(PATHS));
+      client = await Client.open(t.url, pick(PATHS), {
+        signal, handshakeTimeoutMs: t.relay.ctx.limits.authDeadlineMs + 3_000,
+      });
     } catch (error) {
-      if (!progress.reportedOpenFailure) {
+      if (!signal.aborted && !progress.reportedOpenFailure) {
         progress.reportedOpenFailure = true;
         try {
           const counts = {
@@ -104,6 +114,7 @@ async function fuzzOne(progress: FuzzProgress): Promise<number> {
       }
       throw error;
     }
+    if (signal.aborted) throw signal.reason;
     progress.opened++;
     const valid = pick([
       JSON.stringify({ t: "auth", v: 1, token: mintToken(t.key, { exp: 1 }) }),
@@ -133,38 +144,123 @@ async function fuzzOne(progress: FuzzProgress): Promise<number> {
       }
     }
     const { code } = await client.closedWithin(t.relay.ctx.limits.authDeadlineMs + 3_000);
+    if (signal.aborted) throw signal.reason;
     progress.completedCloses++;
     return code;
   } finally {
-    progress.inFlight--;
+    signal.removeEventListener("abort", cancel);
+    try {
+      if (client) await terminateAndJoin(client);
+    } finally {
+      progress.inFlight--;
+    }
   }
 }
 
-async function fuzzBatch(run: () => Promise<number>): Promise<number[]> {
-  const started = Array.from({ length: FUZZ_BATCH_SIZE }, run);
+async function fuzzBatch(run: (signal: AbortSignal) => Promise<number>): Promise<number[]> {
+  const controller = new AbortController();
+  const started = Array.from({ length: FUZZ_BATCH_SIZE }, () => run(controller.signal));
   try {
     return await Promise.all(started);
   } catch (firstError) {
+    controller.abort();
     await Promise.allSettled(started);
     throw firstError;
   }
 }
 
+async function admitBatch(nextStart: number, stop: number, now: () => number = () => performance.now(),
+  pause: (ms: number) => Promise<void> = async (ms) => { await sleep(ms); }): Promise<boolean> {
+  for (;;) {
+    const current = now();
+    if (current >= stop) return false;
+    if (current >= nextStart) return true;
+    await pause(Math.ceil(Math.min(nextStart, stop) - current));
+  }
+}
+
 describe("pre-auth fuzzing", () => {
-  test("keeps all 16 started calls owned after the first failure", async () => {
+  test("cancels and joins all 16 started calls after the first failure", async () => {
     const calls = Array.from({ length: FUZZ_BATCH_SIZE }, () => Promise.withResolvers<number>());
     let started = 0;
-    const batch = fuzzBatch(() => calls[started++]!.promise);
+    let active = 0;
+    let cancelled = 0;
+    const batch = fuzzBatch((signal) => {
+      const call = calls[started++]!;
+      active++;
+      const cancel = () => { cancelled++; call.reject(new Error("cancelled")); };
+      signal.addEventListener("abort", cancel, { once: true });
+      return call.promise.finally(() => {
+        signal.removeEventListener("abort", cancel);
+        active--;
+      });
+    });
     assert.equal(started, FUZZ_BATCH_SIZE);
-    let finished = false;
-    void batch.finally(() => { finished = true; }).catch(() => {});
+    assert.equal(active, FUZZ_BATCH_SIZE);
     const firstError = new Error("first open failed");
     calls[0]!.reject(firstError);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(finished, false);
-    calls[1]!.reject(new Error("later open failed"));
-    for (const call of calls.slice(2)) call.resolve(Close.Malformed);
     await assert.rejects(batch, (error) => error === firstError);
+    assert.equal(cancelled, FUZZ_BATCH_SIZE - 1);
+    assert.equal(active, 0);
+  });
+
+  test("cancels a held opening handshake and joins its socket", { timeout: 5_000 }, async () => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    let peer: Socket | undefined;
+    try {
+      const connected = once(server, "connection", { signal: AbortSignal.timeout(2_000) });
+      const controller = new AbortController();
+      const opening = Client.open(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`, "/v1/phone", {
+        signal: controller.signal, handshakeTimeoutMs: 2_000,
+      });
+      [peer] = await connected as [Socket];
+      const closed = once(peer, "close", { signal: AbortSignal.timeout(2_000) });
+      controller.abort();
+      await assert.rejects(opening);
+      await closed;
+      assert.equal(peer.destroyed, true);
+    } finally {
+      peer?.destroy();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  test("terminates and joins a live socket after close observation expires", { timeout: 5_000 }, async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    let client: Client | undefined;
+    let peer: WebSocket | undefined;
+    try {
+      const connected = once(server, "connection", { signal: AbortSignal.timeout(2_000) });
+      client = await Client.open(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`, "/v1/phone");
+      [peer] = await connected as [WebSocket];
+      const closed = once(peer, "close", { signal: AbortSignal.timeout(2_000) });
+      await assert.rejects(client.closedWithin(10), /still open/);
+      await terminateAndJoin(client);
+      await closed;
+      assert.equal(client.ws.readyState, WebSocket.CLOSED);
+    } finally {
+      if (client) await terminateAndJoin(client);
+      peer?.terminate();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  test("rechecks early and fractional wakes, slow batches, and campaign expiry", async () => {
+    let current = 6.4;
+    const waits: number[] = [];
+    assert.equal(await admitBatch(100, 1_000, () => current, async (ms) => {
+      waits.push(ms);
+      current += ms - (waits.length === 1 ? 1 : 0);
+    }), true);
+    assert.deepEqual(waits, [94, 1]);
+    assert.ok(current >= 100);
+    assert.equal(await admitBatch(100, 1_000, () => 150, async () => assert.fail("slow batch slept")), true);
+    current = 99.2;
+    assert.equal(await admitBatch(100, 99.6, () => current, async (ms) => { current += ms; }), false);
+    assert.equal(await admitBatch(100, 100, () => 100, async () => assert.fail("expired campaign slept")), false);
   });
 
   test(`random first messages on every path for ${FUZZ_MS} ms: each socket is refused with a protocol close code`, async () => {
@@ -172,16 +268,17 @@ describe("pre-auth fuzzing", () => {
     const stop = performance.now() + FUZZ_MS;
     const progress: FuzzProgress = { startedAt: stop - FUZZ_MS, attempted: 0, opened: 0, completedCloses: 0, inFlight: 0, reportedOpenFailure: false };
     let runs = 0;
-    while (performance.now() < stop) {
+    let nextStart = progress.startedAt;
+    while (await admitBatch(nextStart, stop)) {
       const batchStartedAt = performance.now();
-      const codes = await fuzzBatch(() => fuzzOne(progress));
+      if (batchStartedAt >= stop) break;
+      const codes = await fuzzBatch((signal) => fuzzOne(progress, signal));
       for (const code of codes) {
         seen.set(code, (seen.get(code) ?? 0) + 1);
         assert.ok(REFUSED.has(code as never), `closed with ${code}`);
       }
       runs += codes.length;
-      const waitMs = Math.min(batchStartedAt + FUZZ_BATCH_INTERVAL_MS, stop) - performance.now();
-      if (waitMs > 0) await sleep(waitMs);
+      nextStart = batchStartedAt + FUZZ_BATCH_INTERVAL_MS;
     }
     assert.ok(runs > 0);
     for (const code of [Close.Malformed, 1009]) assert.ok(seen.has(code), `never saw ${code} in ${JSON.stringify([...seen])}`);
