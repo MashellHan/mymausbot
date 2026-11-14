@@ -3343,6 +3343,7 @@
   "inbox.empty": "Для вас пока ничего нет.",
   "inbox.from": "От: {name}",
   "inbox.in": "в «{title}»",
+  "inbox.markAllRead": "Отметить всё как прочитанное",
   "inbox.openOrigin": "Открыть «{title}»",
   "inbox.panel.title": "Входящие",
   "inbox.reply.placeholder": "Напишите ответ",

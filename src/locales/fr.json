@@ -1600,6 +1600,7 @@
   "inbox.empty": "Rien pour vous pour l'instant.",
   "inbox.from": "De {name}",
   "inbox.in": "dans {title}",
+  "inbox.markAllRead": "Tout marquer comme lu",
   "inbox.openOrigin": "Ouvrir {title}",
   "inbox.panel.title": "Boîte de réception",
   "inbox.reply.placeholder": "Écrivez votre réponse",

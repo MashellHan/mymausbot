@@ -4526,6 +4526,7 @@
   "inbox.headline.connect": "連線 {app}",
   "inbox.headline.signIn": "登入 {site}",
   "inbox.in": "在 {title}",
+  "inbox.markAllRead": "全部標示為已讀",
   "inbox.noMatch": "收件匣中沒有符合的項目。",
   "inbox.note": "新增備註",
   "inbox.openOrigin": "開啟 {title}",

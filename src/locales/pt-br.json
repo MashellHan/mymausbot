@@ -4705,6 +4705,7 @@
   "inbox.headline.connect": "Conectar {app}",
   "inbox.headline.signIn": "Fazer login em {site}",
   "inbox.in": "em {title}",
+  "inbox.markAllRead": "Marcar tudo como lido",
   "inbox.noMatch": "Nada na caixa de entrada corresponde à busca.",
   "inbox.note": "Adicionar uma observação",
   "inbox.openOrigin": "Abrir {title}",

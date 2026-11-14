@@ -3521,6 +3521,7 @@
   "inbox.empty": "아직 나에게 온 것이 없어요.",
   "inbox.from": "{name}에게서",
   "inbox.in": "{title}에서",
+  "inbox.markAllRead": "모두 읽음으로 표시",
   "inbox.openOrigin": "{title} 열기",
   "inbox.panel.title": "받은편지함",
   "inbox.reply.placeholder": "답변을 쓰세요",

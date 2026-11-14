@@ -1614,6 +1614,7 @@
   "inbox.empty": "Noch nichts für dich.",
   "inbox.from": "Von {name}",
   "inbox.in": "in {title}",
+  "inbox.markAllRead": "Alle als gelesen markieren",
   "inbox.openOrigin": "{title} öffnen",
   "inbox.panel.title": "Posteingang",
   "inbox.reply.placeholder": "Deine Antwort",

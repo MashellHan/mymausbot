@@ -5098,6 +5098,7 @@
   "inbox.headline.connect": "Connect {app}",
   "inbox.headline.signIn": "Sign in to {site}",
   "inbox.in": "in {title}",
+  "inbox.markAllRead": "Mark all as read",
   "inbox.noMatch": "Nothing in the inbox matches.",
   "inbox.note": "Add a note",
   "inbox.openOrigin": "Open {title}",
