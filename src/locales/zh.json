@@ -4225,6 +4225,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI（免费额度）",
   "decider.workersAi.token": "API 令牌",
   "decider.workersAi.tokenPlaceholder": "粘贴一个有 Workers AI 权限的令牌",
+  "defaultBot.demote": "转为普通机器人",
+  "defaultBot.demoteHint": "移除内置保护：之后可像其他机器人一样归档或删除。",
   "defaultBot.hidden": "{name} 已从侧栏隐藏。可在 设置 → 通用 中重新显示。",
   "defaultBot.hide": "从侧栏隐藏",
   "defaultBot.hideHint": "它会继续工作。可在 设置 → 通用 中重新显示。",

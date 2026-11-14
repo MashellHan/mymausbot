@@ -35,6 +35,7 @@ import {
   type Action,
 } from "./store";
 import { LAST_CONVERSATION_KEY } from "@/lib/last-conversation";
+import { hiddenFromSidebar } from "@/lib/default-bot";
 import { cacheDesktopCapabilities, desktopCapabilitiesNow } from "@/lib/desktop";
 import { LAST_BOT_SECTION_KEY } from "@/lib/last-bot-section";
 import { NOTIFICATION_TRAY_PINNED_KEY } from "@/lib/notification-preferences";
@@ -213,6 +214,31 @@ describe("independent bot threads", () => {
     const switched = reducer(pending, { type: "botPatched", bot: { ...bot, threadId: "replacement", messages: [], defaultBot: undefined } });
     expect(switched.bots[0]?.defaultBot).toBeUndefined();
     expect(switched.notice).toMatchObject({ kind: "note", text: expect.stringContaining("regular bot") });
+  });
+
+  it.each(["botPatched", "botPatchedSwitch", "taskSwitched"] as const)("shows an already-hidden default bot after a serialized %s demotion", (kind) => {
+    const marked = { ...bot, defaultBot: {}, sidebarHidden: true };
+    const pending = reducer({ ...start(), bots: [marked] }, { type: "updateBot", botId: bot.id, patch: { defaultBot: null } });
+    expect(pending.bots[0]?.defaultBot).toEqual({});
+    expect(hiddenFromSidebar(pending.bots[0]!, null)).toBe(true);
+
+    const switchesThread = kind !== "botPatched";
+    const serverBot = JSON.parse(JSON.stringify({
+      ...marked,
+      defaultBot: undefined,
+      sidebarHidden: undefined,
+      threadId: switchesThread ? "replacement" : bot.threadId,
+      tasks: switchesThread ? [] : bot.tasks,
+      messages: switchesThread ? [] : bot.messages,
+    })) as Bot;
+    expect(serverBot).not.toHaveProperty("defaultBot");
+    expect(serverBot).not.toHaveProperty("sidebarHidden");
+
+    const confirmed = reducer(pending, { type: kind === "taskSwitched" ? "taskSwitched" : "botPatched", bot: serverBot });
+    expect(confirmed.bots[0]?.threadId).toBe(serverBot.threadId);
+    expect(confirmed.bots[0]?.defaultBot).toBeUndefined();
+    expect(confirmed.bots[0]?.sidebarHidden).toBeUndefined();
+    expect(hiddenFromSidebar(confirmed.bots[0]!, null)).toBe(false);
   });
 
   it("keeps background bot frames from switching the visible transcript or clearing unread", () => {

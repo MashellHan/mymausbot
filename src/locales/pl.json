@@ -2874,6 +2874,8 @@
   "decider.status.notSetUpShort": "Nie skonfigurowano",
   "decider.test.ok": "Jev odpowiedział w {ms} ms.",
   "decider.test.slow": "To jest wolniejsze niż 1,5 s potrzebne na decyzję w pokoju, więc pokoje wrócą do lidera. Wypróbuj szybszy model.",
+  "defaultBot.demote": "Zmień w zwykłego bota",
+  "defaultBot.demoteHint": "Usuwa wbudowaną ochronę: potem można go archiwizować lub usuwać jak każdego innego bota.",
   "defaultBot.hidden": "{name} nie ma już na pasku bocznym. Pokaż go znowu w Ustawienia → Ogólne.",
   "defaultBot.hide": "Ukryj na pasku bocznym",
   "defaultBot.hideHint": "Dalej pracuje. Pokaż go znowu w Ustawienia → Ogólne.",

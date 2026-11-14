@@ -3043,6 +3043,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI(무료 등급)",
   "decider.workersAi.token": "API 토큰",
   "decider.workersAi.tokenPlaceholder": "Workers AI 권한이 있는 토큰을 붙여 넣으세요",
+  "defaultBot.demote": "일반 봇으로 전환",
+  "defaultBot.demoteHint": "기본 보호를 해제합니다. 그러면 다른 봇처럼 보관하거나 삭제할 수 있어요.",
   "defaultBot.hidden": "{name}이(가) 사이드바에서 숨겨졌어요. 설정 → 일반에서 다시 표시할 수 있어요.",
   "defaultBot.hide": "사이드바에서 숨기기",
   "defaultBot.hideHint": "계속 일해요. 설정 → 일반에서 다시 표시할 수 있어요.",

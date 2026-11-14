@@ -1354,6 +1354,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI (offre gratuite)",
   "decider.workersAi.token": "Jeton d'API",
   "decider.workersAi.tokenPlaceholder": "Collez un jeton avec l'autorisation Workers AI",
+  "defaultBot.demote": "Transformer en bot ordinaire",
+  "defaultBot.demoteHint": "Retire la protection intégrée : il peut ensuite être archivé ou supprimé comme les autres bots.",
   "defaultBot.hidden": "{name} n'est plus dans la barre latérale. Réaffichez-le dans Paramètres → Général.",
   "defaultBot.hide": "Masquer de la barre latérale",
   "defaultBot.hideHint": "Il continue de fonctionner. Réaffichez-le dans Paramètres → Général.",

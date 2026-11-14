@@ -1176,7 +1176,7 @@ export function reducer(state: AppState, action: Action): AppState {
       if ((switchedThread || (before.awaitingThreadSnapshot && action.bot.threadId === before.threadId)) &&
           Array.isArray(action.bot.messages)) {
         // The slim deletion broadcast can beat the full snapshot; later duplicate snapshots must not overwrite newer messages.
-        const switched = reducer(switching, { type: "taskSwitched", bot: { ...before, ...action.bot, computer: action.bot.computer, section: action.bot.section, toolScope: action.bot.toolScope, managedSections: action.bot.managedSections, messages: action.bot.messages, browserProfile: action.bot.browserProfile, vpsAlias: action.bot.vpsAlias, phoneApps: action.bot.phoneApps, onlyPeopleAdded: action.bot.onlyPeopleAdded, defaultBot: action.bot.defaultBot } });
+        const switched = reducer(switching, { type: "taskSwitched", bot: { ...before, ...action.bot, computer: action.bot.computer, section: action.bot.section, toolScope: action.bot.toolScope, managedSections: action.bot.managedSections, messages: action.bot.messages, browserProfile: action.bot.browserProfile, vpsAlias: action.bot.vpsAlias, phoneApps: action.bot.phoneApps, onlyPeopleAdded: action.bot.onlyPeopleAdded, defaultBot: action.bot.defaultBot, sidebarHidden: action.bot.sidebarHidden } });
         return demotionNotice ? { ...switched, notice: demotionNotice } : switched;
       }
       const patched = updateBot(switching, action.bot.id, (b) => ({
@@ -1192,6 +1192,7 @@ export function reducer(state: AppState, action: Action): AppState {
         section: action.bot.section, managedSections: action.bot.managedSections,
         vpsAlias: action.bot.vpsAlias, phoneApps: action.bot.phoneApps, onlyPeopleAdded: action.bot.onlyPeopleAdded,
         defaultBot: action.bot.defaultBot,
+        sidebarHidden: action.bot.sidebarHidden,
         tasks: action.bot.tasks ? mergeTaskStamps(b.tasks, action.bot.tasks) : b.tasks,
         // Old approvals must never be sent to the replacement thread while its transcript loads.
         messages: switchedThread ? [] : b.messages,
@@ -1745,6 +1746,7 @@ export function reducer(state: AppState, action: Action): AppState {
         toolScope: action.bot.toolScope, managedSections: action.bot.managedSections,
         vpsAlias: action.bot.vpsAlias,
         defaultBot: action.bot.defaultBot,
+        sidebarHidden: action.bot.sidebarHidden,
         messages: action.bot.messages ?? [],
         hasMore: action.bot.hasMore,
         awaitingThreadSnapshot: false,

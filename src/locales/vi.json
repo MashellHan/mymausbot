@@ -2152,6 +2152,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI (gói miễn phí)",
   "decider.workersAi.token": "Mã API",
   "decider.workersAi.tokenPlaceholder": "Dán một mã có quyền Workers AI",
+  "defaultBot.demote": "Chuyển thành bot thông thường",
+  "defaultBot.demoteHint": "Gỡ bỏ chế độ bảo vệ tích hợp: sau đó có thể lưu trữ hoặc xóa bot này như các bot khác.",
   "defaultBot.hidden": "{name} đã được ẩn khỏi thanh bên. Hiện lại trong Cài đặt → Chung.",
   "defaultBot.hide": "Ẩn khỏi thanh bên",
   "defaultBot.hideHint": "Nó vẫn tiếp tục hoạt động. Hiện lại trong Cài đặt → Chung.",

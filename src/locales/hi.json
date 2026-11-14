@@ -1290,6 +1290,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI (मुफ़्त टियर)",
   "decider.workersAi.token": "API टोकन",
   "decider.workersAi.tokenPlaceholder": "Workers AI अनुमति वाला टोकन पेस्ट करें",
+  "defaultBot.demote": "इसे सामान्य बॉट बनाएँ",
+  "defaultBot.demoteHint": "अंतर्निहित सुरक्षा हटाता है: इसके बाद इसे किसी अन्य बॉट की तरह संग्रहित या हटाया जा सकता है।",
   "defaultBot.hidden": "{name} अब साइडबार में नहीं है। सेटिंग्स → सामान्य में इसे फिर से दिखाएँ।",
   "defaultBot.hide": "साइडबार से छिपाएँ",
   "defaultBot.hideHint": "यह काम करता रहता है। सेटिंग्स → सामान्य में इसे फिर से दिखाएँ।",
