@@ -335,9 +335,16 @@ describe("the USB phone routes", () => {
   });
 
   it("send the phone nothing for input while nobody holds it", async () => {
+    const started = performance.now();
+    const phase = (name: "start" | "served" | "stream-created" | "video-ready" | "messages-queued" | "control-received") =>
+      console.error(`phone-no-holder ${name} ${Math.round(performance.now() - started)}ms`);
+    phase("start");
     const served = await serve();
+    phase("served");
     const watching = stream(served);
+    phase("stream-created");
     await watching.has(RECORDED.length);
+    phase("video-ready");
 
     watching.tell(touch("down", 360, 640));
     watching.tell(touch("move", 361, 641));
@@ -346,8 +353,11 @@ describe("the USB phone routes", () => {
     watching.tell({ type: "text", text: "hi" });
     watching.tell(TAKE);
     watching.tell({ type: "key", key: "back" });
+    phase("messages-queued");
 
-    expect(await served.phone.control(KEY_BYTES)).toBe(hex(control.key(KEYCODES.back)));
+    const received = await served.phone.control(KEY_BYTES);
+    phase("control-received");
+    expect(received).toBe(hex(control.key(KEYCODES.back)));
   });
 
   it.each([
