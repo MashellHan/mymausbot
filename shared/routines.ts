@@ -87,7 +87,11 @@ export const ROUTINE_HOLD_CAUSES: readonly RoutineHoldCause[] = ["plan_cancelled
  * message it wrote. */
 export type RoutineRunReport =
   | { state: "quiet" }
-  | { state: "pending" }
+  | {
+      state: "pending";
+      /** Selected execution reply; null means that turn said and sent nothing, absent means unknown. */
+      sourceMessageId?: string | null;
+    }
   | { state: "posted"; threadId: string; messageId: string };
 
 export type RoutineRunStatus =

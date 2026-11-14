@@ -4091,6 +4091,13 @@ describe("runs that report into a chat", () => {
       .toEqual({ state: "posted", threadId: "main", messageId: "line-1" });
     expect(h.emitted.findLast((frame) => frame.kind === "routine.run")?.run.report).toEqual({ state: "posted", threadId: "main", messageId: "line-1" });
     expect(new RoutineManager(h.options).listRuns()[0]!.report).toEqual({ state: "posted", threadId: "main", messageId: "line-1" });
+    for (const sourceMessageId of ["reply-1", null] as const) {
+      const report = { state: "pending" as const, sourceMessageId };
+      expect(h.manager.noteReport(run.id, report)?.report).toEqual(report);
+      expect(new RoutineManager(h.options).listRuns()[0]!.report).toEqual(report);
+    }
+    h.manager.noteReport(run.id, { state: "pending" });
+    expect(new RoutineManager(h.options).listRuns()[0]!.report).toEqual({ state: "pending" });
     h.manager.noteReport(run.id, undefined);
     expect(new RoutineManager(h.options).listRuns()[0]).not.toHaveProperty("report");
     expect(h.manager.noteReport("missing", { state: "quiet" })).toBeNull();

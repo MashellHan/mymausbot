@@ -218,7 +218,7 @@ export function createAutomationReports(deps: AutomationReportDeps) {
         resumed = true;
         for (const run of manager.listRuns().reverse()) {
           if (run.report?.state !== "pending" || waiting.has(run.id)) continue;
-          waiting.set(run.id, run.status === "failed" ? { kind: "failure", run, detail: run.error ?? "" } : { kind: "reply", run });
+          waiting.set(run.id, run.status === "failed" ? { kind: "failure", run, detail: run.error ?? "" } : { kind: "reply", run, messageId: run.report.sourceMessageId });
         }
       }
       for (const [key, line] of waiting) if (write(line)) waiting.delete(key);
@@ -228,7 +228,8 @@ export function createAutomationReports(deps: AutomationReportDeps) {
   };
 
   const hold = (key: string, line: Waiting) => {
-    if (line.kind !== "card") deps.routines()?.noteReport(line.run.id, { state: "pending" });
+    if (line.kind !== "card") deps.routines()?.noteReport(line.run.id,
+      line.kind === "reply" && line.messageId !== undefined ? { state: "pending", sourceMessageId: line.messageId } : { state: "pending" });
     waiting.set(key, line);
     flush();
   };

@@ -78,6 +78,12 @@ function fixture(options: { threadLanguage?: (threadId: string) => string | unde
     ...(options.threadLanguage ? { threadLanguage: options.threadLanguage } : {}),
   });
   const reports = create();
+  const reload = () => {
+    const saved = JSON.parse(JSON.stringify([...runs.values()])) as RoutineRun[];
+    runs.clear();
+    for (const run of saved) runs.set(run.id, run);
+    return create();
+  };
   let serial = 0;
   /** One run of an automation, finished in its own hidden conversation with `said` as its last reply. */
   const finished = (said: string | null, name = "Inbox brief", extra: Partial<RoutineRun> = {}) => {
@@ -97,7 +103,7 @@ function fixture(options: { threadLanguage?: (threadId: string) => string | unde
   /** Everything written into the chat since the bot said hello. */
   const added = () => store.messagesFor(main).filter((message) => !greeting.has(message.id));
   return {
-    store, bot, main, runs, busy, notified, wrote, reports, finished, lines, added, create,
+    store, bot, main, runs, busy, notified, wrote, reports, finished, lines, added, create, reload,
     offline: () => { manager = null; },
     online: () => { manager = routines; },
   };
@@ -159,7 +165,7 @@ describe("automation reports", () => {
     f.reports.runSettled(run, `turn-${run.id}`);
     f.reports.flush();
     expect(f.lines()).toEqual([]);
-    expect(f.runs.get(run.id)!.report).toEqual({ state: "pending" });
+    expect(f.runs.get(run.id)!.report).toMatchObject({ state: "pending", sourceMessageId: expect.any(String) });
     expect(f.notified).toEqual([]);
     f.busy.delete(f.main);
     f.reports.flush();
@@ -342,7 +348,7 @@ describe("automation reports", () => {
     f.reports.runSettled(ok, `turn-${ok.id}`);
     const failedAgain = f.finished(null, "Inbox brief", { status: "failed" });
     f.reports.runFailed(failedAgain, "");
-    expect(f.runs.get(ok.id)!.report).toEqual({ state: "pending" });
+    expect(f.runs.get(ok.id)!.report).toMatchObject({ state: "pending", sourceMessageId: expect.any(String) });
     f.busy.delete(f.main);
     f.reports.flush();
     expect(f.lines().map((line) => [line.automation?.runId, line.automation?.failed ?? false, line.automation?.recovered ?? false])).toEqual([
@@ -544,6 +550,41 @@ describe("automation reports", () => {
     f.runs.get(run.id)!.report = { state: "pending" };
     f.create().flush();
     expect(f.lines()).toEqual([expect.objectContaining({ text: "", attachments: [pdf("Stock")] })]);
+  });
+
+  it("keeps a held run's selected reply after reload when a later unfinished turn sent a file", () => {
+    const f = fixture();
+    const run = f.finished("Stock counted.");
+    const thread = run.threadId!;
+    sent(f.store, thread, `turn-${run.id}`, pdf("Stock"));
+    f.busy.add(f.main);
+    f.reports.runSettled(run, `turn-${run.id}`);
+    expect(f.runs.get(run.id)!.report).toEqual({ state: "pending", sourceMessageId: f.store.activePath(thread).find((message) => message.turnId === `turn-${run.id}`)!.id });
+    f.store.appendMessage(thread, { role: "user", kind: "text", text: "Count shelves too." });
+    sent(f.store, thread, "turn-later", pdf("Shelves"));
+    f.store.appendMessage(thread, { role: "bot", kind: "text", text: "Counting shelves", turnId: "turn-later" });
+    const restarted = f.reload();
+    f.busy.delete(f.main);
+    restarted.flush();
+    expect(f.lines()).toEqual([expect.objectContaining({ text: "Stock counted.", attachments: [pdf("Stock")], automation: expect.objectContaining({ runId: run.id }) })]);
+  });
+
+  it("keeps a held explicitly empty final turn empty after reload", () => {
+    const f = fixture();
+    const failed = f.finished(null, "Inbox brief", { status: "failed", error: "Timed out" });
+    f.reports.runFailed(failed, "it ran past its 25-minute limit.");
+    const finishedAt = Date.UTC(2026, 9, 26, 2, 40);
+    const run = f.finished(null, "Inbox brief", { finishedAt });
+    sent(f.store, run.threadId!, "turn-before", pdf("Earlier"));
+    f.store.appendMessage(run.threadId!, { role: "bot", kind: "text", text: "Asked Sam for the numbers.", turnId: "turn-before", turnTerminal: true });
+    f.busy.add(f.main);
+    f.reports.runSettled(run, `turn-${run.id}`);
+    expect(f.runs.get(run.id)!.report).toEqual({ state: "pending", sourceMessageId: null });
+    const restarted = f.reload();
+    f.busy.delete(f.main);
+    restarted.flush();
+    expect(f.lines().at(-1)).toMatchObject({ text: recoveredText("Inbox brief", finishedAt), automation: expect.objectContaining({ runId: run.id, recovered: true }) });
+    expect(f.lines().at(-1)).not.toHaveProperty("attachments");
   });
 
   it("reads a run's words and the file it sent after them again after a restart, without an earlier turn's file", () => {
