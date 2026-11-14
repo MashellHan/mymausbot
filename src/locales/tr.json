@@ -2152,6 +2152,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI (ücretsiz katman)",
   "decider.workersAi.token": "API belirteci",
   "decider.workersAi.tokenPlaceholder": "Workers AI izni olan bir belirteç yapıştırın",
+  "defaultBot.demote": "Bunu normal bir bot yap",
+  "defaultBot.demoteHint": "Yerleşik korumayı kaldırır; ardından diğer botlar gibi arşivlenebilir veya silinebilir.",
   "defaultBot.hidden": "{name} kenar çubuğundan gizlendi. Ayarlar → Genel'den yeniden gösterebilirsin.",
   "defaultBot.hide": "Kenar çubuğundan gizle",
   "defaultBot.hideHint": "Çalışmaya devam eder. Ayarlar → Genel'den yeniden gösterebilirsin.",

@@ -4073,6 +4073,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI (plano grátis)",
   "decider.workersAi.token": "Token de API",
   "decider.workersAi.tokenPlaceholder": "Cole um token com permissão para Workers AI",
+  "defaultBot.demote": "Tornar este um bot comum",
+  "defaultBot.demoteHint": "Remove a proteção integrada: depois ele pode ser arquivado ou excluído como qualquer outro bot.",
   "defaultBot.hidden": "{name} saiu da barra lateral. Mostre novamente em Configurações → Geral.",
   "defaultBot.hide": "Ocultar da barra lateral",
   "defaultBot.hideHint": "Ele continua funcionando. Mostre novamente em Configurações → Geral.",

@@ -2903,6 +2903,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI (бесплатный тариф)",
   "decider.workersAi.token": "API-токен",
   "decider.workersAi.tokenPlaceholder": "Вставьте токен с разрешением Workers AI",
+  "defaultBot.demote": "Сделать обычным ботом",
+  "defaultBot.demoteHint": "Снимает встроенную защиту: после этого его можно архивировать или удалить, как любого другого бота.",
   "defaultBot.hidden": "{name} нет на боковой панели. Показать снова можно в разделе Настройки → Общие.",
   "defaultBot.hide": "Скрыть с боковой панели",
   "defaultBot.hideHint": "Он продолжит работать. Показать снова можно в разделе Настройки → Общие.",

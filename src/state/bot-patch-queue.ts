@@ -52,6 +52,8 @@ export type BotUpdatePatch = Partial<
   phoneApps?: Bot["phoneApps"] | null;
   /** null: talks to every bot again. */
   peers?: string[] | null;
+  /** null requests demotion; the pending UI keeps the mark until the server confirms it. */
+  defaultBot?: Bot["defaultBot"] | null;
   /** The server's proof the local-auto warning was shown: wire-only, never folded into bot state. */
   acknowledgeLocalAuto?: boolean;
   applyToAllThreads?: boolean;
@@ -64,7 +66,7 @@ export type BotUpdatePatch = Partial<
 
 export type BotStatePatch = Omit<
   BotUpdatePatch,
-  "computer" | "connectorTools" | "connectorScopes" | "phoneApps" | "peers" | "acknowledgeLocalAuto" | "applyToAllThreads" | "keepThreadModels" | "threadId" | "mainThreadChoice"
+  "computer" | "connectorTools" | "connectorScopes" | "phoneApps" | "peers" | "defaultBot" | "acknowledgeLocalAuto" | "applyToAllThreads" | "keepThreadModels" | "threadId" | "mainThreadChoice"
 > & {
   mainThreadId?: string;
   peers?: string[];
@@ -131,6 +133,7 @@ const stateOverlay = (patch: BotUpdatePatch): BotStatePatch => {
     connectorScopes,
     phoneApps,
     peers,
+    defaultBot: _defaultBot,
     ...fields
   } = patch;
   const normalized: BotStatePatch = { ...fields };

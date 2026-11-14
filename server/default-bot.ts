@@ -21,10 +21,13 @@ export function defaultBotRefusal(name: string): string {
   return `${name} can't be deleted or archived. To take it off the sidebar, choose Hide in its menu, or turn off "Show ${name} in the sidebar" in Settings → General.`;
 }
 
-/** Why a PATCH may not change this bot so, or null. */
+/** A PATCH may clear the default mark only after its caller passes the route's authority checks. */
 export function defaultBotPatchRefusal(bot: BotRecord | null, body: Record<string, unknown>): string | null {
   for (const key of ["sidebarHidden", "welcomed"]) if (body[key] !== undefined && typeof body[key] !== "boolean") return `${key} must be true or false`;
+  if (body.defaultBot === null && body.sidebarHidden !== undefined) return "sidebarHidden cannot be set while clearing defaultBot";
+  if (body.defaultBot === null && bot && defaultBotPerson(bot)) return "A Team Cloud member's MausBot cannot be made a regular bot";
   if ((body.sidebarHidden !== undefined || body.welcomed !== undefined) && !bot?.defaultBot) return "Only MausBot is hidden this way; archive or delete other bots.";
+  if (body.defaultBot !== undefined && body.defaultBot !== null) return "defaultBot can only be cleared (null), never set by a patch";
   return body.hidden === true && bot?.defaultBot ? defaultBotRefusal(bot.name) : null;
 }
 

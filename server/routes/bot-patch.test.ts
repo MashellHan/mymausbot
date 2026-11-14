@@ -83,6 +83,26 @@ function fixture() {
   return { store, bot, activeVpsThreads, privateThreads, patch };
 }
 
+it("demotes a default bot only for an admin and returns the saved mark cleared", async () => {
+  const { store, bot, patch } = fixture();
+  store.patchBot(bot.id, { defaultBot: {}, sidebarHidden: true });
+  const member = { kind: "session", via: "bearer", scopes: ["client"], session: { id: "s", label: "Laptop", scopes: ["client"] } } as unknown as RequestAuth;
+  expect((await patch(bot.id, { defaultBot: null }, { auth: member })).status).toBe(403);
+  expect(store.bot(bot.id)?.defaultBot).toEqual({});
+
+  expect((await patch(bot.id, { defaultBot: null, sidebarHidden: true })).status).toBe(400);
+  expect(store.bot(bot.id)?.defaultBot).toEqual({});
+
+  const demoted = await patch(bot.id, { defaultBot: null });
+  expect(demoted.status).toBe(200);
+  expect(demoted.body.bot.defaultBot).toBeUndefined();
+  expect(store.bot(bot.id)?.defaultBot).toBeUndefined();
+  expect(store.bot(bot.id)?.sidebarHidden).toBeUndefined();
+  store.patchBot(bot.id, { defaultBot: { person: "member@example.com" } });
+  expect((await patch(bot.id, { defaultBot: null })).status).toBe(400);
+  expect(store.bot(bot.id)?.defaultBot).toEqual({ person: "member@example.com" });
+});
+
 describe("PATCH /api/bots/:id vpsAlias relocation guard", () => {
   it("skips the guard when pinning a bot to the host it already uses", async () => {
     const { bot, patch } = fixture();

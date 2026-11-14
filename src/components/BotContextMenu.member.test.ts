@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot } from "@/state/store";
 
-const fixture = vi.hoisted(() => ({ advanced: true, admin: false as boolean | null }));
+const fixture = vi.hoisted(() => ({ advanced: true, admin: false as boolean | null, defaultBot: false, personDefault: false }));
 vi.mock("react", async (importOriginal) => ({ ...await importOriginal<typeof import("react")>(), useLayoutEffect: () => {} }));
 vi.mock("react-dom", async (importOriginal) => ({ ...await importOriginal<typeof import("react-dom")>(), createPortal: (node: ReactNode) => node }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({}) }));
@@ -12,7 +12,7 @@ vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.admin }));
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
-  return { ...original, useStore: () => ({ state: { ...original.initialState, bots: [chief, scout] }, dispatch: vi.fn() }) };
+  return { ...original, useStore: () => ({ state: { ...original.initialState, bots: [fixture.defaultBot ? { ...chief, defaultBot: fixture.personDefault ? { person: "member@example.com" } : {} } : chief, scout] }, dispatch: vi.fn() }) };
 });
 
 const { BotContextMenu } = await import("./Sidebar");
@@ -23,6 +23,8 @@ const chief = { ...base, id: "luna", name: "Luna", chiefOfStaff: true } as unkno
 beforeEach(() => {
   fixture.advanced = true;
   fixture.admin = false;
+  fixture.defaultBot = false;
+  fixture.personDefault = false;
   vi.stubGlobal("document", { body: {} });
   vi.stubGlobal("window", { innerWidth: 1_000, innerHeight: 800, addEventListener: () => {}, removeEventListener: () => {} });
 });
@@ -57,5 +59,19 @@ describe("a team bot's actions for a session without the admin scope", () => {
     const html = render(scout);
     for (const offered of [">Archive</button>", ">Delete</button>", "Duplicate", "Move to department"]) expect(html).toContain(offered);
     expect(html).toContain("Choose Claude or an ACP model provider first");
+  });
+
+  it("offers demotion only after admin authority is known", () => {
+    fixture.defaultBot = true;
+    for (const admin of [false, null]) {
+      fixture.admin = admin;
+      expect(render(chief)).not.toContain("Make this a regular bot");
+    }
+    fixture.admin = true;
+    expect(render(chief)).toContain("Make this a regular bot");
+    fixture.advanced = false;
+    expect(render(chief)).toContain("Make this a regular bot");
+    fixture.personDefault = true;
+    expect(render(chief)).not.toContain("Make this a regular bot");
   });
 });

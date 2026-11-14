@@ -3899,6 +3899,8 @@
   "decider.workersAi.title": "Cloudflare Workers AI（免費額度）",
   "decider.workersAi.token": "API 權杖",
   "decider.workersAi.tokenPlaceholder": "貼上具有 Workers AI 權限的權杖",
+  "defaultBot.demote": "轉為一般機器人",
+  "defaultBot.demoteHint": "移除內建保護：之後可像其他機器人一樣封存或刪除。",
   "defaultBot.hidden": "{name} 已從側邊欄隱藏。可在 設定 → 一般 中重新顯示。",
   "defaultBot.hide": "從側邊欄隱藏",
   "defaultBot.hideHint": "它會繼續運作。可在 設定 → 一般 中重新顯示。",

@@ -152,6 +152,24 @@ describe("bot patch queue", () => {
     await expect(flushed).resolves.toMatchObject({ computer: "cloud", cloudBackend: "vps" });
   });
 
+  it("sends default-bot demotion without removing the mark in the pending overlay", async () => {
+    const request = deferredBot();
+    const send = vi.fn(async () => request.promise);
+    const queue = createBotPatchQueue({
+      send,
+      reconcile: async () => bot(),
+      onAuthoritative: vi.fn(),
+      onError: vi.fn(),
+    });
+    queue.enqueue("bot-1", { defaultBot: null }, bot({ defaultBot: {} }));
+    expect(queue.overlayFor("bot-1")).not.toHaveProperty("defaultBot");
+    const flushed = queue.flush("bot-1");
+    await Promise.resolve();
+    expect(send).toHaveBeenCalledWith("bot-1", { defaultBot: null }, expect.any(AbortSignal), expect.anything(), false);
+    request.resolve(bot());
+    await flushed;
+  });
+
   it("coalesces upload then remove so an older avatar can never resurrect", async () => {
     const sent: BotUpdatePatch[] = [];
     const authoritative = vi.fn();
@@ -165,6 +183,7 @@ describe("bot patch queue", () => {
           connectorScopes: patch.connectorScopes ?? undefined,
           phoneApps: patch.phoneApps ?? undefined,
           peers: patch.peers ?? undefined,
+          defaultBot: patch.defaultBot ?? undefined,
         });
       },
       reconcile: async () => bot(),
