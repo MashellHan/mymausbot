@@ -10,7 +10,7 @@ vi.mock("../../state/api", () => ({
     server.calls.push({ path, method: init?.method ?? "GET", ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
     const done = /^\/api\/inbox\/([\w-]+)\/done$/.exec(path);
     if (done && server.view) server.view = { ...server.view, rows: server.view.rows.map((row) => (row.id === done[1] ? { ...row, tab: "done", unread: false } : row)) };
-    if (path === "/api/inbox/read-all" && server.view) server.view = { ...server.view, rows: server.view.rows.map((row) => ({ ...row, unread: false })) };
+    if (path === "/api/inbox/read-all" && server.view) server.view = { ...server.view, rows: server.view.rows.map((row) => (row.tab === "done" ? row : { ...row, unread: false })) };
     return server.view;
   }),
 }));
@@ -80,6 +80,7 @@ describe("the inbox panel", () => {
   });
 
   it("marks every unread line read from one control that only shows while something is unread, and answers no ask", async () => {
+    shown(inboxView([approvalRow, questionRow, messageRow, reportRow, { ...settledRow, unread: true }]));
     openInbox();
     await mount(createElement(InboxPanel));
     const rowIds = () => [...document.querySelectorAll<HTMLElement>("[data-inbox-row]")].map((row) => row.dataset.inboxRow);
@@ -94,11 +95,12 @@ describe("the inbox panel", () => {
     expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "decideRequest" }));
     expect(server.calls.filter((call) => /\/(done)$/.test(call.path))).toEqual([]);
     expect(currentInbox()!.rows.map((row) => [row.id, row.tab])).toEqual(inboxView().rows.map((row) => [row.id, row.tab]));
+    expect(currentInbox()!.rows.find((row) => row.id === settledRow.id)?.unread, "settled history was not changed").toBe(true);
     expect(document.querySelector("[data-inbox-mark-all]"), "nothing is unread").toBeNull();
   });
 
-  it("keeps the control out of an inbox with nothing unread", async () => {
-    shown(inboxView([{ ...approvalRow, unread: false }, { ...messageRow, unread: false }]));
+  it("keeps the control out when current rows are read but settled history is unseen", async () => {
+    shown(inboxView([{ ...approvalRow, unread: false }, { ...messageRow, unread: false }, { ...settledRow, unread: true }]));
     openInbox();
     await mount(createElement(InboxPanel));
     expect(document.querySelector("[data-inbox-row]")).not.toBeNull();

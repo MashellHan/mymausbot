@@ -6,7 +6,7 @@ import { cn } from "@/lib/cn";
 import { useAdvancedMode } from "@/lib/interface-mode";
 import { t } from "@/lib/i18n";
 import { PHONE_LAYOUT, useMediaQuery } from "@/lib/use-media-query";
-import { closeInbox, markAllInboxRead, readInboxLine, readInboxRow, useInboxMarkingAll, useInboxPanel, useInboxView, widenInbox } from "@/state/inbox";
+import { canMarkInboxRead, closeInbox, markAllInboxRead, readInboxLine, readInboxRow, useInboxMarkingAll, useInboxPanel, useInboxView, widenInbox } from "@/state/inbox";
 import { InboxActive } from "./InboxActive";
 import { InboxReading } from "./InboxReading";
 import { InboxRowItem } from "./InboxRow";
@@ -68,7 +68,7 @@ export function InboxPanel() {
           <span className="min-w-0 truncate font-medium text-ink">{t("inbox.panel.title")}</span>
           {count > 0 && <span data-inbox-tab-count className="shrink-0 tabular-nums text-ink-tertiary">{count}</span>}
         </div>
-        {view?.rows.some((row) => row.unread) && (
+        {view?.rows.some(canMarkInboxRead) && (
           <button type="button" data-inbox-mark-all onClick={markAllInboxRead} disabled={markingAll}
             className="mt-[9px] shrink-0 whitespace-nowrap text-[12px] text-accent hover:underline disabled:opacity-50 disabled:hover:no-underline">
             {t("inbox.markAllRead")}

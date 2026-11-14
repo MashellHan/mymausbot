@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { InboxView } from "../../shared/inbox";
-import { inboxView, messageRow } from "@/testing/inbox-fixture";
+import { approvalRow, inboxView, messageRow, reportRow, settledRow } from "@/testing/inbox-fixture";
 import { api } from "./api";
-import { currentInbox, doneInboxRow, readInboxRow, refreshInbox, setInboxView } from "./inbox";
+import { currentInbox, doneInboxRow, markAllInboxRead, readInboxRow, refreshInbox, setInboxView } from "./inbox";
 
 vi.mock("./api", () => ({ api: vi.fn() }));
 
@@ -87,4 +87,45 @@ it.each(["done", "read"] as const)("puts the row back when %s fails and the read
   await reply(2, inboxView([{ ...messageRow, text: "Reconciled text", unread: false }]));
   await loading;
   expect(currentInbox()?.rows[0]).toMatchObject({ tab: "info", unread: false, text: "Reconciled text" });
+});
+
+it("restores eligible unread rows after a bulk POST and fallback GET both fail", async () => {
+  setInboxView(inboxView([messageRow, { ...settledRow, unread: true }]));
+  markAllInboxRead();
+  expect(requests[0]?.path).toBe("/api/inbox/read-all");
+  expect(currentInbox()?.rows.map((row) => row.unread)).toEqual([false, true]);
+  await fail(0);
+  expect(requests[1]?.path).toBe("/api/inbox");
+  await fail(1);
+  expect(currentInbox()?.rows.map((row) => row.unread)).toEqual([true, true]);
+  markAllInboxRead();
+  expect(requests[2]?.path).toBe("/api/inbox/read-all");
+  await reply(2, inboxView([{ ...messageRow, unread: false }, { ...settledRow, unread: true }]));
+});
+
+it("restores only its still-optimistic rows after a newer decision and arrival", async () => {
+  setInboxView(inboxView([messageRow, approvalRow]));
+  markAllInboxRead();
+  doneInboxRow(messageRow);
+  setInboxView({ ...currentInbox()!, rows: [...currentInbox()!.rows, { ...reportRow, id: "new-line", unread: true }] });
+  await fail(0);
+  expect(currentInbox()?.rows).toMatchObject([
+    { id: messageRow.id, tab: "done", unread: false },
+    { id: approvalRow.id, tab: "needs-you", unread: true },
+    { id: "new-line", unread: true },
+  ]);
+  expect(requests[2]?.path).toBe("/api/inbox");
+  await fail(2);
+  expect(currentInbox()?.rows[1]?.unread).toBe(true);
+});
+
+it("does not undo a refreshed row when an older bulk POST fails", async () => {
+  markAllInboxRead();
+  const loading = refreshInbox();
+  await reply(1, inboxView([{ ...messageRow, unread: false, text: "Fresh server text" }]));
+  await loading;
+  await fail(0);
+  expect(requests[2]?.path).toBe("/api/inbox");
+  await fail(2);
+  expect(currentInbox()?.rows[0]).toMatchObject({ unread: false, text: "Fresh server text" });
 });
