@@ -382,15 +382,26 @@ describe("the USB phone routes", () => {
     ["a text that is not a string", { type: "text", text: 7 }],
     ["a message of no known type", { type: "scroll", x: 1, y: 1 }],
   ])("send the phone nothing for %s, though a person holds it", async (_what, invalid) => {
+    const started = performance.now();
+    const phase = (name: "start" | "served" | "stream-created" | "video-ready" | "messages-queued" | "control-received") => {
+      if (_what === "an empty text") console.error(`phone-empty-text ${name} ${Math.round(performance.now() - started)}ms`);
+    };
+    phase("start");
     const served = await serve();
+    phase("served");
     const watching = stream(served);
+    phase("stream-created");
     await watching.has(RECORDED.length);
+    phase("video-ready");
 
     watching.tell(TAKE);
     watching.socket.send(typeof invalid === "string" ? invalid : JSON.stringify(invalid));
     watching.tell({ type: "key", key: "back" });
+    phase("messages-queued");
 
-    expect(await served.phone.control(KEY_BYTES)).toBe(hex(control.key(KEYCODES.back)));
+    const received = await served.phone.control(KEY_BYTES);
+    phase("control-received");
+    expect(received).toBe(hex(control.key(KEYCODES.back)));
   });
 
   it("leave a finger down, and send the phone nothing, for a touch that is neither down, move nor up", async () => {
