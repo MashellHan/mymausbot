@@ -102,12 +102,21 @@ describe("the runner", () => {
     return directory;
   }
 
-  async function vitest(directory: string, env: Record<string, string | undefined>) {
+  async function vitest(directory: string, env: Record<string, string | undefined>, stopAt?: string) {
     const childEnv: Record<string, string | undefined> = { ...process.env, OMB_VITEST_RETRY_LIST: join(directory, "list.json"), OMB_VITEST_RETRY_LOG: join(directory, "retries.jsonl"), ...env };
     for (const [key, value] of Object.entries(childEnv)) if (value === undefined) delete childEnv[key];
-    return new Promise<{ code: number; output: string }>((resolve) => {
-      execFile(process.execPath, [VITEST, "run", "--config", join(directory, "vitest.config.mjs"), "--reporter=json"], { cwd: directory, env: childEnv as NodeJS.ProcessEnv, encoding: "utf8", timeout: 60_000 },
-        (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, output: `${stdout}\n${stderr}` }));
+    return new Promise<{ code: number; output: string; stopped: boolean }>((resolve) => {
+      let stopped = false;
+      let observed = "";
+      const child = execFile(process.execPath, [VITEST, "run", "--config", join(directory, "vitest.config.mjs"), "--reporter=json"], { cwd: directory, env: childEnv as NodeJS.ProcessEnv, encoding: "utf8", timeout: stopAt ? 10_000 : 60_000, killSignal: stopAt ? "SIGKILL" : "SIGTERM" },
+        (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, output: `${stdout}\n${stderr}`, stopped }));
+      if (stopAt) child.stderr?.on("data", (chunk: string) => {
+        observed += chunk;
+        if (!stopped && observed.includes(stopAt)) {
+          stopped = true;
+          child.kill("SIGKILL");
+        }
+      });
     });
   }
 
@@ -116,13 +125,33 @@ describe("the runner", () => {
     return Object.fromEntries(report.testResults[0].assertionResults.map((test: { title: string; status: string }) => [test.title, test.status]));
   };
 
+  const filePhases = (output: string) => [...output.matchAll(/^\[ci-file\] (collect|run|complete) ([a-zA-Z0-9_./-]+) (\d+)ms$/gm)]
+    .map((match) => ({ phase: match[1], file: match[2], elapsed: Number(match[3]) }));
+
   it("retries a listed test in CI, records it, and leaves other tests alone", async () => {
     const directory = project();
     const { output } = await vitest(directory, { CI: "true" });
     expect(results(output)).toEqual({ "fails once": "passed", "fails always": "failed" });
     const lines = readFileSync(join(directory, "retries.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(lines).toEqual([{ file: "flaky.test.mjs", test: "group > fails once", retries: 1, state: "pass", platform: process.platform }]);
+    const phases = filePhases(output);
+    expect(phases.map(({ phase, file }) => [phase, file])).toEqual(["collect", "run", "complete"].map((phase) => [phase, "flaky.test.mjs"]));
+    expect(phases.map(({ elapsed }) => elapsed)).toEqual(phases.map(({ elapsed }) => elapsed).sort((a, b) => a - b));
+    expect(phases.every(({ elapsed }) => Number.isInteger(elapsed) && elapsed >= 0)).toBe(true);
   }, 60_000);
+
+  it.each(["collect", "run"])("exposes an unfinished file's %s phase before final results exist", async (phase) => {
+    const directory = project();
+    const hold = 'writeSync(2, "fixture suspended\\n"); await new Promise(() => {});';
+    writeFileSync(join(directory, "flaky.test.mjs"), `import { writeSync } from "node:fs";\n${phase === "collect" ? hold : `it("pending", async () => { ${hold} });`}\n`);
+    writeFileSync(join(directory, "vitest.config.mjs"), `export default { test: { globals: true, pool: "threads", maxWorkers: 1, include: ["flaky.test.mjs"], runner: ${JSON.stringify(RUNNER)} } };\n`);
+    const { output, stopped } = await vitest(directory, { CI: "true" }, "fixture suspended\n");
+    expect(stopped).toBe(true);
+    expect(output).not.toContain('"testResults"');
+    const phases = filePhases(output);
+    expect(phases.map(({ phase: value, file }) => [value, file])).toEqual((phase === "collect" ? ["collect"] : ["collect", "run"]).map((value) => [value, "flaky.test.mjs"]));
+    expect(existsSync(join(directory, "retries.jsonl"))).toBe(false);
+  }, 30_000);
 
   it("stops retrying a file's listed tests once one of them fails every attempt", async () => {
     // A broken fixture, not a flake: three attempts of every listed test
@@ -172,6 +201,7 @@ describe("the runner", () => {
     const { output } = await vitest(directory, { CI: undefined });
     expect(results(output)).toEqual({ "fails once": "failed", "fails always": "failed" });
     expect(existsSync(join(directory, "retries.jsonl"))).toBe(false);
+    expect(filePhases(output)).toEqual([]);
   }, 60_000);
 
   it("retains naming mismatch evidence in JSON when Vitest truncates its error message", async () => {
