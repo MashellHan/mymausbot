@@ -7335,6 +7335,7 @@
   "remote.serverPairing.noDevices": "No devices paired yet.",
   "remote.serverPairing.noLink": "This server has no public address for a link yet: open /pair on the address you use and type the code.",
   "remote.serverPairing.noPhoneSecrets": "This phone can chat and approve here, but secrets must be entered on the web or computer.",
+  "remote.serverPairing.sameWifiOnly": "This link works only on the same Wi-Fi as this computer. To use it away from home, pair the {app} phone app and choose Anywhere (this computer needs {app} Relay on), or give this computer an HTTPS address, for example with Tailscale.",
   "remote.serverPairing.portal": "People sign in to this installation through your organization's Admin, so pairing codes are turned off. To add someone, invite them in your organization's Admin.",
   "remote.serverPairing.portalChatOnly": "You signed in through your organization's Admin. To use this installation on another device, sign in there the same way.",
   "remote.serverPairing.portalDevices": "Signed-in devices",
