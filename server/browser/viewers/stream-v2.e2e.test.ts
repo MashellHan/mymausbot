@@ -2,8 +2,9 @@
 // the panel at the screen's real scale and every drag ends sharp, a zoom follows new tabs, the person answers the
 // page's file picker and dropdown lists, takes its downloads and its copied text.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { json, readBody } from "../../harness/http.ts";
 import type { RequestAuth } from "../../request-auth.ts";
@@ -12,9 +13,11 @@ import { dispatchRoutes } from "../../routes/table.ts";
 import { createUpgrades } from "../../routes/upgrades.ts";
 import { hostTimeout } from "../../testing/host-timeout.ts";
 import { FixtureServer } from "../cdp/testing/fixtures.ts";
+import { CdpConnection } from "../cdp/connection.ts";
 import { CHROME } from "../cdp/testing/real-chrome.ts";
 import type { BrowserTarget } from "../service.ts";
 import { jpegSize, startService, until, type RealService } from "../testing/real-service.ts";
+import { Viewer } from "./core.ts";
 import { StreamV2 } from "./stream-v2.ts";
 import { fillPage } from "./viewport.ts";
 
@@ -35,6 +38,63 @@ const FORM = `<!doctype html><title>form</title><style>body{margin:0}#f{position
 <a id="d" href="/report.csv">report</a>
 <p id="p">copy these words</p>
 <script>document.getElementById("s").addEventListener("change", (event) => { document.title = "chose " + event.target.value; });</script>`;
+
+function passiveFrameState(phase: string, pageSizes: Array<{ at: number; phase: string; size: [number, number, number] }>) {
+  return {
+    at: Date.now(), phase, pageSizes: pageSizes.slice(),
+    activeSnapshot: { unavailable: "no diagnostic CDP read" },
+    css: { unavailable: "computed styles not passively captured" },
+    layout: { unavailable: "layout metrics not passively captured" },
+    window: { unavailable: "window bounds not passively captured" },
+  };
+}
+
+function emitFrameDiagnostic(diagnostic: Record<string, unknown>, receipt: string | undefined, failure: unknown,
+  write: (path: string, value: string) => void = writeFileSync): void {
+  let compact: string;
+  let formatted: string;
+  try {
+    compact = JSON.stringify(diagnostic);
+    formatted = JSON.stringify(diagnostic, null, 2);
+  } catch (error) {
+    console.error("QA53 diagnostic serialization:", String(error));
+    return;
+  }
+  if (receipt) {
+    try { write(receipt, `${formatted}\n`); }
+    catch (error) { console.error("QA53 diagnostic receipt:", String(error)); }
+  }
+  if (failure) console.error("QA53 frame state", compact);
+}
+
+it("keeps passive frame state and failed receipt separate from the primary failure", async () => {
+  const primary = new Error("frame assertion");
+  const output = vi.spyOn(console, "error").mockImplementation(() => {});
+  const dispatch = vi.spyOn(CdpConnection.prototype, "dispatch").mockImplementation(() => { throw new Error("late diagnostic dispatch"); });
+  let caught: unknown;
+  let emitted: unknown[] = [];
+  let dispatchCalls = -1;
+  let state: ReturnType<typeof passiveFrameState> | undefined;
+  try {
+    try { throw primary; }
+    finally {
+      state = passiveFrameState("return", [{ at: 1, phase: "tall-resize", size: [1280, 2400, 2] }]);
+      emitFrameDiagnostic({ state }, "/unwritable/receipt.json", primary, () => { throw new Error("sink failed"); });
+    }
+  } catch (error) {
+    caught = error;
+  } finally {
+    await Promise.resolve();
+    emitted = output.mock.calls.map((call) => call[0]);
+    dispatchCalls = dispatch.mock.calls.length;
+    output.mockRestore();
+    dispatch.mockRestore();
+  }
+  expect(caught).toBe(primary);
+  expect(state).toMatchObject({ pageSizes: [{ phase: "tall-resize", size: [1280, 2400, 2] }], activeSnapshot: { unavailable: "no diagnostic CDP read" } });
+  expect(dispatchCalls).toBe(0);
+  expect(emitted).toEqual(["QA53 diagnostic receipt:", "QA53 frame state"]);
+});
 
 interface Client {
   socket: WebSocket;
@@ -149,23 +209,67 @@ suite("the v2 stream on real Chrome", () => {
   };
 
   it("fills the panel: a 1600x1000 panel gets a 1600x1000 page and 3200x2000 frames on a 2x screen, and follows its resizes", async () => {
-    await opened("/animated", ANIMATED);
-    expect(await pageSize()).toEqual([1280, 800, 2]);
-    const client = await connect("width=1600&height=1000&maxWidth=3200&maxHeight=2000");
-    await until(pageSize, same([1600, 1000, 2]));
-    await until(() => client.frames.at(-1), (frame) => frame?.width === 3200 && frame.height === 2000);
-    expect(client.messages).toContainEqual(expect.objectContaining({ type: "viewport", width: 1600, height: 1000 }));
-    // Watching is enough to size the page; nobody has to take control for it.
-    client.send({ type: "resize", width: 1200, height: 900 });
-    await until(pageSize, same([1280, 960, 2]));
-    await until(() => client.frames.at(-1), (frame) => frame?.width === 2560 && frame.height === 1920);
-    // A narrow, tall panel: a desktop page of its shape, taller than the screen, in frames as tall as the viewer takes.
-    client.send({ type: "resize", width: 400, height: 750 });
-    await until(pageSize, same([1280, 2400, 2]));
-    await until(() => client.frames.at(-1), (frame) => frame?.height === 2000 && Math.abs(frame.width - 1067) <= 1);
-    expect(client.messages.filter((message) => message.type === "viewport").at(-1)).toMatchObject({ width: 1280, height: 2400 });
-    await client.close();
-    await until(pageSize, same([1280, 800, 2]));
+    const frames: Array<Record<string, unknown>> = [];
+    const commands: Array<Record<string, unknown>> = [];
+    const pageSizes: Array<{ at: number; phase: string; size: [number, number, number] }> = [];
+    let phase = "open";
+    let client: Client | undefined;
+    let failure: unknown;
+    const originalPush = Viewer.prototype.push;
+    const originalDispatch = CdpConnection.prototype.dispatch;
+    Viewer.prototype.push = function (output) {
+      if (output.type === "frame") {
+        frames.push({ at: Date.now(), phase, source: output.still ? "still" : "screencast", ...jpegSize(output.data), metadata: output.metadata });
+        if (frames.length > 32) frames.shift();
+      }
+      return originalPush.call(this, output);
+    };
+    CdpConnection.prototype.dispatch = function (session, method, params, options) {
+      if (/^(?:Page\.(?:startScreencast|stopScreencast|captureScreenshot)|Browser\.(?:getWindowForTarget|getWindowBounds|setWindowBounds))$/.test(method)) {
+        commands.push({ at: Date.now(), phase, session: session.id, method, params });
+        if (commands.length > 40) commands.shift();
+      }
+      return originalDispatch.call(this, session, method, params, options);
+    };
+    const observedPageSize = async () => {
+      const size = await pageSize();
+      pageSizes.push({ at: Date.now(), phase, size });
+      if (pageSizes.length > 16) pageSizes.shift();
+      return size;
+    };
+    try {
+      await opened("/animated", ANIMATED);
+      expect(await observedPageSize()).toEqual([1280, 800, 2]);
+      client = await connect("width=1600&height=1000&maxWidth=3200&maxHeight=2000");
+      await until(observedPageSize, same([1600, 1000, 2]));
+      await until(() => client!.frames.at(-1), (frame) => frame?.width === 3200 && frame.height === 2000);
+      expect(client.messages).toContainEqual(expect.objectContaining({ type: "viewport", width: 1600, height: 1000 }));
+      phase = "wide-resize";
+      client.send({ type: "resize", width: 1200, height: 900 });
+      await until(observedPageSize, same([1280, 960, 2]));
+      await until(() => client!.frames.at(-1), (frame) => frame?.width === 2560 && frame.height === 1920);
+      phase = "tall-resize";
+      client.send({ type: "resize", width: 400, height: 750 });
+      await until(observedPageSize, same([1280, 2400, 2]));
+      await until(() => client!.frames.at(-1), (frame) => frame?.height === 2000 && Math.abs(frame.width - 1067) <= 1);
+      expect(client.messages.filter((message) => message.type === "viewport").at(-1)).toMatchObject({ width: 1280, height: 2400 });
+      phase = "return";
+      await client.close();
+      await until(observedPageSize, same([1280, 800, 2]));
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      try { Viewer.prototype.push = originalPush; }
+      finally { CdpConnection.prototype.dispatch = originalDispatch; }
+      const diagnostic = {
+        phase, failure: failure instanceof Error ? failure.message : String(failure ?? ""),
+        panel: { requested: phase === "open" ? [1600, 1000] : phase === "wide-resize" ? [1200, 900] : [400, 750], maxFrame: [3200, 2000] },
+        state: passiveFrameState(phase, pageSizes), frames, commands,
+        viewportMessages: client?.messages.filter((message) => message.type === "viewport").slice(-4),
+      };
+      emitFrameDiagnostic(diagnostic, process.env.OMB_QA53_RECEIPT, failure);
+    }
   }, hostTimeout(90_000));
 
   it("ends every drag of the panel on a sharp frame of the final size, on a page that never repaints by itself", async () => {
