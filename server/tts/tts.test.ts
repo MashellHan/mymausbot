@@ -713,6 +713,23 @@ describe("included voice", () => {
     expect(seen.every((request) => request.headers["xi-api-key"] === INCLUDED)).toBe(true);
   });
 
+  it("keeps a script Flash lacks on the relay's Flash model but uses v3 with an own key", async () => {
+    include();
+    const { speak } = await voice();
+    const settings = cfg({ voice: "v-1" });
+    await speak(settings, "สวัสดีครับ");
+    expect(direct()).toEqual([]);
+    expect(relayed().map((request) => [request.headers["xi-api-key"], JSON.parse(request.body).model_id]))
+      .toEqual([[INCLUDED, "eleven_flash_v2_5"]]);
+
+    seen.length = 0;
+    settings.tts!.key = "sk-own";
+    await speak(settings, "สวัสดีครับ");
+    expect(relayed()).toEqual([]);
+    expect(direct().map((request) => [request.headers["xi-api-key"], JSON.parse(request.body).model_id]))
+      .toEqual([["sk-own", "eleven_v3"]]);
+  });
+
   it("an own key saved in Settings wins and goes only to ElevenLabs; removing it falls back", async () => {
     include();
     const { speak } = await voice();
