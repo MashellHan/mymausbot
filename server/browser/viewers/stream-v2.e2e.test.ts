@@ -2,6 +2,7 @@
 // the panel at the screen's real scale and every drag ends sharp, a zoom follows new tabs, the person answers the
 // page's file picker and dropdown lists, takes its downloads and its copied text.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -12,9 +13,11 @@ import { dispatchRoutes } from "../../routes/table.ts";
 import { createUpgrades } from "../../routes/upgrades.ts";
 import { hostTimeout } from "../../testing/host-timeout.ts";
 import { FixtureServer } from "../cdp/testing/fixtures.ts";
+import { CdpConnection } from "../cdp/connection.ts";
 import { CHROME } from "../cdp/testing/real-chrome.ts";
 import type { BrowserTarget } from "../service.ts";
 import { jpegSize, startService, until, type RealService } from "../testing/real-service.ts";
+import { Viewer } from "./core.ts";
 import { StreamV2 } from "./stream-v2.ts";
 import { fillPage } from "./viewport.ts";
 
@@ -149,23 +152,80 @@ suite("the v2 stream on real Chrome", () => {
   };
 
   it("fills the panel: a 1600x1000 panel gets a 1600x1000 page and 3200x2000 frames on a 2x screen, and follows its resizes", async () => {
-    await opened("/animated", ANIMATED);
-    expect(await pageSize()).toEqual([1280, 800, 2]);
-    const client = await connect("width=1600&height=1000&maxWidth=3200&maxHeight=2000");
-    await until(pageSize, same([1600, 1000, 2]));
-    await until(() => client.frames.at(-1), (frame) => frame?.width === 3200 && frame.height === 2000);
-    expect(client.messages).toContainEqual(expect.objectContaining({ type: "viewport", width: 1600, height: 1000 }));
-    // Watching is enough to size the page; nobody has to take control for it.
-    client.send({ type: "resize", width: 1200, height: 900 });
-    await until(pageSize, same([1280, 960, 2]));
-    await until(() => client.frames.at(-1), (frame) => frame?.width === 2560 && frame.height === 1920);
-    // A narrow, tall panel: a desktop page of its shape, taller than the screen, in frames as tall as the viewer takes.
-    client.send({ type: "resize", width: 400, height: 750 });
-    await until(pageSize, same([1280, 2400, 2]));
-    await until(() => client.frames.at(-1), (frame) => frame?.height === 2000 && Math.abs(frame.width - 1067) <= 1);
-    expect(client.messages.filter((message) => message.type === "viewport").at(-1)).toMatchObject({ width: 1280, height: 2400 });
-    await client.close();
-    await until(pageSize, same([1280, 800, 2]));
+    const frames: Array<Record<string, unknown>> = [];
+    const commands: Array<Record<string, unknown>> = [];
+    let phase = "open";
+    let client: Client | undefined;
+    let failure: unknown;
+    let finalState: Record<string, unknown> | undefined;
+    const originalPush = Viewer.prototype.push;
+    const originalDispatch = CdpConnection.prototype.dispatch;
+    Viewer.prototype.push = function (output) {
+      if (output.type === "frame") {
+        frames.push({ at: Date.now(), phase, source: output.still ? "still" : "screencast", ...jpegSize(output.data), metadata: output.metadata });
+        if (frames.length > 32) frames.shift();
+      }
+      return originalPush.call(this, output);
+    };
+    CdpConnection.prototype.dispatch = function (session, method, params, options) {
+      if (/^(?:Page\.(?:startScreencast|stopScreencast|captureScreenshot)|Browser\.(?:getWindowForTarget|getWindowBounds|setWindowBounds))$/.test(method)) {
+        commands.push({ at: Date.now(), phase, session: session.id, method, params });
+        if (commands.length > 40) commands.shift();
+      }
+      return originalDispatch.call(this, session, method, params, options);
+    };
+    const snapshot = async (): Promise<Record<string, unknown>> => {
+      const state: Record<string, unknown> = { at: Date.now(), phase };
+      const profile = real.service.profiles().find((item) => item.key === target?.key);
+      const page = profile?.active()?.page;
+      if (!page) return state;
+      try {
+        state.css = await real.peek(target, "({innerWidth,innerHeight,outerWidth,outerHeight,devicePixelRatio,html:getComputedStyle(document.documentElement).cssText,bodyWidth:getComputedStyle(document.body).width,bodyHeight:getComputedStyle(document.body).height})");
+        state.layout = await page.session.send("Page.getLayoutMetrics", {}, { timeoutMs: 2_000 });
+        const root = profile!.run!.browser.connection.root;
+        const { windowId } = await root.send<{ windowId: number }>("Browser.getWindowForTarget", { targetId: page.targetId }, { timeoutMs: 2_000 });
+        state.window = await root.send("Browser.getWindowBounds", { windowId }, { timeoutMs: 2_000 });
+      } catch (error) {
+        state.metricsError = String(error);
+      }
+      return state;
+    };
+    try {
+      await opened("/animated", ANIMATED);
+      expect(await pageSize()).toEqual([1280, 800, 2]);
+      client = await connect("width=1600&height=1000&maxWidth=3200&maxHeight=2000");
+      await until(pageSize, same([1600, 1000, 2]));
+      await until(() => client!.frames.at(-1), (frame) => frame?.width === 3200 && frame.height === 2000);
+      expect(client.messages).toContainEqual(expect.objectContaining({ type: "viewport", width: 1600, height: 1000 }));
+      phase = "wide-resize";
+      client.send({ type: "resize", width: 1200, height: 900 });
+      await until(pageSize, same([1280, 960, 2]));
+      await until(() => client!.frames.at(-1), (frame) => frame?.width === 2560 && frame.height === 1920);
+      phase = "tall-resize";
+      client.send({ type: "resize", width: 400, height: 750 });
+      await until(pageSize, same([1280, 2400, 2]));
+      await until(() => client!.frames.at(-1), (frame) => frame?.height === 2000 && Math.abs(frame.width - 1067) <= 1);
+      expect(client.messages.filter((message) => message.type === "viewport").at(-1)).toMatchObject({ width: 1280, height: 2400 });
+      finalState = await snapshot();
+      phase = "return";
+      await client.close();
+      await until(pageSize, same([1280, 800, 2]));
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      if (!finalState) finalState = await snapshot();
+      Viewer.prototype.push = originalPush;
+      CdpConnection.prototype.dispatch = originalDispatch;
+      const diagnostic = {
+        phase, failure: failure instanceof Error ? failure.message : String(failure ?? ""),
+        panel: { requested: phase === "open" ? [1600, 1000] : phase === "wide-resize" ? [1200, 900] : [400, 750], maxFrame: [3200, 2000] },
+        state: finalState, frames, commands,
+        viewportMessages: client?.messages.filter((message) => message.type === "viewport").slice(-4),
+      };
+      if (process.env.OMB_QA53_RECEIPT) writeFileSync(process.env.OMB_QA53_RECEIPT, `${JSON.stringify(diagnostic, null, 2)}\n`);
+      if (failure) console.error("QA53 frame state", JSON.stringify(diagnostic));
+    }
   }, hostTimeout(90_000));
 
   it("ends every drag of the panel on a sharp frame of the final size, on a page that never repaints by itself", async () => {
