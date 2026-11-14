@@ -14,6 +14,8 @@ const SLOW_SOCKETS = FUZZ_MS >= 60_000 ? 3_000 : 200;
 /** What a socket may be closed with when its first message is anything but a valid one. */
 const REFUSED = new Set([Close.Malformed, Close.TokenInvalid, Close.NotFound, 1002, 1007, 1009]);
 const PATHS = ["/v1/host", "/v1/host/data", "/v1/phone"];
+const FUZZ_BATCH_SIZE = 16;
+const FUZZ_BATCH_INTERVAL_MS = 100;
 
 let t: TestRelay;
 
@@ -138,19 +140,48 @@ async function fuzzOne(progress: FuzzProgress): Promise<number> {
   }
 }
 
+async function fuzzBatch(run: () => Promise<number>): Promise<number[]> {
+  const started = Array.from({ length: FUZZ_BATCH_SIZE }, run);
+  try {
+    return await Promise.all(started);
+  } catch (firstError) {
+    await Promise.allSettled(started);
+    throw firstError;
+  }
+}
+
 describe("pre-auth fuzzing", () => {
+  test("keeps all 16 started calls owned after the first failure", async () => {
+    const calls = Array.from({ length: FUZZ_BATCH_SIZE }, () => Promise.withResolvers<number>());
+    let started = 0;
+    const batch = fuzzBatch(() => calls[started++]!.promise);
+    assert.equal(started, FUZZ_BATCH_SIZE);
+    let finished = false;
+    void batch.finally(() => { finished = true; }).catch(() => {});
+    const firstError = new Error("first open failed");
+    calls[0]!.reject(firstError);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(finished, false);
+    calls[1]!.reject(new Error("later open failed"));
+    for (const call of calls.slice(2)) call.resolve(Close.Malformed);
+    await assert.rejects(batch, (error) => error === firstError);
+  });
+
   test(`random first messages on every path for ${FUZZ_MS} ms: each socket is refused with a protocol close code`, async () => {
     const seen = new Map<number, number>();
     const stop = performance.now() + FUZZ_MS;
     const progress: FuzzProgress = { startedAt: stop - FUZZ_MS, attempted: 0, opened: 0, completedCloses: 0, inFlight: 0, reportedOpenFailure: false };
     let runs = 0;
     while (performance.now() < stop) {
-      const codes = await Promise.all(Array.from({ length: 16 }, () => fuzzOne(progress)));
+      const batchStartedAt = performance.now();
+      const codes = await fuzzBatch(() => fuzzOne(progress));
       for (const code of codes) {
         seen.set(code, (seen.get(code) ?? 0) + 1);
         assert.ok(REFUSED.has(code as never), `closed with ${code}`);
       }
       runs += codes.length;
+      const waitMs = Math.min(batchStartedAt + FUZZ_BATCH_INTERVAL_MS, stop) - performance.now();
+      if (waitMs > 0) await sleep(waitMs);
     }
     assert.ok(runs > 0);
     for (const code of [Close.Malformed, 1009]) assert.ok(seen.has(code), `never saw ${code} in ${JSON.stringify([...seen])}`);
