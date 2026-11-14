@@ -933,12 +933,9 @@ it("gives an engine switched in while a teammate works the full assignment when 
   expect(returned.resumedThread).toBeTruthy();
   const resultCount = count(f.prompt(returned), "SWITCH_RESULT");
   if (resultCount !== 1) {
-    const lead = f.nodes().find((node: any) => node.botId === f.lead.id);
-    const reportVisible = (await f.messages()).some((m: any) => m.tool?.name === "Engineering lead replied");
     console.error("delta-switch-result", JSON.stringify({ phases, turnCount: turns.length,
       recentResultCounts: turns.slice(-4).map((turn: any) => count(f.prompt(turn), "SWITCH_RESULT")),
-      teammateRunning: lead?.status === "running", teammateCompleted: lead?.status === "completed",
-      teammateReported: lead?.reported === true, reportVisible }));
+      teammateStatusAfterWaitAvailable: false, reportVisibilityAfterWaitAvailable: false }));
   }
   expect(resultCount).toBe(1);
   const lead = f.nodes().find((node: any) => node.botId === f.lead.id);
