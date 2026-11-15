@@ -47,7 +47,7 @@ import {
 import type { Routine, RoutineInput, RoutineRun, RoutineRunStatusFilter } from "@/lib/routines";
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { duplicateBotProfile, restrictedCopyRequest } from "@/lib/bot-duplicate";
-import { botShowsUnread } from "@/lib/bot-unread";
+import { markShownBotRead, markShownGroupRead } from "./shown-read";
 import { placeUnreadDivider, threadOpensUnread, threadReadCursor, unreadDividerFor, type UnreadDivider } from "@/lib/unread-divider";
 import type { ComputerStart } from "@/lib/computer-start";
 import { parseComputerHelp } from "@/lib/computer-control";
@@ -2843,8 +2843,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             });
           break;
         }
-        case "forkMessage":
-        case "openForkPanel": {
+        case "forkMessage": case "openForkPanel": {
           runForkEffect(action, wrapped, rawDispatch, showError);
           break;
         }
@@ -3159,22 +3158,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "bot": {
           const bot = frame.bot as BotAnnouncement;
-          const selected = stateRef.current.bots.find((candidate) => candidate.id === bot.id);
-          const shown = selected?.switchingTo ?? selected?.threadId;
-          const panel = stateRef.current.forkPanel;
-          if (bot.id === stateRef.current.selectedId && stateRef.current.activeView === "chat" && document.hasFocus()) {
-            const visible = [...new Set([shown, panel?.kind === "bot" && panel.ownerId === bot.id ? panel.threadId : undefined])]
-              .filter((threadId): threadId is string => Boolean(threadId));
-            for (const threadId of visible) {
-              const task = bot.tasks?.find((candidate) => candidate.threadId === threadId);
-              if (!task?.unread && (bot.tasks || !bot.unread)) continue;
-              if (task) task.unread = false;
-              const read = `${bot.id}:${threadId}`, newest = task?.updatedAt ?? 0, open = readsInFlight.get(read);
-              if (!open) sendRead(bot.id, threadId, read, newest);
-              else if (newest > open.covers) readsInFlight.set(read, { covers: newest, again: true });
-            }
-            bot.unread = botShowsUnread(bot);
-          }
+          markShownBotRead(stateRef.current, bot, readsInFlight, sendRead);
           rawDispatch({
             type: "botPatched",
             bot: withTaskWrites({ ...bot, ...botPatchQueue.overlayFor(bot.id) }),
@@ -3183,19 +3167,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         case "group": {
           const group = frame.group as Partial<Group> & { id: string };
-          if (group.id === stateRef.current.selectedId && stateRef.current.activeView === "chat" && document.hasFocus()) {
-            const shown = stateRef.current.groups.find((candidate) => candidate.id === group.id)?.threadId;
-            const panel = stateRef.current.forkPanel;
-            const visible = [...new Set([shown, panel?.kind === "group" && panel.ownerId === group.id ? panel.threadId : undefined])]
-              .filter((threadId): threadId is string => Boolean(threadId));
-            for (const threadId of visible) {
-              const task = group.tasks?.find((candidate) => candidate.threadId === threadId);
-              if (!task?.unread && (group.tasks || !group.unread)) continue;
-              if (task) task.unread = false;
-              fetch(`/api/groups/${group.id}/read`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) }).catch(() => {});
-            }
-            group.unread = group.tasks ? group.tasks.some((task) => task.unread) : false;
-          }
+          markShownGroupRead(stateRef.current, group);
           rawDispatch({ type: "groupPatched", group });
           break;
         }
