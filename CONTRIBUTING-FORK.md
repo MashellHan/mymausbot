@@ -6,6 +6,9 @@ This standalone repository (`fork=false`) preserves upstream licensing and histo
 `MashellHan/openmausbot` repository, whose PR, issue, review and CI links are
 historical. Never push to `upstream` or `legacy-fork`.
 
+For UI changes, follow the fork's [design rules](DESIGN.md) alongside explicit
+product and security requirements.
+
 The product name is exactly lowercase `mymausbot`, including desktop bundles,
 window titles and phone installation metadata. Updates come from
 `MashellHan/mymausbot`. Keep existing application IDs, data paths, pairing and
