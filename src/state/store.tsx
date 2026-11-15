@@ -530,7 +530,8 @@ export interface ModelVariantSession {
   variants?: { options: ModelVariantOption[]; currentValue?: string };
 }
 
-type QueuedPointedChip = import("../../shared/app-frame/point").PointedElement & { id: string; title: string };
+type QueuedPointedElement = import("../../shared/app-frame/point").PointedElement;
+type QueuedPointedChip = QueuedPointedElement & { id: string; title: string };
 
 export interface AppState {
   bots: Bot[];
@@ -597,7 +598,7 @@ export interface AppState {
     nonce: number;
     kind: Exclude<MausMotion, "none">;
   } | null;
-  pendingQueued: Record<string, Array<{ queueId: string; text: string; reason?: SteerQueueReason; sender?: ResolvedSender; pointedChips?: QueuedPointedChip[] }>>;
+  pendingQueued: Record<string, Array<{ queueId: string; text: string; reason?: SteerQueueReason; sender?: ResolvedSender; pointed?: QueuedPointedElement[]; pointedChips?: QueuedPointedChip[]; mentions?: string[]; replyToId?: string; channelMode?: "chat" | "goal" }>>;
   consumedQueueIds: Record<string, true>;
   backgroundThreadEvents: Record<string, Array<Extract<Action, { type: "messageAdded" | "messagePatched" | "threadActive" | "optimisticMessageRemoved" }>>>;
   loadingOlder: Record<string, true>;
@@ -698,7 +699,7 @@ export type Action =
       dataContext?: import("../../shared/data-context").DataContext; pointed?: import("../../shared/app-frame/point").PointedElement[]; openPage?: import("../lib/open-page").OpenPage; mode?: "chat" | "goal";
       followUp?: import("../../shared/follow-up").FollowUp; mentions?: string[]; onError?: () => void;
     }
-  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; reason?: SteerQueueReason; pointedChips?: QueuedPointedChip[] }
+  | { type: "pendingQueued"; threadId: string; queueId: string; text: string; reason?: SteerQueueReason; pointed?: QueuedPointedElement[]; pointedChips?: QueuedPointedChip[]; mentions?: string[]; replyToId?: string; channelMode?: "chat" | "goal" }
   | { type: "consumePendingQueued"; threadId: string; queueId: string }
   | { type: "cancelQueued"; botId: string; queueId: string; threadId?: string; onCancelled?: () => void }
   | { type: "steerQueued"; botId: string; queueId: string; threadId?: string; onError?: () => void; onSettled?: () => void }
@@ -1625,7 +1626,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         pendingQueued: {
           ...state.pendingQueued,
-          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, ...(action.reason ? { reason: action.reason } : {}), ...(action.pointedChips?.length ? { pointedChips: action.pointedChips } : {}) }],
+          [action.threadId]: [...prev, { queueId: action.queueId, text: action.text, ...(action.reason ? { reason: action.reason } : {}), ...(action.pointedChips?.length ? { pointed: action.pointed, pointedChips: action.pointedChips, mentions: action.mentions, replyToId: action.replyToId, channelMode: action.channelMode } : {}) }],
         },
       };
     }
@@ -2679,6 +2680,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   queueId: body.queueId,
                   text: action.text,
                   pointedChips: action.pointedChips,
+                  pointed: action.pointed,
+                  mentions: action.mentions,
+                  replyToId: action.replyToId,
+                  channelMode: action.mode,
                 });
               }
             })

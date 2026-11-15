@@ -66,6 +66,17 @@ export function prependPointedChips(threadId: string, picked: readonly PointedCh
   set({ ...chips, [threadId]: [...picked, ...(chips[threadId] ?? EMPTY)].slice(0, POINT_LIMITS.perMessage) });
 }
 
+export function tryPrependPointedChips(threadId: string, picked: readonly PointedChip[]): boolean {
+  const current = chips[threadId] ?? EMPTY;
+  if (picked.length + current.length > POINT_LIMITS.perMessage) return false;
+  if (picked.length) set({ ...chips, [threadId]: [...picked, ...current] });
+  return true;
+}
+
+export function pointedElements(picked: readonly PointedChip[]): PointedElement[] {
+  return picked.map(({ id: _id, title: _title, note, ...element }) => (note?.trim() ? { ...element, note: note.trim() } : element));
+}
+
 /** The chips a send carries; `restore` returns them to the composer when its original draft is restored. */
 export function takePointedChips(threadId: string): { pointed: PointedElement[]; chips: PointedChip[]; restore(): void } | null {
   const list = chips[threadId];
@@ -73,7 +84,7 @@ export function takePointedChips(threadId: string): { pointed: PointedElement[];
   const { [threadId]: _taken, ...rest } = chips;
   set(rest);
   return {
-    pointed: list.map(({ id: _id, title: _title, note, ...element }) => (note?.trim() ? { ...element, note: note.trim() } : element)),
+    pointed: pointedElements(list),
     chips: [...list],
     restore: () => prependPointedChips(threadId, list),
   };

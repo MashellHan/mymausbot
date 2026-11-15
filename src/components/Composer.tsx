@@ -39,7 +39,7 @@ import { SlashCommandMenu } from "./SlashCommandMenu";
 import { MentionTextarea } from "./MentionTextarea";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import { PointedChips } from "./app/PointedChips"; import { SetupRequestChip, setupRequestPlaceholder } from "./SetupOffer";
-import { prependPointedChips, takePointedChips } from "@/lib/pointed-chips";
+import { pointedElements, takePointedChips, tryPrependPointedChips } from "@/lib/pointed-chips";
 import { openPageFor } from "@/lib/open-page";
 import { splitTranscriptCitations, type CitationAttachment } from "@/lib/citations";
 import { PlaceChip } from "./PlaceChip";
@@ -444,16 +444,19 @@ export function Composer({
     if (!queued) return;
     const targetDraftId = draftId;
     const onCancelled = () => {
+      if (group && queued.pointedChips && !tryPrependPointedChips(threadId, queued.pointedChips)) {
+        rememberFailedComposerSend(targetDraftId, { sendId: randomUuid(), text: queued.text, requestText: queued.text, threadId,
+          channelMode: queued.channelMode ?? "chat", replyToId: queued.replyToId, mentions: queued.mentions, pointed: queued.pointed ?? pointedElements(queued.pointedChips), pointedChips: queued.pointedChips });
+        return;
+      }
       const cited = splitTranscriptCitations(queued.text);
       if (cited.display) prependComposerDraft(targetDraftId, cited.display);
       appendDraftAttachments(targetDraftId, cited.citations);
-      if (group && queued.pointedChips) prependPointedChips(threadId, queued.pointedChips);
       if (targetDraftId !== draftIdRef.current) return;
       requestAnimationFrame(() => {
         const input = inputRef.current;
         if (!input) return;
-        input.focus();
-        input.setSelectionRange(cited.display.length, cited.display.length);
+        input.focus(); input.setSelectionRange(cited.display.length, cited.display.length);
       });
     };
     if (group) dispatch({ type: "cancelGroupQueued", groupId: group.id, threadId, queueId, onCancelled });
@@ -503,7 +506,6 @@ export function Composer({
     }
     refocusInput();
   };
-
   const hasContent = Boolean(effectiveText.trim()) || attachments.length > 0;
   const onCall = useOnCall();
   const media = useLiveMedia();

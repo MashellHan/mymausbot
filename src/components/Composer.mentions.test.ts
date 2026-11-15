@@ -9,7 +9,7 @@ import type { Bot, Group } from "@/state/store";
 import { failedComposerSends, forgetFailedComposerSend, markDraftEdited, restoreComposerDraft } from "@/lib/drafts";
 import { addPointedChip, forgetPointedChips, takePointedChips } from "@/lib/pointed-chips";
 
-const fixture = vi.hoisted(() => ({ dispatch: vi.fn(), queued: [] as Array<{ queueId: string; text: string; pointedChips?: import("@/lib/pointed-chips").PointedChip[] }> }));
+const fixture = vi.hoisted(() => ({ dispatch: vi.fn(), queued: [] as Array<{ queueId: string; text: string; pointedChips?: import("@/lib/pointed-chips").PointedChip[]; pointed?: import("../../shared/app-frame/point").PointedElement[]; mentions?: string[]; replyToId?: string; channelMode?: "chat" | "goal" }> }));
 const ENGINE = "claude-3f0c2b1e-9d1a-4c55-8a51-0a3a6f1e2b7c";
 vi.mock("@/state/store", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/state/store")>();
@@ -155,14 +155,51 @@ describe("room Point recovery", () => {
     const withdrawal = fixture.dispatch.mock.calls.at(-1)![0];
     expect(withdrawal).toMatchObject({ type: "cancelGroupQueued", groupId: room.id, queueId: "queued-point" });
     expect(takePointedChips(room.threadId)).toBeNull();
+    type(drafts[0]!, "New request");
+    addPointedChip(room.threadId, chip("current", "keep this note"));
     flushSync(() => withdrawal.onCancelled());
-    expect(input().value).toBe("Change this");
+    expect(input().value).toBe("Change this\n\nNew request");
     const restored = takePointedChips(room.threadId)!;
-    expect(restored.pointed).toEqual(first.pointed);
+    expect(restored.pointed.slice(0, 2)).toEqual(first.pointed);
     expect(restored.chips.map(({ selector, title, note }) => ({ selector, title, note }))).toEqual([
       { selector: "original", title: "Pricing", note: "make it larger" },
       { selector: "second", title: "Pricing", note: "make it blue" },
+      { selector: "current", title: "Pricing", note: "keep this note" },
     ]);
+  });
+
+  it.each([29, 30])("keeps queued and current picks separately when %i current picks fill the limit", (beforeWithdrawal) => {
+    addPointedChip(room.threadId, chip("queued", "queued note"));
+    type(drafts[0]!, "Queued words");
+    send();
+    const first = sent()[0]!;
+    for (let index = 0; index < beforeWithdrawal; index += 1) addPointedChip(room.threadId, chip(`current-${index}`, `note-${index}`));
+    type(drafts[0]!, "Current words");
+    fixture.queued = [{ queueId: "queued-overflow", text: first.text, pointedChips: first.pointedChips, pointed: first.pointed, mentions: [chief.id], replyToId: "original-reply", channelMode: "chat" }];
+    flushSync(() => root.render(createElement(Composer, { group: room, members: [scout, analyst, chief] })));
+    const edit = [...container.querySelectorAll("button")].find((button) => button.getAttribute("aria-label")?.startsWith("Edit queued message"))!;
+    flushSync(() => edit.click());
+    const withdrawal = fixture.dispatch.mock.calls.at(-1)![0];
+    expect(withdrawal.type).toBe("cancelGroupQueued");
+    expect(failedComposerSends(drafts[0]!)).toHaveLength(0);
+    if (beforeWithdrawal === 29) {
+      type(drafts[0]!, "Current words edited while waiting");
+      addPointedChip(room.threadId, chip("current-29", "note-29"));
+    }
+    flushSync(() => withdrawal.onCancelled());
+    expect(input().value).toBe(beforeWithdrawal === 29 ? "Current words edited while waiting" : "Current words");
+    const current = takePointedChips(room.threadId)!;
+    expect(current.chips).toHaveLength(30);
+    expect(current.chips.map(({ selector, note }) => [selector, note])).toEqual(
+      Array.from({ length: 30 }, (_, index) => [`current-${index}`, `note-${index}`]),
+    );
+    current.restore();
+    const outbox = failedComposerSends(drafts[0]!)[0]!;
+    expect(outbox).toMatchObject({ text: "Queued words", requestText: "Queued words", pointed: first.pointed, pointedChips: first.pointedChips, mentions: [chief.id], replyToId: "original-reply" });
+    expect(outbox.sendId).not.toBe(first.sendId);
+    const retry = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Retry")!;
+    flushSync(() => retry.click());
+    expect(sent()[1]).toMatchObject({ type: "sendGroup", text: "Queued words", sendId: outbox.sendId, pointed: first.pointed, pointedChips: first.pointedChips, mentions: [chief.id], replyToId: "original-reply" });
   });
 });
 

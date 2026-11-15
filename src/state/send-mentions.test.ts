@@ -89,16 +89,16 @@ describe("a send with bots picked from the @ list", () => {
   it("keeps queued room picks on the client while posting only their original payload", async () => {
     const pointed = [{ appId: "page", rev: 2, tag: "button", role: "button", text: "Go", selector: "button", html: "<button>Go</button>", note: "make it larger" }];
     const pointedChips = [{ ...pointed[0]!, id: "chip", title: "Pricing" }];
-    await sent({ type: "sendGroup", groupId: "room", threadId: "room-thread", text: "Change this", sendId: "point-send", pointed, pointedChips });
+    await sent({ type: "sendGroup", groupId: "room", threadId: "room-thread", text: "Change this", sendId: "point-send", pointed, pointedChips, mentions: ["helper"], replyToId: "reply", mode: "chat" });
     expect(posted.at(-1)?.body).toMatchObject({ pointed, sendId: "point-send" });
     expect(posted.at(-1)?.body).not.toHaveProperty("pointedChips");
-    expect(state.pendingQueued.elsewhere).toContainEqual({ queueId: "point-send", text: "Change this", pointedChips });
+    expect(state.pendingQueued.elsewhere).toContainEqual({ queueId: "point-send", text: "Change this", pointedChips, pointed, mentions: ["helper"], replyToId: "reply", channelMode: "chat" });
     const onCancelled = vi.fn();
     cancelStatus = 403;
     flushSync(() => dispatch({ type: "cancelGroupQueued", groupId: "room", threadId: "elsewhere", queueId: "point-send", onCancelled }));
     await settle();
     expect(onCancelled).not.toHaveBeenCalled();
-    expect(state.pendingQueued.elsewhere).toContainEqual({ queueId: "point-send", text: "Change this", pointedChips });
+    expect(state.pendingQueued.elsewhere).toContainEqual({ queueId: "point-send", text: "Change this", pointedChips, pointed, mentions: ["helper"], replyToId: "reply", channelMode: "chat" });
     cancelStatus = 200;
     flushSync(() => dispatch({ type: "cancelGroupQueued", groupId: "room", threadId: "elsewhere", queueId: "point-send", onCancelled }));
     await settle();
