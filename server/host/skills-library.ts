@@ -89,13 +89,13 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
     const live = store.bot(bot.id) ?? bot;
     return [live.name, live.description, live.soul, live.section, readSectionContext(live.section)?.text].filter(Boolean).join("\n");
   };
-  const listBotSkills = (bot: BotRecord, threadId = bot.threadId): SkillListing[] => {
+  const listBotSkills = (bot: BotRecord, threadId = bot.threadId, cwd?: string | null): SkillListing[] => {
     const own = ownSkills(bot);
     const listed = [...own, ...importedSkillListings(bot.id, new Set(own.map((skill) => skill.name)), aboutBot(bot))];
     const names = new Set(listed.map((skill) => skill.name));
-    const natives = nativesFor(bot, threadId).filter((skill) => !names.has(skill.name));
+    const natives = nativesFor(bot, threadId, undefined, cwd).filter((skill) => !names.has(skill.name));
     for (const skill of natives) names.add(skill.name);
-    const project = projectFor(bot, threadId).filter((skill) => !names.has(skill.name));
+    const project = projectFor(bot, threadId, cwd).filter((skill) => !names.has(skill.name));
     return [
       ...listed, ...natives.map((skill) => nativeSkillListing(skill, isNativeSkillEnabled(bot.id, skill.name))),
       ...project.map(projectSkillListing),

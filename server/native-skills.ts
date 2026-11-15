@@ -140,8 +140,8 @@ export function nativeSkillListing(skill: NativeSkill, enabled = true): SkillLis
 }
 
 /** Shown with the bot's skills; always on while the bot works in that project, and changed only there. */
-export function projectSkillListing(skill: NativeSkill): SkillListing & { origin: "project" } {
-  return { ...nativeSkillListing(skill), origin: "project" };
+export function projectSkillListing(skill: NativeSkill): SkillListing & { origin: "project"; userInvocable: boolean } {
+  return { ...nativeSkillListing(skill), origin: "project", userInvocable: !skill.modelOnly };
 }
 
 export function readNativeSkillFile(skill: NativeSkill): string | null {

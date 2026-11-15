@@ -3,12 +3,12 @@ import { api } from "@/state/store";
 import type { SlashSkill } from "./composer-commands";
 
 interface SkillsResponse {
-  skills?: Array<{ name?: unknown; description?: unknown; enabled?: unknown }>;
+  skills?: Array<{ name?: unknown; description?: unknown; enabled?: unknown; userInvocable?: unknown }>;
 }
 
 export function enabledSlashSkills(body: SkillsResponse | null | undefined): SlashSkill[] {
   return (body?.skills ?? []).flatMap((skill) =>
-    skill.enabled === true && typeof skill.name === "string"
+    skill.enabled === true && skill.userInvocable !== false && typeof skill.name === "string"
       ? [{ name: skill.name, description: typeof skill.description === "string" ? skill.description : "" }]
       : []);
 }

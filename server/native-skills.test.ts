@@ -240,6 +240,21 @@ describe("skills a project ships for any agent", () => {
     expect(host.skillsIndex(bot, "main", undefined, null)).toBe("");
   });
 
+  it("list the requesting turn's project, including a room folder, without falling back to the main project", () => {
+    const main = join(PROJECTS, "main-project");
+    const task = join(PROJECTS, "task-project");
+    for (const folder of [main, task]) mkdirSync(join(folder, ".git"), { recursive: true });
+    const mainFile = plant(join(main, "agents", "skills"), "main-only");
+    const taskFile = plant(join(task, "agents", "skills"), "task-only");
+    const { host, bot } = hostFor("geminiAgent", { cwd: main });
+
+    expect(listed(host.listBotSkills(bot))).toEqual(["main-only:project"]);
+    expect(listed(host.listBotSkills(bot, "task", task))).toEqual(["task-only:project"]);
+    expect(host.skillsIndex(bot, "task", undefined, task)).toContain(JSON.stringify(taskFile));
+    expect(host.skillsIndex(bot, "task", undefined, task)).not.toContain(JSON.stringify(mainFile));
+    expect(host.listBotSkills(bot, "task", null)).toEqual([]);
+  });
+
   it("never run from the bot's folder for a resumed thread that will stay where its session is", () => {
     plantRepo();
     const { host, bot } = hostFor("geminiAgent", { cwd: repo, resumed: true });
@@ -265,6 +280,7 @@ describe("skills a project ships for any agent", () => {
     writeFileSync(join(folder, "SKILL.md"), "---\ndescription: House style.\nuser-invocable: false\n---\n\nUse it.\n");
     const { host, bot } = hostFor("geminiAgent", { cwd: repo });
     expect(host.skillsIndex(bot, "main")).toContain("- background: House style.");
+    expect(host.listBotSkills(bot)).toMatchObject([{ name: "background", enabled: true, userInvocable: false, origin: "project" }]);
     expect(host.expandSkillCommand(bot, "main", "/background go", undefined, [], true)).toBe("/background go");
   });
 
