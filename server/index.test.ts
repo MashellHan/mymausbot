@@ -9961,6 +9961,79 @@ describe("harness HTTP API", () => {
     await api("PATCH", "/api/config", { features: { skillAuthoring: true, showToolCalls: false } });
   });
 
+  it("lists only the active task or room project for skills_list", async () => {
+    const main = join(home, "skill-project-main");
+    const task = join(home, "skill-project-task");
+    const skill = (project: string, name: string) => {
+      const folder = join(project, "agents", "skills", name);
+      mkdirSync(join(project, ".git"), { recursive: true });
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, "SKILL.md"), `---\ndescription: ${name}\n---\n\nUse it.\n`);
+      return join(folder, "SKILL.md");
+    };
+    const mainFile = skill(main, "main-only");
+    const taskFile = skill(task, "task-only");
+    const created = await api("POST", "/api/bots", {
+      modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      requireAvailableModel: true,
+      cwd: main,
+    });
+    expect(created.status).toBe(201);
+    const bot = created.body.bot;
+    let roomId: string | undefined;
+    const listed = async (threadId: string, token: string) => {
+      const response = await fetch(`${BASE}/api/internal/skills?fromBotId=${encodeURIComponent(bot.id)}&fromThreadId=${encodeURIComponent(threadId)}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.status).toBe(200);
+      return (await response.json() as { skills: Array<{ name: string }> }).skills.map((entry) => entry.name);
+    };
+    try {
+      const next = await api("POST", `/api/bots/${bot.id}/tasks`, { title: "Project task" });
+      expect(next.status).toBe(201);
+      const taskThread = next.body.task.threadId as string;
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { cwd: task })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/bots/${bot.id}/messages`, { text: "Use the task project" })).status).toBe(202);
+      const direct = await readJsonFileWhenReady<{
+        systemPrompt: string;
+        mcpConfig: { mcpServers: { agents: { env: { OMB_COMMS_TOKEN: string } } } };
+      }>(fakeClaudeDump);
+      expect(direct.systemPrompt).toContain(JSON.stringify(taskFile));
+      expect(direct.systemPrompt).not.toContain(JSON.stringify(mainFile));
+      expect((await api("PATCH", `/api/bots/${bot.id}`, { cwd: main })).status).toBe(200);
+      const taskListing = await listed(taskThread, direct.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN);
+      expect(taskListing).toContain("task-only");
+      expect(taskListing).not.toContain("main-only");
+      await api("POST", `/api/bots/${bot.id}/interrupt`);
+      await expect.poll(async () => (await api("GET", "/api/bots?messages=0")).body.bots.find((entry: { id: string }) => entry.id === bot.id)?.busy, { timeout: 5_000 }).toBe(false);
+
+      const room = await api("POST", "/api/groups", { name: "Project room", memberIds: [bot.id] });
+      expect(room.status).toBe(201);
+      roomId = room.body.group.id;
+      expect((await api("PATCH", `/api/groups/${roomId}/setup`, {
+        action: "complete", cwd: task, bulletin: "", defaultResponder: { kind: "member", botId: bot.id },
+      })).status).toBe(200);
+      rmSync(fakeClaudeDump, { force: true });
+      expect((await api("POST", `/api/groups/${roomId}/messages`, { text: "Use the room project" })).status).toBe(202);
+      const inRoom = await readJsonFileWhenReady<{
+        systemPrompt: string;
+        mcpConfig: { mcpServers: { agents: { env: { OMB_COMMS_TOKEN: string } } } };
+      }>(fakeClaudeDump);
+      expect(inRoom.systemPrompt).toContain(JSON.stringify(taskFile));
+      expect(inRoom.systemPrompt).not.toContain(JSON.stringify(mainFile));
+      const roomListing = await listed(room.body.group.threadId, inRoom.mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN);
+      expect(roomListing).toContain("task-only");
+      expect(roomListing).not.toContain("main-only");
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`).catch(() => undefined);
+      if (roomId) await api("DELETE", `/api/groups/${roomId}`);
+      await api("DELETE", `/api/bots/${bot.id}`);
+      rmSync(main, { recursive: true, force: true });
+      rmSync(task, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("refuses to delete a bot while it owns an active channel turn", async () => {
     const bot = (await api("POST", "/api/bots", {
       modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },

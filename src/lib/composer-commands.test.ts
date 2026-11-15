@@ -107,6 +107,7 @@ describe("composer slash commands", () => {
     expect(enabledSlashSkills({ skills: [
       { name: "standup", description: "Writes the note.", enabled: true },
       { name: "draft", description: "Off for now.", enabled: false },
+      { name: "background", description: "For the model.", enabled: true, userInvocable: false },
       { name: 7, description: "broken", enabled: true },
       { name: "bare", enabled: true },
     ] })).toEqual([
