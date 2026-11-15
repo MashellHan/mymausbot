@@ -170,9 +170,12 @@ describe("a person's hold on the shared Local VM", () => {
         join(ROOT, "server/index.ts")], {
         cwd: ROOT, env: {
           PATH: dirname(process.execPath), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+          ProgramFiles: join(home, "program-files"), "ProgramFiles(x86)": join(home, "program-files-x86"),
           HOME: home, USERPROFILE: home, OMB_DATA_DIR: data,
           APPDATA: join(home, "appdata"), LOCALAPPDATA: join(home, "localappdata"),
           TEMP: home, TMP: home, TMPDIR: home,
+          OMB_TEST_SEALED_PATH: "1", OMB_DISABLE_MODEL_MANIFEST_FETCH: "1",
+          OMB_DISABLE_MODEL_CATALOG_FETCH: "1", OMB_DISABLE_ANNOUNCEMENTS: "1",
           OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_STATIC_DIR: ui, OMB_TEST_VM_STATE: stateFile,
           OMB_BOAT_API: `http://127.0.0.1:${(boatServer.address() as { port: number }).port}`,
           OMB_COMPUTER_CALL_WAIT_MS: String(CALL_WAIT_MS), OMB_TEST_LEASE_GRACE_MS: String(GRACE_MS),

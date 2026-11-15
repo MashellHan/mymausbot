@@ -42,7 +42,7 @@ registerHooks({
     ` };
     if (url === mock) return { format: 'module', shortCircuit: true, source: `
       export * from ${JSON.stringify(actual)};
-      import { SHARED_LOCAL_VM_TARGET, containerComputerFrame as actualFrame } from ${JSON.stringify(actual)};
+      import { SHARED_LOCAL_VM_TARGET } from ${JSON.stringify(actual)};
       import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
       import { writeFileAtomic } from ${JSON.stringify(atomic)};
       const file = ${JSON.stringify(state)};
@@ -51,9 +51,8 @@ registerHooks({
         while (read().holdRuntime) { writeFileSync(file + '.runtime', '1'); await new Promise(r => setTimeout(r, 30)); }
         return { runtime: 'podman', daemonUp: true };
       }
-      export async function containerComputerFrame(...args) {
-        if (!read().frames) return actualFrame(...args);
-        writeFileSync(file + '.frame', '1');
+      export async function containerComputerFrame() {
+        if (read().frames) writeFileSync(file + '.frame', '1');
         return { png: 'iVBORw0KGgo=', format: 'png' };
       }
       export async function containerExec(target, command) {
