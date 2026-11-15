@@ -53,7 +53,7 @@ const rows = [
 describe("what an admin reads of other people's records on a Team Cloud", () => {
   it("usage keeps every amount and person and says nothing of what was private", () => {
     const seen = rows.map(records().usageRow(admin(ANA)));
-    const told = JSON.stringify(seen) + usageCsv(seen) + JSON.stringify(summarizeUsage(seen, "routine")) + JSON.stringify(summarizeUsage(seen, "bot"));
+    const told = JSON.stringify(seen) + usageCsv(seen) + JSON.stringify(summarizeUsage(seen, "routine")) + JSON.stringify(summarizeUsage(seen, "bot", null, "model"));
     for (const secret of ["rui-chat", "rui-run", "rui-maus-chat", "gone-chat", "Salary check", "r-rui", "run-1", "ruis-maus", "Confidant", "left-maus", "Old confidant", "Rui's corner", "turn-1", "turn-0"]) {
       expect(told, secret).not.toContain(secret);
     }

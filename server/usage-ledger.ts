@@ -56,6 +56,9 @@ export interface UsageRow {
 export type UsageGroupBy = "bot" | "model" | "user" | "day" | "engine" | "routine" | "department";
 export const USAGE_GROUPINGS: readonly UsageGroupBy[] = ["bot", "model", "user", "day", "engine", "routine", "department"];
 
+export type UsageSplitBy = "model";
+export const USAGE_SPLITS: readonly UsageSplitBy[] = ["model"];
+
 export interface UsageGroup {
   key: string;
   label: string;
@@ -67,6 +70,8 @@ export interface UsageGroup {
   estimatedUsd: number | null;
   unpriced: number;
   billableUsd: number | null;
+  barTokens?: number;
+  segments?: UsageGroup[];
 }
 
 export interface UsageSummary {
@@ -277,7 +282,7 @@ function groupOf(row: UsageRow, groupBy: UsageGroupBy): { key: string; label: st
 }
 
 function emptyGroup(key: string, label: string): UsageGroup {
-  return { key, label, turns: 0, input: 0, output: 0, cachedInput: 0, costUsd: null, estimatedUsd: null, unpriced: 0, billableUsd: null };
+  return { key, label, turns: 0, input: 0, output: 0, cachedInput: 0, costUsd: null, estimatedUsd: null, unpriced: 0, billableUsd: null, barTokens: 0 };
 }
 
 export function costSourceOf(row: Pick<UsageRow, "costUsd" | "costSource">): CostSource | null {
@@ -286,10 +291,14 @@ export function costSourceOf(row: Pick<UsageRow, "costUsd" | "costSource">): Cos
 }
 
 function add(group: UsageGroup, row: UsageRow, prices: PriceList | null): void {
+  const input = clean(row.input);
+  const output = clean(row.output);
+  const cachedInput = clean(row.cachedInput);
   group.turns += 1;
-  group.input += clean(row.input);
-  group.output += clean(row.output);
-  group.cachedInput += clean(row.cachedInput);
+  group.input += input;
+  group.output += output;
+  group.cachedInput += cachedInput;
+  group.barTokens = (group.barTokens ?? 0) + Math.max(0, input - Math.min(cachedInput, input)) + output;
   const cost = finiteOrNull(row.costUsd);
   if (cost === null) group.unpriced += 1;
   else {
@@ -300,9 +309,20 @@ function add(group: UsageGroup, row: UsageRow, prices: PriceList | null): void {
   if (billable !== null) group.billableUsd = (group.billableUsd ?? 0) + billable;
 }
 
-export function summarizeUsage(rows: UsageRow[], groupBy: UsageGroupBy, prices: PriceList | null = null): UsageSummary {
+function barTokensOf(group: UsageGroup): number {
+  return group.barTokens ?? Math.max(0, group.input - Math.min(group.cachedInput, group.input)) + group.output;
+}
+
+export function summarizeUsage(
+  rows: UsageRow[],
+  groupBy: UsageGroupBy,
+  prices: PriceList | null = null,
+  splitBy: UsageSplitBy | null = null,
+): UsageSummary {
   const groups = new Map<string, UsageGroup>();
   const total = emptyGroup("total", "total");
+  const splits = new Map<string, Map<string, UsageGroup>>();
+  const split = splitBy && splitBy !== groupBy ? splitBy : null;
   for (const row of rows) {
     const { key, label } = groupOf(row, groupBy);
     let group = groups.get(key);
@@ -312,6 +332,22 @@ export function summarizeUsage(rows: UsageRow[], groupBy: UsageGroupBy, prices: 
     }
     add(group, row, prices);
     add(total, row, prices);
+    if (!split) continue;
+    let inside = splits.get(key);
+    if (!inside) {
+      inside = new Map();
+      splits.set(key, inside);
+    }
+    const pieceOf = groupOf(row, split);
+    let piece = inside.get(pieceOf.key);
+    if (!piece) {
+      piece = emptyGroup(pieceOf.key, pieceOf.label);
+      inside.set(pieceOf.key, piece);
+    }
+    add(piece, row, prices);
+  }
+  for (const [key, inside] of splits) {
+    groups.get(key)!.segments = [...inside.values()].sort((a, b) => barTokensOf(b) - barTokensOf(a));
   }
   const ordered = [...groups.values()];
   if (groupBy === "day") ordered.sort((a, b) => a.key.localeCompare(b.key));

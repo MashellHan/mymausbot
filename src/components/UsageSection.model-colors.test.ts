@@ -43,6 +43,35 @@ describe("model colours in the usage breakdown", () => {
     expect(html).toContain("bg-accent/70");
   });
 
+  it("requests model segments for the actual Usage bars and names their legend", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    setLocale("en");
+    const models = [
+      group("model:codex/gpt-6.1-sol", "gpt-6.1-sol", 700),
+      group("model:opencodeGo/opencode-go/deepseek-v4.1-flash", "deepseek-v4.1-flash", 300),
+    ];
+    calls.api.mockImplementation(async (path: string) => {
+      if (path.startsWith("/api/usage/traces?")) return { roots: [], totals: { costUsd: 0, errors: 0, durationMs: 0 } };
+      const by = new URL(path, "http://localhost").searchParams.get("groupBy");
+      return { groupBy: by, groups: by === "bot" ? [{ ...group("bot:b1", "Scout", 1_000), segments: models }] : models };
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(UsageSection)));
+      expect(calls.api).toHaveBeenCalledWith(expect.stringContaining("groupBy=bot&splitBy=model"));
+      expect(calls.api).toHaveBeenCalledWith(expect.stringContaining("groupBy=model"));
+      expect(host.querySelector<HTMLElement>('[title*="gpt-6.1-sol"][title*="70%"]')).not.toBeNull();
+      expect(host.textContent).toContain("deepseek-v4.1-flash");
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      calls.api.mockReset();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("colors model rows in the actual Settings Usage route while leaving bot rows neutral", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     setLocale("en");
