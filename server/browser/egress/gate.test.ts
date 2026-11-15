@@ -89,6 +89,25 @@ const domainTarget = (host: string, port: number) => {
   return target;
 };
 
+async function pendingBrowser(port: number): Promise<NodeNet.Socket> {
+  const socket = NodeNet.connect(port, "127.0.0.1");
+  socket.on("error", () => {});
+  await new Promise<void>((resolve) => socket.once("connect", resolve));
+  socket.write(Buffer.concat([Buffer.from([5, 1, 0, 5, 1, 0]), domainTarget("example.com", 443)]));
+  return socket;
+}
+
+async function promptly<T>(operation: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("The pending proxy connection did not close promptly.")), 1_000);
+    })]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 describe("egress gate", () => {
   it("refuses loopback and private targets, by address or by name, and reports each", async () => {
     const refusals: Array<[GateTarget, string]> = [];
@@ -228,6 +247,104 @@ describe("egress gate", () => {
     socket.destroy();
     expect(code).toBe(0);
     await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  });
+
+  it("cancels an outbound TCP dial when its browser leaves", async () => {
+    const pending = new NodeNet.Socket();
+    let dialed!: () => void;
+    const dialStarted = new Promise<void>((resolve) => { dialed = resolve; });
+    const opened = await openGate({
+      decide: async () => null,
+      resolve: async () => [{ address: "93.184.215.14", family: 4 }],
+      upstreamProxy: () => ({ host: "127.0.0.1", port: 1080 }),
+      dialProxy: () => { dialed(); return pending; },
+    });
+    gates.push(opened);
+    const browser = await pendingBrowser(opened.port);
+    await dialStarted;
+    browser.destroy();
+    await vi.waitFor(() => expect(pending.destroyed).toBe(true), { timeout: 1_000 });
+    expect(pending.listenerCount("connect")).toBe(0);
+    await promptly(opened.close());
+  });
+
+  it("closes a pending greeting with the gate before a late reply can issue CONNECT", async () => {
+    let proxySocket: NodeNet.Socket | undefined;
+    let greeted!: () => void;
+    let closed!: () => void;
+    const greetingReceived = new Promise<void>((resolve) => { greeted = resolve; });
+    const proxyClosed = new Promise<void>((resolve) => { closed = resolve; });
+    let received = Buffer.alloc(0);
+    const upstream = NodeNet.createServer((socket) => {
+      proxySocket = socket;
+      socket.on("error", () => {});
+      socket.once("close", closed);
+      socket.on("data", (chunk) => {
+        received = Buffer.concat([received, chunk as Buffer]);
+        if (received.length >= 3) greeted();
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const opened = await openGate({
+      decide: async () => null,
+      resolve: async () => [{ address: "93.184.215.14", family: 4 }],
+      upstreamProxy: () => ({ host: "127.0.0.1", port: (upstream.address() as NodeNet.AddressInfo).port }),
+    });
+    gates.push(opened);
+    const browser = await pendingBrowser(opened.port);
+    try {
+      await greetingReceived;
+      await promptly(opened.close());
+      await promptly(proxyClosed);
+      proxySocket?.write(Buffer.from([5, 0]));
+      expect(received).toEqual(Buffer.from([5, 1, 0]));
+    } finally {
+      browser.destroy();
+      proxySocket?.destroy();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it("closes a pending CONNECT reply when its browser leaves", async () => {
+    let proxySocket: NodeNet.Socket | undefined;
+    let requested!: () => void;
+    let closed!: () => void;
+    const connectReceived = new Promise<void>((resolve) => { requested = resolve; });
+    const proxyClosed = new Promise<void>((resolve) => { closed = resolve; });
+    let received = Buffer.alloc(0);
+    const upstream = NodeNet.createServer((socket) => {
+      proxySocket = socket;
+      socket.on("error", () => {});
+      socket.once("close", closed);
+      let greeted = false;
+      socket.on("data", (chunk) => {
+        received = Buffer.concat([received, chunk as Buffer]);
+        if (!greeted && received.length >= 3) {
+          received = received.subarray(3);
+          greeted = true;
+          socket.write(Buffer.from([5, 0]));
+        }
+        if (greeted && received.length >= 10) requested();
+      });
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const opened = await openGate({
+      decide: async () => null,
+      resolve: async () => [{ address: "93.184.215.14", family: 4 }],
+      upstreamProxy: () => ({ host: "127.0.0.1", port: (upstream.address() as NodeNet.AddressInfo).port }),
+    });
+    gates.push(opened);
+    const browser = await pendingBrowser(opened.port);
+    try {
+      await connectReceived;
+      browser.destroy();
+      await promptly(proxyClosed);
+      expect(received.subarray(0, 4)).toEqual(Buffer.from([5, 1, 0, 1]));
+    } finally {
+      browser.destroy();
+      proxySocket?.destroy();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
   });
 
   it("buffers client bytes sent while the SOCKS5 upstream handshake is pending", async () => {

@@ -31,6 +31,8 @@ export interface GateOptions {
   upstream?(target: GateTarget): GateUpstream | null;
   /** A configured unauthenticated SOCKS5 proxy for public destinations after the local destination policy passes. */
   upstreamProxy?: () => { host: string; port: number } | null;
+  /** A proxy dialer for isolated fixtures; production uses Node's TCP connector. */
+  dialProxy?(proxy: { host: string; port: number }): Socket;
   /** This machine's own addresses, which never go upstream: its interfaces unless a test passes them. */
   own?(): BlockList;
 }
@@ -114,12 +116,15 @@ function socksAddress(host: string): Buffer {
 }
 
 /** Open a no-auth SOCKS5 tunnel to a numeric, already policy-checked destination. */
-async function connectSocks5(proxy: { host: string; port: number }, target: GateTarget): Promise<Socket> {
-  const socket = connect({ host: proxy.host, port: proxy.port });
-  socket.on("error", () => {});
+async function connectSocks5(proxy: { host: string; port: number }, target: GateTarget, client: Socket, track: (socket: Socket) => Socket, dial?: GateOptions["dialProxy"]): Promise<Socket> {
+  const socket = track(dial ? dial(proxy) : connect(proxy));
+  const cancel = () => socket.destroy();
+  client.once("close", cancel);
+  if (client.destroyed) cancel();
   socket.setTimeout(10_000, () => socket.destroy(new Error("SOCKS5 proxy handshake timed out.")));
   let pending = Buffer.alloc(0);
   const readAtLeast = (size: number): Promise<Buffer> => new Promise((resolve, reject) => {
+    if (socket.destroyed) return reject(new Error("SOCKS5 proxy closed during handshake."));
     const cleanup = () => { socket.off("data", onData); socket.off("error", onError); socket.off("close", onClose); };
     const onError = (error: Error) => { cleanup(); reject(error); };
     const onClose = () => { cleanup(); reject(new Error("SOCKS5 proxy closed during handshake.")); };
@@ -142,11 +147,18 @@ async function connectSocks5(proxy: { host: string; port: number }, target: Gate
   });
   try {
     await new Promise<void>((resolve, reject) => {
-      socket.once("connect", resolve); socket.once("error", reject);
+      if (socket.destroyed) return reject(new Error("SOCKS5 proxy closed before connecting."));
+      const cleanup = () => { socket.off("connect", onConnect); socket.off("error", onError); socket.off("close", onClose); };
+      const onConnect = () => { cleanup(); resolve(); };
+      const onError = (error: Error) => { cleanup(); reject(error); };
+      const onClose = () => { cleanup(); reject(new Error("SOCKS5 proxy closed before connecting.")); };
+      socket.once("connect", onConnect); socket.once("error", onError); socket.once("close", onClose);
     });
+    if (client.destroyed || socket.destroyed) throw new Error("Browser connection closed during SOCKS5 handshake.");
     socket.write(Buffer.from([5, 1, 0]));
     const greeting = await readAtLeast(2);
     if (greeting[0] !== 5 || greeting[1] !== 0) throw new Error("SOCKS5 proxy must allow connections without authentication.");
+    if (client.destroyed || socket.destroyed) throw new Error("Browser connection closed during SOCKS5 handshake.");
     const address = socksAddress(target.host);
     const port = Buffer.alloc(2); port.writeUInt16BE(target.port);
     socket.write(Buffer.concat([Buffer.from([5, 1, 0]), address, port]));
@@ -156,12 +168,15 @@ async function connectSocks5(proxy: { host: string; port: number }, target: Gate
     if (!length) throw new Error("SOCKS5 proxy returned an invalid response.");
     await readAtLeast(length + 2);
     if (head[1] !== 0) throw Object.assign(new Error("SOCKS5 proxy refused the connection."), { code: head[1] === 2 ? "EACCES" : "ECONNREFUSED" });
+    if (client.destroyed || socket.destroyed) throw new Error("Browser connection closed during SOCKS5 handshake.");
     if (pending.length) socket.unshift(pending);
     socket.setTimeout(0);
     return socket;
   } catch (error) {
     socket.destroy();
     throw error;
+  } finally {
+    client.off("close", cancel);
   }
 }
 
@@ -322,7 +337,7 @@ export function openGate(options: GateOptions): Promise<EgressGate> {
             if (client.destroyed) return;
             try {
               // The proxy receives only the checked IPs above, not a hostname it could resolve differently.
-              tunnel = await connectSocks5(proxy, { host: address, port: target.port });
+              tunnel = await connectSocks5(proxy, { host: address, port: target.port }, client, track, options.dialProxy);
               break;
             } catch (error) {
               lastError = error;
