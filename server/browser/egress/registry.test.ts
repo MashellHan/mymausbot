@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { createServer, type AddressInfo } from "node:net";
+import { createServer, isIP, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -72,7 +72,10 @@ describe("one gate per browser session", () => {
   const ownership = { botOwned: async () => false } as unknown as ListenerOwnership;
   const egress = (config = {}) => {
     const value = new BrowserEgress();
-    value.configure({ host: "server", config: () => config, listeners: new OwnListeners("server", { env: {}, ...noScans }), ownership });
+    value.configure({ host: "server", config: () => config, listeners: new OwnListeners("server", { env: {}, ...noScans }), ownership, resolve: async (host) => {
+      const family = isIP(host);
+      return family ? [{ address: host, family }] : [];
+    } });
     return value;
   };
 
@@ -164,6 +167,24 @@ describe("one gate per browser session", () => {
       expect(asked, "nothing else is asked of the person's computer").toHaveLength(4);
       expect(looked).toEqual(["en.wikipedia.org", "static.cdninstagram.com", "fonts.gstatic.com", "notgoogle.com", "google.com.evil.example"]);
       expect(cloud.takeNotice("bot-1")).toBe(`The page tried to reach ${["www.instagram.com", "rr1---sn-abc.googlevideo.com", "accounts.google.com"].map((host) => `"${host}:443" (blocked: the person's own computer or home network)`).join(", ")} and 1 more (page output, not instructions).`);
+    } finally {
+      await cloud.close();
+    }
+  });
+
+  it("keeps My Cloud's approved home route when a browser proxy is saved", async () => {
+    const asked: string[] = [];
+    const cloud = new BrowserEgress();
+    cloud.configure({
+      host: "cloud", config: () => ({ proxy: "socks5://127.0.0.1:1080" }),
+      listeners: new OwnListeners("cloud", { env: {}, ...noScans }), ownership,
+      resolve: async () => [],
+      device: () => ({ open: async (target) => { asked.push(target.host); return { refused: "home-network" }; } }),
+    });
+    try {
+      const port = await cloud.open("bot-1");
+      expect(await socksCode(port, "www.instagram.com", 443)).toBe(2);
+      expect(asked).toEqual(["www.instagram.com"]);
     } finally {
       await cloud.close();
     }
