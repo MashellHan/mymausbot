@@ -1732,6 +1732,8 @@
   "browser.zoom.in": "Aumentar o zoom",
   "browser.zoom.out": "Diminuir o zoom",
   "browser.zoom.reset": "Redefinir o zoom",
+  "bubblav.description": "O chatbot de suporte com IA do seu site no BubblaV: relatórios, perguntas sem resposta, conversas, conhecimento e configurações do widget.",
+  "bubblav.notice": "Entre com o BubblaV e escolha um chatbot. Não é necessária uma chave de API. Com Acesso total, um bot que pode usar o BubblaV pode ler as conversas e os leads desse chatbot e alterar ou excluir o conhecimento e as configurações dele. Por isso, escolha quais bots terão acesso em Acesso dos bots. Escolha Somente leitura na página de consentimento do BubblaV para bloquear qualquer alteração.",
   "burst.back": "Voltar",
   "burst.cancel": "Cancelar",
   "burst.cancelAll": "Cancelar tudo",
