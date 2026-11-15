@@ -7794,6 +7794,7 @@
   "server.rooms.noneActive": "Nenhum membro ativo do grupo pode responder — restaure um bot arquivado ou adicione um membro ativo.",
   "server.rooms.openedThread": "Abriu a conversa #{title}",
   "server.rooms.postedIn": "Publicou em {room}",
+  "server.rooms.pickNotSent": "{bot} não pode responder a esta mensagem agora, então o que você apontou na página dele não foi enviado. Aponte de novo quando {bot} puder responder.",
   "server.rooms.providerUpdating": "O provedor do computador de {bot} está sendo atualizado — o bot ficou fora desta rodada",
   "server.rooms.sameName.chief": "Chefe de gabinete",
   "server.rooms.sameName.choice": "{name}, {role}",

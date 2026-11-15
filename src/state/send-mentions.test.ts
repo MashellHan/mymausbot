@@ -5,7 +5,7 @@ import { createElement, type Dispatch } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Action, Group } from "./store";
+import type { Action, AppState, Group } from "./store";
 
 class FixtureEventSource {
   static opened: FixtureEventSource[] = [];
@@ -22,13 +22,15 @@ const room = {
   unread: false, createdAt: 1, messages: [],
 } as unknown as Group;
 const posted: Array<{ path: string; body: Record<string, unknown> }> = [];
+let cancelStatus = 200;
 const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body)));
 
 const { StoreProvider, useStore } = await import("./store");
 
 let dispatch!: Dispatch<Action>;
+let state!: AppState;
 function Probe() {
-  ({ dispatch } = useStore());
+  ({ dispatch, state } = useStore());
   return null;
 }
 let root: Root;
@@ -45,9 +47,11 @@ beforeAll(async () => {
   vi.stubGlobal("fetch", (path: string, init?: RequestInit) => {
     if (path.startsWith("/api/bots?")) return json({ bots: [], groups: [room] });
     if (init?.method === "POST" && path.endsWith("/messages")) {
-      posted.push({ path, body: JSON.parse(String(init.body)) as Record<string, unknown> });
-      return json({ ok: true, threadId: "elsewhere", queued: true, queueId: "q" });
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      posted.push({ path, body });
+      return json({ ok: true, threadId: "elsewhere", queued: true, queueId: body.sendId ?? "q" });
     }
+    if (init?.method === "DELETE" && path.includes("/queue/")) return new Response(JSON.stringify({ ok: cancelStatus === 200, error: "not yours" }), { status: cancelStatus });
     return json({});
   });
   const container = document.createElement("div");
@@ -58,7 +62,7 @@ beforeAll(async () => {
   FixtureEventSource.opened[0].send({ kind: "hello", resumed: false, cursor: "run:0" });
   await settle();
 });
-beforeEach(() => { posted.length = 0; });
+beforeEach(() => { posted.length = 0; cancelStatus = 200; });
 afterAll(() => {
   root.unmount();
   vi.unstubAllGlobals();
@@ -80,5 +84,25 @@ describe("a send with bots picked from the @ list", () => {
       .toEqual([{ path: "/api/groups/room/messages", mentions: undefined }]);
     expect(await sent({ type: "send", botId: "scout", threadId: "scout-thread", text: "ask @Quill", sendId: "s4" }))
       .toEqual([{ path: "/api/bots/scout/messages", mentions: undefined }]);
+  });
+
+  it("keeps queued room picks on the client while posting only their original payload", async () => {
+    const pointed = [{ appId: "page", rev: 2, tag: "button", role: "button", text: "Go", selector: "button", html: "<button>Go</button>", note: "make it larger" }];
+    const pointedChips = [{ ...pointed[0]!, id: "chip", title: "Pricing" }];
+    await sent({ type: "sendGroup", groupId: "room", threadId: "room-thread", text: "Change this", sendId: "point-send", pointed, pointedChips, mentions: ["helper"], replyToId: "reply", mode: "chat" });
+    expect(posted.at(-1)?.body).toMatchObject({ pointed, sendId: "point-send" });
+    expect(posted.at(-1)?.body).not.toHaveProperty("pointedChips");
+    expect(state.pendingQueued.elsewhere).toContainEqual({ queueId: "point-send", text: "Change this", pointedChips, pointed, mentions: ["helper"], replyToId: "reply", channelMode: "chat" });
+    const onCancelled = vi.fn();
+    cancelStatus = 403;
+    flushSync(() => dispatch({ type: "cancelGroupQueued", groupId: "room", threadId: "elsewhere", queueId: "point-send", onCancelled }));
+    await settle();
+    expect(onCancelled).not.toHaveBeenCalled();
+    expect(state.pendingQueued.elsewhere).toContainEqual({ queueId: "point-send", text: "Change this", pointedChips, pointed, mentions: ["helper"], replyToId: "reply", channelMode: "chat" });
+    cancelStatus = 200;
+    flushSync(() => dispatch({ type: "cancelGroupQueued", groupId: "room", threadId: "elsewhere", queueId: "point-send", onCancelled }));
+    await settle();
+    expect(onCancelled).toHaveBeenCalledOnce();
+    expect(state.pendingQueued.elsewhere?.some((entry) => entry.queueId === "point-send")).toBeFalsy();
   });
 });

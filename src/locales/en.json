@@ -8212,6 +8212,7 @@
   "server.rooms.noneActive": "No active room members can respond — restore an archived bot or add an active member.",
   "server.rooms.openedThread": "Opened thread #{title}",
   "server.rooms.postedIn": "Posted in {room}",
+  "server.rooms.pickNotSent": "{bot} can't answer this line right now, so what you pointed at in its page wasn't sent. Point at it again when {bot} can answer.",
   "server.rooms.providerUpdating": "{bot}'s computer provider is being updated — skipped this round",
   "server.rooms.sameName.chief": "Chief of Staff",
   "server.rooms.sameName.choice": "{name}, {role}",

@@ -2739,6 +2739,7 @@
   "server.rooms.noneActive": "Kein aktives Raummitglied kann antworten. Stelle einen archivierten Bot wieder her oder füge ein aktives Mitglied hinzu.",
   "server.rooms.openedThread": "Thread #{title} geöffnet",
   "server.rooms.postedIn": "Gepostet in {room}",
+  "server.rooms.pickNotSent": "{bot} kann gerade nicht auf diese Nachricht antworten, daher wurde das, worauf du auf seiner Seite gezeigt hast, nicht gesendet. Zeig noch einmal darauf, sobald {bot} antworten kann.",
   "server.rooms.providerUpdating": "Der Computeranbieter von {bot} wird gerade aktualisiert, daher diese Runde übersprungen",
   "server.rooms.sameName.chief": "Stabschef",
   "server.rooms.sameName.choice": "{name}, {role}",

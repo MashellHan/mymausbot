@@ -27,13 +27,13 @@ const NOTE = "While writing this message the person pointed at parts of your pag
 export type Pointed = { ok: true; block: string; refs: AppPointedRef[] } | ({ ok: false; status: 400 | 404; error: string } & Partial<UserError>);
 
 /** Security invariant: a pick's words reach the model only through recordsBlock. null when nothing was pointed at. */
-export function preparePointed(store: Pick<AgentCardStore, "messagesFor">, threadId: string, value: unknown): Pointed | null {
+export function preparePointed(store: Pick<AgentCardStore, "messagesFor">, threadId: string, value: unknown, numbers?: readonly number[]): Pointed | null {
   if (value === undefined || value === null) return null;
   const parsed = parts.safeParse(value);
   if (!parsed.success) return { ok: false, status: 400, error: BAD };
   // Numbered across the whole message, as the composer's chips and the page's outlines are.
   const byPage = new Map<string, Array<{ pick: z.infer<typeof part>; number: number }>>();
-  parsed.data.forEach((pick, index) => byPage.set(pick.appId, [...(byPage.get(pick.appId) ?? []), { pick, number: index + 1 }]));
+  parsed.data.forEach((pick, index) => byPage.set(pick.appId, [...(byPage.get(pick.appId) ?? []), { pick, number: numbers?.[index] ?? index + 1 }]));
   const blocks: string[] = [];
   for (const [appId, picks] of byPage) {
     const row = appRow(store, threadId, appId);

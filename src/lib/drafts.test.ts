@@ -112,6 +112,15 @@ describe("channel draft delivery mode", () => {
     expect(failedComposerSends(draftId)[0]?.requestText).toBe(requestText);
   });
 
+  it("keeps a failed room send's picks and notes with its original send id in the outbox", () => {
+    const draftId = "group:point-outbox:task";
+    const revision = draftRevision(draftId);
+    const pointed = [{ appId: "page", rev: 2, tag: "button", role: "button", text: "Go", selector: "button", html: "<button>Go</button>", note: "make it larger" }];
+    markDraftEdited(draftId);
+    expect(recoverFailedComposerSend({ draftId, revision, sendId: "point-send", threadId: "task", text: "Change this", requestText: "Change this", attachments: [], pointed })).toBe("outbox");
+    expect(failedComposerSends(draftId)[0]).toMatchObject({ sendId: "point-send", pointed });
+  });
+
   it("keeps a failed outbox send's choice of how it meets the running turn", () => {
     const draftId = "bot:follow-up-outbox:task";
     const revision = draftRevision(draftId);

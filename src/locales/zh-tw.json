@@ -7504,6 +7504,7 @@
   "server.rooms.noneActive": "房間裡沒有能回覆的活躍成員。請還原一個已封存的機器人，或新增一個活躍成員。",
   "server.rooms.openedThread": "已開啟對話 #{title}",
   "server.rooms.postedIn": "已發布到 {room}",
+  "server.rooms.pickNotSent": "{bot} 現在無法回覆這則訊息，所以你在它頁面上指出的內容沒有送出。等 {bot} 可以回覆時再指一次。",
   "server.rooms.providerUpdating": "{bot} 的電腦供應商正在更新，本輪已略過",
   "server.rooms.sameName.chief": "幕僚長",
   "server.rooms.sameName.choice": "{name}，{role}",

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useSyncExternalStore, type SetStateAction } from "react";
 import type { FollowUp } from "../../shared/follow-up.js";
+import type { PointedElement } from "../../shared/app-frame/point.js";
 import { isAttachment, type Attachment } from "./composer-attachments.js";
 
 const KEY = "omb-drafts";
@@ -11,6 +12,7 @@ const REPLY_IDS_KEY = "omb-draft-reply-ids";
 const draftRevisions = new Map<string, number>();
 type ChannelMode = "chat" | "goal";
 type DraftRestore = { text: string; attachments: Attachment[]; channelMode?: ChannelMode };
+type PointedChipSnapshot = PointedElement & { id: string; title: string };
 type DraftRestoreListener = (draft: DraftRestore) => void;
 const restoreListeners = new Map<string, Set<DraftRestoreListener>>();
 const channelModeListeners = new Map<string, Set<() => void>>();
@@ -26,6 +28,8 @@ export interface FailedComposerSend {
   channelMode?: "chat" | "goal";
   /** Bot ids picked from the @ list. */
   mentions?: string[];
+  pointed?: PointedElement[];
+  pointedChips?: PointedChipSnapshot[];
   followUp?: FollowUp;
 }
 type FailedComposerSendInput = Omit<FailedComposerSend, "id">;
@@ -450,6 +454,8 @@ export function recoverFailedComposerSend(sent: ComposerSendSnapshot): "restored
       threadId: sent.threadId,
       channelMode: sent.channelMode,
       mentions: sent.mentions,
+      pointed: sent.pointed,
+      pointedChips: sent.pointedChips,
       followUp: sent.followUp,
     });
     return "outbox";
