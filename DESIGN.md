@@ -55,8 +55,8 @@ new things where they belong instead of adding new places.
   offer **Undo** for a reversible change when it is safe.
 - **Bots set themselves up.** A new bot asks its questions in chat
   (`/setup`). Don't add form fields for things the bot can learn by asking.
-- **Simple mode comes first.** It is the default for new installs. Design the
-  Simple version, then decide what Advanced adds (see [section 13](#13-simple-and-advanced-mode)).
+- **Raw is the first-use default.** Design that entry view, then check Simple
+  and what Advanced adds (see [section 13](#13-raw-simple-and-advanced-mode)).
 - **Don't hide everyday features.** A thing most people use must be reachable
   in two clicks from the chat in Simple mode.
 
@@ -287,15 +287,17 @@ Before a UI change is done, it handles each of these:
   Arabic or Hebrew text, no avatar.
 - **Narrow window, touch screen, light and dark skins.**
 
-## 13. Simple and Advanced mode
+## 13. Raw, Simple and Advanced mode
 
-`useAdvancedMode()` from `src/lib/interface-mode.ts` tells you which mode is
-on. Simple is the default for new installs.
+`useInterfaceMode()` from `src/lib/interface-mode.ts` distinguishes `raw`,
+`simple` and `advanced`. Raw is the default for new installs.
+`useAdvancedMode()` only tells you whether Advanced is on.
 
+- **Raw is the first-use presentation.** Check its layout separately from Simple.
 - **Simple mode shows what a person needs to talk to bots and get work done.**
   Keep Mini Apps and its installed dashboards reachable.
-- **Advanced adds; it doesn't rearrange.** The same thing sits in the same
-  place in both modes. Advanced may show more rows or more detail.
+- **Advanced adds; it doesn't rearrange.** Keep a feature's location consistent
+  between Simple and Advanced. Advanced may show more rows or more detail.
 - **Switching modes never loses data.**
 
 ## 14. Accessibility
@@ -340,8 +342,8 @@ on. Simple is the default for new installs.
 
 - [ ] It follows sections 1–14, or the PR changes this file and says why.
 - [ ] Only tokens, the radius scale, the type table and existing components.
-- [ ] Checked in **Midnight and Daylight**, in **Simple mode** (and Advanced
-      if you touched it), at 1440×900 and at a narrow width.
+- [ ] Checked in **Midnight and Daylight**, in **Raw** (the first-use default),
+      **Simple**, and **Advanced** if touched, at 1440×900 and a narrow width.
 - [ ] Every state in [section 12](#12-states) handled.
 - [ ] Works with the keyboard alone; focus is visible throughout.
 - [ ] New strings go through `t()`; `pnpm i18n:check` passes.
