@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import App from "../../src/App";
 import { setAnalyticsEnabled, setEmailGateDone } from "../../src/lib/analytics";
 import { setAdvancedMode } from "../../src/lib/interface-mode";
+import { languageChoice, setLanguageChoice } from "../../src/lib/language-preference";
 import { GROK_MOVE_NOTICE, MODELGO_OFFER_NOTICE } from "../../src/lib/notices";
 import { markSimpleModePromptSeen } from "../../src/lib/simple-mode-prompt";
 import { applySkinChoice, readSkinChoice } from "../../src/lib/skins";
@@ -15,6 +16,7 @@ if (query.has("ombVoiceProbe")) {
   (window as typeof window & { __ombVoiceProbe?: unknown[] }).__ombVoiceProbe = [];
 }
 setAnalyticsEnabled(false);
+if (languageChoice() === null) setLanguageChoice("en");
 // ?onboarding=1 plays a brand-new install with the default interface mode.
 if (query.get("fixtureMode") === "simple") setAdvancedMode(false);
 if (!query.has("onboarding")) setEmailGateDone("skipped");
