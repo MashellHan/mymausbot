@@ -1,15 +1,22 @@
-import { createElement } from "react";
+// @vitest-environment happy-dom
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { modelColor } from "@/lib/model-color";
+import { setLocale } from "@/lib/i18n";
 import { SettingsLook } from "./SettingsPrimitives";
 
+const calls = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", async (original) => {
   const actual = await original<typeof import("@/state/store")>();
-  return { ...actual, useStore: () => ({ state: actual.initialState, dispatch: vi.fn() }) };
+  return { ...actual, api: calls.api, useStore: () => ({ state: actual.initialState, dispatch: vi.fn() }) };
 });
+vi.mock("@/lib/live-events", () => ({ listenLiveFrames: () => () => {} }));
+vi.mock("./PlanUsage", () => ({ PlanUsage: () => null }));
+vi.mock("./UsageBudget", () => ({ UsageBudgetCards: () => null }));
 
-const { GroupBars } = await import("./UsageSection");
+const { GroupBars, UsageSection } = await import("./UsageSection");
 
 const group = (key: string, label: string, input: number) => ({
   key, label, turns: 1, input, output: 0, cachedInput: 0, costUsd: null,
@@ -36,15 +43,46 @@ describe("model colours in the usage breakdown", () => {
     expect(html).toContain("bg-accent/70");
   });
 
-  it("keeps model shades in Settings while retaining its neutral bar for other groups", () => {
-    const model = group("model:codex/gpt-6.1-sol", "gpt-6.1-sol", 1_000);
-    const painted = renderToStaticMarkup(createElement(SettingsLook.Provider, { value: true },
-      createElement(GroupBars, { groupBy: "model", groups: [model] })));
-    expect(painted.match(/data-model-color=/g)).toHaveLength(2);
-    expect(painted).toContain(modelColor(model.key));
-    const neutral = renderToStaticMarkup(createElement(SettingsLook.Provider, { value: true },
-      createElement(GroupBars, { groupBy: "bot", groups: [group("bot:b1", "Scout", 1_000)] })));
-    expect(neutral).not.toContain("data-model-color");
-    expect(neutral).toContain("bg-ink");
+  it("colors model rows in the actual Settings Usage route while leaving bot rows neutral", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    setLocale("en");
+    const models = [
+      group("model:codex/gpt-6.1-sol", "gpt-6.1-sol", 1_000),
+      group("model:codex/gpt-6-luna", "gpt-6-luna", 800),
+    ];
+    calls.api.mockImplementation(async (path: string) => {
+      if (path.startsWith("/api/usage/traces?")) return { roots: [], totals: { costUsd: 0, errors: 0, durationMs: 0 } };
+      if (!path.startsWith("/api/usage?")) throw new Error(`Unexpected API request: ${path}`);
+      const by = new URL(path, "http://localhost").searchParams.get("groupBy");
+      return { groupBy: by, groups: by === "model" ? models : [group("bot:b1", "Scout", 500)] };
+    });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(SettingsLook.Provider, { value: true }, createElement(UsageSection))));
+      const where = host.querySelector<HTMLElement>('[data-settings-block="where"]')!;
+      const rows = () => [...where.querySelectorAll<HTMLElement>("[data-setting-row]")];
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]!.textContent).toContain("Scout");
+      expect(rows()[0]!.querySelector("[data-model-color]")).toBeNull();
+      const select = where.querySelector<HTMLSelectElement>("select")!;
+      await act(async () => { select.value = "model"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(rows()).toHaveLength(2);
+      expect(calls.api).toHaveBeenCalledWith(expect.stringContaining("groupBy=model"));
+      for (const [index, model] of models.entries()) {
+        const row = rows()[index]!;
+        expect(row.textContent).toContain(model.label);
+        expect(row.querySelector("[data-settings-slot]")).toBeNull();
+        const shade = row.querySelector<HTMLElement>("[data-model-color]")!;
+        expect(shade.getAttribute("data-model-color")).toBe(modelColor(model.key));
+        expect(shade.style.backgroundColor).toBe(modelColor(model.key));
+      }
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      calls.api.mockReset();
+      vi.unstubAllGlobals();
+    }
   });
 });

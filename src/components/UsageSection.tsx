@@ -167,14 +167,16 @@ function SettingsWhereItWent({ range, version, onBudget }: { range: { from: stri
       <SettingsRows>
         {!top ? <SettingsEmptyRow>{t("common.checking")}</SettingsEmptyRow>
           : top.length === 0 ? <SettingsEmptyRow>{t("usage.page.whereEmpty")}</SettingsEmptyRow>
-          : top.map((group) => (
-            <SettingRow key={group.key} title={by === "model" ? modelName(group.label, state.instances) : usageGroupLabel(by, group)}
+          : top.map((group) => {
+            const color = by === "model" ? modelColor(group.key) : undefined;
+            return <SettingRow key={group.key} title={by === "model" ? modelName(group.label, state.instances) : usageGroupLabel(by, group)}
               subtitle={t("usage.page.turns", { count: String(group.turns) })}>
-              <span className="text-[13px] leading-5 tabular-nums text-ink-secondary">
+              <span className="inline-flex items-center gap-2 text-[13px] leading-5 tabular-nums text-ink-secondary">
+                {color && <span aria-hidden="true" data-model-color={color} className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />}
                 {formatTokens(headlineTokens(group))}{hasFiniteCost(group.costUsd) && group.costUsd > 0 ? ` · ${formatCost(group.costUsd)}` : ""}
               </span>
-            </SettingRow>
-          ))}
+            </SettingRow>;
+          })}
       </SettingsRows>
     </SettingsGroup>
   );
