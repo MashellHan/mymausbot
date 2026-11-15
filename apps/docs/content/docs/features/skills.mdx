@@ -19,7 +19,7 @@ Skills are reference material, and the bot is told to treat them that way: it is
 - **A bot's skills** are under **Skills** in its bot panel. Each row can be switched on or off and opened to read the full text. A skill the bot owns can also be deleted; a skill imported from its engine or this computer can only be switched off here. Switching one off keeps its files. A skill imported into a bot from a supported URL arrives switched off, so you can read it first.
 - **The skills library** is under **Settings → You and your bots → Skills** in Advanced mode, on an installation where `"features": { "skillsLibrary": true }` is set in `~/.openmausbot/config.json`. There is no switch for the library in Settings itself. Import a skill by pasting its `SKILL.md` text: this library import fetches nothing from the network and keeps only that text, so it cannot bring along files from a `references/` folder. A library skill starts out switched off: open it to read the text, then switch it on and assign it to one bot, several, or every current and future bot. Only a switched-on skill reaches the bots it is assigned to. Changing a library skill through the app keeps its current switch state; editing its stored files outside the app invalidates the reviewed copy until it is restored.
 
-The index a bot sees each turn lists at most 30 skills and at most 4,000 bytes, so a long list is trimmed, and the bot gets a note saying how many were left out and why — the skill cap or the byte cap. The names of the skills left out go to the server log rather than into the note. The skills are still there — it is only the index that is trimmed.
+The bot's own and library skills have an index block capped at 30 skills and 4,000 bytes. When that block is trimmed, its note gives the number left out and whether the skill or byte cap was reached; the omitted names go to the server log. Skills imported from this computer have a separate block with its own 30-skill and 4,000-byte budget. Relevance selection can also leave imports unlisted; their note points the bot to `skills_list`, when available, to find them. An unlisted skill is still available — it is only missing from that turn's index.
 
 ## Writing one
 
@@ -58,6 +58,8 @@ The `/learn` command is the predictable path: you decide when a conversation is 
 ## Sharing with the team
 
 A learned skill belongs to one bot until you share it. **Share learned skills with the department** decides what happens when a bot learns or improves one: **Off** keeps it private, **Ask** offers to move it into the library, and **Automatic** moves it and gives it to every bot in the same department. Conversations already running hear about it on their next message; new ones list it. A teammate that already has its own skill with that name keeps it, and a bot whose conversations more people can see than the one the skill was learned in is left alone.
+
+Current sharing accepts learned skills whose directory contains only `SKILL.md`. A learned skill with `references/` or any other supporting entry stays private: **Ask** and **Automatic** cannot move it into the library or assign it to teammates.
 
 ## Reviewing what arrived
 
