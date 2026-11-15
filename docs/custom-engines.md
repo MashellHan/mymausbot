@@ -44,9 +44,10 @@ instance at it:
   works). You can also set it from the app: Settings → Engines → *Set CLI…* on
   the instance's row. An instance without a command shows up with exactly that
   hint instead of failing at first message.
-- **Sign in first.** The driver has no auth flow of its own — run the CLI once
-  in a terminal and log in there; OpenMausBot spawns it with your login intact.
-- **Choose models per bot.** Open the bot's model picker and use **Re-detect**
+- **Sign in first.** The driver has no auth flow of its own. Configure the CLI's
+  sign-in where OpenMausBot runs it; a boxed Team Cloud may use a separate engine
+  home, so a terminal sign-in for an arbitrary CLI is not guaranteed to appear.
+- **Choose models per bot.** Open the bot's model picker and use **Refresh models**
   to load the models advertised by the agent. Select a model and, when offered,
   its thinking level. Bot defaults and individual conversation overrides are
   saved independently. **Agent default** leaves the native session's model
@@ -55,9 +56,10 @@ instance at it:
   without sending a prompt. Only confirmed, model-specific thinking options
   are shown; a failed refresh keeps the last successful catalog. ZCode,
   CodeBuddy, Qoder and other custom ACP engines use the same mechanism.
-- **`environment`** is passed to the CLI child. Foreign provider keys
-  (XAI_API_KEY, OPENAI_COMPAT_API_KEY, …) are deliberately stripped so a
-  custom CLI can never bill against another engine's login.
+- **`environment`** is passed to the CLI child after MausBot removes provider
+  credential names (XAI_API_KEY, OPENAI_COMPAT_API_KEY, …), workspace credentials
+  and control-plane secrets. The CLI may still use its own sign-in or files.
+  A bot box also filters variables and can use a separate engine home.
 - **Permissions** ride ACP's own `session/request_permission` — if your agent
   asks, the request becomes a normal approval card in chat.
 - Multiple instances are fine — one per agent.
@@ -129,7 +131,7 @@ a custom ACP engine with your own Command Code sign-in. (Checked with
    is not on the app's `PATH`: `which cmd` on macOS or Linux, or
    `where.exe cmdc` on Windows.
 4. Pick **Command Code** for a bot. Its model menu shows **Agent default**,
-   which runs Command Code's own default model; **Re-detect** lists the models
+   which runs Command Code's own default model; **Refresh models** lists the models
    it advertises once you're signed in.
 
 Without a sign-in the chat shows ``Not authenticated. Run `cmd login` in a
