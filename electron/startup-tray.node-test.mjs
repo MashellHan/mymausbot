@@ -156,8 +156,13 @@ test("the tray's menu and the startup screen speak the app's language, and the t
   assert.equal(trayInstance.tooltip, "mymausbot");
   const html = startupScreenHtml(iconPath, { t: text.t, lang: text.intlTag() });
   assert.match(html, /<html lang="pt-BR">/);
+  assert.match(html, /<title>mymausbot<\/title>/);
+  assert.match(html, /<h1>mymausbot<\/h1>/);
   assert.match(html, /<button aria-label="Fechar"/);
   assert.match(startupScreenHtml(iconPath), /<html lang="en">.*<button aria-label="Close"/s);
+  const { splash } = fixture();
+  assert.equal(splash.window.options.title, "mymausbot");
+  splash.dispose();
 });
 
 test("tray restores minimized windows, supports explicit quit, and disposes once", async () => {
