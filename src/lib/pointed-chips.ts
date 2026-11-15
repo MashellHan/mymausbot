@@ -61,15 +61,21 @@ export function removePointedChip(threadId: string, id: string): void {
   set({ ...chips, [threadId]: list.filter((chip) => chip.id !== id) });
 }
 
-/** The chips a send carries, taken out of the composer; `restore` puts them back when the send fails. */
-export function takePointedChips(threadId: string): { pointed: PointedElement[]; restore(): void } | null {
+export function prependPointedChips(threadId: string, picked: readonly PointedChip[]): void {
+  if (!picked.length) return;
+  set({ ...chips, [threadId]: [...picked, ...(chips[threadId] ?? EMPTY)].slice(0, POINT_LIMITS.perMessage) });
+}
+
+/** The chips a send carries; `restore` returns them to the composer when its original draft is restored. */
+export function takePointedChips(threadId: string): { pointed: PointedElement[]; chips: PointedChip[]; restore(): void } | null {
   const list = chips[threadId];
   if (!list?.length) return null;
   const { [threadId]: _taken, ...rest } = chips;
   set(rest);
   return {
     pointed: list.map(({ id: _id, title: _title, note, ...element }) => (note?.trim() ? { ...element, note: note.trim() } : element)),
-    restore: () => set({ ...chips, [threadId]: [...list, ...(chips[threadId] ?? EMPTY)].slice(0, POINT_LIMITS.perMessage) }),
+    chips: [...list],
+    restore: () => prependPointedChips(threadId, list),
   };
 }
 

@@ -10875,7 +10875,7 @@ function startGroupTurn(
   const goalCoordinator = channelMode === "goal"
     ? requestedGoalCoordinator ?? explicitlyMentionedLead ?? selectGroupGoalCoordinator(routableMembers, group.defaultResponder)
     : null;
-  if (!responders.length && group.dm) {
+  if (!responders.length && group.dm && !options.pointed) {
     const lastSpeakerId = [...store.messagesFor(threadId)]
       .reverse()
       .find((msg) => msg.kind === "text" && msg.from)?.from?.botId;

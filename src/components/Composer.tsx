@@ -39,7 +39,7 @@ import { SlashCommandMenu } from "./SlashCommandMenu";
 import { MentionTextarea } from "./MentionTextarea";
 import { ComposerAttachments, pathForFile } from "./ComposerAttachments";
 import { PointedChips } from "./app/PointedChips"; import { SetupRequestChip, setupRequestPlaceholder } from "./SetupOffer";
-import { takePointedChips } from "@/lib/pointed-chips";
+import { prependPointedChips, takePointedChips } from "@/lib/pointed-chips";
 import { openPageFor } from "@/lib/open-page";
 import { splitTranscriptCitations, type CitationAttachment } from "@/lib/citations";
 import { PlaceChip } from "./PlaceChip";
@@ -186,9 +186,11 @@ export function Composer({
   );
   const restoreDraft = useCallback(
     (sent: ComposerDraftSnapshot) => {
-      if (recoverFailedComposerSend(sent) === "restored") {
+      const restored = recoverFailedComposerSend(sent) === "restored";
+      if (restored) {
         restoreMentionPicks(sent.draftId, sent.mentions); if (sent.reply) onRestoreReply?.(sent.reply, sent.threadId);
       }
+      return restored;
     },
     [onRestoreReply],
   );
@@ -445,6 +447,7 @@ export function Composer({
       const cited = splitTranscriptCitations(queued.text);
       if (cited.display) prependComposerDraft(targetDraftId, cited.display);
       appendDraftAttachments(targetDraftId, cited.citations);
+      if (group && queued.pointedChips) prependPointedChips(threadId, queued.pointedChips);
       if (targetDraftId !== draftIdRef.current) return;
       requestAnimationFrame(() => {
         const input = inputRef.current;
@@ -535,13 +538,15 @@ export function Composer({
           requestText: failed.requestText,
           replyToId: failed.replyToId,
           threadId: failed.threadId, mentions: failed.mentions,
+          pointed: failed.pointed,
+          pointedChips: failed.pointedChips,
           channelMode: failed.channelMode,
           followUp: failed.followUp,
         });
       },
     };
     if (group) {
-      dispatch({ type: "sendGroup", groupId: group.id, mode: failedMode, ...retry });
+      dispatch({ type: "sendGroup", groupId: group.id, mode: failedMode, pointed: failed.pointed, pointedChips: failed.pointedChips, ...retry });
     } else if (bot) {
       dispatch({ type: "send", botId: bot.id, mode: failedMode, followUp: failed.followUp, ...retry });
     }
@@ -578,6 +583,7 @@ export function Composer({
     };
     if (group) {
       const points = effectiveChannelMode === "goal" ? null : takePointedChips(threadId);
+      const roomSentDraft = { ...sentDraft, pointed: points?.pointed, pointedChips: points?.chips };
       dispatch({
         type: "sendGroup",
         groupId: group.id,
@@ -587,7 +593,8 @@ export function Composer({
         threadId,
         mode: effectiveChannelMode, mentions: sentDraft.mentions,
         ...(points ? { pointed: points.pointed } : {}),
-        onError: () => { points?.restore(); restoreDraft(sentDraft); },
+        ...(points ? { pointedChips: points.chips } : {}),
+        onError: () => { if (restoreDraft(roomSentDraft)) points?.restore(); },
       });
       roomMessageSent(effectiveChannelMode, busy);
     } else if (bot) {
