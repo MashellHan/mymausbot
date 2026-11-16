@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import electron from "electron";
 import { launchVerificationServer, runControlOmb } from "./control-omb.ts";
 import { mountPreview } from "./testing/preview-fixture.ts";
+import { syntheticHongguoPreviewBoundary } from "./testing/hongguo-preview-boundary.ts";
 import type { MiniAppSummary } from "../shared/mini-apps.ts";
 
 const metadataOnly = process.argv.includes("--metadata-only");
@@ -25,9 +26,10 @@ try {
     return (await response.json() as { apps: MiniAppSummary[] }).apps;
   };
   assert.deepEqual(await inventory(), []);
+  const hongguo = syntheticHongguoPreviewBoundary(fixture.info.url);
   preview = await mountPreview(fixture, { entry: "/scripts/testing/mini-apps-preview.tsx", route: "/__mini-app-launcher.html",
     title: "Synthetic Mini Apps launcher", logLevel: "warn",
-    extraRoutes: [{ path: "/__mini-app-fixture", handler: (_req, res) => {
+    extraRoutes: [hongguo.route, { path: "/__mini-app-fixture", handler: (_req, res) => {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ id: bot.id, threadId: bot.activeTaskId }));
     } }],
@@ -51,10 +53,19 @@ try {
   assert.equal(code, 0, `Launcher renderer failed: ${output.slice(-3000)}`);
   const result = JSON.parse(readFileSync(join(evidence, "launcher-result.json"), "utf8")) as { errors: string[] };
   assert.deepEqual(result.errors, []);
+  if (!metadataOnly) {
+    assert(hongguo.calls.some((call) => call.method === "POST" && call.operation === "catalog"
+      && call.mode === "categories" && call.status === 200));
+    assert(hongguo.calls.some((call) => call.method === "POST" && call.operation === "catalog"
+      && call.mode === "popular" && call.status === 200));
+    writeFileSync(join(evidence, "hongguo-synthetic-boundary.json"), JSON.stringify({
+      calls: hongguo.calls, providerRequestsForwarded: 0,
+    }, null, 2) + "\n");
+  }
   const active = (await inventory()).filter((app) => app.status === "active");
-  assert.equal(active.length, 5);
-  assert.deepEqual(active.map((app) => app.dashboardIdentity ?? app.shippedTemplateKind).sort(),
-    ["agent-team", "bookkeeping", "github_activity", "usage", "x_ai_digest"].sort());
+  assert.equal(active.length, 6);
+  assert.deepEqual(active.map((app) => app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind).sort(),
+    ["agent-team", "bookkeeping", "github_activity", "hongguo", "usage", "x_ai_digest"].sort());
   console.log(JSON.stringify({ passed: true, source: "isolated source Electron fixture", evidence, activeApps: active.length }));
 } finally {
   await preview?.close();

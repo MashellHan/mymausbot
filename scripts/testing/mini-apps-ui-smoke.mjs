@@ -235,12 +235,13 @@ try {
   await ready(window);
   passed("Generic inventory app uses the same host and keyboard app navigation returns to bookkeeping");
 
-  await evaluate(window, 'document.querySelector("[data-testid=mini-apps-panel] details").open=true; true');
-  await evaluate(window, `(() => { const b=[...document.querySelectorAll('[data-testid="mini-apps-panel"] details button')].find(x=>!x.disabled); if(!b)throw Error("No rollback");b.click(); return true; })()`);
-  await until(() => evaluate(window, 'document.body.innerText.includes("Bookkeeping") && !document.body.innerText.includes("Synthetic bookkeeping records")'), "template rollback");
-  await ready(window);
+  await evaluate(window, 'document.querySelector("[data-mini-app-all]").click(); true');
+  assert.equal(await evaluate(window, `(() => { const menu=document.querySelector('[data-mini-app-popover]');
+    return menu?.children.length === 1 && menu.firstElementChild?.hasAttribute('data-mini-app-library')
+      && !menu.querySelector('details, summary') && !menu.innerText.includes('Open publisher chat'); })()`), true);
+  await evaluate(window, 'window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); true');
   assert((await content(window)).includes("13.54"));
-  passed("Template rollback retains current Data");
+  passed("The Mini App menu ends after its cards while the current report keeps its Data");
 
   await hostClick(window, "Install bookkeeping");
   await until(() => evaluate(window, 'document.querySelectorAll("[data-testid=bookkeeping-install] select").length > 2'), "installer sources");
