@@ -35,6 +35,7 @@ vi.mock("@/state/store", () => ({
   ApiError: class ApiError extends Error { constructor(message: string, readonly status: number) { super(message); } },
   useStore: () => ({ state: { bots: fixture.bots }, dispatch: fixture.dispatch }),
 }));
+vi.mock("@/state/api", () => ({ api: fixture.api }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.owner }));
 vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => fixture.visible }));
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => false }));
@@ -128,6 +129,7 @@ beforeEach(() => {
   fixture.mojoHtml = null;
   fixture.dispatch.mockReset();
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path.startsWith("/api/published-apps/framing?")) return { framing: "allowed" };
     if (path === "/.well-known/openmausbot/environment") return { environmentId: "fixture-environment" };
     if (path === "/api/mini-apps/defaults" && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { restore?: string; bookkeepingHtml: string };
