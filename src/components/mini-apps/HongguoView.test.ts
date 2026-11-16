@@ -123,12 +123,17 @@ beforeEach(() => {
 
 afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLocale("en"); });
 
-it("keeps catalog results and errors visible after Strict Mode effect cleanup and setup", async () => {
+it("keeps catalog errors visible and clears them when restoring cached rows after Strict Mode", async () => {
   await render(true);
   await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
   failNew = true;
   await act(async () => { button("New").click(); });
   await vi.waitFor(() => expect(host.textContent).toContain("Synthetic catalog unavailable"));
+  const catalogCalls = fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/catalog")).length;
+  await act(async () => { button("Popular").click(); });
+  expect(seriesButton()).toBeTruthy();
+  expect(host.textContent).not.toContain("Synthetic catalog unavailable");
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/catalog"))).toHaveLength(catalogCalls);
 });
 
 it("uses an owner-scoped supported cover URL and removes a failed image over its placeholder", async () => {

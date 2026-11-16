@@ -209,7 +209,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
     catalogController.current = controller;
     const saved = recentHome(homeKey, refreshKey);
     if (saved && saved.mode === mode && saved.query === query && saved.categoryId === categoryId) {
-      setItems(saved.items); setNextCursor(saved.nextCursor); setCatalogLoading(false); setMoreLoading(false);
+      setItems(saved.items); setNextCursor(saved.nextCursor); setCatalogLoading(false); setMoreLoading(false); setCatalogError("");
       return () => { controller.abort(); if (catalogController.current === controller) catalogController.current = null; };
     }
     const body: HongguoCatalogRequest = { expectedRevision: revision, mode,

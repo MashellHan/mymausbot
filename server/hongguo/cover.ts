@@ -40,7 +40,7 @@ export async function coverJpeg(bytes: Buffer, signal?: AbortSignal): Promise<Bu
       else chunks.push(chunk);
     });
     child.stdin.on("error", () => {});
-    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("error", reject);
     child.once("close", (code) => {
       clearTimeout(timer);
       const jpeg = Buffer.concat(chunks);
