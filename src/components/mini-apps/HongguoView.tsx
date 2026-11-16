@@ -34,6 +34,15 @@ function rememberHome(key: string, saved: HomeSnapshot): void {
   while (homeSnapshots.size > 8) homeSnapshots.delete(homeSnapshots.keys().next().value!);
 }
 
+function appendUniqueCards(existing: HongguoSeriesCard[], incoming: HongguoSeriesCard[]): HongguoSeriesCard[] {
+  const seen = new Set(existing.map((card) => card.id));
+  return [...existing, ...incoming.filter((card) => {
+    if (seen.has(card.id)) return false;
+    seen.add(card.id);
+    return true;
+  })];
+}
+
 function enqueueHistoryMutation<T>(appId: string, operation: () => Promise<T>): Promise<T> {
   const result = (historyMutationTailByApp.get(appId) ?? Promise.resolve()).then(operation);
   const tail = result.then(() => {}, () => {});
@@ -219,14 +228,29 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
     setCatalogError("");
     setItems([]);
     setNextCursor(null);
-    void post<HongguoCatalogResponse>("catalog", body, controller.signal)
-      .then((result) => { if (!controller.signal.aborted && generation === catalogGeneration.current) {
-        setItems(result.items); setNextCursor(result.nextCursor);
-        rememberHome(homeKey, { refreshKey, mode, query, categoryId, items: result.items, nextCursor: result.nextCursor,
+    const active = () => !controller.signal.aborted && generation === catalogGeneration.current;
+    void (async () => {
+      try {
+        const first = await post<HongguoCatalogResponse>("catalog", body, controller.signal);
+        if (!active()) return;
+        const firstItems = appendUniqueCards([], first.items);
+        setItems(firstItems); setNextCursor(first.nextCursor); setCatalogLoading(false);
+        rememberHome(homeKey, { refreshKey, mode, query, categoryId, items: firstItems, nextCursor: first.nextCursor,
           categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt: Date.now() + 2 * 60_000 });
-      } })
-      .catch((cause: unknown) => { if (!controller.signal.aborted && generation === catalogGeneration.current) showError(cause, setCatalogError); })
-      .finally(() => { if (!controller.signal.aborted && generation === catalogGeneration.current) setCatalogLoading(false); });
+        if (!first.nextCursor) return;
+        setMoreLoading(true);
+        try {
+          const second = await post<HongguoCatalogResponse>("catalog", { ...body, cursor: first.nextCursor }, controller.signal);
+          if (!active()) return;
+          const updated = appendUniqueCards(firstItems, second.items);
+          setItems(updated); setNextCursor(second.nextCursor);
+          rememberHome(homeKey, { refreshKey, mode, query, categoryId, items: updated, nextCursor: second.nextCursor,
+            categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt: Date.now() + 2 * 60_000 });
+        } catch (cause) { if (active()) showError(cause, setCatalogError); }
+        finally { if (active()) setMoreLoading(false); }
+      } catch (cause) { if (active()) showError(cause, setCatalogError); }
+      finally { if (active()) setCatalogLoading(false); }
+    })();
     return () => { controller.abort(); if (catalogController.current === controller) catalogController.current = null; };
   }, [valid, visible, refreshKey, mode, query, categoryId, homeKey, post, revision, showError]);
 
@@ -240,8 +264,8 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
     try {
       const result = await post<HongguoCatalogResponse>("catalog", body, signal);
       if (!signal.aborted && generation === catalogGeneration.current) {
-        const updated = [...items, ...result.items];
-        setItems(updated); setNextCursor(result.nextCursor);
+        const updated = appendUniqueCards(items, result.items);
+        setItems(updated); setNextCursor(result.nextCursor); setCatalogError("");
         rememberHome(homeKey, { refreshKey, mode, query, categoryId, items: updated, nextCursor: result.nextCursor,
           categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt: Date.now() + 2 * 60_000 });
       }
@@ -396,7 +420,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
         </div>
         {catalogError && <p role="alert" className="rounded-lg bg-danger/10 p-3 text-[13px] text-danger">{catalogError}</p>}
         {catalogLoading ? <p role="status" className="flex items-center gap-2 py-8 text-[13px] text-ink-secondary"><Loader2 size={16} className="animate-spin" />{t("computer.miniApps.hongguo.loading")}</p>
-          : items.length ? <div className="grid grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-x-4 gap-y-5">
+          : items.length ? <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,210px),1fr))] gap-x-4 gap-y-5">
             {items.map((card, index) => <button key={card.id} type="button" onClick={() => openSeries(card.id)} className="min-w-0 text-left focus-visible:outline-2 focus-visible:outline-accent">
               <Poster key={refreshKey} card={card} appId={appId} revision={revision} priority={index < 4} /><span className="mt-1.5 block truncate text-[12px] font-semibold">{card.title}</span>
               {card.episodeCount !== null && <span className="block text-[11px] text-ink-secondary">{t("computer.miniApps.hongguo.totalEpisodes", { count: card.episodeCount })}</span>}

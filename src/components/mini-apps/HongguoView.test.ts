@@ -40,6 +40,7 @@ let historyFailures: number;
 let seriesHold: Promise<void> | null;
 let paginationHold: Promise<void> | null;
 let pageable: boolean;
+let failMore: boolean;
 let episodes: Array<typeof episode | typeof laterEpisode>;
 let historyActions: string[];
 let catalogCard: HongguoSeriesCard;
@@ -77,6 +78,7 @@ beforeEach(() => {
   seriesHold = null;
   paginationHold = null;
   pageable = false;
+  failMore = false;
   episodes = [episode];
   historyActions = [];
   catalogCard = card;
@@ -88,10 +90,17 @@ beforeEach(() => {
       if (body.mode === "new" && failNew) throw new Error("Synthetic catalog unavailable");
       if (pageable && body.cursor === "old-next") {
         await paginationHold;
-        return { ...scope, items: [{ ...card, id: "old_extra", title: "Old extra" }], categories: [], nextCursor: null };
+        if (failMore) throw new Error("Synthetic next page unavailable");
+        return { ...scope, items: [catalogCard, { ...card, id: "old_extra", title: "Old extra" }],
+          categories: [], nextCursor: "old-third" };
       }
+      if (pageable && body.cursor === "old-third") return { ...scope,
+        items: [{ ...card, id: "old_last", title: "Old last" }], categories: [], nextCursor: null };
       if (pageable && body.cursor === "new-next") return { ...scope,
-        items: [{ ...card, id: "new_extra", title: "New extra" }], categories: [], nextCursor: null };
+        items: [{ ...card, id: "new_first", title: "New first" },
+          { ...card, id: "new_extra", title: "New extra" }], categories: [], nextCursor: "new-third" };
+      if (pageable && body.cursor === "new-third") return { ...scope,
+        items: [{ ...card, id: "new_last", title: "New last" }], categories: [], nextCursor: null };
       if (pageable && body.mode === "new") return { ...scope,
         items: [{ ...card, id: "new_first", title: "New first" }], categories: [], nextCursor: "new-next" };
       if (pageable && body.mode === "popular") return { ...scope, items: [catalogCard], categories: [], nextCursor: "old-next" };
@@ -167,21 +176,54 @@ it("shows a short same-revision revisit from memory without a blank catalog or r
   await vi.waitFor(() => expect(catalogCalls()).toBeGreaterThan(before));
 });
 
-it("keeps a replacement catalog pageable when an old Load more response arrives late", async () => {
+it("shows the first page before one automatic fill, dedupes rows, and leaves manual pagination", async () => {
+  pageable = true;
+  let releaseNext!: () => void;
+  paginationHold = new Promise<void>((resolve) => { releaseNext = resolve; });
+  await render();
+  await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
+  await vi.waitFor(() => expect(button("Loading…")).toBeTruthy());
+  expect(host.textContent).not.toContain("Old extra");
+  const nextCalls = () => fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/catalog")
+    && JSON.parse(String(init.body)).cursor === "old-next");
+  expect(nextCalls()).toHaveLength(1);
+  await act(async () => { releaseNext(); });
+  await vi.waitFor(() => expect(host.textContent).toContain("Old extra"));
+  expect([...host.querySelectorAll("button")].filter((item) => item.textContent?.startsWith("Drama A"))).toHaveLength(1);
+  expect(nextCalls()).toHaveLength(1);
+  await act(async () => { button("Load more").click(); });
+  await vi.waitFor(() => expect(host.textContent).toContain("Old last"));
+});
+
+it("keeps the first page and a manual retry when background fill fails", async () => {
+  pageable = true;
+  failMore = true;
+  await render();
+  await vi.waitFor(() => expect(host.textContent).toContain("Synthetic next page unavailable"));
+  expect(seriesButton()).toBeTruthy();
+  expect(button("Load more").disabled).toBe(false);
+  expect(fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/catalog")
+    && JSON.parse(String(init.body)).cursor === "old-next")).toHaveLength(1);
+  failMore = false;
+  await act(async () => { button("Load more").click(); });
+  await vi.waitFor(() => expect(host.textContent).toContain("Old extra"));
+  expect(host.textContent).not.toContain("Synthetic next page unavailable");
+});
+
+it("keeps replacement pagination current when an old automatic response arrives late", async () => {
   pageable = true;
   let releaseOld!: () => void;
   paginationHold = new Promise<void>((resolve) => { releaseOld = resolve; });
   await render();
-  await vi.waitFor(() => expect(button("Load more")).toBeTruthy());
-  await act(async () => { button("Load more").click(); });
   await vi.waitFor(() => expect(button("Loading…")).toBeTruthy());
   await act(async () => { button("New").click(); });
-  await vi.waitFor(() => expect(host.textContent).toContain("New first"));
+  await vi.waitFor(() => expect(host.textContent).toContain("New extra"));
+  expect([...host.querySelectorAll("button")].filter((item) => item.textContent?.startsWith("New first"))).toHaveLength(1);
   expect(button("Load more").disabled).toBe(false);
   await act(async () => { releaseOld(); });
   expect(host.textContent).not.toContain("Old extra");
   await act(async () => { button("Load more").click(); });
-  await vi.waitFor(() => expect(host.textContent).toContain("New extra"));
+  await vi.waitFor(() => expect(host.textContent).toContain("New last"));
   expect(host.textContent).not.toContain("Old extra");
 });
 
