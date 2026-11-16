@@ -119,6 +119,7 @@ describe("control-omb ui drives the real renderer", () => {
     await ui("wait-settle", info.ui, "--timeout", "60");
     await ui("click", info.ui, "--name", "Open Pepper's profile");
     await ui("click", info.ui, "--name", "Bot settings");
+    await ui("click", info.ui, "--name", "Details");
     await ui("click", info.ui, "--name", "Find in conversation");
     await ui("type", info.ui, "--name", "Find in this conversation", "--text", "zebra");
     const highlighted = async () => (await ui("eval", info.ui, "--js", "[...CSS.highlights.get('search-result-text') ?? []][0]?.toString() ?? null")).result;
