@@ -185,8 +185,9 @@ Dev sends the ready head to Lead once, with the existing handoff record and
 pending checks. The assigned Reviewer sends its final verdict to Lead once
 when it finishes, including the reviewed SHA and any findings. Do not leave a
 verdict only in an idle pane. Lead follows the existing CI run and resumes the
-merge decision as soon as review and required results are available; the hourly
-queue is recovery for missed handoffs, not the normal delivery trigger. Check
+merge decision as soon as review and required results are available; the
+06:00/21:00 Beijing Lead checkpoint catches missed handoffs without delaying
+normal delivery. Check
 current-head acceptance, CI and holds before merging. Do not add polling jobs,
 duplicate notifications, another reviewer or a new approval gate.
 
@@ -313,7 +314,7 @@ Electron unit checks precede the long Vitest block, and broker tests run once
 in the control-plane job. Long checks belong to the applicable post-integration,
 daily 05:00 and release lanes. Actual failed required work remains a quality incident. Timing overruns and
 other process targets are advisory scan cases; successful validation remains
-green. Use the independent process scan and existing Lead queue, without
+green. Use the independent process scan and Lead checkpoint, without
 blocking merges or delivery on process metadata or elapsed time. Current-head
 review and actual QA holds still control merging.
 Dev leaves a durable PR-body handoff with `QA-Handoff: <current head SHA>`.
@@ -324,12 +325,14 @@ The automated QA runner is the existing CI full lane, once daily at 05:00
 Asia/Shanghai, using the full macOS selection. It does not need another
 persistent model. Its trusted reporter records the selected platform policy and
 files deduplicated issues;
-the hourly queue hands actionable work to mausbot-lead. Lead acknowledges,
-targets triage within thirty minutes, assigns an existing developer/maintainer and sets
-priority, scope, classification, next action and due date. Reviewer reviews fixes;
-QA verifies after integration; Lead closes with evidence. Retiring a platform
-does not verify its old failures. Refresh the existing pinned hourly queue to
-the accepted merged QA contracts without changing its cadence or state. Read
+one Root-owned MausBot Automation calls the existing Lead at 06:00 and 21:00
+Asia/Shanghai. Lead inspects the full backlog and active work, holds a brief
+triage meeting, starts the next prioritized repair batch and resumes unfinished
+work at later checkpoints. Assign an existing developer/maintainer and record
+priority, scope, classification, next action and due date. Reviewer reviews
+fixes; QA verifies after integration; Lead closes with evidence. Retiring a
+platform does not verify its old failures. Preserve the retired hourly queue's
+source, state and receipts; Root owns its launchd replacement. Read
 the mechanism for hold/repair boundaries and rollback. Shadow mode preserves existing checks;
 admission requires the documented pilot evidence.
 

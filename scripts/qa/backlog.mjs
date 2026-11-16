@@ -22,10 +22,12 @@ function field(body, name) {
 }
 
 function linkedRepair(issue, prs) {
-  return prs.find((pr) => new RegExp(`^QA-Repair:\\s*#${issue.number}\\s*$`, "m").test(pr.body ?? ""));
+  return prs.find((pr) => Number.isSafeInteger(pr.number) && pr.number > 0
+    && /^[a-f0-9]{40}$/.test(pr.head?.sha ?? "")
+    && new RegExp(`^QA-Repair:\\s*#${issue.number}\\s*$`, "m").test(pr.body ?? ""));
 }
 
-function observe(issue, prs, previous, now) {
+function observe(issue, prs, previous, now, checkpoint = false) {
   const labels = issueLabels(issue);
   const qa = labels.includes("qa") && !labels.includes("qa:process");
   const process = labels.includes("qa:process");
@@ -42,28 +44,36 @@ function observe(issue, prs, previous, now) {
   const stage = !qa && !process || paused ? "disposition_needed"
     : verified ? "verification" : review ? "review" : repair ? "fixing"
       : triage.complete || process && safe(owner) !== "" && safe(owner) !== "unassigned" ? "assigned" : "unassigned";
-  const signature = JSON.stringify([stage, owner, next, blocker, evidence, repair?.number, repair?.head?.sha, verified]);
+  const milestone = JSON.stringify([repair?.number ?? null, repair?.head?.sha ?? null, Boolean(review), verified]);
+  const legacyReview = previous?.stage === "verification" || previous?.stage === "disposition_needed"
+    ? Boolean(review) : previous?.stage === "review";
+  const previousMilestone = previous?.milestone ?? JSON.stringify([
+    previous?.repair?.number ?? null, previous?.repair?.head ?? null, legacyReview, Boolean(previous?.verified),
+  ]);
   const firstSeenAt = previous?.firstSeenAt ?? issue.created_at ?? new Date(now).toISOString();
-  const lastProgressAt = previous?.signature === signature ? previous.lastProgressAt
+  const lastProgressAt = previousMilestone === milestone ? previous?.lastProgressAt ?? firstSeenAt
     : previous ? new Date(now).toISOString() : firstSeenAt;
   const age = now - Date.parse(issue.created_at ?? firstSeenAt);
   const progressAge = now - Date.parse(lastProgressAt);
   const stale = Number.isFinite(age) && age >= 48 * 60 * 60_000
     && (previous ? progressAge >= DAY_MS : true);
   const priority = verified ? 0 : qa && !triage.complete ? 1 : qa && stale ? 2 : process ? 3 : qa ? 4 : 5;
+  const severity = labels.includes("qa:p0") ? 0 : labels.includes("qa:p1") ? 1 : labels.includes("qa:p2") ? 2 : 3;
   const action = stage === "disposition_needed" ? "request explicit disposition; do not resume paused or product work"
     : stage === "verification" ? "review exact integrated evidence for closure"
     : stage === "review" ? "finish existing review and verification"
     : stage === "fixing" ? "follow up with existing repair owner"
-    : stage === "unassigned" ? "triage and assign an existing owner" : "check evidence and next action with existing owner";
+    : stage === "unassigned" ? "triage and assign an existing owner" : "request concrete execution from existing owner";
   const epoch = issue.body?.match(/"triageEpoch":"([^"]+)"/)?.[1] ?? issue.created_at;
   const overdue = qa && !["disposition_needed", "verification"].includes(stage)
-    ? !triage.complete && now - Date.parse(epoch) > 30 * 60_000 ? "overdue triage; "
+    ? !triage.complete && !checkpoint && now - Date.parse(epoch) > 30 * 60_000 ? "overdue triage; "
       : triage.complete && Date.parse(triage.due) < now ? `overdue repair owned by ${safe(owner)}, due ${triage.due}; ` : ""
     : "";
   return {
-    number: issue.number, url: issue.html_url, qa, process, paused, verified, stale, priority, stage,
-    firstSeenAt, lastProgressAt, signature, lastNotifiedAt: previous?.lastNotifiedAt,
+    number: issue.number, url: issue.html_url, qa, process, paused, verified, stale, priority, severity, stage,
+    firstSeenAt, lastProgressAt, milestone, signature: undefined, lastNotifiedAt: previous?.lastNotifiedAt,
+    execution: repair ? { status: "source_started", repair: repair.number, head: repair.head.sha } : { status: "not_observed" },
+    completion: { status: "pending" }, closedAt: null, closureEvidence: null,
     owner: safe(owner), next: safe(next), blocker: safe(blocker), evidence: safe(evidence),
     repair: repair && { number: repair.number, head: repair.head?.sha, draft: repair.draft },
     action: overdue + action,
@@ -71,8 +81,28 @@ function observe(issue, prs, previous, now) {
 }
 
 function order(a, b) {
-  return a.priority - b.priority || (a.lastNotifiedAt ? Date.parse(a.lastNotifiedAt) : 0) - (b.lastNotifiedAt ? Date.parse(b.lastNotifiedAt) : 0)
+  return a.priority - b.priority || checkpointOrder(a, b);
+}
+
+function checkpointOrder(a, b) {
+  return (a.lastNotifiedAt ? Date.parse(a.lastNotifiedAt) : 0) - (b.lastNotifiedAt ? Date.parse(b.lastNotifiedAt) : 0)
+    || a.severity - b.severity
     || Date.parse(a.firstSeenAt) - Date.parse(b.firstSeenAt) || a.number - b.number;
+}
+
+function fairQa(items, limit) {
+  const lanes = [[], [], []];
+  for (const item of items) {
+    const lane = item.stage === "verification" ? 2
+      : ["assigned", "fixing", "review"].includes(item.stage) ? 1 : 0;
+    lanes[lane].push(item);
+  }
+  for (const lane of lanes) lane.sort(checkpointOrder);
+  const selected = [];
+  while (selected.length < limit && lanes.some((lane) => lane.length)) {
+    for (const lane of lanes) if (lane.length && selected.length < limit) selected.push(lane.shift());
+  }
+  return selected;
 }
 
 function line(item) {
@@ -80,9 +110,9 @@ function line(item) {
   return `#${item.number} ${safe(item.url)}: ${item.action}; stage=${item.stage}; owner=${item.owner}; ${item.process ? "Process" : "QA"}-Next=${item.next || "unrecorded"}; evidence/blocker=${proof}${item.repair ? `; existing PR #${item.repair.number}` : ""}`;
 }
 
-export function planBacklog(issues, prs, records = {}, now = Date.now(), { daily = true, followup = true } = {}) {
+export function planBacklog(issues, prs, records = {}, now = Date.now(), { daily = true, followup = true, checkpoint = false } = {}) {
   const open = issues.filter((issue) => !issue.pull_request && issue.state !== "closed");
-  const observed = open.map((issue) => observe(issue, prs, records[issue.number], now));
+  const observed = open.map((issue) => observe(issue, prs, records[issue.number], now, checkpoint));
   const inventory = {
     at: new Date(now).toISOString(), day: beijingDay(now), total: observed.length,
     qa: observed.filter((item) => item.qa).length, process: observed.filter((item) => item.process).length,
@@ -107,4 +137,15 @@ export function planBacklog(issues, prs, records = {}, now = Date.now(), { daily
   if (followup && selectedFollowup.length) items.push({ key: `backlog:followup:${backlogSlot(now)}`, kind: "followup", selected: selectedFollowup,
     text: `Unresolved work follow-up, six-hour cadence: ${selectedFollowup.length} selected. Prompt delivery is not completion; record assignment, repair, review/verification or evidence-backed disposition on each original item.\n${selectedFollowup.map(line).join("\n")}` });
   return { inventory, observed, items };
+}
+
+export function planCheckpoint(issues, prs, records = {}, now = Date.now()) {
+  const { inventory, observed } = planBacklog(issues, prs, records, now, { daily: false, followup: false, checkpoint: true });
+  const eligible = observed.filter((item) => item.stage !== "closed").sort(checkpointOrder);
+  const qa = fairQa(eligible.filter((item) => item.qa), 5);
+  const process = eligible.filter((item) => item.process).slice(0, 2);
+  const other = eligible.filter((item) => !item.qa && !item.process).slice(0, 1);
+  const selected = [...qa, ...process, ...other];
+  selected.push(...eligible.filter((item) => !selected.includes(item)).slice(0, 8 - selected.length));
+  return { inventory, observed, selected, deferred: inventory.total - selected.length };
 }
