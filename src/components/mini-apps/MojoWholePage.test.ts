@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setLocale } from "@/lib/i18n";
 import type { MiniAppDocument, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
-import { MOJO_APP_ID, MOJO_POETRY_URL } from "./mojo-host";
+import { MOJO_APP_ID, MOJO_POETRY_FRAME_NAME, MOJO_POETRY_URL } from "./mojo-host";
 
 const mounts = vi.hoisted(() => ({ quotes: 0, poetry: 0, quoteUnmounts: 0, poemUnmounts: 0 }));
 vi.mock("./MiniAppFrame", async () => {
@@ -16,9 +16,9 @@ vi.mock("./MiniAppFrame", async () => {
 });
 vi.mock("../published-apps/SiteFrame", async () => {
   const { createElement, useEffect } = await import("react");
-  return { SiteFrame: ({ url, sandbox }: { url: string; sandbox: string }) => {
+  return { SiteFrame: ({ url, sandbox, frameName }: { url: string; sandbox: string; frameName: string }) => {
     useEffect(() => { mounts.poetry++; return () => { mounts.poemUnmounts++; }; }, []);
-    return createElement("div", { "data-testid": "poetry-frame", "data-url": url, "data-sandbox": sandbox });
+    return createElement("div", { "data-testid": "poetry-frame", "data-url": url, "data-sandbox": sandbox, "data-frame-name": frameName });
   } };
 });
 
@@ -60,7 +60,7 @@ it("keeps both sibling frames mounted and hides the inactive view", () => {
   expect(tab("quotes").getAttribute("aria-selected")).toBe("true");
   act(() => tab("poetry").click());
   const poem = host.querySelector<HTMLElement>("[data-testid=poetry-frame]");
-  expect(poem?.dataset).toMatchObject({ url: MOJO_POETRY_URL, sandbox: "allow-scripts allow-same-origin" });
+  expect(poem?.dataset).toMatchObject({ url: MOJO_POETRY_URL, sandbox: "allow-scripts allow-same-origin", frameName: MOJO_POETRY_FRAME_NAME });
   expect(panel("quotes").hidden).toBe(true);
   expect(panel("quotes").hasAttribute("inert")).toBe(true);
   expect(panel("poetry").hidden).toBe(false);

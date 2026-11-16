@@ -62,9 +62,10 @@ describe("the sandbox a published site runs in", () => {
 
   it("allows a caller to remove forms and popups without changing the default site sandbox", async () => {
     await act(async () => root.render(createElement(SiteFrame, { url: SITE, title: "Poetry", attempt: 0,
-      sandbox: SITE_THUMB_SANDBOX })));
+      sandbox: SITE_THUMB_SANDBOX, frameName: "openmausbot-mojo-poetry" })));
     const iframe = host.querySelector("iframe")!;
     expect(tokens(iframe.getAttribute("sandbox"))).toEqual(["allow-same-origin", "allow-scripts"]);
+    expect(iframe.getAttribute("name")).toBe("openmausbot-mojo-poetry");
     expect(iframe.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(iframe.getAttribute("allow")).toBe(SITE_FRAME_ALLOW);
     expect(SITE_FRAME_SANDBOX).toContain("allow-forms allow-popups");

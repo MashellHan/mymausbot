@@ -48,6 +48,7 @@ import { collisionFreeDownloadPath, defaultSaveName, openFolder, openHtmlCopy, o
 import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs";
 import { appPermissionHandlers, externalLinkUrl } from "./app-permissions.mjs";
 import { appFrameBlinkSettings, appFrameNavigationAllowed } from "./app-frame-guard.mjs";
+import { mojoPoetryHostNavigationAllowed } from "./mojo-poetry-frame.mjs";
 import { writeClipboardText } from "./clipboard-write.mjs";
 import {
   managedComposioAccess,
@@ -2058,7 +2059,8 @@ function createWindow({ deferNavigation = false } = {}) {
   // No page may embed the local server, or any saved server, in this preload-bearing window.
   win.webContents.on("will-frame-navigate", (details) => {
     if (details.isMainFrame) return;
-    if (!appFrameNavigationAllowed(details)) return void details.preventDefault();
+    if (!appFrameNavigationAllowed(details)
+      && !mojoPoetryHostNavigationAllowed(details, win.webContents.mainFrame, rendererOrigin())) return void details.preventDefault();
     let target = null;
     let page = null;
     try {
