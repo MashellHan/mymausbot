@@ -156,6 +156,38 @@ describe("safe tier", () => {
     expect(await host.undo({ threadId: turn.threadId, requestId })).toEqual({ claimed: true, state: "already_undone" });
   });
 
+  it("restores an omitted default model without replacing other new-bot defaults", async () => {
+    const { host, set, cfg, cards, turn, saved } = fixture();
+    cfg.newBotDefaults = { profile: { name: "Keep" }, memory: {}, skills: [], routines: [] };
+    expect(cfg.defaultModelSelection).toBeUndefined();
+    expect((await set("bots.defaultModel", { instanceId: "codex", model: "fixture" })).status).toBe(200);
+    const requestId = String(cards()[0]!.card.requestId);
+    expect(await host.undo({ threadId: turn.threadId, requestId })).toEqual({ claimed: true, state: "undone" });
+    expect(saved.at(-1)).toEqual({ defaultModelSelection: null });
+    expect(cfg.newBotDefaults.profile.name).toBe("Keep");
+  });
+
+  it.each([
+    ["effort", "high"], ["variant", "fast"], ["contextWindowTokens", 200_000],
+  ] as const)("refuses stale default-model Undo after a later %s edit", async (field, value) => {
+    const { host, set, cfg, cards, turn, saved } = fixture();
+    cfg.defaultModelSelection = { instanceId: "codex", model: "before" };
+    expect((await set("bots.defaultModel", { instanceId: "codex", model: "after" })).status).toBe(200);
+    Object.assign(cfg.defaultModelSelection!, { [field]: value });
+    const requestId = String(cards()[0]!.card.requestId);
+    expect(await host.undo({ threadId: turn.threadId, requestId })).toMatchObject({ claimed: true, state: "invalid", error: UNDO_STALE, stale: true });
+    expect(saved).toHaveLength(1);
+  });
+
+  it("uses bot identities when names cannot distinguish a later order change", async () => {
+    const { host, set, bots, cards, turn } = fixture();
+    bots[0]!.name = bots[1]!.name = "Same";
+    expect((await set("bots.order", ["clive", "kiwi"])).status).toBe(200);
+    bots.reverse();
+    const requestId = String(cards()[0]!.card.requestId);
+    expect(await host.undo({ threadId: turn.threadId, requestId })).toMatchObject({ claimed: true, state: "invalid", error: UNDO_STALE, stale: true });
+  });
+
   it("a setting never saved reads as the default the app runs on, so Undo of its first change sets that default back", async () => {
     const { host, set, cfg, cards, turn, saved } = fixture();
     delete cfg.rooms; delete cfg.threads; cfg.mcp = {};
@@ -204,6 +236,26 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("sends only the selected provider field when effective config has external credentials", async () => {
+    const { cfg, entries, saved } = fixture();
+    for (const section of ["anthropic", "xai", "groq", "meta", "openaiCompat", "tts"] as const) {
+      Object.assign(cfg, { [section]: { key: `fixture-${section}-key` } });
+    }
+    for (const [id, value, patch] of [
+      ["providers.anthropic.url", "https://anthropic.example", { anthropic: { url: "https://anthropic.example" } }],
+      ["providers.xai.url", "https://xai.example", { xai: { url: "https://xai.example" } }],
+      ["providers.groq.url", "https://groq.example", { groq: { url: "https://groq.example" } }],
+      ["providers.meta.url", "https://meta.example", { meta: { url: "https://meta.example" } }],
+      ["providers.openaiCompat.url", "https://compat.example", { openaiCompat: { url: "https://compat.example" } }],
+      ["providers.openaiCompat.model", "fixture-model", { openaiCompat: { model: "fixture-model" } }],
+      ["voice.baseUrl", "https://voice.example", { tts: { baseUrl: "https://voice.example" } }],
+    ] as const) {
+      const entry = entries.find((candidate) => candidate.id === id);
+      if (!entry || entry.tier !== "confirm") throw new Error(`missing ${id}`);
+      expect(await entry.write(value)).toBeNull();
+      expect(saved.at(-1), id).toEqual(patch);
+    }
+  });
   it("always shows a Change/Cancel card, applies on an owner's Allow, and refuses a second open card", async () => {
     const { set, cards, answer, saved, dataDir } = fixture();
     const pending = set("providers.anthropic.url", "https://proxy.example/v1");

@@ -12361,7 +12361,7 @@ ROUTES.push(createThreadModelRoutes({
   reply: (botId) => publicBot(store.bot(botId)!),
 }));
 ROUTES.push(createUndoRoutes({
-  refusal: (auth, threadId, requestId) => cardAnswerRefusal(auth, threadId, requestId, "allow"),
+  refusal: (auth, threadId, requestId) => (store.messagesFor(threadId).some((message) => message.card?.requestId === requestId && message.card.appSettingRequest) && !ownerOrAdmin(auth) ? "Only the owner can undo an app setting." : cardAnswerRefusal(auth, threadId, requestId, "allow")),
   undo: (auth, res, threadId, requestId) => withDecisionActor(decisionActorFor(auth), () => undoAppliedChange(res, threadId, requestId)),
 }));
 ROUTES.push(createAntigravityLeftoverRoutes({

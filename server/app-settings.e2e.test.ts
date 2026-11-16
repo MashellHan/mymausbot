@@ -9,6 +9,7 @@ import { launchVerificationServer, verificationServerArgs, verificationServerEnv
 import { waitForExit } from "./testing/cleanup.ts";
 
 const SECRET = "sk-test-123";
+const EXTERNAL_XAI_KEY = "fixture-external-xai-key";
 const XAI_URL = "https://example.test/v1";
 let fixture: VerificationServer;
 let child: ChildProcess | undefined;
@@ -71,6 +72,7 @@ beforeAll(async () => {
   for (const task of setter.tasks) { task.approvalMode = "full"; task.autoApprove = false; }
   writeFileSync(join(dataDir, "bots.json"), JSON.stringify(saved, null, 2));
   const env = verificationServerEnvironment({}, dataDir, Number(new URL(url).port));
+  env.XAI_API_KEY = EXTERNAL_XAI_KEY;
   const log = openSync(fixture.info.logPath, "a", 0o600);
   child = spawn(process.execPath, verificationServerArgs(env), { cwd: join(import.meta.dirname, ".."), env, stdio: ["ignore", log, log] });
   closeSync(log);
@@ -109,9 +111,27 @@ it("a Full-access owner turn finds a safe setting, applies it with an applied ca
 
   const [card] = await settingCards(bot.threadId);
   expect(card.card).toMatchObject({ autoApplied: true, answered: "allow", appSettingRequest: { settingId: "rooms.turnTimeoutMinutes", tier: "safe", after: "45" } });
+  const opened = await api("POST", "/api/auth/pairing", { label: "Client-only fixture", scopes: ["client"] });
+  const clientToken = (await api("POST", "/api/auth/pair", { code: opened.code })).token;
+  expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: card.card.requestId }, 403, clientToken)).error).toContain("Only the owner");
+  expect(config().rooms.turnTimeoutMinutes).toBe(45);
   expect(await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: card.card.requestId })).toMatchObject({ ok: true, undone: true });
   expect(config().rooms?.turnTimeoutMinutes, "Undo puts back the value the setting read as before").toBe(earlier ?? Number(card.card.appSettingRequest.before));
   expect((await settingCards(bot.threadId))[0].card.undone).toBe(true);
+}, 60_000);
+
+it("the first default-model change undoes to the omitted fallback without replacing other new-bot defaults", async () => {
+  expect(config()).not.toHaveProperty("defaultModelSelection");
+  const defaults = { profile: { name: "Keep" }, memory: { "MEMORY.md": "Keep memory" }, skills: [], routines: [] };
+  await api("PATCH", "/api/config", { newBotDefaults: defaults });
+  await start("DEFAULT-MODEL", [step({ action: "set", id: "bots.defaultModel", value: JSON.stringify({ instanceId: "claude", model: "claude-sonnet-5" }) })]);
+  expect(results(await finished("DEFAULT-MODEL"))[0]?.isError).toBe(false);
+  expect(config().defaultModelSelection).toEqual({ instanceId: "claude", model: "claude-sonnet-5" });
+  const card = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "bots.defaultModel")!.card;
+  expect(await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: card.requestId })).toMatchObject({ ok: true, undone: true });
+  expect(config()).not.toHaveProperty("defaultModelSelection");
+  expect(config().newBotDefaults).toEqual(defaults);
+  expect((await api("GET", "/api/config")).defaultModelSelection).toBeUndefined();
 }, 60_000);
 
 it("a Full-access owner turn changing a provider address waits on a Change/Cancel card: Cancel changes nothing, Change from the owner's device applies it", async () => {
@@ -134,8 +154,13 @@ it("a Full-access owner turn changing a provider address waits on a Change/Cance
   await start("CONFIRM-CHANGE", [step({ action: "set", id: "providers.xai.url", value: XAI_URL })], 60_000);
   const second = await waitingCard();
   expect(config().xai?.url).toBeUndefined();
+  expect(config().xai?.key).toBeUndefined();
   expect(await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: second.requestId, behavior: "allow" }, 200, ownerDevice)).toMatchObject({ ok: true, outcome: "allowed-once" });
   expect(results(await finished("CONFIRM-CHANGE"))).toEqual([expect.objectContaining({ isError: false, text: `Changed xAI address from not set to ${XAI_URL}.` })]);
+  expect(config().xai.url).toBe(XAI_URL);
+  expect(config().xai).not.toHaveProperty("key");
+  expect(JSON.stringify(config())).not.toContain(EXTERNAL_XAI_KEY);
+  expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: second.requestId }, 409, ownerDevice)).error).toContain("can't be undone");
   expect(config().xai.url).toBe(XAI_URL);
   const decisions = (await api("GET", "/api/decisions")).decisions.filter((row: any) => row.tool === "app_settings" && row.summary.startsWith("providers.xai.url"));
   expect(decisions.map((row: any) => row.decision).sort()).toEqual(["card-shown", "card-shown", "user-approved", "user-denied"]);

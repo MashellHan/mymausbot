@@ -289,8 +289,21 @@ describe("configuration boundaries", () => {
       .toEqual({ defaultModelSelection: { instanceId: "codex", model: "chosen-model", effort: "high" } });
   });
 
+  it("clears only the saved default model with a patch tombstone", () => {
+    expect(parseConfigPatch({ defaultModelSelection: null })).toEqual({ defaultModelSelection: null });
+    expect(() => parseStoredConfig({ defaultModelSelection: null })).toThrow("defaultModelSelection");
+    const path = join(DATA_DIR, "config.json");
+    const defaults = { profile: { name: "Keep", modelSelection: { instanceId: "codex", model: "before" } }, memory: { "MEMORY.md": "Keep memory" }, skills: [], routines: [] };
+    saveConfig({ newBotDefaults: defaults });
+    saveConfig({ defaultModelSelection: { instanceId: "codex", model: "after" } });
+    saveConfig({ defaultModelSelection: null });
+    const disk = JSON.parse(readFileSync(path, "utf8"));
+    expect(disk).not.toHaveProperty("defaultModelSelection");
+    expect(disk.newBotDefaults).toEqual({ ...defaults, profile: { name: "Keep" } });
+    expect(loadConfig().defaultModelSelection).toBeUndefined();
+  });
+
   it.each<JsonValue>([
-    null,
     "codex/model",
     {},
     { instanceId: "codex" },

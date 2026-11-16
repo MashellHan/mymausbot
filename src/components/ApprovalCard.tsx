@@ -160,7 +160,7 @@ function plainWhen(schedule: RoutineRequestSchedule): string {
 
 export function appliedChange(card: OptionCardData, name: string): { line: string; canUndo: boolean; cancels?: boolean } | undefined {
   const setting = card.appSettingRequest;
-  if (setting) return { line: t("approval.applied.appSetting", { name, title: `${setting.label}: ${approvalDetailText(card)}` }), canUndo: true };
+  if (setting) return { line: t("approval.applied.appSetting", { name, title: `${setting.label}: ${approvalDetailText(card)}` }), canUndo: setting.tier === "safe" };
   const routine = card.routineRequest;
   if (routine) {
     const operation = routine.operation;
@@ -244,8 +244,8 @@ function AppliedChangeLine({
   // Kept until the card's own patch arrives, so the Share button cannot come back in between.
   const [sharedNow, setSharedNow] = useState<{ requestId: string; shared: SkillShareRecord }>();
   const config = useContext(StoreContext)?.state.config ?? null;
-  const reviewsTeamMemory = useOwnerOrAdmin() !== false;
-  const canUndo = summary.canUndo && (!card.teamMemoryRequest || reviewsTeamMemory);
+  const ownerOrAdmin = useOwnerOrAdmin();
+  const canUndo = summary.canUndo && (!card.teamMemoryRequest || ownerOrAdmin !== false) && (!card.appSettingRequest || ownerOrAdmin === true);
   const undone = card.undone === true;
   const cancels = summary.cancels === true;
   const skill = card.skillRequest;

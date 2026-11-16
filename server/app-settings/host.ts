@@ -3,6 +3,7 @@
 // never skips it), a secret never passes through the bot, and an owner-only setting is only explained.
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
+import { isDeepStrictEqual } from "node:util";
 
 import type { AppSettingRequest } from "../../shared/app-settings.ts";
 import type { Notification } from "../../shared/notification.ts";
@@ -50,17 +51,15 @@ interface Held {
   entry: WritableEntry;
   value: unknown;
   before: string;
-  earlier: unknown;
   settle(outcome: Outcome): void;
   timer: ReturnType<typeof setTimeout>;
   answered?: true;
   applying?: true;
 }
-/** `before`: the typed value read before the write; `after`: what it read as once applied, so Undo can tell it changed since. */
 interface Undoable {
   entry: WritableEntry;
   before: unknown;
-  after: string;
+  after: unknown;
 }
 
 export type UndoResult =
@@ -124,13 +123,13 @@ export function createAppSettings(deps: AppSettingsDeps) {
   }
 
   async function setSafe(turn: Turn, bot: BotRecord, entry: WritableEntry, value: unknown, before: string) {
-    const earlier = entry.current();
+    const earlier = structuredClone(entry.current());
     const outcome = await apply(entry, value, before);
     if (outcome.kind !== "applied") return refuse(409, outcome.kind === "failed" ? outcome.error : "The change was not applied.");
     const after = outcome.after;
     const requestId = randomUUID();
     card(bot, turn.threadId, entry, before, after, requestId, [], { answered: "allow", dismissed: true, autoApplied: true });
-    undoable.set(requestId, { entry, before: earlier, after });
+    undoable.set(requestId, { entry, before: earlier, after: structuredClone(entry.current()) });
     decide(turn, bot, entry, `${text(before)} → ${text(after)}`, "auto-approved", requestId);
     return reply(200, { text: `${outcome.text} The user can undo it from the card in the conversation.` });
   }
@@ -146,7 +145,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
     timer.unref?.();
     const onAbort = () => settleHold(requestId, { kind: "stopped" });
     ended?.addEventListener("abort", onAbort, { once: true });
-    held.set(requestId, { botId: bot.id, threadId: turn.threadId, entry, value, before, earlier: entry.current(), settle, timer });
+    held.set(requestId, { botId: bot.id, threadId: turn.threadId, entry, value, before, settle, timer });
     openByBot.set(bot.id, requestId);
     const message = card(bot, turn.threadId, entry, before, after, requestId, ["Change", "Cancel"], {});
     decide(turn, bot, entry, `${text(before)} → ${text(after)}`, "card-shown", requestId);
@@ -258,7 +257,6 @@ export function createAppSettings(deps: AppSettingsDeps) {
       hold.applying = true;
       clearTimeout(hold.timer);
       void apply(hold.entry, hold.value, hold.before).then((outcome) => {
-        if (outcome.kind === "applied") undoable.set(args.requestId, { entry: hold.entry, before: hold.earlier, after: outcome.after });
         settleHold(args.requestId, outcome);
       }, () => settleHold(args.requestId, { kind: "failed", error: "The setting change failed." }));
       json(res, 200, { ok: true, outcome: "allowed-once" });
@@ -272,9 +270,9 @@ export function createAppSettings(deps: AppSettingsDeps) {
       if (!message || !current) return { claimed: false };
       if (current.undone) return { claimed: true, state: "already_undone" };
       const change = undoable.get(args.requestId);
-      if (!change || current.answered !== "allow") return { claimed: true, state: "invalid", error: "This change can't be undone here.", status: 409 };
-      if (change.entry.read() !== change.after) return { claimed: true, state: "invalid", error: UNDO_STALE, status: 409, stale: true };
-      const refusal = change.before === undefined ? "The earlier value is not one that can be set back." : await change.entry.write(change.before);
+      if (!change || current.answered !== "allow" || current.appSettingRequest?.tier !== "safe" || change.entry.tier !== "safe") return { claimed: true, state: "invalid", error: "This change can't be undone here.", status: 409 };
+      if (!isDeepStrictEqual(change.entry.current(), change.after)) return { claimed: true, state: "invalid", error: UNDO_STALE, status: 409, stale: true };
+      const refusal = await change.entry.write(change.before);
       if (refusal) return { claimed: true, state: "invalid", error: refusal, status: 409 };
       undoable.delete(args.requestId);
       store.patchMessage(args.threadId, message.id, { card: { ...current, undone: true } });
