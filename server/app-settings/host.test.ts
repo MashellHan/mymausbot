@@ -31,6 +31,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     instances: { "openai-compat-gw": { driver: "openai-compat", displayName: "Gateway", config: { key: GATEWAY_KEY, url: "https://gw.example/v1" } } } } as unknown as AppConfig;
   const saved: Record<string, unknown>[] = [];
   const pinCalls: Array<{ botId: string; pinned: boolean }> = [];
+  const renameCalls: Array<{ botId: string; name: string }> = [];
   const engineCalls: unknown[] = [];
   const chosen = new Set(options.chosen ?? []);
   const messages: Array<Record<string, any>> = [];
@@ -72,6 +73,13 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
       bot.pinned = pinned;
       return null;
     },
+    renameBot: async (botId, name) => {
+      renameCalls.push({ botId, name });
+      const bot = bots.find((candidate) => candidate.id === botId);
+      if (!bot) return "no such bot";
+      bot.name = name;
+      return null;
+    },
     credentials: () => cfg,
     engines: () => [{ instanceId: "claude", name: "Claude", working: true }, { instanceId: "openai-compat-gw", name: "Gateway", working: true }],
     engineChosen: (instanceId) => chosen.has(instanceId),
@@ -102,7 +110,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, pinCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, cfg, saved, pinCalls, renameCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -285,6 +293,46 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("renames only after owner Change and refuses Cancel, stale cards and invalid names", async () => {
+    const fx = fixture();
+    const value = { botId: "clive", name: "   River   " };
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.name" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ tier: "confirm", value: expect.stringContaining("clive: \"Clive\"") });
+    for (const name of ["", "two\nlines", "x".repeat(101)]) {
+      expect((await fx.set("bots.name", { botId: "clive", name })).status).toBe(400);
+    }
+    expect((await fx.set("bots.name", { botId: "missing", name: "River" })).status).toBe(409);
+    expect(fx.cards()).toEqual([]);
+    expect(fx.renameCalls).toEqual([]);
+
+    const cancelled = fx.set("bots.name", JSON.stringify(value));
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: 'Rename "Clive" to "River"' } });
+    expect(fx.renameCalls).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.bots[1]!.name).toBe("Clive");
+
+    const stale = fx.set("bots.name", value);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.bots[1]!.name = "Changed elsewhere";
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.renameCalls).toEqual([]);
+
+    const approved = fx.set("bots.name", value);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.renameCalls).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.renameCalls).toEqual([{ botId: "clive", name: "River" }]);
+    expect(fx.bots[1]!.name).toBe("River");
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
   it("keeps a proposed proxy private until the owner approves, and leaves Cancel and unauthorized answers unchanged", async () => {
     const { host, set, cfg, cards, turn, saved, answer, dataDir, notified } = fixture();
     const proxy = "socks5://proxy.example:1080";
