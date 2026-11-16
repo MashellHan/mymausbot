@@ -240,6 +240,53 @@ it("Stop settles a waiting Change card at once: the card shows as unavailable, a
   expect(results(await finished("CONFIRM-AFTER-STOP"))[0]?.text).toMatch(/^The user cancelled the change to Groq address\./);
 }, 90_000);
 
+it("a Full-access owner adds and removes an AI engine through Change cards without exposing its saved key", async () => {
+  const savedKey = "sk-or-v1-fixture-0123456789";
+  await api("PUT", "/api/config", { openrouter: { key: savedKey } }, 200, ownerDevice);
+  const addedEngines = () => Object.entries(config().instances ?? {}).filter(([id]) => id.startsWith("openai-compat-")) as Array<[string, any]>;
+  const engineCard = async () => {
+    let waiting: any;
+    await expect.poll(async () => (waiting = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "engines" && !one.card.answered)) !== undefined, { timeout: 20_000 }).toBe(true);
+    return waiting.card;
+  };
+  const answer = (card: any, behavior: "allow" | "deny") => api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: card.requestId, behavior }, 200, ownerDevice);
+
+  await start("ENGINE-CANCEL", [step({ action: "set", id: "engines", value: JSON.stringify({ kind: "ollama", url: "http://127.0.0.1:9" }) }, true)], 60_000);
+  const cancelled = await engineCard();
+  expect(cancelled).toMatchObject({ title: "Change AI engines?", options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm" } });
+  expect(addedEngines()).toEqual([]);
+  await answer(cancelled, "deny");
+  expect(results(await finished("ENGINE-CANCEL"))[0]?.text).toMatch(/^The user cancelled the change to AI engines\./);
+  expect(addedEngines()).toEqual([]);
+
+  const gateway = { kind: "openai-compat", name: "Gateway", url: "http://127.0.0.1:9", keyFrom: "openrouterApiKey" };
+  await start("ENGINE-ADD", [
+    step({ action: "set", id: "engines", value: JSON.stringify({ ...gateway, keyFrom: undefined, key: savedKey }) }, true),
+    step({ action: "set", id: "engines", value: JSON.stringify(gateway) }),
+  ], 60_000);
+  const adding = await engineCard();
+  expect(adding.subtitle).toContain("sending it your saved OpenRouter API key");
+  expect(addedEngines()).toEqual([]);
+  await answer(adding, "allow");
+  const [inline, applied] = results(await finished("ENGINE-ADD"));
+  expect(inline).toMatchObject({ isError: true, text: expect.stringContaining("Never put a key or token in the value") });
+  expect(applied).toMatchObject({ isError: false, text: expect.stringMatching(/^Done: Add the engine "Gateway"/) });
+  const [[instanceId, instance]] = addedEngines();
+  expect(instance).toMatchObject({ driver: "openai-compat", displayName: "Gateway", config: { url: "http://127.0.0.1:9", key: savedKey } });
+
+  await start("ENGINE-REMOVE", [step({ action: "get", id: "engines" }), step({ action: "set", id: "engines", value: JSON.stringify({ kind: "remove", instanceId }) })], 60_000);
+  const removing = await engineCard();
+  expect(addedEngines()).toHaveLength(1);
+  await answer(removing, "allow");
+  const [listed, removed] = results(await finished("ENGINE-REMOVE"));
+  expect(JSON.parse(listed.text).value).toContain(`${instanceId}: Gateway`);
+  expect(removed.isError).toBe(false);
+  expect(addedEngines()).toEqual([]);
+  expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: removing.requestId }, 409, ownerDevice)).error).toContain("can't be undone");
+  const visible = JSON.stringify({ cards: await settingCards(bot.threadId), results: [inline.text, applied.text, listed.text, removed.text], decisions: (await api("GET", "/api/decisions")).decisions });
+  expect(visible).not.toContain(savedKey);
+}, 120_000);
+
 it("a key is never taken as a value: set with a value is refused, set without one posts the secure card, and the key appears nowhere", async () => {
   expect(config().groq?.key).toBeUndefined();
   const before = (await messages(bot.threadId)).length;
