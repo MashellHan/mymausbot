@@ -13,6 +13,15 @@ import { miniAppNativeFrameGuard } from "./native-frame-guard";
 type Page = "home" | "history" | "watch";
 type BrowseMode = "popular" | "new" | "search" | "category";
 type HistoryChoice = { action: "delete"; entry: HongguoHistoryEntry } | { action: "clear" };
+const historyMutationTailByApp = new Map<string, Promise<void>>();
+
+function enqueueHistoryMutation<T>(appId: string, operation: () => Promise<T>): Promise<T> {
+  const result = (historyMutationTailByApp.get(appId) ?? Promise.resolve()).then(operation);
+  const tail = result.then(() => {}, () => {});
+  historyMutationTailByApp.set(appId, tail);
+  void tail.then(() => { if (historyMutationTailByApp.get(appId) === tail) historyMutationTailByApp.delete(appId); });
+  return result;
+}
 
 function Poster({ card, className = "" }: { card: HongguoSeriesCard; className?: string }) {
   return <div className={`flex aspect-[3/4] items-center justify-center overflow-hidden rounded-xl bg-inset text-ink-secondary ${className}`}>
@@ -52,7 +61,6 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   const videoRef = useRef<HTMLVideoElement>(null);
   const progress = useRef<Omit<HongguoHistoryEntry, "updatedAt"> | null>(null);
   const lastQueuedPosition = useRef(-Infinity);
-  const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const catalogController = useRef<AbortController | null>(null);
   const catalogGeneration = useRef(0);
   const homeScroll = useRef<HTMLDivElement>(null);
@@ -69,6 +77,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   const [catalogError, setCatalogError] = useState("");
   const [history, setHistory] = useState<HongguoHistoryEntry[] | null>(null);
   const [historyError, setHistoryError] = useState("");
+  const [historyRetry, setHistoryRetry] = useState(0);
   const [autoplayNext, setAutoplayNext] = useState(true);
   const [preferenceBusy, setPreferenceBusy] = useState(false);
   const [choice, setChoice] = useState<HistoryChoice | null>(null);
@@ -106,11 +115,11 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   const savePosition = useCallback(() => {
     const entry = progress.current;
     if (!entry || !miniAppNativeFrameGuard()) return;
-    saveQueue.current = saveQueue.current.catch(() => {}).then(async () => {
+    void enqueueHistoryMutation(appId, async () => {
       const result = await post<HongguoHistoryResponse>("history", { expectedRevision: revision, action: "save", entry });
       if (mounted.current) { setHistory(result.entries); setSaveError(""); }
     }).catch((cause: unknown) => { if (mounted.current) showError(cause, setSaveError); });
-  }, [post, revision, showError]);
+  }, [appId, post, revision, showError]);
 
   const pauseAndSave = useCallback(() => {
     const video = videoRef.current;
@@ -132,11 +141,17 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   useEffect(() => {
     if (!valid || !visible) return;
     const controller = new AbortController();
-    void post<HongguoHistoryResponse>("history", { expectedRevision: revision, action: "list" }, controller.signal)
-      .then((result) => { if (!controller.signal.aborted) { setHistory(result.entries); setAutoplayNext(result.autoplayNext); setHistoryError(""); } })
+    setHistory(null);
+    setHistoryError("");
+    void (async () => {
+      await historyMutationTailByApp.get(appId);
+      if (controller.signal.aborted) return;
+      const result = await post<HongguoHistoryResponse>("history", { expectedRevision: revision, action: "list" }, controller.signal);
+      if (!controller.signal.aborted) { setHistory(result.entries); setAutoplayNext(result.autoplayNext); setHistoryError(""); }
+    })()
       .catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setHistoryError); });
     return () => controller.abort();
-  }, [valid, visible, refreshKey, post, revision, showError]);
+  }, [appId, valid, visible, refreshKey, historyRetry, post, revision, showError]);
 
   useEffect(() => {
     if (!valid || !visible) return;
@@ -155,6 +170,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
     const body: HongguoCatalogRequest = { expectedRevision: revision, mode,
       ...(mode === "search" ? { query } : mode === "category" ? { categoryId } : {}) };
     setCatalogLoading(true);
+    setMoreLoading(false);
     setCatalogError("");
     setItems([]);
     setNextCursor(null);
@@ -162,8 +178,8 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
       .then((result) => { if (!controller.signal.aborted && generation === catalogGeneration.current) {
         setItems(result.items); setNextCursor(result.nextCursor);
       } })
-      .catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setCatalogError); })
-      .finally(() => { if (!controller.signal.aborted) setCatalogLoading(false); });
+      .catch((cause: unknown) => { if (!controller.signal.aborted && generation === catalogGeneration.current) showError(cause, setCatalogError); })
+      .finally(() => { if (!controller.signal.aborted && generation === catalogGeneration.current) setCatalogLoading(false); });
     return () => { controller.abort(); if (catalogController.current === controller) catalogController.current = null; };
   }, [valid, visible, refreshKey, mode, query, categoryId, post, revision, showError]);
 
@@ -179,8 +195,8 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
       if (!signal.aborted && generation === catalogGeneration.current) {
         setItems((current) => [...current, ...result.items]); setNextCursor(result.nextCursor);
       }
-    } catch (cause) { if (!signal.aborted) showError(cause, setCatalogError); }
-    finally { if (!signal.aborted) setMoreLoading(false); }
+    } catch (cause) { if (!signal.aborted && generation === catalogGeneration.current) showError(cause, setCatalogError); }
+    finally { if (!signal.aborted && generation === catalogGeneration.current) setMoreLoading(false); }
   };
 
   useEffect(() => {
@@ -191,13 +207,17 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
       .then((result) => {
         if (controller.signal.aborted) return;
         setSeries(result.series);
-        const wanted = requestedEpisodeId ?? history?.find((entry) => entry.seriesId === seriesId)?.episodeId;
-        const selected = result.series.episodes.find((entry) => entry.id === wanted) ?? result.series.episodes[0];
-        setEpisodeId(selected?.id ?? null);
-        setEpisodeGroup(selected ? Math.floor(result.series.episodes.indexOf(selected) / 30) : 0);
       }).catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setSeriesError); });
     return () => controller.abort();
   }, [valid, visible, refreshKey, seriesId, requestedEpisodeId, post, revision, showError]);
+
+  useEffect(() => {
+    if (!series || series.id !== seriesId || history === null || episodeId !== null) return;
+    const wanted = requestedEpisodeId ?? history.find((entry) => entry.seriesId === seriesId)?.episodeId;
+    const selected = series.episodes.find((entry) => entry.id === wanted) ?? series.episodes[0];
+    setEpisodeId(selected?.id ?? null);
+    setEpisodeGroup(selected ? Math.floor(series.episodes.indexOf(selected) / 30) : 0);
+  }, [series, seriesId, history, requestedEpisodeId, episodeId]);
 
   useEffect(() => {
     if (!valid || !visible || page !== "watch" || !series || !episode) return;
@@ -222,7 +242,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   };
   const leaveWatch = (to: Page) => { pauseAndSave(); setPage(to); };
   const chooseEpisode = (next: HongguoEpisode) => {
-    if (next.id === episodeId) return;
+    if (history === null || next.id === episodeId) return;
     pauseAndSave(); progress.current = null; lastQueuedPosition.current = -Infinity;
     setEpisodeId(next.id); setEpisodeGroup(Math.floor(episodes.indexOf(next) / 30));
   };
@@ -260,9 +280,9 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
     const removedProgress = savedProgress && (choice.action === "clear" || savedProgress.seriesId === choice.entry.seriesId);
     if (removedProgress) { progress.current = null; lastQueuedPosition.current = -Infinity; }
     try {
-      await saveQueue.current;
-      const result = await post<HongguoHistoryResponse>("history", { expectedRevision: revision, action: choice.action,
-        ...(choice.action === "delete" ? { seriesId: choice.entry.seriesId } : {}) });
+      const result = await enqueueHistoryMutation(appId, () => post<HongguoHistoryResponse>("history", {
+        expectedRevision: revision, action: choice.action,
+        ...(choice.action === "delete" ? { seriesId: choice.entry.seriesId } : {}) }));
       if (progress.current && (choice.action === "clear" || progress.current.seriesId === choice.entry.seriesId)) {
         progress.current = null;
         lastQueuedPosition.current = -Infinity;
@@ -384,10 +404,13 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
                 if (autoplayNext && next) chooseEpisode(next); }}
               onError={() => setPlaybackError(t("computer.miniApps.hongguo.playbackFailed"))} />
               : <div className="max-w-xs px-6 py-10"><Clapperboard size={30} className="mx-auto mb-3 opacity-70" aria-hidden="true" />
-                <p role="status" className="text-[13px]">{playback?.status === "unavailable"
+                {history === null && historyError ? <div role="alert" className="text-[13px]">
+                  <p>{historyError}</p><button type="button" onClick={() => setHistoryRetry((current) => current + 1)}
+                    className="mt-2 underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.preview.retry")}</button>
+                </div> : <p role="status" className="text-[13px]">{playback?.status === "unavailable"
                   ? t(playback.reason === "anonymous-limited" ? "computer.miniApps.hongguo.anonymousLimited"
                     : playback.reason === "episode-unavailable" ? "computer.miniApps.hongguo.episodeUnavailable" : "computer.miniApps.hongguo.providerUnavailable")
-                  : playbackError || (episode ? t("computer.miniApps.hongguo.loading") : t("computer.miniApps.hongguo.noEpisodes"))}</p>
+                  : playbackError || (history === null || episode ? t("computer.miniApps.hongguo.loading") : t("computer.miniApps.hongguo.noEpisodes"))}</p>}
               </div>}
           </div>
           {playback?.status === "ready" && <div className="mt-2 flex items-center justify-between gap-2 text-[12px] text-ink-secondary">
@@ -408,9 +431,9 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
                 {episodes[index * 30]!.number}–{episodes[Math.min(episodes.length, (index + 1) * 30) - 1]!.number}</button>)}
             </div>
             <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(38px,1fr))] gap-1.5">
-              {episodes.slice(episodeGroup * 30, (episodeGroup + 1) * 30).map((item) => <button key={item.id} type="button" onClick={() => chooseEpisode(item)}
+              {episodes.slice(episodeGroup * 30, (episodeGroup + 1) * 30).map((item) => <button key={item.id} type="button" disabled={history === null} onClick={() => chooseEpisode(item)}
                 aria-label={t("computer.miniApps.hongguo.episodeNumber", { number: item.number })} aria-current={item.id === episodeId ? "true" : undefined}
-                className={`min-h-9 rounded-lg border px-1 text-[12px] focus-visible:outline-2 focus-visible:outline-accent ${item.id === episodeId ? "border-ink bg-ink font-semibold text-panel" : item.availability === "unavailable" ? "border-dashed border-hairline text-ink-secondary hover:bg-inset" : "border-transparent bg-inset hover:bg-control"}`}
+                className={`min-h-9 rounded-lg border px-1 text-[12px] focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50 ${item.id === episodeId ? "border-ink bg-ink font-semibold text-panel" : item.availability === "unavailable" ? "border-dashed border-hairline text-ink-secondary hover:bg-inset" : "border-transparent bg-inset hover:bg-control"}`}
                 title={item.title}>{item.number}</button>)}
             </div>
             {episode?.availability === "unavailable" && <p className="mt-2 text-[11px] text-ink-secondary">{t("computer.miniApps.hongguo.episodeUnavailable")}</p>}
