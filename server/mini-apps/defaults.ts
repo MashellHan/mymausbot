@@ -16,7 +16,7 @@ import { appFailure } from "./validation.ts";
 
 const INPUT = z.object({ bookkeepingHtml: z.string().min(1).max(512 * 1024), restore: z.enum(DEFAULT_MINI_APP_KINDS).optional() }).strict();
 const nativeKind = (kind: DefaultMiniAppKind) => kind === "agent-team" || kind === "usage";
-const identity = (app: MiniAppSummary): DefaultMiniAppKind | null => app.dashboardIdentity ?? app.shippedTemplateKind ?? null;
+const identity = (app: MiniAppSummary): DefaultMiniAppKind | null => app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind ?? null;
 
 export interface DefaultMiniAppDeps {
   apps: MiniApps;
@@ -69,7 +69,8 @@ export class DefaultMiniApps {
         await this.deps.apps.publish(owner, update, current.app.id);
         return;
       }
-      if (input.restore === kind && (current.app.status === "archived" || nativeKind(kind) && !current.app.dashboard)) {
+      if (input.restore === kind && (current.app.status === "archived" || nativeKind(kind) && !current.app.dashboard
+          || kind === "hongguo" && !current.app.nativeKind)) {
         await this.restore(owner, current, kind);
       }
       return;
@@ -89,7 +90,7 @@ export class DefaultMiniApps {
   }
 
   private waiting(document: MiniAppDocument, kind: DefaultMiniAppKind): boolean {
-    return !nativeKind(kind) && !document.bindings.length && !document.app.publisherBotIds.length
+    return kind !== "hongguo" && !nativeKind(kind) && !document.bindings.length && !document.app.publisherBotIds.length
       && matchesPendingDefaultHtml(kind, document.html);
   }
 
@@ -105,19 +106,21 @@ export class DefaultMiniApps {
 
   private draft(kind: DefaultMiniAppKind, slug: string = DEFAULT_APPS[kind].slug): MiniAppPublish {
     return { ...DEFAULT_APPS[kind], slug, requestKey: randomUUID(), expectedRevision: 0,
-      html: nativeKind(kind) ? NATIVE_DEFAULT_HTML : pendingDefaultHtml(kind), bindings: [], publisherBotIds: [],
-      ...(kind === "agent-team" || kind === "usage" ? { dashboardKind: kind } : { shippedTemplateKind: kind }) };
+      html: nativeKind(kind) || kind === "hongguo" ? NATIVE_DEFAULT_HTML : pendingDefaultHtml(kind), bindings: [], publisherBotIds: [],
+      ...(kind === "agent-team" || kind === "usage" ? { dashboardKind: kind }
+        : kind === "hongguo" ? { nativeKind: kind } : { shippedTemplateKind: kind }) };
   }
 
   private async restore(owner: MiniAppActor, current: MiniAppDocument, kind: DefaultMiniAppKind): Promise<void> {
     await this.deps.apps.publish(owner, { requestKey: randomUUID(), expectedRevision: current.app.revision,
       slug: current.app.slug, title: current.app.title, description: current.app.description, html: current.html,
       bindings: current.bindings, publisherBotIds: current.app.publisherBotIds.filter((id) => this.deps.bots().some((bot) => bot.id === id)),
-      ...(kind === "agent-team" || kind === "usage" ? { dashboardKind: kind } : { shippedTemplateKind: kind }) }, current.app.id);
+      ...(kind === "agent-team" || kind === "usage" ? { dashboardKind: kind }
+        : kind === "hongguo" ? { nativeKind: kind } : { shippedTemplateKind: kind }) }, current.app.id);
   }
 
   private async publication(owner: MiniAppActor, kind: DefaultMiniAppKind, bookkeepingHtml: string): Promise<MiniAppPublish> {
-    if (kind === "agent-team" || kind === "usage") return this.draft(kind);
+    if (kind === "agent-team" || kind === "usage" || kind === "hongguo") return this.draft(kind);
     if (kind === "bookkeeping") {
       const source = await existingBookkeepingSource(this.deps.data, this.deps.bots().map((bot) => bot.id), owner.assertActive);
       if (!source) return this.draft(kind);

@@ -181,6 +181,22 @@ try {
   proxyReport = { error: String((error && error.message) || error) };
 }
 
+let hongguoReport = null;
+try {
+  const sdkProbe = join(staging, "server", "probe-hongguo.mjs");
+  writeFileSync(sdkProbe, [
+    'import { createClient, memoryProfileStore } from "./hongguo-sdk/index.js";',
+    'await createClient({ profile: memoryProfileStore(), deviceResets: 0, retryAttempts: 1,',
+    '  transport: async () => { throw new Error("This package probe must stay offline."); } });',
+    'console.log(JSON.stringify({ loaded: true }));',
+  ].join("\n"));
+  for (const notice of ["LICENSE", "GO_LICENSE", "README.md"]) assert(existsSync(join(staging, "server", "hongguo-sdk", notice)));
+  const { stdout } = await promisify(execFile)(process.execPath, [sdkProbe], { cwd: staging, env: fixtureEnv, timeout: 10_000 });
+  hongguoReport = JSON.parse(stdout);
+} catch (error) {
+  hongguoReport = { error: String((error && error.message) || error) };
+}
+
 // The public MCP process is a second packaged entry point. Closing stdin right
 // after a request proves shutdown lets the final JSON-RPC frame drain.
 let mcpReport = null;
@@ -480,6 +496,11 @@ if (!proxyReport || proxyReport.error || proxyReport.missing.length > 0) {
   process.exit(1);
 }
 
+if (hongguoReport?.loaded !== true) {
+  console.error("The packaged Hongguo WASM runtime or notices are missing:", hongguoReport);
+  process.exit(1);
+}
+
 if (browserBundle && (browserReport?.error || browserReport?.browserEngine?.kind !== "engine" ||
   browserReport.browserEngine.version !== browserSpec.engine.version || browserReport.browserEnabled !== true)) {
   console.error("The fresh-home packaged server did not discover its browser bundle with browser access on by default:");
@@ -520,6 +541,7 @@ if (!serviceTrustReport || serviceTrustReport.error || serviceTrustReport.servin
 }
 console.log(`packaged server started with no node_modules in reach (port ${port}) ✓`);
 console.log(`all ${count} spawned proxy paths resolve inside the packaged server dir ✓`);
+console.log("packaged Hongguo SDK loaded its WASM runtime without network access ✓");
 console.log("packaged MCP stdio server reached the API and flushed its final frames ✓");
 console.log("packaged openmausbot doctor and bots answered from the bundle ✓");
 console.log("packaged backup worker exported an encrypted archive ✓");

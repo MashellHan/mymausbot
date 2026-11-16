@@ -63,7 +63,7 @@ it("keeps custom slugs, removals and revoked dashboard grants across default ini
     description: "Custom", html: "<p>Custom</p>", bindings: [] });
   const result = await defaults.ensure(owner, input);
   expect(result.issues).toEqual([]);
-  expect(result.apps).toHaveLength(6);
+  expect(result.apps).toHaveLength(7);
   expect(result.apps.find((app) => app.id === custom.app.id)).toEqual(custom.app);
   const native = result.apps.find((app) => app.dashboardIdentity === "usage")!;
   expect(native.slug).toBe("usage-included-1");
@@ -75,6 +75,22 @@ it("keeps custom slugs, removals and revoked dashboard grants across default ini
   expect(again.apps.find((app) => app.id === book.id)?.status).toBe("archived");
   expect((await defaults.ensure(owner, { ...input, restore: "usage" })).apps.find((app) => app.id === native.id)?.dashboard?.kind).toBe("usage");
   expect((await defaults.ensure(owner, { ...input, restore: "bookkeeping" })).apps.find((app) => app.id === book.id)?.status).toBe("active");
+});
+
+it("installs Hongguo by owner identity and restores its revoked grant only when asked", async () => {
+  const { defaults, apps, restarted } = fixture();
+  const slugOnly = await apps.publish(owner, { requestKey: "custom-hongguo", expectedRevision: 0,
+    slug: "hongguo", title: "My notes", description: "Custom", html: "<p>Notes</p>", bindings: [] });
+  const initial = await defaults.ensure(owner, input);
+  expect(initial.issues).toEqual([]);
+  expect(initial.apps.find((app) => app.id === slugOnly.app.id)?.nativeKind).toBeNull();
+  const native = initial.apps.find((app) => app.nativeIdentity === "hongguo")!;
+  expect(native).toMatchObject({ slug: "hongguo-included-1", nativeKind: "hongguo", publisherBotIds: [] });
+  const revoked = await apps.publish(owner, { ...publication(apps.document(owner, native.id)),
+    requestKey: "revoke-hongguo", nativeKind: null }, native.id);
+  expect((await restarted().ensure(owner, input)).apps.find((app) => app.id === native.id)).toEqual(revoked.app);
+  expect((await defaults.ensure(owner, { ...input, restore: "hongguo" })).apps.find((app) => app.id === native.id))
+    .toMatchObject({ revision: 3, nativeKind: "hongguo", nativeIdentity: "hongguo" });
 });
 
 it("waits for one unambiguous ledger and connects it without creating unrelated stores", async () => {
@@ -111,7 +127,7 @@ it("does not assign a report source when multiple producer Bots match", async ()
     durationMinutes: 0, nextRunAt: null, createdAt: 1, updatedAt: 1 });
   routines.push(routine("one", "ledger"), routine("two", "reports"));
   const result = await defaults.ensure(owner, input);
-  expect(result.apps).toHaveLength(5);
+  expect(result.apps).toHaveLength(6);
   expect(result.issues).toEqual([{ kind: "x_ai_digest", error: expect.stringContaining("More than one Bot") }]);
   expect(result.apps.find((app) => app.shippedTemplateKind === "x_ai_digest")?.publisherBotIds).toEqual([]);
   expect(await data.listBotSources("workspace-owner", ["ledger", "reports"])).toEqual([]);

@@ -111,6 +111,9 @@ importers:
       nodemailer:
         specifier: 10.3.1
         version: 10.3.1
+      openhongguo:
+        specifier: 0.3.0
+        version: 0.3.0
       papaparse:
         specifier: ^5.7.0
         version: 5.7.0
@@ -4625,6 +4628,10 @@ packages:
 
   oniguruma-to-es@4.3.6:
     resolution: {integrity: sha512-csuQ9x3Yr0cEIs/Zgx/OEt9iBw9vqIunAPQkx19R/fiMq2oGVTgcMqO/V3Ybqefr1TBvosI6jU539ksaBULJyA==}
+
+  openhongguo@0.3.0:
+    resolution: {integrity: sha512-X3bsypNrg3ISKzztxcWEFY7t8lktKqIQUDcyHYpSWeCTZaHvauSFKHsgNlec+mECko5Stm3LPUtPHx5F3rYDXA==}
+    engines: {node: '>=20'}
 
   oxlint@1.80.0:
     resolution: {integrity: sha512-5nTiSps4qdbCWLbxzuO00alHkEO2exR9YMN/ig6QXWrLsYSG0KaObOAM+l6oU2LcKPWoSAGYbkZIGEu1ViiWKA==}
@@ -10092,6 +10099,8 @@ snapshots:
       oniguruma-parser: 0.12.2
       regex: 6.1.0
       regex-recursion: 6.0.2
+
+  openhongguo@0.3.0: {}
 
   oxlint@1.80.0:
     optionalDependencies:

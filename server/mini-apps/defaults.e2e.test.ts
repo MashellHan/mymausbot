@@ -8,14 +8,14 @@ import { launchMiniAppsFixture } from "../testing/mini-apps-fixture.ts";
 
 const records = (page: MiniAppNamedPage) => page.rows.map((row) => Object.fromEntries(page.columns.map((column, index) => [column.name, row[index]])));
 
-it("opens five persisted defaults on existing Bot Data, preserves removals and follows ongoing writes", async () => {
+it("opens six persisted defaults on existing Bot Data, preserves removals and follows ongoing writes", async () => {
   const fixture = await launchMiniAppsFixture({ defaultApps: true });
   const { api, url, dataDir, installed, bot, dataCall, publication } = fixture;
   const input = { bookkeepingHtml: publication.html };
   const ensure = (restore?: string) => api<MiniAppDefaultsResult>("POST", "/api/mini-apps/defaults", { ...input, ...(restore ? { restore } : {}) });
   try {
     expect(fixture.defaults?.issues).toEqual([]);
-    expect(fixture.defaults?.apps).toHaveLength(5);
+    expect(fixture.defaults?.apps).toHaveLength(6);
     expect(installed.app).toMatchObject({ title: "记账管家", publisherBotIds: [bot.id], revision: 1 });
     expect(existsSync(join(dataDir, "bots", bot.id, "data.duckdb"))).toBe(false);
     const { bot: unused } = await runControlOmb(["new-bot", "--name", "No Data fixture", "--url", url]) as { bot: { id: string } };

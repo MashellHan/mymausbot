@@ -1,8 +1,8 @@
-import { AppWindow, ChartColumnIncreasing, GitBranch, Newspaper, ReceiptText, UsersRound, type LucideIcon } from "lucide-react";
-import type { MiniAppDashboardKind, MiniAppSummary } from "../../../shared/mini-apps";
+import { AppWindow, ChartColumnIncreasing, Clapperboard, GitBranch, Newspaper, ReceiptText, UsersRound, type LucideIcon } from "lucide-react";
+import type { MiniAppDashboardKind, MiniAppNativeKind, MiniAppSummary } from "../../../shared/mini-apps";
 import type { ReportKind } from "../../../shared/report-mini-app";
 
-export type MiniAppIconKind = "bookkeeping" | ReportKind | MiniAppDashboardKind;
+export type MiniAppIconKind = "bookkeeping" | ReportKind | MiniAppDashboardKind | MiniAppNativeKind;
 
 const icons: Record<MiniAppIconKind, { Icon: LucideIcon; tone: string }> = {
   bookkeeping: { Icon: ReceiptText, tone: "#b47b37" },
@@ -10,10 +10,11 @@ const icons: Record<MiniAppIconKind, { Icon: LucideIcon; tone: string }> = {
   github_activity: { Icon: GitBranch, tone: "#6e7c8b" },
   "agent-team": { Icon: UsersRound, tone: "#738c70" },
   usage: { Icon: ChartColumnIncreasing, tone: "#397db6" },
+  hongguo: { Icon: Clapperboard, tone: "#a84f46" },
 };
 
 export function iconKindForApp(app: MiniAppSummary): MiniAppIconKind | null {
-  return app.dashboardIdentity ?? app.shippedTemplateKind ?? null;
+  return app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind ?? null;
 }
 
 export function MiniAppIcon({ kind, large = false, launcher = false }: { kind: MiniAppIconKind | null; large?: boolean; launcher?: boolean }) {

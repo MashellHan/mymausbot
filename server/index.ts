@@ -469,7 +469,7 @@ import { appliesNow, directApply, UNDO_STALE, type DirectApply } from "./direct-
 import { createTeamMemoryRequests } from "./team-memory-requests.ts";
 import { createAgentCard } from "./chat-widgets.ts";
 import { createChatAppRoutes, createChatAppsMcp } from "./routes/chat-apps.ts";
-import { createMiniAppRouteHandlers } from "./routes/mini-apps.ts"; import { dispatchRoutineReportTurn, type RoutineReportApp } from "./routine-report-publication.ts"; import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts";
+import { createMiniAppRouteHandlers } from "./routes/mini-apps.ts"; import { dispatchRoutineReportTurn, type RoutineReportApp } from "./routine-report-publication.ts"; import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts"; import { createHongguoProvider } from "./hongguo/provider.ts";
 import { buildBotOverview, type BotOverview, connectedAppsFacts } from "./bot-overview.ts";
 import { ProfileRequestService } from "./profile-requests.ts";
 import { ModelRequestService } from "./model-requests.ts";
@@ -12158,7 +12158,7 @@ ROUTES.push(createBotMessageRoutes({
     { emoji, name: person.name ?? person.email, at: Date.now() }),
 }));
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; };
-const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen(), suggestionWriter: (botId) => sideJobs.text("mini-app-suggestions", botId) }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
+const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, hongguoProvider: createHongguoProvider({ dataDir: DATA_DIR }), validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen(), suggestionWriter: (botId) => sideJobs.text("mini-app-suggestions", botId) }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, keys: mcpKeys, storedServers: () => cfg.mcpServers ?? {}, mountedServers: engineMcpServers, personMcp: teamConnections.personMcp, probeAs: (server) => mcpServersHost.probeAs(server), oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc, threadVisible: (auth, threadId) => (auth.kind !== "session" || sessions.isLive(auth.session.id)) && visibleTo(viewerFor(auth)).thread(threadId) }));
 const { react } = createReactions({

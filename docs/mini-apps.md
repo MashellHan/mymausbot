@@ -2,7 +2,7 @@
 
 Mini Apps are persistent applications in **Computer → Mini Apps**. An app has a
 stable identity, immutable template versions and explicit read permissions. Most
-apps use editable HTML and declared Data queries; Agent Team and Activities use
+apps use editable HTML and declared Data queries; Agent Team, Activities and Hongguo use
 registered built-in views. Each app belongs to the local workspace owner,
 independently of the chat or bot that created it. Opening, filtering and
 refreshing an app does not start an AI turn.
@@ -14,9 +14,9 @@ editions published by an existing bot or Automation.
 
 ## Find and open apps
 
-The guarded local-owner desktop initializes five included apps in the existing
+The guarded local-owner desktop initializes six included apps in the existing
 registry: Bookkeeping, Daily X AI digest, Github Rending (GitHub activity), Agent
-Team and Activities. Computer opens on Mini Apps by default; explicit Data,
+Team, Activities and Hongguo. Computer opens on Mini Apps by default; explicit Data,
 Browser and Screen requests and manual tab choices remain available. There is
 no installation wizard. The local-owner `POST /api/mini-apps/defaults`
 operation receives the bundled bookkeeping HTML, creates missing entries and
@@ -44,6 +44,31 @@ using a bundled slug is kept, and the new included app receives an available
 suffixed slug. Older unmarked records are not silently adopted. Native dashboard
 identity and current read grants remain separate; initialization does not restore
 a revoked grant.
+
+## Hongguo
+
+Hongguo is an owner-installed native Mini App for browsing popular, new and
+categorized short dramas, searching, opening a series and its episodes, and
+playing an episode when the provider supplies usable media. The series page can
+show an episode even when playback is unavailable. An anonymous playback limit
+is shown as unavailable; the host does not invent a media URL or sign up for an
+account.
+
+The host stores the last episode and playback position for each series in its
+local SQLite database. Pausing, closing or switching away saves the position;
+history survives restart, and the owner can delete one series or clear this
+app's history. Autoplay for the next episode is a saved per-app preference.
+Archiving or revoking the native grant retains history but denies Hongguo
+operations until the owner explicitly restores the grant. `nativeIdentity`
+identifies the installed app; the current `nativeKind` grant controls access.
+A matching slug, fallback HTML or Bot publisher grant cannot create access.
+
+The same-origin host endpoints are scoped to the app ID and current revision:
+`POST /api/mini-apps/:appId/hongguo/{catalog,series,playback,history,preferences}`.
+The short-lived media URL returned by a ready playback result uses
+`GET /api/mini-apps/:appId/hongguo/media/:token?expectedRevision=N`. Media tokens
+are bound to that app and revision. The frame gets no general network or tool
+permission. The full request and response types are in `shared/hongguo-mini-app.ts`.
 
 ## Agent Team and Activities
 
@@ -214,7 +239,7 @@ through capture. They include closed retained stores, their identity/revision/ha
 manifest, app metadata and referenced documents. Restore checks identities,
 checksums, template references and the native DuckDB revision before replacing
 anything. Untracked stores, unfinished promotion journals and missing references
-fail the operation. Restore clears publisher and dashboard grants so old backups
+fail the operation. Restore clears publisher, dashboard and Hongguo native grants so old backups
 cannot revive revoked access. Apps, Data, versions and receipts remain; the owner
 can explicitly regrant access through an owner publication using the restored
 current revision.
