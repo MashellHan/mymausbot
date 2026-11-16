@@ -2,14 +2,16 @@ import { useEffect, useState } from "react";
 
 import { openExternalLink } from "@/lib/app-links";
 import { t } from "@/lib/i18n";
-import { showable, SITE_FRAME_ALLOW, SITE_FRAME_SANDBOX } from "@/lib/published-apps";
+import { showable, SITE_FRAME_ALLOW, SITE_FRAME_SANDBOX, SITE_THUMB_SANDBOX } from "@/lib/published-apps";
 import { useFramingRefused } from "./use-framing";
 
 const LOAD_TIMEOUT_MS = 10_000;
 
 /** A published site, live, in a sandboxed frame; or, when it can't be shown here (it refuses framing, asks for a login,
  * never loads, or is not a plain web address), a line saying so and Open in browser. */
-export function SiteFrame({ url, title, loginOnly = false, attempt }: { url: string; title: string; loginOnly?: boolean; attempt: number }) {
+export function SiteFrame({ url, title, loginOnly = false, attempt, sandbox }: {
+  url: string; title: string; loginOnly?: boolean; attempt: number; sandbox?: typeof SITE_THUMB_SANDBOX;
+}) {
   const canFrame = showable(url, window.location.origin) && !loginOnly;
   const refused = useFramingRefused(canFrame ? url : null, attempt);
   const [timedOut, setTimedOut] = useState(false);
@@ -37,7 +39,7 @@ export function SiteFrame({ url, title, loginOnly = false, attempt }: { url: str
       data-app-preview-frame=""
       src={url}
       title={title}
-      sandbox={SITE_FRAME_SANDBOX}
+      sandbox={sandbox ?? SITE_FRAME_SANDBOX}
       allow={SITE_FRAME_ALLOW}
       referrerPolicy="no-referrer"
       onLoad={() => setLoaded(true)}
