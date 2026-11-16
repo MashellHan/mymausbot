@@ -339,8 +339,11 @@ export async function runControlOmbUi(args: string[]): Promise<unknown> {
     if (verb === "type" && typeof text !== "string") throw new ControlOmbError("ui type requires --text TEXT");
     await requireLiveSession(handle);
     const { target, name, role } = await resolveTarget(handle, values, verb);
-    const data = await agentBrowser(handle.binary, sessionEnv(handle), verb === "click" ? ["click", target] : ["type", target, text as string]);
-    return { ok: true, target, ...(name ? { name } : {}), ...(role ? { referenceRole: role } : {}), ...data };
+    const namedButton = verb === "click" && name && role === "button";
+    const args = namedButton ? ["find", "role", "button", "click", "--name", name, "--exact"]
+      : verb === "click" ? ["click", target] : ["type", target, text as string];
+    const data = await agentBrowser(handle.binary, sessionEnv(handle), args);
+    return { ok: true, target: namedButton ? "role=button" : target, ...(name ? { name } : {}), ...(role ? { referenceRole: role } : {}), ...data };
   }
 
   if (verb === "press") {
