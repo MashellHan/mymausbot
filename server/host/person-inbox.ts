@@ -94,7 +94,7 @@ export interface PersonInboxDeps {
   confined?(threadId: string): boolean;
   team: CloudTeam | null;
   dataDir: string;
-  store: Pick<Store, "bots" | "bot" | "tasks" | "taskByThread" | "createTask" | "patchTask" | "patchGroup" | "appendMessage" | "patchMessage" | "messagesFor" | "groupByThread" | "onChange">;
+  store: Pick<Store, "bots" | "bot" | "tasks" | "taskByThread" | "createTask" | "patchTask" | "markGroupThreadUnread" | "appendMessage" | "patchMessage" | "messagesFor" | "groupByThread" | "onChange">;
   starters: { get(threadId: string): string | undefined; set(threadId: string, person: string): void };
   audienceOf(threadId: string): Audience;
   personKeyOf(email: string): string;
@@ -350,7 +350,7 @@ export function createPersonInbox(deps: PersonInboxDeps) {
       }
       if (group) {
         store.appendMessage(threadId, { role: "bot", kind: "text", text: `${label(threadId)}: ${text}`, relay, from: { botId: asker.id, name: asker.name, color: asker.color } });
-        store.patchGroup(group.id, { unread: true });
+        store.markGroupThreadUnread(group.id, threadId, true);
       } else {
         const quoted = JSON.stringify(oneLine(item.text, 160));
         deps.continueTurn(botId, threadId, by === "assistant"

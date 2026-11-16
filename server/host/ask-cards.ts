@@ -25,7 +25,7 @@ const NEEDS_INPUT_LINE = /^needs input:/i;
 
 export interface AskCardsDeps {
   store: Pick<Store, "bot" | "messagesFor" | "activePath" | "appendMessage" | "patchMessage" | "taskByThread" | "patchTask" | "group"
-    | "groupTaskByThread" | "patchGroup" | "groupByThread">;
+    | "groupTaskByThread" | "markGroupThreadUnread" | "groupByThread">;
   node(id: string): HandoffView | undefined;
   /** The conversation that handed this one its work, while that work is live. */
   delegatorOf(threadId: string): { threadId: string; botId?: string } | undefined;
@@ -162,10 +162,10 @@ export function createAskCards(deps: AskCardsDeps) {
         ...(node.groupId ? { comm: { groupId: node.groupId, threadId: node.threadId, withBotId: bot.id, withName: bot.name, withColor: bot.color } }
           : { threadRef: { botId: bot.id, threadId: node.threadId, title } }),
       });
-      if (group) store.patchGroup(group.id, { unread: true });
+      if (group) store.markGroupThreadUnread(group.id, liveParent.threadId, true);
       else store.patchTask(liveParent.botId, liveParent.threadId, { unread: true });
     }
-    if (node.groupId) store.patchGroup(node.groupId, { unread: true });
+    if (node.groupId) store.markGroupThreadUnread(node.groupId, node.threadId, true);
     else store.patchTask(bot.id, node.threadId, { unread: true });
     if (node.cards?.length) return;
     const room = node.groupId ? store.group(node.groupId) : undefined;
@@ -184,7 +184,7 @@ export function createAskCards(deps: AskCardsDeps) {
     const body = node.cards?.length ? serverLine(language, "server.teammates.stillWaitingCard", { days })
       : serverLine(language, "server.teammates.stillWaiting", { days, question: withDefault(node.question ?? "").question.slice(0, 180) });
     notify(buildNotification("question", bot, node.threadId, body, { avatarUrl: bot.avatarUrl, ...(room ? { group: { id: room.id, name: room.name } } : {}) }));
-    if (room) store.patchGroup(room.id, { unread: true });
+    if (room) store.markGroupThreadUnread(room.id, node.threadId, true);
     else store.patchTask(bot.id, node.threadId, { unread: true });
   }
 

@@ -417,6 +417,7 @@ it("lets the opener find and close the completed task", () => fixture(async f =>
 it("does not treat self-opened work or an abandoned human branch as new human authority", () => fixture(async f => {
   await f.api("/api/config", { threads: { maxConcurrentPerBot: 1 } }, "PUT");
   const room = (await f.cli("new-channel", "--name", "Updates", "--members", f.chief.id, "--section", "Leadership")).channel;
+  expect((await f.api(`/api/groups/${room.id}/read`, { threadId: room.activeTaskId })).group.unread).toBe(false);
   const post = (message: string, expectError = false) => ({ tool: "post_to_room", arguments: { group_id: room.id, message }, expectError });
   f.plan[f.chief.id] = { turns: [
     { steps: [post("First update"), post("Second update"), { tool: "start_thread", arguments: { title: "Independent job", message: "Continue the separate check." } }], reply: "Opened the independent job" },
@@ -443,6 +444,9 @@ it("does not treat self-opened work or an abandoned human branch as new human au
   expect(attempt.response.result.isError).toBe(true);
   expect(attempt.response.result.content[0].text).toContain("nobody has answered");
   expect((await f.messages(room.activeTaskId)).filter((message: any) => message.peerPost)).toHaveLength(2);
+  expect((await f.api("/api/bots?messages=0")).groups.find((group: any) => group.id === room.id)
+    .tasks.find((task: any) => task.threadId === room.activeTaskId).unread).toBe(true);
+  expect((await f.messages(f.chief.activeTaskId)).filter((message: any) => message.comm?.groupId === room.id && message.tool?.ok)).toHaveLength(2);
   const secret = (await f.messages(child.threadId)).find((message: any) => message.kind === "secret");
   expect(secret).toBeDefined();
   const opening = (await f.messages(child.threadId)).find((message: any) => message.peerAsk?.botId === f.chief.id);

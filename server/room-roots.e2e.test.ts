@@ -209,6 +209,35 @@ it("R2 a member's coordinate_bots reuses its turn's root, and a Chief's Full rea
   expect(nothingLive(f)).toEqual([]);
 }), hostTimeout(120_000));
 
+it("marks the receiving room thread unread when a teammate returns from another conversation", () => scenario(async (f) => {
+  const mira = await f.bot("Mira", "Engineering");
+  expect((await f.api("PATCH", `/api/bots/${f.clive.id}`, {
+    chiefOfStaff: true, managedSections: ["Engineering"], acknowledgePeerScope: true,
+  })).status).toBe(200);
+  const room = await f.room("Engineering", [f.clive.id], { kind: "member", botId: f.clive.id });
+  f.script(f.clive.id,
+    { key: "C0", match: ["PARENT-JOB"], steps: [{ arguments: { bot_ids: [mira.id], message: "CHILD-BRIEF: check the numbers." } }],
+      reply: "C0-SENT: Mira is checking." },
+    { key: "C1", match: [SETTLED, "CHILD-RESULT"], readyFile: f.ready("parent"), gateFile: f.gate("parent"),
+      reply: "PARENT-FINAL: confirmed." });
+  f.script(mira.id, { key: "M0", match: ["CHILD-BRIEF"], readyFile: f.ready("child"), gateFile: f.gate("child"),
+    reply: "CHILD-RESULT: 42." });
+  await f.post(room, "PARENT-JOB: ask Mira to check the numbers.");
+  await expect.poll(() => existsSync(f.ready("child")), { timeout: 30_000 }).toBe(true);
+  const child = f.db().assignments.find((row: any) => row.parentId);
+  const childThreadId = child?.assignee?.destination?.threadId;
+  expect(childThreadId).toBeTruthy();
+  expect(childThreadId).not.toBe(room.threadId);
+  expect((await f.api("POST", `/api/groups/${room.id}/read`, { threadId: room.threadId })).status).toBe(200);
+  expect((await f.roomView(room.id)).tasks.find((task: any) => task.threadId === room.threadId).unread).toBe(false);
+  f.open("child");
+  await expect.poll(() => existsSync(f.ready("parent")), { timeout: 30_000 }).toBe(true);
+  expect((await f.messages(room.threadId)).some((message: any) => message.roomRequest?.id === child.id && message.roomRequest.phase === "result")).toBe(true);
+  expect((await f.roomView(room.id)).tasks.find((task: any) => task.threadId === room.threadId).unread).toBe(true);
+  f.open("parent");
+  await f.final(room.threadId, "PARENT-FINAL");
+}), hostTimeout(120_000));
+
 const parkOnCredential = async (f: any, room: { id: string; threadId: string }, job: string) => {
   f.script(f.clive.id, { key: "C0", match: [job], steps: [{ tool: "request_credential", arguments: { credential_id: "xaiApiKey", reason: `${job} fixture model` } }], reply: `${job}-ASKED: waiting for the key.` });
   await f.post(room, `${job}: set up the Grok model; ask me for the key you need.`);

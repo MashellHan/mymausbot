@@ -3,6 +3,28 @@ import type { Message } from "./store.ts";
 import { toolResultPrefix } from "./tool-results.ts";
 
 export const UNTITLED_TASK = "New task";
+export const UNTITLED_THREAD = "New thread";
+
+/** Every title (a bot's or a person's) passes through here, so equality tells a machine-made title from a rename. */
+const TASK_TITLE_MAX = 80;
+export function threadTitleFrom(title?: string): string {
+  return title?.trim().slice(0, TASK_TITLE_MAX) || UNTITLED_THREAD;
+}
+
+export function titleFromLlm(raw: string): string | null {
+  const line = raw
+    .trim()
+    .split("\n")[0]!
+    .replace(/^[#*\-\u2022]+/, "")
+    .replace(/^["'\u201C\u201D\u2018\u2019\u0060]+/, "")
+    .replace(/["'\u201C\u201D\u2018\u2019\u0060]+$/, "")
+    .replace(/^[#*\-\u2022]+/, "")
+    .replace(/[#*]+$/, "")
+    .replace(/[.\u3002]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return line.length >= 1 && line.length <= 48 ? line : null;
+}
 
 export function titleFromMessage(text: string): string {
   const line = text.trim().split("\n")[0]!.trim();
