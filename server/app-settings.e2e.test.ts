@@ -134,6 +134,21 @@ it("the first default-model change undoes to the omitted fallback without replac
   expect((await api("GET", "/api/config")).defaultModelSelection).toBeUndefined();
 }, 60_000);
 
+it("a browser proxy change stays private on the applied card and Undo restores direct browsing", async () => {
+  const proxy = "socks5://proxy.example:1080";
+  expect(config().browserEngine?.egress?.proxy ?? "").toBe("");
+  await start("BROWSER-PROXY", [step({ action: "set", id: "desktops.browserProxy", value: proxy })]);
+  const [applied] = results(await finished("BROWSER-PROXY"));
+  expect(applied).toMatchObject({ isError: false, text: expect.stringMatching(/^Changed Browser proxy from not set to set\. The user can undo it/) });
+  expect(config().browserEngine.egress.proxy).toBe(proxy);
+  const card = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "desktops.browserProxy")!.card;
+  expect(card).toMatchObject({ autoApplied: true, appSettingRequest: { before: "", after: "set", tier: "safe" } });
+  const decisions = (await api("GET", "/api/decisions")).decisions.filter((row: any) => row.tool === "app_settings" && row.summary.startsWith("desktops.browserProxy"));
+  expect(JSON.stringify({ reply: applied.text, card, decisions })).not.toContain("proxy.example");
+  expect(await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: card.requestId })).toMatchObject({ ok: true, undone: true });
+  expect(config().browserEngine.egress.proxy).toBe("");
+}, 60_000);
+
 it("a Full-access owner turn changing a provider address waits on a Change/Cancel card: Cancel changes nothing, Change from the owner's device applies it", async () => {
   const waitingCard = async () => {
     let waiting: any;

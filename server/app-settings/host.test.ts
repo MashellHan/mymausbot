@@ -156,6 +156,26 @@ describe("safe tier", () => {
     expect(await host.undo({ threadId: turn.threadId, requestId })).toEqual({ claimed: true, state: "already_undone" });
   });
 
+  it("keeps the browser proxy address private and refuses stale Undo after another proxy change", async () => {
+    const { host, set, cfg, cards, turn, saved, dataDir } = fixture();
+    const proxy = "socks5://proxy.example:1080";
+    expect((await set("desktops.browserProxy", "http://proxy.example:8080")).status).toBe(400);
+    expect((await set("desktops.browserProxy", "socks5://user:pass@proxy.example:1080")).status).toBe(400);
+    const applied = await set("desktops.browserProxy", proxy);
+    expect(applied).toMatchObject({ status: 200, body: { text: expect.stringContaining("Browser proxy from not set to set") } });
+    expect(saved).toEqual([{ browserEngine: { egress: { proxy } } }]);
+    const read = await host.handle({ action: "get", id: "desktops.browserProxy" }, turn);
+    expect(JSON.parse(String(read.body.text))).toMatchObject({ value: "set", tier: "safe" });
+    await flushDecisionLog(dataDir);
+    expect(JSON.stringify({ reply: applied.body, read: read.body, card: cards()[0]!.card, decisions: readDecisions(dataDir, 10) })).not.toContain("proxy.example");
+    const requestId = String(cards()[0]!.card.requestId);
+    cfg.browserEngine!.egress!.proxy = "socks5://new.example:1080";
+    expect(await host.undo({ threadId: turn.threadId, requestId })).toMatchObject({ state: "invalid", error: UNDO_STALE, stale: true });
+    cfg.browserEngine!.egress!.proxy = proxy;
+    expect(await host.undo({ threadId: turn.threadId, requestId })).toEqual({ claimed: true, state: "undone" });
+    expect(saved.at(-1)).toEqual({ browserEngine: { egress: { proxy: "" } } });
+  });
+
   it("restores an omitted default model without replacing other new-bot defaults", async () => {
     const { host, set, cfg, cards, turn, saved } = fixture();
     cfg.newBotDefaults = { profile: { name: "Keep" }, memory: {}, skills: [], routines: [] };
