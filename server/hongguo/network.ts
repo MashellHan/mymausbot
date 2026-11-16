@@ -5,7 +5,7 @@ import type { LookupFunction } from "node:net";
 import { isPublicDomainAddress } from "../custom-domain.ts";
 
 const API_DOMAINS = ["fqnovel.com", "reading.snssdk.com"];
-const MEDIA_DOMAINS = ["douyinvod.com", "bytevod.com", "ibytedtos.com", "bytedance.com", "fqnovel.com"];
+const MEDIA_DOMAINS = ["douyinvod.com", "bytevod.com", "ibytedtos.com", "bytedance.com", "fqnovel.com", "qznovelvod.com"];
 const IMAGE_DOMAINS = ["byteimg.com", "fqnovelpic.com", "fqnovel.com"];
 export type HongguoUrlKind = "api" | "media" | "image";
 
