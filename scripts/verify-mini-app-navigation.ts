@@ -52,9 +52,9 @@ try {
   const result = JSON.parse(readFileSync(join(evidence, "launcher-result.json"), "utf8")) as { errors: string[] };
   assert.deepEqual(result.errors, []);
   const active = (await inventory()).filter((app) => app.status === "active");
-  assert.equal(active.length, 5);
-  assert.deepEqual(active.map((app) => app.dashboardIdentity ?? app.shippedTemplateKind).sort(),
-    ["agent-team", "bookkeeping", "github_activity", "usage", "x_ai_digest"].sort());
+  assert.equal(active.length, 6);
+  assert.deepEqual(active.map((app) => app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind).sort(),
+    ["agent-team", "bookkeeping", "github_activity", "hongguo", "usage", "x_ai_digest"].sort());
   console.log(JSON.stringify({ passed: true, source: "isolated source Electron fixture", evidence, activeApps: active.length }));
 } finally {
   await preview?.close();

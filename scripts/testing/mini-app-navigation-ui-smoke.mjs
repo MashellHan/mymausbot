@@ -39,7 +39,7 @@ function makeWindow(capability = true) {
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   return window;
 }
-const open = async (window, query, expected = 5) => {
+const open = async (window, query, expected = 6) => {
   await bounded(window.loadURL(previewUrl + query), `window load ${query}`, 45_000);
   await until(() => evaluate(window, 'document.querySelectorAll("[data-testid=mini-apps-panel] [role=tab]").length'),
     (count) => count === expected, `${expected} persisted app tabs`);
@@ -70,7 +70,7 @@ async function geometry(window, expected, name) {
     return { panelWidth:panel.width, rowLeft:row.left, rowRight:row.right, allLeft:all.left, allRight:all.right,
       hostRight:host.getBoundingClientRect().right, headerOverflow:host.querySelector('header').scrollWidth-host.querySelector('header').clientWidth, tiles }; })()`);
   assert(Math.abs(measured.panelWidth - expected) <= 1, `${name}: actual panel width ${measured.panelWidth}`);
-  assert(measured.tiles.length === 5 && measured.tiles.every((tile) => Math.abs(tile.top - measured.tiles[0].top) <= 1
+  assert(measured.tiles.length === 6 && measured.tiles.every((tile) => Math.abs(tile.top - measured.tiles[0].top) <= 1
     && tile.iconBottom <= tile.labelTop + 1), `${name}: one launcher row with labels below icons`);
   assert(measured.rowRight <= measured.allLeft + 1 && measured.allRight <= measured.hostRight + 1, `${name}: fixed All apps stays visible`);
   assert(measured.headerOverflow <= 1, `${name}: no header overflow`);
@@ -111,22 +111,18 @@ async function metadataInteractions(window) {
     return frame?.srcdoc.includes('fixture-note') && frame.sandbox.contains('allow-scripts')
       && !frame.sandbox.contains('allow-same-origin');
   })()`), Boolean, "real opaque Mini App iframe", 10_000);
-  assert.equal(await evaluate(window, 'document.querySelector("[data-testid=mini-apps-panel] > header").innerText.includes("Version history")'), false);
   await click(window, '[data-mini-app-all]');
-  const history = '[data-mini-app-popover] details';
-  await click(window, `${history} > summary`);
   const menu = await evaluate(window, `(() => {
-    const header = document.querySelector('[data-testid=mini-apps-panel] > header');
-    const details = header.querySelector('[data-mini-app-popover] details');
-    details.scrollIntoView({ block: 'nearest' });
-    const box = details.querySelector('div').getBoundingClientRect();
+    const pop = document.querySelector('[data-mini-app-popover]');
+    const box = pop.getBoundingClientRect();
     return { width: innerWidth, height: innerHeight, left: box.left, right: box.right, top: box.top, bottom: box.bottom,
-      open: details.open, publisherChat: header.innerText.includes('Open publisher chat') };
+      onlyCards: pop.children.length === 1 && pop.firstElementChild.hasAttribute('data-mini-app-library'),
+      hasFooter: !!pop.querySelector('details, summary') || /Version history|Open publisher chat/.test(pop.innerText) };
   })()`);
-  assert(menu.open && !menu.publisherChat && menu.width === 360 && menu.left >= 0 && menu.right <= menu.width
+  assert(menu.onlyCards && !menu.hasFooter && menu.width === 360 && menu.left >= 0 && menu.right <= menu.width
     && menu.top >= 0 && menu.bottom <= menu.height, JSON.stringify(menu));
-  result.geometry.push({ name: "metadata-history-360-midnight-en.png", ...menu });
-  await capture(window, "metadata-history-360-midnight-en.png", true);
+  result.geometry.push({ name: "metadata-menu-360-midnight-en.png", ...menu });
+  await capture(window, "metadata-menu-360-midnight-en.png", true);
   await evaluate(window, 'window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); true');
   await evaluate(window, `(() => {
     const button = document.querySelector('[data-testid=mini-apps-panel] [role=tablist] [data-info-hint]');
@@ -140,16 +136,10 @@ async function metadataInteractions(window) {
   await until(() => evaluate(window, `document.activeElement === document.querySelector('[data-testid=mini-apps-panel] iframe')
     && window.metadataFrameBlur && !document.querySelector('[data-info-hint-content]')`), Boolean, "frame focus dismisses pinned metadata", 5_000);
   result.checks.push("Pinned metadata closes when actual focus enters the opaque Mini App iframe");
-  await click(window, '[data-mini-app-all]');
-  await click(window, `${history} > summary`);
-  await evaluate(window, `(() => {
-    const button = [...document.querySelectorAll('${history} button')].find(node => node.textContent.startsWith('Version ${installed.previousVersion} ·'));
-    if (!button || button.disabled) throw Error('Previous version unavailable');
-    button.click(); return true;
-  })()`);
-  await until(() => inventory(window), apps => apps.some(app => app.id === installed.id
-    && app.templateVersion === installed.previousVersion && app.revision === installed.revision + 1), "history rollback preserves selected version");
-  result.checks.push("History without a publisher chat stays inside a 360px viewport and rolls back the selected version");
+  const versions = await evaluate(window, `(async () => (await (await fetch('/api/mini-apps/${installed.id}')).json()).versions)()`);
+  assert(versions.some((version) => version.version === installed.previousVersion)
+    && versions.some((version) => version.version === installed.templateVersion));
+  result.checks.push("The multi-version menu ends after its cards inside a 360px viewport; version data remains readable");
 }
 
 const timeout = setTimeout(() => { result.errors.push("Launcher fixture timed out");
@@ -193,7 +183,7 @@ try {
   }
   result.checks.push("App metadata stays collapsed beside the selected name and opens within the viewport");
   const before = await inventory(window);
-  assert.equal(before.length, 5);
+  assert.equal(before.length, 6);
   const team = before.find((entry) => entry.dashboardIdentity === "agent-team");
   assert(team?.dashboard?.kind === "agent-team");
   assert(before.some((entry) => entry.dashboardIdentity === "usage" && entry.title === "Activities"));
@@ -206,7 +196,7 @@ try {
     const row=host.querySelector('[role=tablist]').getBoundingClientRect(); const tab=host.querySelector('[role=tab][aria-selected=true]').getBoundingClientRect();
     return tab.left >= row.left-1 && tab.right <= row.right+1; })()`), true);
   await click(window, '[data-mini-app-all]');
-  await until(() => evaluate(window, 'document.querySelectorAll("[data-mini-app-popover] [data-mini-app-catalog]").length'), (count) => count === 5, "anchored app grid");
+  await until(() => evaluate(window, 'document.querySelectorAll("[data-mini-app-popover] [data-mini-app-catalog]").length'), (count) => count === 6, "anchored app grid");
   const menu = await evaluate(window, `(() => { const pop=document.querySelector('[data-mini-app-popover]');
     const trigger=document.querySelector('[data-mini-app-all]');
     return {modal:pop.getAttribute('aria-modal'),anchored:trigger.parentElement.contains(pop),
@@ -215,18 +205,18 @@ try {
   await capture(window, "launcher-grid-360-atelier-zh.png", true);
   await click(window, '[data-mini-app-remove="agent-team"]');
   await until(() => inventory(window), (apps) => apps.find((entry) => entry.id === team.id)?.status === "archived", "explicit app removal");
-  assert.equal(await evaluate(window, 'document.querySelectorAll("[data-testid=mini-apps-panel] [role=tab]").length'), 4);
+  assert.equal(await evaluate(window, 'document.querySelectorAll("[data-testid=mini-apps-panel] [role=tab]").length'), 5);
   await capture(window, "launcher-removed-360-atelier-zh.png");
-  await open(window, "?locale=zh&skin=atelier", 4);
+  await open(window, "?locale=zh&skin=atelier", 5);
   await until(() => inventory(window), (apps) => apps.find((entry) => entry.id === team.id)?.status === "archived", "removed app stays removed on reopen");
-  assert.equal(await evaluate(window, 'document.querySelectorAll("[data-testid=mini-apps-panel] [role=tab]").length'), 4);
+  assert.equal(await evaluate(window, 'document.querySelectorAll("[data-testid=mini-apps-panel] [role=tab]").length'), 5);
   await click(window, '[data-mini-app-all]');
   await click(window, '[data-mini-app-grid-item="agent-team"]');
   await until(() => inventory(window), (apps) => apps.find((entry) => entry.id === team.id && entry.status === "active" && entry.dashboard?.kind === "agent-team"), "explicit same-id re-add");
   const restored = (await inventory(window)).find((entry) => entry.id === team.id);
   assert(restored.id === team.id && restored.revision > team.revision);
   await capture(window, "launcher-restored-960-atelier-zh.png");
-  result.checks.push("Five owner-persisted defaults, one-row launcher, anchored grid, remove persistence and same-id Add");
+  result.checks.push("Six owner-persisted defaults, one-row launcher, anchored grid, remove persistence and same-id Add");
   await open(window, "?shell=1&locale=en&skin=atelier");
   await resizePanel(window, 960);
   await until(() => evaluate(window, 'document.querySelector("textarea") !== null'), Boolean, "real chat composer");

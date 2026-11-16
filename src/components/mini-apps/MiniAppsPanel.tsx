@@ -3,11 +3,10 @@ import { Loader2, RotateCw } from "lucide-react";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { randomUuid } from "@/lib/random-uuid";
-import { useShowThreads } from "@/lib/thread-preferences";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
-import { api, ApiError, openBot, useStore } from "@/state/store";
+import { api, ApiError } from "@/state/store";
 import type { DefaultMiniAppKind, MiniAppArchive, MiniAppDefaultsResult, MiniAppDocument,
-  MiniAppMutationResult, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
+  MiniAppMutationResult, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
 import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?raw";
 import { revealSelectedTab, scrollTabsWithWheel } from "../computer-panel-tabs";
 import { InfoHint } from "../InfoHint";
@@ -44,8 +43,6 @@ function changedState(left: MiniAppState | null, right: MiniAppState): boolean {
 }
 
 export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; nonce: number } } = {}) {
-  const { state: store, dispatch } = useStore();
-  const showThreads = useShowThreads();
   const owner = useOwnerOrAdmin();
   const nativeGuard = miniAppNativeFrameGuard();
   const visible = usePageVisible();
@@ -66,7 +63,6 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const [stale, setStale] = useState(false);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
-  const [rollbackVersion, setRollbackVersion] = useState<number | null>(null);
   const documentRef = useRef(document);
   const stateRef = useRef(appState);
   const selectedRef = useRef(selectedId);
@@ -80,7 +76,6 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   stateRef.current = appState;
   selectedRef.current = selectedId;
   const selected = apps?.find((app) => app.id === selectedId) ?? null;
-  const publisher = store.bots.find((bot) => selected?.publisherBotIds.includes(bot.id));
   const dashboard = document?.app.dashboard;
   const currentHead = !!document && !!appState && !!selected && document.app.status === "active" && appState.status === "active"
     && appState.appId === document.app.id && appState.revision === document.app.revision
@@ -324,19 +319,6 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     revealSelectedTab(event.currentTarget);
   };
 
-  const rollback = async (version: number) => {
-    if (!document || rollbackVersion !== null) return;
-    setRollbackVersion(version);
-    setError("");
-    try {
-      const body: MiniAppRollback = { requestKey: randomUuid(), expectedRevision: document.app.revision, templateVersion: version };
-      await api<MiniAppMutationResult>(`/api/mini-apps/${encodeURIComponent(document.app.id)}/rollback`, { method: "POST", body: JSON.stringify(body), timeoutMs: 20_000 });
-      setRefreshKey((current) => current + 1);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("computer.miniApps.rollbackFailed"));
-    } finally { setRollbackVersion(null); }
-  };
-
   const revoked = () => {
     documentRef.current = null;
     stateRef.current = null;
@@ -381,17 +363,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
           <MiniAppLibraryPopover open={libraryOpen} inventory={inventory ?? []} issues={defaultIssues} busyKind={busyKind}
             focusKind={libraryFocus} owner={owner} nativeGuard={nativeGuard}
             onToggle={() => { setLibraryFocus(null); setLibraryOpen((current) => !current); }} onClose={() => setLibraryOpen(false)}
-            onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)}>
-            {selected && document && appState && (document.versions.length > 1 || publisher && !dashboardInstalled) && <div className="mt-3 border-t border-hairline/60 pt-3 text-[12px] text-ink-secondary">
-              <p className="mb-2 font-medium text-ink">{miniAppDisplayName(selected)}</p>
-              {publisher && !dashboardInstalled && <button type="button" onClick={() => { setLibraryOpen(false); openBot(dispatch, publisher, showThreads); }} className="text-accent-text underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.openChat")}</button>}
-              {document.versions.length > 1 && <details className="mt-2"><summary className="cursor-pointer text-accent-text underline-offset-2 hover:underline">{t("computer.miniApps.history")}</summary>
-                <div className="mt-1 max-h-60 overflow-y-auto">
-                  {document.versions.map((version) => <button key={version.version} type="button" disabled={rollbackVersion !== null || version.version === document.app.templateVersion} onClick={() => void rollback(version.version)} className="block w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">{t("computer.miniApps.version", { number: version.version })} · {stamp(version.createdAt)}</button>)}
-                </div>
-              </details>}
-            </div>}
-          </MiniAppLibraryPopover>
+            onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)} />
         </div>}
       </header>
       <>

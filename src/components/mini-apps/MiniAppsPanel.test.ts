@@ -338,18 +338,32 @@ describe("Mini Apps panel", () => {
     expect(frame()?.dataset.dataRevision).toBe("8");
   });
 
-  it("keeps management actions in All apps and rolls back with the installed revision", async () => {
+  it("ends the menu after app cards for a publisher-owned multi-version app", async () => {
+    fixture.apps[0] = { ...fixture.apps[0]!, publisherBotIds: ["editor"] };
+    fixture.bots = [{ id: "editor" }];
     await render();
-    await vi.waitFor(() => expect(frame()).not.toBeNull());
-    expect(host.textContent).not.toContain("Version history");
-    expect(host.textContent).not.toContain("Open publisher chat");
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
     await act(async () => host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click());
     const menu = host.querySelector<HTMLElement>('[data-mini-app-popover]')!;
-    await act(async () => menu.querySelector("summary")!.click());
-    await act(async () => { [...menu.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.startsWith("Version 1"))!.click(); });
-    const call = fixture.api.mock.calls.find(([path]) => path === "/api/mini-apps/app_a/rollback");
-    expect(call).toBeTruthy();
-    expect(JSON.parse(call![1].body)).toMatchObject({ expectedRevision: 3, templateVersion: 1 });
+    expect(menu.children).toHaveLength(1);
+    expect(menu.firstElementChild?.hasAttribute("data-mini-app-library")).toBe(true);
+    expect(menu.textContent).toContain("Other apps");
+    expect(menu.querySelector('[data-mini-app-custom="app_a"]')).not.toBeNull();
+    expect(menu.querySelector('[data-mini-app-custom="app_b"]')).not.toBeNull();
+    expect(menu.textContent).not.toContain("Open publisher chat");
+    expect(menu.textContent).not.toContain("Version history");
+    expect(menu.querySelector("details, summary")).toBeNull();
+    await act(async () => { menu.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="app_b"]')!.click(); });
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_b"));
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click());
+    const switchedMenu = host.querySelector<HTMLElement>('[data-mini-app-popover]')!;
+    expect(switchedMenu.children).toHaveLength(1);
+    await act(async () => { switchedMenu.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="app_a"]')!.click(); });
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+    expect(fixture.apps[0]?.publisherBotIds).toEqual(["editor"]);
+    expect(fixture.apps[0]?.revision).toBe(3);
+    expect(fixture.apps[0]?.templateVersion).toBe(2);
+    expect(fixture.api.mock.calls.some(([path]) => path === "/api/mini-apps/app_a/rollback")).toBe(false);
   });
 
   it("registers six persisted defaults on opening without another install click", async () => {
