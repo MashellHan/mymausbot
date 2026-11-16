@@ -421,7 +421,7 @@ const storedAppConfigSchema = appConfigSchema.extend(helperStoredShape).extend({
   }).optional(),
 });
 const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true, customDomain: true })
-  .extend({ threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() });
+  .extend({ defaultModelSelection: defaultModelSelectionSchema.nullable().optional(), threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() });
 const jsonObjectSchema = z.record(z.string(), z.json());
 
 export interface AppConfig extends HelperConfig {
@@ -782,7 +782,7 @@ export function cacheUntilConfigChanges<T>(derive: (config: AppConfig) => T): ()
 }
 
 /** Keeps process.env in step with a saved credential ("" drops the var), because loadConfig() prefers env. */
-export function syncCredentialEnv(patch: Partial<Omit<AppConfig, "threads" | "newBots" | "imageGen">> & { imageGen?: ImageGenCredentialPatch }): void {
+export function syncCredentialEnv(patch: Omit<Partial<Omit<AppConfig, "threads" | "newBots" | "imageGen">>, "defaultModelSelection"> & { defaultModelSelection?: ModelSelection | null; imageGen?: ImageGenCredentialPatch }): void {
   const secrets: Array<[value: string | undefined, name: string]> = [
     [patch.xai?.key, "XAI_API_KEY"],
     [patch.mistral?.key, "MISTRAL_API_KEY"],
@@ -886,7 +886,8 @@ export function onConfigSaved(listener: (before: JsonObject, after: JsonObject) 
 
 /** Secrets are never echoed back; callers report configured-or-not only. */
 export function saveConfig(
-  patch: Partial<Omit<AppConfig, "threads" | "newBots" | "imageGen">> & {
+  patch: Omit<Partial<Omit<AppConfig, "threads" | "newBots" | "imageGen">>, "defaultModelSelection"> & {
+    defaultModelSelection?: ModelSelection | null;
     threads?: z.output<typeof threadsPatchSchema>;
     newBots?: z.output<typeof newBotsPatchSchema>;
     imageGen?: z.output<typeof imageGenPatchSchema>;
@@ -898,7 +899,7 @@ export function saveConfig(
   const { previousDisk, previousBytes } = readSessionConfigDisk(p);
   const previousSession = activeSessionConfig();
   let disk: JsonObject = previousSession ? withSessionSecrets(previousDisk, previousSession) : structuredClone(previousDisk);
-  const checkedPatch = appConfigSchema.partial().extend({ threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() }).parse(patch);
+  const checkedPatch = appConfigSchema.partial().extend({ defaultModelSelection: defaultModelSelectionSchema.nullable().optional(), threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() }).parse(patch);
   const before = configSaveListeners.size ? structuredClone(sessionCredentialsEnabled() ? previousDisk : disk) : disk;
   const keepImageModels = keepKeysOutOfImageModels(disk, checkedPatch.imageGen);
   const storedProfiles = storedBrowserProfilesSchema.safeParse(disk.browserProfiles);
@@ -924,12 +925,16 @@ export function saveConfig(
   if (checkedPatch.automaticRecovery !== undefined) disk.automaticRecovery = checkedPatch.automaticRecovery;
   if (checkedPatch.cacheKeepWarm !== undefined) disk.cacheKeepWarm = checkedPatch.cacheKeepWarm;
   if (checkedPatch.defaultModelSelection !== undefined) {
-    disk.defaultModelSelection = checkedPatch.defaultModelSelection;
+    if (checkedPatch.defaultModelSelection === null) delete disk.defaultModelSelection;
+    else disk.defaultModelSelection = checkedPatch.defaultModelSelection;
     if (disk.newBotDefaults) {
       const previousDefaults = newBotDefaultsSchema.parse(disk.newBotDefaults);
+      const profile = { ...previousDefaults.profile };
+      if (checkedPatch.defaultModelSelection === null) delete profile.modelSelection;
+      else profile.modelSelection = checkedPatch.defaultModelSelection;
       disk.newBotDefaults = newBotDefaultsSchema.parse({
         ...previousDefaults,
-        profile: { ...previousDefaults.profile, modelSelection: checkedPatch.defaultModelSelection },
+        profile,
       });
     }
   }

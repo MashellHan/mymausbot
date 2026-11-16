@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ApprovalCard } from "./ApprovalCard";
+import { ApprovalCard, appliedChange } from "./ApprovalCard";
 import { pendingApprovals, PendingApprovalActions, PendingApprovalPanel, spokenApprovalPrompt, type Pending } from "./PendingApproval";
 import { StoreProvider, type Bot, type Message } from "@/state/store";
 import { skillRequestBehavior } from "../../shared/skill-request";
@@ -673,6 +673,16 @@ describe("ApprovalCard for a change that applied on its own", () => {
     expect(markup).not.toContain("30 14 * * 3");
     expect(markup).not.toContain("Waiting for your confirmation");
     expect(markup).not.toContain("schedule_routine");
+  });
+
+  it("offers app-setting Undo only for safe changes and only after owner status is known", () => {
+    const request = { settingId: "rooms.turnTimeoutMinutes", label: "Room turn timeout", before: "30", after: "45", tier: "safe" as const };
+    const safe = applied({ tool: "app_settings", appSettingRequest: request });
+    expect(appliedChange(safe.card!, "Scout")?.canUndo).toBe(true);
+    expect(render(safe)).not.toContain(">Undo<");
+    const confirm = applied({ tool: "app_settings", appSettingRequest: { ...request, tier: "confirm" } });
+    expect(appliedChange(confirm.card!, "Scout")?.canUndo).toBe(false);
+    expect(render(confirm)).not.toContain(">Undo<");
   });
 
   it("never shows a cron expression that has no plain name", () => {

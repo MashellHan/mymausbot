@@ -607,6 +607,7 @@ export function createConfigRoutes(deps: ConfigRouteDeps): RouteHandler {
         }
         throw error;
       }
+      if (patch.defaultModelSelection === null) delete cfg.defaultModelSelection;
       for (const key of resetKeys) if (key) forgetKey(key);
       localVmModeChanged?.();
       postiz?.configSaved(patch);
