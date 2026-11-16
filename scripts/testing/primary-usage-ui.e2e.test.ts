@@ -38,25 +38,35 @@ const enabled = process.env.OMB_PRIMARY_USAGE_UI === "1";
     for (const [width, locale, skin] of [[360, "en", "midnight"], [960, "zh", "atelier"]] as const) {
       await page.navigate(`${url.split("?")[0]}?width=${width}&locale=${locale}&skin=${skin}&scenario=known-counts`,
         { readiness: "domcontentloaded", timeoutMs: 45_000 });
-      const explanation = () => read<string>("document.querySelector('[data-usage-metric-definition]')?.textContent ?? ''");
+      const explanation = () => read<string>("document.querySelector('[data-usage-primary-sources]')?.textContent ?? ''");
       await expect.poll(explanation, { timeout: 30_000 }).toContain(locale === "en" ? "PRs use creation time" : "PR 按创建时刻");
       expect(await explanation()).toContain(locale === "en" ? "Beijing time (UTC+8)" : "北京时间（UTC+8）");
       expect(await explanation()).toContain(locale === "en" ? "including merge commits" : "包括合并提交");
+      expect(await read<boolean>("document.querySelector('[data-usage-metric-definition]') === null")).toBe(true);
       await expect.poll(() => read<number>("document.querySelectorAll('[data-testid=local-usage-panel] section dd').length"),
         { timeout: 30_000 }).toBeGreaterThanOrEqual(3);
-      const state = await read<{ sourceSelector: boolean; overflow: number; width: number; cards: string[]; rows: string }>(`(() => {
+      const state = await read<{ sourceSelector: boolean; overflow: number; width: number; cards: string[]; rows: string;
+        update: string; updatedAt: string; headerRight: number; updateRight: number }>(`(() => {
         const panel = document.querySelector('[data-testid="local-usage-panel"]');
+        const header = panel.querySelector('header');
+        const updated = panel.querySelector('[data-usage-latest-update]');
         return { sourceSelector: Boolean(panel.querySelector('select[aria-label="Activity source"]')),
           overflow: panel.scrollWidth - panel.clientWidth, width: panel.getBoundingClientRect().width,
           cards: [...panel.querySelectorAll('section dd')].slice(0, 3).map(node => node.textContent.trim()),
-          rows: panel.querySelector('[data-usage-repositories]')?.textContent ?? '' };
+          rows: panel.querySelector('[data-usage-repositories]')?.textContent ?? '',
+          update: updated?.textContent ?? '', updatedAt: updated?.getAttribute('datetime') ?? '',
+          headerRight: header.getBoundingClientRect().right, updateRight: updated.getBoundingClientRect().right };
       })()`);
       expect(state.sourceSelector).toBe(false);
       expect(state.overflow).toBeLessThanOrEqual(1);
       expect(Math.abs(state.width - width)).toBeLessThanOrEqual(1);
       expect(state.cards[0]).toMatch(/^5/);
       expect(state.cards[1]).toMatch(/^9/);
-      expect(state.cards[0]).toContain(locale === "en" ? "DoD New" : "日环比 新增");
+      expect(state.cards[0]).toContain(locale === "en" ? "New" : "新增");
+      expect(state.update).toContain(locale === "en" ? "Latest update" : "最近更新");
+      expect(state.update).toContain("16:30");
+      expect(state.updatedAt).toBe("2026-11-03T08:30:00.000Z");
+      expect(Math.abs(state.headerRight - state.updateRight)).toBeLessThanOrEqual(1);
       expect(await read<number>("document.querySelectorAll('section dl > div > dd > [data-usage-change][data-usage-provisional]').length")).toBe(6);
       expect(state.rows).toContain("fixture/github-repo");
       expect(state.rows).toContain("fixture/ado-repo");
@@ -85,8 +95,10 @@ const enabled = process.env.OMB_PRIMARY_USAGE_UI === "1";
     }
     await page.navigate(`${url.split("?")[0]}?width=360&locale=en&skin=midnight&scenario=beijing-partial`,
       { readiness: "domcontentloaded", timeoutMs: 45_000 });
-    await expect.poll(() => read<string>("document.querySelector('[data-usage-metric-definition]')?.textContent ?? ''"),
+    await expect.poll(() => read<string>("document.querySelector('[data-usage-primary-sources]')?.textContent ?? ''"),
       { timeout: 30_000 }).toContain("Today is partial through the shown cutoff");
+    expect(await read<string>("document.querySelector('[data-usage-latest-update]')?.getAttribute('datetime') ?? ''"))
+      .toBe("2026-11-02T16:05:00.000Z");
     const boundary = await read<{ dates: string[]; counts: string[][]; changes: string[][]; trend: string; sources: string; overflow: number }>(`(() => {
       const panel = document.querySelector('[data-testid="local-usage-panel"]');
       const cards = [...panel.querySelectorAll('section')].slice(0, 3);
@@ -99,7 +111,7 @@ const enabled = process.env.OMB_PRIMARY_USAGE_UI === "1";
     })()`);
     expect(boundary.dates.every(date => date.includes("2026-11-03"))).toBe(true);
     expect(boundary.counts).toEqual([["3", "5"], ["3", "5"], ["3", "5"]]);
-    expect(boundary.changes).toEqual([["true:DoD New", "true:DoD New"], ["true:WoW New", "true:WoW New"], ["true:30d New", "true:30d New"]]);
+    expect(boundary.changes).toEqual([["true:New", "true:New"], ["true:New", "true:New"], ["true:New", "true:New"]]);
     expect(boundary.trend).toContain("Known subtotal");
     expect(boundary.sources).toContain("60d");
     expect(boundary.overflow).toBeLessThanOrEqual(1);

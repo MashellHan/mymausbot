@@ -4023,6 +4023,7 @@
   "computer.usage.githubDateBasis": "PR references exclude currently forked repositories and use creation dates in China time. Commit references keep GitHub Profile dates; exact China-day counts are unknown and day buckets may include activity after the requested cutoff. Private or restricted activity may be missing. Earlier definitions are not compared.",
   "computer.usage.githubPrHint": "Visible PR creations in currently non-fork GitHub repositories, dated by createdAt in China time. This reference subset cannot certify repository state at creation or hidden activity; merge dates do not determine the count.",
   "computer.usage.heading": "My activity",
+  "computer.usage.latestUpdate": "Latest update: {time} Beijing time",
   "computer.usage.loading": "Loading activity summary…",
   "computer.usage.mergedActivity": "Remote PR records",
   "computer.usage.mergedCommitHint": "Original non-merge commits in your remotely merged PRs, counted on the PR merge date. A five-commit squash counts as five. Direct pushes and unmerged PRs are excluded.",
