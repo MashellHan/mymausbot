@@ -134,6 +134,62 @@ it("the first default-model change undoes to the omitted fallback without replac
   expect((await api("GET", "/api/config")).defaultModelSelection).toBeUndefined();
 }, 60_000);
 
+it("a browser proxy changes only after the owner's Change, with its address absent from cards, replies and decisions", async () => {
+  const proxy = "socks5://proxy.example:1080";
+  const replacement = "socks5://replacement.example:1080";
+  const waitingCard = async (before: string, after: string) => {
+    let waiting: any;
+    await expect.poll(async () => (waiting = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "desktops.browserProxy" && !one.card.answered)) !== undefined, { timeout: 20_000 }).toBe(true);
+    const card = waiting.card;
+    expect(card).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { before, after, tier: "confirm" } });
+    expect(card.autoApplied).toBeUndefined();
+    expect(JSON.stringify(card)).not.toContain(".example");
+    return card;
+  };
+  expect(config().browserEngine?.egress?.proxy ?? "").toBe("");
+  await start("PROXY-CANCEL", [step({ action: "set", id: "desktops.browserProxy", value: proxy }, true)], 60_000);
+  const denied = await waitingCard("", "set");
+  expect(config().browserEngine?.egress?.proxy ?? "").toBe("");
+  expect((await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: denied.requestId, behavior: "allow" }, 403)).error).toMatch(/^Approve settings changes from the desktop app/);
+  expect(config().browserEngine?.egress?.proxy ?? "").toBe("");
+  expect(await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: denied.requestId, behavior: "deny" })).toMatchObject({ outcome: "rejected" });
+  expect(results(await finished("PROXY-CANCEL"))[0]?.text).toMatch(/^The user cancelled the change to Browser proxy\./);
+  expect(config().browserEngine?.egress?.proxy ?? "").toBe("");
+
+  await start("PROXY-ENABLE", [step({ action: "set", id: "desktops.browserProxy", value: proxy })], 60_000);
+  const enabled = await waitingCard("", "set");
+  expect(config().browserEngine?.egress?.proxy ?? "").toBe("");
+  expect(await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: enabled.requestId, behavior: "allow" }, 200, ownerDevice)).toMatchObject({ outcome: "allowed-once" });
+  const [applied] = results(await finished("PROXY-ENABLE"));
+  expect(applied).toMatchObject({ isError: false, text: "Changed Browser proxy from not set to set." });
+  expect(config().browserEngine.egress.proxy).toBe(proxy);
+  expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: enabled.requestId }, 409, ownerDevice)).error).toContain("can't be undone");
+
+  await start("PROXY-REPLACE-CANCEL", [step({ action: "set", id: "desktops.browserProxy", value: replacement }, true)], 60_000);
+  const replaceDenied = await waitingCard("set", "set");
+  expect(config().browserEngine.egress.proxy).toBe(proxy);
+  await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: replaceDenied.requestId, behavior: "deny" });
+  expect(results(await finished("PROXY-REPLACE-CANCEL"))[0]?.isError).toBe(true);
+  expect(config().browserEngine.egress.proxy).toBe(proxy);
+
+  await start("PROXY-REPLACE", [step({ action: "set", id: "desktops.browserProxy", value: replacement })], 60_000);
+  const replaced = await waitingCard("set", "set");
+  expect(config().browserEngine.egress.proxy).toBe(proxy);
+  await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: replaced.requestId, behavior: "allow" }, 200, ownerDevice);
+  expect(results(await finished("PROXY-REPLACE"))[0]?.text).toBe("Changed Browser proxy from set to set.");
+  expect(config().browserEngine.egress.proxy).toBe(replacement);
+
+  await start("PROXY-CLEAR", [step({ action: "set", id: "desktops.browserProxy", value: "" })], 60_000);
+  const cleared = await waitingCard("set", "");
+  expect(config().browserEngine.egress.proxy).toBe(replacement);
+  await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: cleared.requestId, behavior: "allow" }, 200, ownerDevice);
+  expect(results(await finished("PROXY-CLEAR"))[0]?.text).toBe("Changed Browser proxy from set to not set.");
+  expect(config().browserEngine.egress.proxy).toBe("");
+  const decisions = (await api("GET", "/api/decisions")).decisions.filter((row: any) => row.tool === "app_settings" && row.summary.startsWith("desktops.browserProxy"));
+  expect(decisions.map((row: any) => row.decision).sort()).toEqual(["card-shown", "card-shown", "card-shown", "card-shown", "card-shown", "user-approved", "user-approved", "user-approved", "user-denied", "user-denied"]);
+  expect(JSON.stringify({ reply: applied.text, cards: await settingCards(bot.threadId), decisions })).not.toContain(".example");
+}, 120_000);
+
 it("a Full-access owner turn changing a provider address waits on a Change/Cancel card: Cancel changes nothing, Change from the owner's device applies it", async () => {
   const waitingCard = async () => {
     let waiting: any;

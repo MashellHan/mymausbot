@@ -236,6 +236,73 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("keeps a proposed proxy private until the owner approves, and leaves Cancel and unauthorized answers unchanged", async () => {
+    const { host, set, cfg, cards, turn, saved, answer, dataDir, notified } = fixture();
+    const proxy = "socks5://proxy.example:1080";
+    for (const invalid of ["http://proxy.example:8080", "socks5://user:pass@proxy.example:1080"]) {
+      const refused = await set("desktops.browserProxy", invalid);
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused)).not.toContain("proxy.example");
+    }
+    const cancelled = set("desktops.browserProxy", proxy);
+    await vi.waitFor(() => expect(cards()).toHaveLength(1));
+    const first = cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { before: "", after: "set", tier: "confirm" } });
+    expect(saved).toEqual([]);
+    expect(answer(String(first.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(saved).toEqual([]);
+    expect(answer(String(first.requestId), "deny").sent).toMatchObject({ status: 200, body: { outcome: "rejected" } });
+    expect((await cancelled).body.error).toContain("cancelled");
+    expect(cfg.browserEngine?.egress?.proxy).toBeUndefined();
+
+    const pending = set("desktops.browserProxy", proxy);
+    await vi.waitFor(() => expect(cards()).toHaveLength(2));
+    const second = cards()[1]!.card;
+    expect(saved).toEqual([]);
+    expect(answer(String(second.requestId), "allow").sent).toMatchObject({ status: 200, body: { outcome: "allowed-once" } });
+    const applied = await pending;
+    expect(applied).toMatchObject({ status: 200, body: { text: "Changed Browser proxy from not set to set." } });
+    expect(saved).toEqual([{ browserEngine: { egress: { proxy } } }]);
+    expect(await host.undo({ threadId: turn.threadId, requestId: String(second.requestId) })).toMatchObject({ state: "invalid", error: "This change can't be undone here." });
+    const read = await host.handle({ action: "get", id: "desktops.browserProxy" }, turn);
+    const found = await host.handle({ action: "find", query: "browser proxy" }, turn);
+    expect(JSON.parse(String(read.body.text))).toMatchObject({ value: "set", tier: "confirm" });
+    await flushDecisionLog(dataDir);
+    expect(JSON.stringify({ first, second, notified, reply: applied.body, read: read.body, found: found.body, decisions: readDecisions(dataDir, 10) })).not.toContain("proxy.example");
+  });
+
+  it("waits for owner approval before replacing or clearing an existing proxy", async () => {
+    const { set, cfg, cards, answer, saved } = fixture();
+    const old = "socks5://old.example:1080";
+    const next = "socks5://new.example:1080";
+    cfg.browserEngine = { egress: { proxy: old } };
+    const denied = set("desktops.browserProxy", next);
+    await vi.waitFor(() => expect(cards()).toHaveLength(1));
+    expect(cards()[0]!.card.appSettingRequest).toMatchObject({ before: "set", after: "set", tier: "confirm" });
+    expect(cfg.browserEngine.egress?.proxy).toBe(old);
+    answer(String(cards()[0]!.card.requestId), "deny");
+    expect((await denied).status).toBe(409);
+    expect(cfg.browserEngine.egress?.proxy).toBe(old);
+    expect(saved).toEqual([]);
+
+    const replaced = set("desktops.browserProxy", next);
+    await vi.waitFor(() => expect(cards()).toHaveLength(2));
+    expect(cfg.browserEngine.egress?.proxy).toBe(old);
+    answer(String(cards()[1]!.card.requestId), "allow");
+    expect((await replaced).status).toBe(200);
+    expect(cfg.browserEngine.egress?.proxy).toBe(next);
+
+    const cleared = set("desktops.browserProxy", "");
+    await vi.waitFor(() => expect(cards()).toHaveLength(3));
+    expect(cards()[2]!.card.appSettingRequest).toMatchObject({ before: "set", after: "", tier: "confirm" });
+    expect(cfg.browserEngine.egress?.proxy).toBe(next);
+    answer(String(cards()[2]!.card.requestId), "allow");
+    expect((await cleared).body.text).toBe("Changed Browser proxy from set to not set.");
+    expect(cfg.browserEngine.egress?.proxy).toBe("");
+    expect(saved).toEqual([{ browserEngine: { egress: { proxy: next } } }, { browserEngine: { egress: { proxy: "" } } }]);
+    expect(JSON.stringify(cards())).not.toContain(".example");
+  });
+
   it("sends only the selected provider field when effective config has external credentials", async () => {
     const { cfg, entries, saved } = fixture();
     for (const section of ["anthropic", "xai", "groq", "meta", "openaiCompat", "tts"] as const) {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { credentialIsConfigured, CREDENTIAL_TARGETS, PROVIDER_CREDENTIAL_TARGETS, type CredentialConfig, type CredentialTargetId } from "../../shared/credential-request.ts";
 import { WINDOW_PREFS, type WindowPrefId } from "../../shared/app-settings.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "../bot-thread-limits.ts";
+import { parseSocks5Proxy } from "../browser/egress/policy.ts";
 import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, roomTurnTimeoutMinutes, type AppConfig } from "../config.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { callRoute, type RouteReply } from "../routes/call-route.ts";
@@ -28,6 +29,7 @@ interface Writable {
   value: z.ZodType;
   allowed: string;
   current(): unknown;
+  preview?(value: unknown): string;
   write(value: unknown): Promise<string | null>;
 }
 interface Secret {
@@ -115,6 +117,15 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
       synonyms: ["default model", "new bots", "model", "engine"], tier: "safe", value: z.object({ instanceId: z.string().min(1).max(80), model: z.string().min(1).max(200) }), allowed: "{ instanceId, model } from list_models",
       current: () => cfg().defaultModelSelection, read: () => { const selection = cfg().defaultModelSelection; return selection ? `${selection.instanceId} / ${selection.model}` : ""; },
       write: config((defaultModelSelection: { instanceId: string; model: string } | undefined) => ({ defaultModelSelection: defaultModelSelection ?? null })),
+    }),
+    writable({
+      id: "desktops.browserProxy", label: "Browser proxy", help: "An unauthenticated SOCKS5 proxy for public websites in the built-in browser. The address stays hidden; empty sends requests directly.", where: "Settings → Desktops & browser",
+      synonyms: ["proxy", "socks", "socks5", "browser proxy"], tier: "confirm",
+      value: z.string().trim().max(512).refine((text) => text === "" || parseSocks5Proxy(text) !== null, "an unauthenticated socks5://host:port address, or empty"),
+      allowed: 'an unauthenticated "socks5://host:port", or "" for no proxy',
+      current: () => cfg().browserEngine?.egress?.proxy ?? "", read: () => (cfg().browserEngine?.egress?.proxy ? "set" : ""),
+      preview: (value: unknown) => value ? "set" : "",
+      write: config((proxy: string) => ({ browserEngine: { egress: { proxy } } })),
     }),
   ];
 
