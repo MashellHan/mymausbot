@@ -256,8 +256,13 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
           <p>{t(snapshot?.contributions?.windows ? "computer.usage.primaryDateBasis" : "computer.usage.primaryMissingDateBasis")}</p>
           {view.asOf != null && <p><time dateTime={new Date(view.asOf).toISOString()}>{t("computer.usage.primarySourceCutoff", { time: asOfTime(view.asOf) })}</time></p>}
         </InfoHint>}
+        {view?.asOf != null ? <time data-usage-latest-update dateTime={new Date(view.asOf).toISOString()}
+          className="ml-auto min-w-0 text-right text-[13px] tabular-nums text-ink-secondary [overflow-wrap:anywhere]">
+          {t("computer.usage.latestUpdate", { time: asOfTime(view.asOf) })}
+        </time> : <span data-usage-latest-update className="ml-auto min-w-0 text-right text-[13px] text-ink-secondary">
+          {t("computer.usage.latestUpdate", { time: "—" })}
+        </span>}
       </header>
-      <p data-usage-metric-definition className="mb-3 text-[13px] text-ink-secondary">{t(snapshot?.contributions?.windows ? "computer.usage.primaryDateBasis" : "computer.usage.primaryMissingDateBasis")}</p>
       {snapshot === null ? <p role="status" className="text-[14px] text-ink-secondary">{t("computer.usage.loading")}</p> : null}
       {view?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
       {windows && <>
