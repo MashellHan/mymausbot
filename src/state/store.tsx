@@ -48,7 +48,7 @@ import type { Routine, RoutineInput, RoutineRun, RoutineRunStatusFilter } from "
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { duplicateBotProfile, restrictedCopyRequest } from "@/lib/bot-duplicate";
 import { markShownBotRead, markShownGroupRead } from "./shown-read";
-import { applyWindowPref } from "@/lib/window-prefs";
+import { applyWindowPref, reportWindowPrefs } from "@/lib/window-prefs";
 import { placeUnreadDivider, threadOpensUnread, threadReadCursor, unreadDividerFor, type UnreadDivider } from "@/lib/unread-divider";
 import type { ComputerStart } from "@/lib/computer-start";
 import { parseComputerHelp } from "@/lib/computer-control";
@@ -3224,7 +3224,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     };
     const stopLive = openLiveEvents({
-      onOpen: () => rawDispatch({ type: "connected", value: true }),
+      onOpen: () => { rawDispatch({ type: "connected", value: true }); reportWindowPrefs(); },
       onError: () => rawDispatch({ type: "connected", value: false }),
       onSnapshotRequired: () => {
         store.flushFrames(); // the old stream's waiting frames go first, so forgetLiveTurns() below has the last word

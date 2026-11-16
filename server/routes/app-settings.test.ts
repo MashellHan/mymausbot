@@ -11,6 +11,7 @@ describe("window preferences on the server", () => {
   it("keeps what an owner's window reports, drops what the schema refuses, and pushes a change as a frame", async () => {
     const frames: Record<string, unknown>[] = [];
     const prefs = createWindowPrefs({ broadcast: (frame) => frames.push(frame), ownerOrAdmin: (auth) => auth.scopes.includes("admin"), windowOpen: () => true });
+    expect(prefs.write("appearance.skin", "midnight")).toContain("Open mymausbot");
     expect(await callRoute(prefs.routes, { method: "PUT", path: "/api/window-prefs", body: { values: { "appearance.skin": "daylight" } }, auth: phone })).toMatchObject({ status: 403 });
     expect(await callRoute(prefs.routes, { method: "PUT", path: "/api/window-prefs", body: { values: { "appearance.skin": "daylight", "appearance.font": "comic", "nope": 1 } }, auth: owner })).toMatchObject({ status: 200 });
     expect(prefs.read("appearance.skin")).toBe("daylight");
@@ -27,7 +28,7 @@ describe("window preferences on the server", () => {
     await callRoute(prefs.routes, { method: "PUT", path: "/api/window-prefs", body: { values: { "appearance.skin": "daylight" } }, auth: owner });
     expect(prefs.write("appearance.skin", "midnight")).toBeNull();
     open = false;
-    expect(prefs.write("appearance.skin", "dusk")).toBe("Open MausBot on this computer first; this setting lives in the app window.");
+    expect(prefs.write("appearance.skin", "dusk")).toBe("Open mymausbot on this computer first; this setting lives in the app window.");
     expect(prefs.read("appearance.skin")).toBe("midnight");
     open = true;
     expect(prefs.write("appearance.skin", "dusk")).toBeNull();

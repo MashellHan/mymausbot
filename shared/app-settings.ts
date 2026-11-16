@@ -12,6 +12,7 @@ export interface AppSettingRequest {
   after: string;
   tier: SettingTier;
 }
+export interface AppSettingCardField { appSettingRequest?: AppSettingRequest }
 
 export const SKIN_IDS = [
   "midnight",
@@ -36,7 +37,7 @@ export const SEND_KEYS = ["enter", "shift-enter", "mod-enter"] as const;
 /** Preferences kept in the window, by setting id; the renderer applies a frame with the matching setter. */
 export const WINDOW_PREFS = {
   "appearance.skin": z.enum([...SKIN_IDS, "system"]),
-  "appearance.advanced": z.boolean(),
+  "appearance.mode": z.enum(["raw", "simple", "advanced"]),
   "appearance.font": z.enum(FONT_IDS),
   "appearance.chatWidth": z.enum(CHAT_WIDTH_IDS),
   "general.sendKey": z.enum(SEND_KEYS),

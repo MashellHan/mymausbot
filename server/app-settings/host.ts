@@ -43,7 +43,7 @@ export interface Turn {
   generation: string;
 }
 
-type Outcome = { kind: "applied"; text: string } | { kind: "failed"; error: string } | { kind: "denied" } | { kind: "timeout" } | { kind: "stopped" };
+type Outcome = { kind: "applied"; text: string; after: string } | { kind: "failed"; error: string } | { kind: "denied" } | { kind: "timeout" } | { kind: "stopped" };
 interface Held {
   botId: string;
   threadId: string;
@@ -54,6 +54,7 @@ interface Held {
   settle(outcome: Outcome): void;
   timer: ReturnType<typeof setTimeout>;
   answered?: true;
+  applying?: true;
 }
 /** `before`: the typed value read before the write; `after`: what it read as once applied, so Undo can tell it changed since. */
 interface Undoable {
@@ -118,14 +119,15 @@ export function createAppSettings(deps: AppSettingsDeps) {
   async function apply(entry: WritableEntry, value: unknown, before: string): Promise<Outcome> {
     const refusal = await entry.write(value);
     if (refusal) return { kind: "failed", error: refusal };
-    return { kind: "applied", text: `Changed ${entry.label} from ${text(before)} to ${text(entry.read())}.` };
+    const after = entry.read();
+    return { kind: "applied", text: `Changed ${entry.label} from ${text(before)} to ${text(after)}.`, after };
   }
 
   async function setSafe(turn: Turn, bot: BotRecord, entry: WritableEntry, value: unknown, before: string) {
     const earlier = entry.current();
     const outcome = await apply(entry, value, before);
     if (outcome.kind !== "applied") return refuse(409, outcome.kind === "failed" ? outcome.error : "The change was not applied.");
-    const after = entry.read();
+    const after = outcome.after;
     const requestId = randomUUID();
     card(bot, turn.threadId, entry, before, after, requestId, [], { answered: "allow", dismissed: true, autoApplied: true });
     undoable.set(requestId, { entry, before: earlier, after });
@@ -142,7 +144,8 @@ export function createAppSettings(deps: AppSettingsDeps) {
     const answer = new Promise<Outcome>((resolve) => { settle = resolve; });
     const timer = setTimeout(() => settleHold(requestId, { kind: "timeout" }), holdMs);
     timer.unref?.();
-    ended?.addEventListener("abort", () => settleHold(requestId, { kind: "stopped" }), { once: true });
+    const onAbort = () => settleHold(requestId, { kind: "stopped" });
+    ended?.addEventListener("abort", onAbort, { once: true });
     held.set(requestId, { botId: bot.id, threadId: turn.threadId, entry, value, before, earlier: entry.current(), settle, timer });
     openByBot.set(bot.id, requestId);
     const message = card(bot, turn.threadId, entry, before, after, requestId, ["Change", "Cancel"], {});
@@ -150,6 +153,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
     waiting(bot, turn.threadId, true);
     deps.notify(buildNotification("approval", bot, turn.threadId, message.card!.subtitle, { avatarUrl: bot.avatarUrl }));
     const outcome = await answer;
+    ended?.removeEventListener("abort", onAbort);
     held.delete(requestId);
     if (openByBot.get(bot.id) === requestId) openByBot.delete(bot.id);
     waiting(bot, turn.threadId, false);
@@ -175,7 +179,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
 
   function settleHold(requestId: string, outcome: Outcome) {
     const entry = held.get(requestId);
-    if (!entry || entry.answered) return;
+    if (!entry || entry.answered || (entry.applying && (outcome.kind === "timeout" || outcome.kind === "stopped"))) return;
     entry.answered = true;
     clearTimeout(entry.timer);
     entry.settle(outcome);
@@ -187,7 +191,6 @@ export function createAppSettings(deps: AppSettingsDeps) {
     const bot = store.bot(turn.botId);
     if (!bot) return refuse(404, "This bot no longer exists.");
     if (entry.tier === "owner-only") return refuse(403, `${entry.label} is changed only by the owner, in ${entry.where}. Tell the user where to find it; do not try another way.`);
-    if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings change only in the owner's own conversation. This turn was not started by the owner here, so nothing changed; you may still read settings.");
     if (entry.tier === "secret") {
       if (body.value !== undefined) return refuse(400, `Never send a key or token as a value. Call set on ${entry.id} with no value: a secure card asks the user for it, and you never see it.`);
       const budget = spendWrite(turn);
@@ -195,7 +198,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
       const posted = await deps.requestCredential(bot, turn.threadId, { credentialId: entry.credentialId, reason: typeof body.reason === "string" ? body.reason : undefined });
       if (!posted.body.error && posted.body.alreadyConfigured === true) return reply(200, { text: `${entry.label} is already set. To replace it, the user changes it in ${entry.where}.` });
       if (posted.status >= 300) return refuse(posted.status, String(posted.body.error ?? "The secure card could not be shown."));
-      return reply(200, { text: `A secure card for ${entry.label} is ready in MausBot. End this turn now and say in one line that you are waiting for it; MausBot resumes you when the user saves it or declines. You never see the key.` });
+      return reply(200, { text: `A secure card for ${entry.label} is ready in mymausbot. End this turn now and say in one line that you are waiting for it; mymausbot resumes you when the user saves it or declines. You never see the key.` });
     }
     const parsed = parseValue(entry, body.value);
     if (!parsed.success) return refuse(400, `${entry.label} takes ${entry.allowed}. ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
@@ -208,6 +211,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
   return {
     /** `ended` aborts once the turn is stopped or revoked, or its call is gone: a waiting card then closes at once. */
     async handle(body: Record<string, unknown>, turn: Turn, ended?: AbortSignal): Promise<{ status: number; body: Record<string, unknown> }> {
+      if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings are available only in the owner's own conversation.");
       if (body.action === "find") {
         const query = typeof body.query === "string" ? body.query : "";
         const hits = findSettings(entries, query, FIND_LIMIT).map(describe);
@@ -238,7 +242,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
         json(res, 200, { ok: true, outcome: "unavailable" });
         return true;
       }
-      if (hold.answered) {
+      if (hold.answered || hold.applying) {
         json(res, 200, { ok: true, outcome: "rejected", alreadySettled: true });
         return true;
       }
@@ -251,10 +255,12 @@ export function createAppSettings(deps: AppSettingsDeps) {
         json(res, 200, { ok: true, outcome: "rejected" });
         return true;
       }
+      hold.applying = true;
+      clearTimeout(hold.timer);
       void apply(hold.entry, hold.value, hold.before).then((outcome) => {
-        if (outcome.kind === "applied") undoable.set(args.requestId, { entry: hold.entry, before: hold.earlier, after: hold.entry.read() });
+        if (outcome.kind === "applied") undoable.set(args.requestId, { entry: hold.entry, before: hold.earlier, after: outcome.after });
         settleHold(args.requestId, outcome);
-      });
+      }, () => settleHold(args.requestId, { kind: "failed", error: "The setting change failed." }));
       json(res, 200, { ok: true, outcome: "allowed-once" });
       return true;
     },

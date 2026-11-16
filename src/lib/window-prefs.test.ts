@@ -14,6 +14,17 @@ afterEach(() => {
 });
 
 describe("window preferences", () => {
+  it("keeps Raw, Simple and Advanced distinct when a bot changes the window mode", () => {
+    applyWindowPref({ kind: "window-pref", id: "appearance.mode", value: "raw" });
+    expect(windowPrefValues()["appearance.mode"]).toBe("raw");
+    applyWindowPref({ kind: "window-pref", id: "appearance.mode", value: "advanced" });
+    expect(windowPrefValues()["appearance.mode"]).toBe("advanced");
+    applyWindowPref({ kind: "window-pref", id: "appearance.mode", value: false });
+    expect(windowPrefValues()["appearance.mode"]).toBe("advanced");
+    applyWindowPref({ kind: "window-pref", id: "appearance.mode", value: "simple" });
+    expect(windowPrefValues()["appearance.mode"]).toBe("simple");
+  });
+
   it("applies a frame with the preference's setter and ignores a value the schema refuses", () => {
     applyWindowPref({ kind: "window-pref", id: "general.sendKey", value: "mod-enter" });
     expect(values.get("omb-send-key")).toBe("mod-enter");

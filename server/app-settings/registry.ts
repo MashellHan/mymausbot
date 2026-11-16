@@ -47,8 +47,6 @@ export interface RegistryDeps {
   bots(): BotRecord[];
   sections(): string[];
   reorderBots(botIds: string[]): Promise<string | null>;
-  /** Moves bots into a sidebar group, making it when new; an empty name ungroups them. */
-  groupBots(name: string, botIds: string[]): Promise<string | null>;
   credentials(): CredentialConfig;
   window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
 }
@@ -76,7 +74,7 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
 
   const safe: SettingEntry[] = [
     windowPref("appearance.skin", "Skin", "The window's look; \"system\" follows the computer's light or dark mode.", "Settings → Appearance", ["theme", "dark mode", "light mode", "colors", "look"], enumOf(WINDOW_PREFS["appearance.skin"].options)),
-    windowPref("appearance.advanced", "Advanced mode", "Advanced shows every setting and tool; Simple keeps the everyday ones.", "Settings → Appearance", ["simple mode", "advanced mode", "interface mode"], "true or false"),
+    windowPref("appearance.mode", "Interface mode", "Raw is the first-use layout; Simple shows everyday controls; Advanced shows every setting and tool.", "Settings → Appearance", ["raw mode", "simple mode", "advanced mode", "interface mode"], enumOf(WINDOW_PREFS["appearance.mode"].options)),
     windowPref("appearance.font", "Font", "The app's typeface.", "Settings → Appearance", ["typeface", "typography"], enumOf(WINDOW_PREFS["appearance.font"].options)),
     windowPref("appearance.chatWidth", "Chat width", "How wide the chat column is.", "Settings → Appearance", ["layout", "column", "wide"], enumOf(WINDOW_PREFS["appearance.chatWidth"].options)),
     windowPref("general.sendKey", "Send key", "Which key sends a message in the composer.", "Settings → General", ["enter", "typing", "keyboard", "shortcut"], enumOf(WINDOW_PREFS["general.sendKey"].options)),
@@ -90,26 +88,6 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
       id: "bots.order", label: "Bot order", help: "The order bots are listed in the sidebar and on phones. Send bot ids from list_bots; bots you leave out keep their places.", where: "the sidebar",
       synonyms: ["reorder", "sidebar order", "sort bots", "move bot", "arrange"], tier: "safe", value: z.array(z.string().regex(/^[\w-]+$/)).min(1).max(100), allowed: "an array of bot ids in the wanted order",
       current: () => deps.bots().map((bot) => bot.id), read: () => names(deps.bots().map((bot) => bot.id)), write: (botIds: string[]) => deps.reorderBots(botIds),
-    }),
-    writable({
-      id: "bots.groups", label: "Sidebar groups", help: "Which bots sit in which sidebar group (department). Send an object of group name to bot ids; a bot in no listed group is ungrouped.", where: "the sidebar",
-      synonyms: ["group", "groups", "department", "departments", "section", "sections", "team", "folder"], tier: "safe",
-      value: z.record(z.string().trim().min(1).max(60), z.array(z.string().regex(/^[\w-]+$/)).max(100)), allowed: "an object: group name → array of bot ids",
-      current: groups,
-      read: () => {
-        const grouped = Object.entries(groups()).map(([section, ids]) => `${section}: ${names(ids) || "(empty)"}`);
-        const loose = deps.bots().filter((bot) => !bot.section).map((bot) => bot.id);
-        return [...grouped, ...(loose.length ? [`ungrouped: ${names(loose)}`] : [])].join("; ");
-      },
-      write: async (wanted: Record<string, string[]>) => {
-        const listed = new Set(Object.values(wanted).flat());
-        const loosen = deps.bots().filter((bot) => bot.section && !listed.has(bot.id)).map((bot) => bot.id);
-        for (const [name, botIds] of Object.entries(wanted)) {
-          const refusal = await deps.groupBots(name, botIds);
-          if (refusal) return refusal;
-        }
-        return loosen.length ? deps.groupBots("", loosen) : null;
-      },
     }),
     writable({
       id: "threads.maxConcurrentPerBot", label: "Threads per bot", help: "How many conversations one bot may work on at once.", where: "Settings → You and your bots",
@@ -141,7 +119,7 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   ];
 
   const provider = (id: string, label: string, synonyms: string[], current: () => string | undefined, patch: (text: string) => Record<string, unknown>): SettingEntry => writable({
-    id, label, help: `${label}: the address MausBot sends requests to. Empty uses the provider's own.`, where: "Settings → AI", synonyms: [...synonyms, "url", "base url", "endpoint", "address", "proxy"],
+    id, label, help: `${label}: the address mymausbot sends requests to. Empty uses the provider's own.`, where: "Settings → AI", synonyms: [...synonyms, "url", "base url", "endpoint", "address", "proxy"],
     tier: "confirm", value: url, allowed: "an http(s) address, or empty to clear", current: () => current() ?? "", write: config(patch),
   });
   const confirm: SettingEntry[] = [
@@ -169,11 +147,17 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
 
   const ownerOnly = (id: string, label: string, help: string, where: Where, synonyms: string[], read: () => string): SettingEntry => ({ id, label, help, where, synonyms, tier: "owner-only", read });
   const owner: SettingEntry[] = [
+    ownerOnly("bots.groups", "Sidebar groups", "Departments determine bot team context and access. Move bots in the sidebar.", "the sidebar",
+      ["group", "groups", "department", "departments", "section", "sections", "team", "folder"], () => {
+        const grouped = Object.entries(groups()).map(([section, ids]) => `${section}: ${names(ids) || "(empty)"}`);
+        const loose = deps.bots().filter((bot) => !bot.section).map((bot) => bot.id);
+        return [...grouped, ...(loose.length ? [`ungrouped: ${names(loose)}`] : [])].join("; ");
+      }),
     ownerOnly("bots.approvalModes", "Approval modes", "What each bot may do without asking (Ask, Approve for me, Full access).", "a bot's Settings", ["permissions", "full access", "approve", "ask", "approval", "autonomy"],
       () => deps.bots().map((bot) => `${bot.name}: ${bot.approvalMode}`).join("; ")),
     ownerOnly("remote.access", "Remote access", "How phones and other devices reach this computer (local network, tunnel, Tailscale or a public address).", "Settings → Phone & devices", ["remote", "tunnel", "tailscale", "public url", "phone", "pair", "relay"],
       () => display(cfg().cliStartup?.access ?? "local")),
-    ownerOnly("cloud.account", "MausBot Cloud account", "The account this app is signed in with, and its plan.", "Settings → Your account", ["account", "sign in", "sign out", "plan", "billing", "subscription"], () => "managed in Settings"),
+    ownerOnly("cloud.account", "My Cloud account", "The account this app is signed in with, and its plan.", "Settings → Your account", ["account", "sign in", "sign out", "plan", "billing", "subscription"], () => "managed in Settings"),
     ownerOnly("vault.logins", "Vault and logins", "Saved website logins and secrets bots may use.", "Settings → Vault", ["vault", "password", "passwords", "login", "logins", "1password"], () => "managed in Settings"),
     ownerOnly("data.backups", "Backups", "Backing up and restoring this app's data.", "Settings → Data", ["backup", "backups", "restore", "export", "import"], () => "managed in Settings"),
     ownerOnly("computer.sharing", "Computer sharing", "Lending this computer to other places and people.", "Settings → Desktops & browser", ["share computer", "lend", "lending", "shared computers", "desktop"], () => "managed in Settings"),
@@ -201,7 +185,7 @@ export function findSettings(entries: readonly SettingEntry[], query: string, li
 export function routeBackedRegistry(deps: {
   cfg(): AppConfig;
   store: Pick<Store, "bots" | "sections">;
-  routes: { config: RouteHandler; botOrder: RouteHandler; sections: RouteHandler };
+  routes: { config: RouteHandler; botOrder: RouteHandler };
   credentials(): CredentialConfig;
   window: RegistryDeps["window"];
 }): SettingEntry[] {
@@ -211,6 +195,5 @@ export function routeBackedRegistry(deps: {
     cfg: deps.cfg, bots: () => deps.store.bots, sections: () => deps.store.sections, credentials: deps.credentials, window: deps.window,
     saveConfig: (patch) => refusal(callRoute(deps.routes.config, { method: "PUT", path: "/api/config", body: patch, auth })),
     reorderBots: (botIds) => refusal(callRoute(deps.routes.botOrder, { method: "PUT", path: "/api/bots/order", body: { botIds }, auth })),
-    groupBots: (name, botIds) => refusal(callRoute(deps.routes.sections, { method: "POST", path: "/api/sidebar-sections", body: { name, botIds }, auth })),
   });
 }

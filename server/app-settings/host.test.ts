@@ -59,11 +59,10 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     bots: () => bots,
     sections: () => ["Sales"],
     reorderBots: async (botIds) => { bots.sort((a, b) => botIds.indexOf(a.id) - botIds.indexOf(b.id)); return null; },
-    groupBots: async (name, botIds) => { for (const bot of bots) if (botIds.includes(bot.id)) (bot as { section?: string }).section = name || undefined; return null; },
     credentials: () => cfg,
     window: {
       read: (id) => windowValues.get(id),
-      write: (id, value) => { if (!windowValues.size) return "Open MausBot on this computer first."; windowValues.set(id, value); return null; },
+      write: (id, value) => { if (!windowValues.size) return "Open mymausbot on this computer first."; windowValues.set(id, value); return null; },
     },
   });
   const notified: unknown[] = [];
@@ -86,7 +85,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir };
+  return { host, cfg, saved, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -99,9 +98,10 @@ describe("reads", () => {
     expect(JSON.parse(String(got.body.text))).toMatchObject({ id: "rooms.turnTimeoutMinutes", value: "30", allowed: "1 to 1440 minutes", change: "set applies at once, with Undo on the card" });
   });
 
-  it("works in a turn that is not the owner's, where writes are refused", async () => {
+  it("keeps settings details and writes out of a turn that is not the owner's", async () => {
     const { host, turn, set, saved } = fixture({ owner: false });
-    expect((await host.handle({ action: "get", id: "general.language" }, turn)).status).toBe(200);
+    expect((await host.handle({ action: "get", id: "bots.approvalModes" }, turn)).status).toBe(403);
+    expect((await host.handle({ action: "find", query: "anthropic" }, turn)).status).toBe(403);
     const refused = await set("general.language", "de");
     expect(refused.status).toBe(403);
     expect(refused.body.error).toContain("owner's own conversation");
@@ -109,7 +109,8 @@ describe("reads", () => {
   });
 
   it("refuses writes in a guest-driven conversation", async () => {
-    const { set, saved } = fixture({ guest: true });
+    const { host, turn, set, saved } = fixture({ guest: true });
+    expect((await host.handle({ action: "get", id: "bots.groups" }, turn)).status).toBe(403);
     expect((await set("general.language", "de")).status).toBe(403);
     expect(saved).toEqual([]);
   });
@@ -170,15 +171,14 @@ describe("safe tier", () => {
     expect(saved).toContainEqual({ mcp: { callTimeoutMinutes: 10 } });
   });
 
-  it("reorders and groups bots through the registry, with typed values kept for undo", async () => {
+  it("reorders bots with Undo, but leaves department moves to the owner", async () => {
     const { host, set, bots, cards, turn } = fixture();
     expect((await set("bots.order", ["clive", "kiwi"])).status).toBe(200);
     expect(bots.map((bot) => bot.id)).toEqual(["clive", "kiwi"]);
     expect(await host.undo({ threadId: turn.threadId, requestId: String(cards()[0]!.card.requestId) })).toEqual({ claimed: true, state: "undone" });
     expect(bots.map((bot) => bot.id)).toEqual(["kiwi", "clive"]);
-    expect((await set("bots.groups", { Ops: ["clive"] })).status).toBe(200);
-    expect(bots.map((bot) => bot.section)).toEqual([undefined, "Ops"]);
-    expect(await host.undo({ threadId: turn.threadId, requestId: String(cards()[1]!.card.requestId) })).toEqual({ claimed: true, state: "undone" });
+    expect((await set("bots.groups", { Ops: ["clive"] })).body.error).toContain("only by the owner");
+    expect(cards()).toHaveLength(1);
     expect(bots.map((bot) => bot.section)).toEqual(["Sales", undefined]);
   });
 
@@ -186,7 +186,7 @@ describe("safe tier", () => {
     const closed = fixture({ window: false });
     const refused = await closed.set("appearance.skin", "midnight");
     expect(refused.status).toBe(409);
-    expect(refused.body.error).toContain("Open MausBot on this computer first");
+    expect(refused.body.error).toContain("Open mymausbot on this computer first");
     const open = fixture();
     expect((await open.set("appearance.skin", "midnight")).status).toBe(200);
     expect(open.windowValues.get("appearance.skin")).toBe("midnight");
@@ -242,6 +242,26 @@ describe("confirm tier", () => {
     await vi.waitFor(() => expect(cards()).toHaveLength(2));
     answer(String(cards()[1]!.card.requestId), "allow");
     expect((await refused).body.error).toContain("the provider refused it");
+  });
+
+  it("one approved Change stays single while its write is pending, even if the turn stops", async () => {
+    const { set, cards, answer, saved, entries } = fixture();
+    const entry = entries.find((candidate) => candidate.id === "providers.anthropic.url");
+    if (!entry || entry.tier !== "confirm") throw new Error("missing provider setting");
+    const write = entry.write;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    entry.write = async (value) => { await gate; return write(value); };
+    const stop = new AbortController();
+    const pending = set("providers.anthropic.url", "https://proxy.example/v1", "gen-1", stop.signal);
+    await vi.waitFor(() => expect(cards()).toHaveLength(1));
+    const requestId = String(cards()[0]!.card.requestId);
+    expect(answer(requestId, "allow").sent).toMatchObject({ status: 200, body: { outcome: "allowed-once" } });
+    expect(answer(requestId, "allow").sent).toMatchObject({ status: 200, body: { alreadySettled: true } });
+    stop.abort();
+    release();
+    expect((await pending).status).toBe(200);
+    expect(saved).toEqual([{ anthropic: { url: "https://proxy.example/v1" } }]);
   });
 
   it("times out, patches the card as unavailable, and refuses the write", async () => {

@@ -17,7 +17,7 @@ export function createInternalAppSettingsRoutes(deps: {
   };
 }
 
-/** The window's own preferences (skin, Simple or Advanced, font, chat width, send key, sounds) live in its
+/** The window's own preferences (skin, Raw, Simple or Advanced, font, chat width, send key, sounds) live in its
  * localStorage. The window reports them here; the server keeps the last report and pushes a change back as a
  * `window-pref` frame, which only an open window can apply. */
 export function createWindowPrefs(deps: {
@@ -41,7 +41,7 @@ export function createWindowPrefs(deps: {
     routes,
     read: (id: WindowPrefId) => values.get(id),
     write(id: WindowPrefId, value: unknown): string | null {
-      if (!deps.windowOpen()) return "Open MausBot on this computer first; this setting lives in the app window.";
+      if (!deps.windowOpen() || !values.has(id)) return "Open mymausbot on this computer first; this setting lives in the app window.";
       values.set(id, value);
       deps.broadcast({ kind: "window-pref", id, value }, { adminOnly: true });
       return null;

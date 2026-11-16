@@ -3,7 +3,7 @@
 import { WINDOW_PREFS, type WindowPrefFrame, type WindowPrefId } from "../../shared/app-settings";
 import { applyChatWidth, readChatWidth } from "./chat-width";
 import { applyFont, readFont } from "./fonts";
-import { readAdvancedMode, setAdvancedMode } from "./interface-mode";
+import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
 import { readSendKey, setSendKey } from "./send-key";
 import { applySkinChoice, readSkinChoice } from "./skins";
@@ -11,7 +11,7 @@ import { onWindowPrefChanged } from "./window-pref-changes";
 
 const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }> = {
   "appearance.skin": { read: () => readSkinChoice(), write: (choice) => applySkinChoice(choice) },
-  "appearance.advanced": { read: () => readAdvancedMode(), write: (on) => setAdvancedMode(on) },
+  "appearance.mode": { read: () => readInterfaceMode(), write: (mode) => setInterfaceMode(mode) },
   "appearance.font": { read: () => readFont(), write: (font) => applyFont(font) },
   "appearance.chatWidth": { read: () => readChatWidth(), write: (width) => applyChatWidth(width) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },

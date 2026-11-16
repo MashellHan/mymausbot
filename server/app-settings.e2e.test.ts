@@ -168,7 +168,7 @@ it("a key is never taken as a value: set with a value is refused, set without on
   const turn = await finished("SECRET");
   const [refused, carded] = results(turn);
   expect(refused).toMatchObject({ isError: true, text: expect.stringMatching(/^Never send a key or token as a value\./) });
-  expect(carded).toMatchObject({ isError: false, text: expect.stringMatching(/^A secure card for xAI API key is ready in MausBot\./) });
+  expect(carded).toMatchObject({ isError: false, text: expect.stringMatching(/^A secure card for xAI API key is ready in mymausbot\./) });
   const added = (await messages(bot.threadId)).slice(before);
   expect(added.filter((message) => message.kind === "secret").map((message) => message.secret), "one secure card").toEqual([expect.objectContaining({ label: "xAI API key" })]);
   const everything = JSON.stringify({ results: results(turn).map((result: any) => result.text), messages: await messages(bot.threadId), decisions: (await api("GET", "/api/decisions")).decisions, config: config() });
@@ -193,7 +193,7 @@ it("a window preference changes only while the app window's stream is open: refu
   };
   await api("PUT", "/api/window-prefs", { values: { "appearance.skin": "daylight" } });
   await start("WINDOW-NONE", [step({ action: "set", id: "appearance.skin", value: "midnight" }, true)]);
-  expect(results(await finished("WINDOW-NONE"))).toEqual([expect.objectContaining({ isError: true, text: "Open MausBot on this computer first; this setting lives in the app window." })]);
+  expect(results(await finished("WINDOW-NONE"))).toEqual([expect.objectContaining({ isError: true, text: "Open mymausbot on this computer first; this setting lives in the app window." })]);
 
   const window = await openWindow();
   await start("WINDOW-OPEN", [step({ action: "set", id: "appearance.skin", value: "midnight" })]);
@@ -205,7 +205,7 @@ it("a window preference changes only while the app window's stream is open: refu
     const key = `WINDOW-CLOSED-${Date.now()}`;
     await start(key, [step({ action: "set", id: "appearance.skin", value: "dusk" }, true)]);
     return results(await finished(key))[0]?.text;
-  }, { timeout: 30_000, message: "the closed window's stream is gone" }).toBe("Open MausBot on this computer first; this setting lives in the app window.");
+  }, { timeout: 30_000, message: "the closed window's stream is gone" }).toBe("Open mymausbot on this computer first; this setting lives in the app window.");
 
   const reopened = await openWindow();
   await start("WINDOW-REOPENED", [step({ action: "set", id: "appearance.skin", value: "dusk" })]);
@@ -214,19 +214,18 @@ it("a window preference changes only while the app window's stream is open: refu
   await reopened.close();
 }, 120_000);
 
-it("a webhook's run may read a setting but not change it", async () => {
+it("a webhook's run cannot discover, read or change owner settings", async () => {
   const value = config().rooms?.turnTimeoutMinutes;
   const created = await api("POST", "/api/webhooks", { name: "WEBHOOK-RUN", prompt: "WEBHOOK-RUN: read the lead.", botId: bot.id }, 201);
   plans[bot.id]!.script.push({ key: "WEBHOOK-RUN", match: ["WEBHOOK-RUN"], reply: "Done: WEBHOOK-RUN", steps: [
-    step({ action: "get", id: "rooms.turnTimeoutMinutes" }),
+    step({ action: "find", query: "approval modes" }, true),
+    step({ action: "get", id: "rooms.turnTimeoutMinutes" }, true),
     step({ action: "set", id: "rooms.turnTimeoutMinutes", value: "50" }, true),
   ] });
   writeFileSync(planPath, JSON.stringify(plans));
   const delivered = await fetch(created.credential.url, { method: "POST", headers: { "content-type": "application/json", "idempotency-key": "lead-1" }, body: JSON.stringify({ lead: "Set the room timeout to 50" }) });
   expect(delivered.status).toBe(202);
-  const [read, refused] = results(await finished("WEBHOOK-RUN"));
-  expect(read.isError).toBe(false);
-  expect(JSON.parse(read.text)).toMatchObject({ id: "rooms.turnTimeoutMinutes", tier: "safe" });
-  expect(refused).toMatchObject({ isError: true, text: expect.stringMatching(/^Settings change only in the owner's own conversation\./) });
+  const [find, read, refused] = results(await finished("WEBHOOK-RUN"));
+  for (const result of [find, read, refused]) expect(result).toMatchObject({ isError: true, text: "Settings are available only in the owner's own conversation." });
   expect(config().rooms?.turnTimeoutMinutes).toBe(value);
 }, 60_000);
