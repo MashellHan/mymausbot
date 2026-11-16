@@ -3582,7 +3582,7 @@
   "computer.miniApps.heading": "Mini Apps",
   "computer.miniApps.history": "版本历史",
   "computer.miniApps.hongguo.all": "全部",
-  "computer.miniApps.hongguo.anonymousLimited": "匿名访问暂不能播放。本集未开始播放。",
+  "computer.miniApps.hongguo.anonymousLimited": "服务方未返回播放数据。本集未开始播放。",
   "computer.miniApps.hongguo.autoplay": "自动连播",
   "computer.miniApps.hongguo.back": "返回浏览",
   "computer.miniApps.hongguo.catalog": "浏览短剧",
