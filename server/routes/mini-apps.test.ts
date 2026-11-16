@@ -84,6 +84,43 @@ it("keeps app-scoped dashboard reads behind the existing local owner gate", asyn
     "11111111-1111-4111-8111-111111111111", { resource: "teams", expectedRevision: 1 });
 });
 
+it("keeps Hongguo provider and scoped media behind the owner and revision gates", async () => {
+  const requireHongguo = vi.fn(() => ({ revision: 3, nativeKind: "hongguo", nativeIdentity: "hongguo" }));
+  const catalog = vi.fn(async () => ({ items: [], categories: [], nextCursor: null }));
+  const preparePlayback = vi.fn(async () => ({ status: "unavailable", reason: "anonymous-limited" }));
+  const serveMedia = vi.fn(async () => new Response(null, { status: 416 }));
+  const deps = { localEnabled: () => true, apps: { requireHongguo },
+    hongguoProvider: { catalog, preparePlayback, serveMedia } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
+  const route = createMiniAppRoutes(deps);
+  const json = vi.fn();
+  const id = "11111111-1111-4111-8111-111111111111";
+  const call = (method: string, suffix: string, auth: RequestAuth, body?: unknown) => {
+    const path = `/api/mini-apps/${id}/hongguo/${suffix.split("?")[0]}`;
+    const req = new IncomingMessage(new Socket());
+    Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+    req.method = method;
+    req.url = `/api/mini-apps/${id}/hongguo/${suffix}`;
+    return route({ method, path, url: new URL(`http://127.0.0.1${req.url}`),
+      req, res: new ServerResponse(req), auth, json, readBody: async () => body });
+  };
+  const ownerAuth: RequestAuth = { kind: "loopback", scopes: ["admin"] };
+  await call("POST", "catalog", { kind: "loopback", scopes: [] }, { expectedRevision: 3, mode: "popular" });
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 403, expect.objectContaining({ error: expect.any(String) }));
+  expect(requireHongguo).not.toHaveBeenCalled();
+  await call("POST", "catalog", ownerAuth, { expectedRevision: 3, mode: "popular" });
+  expect(catalog).toHaveBeenCalledWith({ expectedRevision: 3, mode: "popular" });
+  expect(requireHongguo).toHaveBeenCalledTimes(2);
+  await call("POST", "playback", ownerAuth, { expectedRevision: 3, seriesId: "series", episodeId: "episode" });
+  expect(preparePlayback).toHaveBeenCalledWith("series", "episode", { appId: id, revision: 3 });
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200,
+    { appId: id, revision: 3, status: "unavailable", reason: "anonymous-limited" });
+  await call("GET", "media/token?expectedRevision=3", ownerAuth);
+  expect(serveMedia).toHaveBeenCalledWith("token", undefined, expect.any(AbortSignal), { appId: id, revision: 3 });
+  await call("GET", "media/token?expectedRevision=3&extra=1", ownerAuth);
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 400, expect.objectContaining({ error: expect.any(String) }));
+  expect(serveMedia).toHaveBeenCalledTimes(1);
+});
+
 it("keeps suggestions behind the local owner gate and passes only the selected Bot task", async () => {
   const read = vi.fn(() => ({ botId: "bot", threadId: "current", suggestions: [], refreshPending: false }));
   const deps = { localEnabled: () => true, suggestions: { read } } as unknown as Parameters<typeof createMiniAppRoutes>[0];

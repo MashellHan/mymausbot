@@ -120,10 +120,14 @@ describe("local App preservation", () => {
       { ...before, routines: [routine], runs: [checked] })).toThrow();
   });
 
-  it("normalizes only absent template provenance without ignoring IDs, revisions or grants", () => {
+  it("normalizes absent optional Mini App metadata without ignoring IDs, revisions or grants", () => {
     const app = { id: "app-1", revision: 1, dashboard: { kind: "usage" }, publisherBotIds: ["bot-1"] };
     const before = { apps: [app] };
     expect(() => assertInventorySame(before, { apps: [{ ...app, shippedTemplateKind: null }] })).not.toThrow();
+    expect(() => assertInventorySame(before, { apps: [{ ...app, nativeKind: null, nativeIdentity: null }] })).not.toThrow();
+    for (const change of [{ nativeKind: "hongguo" }, { nativeIdentity: "hongguo" }]) {
+      expect(() => assertInventorySame(before, { apps: [{ ...app, ...change }] })).toThrow();
+    }
     for (const change of [{ id: "app-2" }, { revision: 2 }, { dashboard: { kind: "agent-team" } },
       { publisherBotIds: ["other-bot"] }, { shippedTemplateKind: "bookkeeping" }]) {
       expect(() => assertInventorySame(before, { apps: [{ ...app, ...change }] })).toThrow();

@@ -1,4 +1,6 @@
 import type { ServerResponse } from "node:http";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import { allowsTool } from "../../shared/tool-scope.ts";
 import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
@@ -15,6 +17,9 @@ import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
 import { ReportStore } from "../mini-apps/report-store.ts";
 import { DefaultMiniApps } from "../mini-apps/defaults.ts";
+import { parseHongguoCatalog, parseHongguoCatalogResult, parseHongguoPlayback, parseHongguoPreparedPlayback,
+  parseHongguoSeries, parseHongguoSeriesResult } from "../mini-apps/hongguo-validation.ts";
+import type { HongguoProvider } from "../hongguo/provider.ts";
 import { MiniAppSuggestions } from "../mini-apps/suggestions.ts";
 import type { SideJobText } from "../side-jobs.ts";
 import type { Store } from "../store.ts";
@@ -27,6 +32,8 @@ import { PASS, type RouteHandler } from "./table.ts";
 const ROOT = "/api/mini-apps";
 const REPORT_SOURCE = `${ROOT}/report-source`;
 const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive))?$/;
+const HONGGUO_ACTION = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/(catalog|series|playback|history|preferences)$/;
+const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Za-z0-9_-]{1,256})$/;
 const SOURCE = z.object({ botId: z.string().regex(/^[\w-]{1,128}$/) }).strict();
 const INTERNAL_ID = z.object({ app_id: z.uuid() }).strict();
 const CONNECT = z.object({}).strict();
@@ -42,6 +49,7 @@ interface MiniAppRouteDeps {
   localEnabled(): boolean;
   bots(): Array<{ id: string; name: string; toolScope?: unknown }>;
   suggestions?: MiniAppSuggestions;
+  hongguoProvider?: HongguoProvider;
 }
 
 export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" | "reports"> & {
@@ -49,6 +57,7 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   dataDir: string;
   validPublisher(id: string): boolean;
   dashboardProviders?: LocalDashboardProviders;
+  hongguoProvider?: HongguoProvider;
   suggestionWriter?(botId: string): SideJobText | null;
 } & Pick<Parameters<typeof createChatApps>[0], "liveRows" | "liveRoots" | "paused">) {
   const { store, dataDir, validPublisher, dashboardProviders, suggestionWriter, liveRows, liveRoots, paused, ...shared } = input;
@@ -82,6 +91,11 @@ async function datasetInfo(data: DataEngine, datasetId: string): Promise<MiniApp
   return { datasetId, revision: entry.revision, tables: await database.listSourceTables() };
 }
 
+async function hongguoProviderResult<T>(read: () => Promise<T>): Promise<T> {
+  try { return await read(); }
+  catch { throw appFailure(503, "Hongguo provider is unavailable."); }
+}
+
 export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
   const defaults = new DefaultMiniApps(deps);
   return async (ctx) => {
@@ -96,7 +110,73 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
     const owner: MiniAppActor = { writeAllowed: true, assertActive: assertOwner, canBind: () => true };
     try {
       assertOwner();
-      if (url.search) throw appFailure(400, "Query parameters are not supported.");
+      const hongguoMedia = HONGGUO_MEDIA.exec(path);
+      if (url.search && !hongguoMedia) throw appFailure(400, "Query parameters are not supported.");
+      if (hongguoMedia) {
+        if (method !== "GET") throw appFailure(405, "Method not allowed.");
+        if (url.searchParams.size !== 1 || url.searchParams.getAll("expectedRevision").length !== 1) {
+          throw appFailure(400, "Pass one expectedRevision for Hongguo media.");
+        }
+        const rawRevision = url.searchParams.get("expectedRevision")!;
+        const revision = Number(rawRevision);
+        if (!/^[1-9]\d*$/.test(rawRevision) || !Number.isSafeInteger(revision)) throw appFailure(400, "Invalid Hongguo revision.");
+        const id = hongguoMedia[1]!, token = hongguoMedia[2]!;
+        deps.apps.requireHongguo(owner, id, revision);
+        if (!deps.hongguoProvider) throw appFailure(503, "Hongguo is unavailable.");
+        const range = req.headers.range;
+        if (range !== undefined && (typeof range !== "string" || range.length > 128 || !/^bytes=(?:\d+-\d*|-\d+)$/.test(range))) {
+          throw appFailure(400, "Invalid media range.");
+        }
+        const abort = new AbortController();
+        const onClose = () => abort.abort();
+        res.once("close", onClose);
+        try {
+          const media = await hongguoProviderResult(() => deps.hongguoProvider!.serveMedia(token, range, abort.signal, { appId: id, revision }));
+          deps.apps.requireHongguo(owner, id, revision);
+          if (media.status === 403 || media.status === 404) throw appFailure(media.status, "Hongguo media is unavailable.");
+          if (media.status !== 200 && media.status !== 206 && media.status !== 416) throw appFailure(503, "Hongguo media is unavailable.");
+          res.statusCode = media.status;
+          res.setHeader("x-content-type-options", "nosniff");
+          res.setHeader("content-security-policy", "default-src 'none'");
+          for (const header of ["content-type", "content-length", "content-range", "accept-ranges"] as const) {
+            const value = media.headers.get(header);
+            if (value) res.setHeader(header, value);
+          }
+          if (!media.body || media.status === 416) { res.end(); return; }
+          await pipeline(Readable.fromWeb(media.body as unknown as import("node:stream/web").ReadableStream), res);
+          return;
+        } catch (error) {
+          if (res.headersSent) { res.destroy(error instanceof Error ? error : undefined); return; }
+          throw error;
+        } finally { res.off("close", onClose); }
+      }
+      const hongguoAction = HONGGUO_ACTION.exec(path);
+      if (hongguoAction) {
+        if (method !== "POST") throw appFailure(405, "Method not allowed.");
+        const id = hongguoAction[1]!, action = hongguoAction[2]!;
+        const raw: unknown = await readBody(req, 20_000);
+        if (action === "history") return json(res, 200, deps.apps.hongguoHistory(owner, id, raw));
+        if (action === "preferences") return json(res, 200, deps.apps.hongguoPreferences(owner, id, raw));
+        const input = action === "catalog" ? parseHongguoCatalog(raw)
+          : action === "series" ? parseHongguoSeries(raw) : parseHongguoPlayback(raw);
+        deps.apps.requireHongguo(owner, id, input.expectedRevision);
+        if (!deps.hongguoProvider) throw appFailure(503, "Hongguo is unavailable.");
+        let result: unknown;
+        if (action === "catalog") result = parseHongguoCatalogResult(await hongguoProviderResult(() => deps.hongguoProvider!.catalog(input as ReturnType<typeof parseHongguoCatalog>)));
+        else if (action === "series") result = { series: parseHongguoSeriesResult(await hongguoProviderResult(() => deps.hongguoProvider!.series((input as ReturnType<typeof parseHongguoSeries>).seriesId))) };
+        else {
+          const playback = input as ReturnType<typeof parseHongguoPlayback>;
+          const prepared = parseHongguoPreparedPlayback(await hongguoProviderResult(() => deps.hongguoProvider!.preparePlayback(
+            playback.seriesId, playback.episodeId, { appId: id, revision: input.expectedRevision })));
+          result = prepared.status === "ready" ? { status: "ready", durationSeconds: prepared.durationSeconds,
+            mediaUrl: `${ROOT}/${id}/hongguo/media/${prepared.token}?expectedRevision=${input.expectedRevision}` }
+            : prepared;
+        }
+        deps.apps.requireHongguo(owner, id, input.expectedRevision);
+        const response = { appId: id, revision: input.expectedRevision, ...result as object };
+        if (Buffer.byteLength(JSON.stringify(response)) > 1_000_000) throw appFailure(413, "Hongguo response is too large.");
+        return json(res, 200, response);
+      }
       if (path === `${ROOT}/suggestions` && method === "POST") {
         if (!deps.suggestions) throw appFailure(503, "Mini App suggestions are unavailable.");
         return json(res, 200, deps.suggestions.read(owner, await readBody(req, 4096)));

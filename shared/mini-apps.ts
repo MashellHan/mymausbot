@@ -9,8 +9,9 @@ export const MINI_APP_DASHBOARD_RESOURCES = {
 export type MiniAppDashboardKind = keyof typeof MINI_APP_DASHBOARD_RESOURCES;
 export type MiniAppDashboardResource = "teams" | "activity" | "usage";
 export type MiniAppShippedTemplateKind = "bookkeeping" | "x_ai_digest" | "github_activity";
-export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage"] as const;
+export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage", "hongguo"] as const;
 export type DefaultMiniAppKind = typeof DEFAULT_MINI_APP_KINDS[number];
+export type MiniAppNativeKind = "hongguo";
 
 /** The local owner adds bundled apps once; only an explicit restore re-adds a removed app. */
 export interface MiniAppDefaultsInput {
@@ -61,6 +62,10 @@ export interface MiniAppSummary {
   dashboard?: MiniAppDashboardDeclaration | null;
   /** Installed built-in identity survives grant revocation; it grants no dashboard reads. */
   dashboardIdentity?: MiniAppDashboardKind | null;
+  /** Current owner grant for the bundled native Hongguo experience. */
+  nativeKind?: MiniAppNativeKind | null;
+  /** Installed native identity survives archive and grant revocation. */
+  nativeIdentity?: MiniAppNativeKind | null;
   /** Owner-assigned display provenance; it grants no publisher, Data or dashboard access. */
   shippedTemplateKind?: MiniAppShippedTemplateKind | null;
   createdAt: number;
@@ -103,6 +108,8 @@ export interface MiniAppPublish {
   capabilities?: string[];
   /** Only the workspace owner may set or revoke a native dashboard grant. */
   dashboardKind?: MiniAppDashboardKind | null;
+  /** Only the workspace owner may set or revoke a native app grant. */
+  nativeKind?: MiniAppNativeKind | null;
   /** Only the workspace owner may label an installed shipped template. */
   shippedTemplateKind?: MiniAppShippedTemplateKind;
 }
