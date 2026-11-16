@@ -180,6 +180,25 @@ beforeEach(() => {
 afterEach(() => { root.unmount(); host.remove(); vi.unstubAllGlobals(); setLocale("en"); });
 
 describe("Mini Apps panel", () => {
+  it("keeps Mojo in the custom library with a centered selected title and a separate info target", async () => {
+    const mojo = { ...app("01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7", "Mojo"), slug: "mojo" };
+    fixture.apps = [mojo, app("other", "A deliberately long title")];
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe(mojo.id));
+    expect(selected()?.querySelector('[data-mini-app-icon="mojo"]')).not.toBeNull();
+    expect(selected()?.querySelector(".line-clamp-2")?.classList.contains("pr-6")).toBe(false);
+    const hint = host.querySelector<HTMLButtonElement>('[role="tablist"] [data-info-hint]')!;
+    expect(hint.classList.contains("top-1")).toBe(true);
+    await act(async () => hint.click());
+    expect(document.querySelector('[data-info-hint-content]')).not.toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-app-id="other"]')!.click(); });
+    expect(selected()?.querySelector(".line-clamp-2")?.classList.contains("pr-6")).toBe(false);
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    expect(host.querySelector('[data-mini-app-custom="01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7"] [data-mini-app-icon="mojo"]')).not.toBeNull();
+    expect(host.querySelector('[data-mini-app-catalog="mojo"]')).toBeNull();
+    expect(host.querySelector('[data-mini-app-custom="other"] [data-mini-app-icon="custom"]')).not.toBeNull();
+  });
+
   it("keeps the current app visible when its icon is selected again", async () => {
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));

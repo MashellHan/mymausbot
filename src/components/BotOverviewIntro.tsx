@@ -109,7 +109,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
         : <div className="grid grid-cols-2 gap-2 @min-[34rem]/botoverview:grid-cols-3">
           {suggestions.map(({ app, reason }) => <button key={app.id} type="button" title={miniAppDisplayName(app)} onClick={() => onOpenApps(app.id)}
             className="flex min-w-0 items-center gap-2.5 rounded-lg border border-hairline/50 bg-card px-3 py-2 text-left text-[13px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent">
-            <MiniAppIcon kind={iconKindForApp(app)} />
+            <MiniAppIcon kind={iconKindForApp(app)} app={app} />
             <span className="min-w-0 flex-1">
               <span className="block truncate">{miniAppDisplayName(app)}</span>
               <span className="mt-0.5 block truncate text-[11px] text-ink-secondary" title={reason.kind === "task" ? `${reason.capability} · ${reason.taskPhrase}` : undefined}>{suggestionReason(reason)}</span>

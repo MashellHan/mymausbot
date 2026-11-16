@@ -357,9 +357,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               <button id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1} onClick={() => choose(app.id)}
               aria-label={miniAppDisplayName(app)} title={miniAppDisplayName(app)}
               className={`flex w-full flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-[11px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}>
-                <MiniAppIcon kind={iconKindForApp(app)} launcher /><span className={`line-clamp-2 min-h-8 w-full text-center leading-4 ${app.id === selectedId ? "pr-6" : ""}`}>{miniAppDisplayName(app)}</span>
+                <MiniAppIcon kind={iconKindForApp(app)} app={app} launcher /><span className="line-clamp-2 min-h-8 w-full text-center leading-4">{miniAppDisplayName(app)}</span>
               </button>
-              {app.id === selectedId && <InfoHint className="absolute bottom-5 right-1" label={`${miniAppDisplayName(app)}: ${t("app.info")}`}>
+              {app.id === selectedId && <InfoHint className="absolute end-0 top-1" label={`${miniAppDisplayName(app)}: ${t("app.info")}`}>
                 <p>{miniAppDisplayDescription(app)}</p>
                 <p className="tabular-nums text-ink-secondary">{t("computer.miniApps.published", { time: stamp(app.updatedAt) })}</p>
               </InfoHint>}

@@ -61,6 +61,16 @@ afterEach(async () => {
 });
 
 describe("Bot overview suggestions", () => {
+  it("uses the Mojo mark only for the existing Mojo app", async () => {
+    const mojo = suggestion("01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7");
+    mojo.app.slug = "mojo";
+    mojo.app.title = "Mojo";
+    fixture.api.mockResolvedValue(response(bot(), [mojo, { ...suggestion("other"), app: { ...suggestion("other").app, slug: "mojo", title: "Other" } }]));
+    await render();
+    expect(card("Mojo")?.querySelector('[data-mini-app-icon="mojo"]')).not.toBeNull();
+    expect(card("Other")?.querySelector('[data-mini-app-icon="custom"]')).not.toBeNull();
+  });
+
   it("shows at most three active suggestions with their reasons and opens the app or full list", async () => {
     const selected = bot();
     fixture.api.mockResolvedValue(response(selected, [

@@ -65,7 +65,7 @@ export function MiniAppLibraryEntries({ inventory, issues, busyKind, owner, nati
           <button type="button" data-mini-app-grid-item={app.id} disabled={app.status !== "active" || owner !== true || !nativeGuard || busyKind !== null}
             onClick={() => onOpen(app.id)} aria-label={`${t("computer.miniApps.catalog.open")} ${app.title}`}
             className="flex min-w-0 flex-col items-center gap-1 rounded-lg focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-60">
-            <MiniAppIcon kind={null} launcher /><span className="w-full text-[11px] leading-4 text-ink [overflow-wrap:anywhere]">{app.title}</span>
+            <MiniAppIcon kind={null} app={app} launcher /><span className="w-full text-[11px] leading-4 text-ink [overflow-wrap:anywhere]">{app.title}</span>
           </button>
           {app.status === "archived" && <span className="mt-1 text-[10px] text-ink-secondary">{t("computer.miniApps.archived")}</span>}
         </li>)}
