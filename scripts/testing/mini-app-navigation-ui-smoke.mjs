@@ -184,6 +184,8 @@ try {
   result.checks.push("App metadata stays collapsed beside the selected name and opens within the viewport");
   const before = await inventory(window);
   assert.equal(before.length, 6);
+  const hongguo = before.find((entry) => entry.nativeIdentity === "hongguo");
+  assert(hongguo);
   const team = before.find((entry) => entry.dashboardIdentity === "agent-team");
   assert(team?.dashboard?.kind === "agent-team");
   assert(before.some((entry) => entry.dashboardIdentity === "usage" && entry.title === "Activities"));
@@ -191,7 +193,10 @@ try {
     const tabs=[...host.querySelectorAll('[role=tab]')]; tabs[0].focus();
     tabs[0].dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true})); return true; })()`);
   await until(() => evaluate(window, `(() => { const tabs=[...document.querySelectorAll('[data-testid=mini-apps-panel] [role=tab]')];
-    return tabs.at(-1)?.getAttribute('aria-selected') === 'true'; })()`), Boolean, "last launcher tab selected");
+    return tabs.at(-1)?.getAttribute('aria-selected') === 'true' && tabs.at(-1)?.getAttribute('data-app-id') === ${JSON.stringify(hongguo.id)}; })()`), Boolean, "Hongguo launcher tab selected");
+  await until(() => evaluate(window, `document.querySelector('[data-testid=hongguo-view]')?.innerText.includes('Synthetic Hongguo card')`),
+    Boolean, "synthetic Hongguo catalog after End");
+  result.checks.push("End selects Hongguo and renders a synthetic catalog without forwarding its API to the provider");
   assert.equal(await evaluate(window, `(() => { const host=document.querySelector('[data-testid=mini-apps-panel]');
     const row=host.querySelector('[role=tablist]').getBoundingClientRect(); const tab=host.querySelector('[role=tab][aria-selected=true]').getBoundingClientRect();
     return tab.left >= row.left-1 && tab.right <= row.right+1; })()`), true);
