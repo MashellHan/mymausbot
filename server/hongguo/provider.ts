@@ -7,6 +7,7 @@ import type { HongguoCatalogRequest, HongguoCatalogResponse, HongguoCategory, Ho
 import { SERVER_ROOT } from "../proxy-paths.ts";
 import { HongguoMedia, type HongguoMediaScope } from "./media.ts";
 import { hongguoRequest, hongguoUrl } from "./network.ts";
+import { safeHttpFacts, safeSdkError, type PlaybackReason, type PlaybackStage } from "./playback-diagnostic.ts";
 
 export type { HongguoMediaScope } from "./media.ts";
 type PreparedPlayback = { status: "ready"; token: string; durationSeconds: number | null }
@@ -46,17 +47,53 @@ export const hongguoTransport: Transport = async (input) => {
   return { status: result.status, headers, cookies, body: result.body };
 };
 
-async function loadClient(dataDir: string): Promise<Client> {
+async function loadClient(dataDir: string, transport: Transport): Promise<Client> {
   const shipped = join(SERVER_ROOT, "hongguo-sdk", "index.js");
   const sdk: typeof import("openhongguo") = existsSync(shipped) ? await import(pathToFileURL(shipped).href) : await import("openhongguo");
-  return sdk.createClient({ profile: join(dataDir, "providers", "hongguo", "anonymous.json"), transport: hongguoTransport,
+  return sdk.createClient({ profile: join(dataDir, "providers", "hongguo", "anonymous.json"), transport,
     retryAttempts: 1, deviceResets: 0 });
 }
 
-export function createHongguoProvider(options: { dataDir: string; client?: () => Promise<CatalogClient>;
-  media?: Pick<HongguoMedia, "prepare" | "serve"> }): HongguoProvider {
+type PlaybackTrace = { stage: PlaybackStage; ambiguous: boolean; truncated: boolean;
+  responses: ReturnType<typeof safeHttpFacts>[] };
+type ActiveSdkCall = { trace: PlaybackTrace | null; stage: PlaybackStage | null };
+
+export function createHongguoProvider(options: { dataDir: string; client?: (transport: Transport) => Promise<CatalogClient>;
+  transport?: Transport; log?: (line: string) => void; media?: Pick<HongguoMedia, "prepare" | "serve"> }): HongguoProvider {
+  const traces = new Set<PlaybackTrace>();
+  const sdkCalls = new Set<ActiveSdkCall>();
+  const transport: Transport = async (input) => {
+    const call = sdkCalls.size === 1 ? sdkCalls.values().next().value! : null;
+    const trace = call?.trace && traces.size === 1 && traces.has(call.trace) ? call.trace : null;
+    const stage = call?.stage;
+    const result = await (options.transport ?? hongguoTransport)(input);
+    if (trace && stage && !trace.ambiguous && sdkCalls.size === 1 && sdkCalls.has(call!)) {
+      try {
+        if (trace.responses.length === 4) { trace.responses.shift(); trace.truncated = true; }
+        trace.responses.push(safeHttpFacts(result, stage));
+      } catch { trace.truncated = true; }
+    }
+    return result;
+  };
+  const sdkCall = async <T>(trace: PlaybackTrace | null, stage: PlaybackStage | null, action: () => Promise<T>): Promise<T> => {
+    const call = { trace, stage };
+    sdkCalls.add(call);
+    if (sdkCalls.size > 1) for (const active of traces) active.ambiguous = true;
+    if (trace && stage) trace.stage = stage;
+    try { return await action(); }
+    finally { sdkCalls.delete(call); }
+  };
+  const unavailable = (trace: PlaybackTrace, reason: PlaybackReason, error?: unknown): PreparedPlayback => {
+    const sdk = safeSdkError(error);
+    // SDK log lines and error text are untrusted and must never reach this local diagnostic.
+    const line = JSON.stringify({ kind: "hongguo-playback", stage: trace.stage, reason,
+      errorCode: sdk.code, retryable: sdk.retryable, correlation: trace.ambiguous ? "ambiguous" : "isolated",
+      responses: trace.ambiguous ? [] : trace.responses, truncated: trace.truncated });
+    try { (options.log ?? console.warn)(line); } catch {}
+    return { status: "unavailable", reason };
+  };
   let client: Promise<CatalogClient> | undefined;
-  const getClient = () => client ??= (options.client?.() ?? loadClient(options.dataDir)).catch((error: unknown) => {
+  const getClient = () => client ??= (options.client?.(transport) ?? loadClient(options.dataDir, transport)).catch((error: unknown) => {
     client = undefined;
     throw error;
   });
@@ -66,7 +103,7 @@ export function createHongguoProvider(options: { dataDir: string; client?: () =>
 
   async function categories(): Promise<HongguoCategory[]> {
     if (categoryCache && categoryCache.expiresAt > Date.now()) return categoryCache.items;
-    const rows = await (await getClient()).shortFilterPanel();
+    const rows = await sdkCall(null, null, async () => (await getClient()).shortFilterPanel());
     const items = (rows.find((row) => row.key === "category_dim_theme")?.options ?? [])
       .filter((option) => /^cate_\d+$/.test(option.value) && label(option.name))
       .slice(0, 100).map((option) => ({ id: option.value, title: label(option.name) }));
@@ -74,11 +111,12 @@ export function createHongguoProvider(options: { dataDir: string; client?: () =>
     return items;
   }
 
-  async function series(id: string): Promise<HongguoSeries> {
+  async function series(id: string, trace: PlaybackTrace | null = null): Promise<HongguoSeries> {
+    if (trace) trace.stage = "series";
     if (!providerId(id)) throw new Error("Invalid series identifier.");
     const cached = seriesCache.get(id);
     if (cached && cached.expiresAt > Date.now()) return cached.series;
-    const details = await (await getClient()).getSeriesBatch([id]);
+    const details = await sdkCall(trace, "series", async () => (await getClient()).getSeriesBatch([id]));
     const detail = details.find((entry) => entry.series.id === id);
     const summary = detail && card(detail.series);
     if (!summary || !detail) throw new Error("This series is unavailable.");
@@ -96,38 +134,44 @@ export function createHongguoProvider(options: { dataDir: string; client?: () =>
   return {
     async catalog(input) {
       if (input.mode === "categories") return { items: [], categories: await categories(), nextCursor: null };
-      const sdk = await getClient();
       let page: { items: SeriesSummary[]; has_more: boolean; cursor?: string };
-      if (input.mode === "search") page = await sdk.search(input.query!, { cursor: input.cursor, pageSize: 24 });
+      if (input.mode === "search") page = await sdkCall(null, null, async () =>
+        (await getClient()).search(input.query!, { cursor: input.cursor, pageSize: 24 }));
       else if (input.mode === "new") {
-        const result = await sdk.newReleases({ cursor: input.cursor });
+        const result = await sdkCall(null, null, async () => (await getClient()).newReleases({ cursor: input.cursor }));
         page = { ...result, items: result.items.filter((item) => item.online).map((item) => ({ ...item, id: item.series_id })) };
       } else if (input.mode === "category") {
         if (!(await categories()).some((item) => item.id === input.categoryId)) throw new Error("This category is unavailable.");
-        page = await sdk.shortFilter({ selections: { category_dim_theme: [input.categoryId!] }, cursor: input.cursor });
+        page = await sdkCall(null, null, async () => (await getClient()).shortFilter({
+          selections: { category_dim_theme: [input.categoryId!] }, cursor: input.cursor }));
       } else {
-        const result = await sdk.shortRank({ cursor: input.cursor });
+        const result = await sdkCall(null, null, async () => (await getClient()).shortRank({ cursor: input.cursor }));
         page = { ...result, items: result.items.map((item) => ({ ...item, id: item.series_id ?? "", title: item.title ?? "" })) };
       }
       return { items: page.items.slice(0, 100).map(card).filter((item): item is HongguoSeriesCard => item !== null), categories: [],
         nextCursor: page.has_more && page.cursor && page.cursor.length <= 4096 ? page.cursor : null };
     },
-    series,
+    series: (id) => series(id),
     async preparePlayback(seriesId, episodeId, scope) {
+      const trace: PlaybackTrace = { stage: "series", ambiguous: false, truncated: false, responses: [] };
+      traces.add(trace);
+      if (traces.size > 1) for (const active of traces) active.ambiguous = true;
       try {
-        const detail = await series(seriesId);
+        const detail = await series(seriesId, trace);
+        trace.stage = "selection";
         const episode = detail.episodes.find((item) => item.id === episodeId);
-        if (!episode || episode.availability === "unavailable") return { status: "unavailable", reason: "episode-unavailable" };
-        const resolved = await (await getClient()).resolvePlayback(episodeId);
-        if (resolved.playback.episode_id !== episodeId) return { status: "unavailable", reason: "provider-unavailable" };
+        if (!episode || episode.availability === "unavailable") return unavailable(trace, "episode-unavailable");
+        const resolved = await sdkCall(trace, "resolve", async () => (await getClient()).resolvePlayback(episodeId));
+        if (resolved.playback.episode_id !== episodeId) return unavailable(trace, "provider-unavailable");
+        trace.stage = "media";
         const token = await media.prepare(resolved.playback, resolved.contentKey?.key, scope);
         return token ? { status: "ready", token, durationSeconds: number(resolved.playback.duration_seconds) }
-          : { status: "unavailable", reason: "provider-unavailable" };
+          : unavailable(trace, "provider-unavailable");
       } catch (error) {
-        const code = error && typeof error === "object" && "code" in error ? error.code : null;
-        return { status: "unavailable", reason: code === "ANONYMOUS_LIMITED" ? "anonymous-limited"
-          : code === "CONTENT_UNAVAILABLE" ? "episode-unavailable" : "provider-unavailable" };
-      }
+        const code = safeSdkError(error).code;
+        return unavailable(trace, code === "ANONYMOUS_LIMITED" ? "anonymous-limited"
+          : code === "CONTENT_UNAVAILABLE" ? "episode-unavailable" : "provider-unavailable", error);
+      } finally { traces.delete(trace); }
     },
     serveMedia: (token, range, signal, scope) => media.serve(token, range, signal, scope),
   };

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { join, relative } from "node:path";
+import type { Transport } from "openhongguo";
 import { excludedWorkspaceAuthPath } from "../workspace-backup-policy.ts";
 import { createHongguoProvider } from "./provider.ts";
 
@@ -24,8 +25,9 @@ function fixture() {
   };
   const media = { prepare: vi.fn(async () => "media-token"), serve: vi.fn(async () => new Response(null)) };
   const load = vi.fn(async () => client);
-  const provider = createHongguoProvider({ dataDir: "/unused", client: load, media });
-  return { provider, client, media, load };
+  const log = vi.fn();
+  const provider = createHongguoProvider({ dataDir: "/unused", client: load, media, log });
+  return { provider, client, media, load, log };
 }
 
 describe("Hongguo provider", () => {
@@ -87,5 +89,101 @@ describe("Hongguo provider", () => {
     client.resolvePlayback.mockRejectedValueOnce(new Error("private provider detail"));
     expect(await provider.preparePlayback("10", "101", { appId: "a", revision: 1 }))
       .toEqual({ status: "unavailable", reason: "provider-unavailable" });
+  });
+
+  it("reports only the reached series, resolve or media stage and allowlisted SDK error", async () => {
+    const secret = "private-series-episode-error-text";
+    const { provider, client, media, log } = fixture();
+    client.getSeriesBatch.mockRejectedValueOnce({ code: "ANONYMOUS_LIMITED", retryable: false, message: secret });
+    expect(await provider.preparePlayback("10", "101", { appId: secret, revision: 1 }))
+      .toEqual({ status: "unavailable", reason: "anonymous-limited" });
+    expect(JSON.parse(log.mock.calls.at(-1)![0])).toMatchObject({ stage: "series", reason: "anonymous-limited",
+      errorCode: "ANONYMOUS_LIMITED", retryable: false, responses: [] });
+    client.resolvePlayback.mockRejectedValueOnce({ code: "ANONYMOUS_LIMITED", retryable: false, message: secret });
+    expect(await provider.preparePlayback("10", "101", { appId: secret, revision: 1 }))
+      .toEqual({ status: "unavailable", reason: "anonymous-limited" });
+    expect(JSON.parse(log.mock.calls.at(-1)![0])).toMatchObject({ stage: "resolve", reason: "anonymous-limited",
+      errorCode: "ANONYMOUS_LIMITED", retryable: false, responses: [] });
+    media.prepare.mockRejectedValueOnce(new Error(secret));
+    expect(await provider.preparePlayback("10", "101", { appId: secret, revision: 1 }))
+      .toEqual({ status: "unavailable", reason: "provider-unavailable" });
+    expect(JSON.parse(log.mock.calls.at(-1)![0])).toMatchObject({ stage: "media", reason: "provider-unavailable",
+      errorCode: null, retryable: null, responses: [] });
+    expect(log.mock.calls.map(([line]) => line).join("\n")).not.toContain(secret);
+  });
+
+  it("captures only bounded response facts for an isolated playback failure", async () => {
+    const secret = "private-url-query-header-profile-episode-message";
+    const { client, media } = fixture();
+    const log = vi.fn();
+    const body = Buffer.from(JSON.stringify({ status_code: 0, data: { video_model: null, url: secret }, message: secret }));
+    const response = { status: 200, headers: { "content-encoding": "identity", "x-private": secret },
+      cookies: { token: secret }, body };
+    const http = vi.fn(async () => response);
+    let wrapped: Transport | undefined;
+    client.resolvePlayback.mockImplementationOnce(async () => {
+      expect(await wrapped!({ method: "POST", url: `https://api.fqnovel.com/${secret}?${secret}`,
+        headers: { authorization: secret }, body: Buffer.from(secret) })).toBe(response);
+      throw { code: "ANONYMOUS_LIMITED", retryable: false, message: secret };
+    });
+    const provider = createHongguoProvider({ dataDir: "/unused", client: async (transport) => {
+      wrapped = transport; return client;
+    }, transport: http, media, log });
+    expect(await provider.preparePlayback("10", "101", { appId: secret, revision: 1 }))
+      .toEqual({ status: "unavailable", reason: "anonymous-limited" });
+    const record = JSON.parse(log.mock.calls[0]![0]);
+    expect(record).toMatchObject({ kind: "hongguo-playback", stage: "resolve", errorCode: "ANONYMOUS_LIMITED",
+      correlation: "isolated", responses: [{ stage: "resolve", status: 200, encodedBytes: body.length,
+        decodedBytes: body.length, encoding: "identity",
+        shape: { json: "object", businessStatus: "zero", data: "object", videoModel: "null" } }] });
+    expect(log.mock.calls[0]![0]).not.toContain(secret);
+    expect(http).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not assign a concurrent catalog response to a playback failure", async () => {
+    const { client, media } = fixture();
+    const log = vi.fn();
+    let wrapped: Transport | undefined;
+    let finishSearch: ((value: { items: never[]; has_more: boolean; cursor: string }) => void) | undefined;
+    client.search.mockImplementationOnce(() => new Promise((resolve) => { finishSearch = resolve; }));
+    client.resolvePlayback.mockImplementationOnce(async () => {
+      await wrapped!({ method: "POST", url: "https://api.fqnovel.com/synthetic", headers: {}, body: new Uint8Array() });
+      throw { code: "ANONYMOUS_LIMITED", retryable: false };
+    });
+    const provider = createHongguoProvider({ dataDir: "/unused", client: async (transport) => {
+      wrapped = transport; return client;
+    }, transport: async () => ({ status: 200, headers: {}, body: Buffer.from("{}") }), media, log });
+    await provider.series("10");
+    const catalog = provider.catalog({ expectedRevision: 1, mode: "search", query: "synthetic" });
+    await vi.waitFor(() => expect(client.search).toHaveBeenCalledTimes(1));
+    expect(await provider.preparePlayback("10", "101", { appId: "a", revision: 1 }))
+      .toEqual({ status: "unavailable", reason: "anonymous-limited" });
+    finishSearch!({ items: [], has_more: false, cursor: "" });
+    await catalog;
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({ correlation: "ambiguous", responses: [] });
+  });
+
+  it("does not attach a catalog response while playback waits for media", async () => {
+    const { client, media } = fixture();
+    const log = vi.fn();
+    let wrapped: Transport | undefined;
+    let failMedia: (() => void) | undefined;
+    media.prepare.mockImplementationOnce(() => new Promise<string>((_resolve, reject) => {
+      failMedia = () => reject(new Error("private media detail"));
+    }));
+    client.search.mockImplementationOnce(async () => {
+      await wrapped!({ method: "GET", url: "https://api.fqnovel.com/private-catalog", headers: {}, body: new Uint8Array() });
+      return { items: [], has_more: true, cursor: "next" };
+    });
+    const provider = createHongguoProvider({ dataDir: "/unused", client: async (transport) => {
+      wrapped = transport; return client;
+    }, transport: async () => ({ status: 200, headers: {}, body: Buffer.from("{}") }), media, log });
+    await provider.series("10");
+    const playback = provider.preparePlayback("10", "101", { appId: "a", revision: 1 });
+    await vi.waitFor(() => expect(media.prepare).toHaveBeenCalledTimes(1));
+    await provider.catalog({ expectedRevision: 1, mode: "search", query: "synthetic" });
+    failMedia!();
+    expect(await playback).toEqual({ status: "unavailable", reason: "provider-unavailable" });
+    expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({ stage: "media", correlation: "isolated", responses: [] });
   });
 });
