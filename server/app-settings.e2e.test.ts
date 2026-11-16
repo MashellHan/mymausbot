@@ -185,17 +185,18 @@ it("Stop settles a waiting Change card at once: the card shows as unavailable, a
 }, 90_000);
 
 it("a key is never taken as a value: set with a value is refused, set without one posts the secure card, and the key appears nowhere", async () => {
+  expect(config().groq?.key).toBeUndefined();
   const before = (await messages(bot.threadId)).length;
   await start("SECRET", [
-    step({ action: "set", id: "keys.xaiApiKey", value: SECRET }, true),
-    step({ action: "set", id: "keys.xaiApiKey", reason: "You asked me to add your xAI key." }),
+    step({ action: "set", id: "keys.groqApiKey", value: SECRET }, true),
+    step({ action: "set", id: "keys.groqApiKey", reason: "You asked me to add your Groq key." }),
   ]);
   const turn = await finished("SECRET");
   const [refused, carded] = results(turn);
   expect(refused).toMatchObject({ isError: true, text: expect.stringMatching(/^Never send a key or token as a value\./) });
-  expect(carded).toMatchObject({ isError: false, text: expect.stringMatching(/^A secure card for xAI API key is ready in mymausbot\./) });
+  expect(carded).toMatchObject({ isError: false, text: expect.stringMatching(/^A secure card for Groq API key is ready in mymausbot\./) });
   const added = (await messages(bot.threadId)).slice(before);
-  expect(added.filter((message) => message.kind === "secret").map((message) => message.secret), "one secure card").toEqual([expect.objectContaining({ label: "xAI API key" })]);
+  expect(added.filter((message) => message.kind === "secret").map((message) => message.secret), "one secure card").toEqual([expect.objectContaining({ label: "Groq API key" })]);
   const everything = JSON.stringify({ results: results(turn).map((result: any) => result.text), messages: await messages(bot.threadId), decisions: (await api("GET", "/api/decisions")).decisions, config: config() });
   expect(everything).not.toContain(SECRET);
 }, 60_000);
