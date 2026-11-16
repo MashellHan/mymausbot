@@ -16,9 +16,11 @@ import { ensureMiniAppDefaults } from "./MiniAppDefaultsBootstrap";
 import { MiniAppFrame } from "./MiniAppFrame";
 import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
 import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
+import { MojoWholePage } from "./MojoWholePage";
 import { HongguoView } from "./HongguoView";
 import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-display";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
+import { mojoHostEligible } from "./mojo-host";
 
 const REFRESH_MS = 15_000;
 type Inventory = { apps: MiniAppSummary[] };
@@ -93,6 +95,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     && selected?.nativeKind === "hongguo" && document?.app.nativeKind === "hongguo";
   const hongguoRecovery = currentHead && owner === true && selected?.nativeIdentity === "hongguo" && document?.app.nativeIdentity === "hongguo"
     && !selected?.nativeKind && !document?.app.nativeKind;
+  const mojoCurrent = !stale && mojoHostEligible({ selected, document, state: appState,
+    localOwner: owner === true && typeof window !== "undefined" && window.ogb?.remoteClient?.active !== true, nativeGuard });
 
   useEffect(() => {
     const target = focusAfter.current;
@@ -413,7 +417,10 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
                 <button type="button" onClick={() => void addDefault(recoveryKind)} className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.dashboard.reauthorize")}</button>
               </section>
               : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === null ? "computer.miniApps.opening" : owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
-              : appState.status === "active" && nativeGuard ? <MiniAppFrame document={document} state={appState} onRevoked={revoked} />
+              : appState.status === "active" && nativeGuard ? mojoCurrent
+                ? <MojoWholePage key={`${document.app.id}:${document.app.revision}:${document.app.templateVersion}`}
+                  document={document} state={appState} onRevoked={revoked} />
+                : <MiniAppFrame document={document} state={appState} onRevoked={revoked} />
               : appState.status === "active" ? <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t("computer.miniApps.desktopRequired")}</p>
               : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t("computer.miniApps.archivedContent")}</p>}
           </> : !error && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.opening")}</p>}
