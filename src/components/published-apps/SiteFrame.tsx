@@ -9,8 +9,8 @@ const LOAD_TIMEOUT_MS = 10_000;
 
 /** A published site, live, in a sandboxed frame; or, when it can't be shown here (it refuses framing, asks for a login,
  * never loads, or is not a plain web address), a line saying so and Open in browser. */
-export function SiteFrame({ url, title, loginOnly = false, attempt, sandbox }: {
-  url: string; title: string; loginOnly?: boolean; attempt: number; sandbox?: typeof SITE_THUMB_SANDBOX;
+export function SiteFrame({ url, title, loginOnly = false, attempt, sandbox, frameName }: {
+  url: string; title: string; loginOnly?: boolean; attempt: number; sandbox?: typeof SITE_THUMB_SANDBOX; frameName?: string;
 }) {
   const canFrame = showable(url, window.location.origin) && !loginOnly;
   const refused = useFramingRefused(canFrame ? url : null, attempt);
@@ -38,6 +38,7 @@ export function SiteFrame({ url, title, loginOnly = false, attempt, sandbox }: {
       key={`${url}:${attempt}`}
       data-app-preview-frame=""
       src={url}
+      name={frameName}
       title={title}
       sandbox={sandbox ?? SITE_FRAME_SANDBOX}
       allow={SITE_FRAME_ALLOW}

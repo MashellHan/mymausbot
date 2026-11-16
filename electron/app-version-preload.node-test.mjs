@@ -29,7 +29,8 @@ test("only a window configured with the native navigation guard advertises it", 
   assert.equal(app(LOCAL, [`--omb-local-origin=${LOCAL}`, "--omb-opaque-frame-navigation=1"]).blocksOpaqueFrameNavigation, true);
   assert.equal(app(LOCAL, [`--omb-local-origin=${LOCAL}`]).blocksOpaqueFrameNavigation, false);
   assert.ok(MAIN.includes('"--omb-opaque-frame-navigation=1"'));
-  assert.ok(MAIN.includes('if (!appFrameNavigationAllowed(details)) return void details.preventDefault();'));
+  assert.ok(MAIN.includes('if (!appFrameNavigationAllowed(details)'));
+  assert.ok(MAIN.includes('&& !mojoPoetryHostNavigationAllowed(details, win.webContents.mainFrame, rendererOrigin())) return void details.preventDefault();'));
 });
 
 test("main passes the app's version to the window it opens", () => {

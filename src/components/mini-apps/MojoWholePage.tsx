@@ -4,7 +4,7 @@ import { SITE_THUMB_SANDBOX } from "@/lib/published-apps";
 import type { MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
 import { SiteFrame } from "../published-apps/SiteFrame";
 import { MiniAppFrame } from "./MiniAppFrame";
-import { MOJO_POETRY_URL } from "./mojo-host";
+import { MOJO_POETRY_FRAME_NAME, MOJO_POETRY_URL } from "./mojo-host";
 
 type View = "quotes" | "poetry";
 type Gesture = { pointerId: number; x: number; y: number };
@@ -81,7 +81,7 @@ export function MojoWholePage({ document, state, onRevoked }: {
       hidden={view !== "poetry"} inert={view !== "poetry"}
       className={`${view === "poetry" ? "flex" : "hidden"} min-h-0 min-w-0 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-accent`}>
       {poetryOpened && <SiteFrame url={MOJO_POETRY_URL} title={t("computer.miniApps.mojo.poetry")}
-        attempt={0} sandbox={SITE_THUMB_SANDBOX} />}
+        attempt={0} sandbox={SITE_THUMB_SANDBOX} frameName={MOJO_POETRY_FRAME_NAME} />}
     </section>
   </div>;
 }
