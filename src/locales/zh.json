@@ -3810,6 +3810,7 @@
   "computer.usage.githubDateBasis": "PR 参考数排除当前 fork 仓库，按北京时间的创建日期计数；提交参考数保留 GitHub Profile 日期，精确中国日数未知，日桶可能包含请求截止时刻之后的活动。私有或受限活动可能缺失，不与旧口径比较。",
   "computer.usage.githubPrHint": "当前非 fork GitHub 仓库中可见的新建 PR，按 createdAt 投影到北京时间。参考子集不能证明创建时的仓库状态或隐藏活动；合并日期不决定计数。",
   "computer.usage.heading": "我的活动",
+  "computer.usage.latestUpdate": "最近更新：北京时间 {time}",
   "computer.usage.loading": "正在读取活动汇总…",
   "computer.usage.mergedActivity": "远端 PR 记录",
   "computer.usage.mergedCommitHint": "你已合并 PR 中的原始非 merge 提交，归到 PR 合并当天。Squash 前有 5 个仍计 5 个；不计直接 push 和未合并 PR。",

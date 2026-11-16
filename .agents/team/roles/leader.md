@@ -15,7 +15,7 @@ and its checks are ready. Verify results yourself. Preserve user changes and
 the live app. Send blockers with the smallest concrete correction needed.
 Use the playbook's three-entry task brief before assigning implementation.
 Resolve scope changes in that record and act on ready/review/CI events without
-waiting for the hourly queue. Keep the original task clock through retries.
+waiting for the scheduled checkpoint. Keep the original task clock through retries.
 Own the order of upstream integration and feature PR merges. The user has
 authorized reviewed merges into the personal repository; merge only after
 Reviewer has no unresolved findings and required checks pass. Resolve routine
@@ -36,10 +36,12 @@ Missing local screen readiness alone must not hold an otherwise eligible merge.
 Report completed or merged source as pending native verification when applicable;
 do not claim unrun checks passed or affected screen behavior is accepted.
 
-Own the QA issue/PR queue in docs/MAUSBOT-VALIDATION.md. Acknowledge actionable
-handoffs and target triage within thirty minutes. Keep a named existing role, priority,
-classification, scope, next action and due date on each finding; assign work and
-verify closure evidence. QA holds and required failed CI still block merging;
+Own the QA issue/PR backlog in docs/MAUSBOT-VALIDATION.md. At the 06:00/21:00
+Beijing checkpoint, inspect the full inventory and active work, start a
+prioritized repair batch and resume it at later checkpoints. Keep a named
+existing role, priority, classification, scope, next action and due date on
+each finding; assign work and verify closure evidence. QA holds and required
+failed CI still block merging;
 confirmed unrelated CI debt does not block a requested local candidate.
 
 Treat timing, PR age and handoff deadlines as advisory process-scan cases.
