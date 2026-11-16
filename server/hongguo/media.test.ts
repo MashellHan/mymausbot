@@ -14,6 +14,8 @@ const playback = (): Playback => ({ episode_id: "101", protected: false,
 it("only accepts browser-compatible single-file streams and supported encryption", () => {
   const model = playback();
   expect(compatibleStream(model)).toBe(model.streams[0]);
+  expect(compatibleStream({ ...model, streams: [{ ...model.streams[0]!, url: "https://v5-ex-reading-video.qznovelvod.com/clip.mp4" }] })?.url)
+    .toBe("https://v5-ex-reading-video.qznovelvod.com/clip.mp4");
   expect(compatibleStream({ ...model, audio_url: "https://v.douyinvod.com/audio" })).toBeUndefined();
   expect(compatibleStream({ ...model, protected: true })).toBeUndefined();
   for (const patch of [{ hls: true }, { dash: true }, { codec: "hevc" }, { url: "http://127.0.0.1/" }]) {

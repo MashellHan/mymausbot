@@ -149,7 +149,7 @@ it("keeps anonymous playback unavailable with a finite preparation deadline", as
   await render();
   await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
   await act(async () => { seriesButton().click(); });
-  await vi.waitFor(() => expect(host.textContent).toContain("Playback is unavailable with anonymous access"));
+  await vi.waitFor(() => expect(host.textContent).toContain("The provider returned no playback data. This episode was not played."));
   expect(host.querySelector("video")).toBeNull();
   const request = fixture.api.mock.calls.find(([path]) => String(path).endsWith("/playback"));
   expect(request?.[1].timeoutMs).toBe(120_000);

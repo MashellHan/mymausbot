@@ -3798,7 +3798,7 @@
   "computer.miniApps.heading": "Mini Apps",
   "computer.miniApps.history": "Version history",
   "computer.miniApps.hongguo.all": "All",
-  "computer.miniApps.hongguo.anonymousLimited": "Playback is unavailable with anonymous access. This episode was not played.",
+  "computer.miniApps.hongguo.anonymousLimited": "The provider returned no playback data. This episode was not played.",
   "computer.miniApps.hongguo.autoplay": "Play next automatically",
   "computer.miniApps.hongguo.back": "Back to browsing",
   "computer.miniApps.hongguo.catalog": "Browse series",
