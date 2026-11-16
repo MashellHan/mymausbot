@@ -7,7 +7,7 @@ import type { Bot, ConfigStatus, Group, Message } from "@/state/store";
 const fixture = vi.hoisted(() => ({ config: null as ConfigStatus | null, dispatch: vi.fn() }));
 vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(),
-  useStore: () => ({ state: { config: fixture.config }, dispatch: fixture.dispatch }),
+  useStore: () => ({ state: { config: fixture.config, groups: [] }, dispatch: fixture.dispatch }),
 }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({}) }));
 
