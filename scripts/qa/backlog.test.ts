@@ -195,6 +195,18 @@ describe("hourly QA backlog", () => {
     });
   });
 
+  it("keeps a legacy verified record's progress time with the same ready repair", () => {
+    const source = issue(2, [...issue(2).labels, "qa:verified"]);
+    const head = "a".repeat(40);
+    const repair = { number: 44, draft: false, head: { sha: head }, body: `QA-Repair: #2\nQA-Handoff: ${head}` };
+    const legacy = { stage: "verification", verified: true, repair: { number: 44, head, draft: false },
+      firstSeenAt: old, lastProgressAt: old };
+    const at = start + 6 * 24 * 60 * 60_000;
+    const observed = planCheckpoint([source], [repair], { 2: legacy }, at).observed[0];
+    expect(observed).toMatchObject({ stage: "verification", lastProgressAt: old, stale: true });
+    expect(planCheckpoint([source], [repair], { 2: observed }, at + 60_000).observed[0].lastProgressAt).toBe(old);
+  });
+
   it("rotates triage, repair and verification in read-only checkpoints", () => {
     const triage = Array.from({ length: 4 }, (_, index) => issue(index + 1,
       ["qa", "qa:untriaged", index === 0 ? "qa:p0" : "qa:p2", "qa:kind:infrastructure", "qa:scope:global"]));

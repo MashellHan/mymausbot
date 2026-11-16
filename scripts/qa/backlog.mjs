@@ -45,8 +45,10 @@ function observe(issue, prs, previous, now, checkpoint = false) {
     : verified ? "verification" : review ? "review" : repair ? "fixing"
       : triage.complete || process && safe(owner) !== "" && safe(owner) !== "unassigned" ? "assigned" : "unassigned";
   const milestone = JSON.stringify([repair?.number ?? null, repair?.head?.sha ?? null, Boolean(review), verified]);
+  const legacyReview = previous?.stage === "verification" || previous?.stage === "disposition_needed"
+    ? Boolean(review) : previous?.stage === "review";
   const previousMilestone = previous?.milestone ?? JSON.stringify([
-    previous?.repair?.number ?? null, previous?.repair?.head ?? null, previous?.stage === "review", Boolean(previous?.verified),
+    previous?.repair?.number ?? null, previous?.repair?.head ?? null, legacyReview, Boolean(previous?.verified),
   ]);
   const firstSeenAt = previous?.firstSeenAt ?? issue.created_at ?? new Date(now).toISOString();
   const lastProgressAt = previousMilestone === milestone ? previous?.lastProgressAt ?? firstSeenAt

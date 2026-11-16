@@ -73,8 +73,8 @@ timeout to hide a launcher error. Keep local acceptance focused on the changed
 interaction and critical layout; broader unchanged permutations remain QA work.
 
 Dev records the exact head, local receipt and remaining checks in the PR body,
-including `QA-Handoff: <40-character head SHA>`. The queue hands that head to
-MausBot Lead only while the marker matches the current head. Updating the
+including `QA-Handoff: <40-character head SHA>`. Dev hands that head to
+MausBot Lead while the marker matches the current head. Updating the
 handoff or marking a draft ready does not restart CI. Lead owns CI,
 independent review and merging while Dev can take independent work. New pushes
 require an updated handoff marker; a chat mention alone is not the handoff record.
