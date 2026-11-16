@@ -1,4 +1,4 @@
-import { AppWindow, ChartColumnIncreasing, Clapperboard, GitBranch, Newspaper, ReceiptText, UsersRound, type LucideIcon } from "lucide-react";
+import { AppWindow, ChartColumnIncreasing, Clapperboard, Flame, GitBranch, Newspaper, ReceiptText, UsersRound, type LucideIcon } from "lucide-react";
 import type { MiniAppDashboardKind, MiniAppNativeKind, MiniAppSummary } from "../../../shared/mini-apps";
 import type { ReportKind } from "../../../shared/report-mini-app";
 
@@ -17,12 +17,14 @@ export function iconKindForApp(app: MiniAppSummary): MiniAppIconKind | null {
   return app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind ?? null;
 }
 
-export function MiniAppIcon({ kind, large = false, launcher = false }: { kind: MiniAppIconKind | null; large?: boolean; launcher?: boolean }) {
+export function MiniAppIcon({ kind, app, large = false, launcher = false }: { kind: MiniAppIconKind | null; app?: MiniAppSummary; large?: boolean; launcher?: boolean }) {
+  const mojo = app?.id === "01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7" && app.slug === "mojo";
   const entry = kind ? icons[kind] : null;
-  const Icon = entry?.Icon ?? AppWindow;
-  return <span data-mini-app-icon={kind ?? "custom"}
-    className={`inline-flex shrink-0 items-center justify-center ${launcher ? "h-14 w-14 rounded-xl" : large ? "h-9 w-9 rounded-lg" : "h-6 w-6 rounded-lg"} ${entry ? "" : "bg-inset text-ink-secondary"}`}
-    style={entry ? { color: `color-mix(in oklab, ${entry.tone} 72%, var(--color-ink))`,
+  const Icon = mojo ? Flame : entry?.Icon ?? AppWindow;
+  return <span data-mini-app-icon={mojo ? "mojo" : kind ?? "custom"}
+    className={`inline-flex shrink-0 items-center justify-center ${launcher ? "h-14 w-14 rounded-xl" : large ? "h-9 w-9 rounded-lg" : "h-6 w-6 rounded-lg"} ${entry || mojo ? "" : "bg-inset text-ink-secondary"}`}
+    style={mojo ? { color: "#f6d177", backgroundColor: "#a8402e", border: "1px solid #d6a64f" }
+      : entry ? { color: `color-mix(in oklab, ${entry.tone} 72%, var(--color-ink))`,
       backgroundColor: `color-mix(in oklab, ${entry.tone} 14%, var(--color-inset))` } : undefined}>
     <Icon size={launcher ? 26 : large ? 19 : 14} strokeWidth={1.8} aria-hidden="true" />
   </span>;
