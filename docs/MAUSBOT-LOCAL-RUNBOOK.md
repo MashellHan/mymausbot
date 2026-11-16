@@ -253,6 +253,9 @@ unchanged. This source exception is not a permanent registry configuration.
 
 The server bundle copies the SDK, Go WASM runtime and vendor notices to
 `hongguo-sdk/`. The packaged smoke loads it offline outside `node_modules`.
+The SDK profile stays under `providers/hongguo/` and disposable media under
+`cache/hongguo/`, using the existing backup exclusions and preserving the
+destination's own anonymous device. Viewing history remains in SQLite backups.
 Supported encrypted H.264 MP4 playback also needs `ffmpeg` on the existing
 augmented host PATH. Catalog and synthetic decoding checks do not prove
 provider playback: the initial live anonymous playback probe returned

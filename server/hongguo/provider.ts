@@ -49,7 +49,7 @@ export const hongguoTransport: Transport = async (input) => {
 async function loadClient(dataDir: string): Promise<Client> {
   const shipped = join(SERVER_ROOT, "hongguo-sdk", "index.js");
   const sdk: typeof import("openhongguo") = existsSync(shipped) ? await import(pathToFileURL(shipped).href) : await import("openhongguo");
-  return sdk.createClient({ profile: join(dataDir, "hongguo", "anonymous.json"), transport: hongguoTransport,
+  return sdk.createClient({ profile: join(dataDir, "providers", "hongguo", "anonymous.json"), transport: hongguoTransport,
     retryAttempts: 1, deviceResets: 0 });
 }
 
@@ -60,7 +60,7 @@ export function createHongguoProvider(options: { dataDir: string; client?: () =>
     client = undefined;
     throw error;
   });
-  const media = options.media ?? new HongguoMedia(join(options.dataDir, "hongguo", "media"));
+  const media = options.media ?? new HongguoMedia(join(options.dataDir, "cache", "hongguo"));
   const seriesCache = new Map<string, { series: HongguoSeries; expiresAt: number }>();
   let categoryCache: { items: HongguoCategory[]; expiresAt: number } | undefined;
 

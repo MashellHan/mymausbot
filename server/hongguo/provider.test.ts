@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { join, relative } from "node:path";
+import { excludedWorkspaceAuthPath } from "../workspace-backup-policy.ts";
 import { createHongguoProvider } from "./provider.ts";
+
+const sdkCreate = vi.hoisted(() => vi.fn());
+vi.mock("openhongguo", () => ({ createClient: sdkCreate }));
 
 function fixture() {
     const series = { id: "10", title: "A\u0000series", episode_count: 2, cover_url: "https://p.fqnovelpic.com/cover.jpg" };
@@ -24,6 +29,16 @@ function fixture() {
 }
 
 describe("Hongguo provider", () => {
+  it("keeps the actual SDK profile in destination-owned authentication storage without device resets", async () => {
+    sdkCreate.mockResolvedValueOnce(fixture().client);
+    const dataDir = join(process.cwd(), "synthetic-hongguo-data");
+    const provider = createHongguoProvider({ dataDir });
+    await provider.catalog({ expectedRevision: 1, mode: "popular" });
+    const options = sdkCreate.mock.calls[0]![0];
+    expect(options).toMatchObject({ profile: join(dataDir, "providers", "hongguo", "anonymous.json"), retryAttempts: 1, deviceResets: 0 });
+    expect(excludedWorkspaceAuthPath(relative(dataDir, options.profile).replaceAll("\\", "/"))).toBe(true);
+  });
+
   it("loads lazily and uses real catalog modes, safe cards and cursors", async () => {
     const { provider, client, load } = fixture();
     expect(load).not.toHaveBeenCalled();
