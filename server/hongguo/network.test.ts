@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import type { RequestOptions } from "node:https";
+import type { TransportRequest } from "openhongguo";
 import { afterEach, expect, it, vi } from "vitest";
 import { hongguoTransport } from "./provider.ts";
 import { hongguoMediaBytes, hongguoRequest, hongguoUrl } from "./network.ts";
@@ -30,10 +32,12 @@ it("passes an SDK-shaped signed POST through without hiding HTTP errors or decod
   const body = Uint8Array.from([1, 2, 3]);
   const responseBody = Buffer.from([0x1f, 0x8b, 0, 0]);
   const write = vi.fn();
+  const end = vi.fn();
   request.mockImplementation((_url: unknown, options: RequestOptions, done: (res: EventEmitter) => void) => {
     expect(options.method).toBe("POST");
     expect(options.headers).toEqual({ "x-signature": "synthetic", "content-type": "application/json" });
-    const req = Object.assign(new EventEmitter(), { write, end: () => {
+    const req = Object.assign(new EventEmitter(), { write, end: (sent?: Uint8Array) => {
+      end(sent);
       const response = Object.assign(new EventEmitter(), { statusCode: 403, headers: {
         "content-encoding": "gzip", "set-cookie": ["sid=one; Path=/", "flag=two; HttpOnly"],
       } });
@@ -44,7 +48,8 @@ it("passes an SDK-shaped signed POST through without hiding HTTP errors or decod
   const result = await hongguoTransport({ method: "POST", url: "https://api.fqnovel.com/play", headers: {
     "x-signature": "synthetic", "content-type": "application/json",
   }, body });
-  expect(write).toHaveBeenCalledWith(body);
+  expect(write).not.toHaveBeenCalled();
+  expect(end).toHaveBeenCalledWith(body);
   expect(result).toEqual({ status: 403, headers: { "content-encoding": "gzip" },
     cookies: { sid: "one", flag: "two" }, body: responseBody });
 });
@@ -94,4 +99,55 @@ it("pins the checked address, preserves bytes and refuses redirected private hos
   expect(result.body).toEqual(Buffer.from([0x1f, 0x8b]));
   await expect(hongguoMediaBytes("https://v.douyinvod.com/video")).rejects.toThrow("unsupported address");
   expect(request).toHaveBeenCalledTimes(2);
+});
+
+
+it("sends an SDK-generated playback body with known-length framing", async () => {
+  const sdk = await import("openhongguo");
+  let signed: TransportRequest | undefined;
+  const client = await sdk.createClient({ profile: sdk.memoryProfileStore(), retryAttempts: 1, deviceResets: 0,
+    transport: async (input) => {
+      const path = new URL(input.url).pathname;
+      if (path === "/service/2/device_register/") return { status: 200, headers: {},
+        cookies: { ttreq: "synthetic-ticket" }, body: Buffer.from(JSON.stringify({ new_user: 1,
+          device_id_str: "7000000000000000001", install_id_str: "7000000000000000002" })) };
+      if (path === "/novel/player/video_model/v1/") {
+        signed = input;
+        return { status: 200, headers: {}, body: new Uint8Array() };
+      }
+      throw new Error("Unexpected synthetic SDK request.");
+    },
+  });
+  await expect(client.resolvePlayback("7100000000000201")).rejects.toMatchObject({ code: "ANONYMOUS_LIMITED" });
+  expect(signed).toBeDefined();
+  expect(signed!.method).toBe("POST");
+  expect(new URL(signed!.url).pathname).toBe("/novel/player/video_model/v1/");
+  expect(signed!.body.byteLength).toBeGreaterThan(0);
+
+  lookup.mockResolvedValue([{ address: "8.8.8.8", family: 4 }]);
+  const digest = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
+  let sameUrl = false;
+  let sameHeaders = false;
+  let endedBody: Uint8Array | undefined;
+  const written: Uint8Array[] = [];
+  request.mockImplementation((url: URL, options: RequestOptions, done: (res: EventEmitter) => void) => {
+    sameUrl = digest(url.href) === digest(signed!.url);
+    sameHeaders = digest(JSON.stringify(options.headers)) === digest(JSON.stringify(signed!.headers));
+    expect(options.method).toBe("POST");
+    const req = Object.assign(new EventEmitter(), { write: (body: Uint8Array) => written.push(body),
+      end: (body?: Uint8Array) => {
+        endedBody = body;
+        const response = Object.assign(new EventEmitter(), { statusCode: 200, headers: {} });
+        done(response); response.emit("end"); req.emit("close");
+      }, destroy: vi.fn() });
+    return req;
+  });
+  const response = await hongguoTransport(signed!);
+  expect(response.status).toBe(200);
+  expect(request.mock.calls.length).toBe(1);
+  expect(sameUrl).toBe(true);
+  expect(sameHeaders).toBe(true);
+  expect(written.length).toBe(0);
+  expect(endedBody?.byteLength).toBe(signed!.body.byteLength);
+  expect(digest(endedBody!)).toBe(digest(signed!.body));
 });
