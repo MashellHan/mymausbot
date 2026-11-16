@@ -21,7 +21,7 @@ export interface HongguoProvider {
 type CatalogClient = Pick<Client, "search" | "shortRank" | "shortFilterPanel" | "shortFilter" | "newReleases"
   | "getSeriesBatch" | "resolvePlayback">;
 const providerId = (id: string) => /^\d{1,32}$/.test(id);
-const label = (value: string | undefined, max = 300) => (value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, max);
+const label = (value: string | undefined, max = 300) => (value ?? "").replace(/\p{Cc}/gu, " ").trim().slice(0, max);
 const number = (value: number | undefined) => Number.isFinite(value) && value! >= 0 && value! <= 1_000_000 ? value! : null;
 const imageUrl = (value: string | undefined) => value && value.length <= 2048 ? hongguoUrl(value, "image")?.href ?? null : null;
 

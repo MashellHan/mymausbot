@@ -5,7 +5,7 @@ import { hongguoUrl } from "../hongguo/network.ts";
 import { appFailure } from "./validation.ts";
 
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER - 1);
-const id = z.string().trim().min(1).max(256).refine((value) => !/[\x00-\x1f\x7f]/.test(value));
+const id = z.string().trim().min(1).max(256).refine((value) => !/\p{Cc}/u.test(value));
 const label = z.string().trim().min(1).max(300);
 const httpsUrl = z.url().max(2048).refine((value) => Boolean(hongguoUrl(value, "image")));
 const optionalUrl = httpsUrl.nullable();

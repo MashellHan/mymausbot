@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHongguoProvider } from "./provider.ts";
 
 function fixture() {
-  const series = { id: "10", title: "A series", episode_count: 2, cover_url: "https://p.fqnovelpic.com/cover.jpg" };
+    const series = { id: "10", title: "A\u0000series", episode_count: 2, cover_url: "https://p.fqnovelpic.com/cover.jpg" };
   const client = {
     search: vi.fn(async () => ({ items: [series, { id: "bad/id", title: "Invalid" }], has_more: true, cursor: "next" })),
     shortRank: vi.fn(async () => ({ items: [{ series_id: "10", title: "A series" }], has_more: false, contents: [], content: "all", board: "1" })),
@@ -29,6 +29,7 @@ describe("Hongguo provider", () => {
     expect(load).not.toHaveBeenCalled();
     const page = await provider.catalog({ expectedRevision: 1, mode: "search", query: "family" });
     expect(page.items.map((item) => item.id)).toEqual(["10"]);
+    expect(page.items[0]?.title).toBe("A series");
     expect(page.nextCursor).toBe("next");
     expect(client.search).toHaveBeenCalledWith("family", { cursor: undefined, pageSize: 24 });
     expect((await provider.catalog({ expectedRevision: 1, mode: "new" })).items.map((item) => item.id)).toEqual(["10"]);
