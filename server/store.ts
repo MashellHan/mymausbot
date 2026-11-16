@@ -2149,7 +2149,7 @@ export class Store {
     return task;
   }
 
-  forkTask(botId: string, sourceThreadId: string, messageId: string): TaskRecord | null {
+  forkTask(botId: string, sourceThreadId: string, messageId: string, beforeShown?: (task: TaskRecord) => void): TaskRecord | null {
     const bot = this.bot(botId);
     const source = this.taskByThread(botId, sourceThreadId);
     if (!bot || !source) return null;
@@ -2170,6 +2170,7 @@ export class Store {
     importFork(task.threadId, history, messageId, () => this.commitBotChange(bot, "the forked thread", () => {
       bot.tasks = [task, ...(bot.tasks ?? [])];
     }));
+    beforeShown?.(task);
     this.emit({ type: "bot", botId });
     return task;
   }

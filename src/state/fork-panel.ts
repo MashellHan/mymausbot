@@ -25,6 +25,7 @@ export interface ForkPanelState {
   messages: Message[];
   activeLeafId: string | null;
   loading: boolean;
+  loadingAppends: string[];
   loadId: string;
   loadFailed: boolean;
 }
@@ -44,7 +45,7 @@ export function reduceForkPanel(state: AppState, action: ForkPanelAction): AppSt
     case "openForkPanel":
       return { ...state, settingsOpen: false, computerOpen: false, inspectorOpen: false, activityOpen: false,
         forkPanel: { kind: action.kind, ownerId: action.ownerId, threadId: action.threadId, messages: [], activeLeafId: null,
-          loading: true, loadId: action.loadId ?? "", loadFailed: false } };
+          loading: true, loadingAppends: [], loadId: action.loadId ?? "", loadFailed: false } };
     case "forkPanelLoaded": {
       const panel = state.forkPanel;
       if (panel?.threadId !== action.threadId || panel.loadId !== action.loadId) return state;
@@ -52,8 +53,15 @@ export function reduceForkPanel(state: AppState, action: ForkPanelAction): AppSt
       const loaded = new Set(action.messages.map((message) => message.id));
       const messages = [...action.messages.map((message) => live.get(message.id) ?? message),
         ...panel.messages.filter((message) => !loaded.has(message.id))];
-      return { ...state, forkPanel: { ...panel, messages, activeLeafId: panel.activeLeafId ?? action.activeLeafId,
-        loading: false, loadFailed: false } };
+      let activeLeafId = panel.activeLeafId ?? action.activeLeafId;
+      if (panel.activeLeafId === null) {
+        for (const id of panel.loadingAppends) {
+          const message = live.get(id);
+          if (!loaded.has(id) && message && (message.parentId ?? null) === activeLeafId) activeLeafId = id;
+        }
+      }
+      return { ...state, forkPanel: { ...panel, messages, activeLeafId,
+        loading: false, loadingAppends: [], loadFailed: false } };
     }
     case "forkPanelLoadFailed":
       return state.forkPanel?.threadId === action.threadId && state.forkPanel.loadId === action.loadId
@@ -70,7 +78,9 @@ export function reduceForkPanel(state: AppState, action: ForkPanelAction): AppSt
       const activeLeafId = replacedOptimistic && panel.activeLeafId === optimisticId ? action.message.id
         : !action.patch && !panel.loading && !existing && (action.message.parentId ?? null) === panel.activeLeafId
           ? action.message.id : panel.activeLeafId;
-      return { ...state, forkPanel: { ...panel, messages, activeLeafId } };
+      const loadingAppends = panel.loading && !action.patch && !existing && !replacedOptimistic
+        ? [...panel.loadingAppends, action.message.id] : panel.loadingAppends;
+      return { ...state, forkPanel: { ...panel, messages, activeLeafId, loadingAppends } };
     }
     case "forkPanelActive":
       return state.forkPanel?.threadId === action.threadId

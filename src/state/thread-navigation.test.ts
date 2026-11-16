@@ -15,7 +15,7 @@ afterEach(() => setTeamChats(null));
 it("treats a visible fork as read without hiding notifications for another thread", () => {
   const state = { activeView: "chat" as const, selectedId: "bot", bots: [{ id: "bot", threadId: "main" }], groups: [],
     forkPanel: { kind: "bot" as const, ownerId: "bot", threadId: "fork", messages: [], activeLeafId: null,
-      loading: false, loadId: "load", loadFailed: false } };
+      loading: false, loadingAppends: [], loadId: "load", loadFailed: false } };
   expect(visibleNotificationThread(state, "fork")).toBe("fork");
   expect(visibleNotificationThread(state, "other")).toBe("main");
   expect(visibleNotificationThread({ ...state, forkPanel: { ...state.forkPanel, ownerId: "other" } }, "fork")).toBe("main");

@@ -174,9 +174,9 @@ export function createTaskRoutes(deps: TaskRouteDeps): RouteHandler & { deleteTa
       const notYours = cloudThreadRefusal(auth, m[2]);
       if (notYours) return json(res, 403, { error: notYours });
       if (threadBusy(bot.id, m[2])) return json(res, 409, { error: "this conversation is running — wait for it to finish" });
-      const task = store.forkTask(bot.id, m[2], body.messageId);
+      const task = store.forkTask(bot.id, m[2], body.messageId,
+        auth.kind === "session" ? (created) => threadStarters.set(created.threadId, actorKey(auth)) : undefined);
       if (!task) return json(res, 404, { error: "no such completed message in this conversation" });
-      if (auth.kind === "session") threadStarters.set(task.threadId, actorKey(auth));
       return json(res, 201, { bot: publicBot(store.bot(bot.id)!), task: wireTask(task, store.bot(bot.id)!.modelSelection) });
     }
 

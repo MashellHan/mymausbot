@@ -4000,7 +4000,7 @@ const handoffTicks = createHandoffTicks(), coordinator: Coordinator = createCoor
           withName: bot?.name ?? "Teammate", withColor: bot?.color ?? "blue" } }
           : { threadRef: { botId: child.botId, threadId: child.threadId, title: store.taskByThread(child.botId, child.threadId)?.title ?? "Teammate work" } }),
       });
-      if (group) store.markGroupThreadUnread(group.id, child.threadId, true);
+      if (group) store.markGroupThreadUnread(group.id, parent.threadId, true);
       else {
         if (!parent.parentId && parent.reply !== "poll") store.patchTask(parent.botId, parent.threadId, { unread: true });
         const source = store.bot(parent.botId);
@@ -14150,7 +14150,7 @@ if (await miniAppRoutes.internal({ method, path, res, json, botId: internalSende
         });
         internalCapability.roomPosts = (internalCapability.roomPosts ?? 0) + 1;
         detachParkedAudio?.();
-        store.markGroupThreadUnread(room.id, internalCapability.threadId, true);
+        store.markGroupThreadUnread(room.id, room.threadId, true);
         const chip: Omit<Message, "id" | "at"> = {
           role: "bot",
           kind: "activity",

@@ -1,11 +1,12 @@
 import { expect, it } from "vitest";
 import { addForkOptimistic, reduceForkPanel, type ForkPanelState } from "./fork-panel";
+import { visibleMessages } from "./snapshot-navigation";
 import { initialState, reducer, type AppState, type Message } from "./store";
 
 const source: Message = { id: "source", role: "user", kind: "text", text: "Start", at: 1, parentId: null };
 const panel = (): ForkPanelState => ({
   kind: "bot", ownerId: "bot", threadId: "fork", messages: [source], activeLeafId: source.id,
-  loading: false, loadId: "load-1", loadFailed: false,
+  loading: false, loadingAppends: [], loadId: "load-1", loadFailed: false,
 });
 const state = (): AppState => ({ ...initialState,
   bots: [{ id: "bot", threadId: "main", messages: [], tasks: [{ threadId: "fork" }] }], forkPanel: panel(),
@@ -38,4 +39,35 @@ it("ignores a stale failed load after retry and prefers live patches over fetche
     messages: [source], activeLeafId: source.id });
   expect(loaded.forkPanel?.messages[0]?.text).toBe("Updated");
   expect(loaded.forkPanel?.loadFailed).toBe(false);
+});
+
+it("extends the fetched leaf through live appends received during hydration", () => {
+  const loading = reduceForkPanel(state(), { type: "openForkPanel", kind: "bot", ownerId: "bot", threadId: "fork", loadId: "load-2" });
+  const next = { ...source, id: "next", text: "Next", at: 2, parentId: source.id };
+  const reply = { ...source, id: "reply", text: "Reply", at: 3, parentId: next.id };
+  const aside = { ...source, id: "aside", text: "Aside", at: 4, parentId: source.id };
+  let live = reduceForkPanel(loading, { type: "forkPanelMessage", threadId: "fork", message: next });
+  live = reduceForkPanel(live, { type: "forkPanelMessage", threadId: "fork", message: aside });
+  live = reduceForkPanel(live, { type: "forkPanelMessage", threadId: "fork", message: reply });
+  live = reduceForkPanel(live, { type: "forkPanelMessage", threadId: "fork", message: { ...source, text: "Patched" }, patch: true });
+  expect(reduceForkPanel(live, { type: "forkPanelLoaded", threadId: "fork", loadId: "old", messages: [source], activeLeafId: source.id })).toBe(live);
+  const loaded = reduceForkPanel(live, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2", messages: [source], activeLeafId: source.id });
+  expect(loaded.forkPanel?.messages.map((message) => message.id)).toEqual(["source", "next", "aside", "reply"]);
+  expect(loaded.forkPanel?.messages[0]?.text).toBe("Patched");
+  expect(loaded.forkPanel?.activeLeafId).toBe(reply.id);
+  expect(visibleMessages(loaded.forkPanel!).map((message) => message.id)).toEqual(["source", "next", "reply"]);
+  const child = { ...source, id: "child", text: "Child", at: 5, parentId: reply.id };
+  expect(reduceForkPanel(loaded, { type: "forkPanelMessage", threadId: "fork", message: child }).forkPanel?.activeLeafId).toBe(child.id);
+});
+
+it("keeps an explicit loading-time branch choice and does not select a patch-only row", () => {
+  const loading = reduceForkPanel(state(), { type: "openForkPanel", kind: "bot", ownerId: "bot", threadId: "fork", loadId: "load-2" });
+  const child = { ...source, id: "child", at: 2, parentId: source.id };
+  const appended = reduceForkPanel(loading, { type: "forkPanelMessage", threadId: "fork", message: child });
+  const selected = reduceForkPanel(appended, { type: "forkPanelActive", threadId: "fork", activeLeafId: source.id });
+  expect(reduceForkPanel(selected, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2",
+    messages: [source], activeLeafId: source.id }).forkPanel?.activeLeafId).toBe(source.id);
+  const patched = reduceForkPanel(loading, { type: "forkPanelMessage", threadId: "fork", message: child, patch: true });
+  expect(reduceForkPanel(patched, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2",
+    messages: [source], activeLeafId: source.id }).forkPanel?.activeLeafId).toBe(source.id);
 });
