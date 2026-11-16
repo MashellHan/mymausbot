@@ -3,6 +3,7 @@ import { Socket } from "node:net";
 import { expect, it, vi } from "vitest";
 
 import type { RequestAuth } from "../request-auth.ts";
+import { HongguoCovers } from "../hongguo/cover.ts";
 import { createMiniAppRoutes, createMiniAppsInternalRoutes } from "./mini-apps.ts";
 
 it("rejects local Mini App writes before reading a write-disallowed turn", async () => {
@@ -100,8 +101,9 @@ it("keeps Hongguo provider and scoped media behind the owner and revision gates"
     Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
     req.method = method;
     req.url = `/api/mini-apps/${id}/hongguo/${suffix}`;
+    const res = new ServerResponse(req);
     return route({ method, path, url: new URL(`http://127.0.0.1${req.url}`),
-      req, res: new ServerResponse(req), auth, json, readBody: async () => body });
+      req, res, auth, json, readBody: async () => body }).then(() => res);
   };
   const ownerAuth: RequestAuth = { kind: "loopback", scopes: ["admin"] };
   await call("POST", "catalog", { kind: "loopback", scopes: [] }, { expectedRevision: 3, mode: "popular" });
@@ -119,6 +121,22 @@ it("keeps Hongguo provider and scoped media behind the owner and revision gates"
   await call("GET", "media/token?expectedRevision=3&extra=1", ownerAuth);
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 400, expect.objectContaining({ error: expect.any(String) }));
   expect(serveMedia).toHaveBeenCalledTimes(1);
+
+  const image = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+  const getCover = vi.spyOn(HongguoCovers.prototype, "get").mockResolvedValue(image);
+  const cover = `cover?expectedRevision=3&url=${encodeURIComponent("https://p.fqnovelpic.com/poster.heic")}`;
+  await call("GET", cover, { kind: "loopback", scopes: [] });
+  expect(getCover).not.toHaveBeenCalled();
+  await call("GET", "cover?expectedRevision=2&url=https%3A%2F%2Fp.fqnovelpic.com%2Fposter.heic&extra=1", ownerAuth);
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 400, expect.objectContaining({ error: expect.any(String) }));
+  const response = await call("GET", cover, ownerAuth);
+  expect(getCover).toHaveBeenCalledWith("https://p.fqnovelpic.com/poster.heic", expect.any(AbortSignal));
+  expect(response.statusCode).toBe(200);
+  expect(response.getHeader("content-type")).toBe("image/jpeg");
+  expect(response.getHeader("x-content-type-options")).toBe("nosniff");
+  expect(response.getHeader("content-length")).toBe(String(image.length));
+  expect(requireHongguo).toHaveBeenLastCalledWith(expect.objectContaining({ writeAllowed: true }), id, 3);
+  getCover.mockRestore();
 });
 
 it("keeps suggestions behind the local owner gate and passes only the selected Bot task", async () => {

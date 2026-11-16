@@ -19,6 +19,7 @@ import { ReportStore } from "../mini-apps/report-store.ts";
 import { DefaultMiniApps } from "../mini-apps/defaults.ts";
 import { parseHongguoCatalog, parseHongguoCatalogResult, parseHongguoPlayback, parseHongguoPreparedPlayback,
   parseHongguoSeries, parseHongguoSeriesResult } from "../mini-apps/hongguo-validation.ts";
+import { HongguoCovers } from "../hongguo/cover.ts";
 import type { HongguoProvider } from "../hongguo/provider.ts";
 import { MiniAppSuggestions } from "../mini-apps/suggestions.ts";
 import type { SideJobText } from "../side-jobs.ts";
@@ -34,6 +35,7 @@ const REPORT_SOURCE = `${ROOT}/report-source`;
 const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive))?$/;
 const HONGGUO_ACTION = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/(catalog|series|playback|history|preferences)$/;
 const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Za-z0-9_-]{1,256})$/;
+const HONGGUO_COVER = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/cover$/;
 const SOURCE = z.object({ botId: z.string().regex(/^[\w-]{1,128}$/) }).strict();
 const INTERNAL_ID = z.object({ app_id: z.uuid() }).strict();
 const CONNECT = z.object({}).strict();
@@ -98,6 +100,7 @@ async function hongguoProviderResult<T>(read: () => Promise<T>): Promise<T> {
 
 export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
   const defaults = new DefaultMiniApps(deps);
+  const covers = new HongguoCovers();
   return async (ctx) => {
     const { req, res, path, method, auth, json, readBody, url } = ctx;
     if (path !== ROOT && !path.startsWith(`${ROOT}/`)) return PASS;
@@ -111,7 +114,34 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
     try {
       assertOwner();
       const hongguoMedia = HONGGUO_MEDIA.exec(path);
-      if (url.search && !hongguoMedia) throw appFailure(400, "Query parameters are not supported.");
+      const hongguoCover = HONGGUO_COVER.exec(path);
+      if (url.search && !hongguoMedia && !hongguoCover) throw appFailure(400, "Query parameters are not supported.");
+      if (hongguoCover) {
+        if (method !== "GET") throw appFailure(405, "Method not allowed.");
+        const rawRevision = url.searchParams.get("expectedRevision");
+        const coverUrl = url.searchParams.get("url");
+        if (url.searchParams.size !== 2 || url.searchParams.getAll("expectedRevision").length !== 1
+          || url.searchParams.getAll("url").length !== 1 || !rawRevision || !/^[1-9]\d*$/.test(rawRevision)
+          || !Number.isSafeInteger(Number(rawRevision)) || !coverUrl) throw appFailure(400, "Invalid Hongguo cover request.");
+        const id = hongguoCover[1]!;
+        const revision = Number(rawRevision);
+        deps.apps.requireHongguo(owner, id, revision);
+        const abort = new AbortController();
+        const onClose = () => abort.abort();
+        res.once("close", onClose);
+        try {
+          const bytes = await hongguoProviderResult(() => covers.get(coverUrl, abort.signal));
+          deps.apps.requireHongguo(owner, id, revision);
+          if (abort.signal.aborted) return;
+          res.statusCode = 200;
+          res.setHeader("content-type", "image/jpeg");
+          res.setHeader("content-length", String(bytes.length));
+          res.setHeader("x-content-type-options", "nosniff");
+          res.setHeader("content-security-policy", "default-src 'none'");
+          res.end(bytes);
+          return;
+        } finally { res.off("close", onClose); }
+      }
       if (hongguoMedia) {
         if (method !== "GET") throw appFailure(405, "Method not allowed.");
         if (url.searchParams.size !== 1 || url.searchParams.getAll("expectedRevision").length !== 1) {
