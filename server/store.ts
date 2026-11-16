@@ -27,7 +27,7 @@ import { lastChangeRequestUrl } from "../shared/thread-link.ts";
 import { REMOVED_COMPUTER_DRIVER, type ComputerEngineMove } from "./computer-engine-removal.ts";
 import type { TeamSetupRequest, TeamSetupResult } from "../shared/team-setup.ts";
 import type { GroupGoalRunCardData } from "../shared/group-goal-run.ts";
-import { isMentionBoundary, isMentionNameContinuation } from "../shared/mention-boundary.ts"; import { resolveMentions } from "../shared/room-mentions.ts";
+import { resolveMentions } from "../shared/room-mentions.ts";
 import type { HandedState } from "./delta-context.ts";
 import type { AgentPart, PartPair, RoomPart } from "./package-parts.ts";
 import type {
@@ -41,8 +41,11 @@ import { sameModelSelection } from "../shared/thread-model.ts";
 import { initialGreetingMessage } from "./initial-greeting.ts"; import { createDefaultBot, defaultBotRefusal, type DefaultBotIntro } from "./default-bot.ts";
 import { appsFromCreator } from "./inherited-apps.ts"; import { newBotOwner, sharedAsMaker, sharedUnlessRestricted, type NewBotSharingRule } from "./new-bot-sharing.ts";
 import { ThreadCache, type ThreadState } from "./thread-cache.ts";
-import { titleFromMessage, UNTITLED_TASK } from "./thread-title.ts";
-export { titleFromMessage, UNTITLED_TASK } from "./thread-title.ts";
+import { titleFromMessage, UNTITLED_TASK, UNTITLED_THREAD, threadTitleFrom } from "./thread-title.ts";
+import { normalizeGroupDefaultResponder, pruneRoomHolds } from "./room-response.ts";
+import { forkHistory, importFork } from "./fork-history.ts";
+export { titleFromMessage, UNTITLED_TASK, UNTITLED_THREAD, threadTitleFrom, titleFromLlm } from "./thread-title.ts";
+export { normalizeGroupDefaultResponder, roomResponders, pruneRoomHolds } from "./room-response.ts";
 export type {
   BotActivity, GroupDefaultResponder, OptionCardData,
   SecretRequestCardData, Surface, TaskClosedBy, TaskOpenedBy, TaskUsage,
@@ -113,7 +116,7 @@ export type TaskPatch = Partial<Pick<TaskRecord, typeof TASK_PATCH_FIELDS[number
 export type GroupTaskPatch = Partial<Pick<GroupTaskRecord, "title" | "pinned">> & { turnTimeoutMinutes?: number | null; archivedAt?: number | null; activity?: "waiting-on-you" | null };
 
 function mirrorActiveGroupTask(group: GroupRecord, task: GroupTaskRecord): void {
-  Object.assign(group, { threadId: task.threadId, pinnedCwd: task.pinnedCwd, pinnedMessageId: task.pinnedMessageId });
+  Object.assign(group, { threadId: task.threadId, pinnedCwd: task.pinnedCwd, pinnedMessageId: task.pinnedMessageId, lastReadMessageId: task.lastReadMessageId });
 }
 
 function persistedPin<T extends { pinned?: boolean }>(task: T): T {
@@ -137,29 +140,6 @@ export type StoreChange =
   | { type: "bots.order" } | { type: "groups.order" }
   | { type: "group"; groupId: string }
   | { type: "group.deleted"; groupId: string };
-
-export const UNTITLED_THREAD = "New thread";
-
-/** Every title (a bot's or a person's) passes through here, so equality tells a machine-made title from a rename. */
-const TASK_TITLE_MAX = 80;
-export function threadTitleFrom(title?: string): string {
-  return title?.trim().slice(0, TASK_TITLE_MAX) || UNTITLED_THREAD;
-}
-
-export function titleFromLlm(raw: string): string | null {
-  const line = raw
-    .trim()
-    .split("\n")[0]!
-    .replace(/^[#*\-\u2022]+/, "")
-    .replace(/^["'\u201C\u201D\u2018\u2019\u0060]+/, "")
-    .replace(/["'\u201C\u201D\u2018\u2019\u0060]+$/, "")
-    .replace(/^[#*\-\u2022]+/, "")
-    .replace(/[#*]+$/, "")
-    .replace(/[.\u3002]+$/, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return line.length >= 1 && line.length <= 48 ? line : null;
-}
 
 export interface BotRecord extends Omit<WireBot, "avatarUrl" | "tasks"> {
   tasks?: TaskRecord[];
@@ -205,75 +185,6 @@ export const sectionKey = (section?: string | null): string => section?.trim() |
 
 export function mentionedBots<T extends { id?: string; name: string; hidden?: boolean }>(text: string, peers: T[], picked: readonly string[] = []): T[] {
   return resolveMentions(text, peers, picked).bots;
-}
-
-export function normalizeGroupDefaultResponder(
-  value: unknown,
-  memberIds: string[],
-  dm = false,
-): GroupDefaultResponder {
-  if (dm) return { kind: "mentions" };
-  if (value && typeof value === "object") {
-    const candidate = value as { kind?: unknown; botId?: unknown; fallbackBotId?: unknown };
-    if (candidate.kind === "everyone") return { kind: "everyone" };
-    if (candidate.kind === "mentions") return { kind: "mentions" };
-    if (candidate.kind === "auto") {
-      return typeof candidate.fallbackBotId === "string" && memberIds.includes(candidate.fallbackBotId)
-        ? { kind: "auto", fallbackBotId: candidate.fallbackBotId }
-        : { kind: "auto" };
-    }
-    if (
-      candidate.kind === "member" &&
-      typeof candidate.botId === "string" &&
-      memberIds.includes(candidate.botId)
-    ) {
-      return { kind: "member", botId: candidate.botId };
-    }
-  }
-  if (memberIds.length === 0) return { kind: "mentions" };
-  return { kind: "member", botId: memberIds[0] };
-}
-
-export function roomResponders<T extends { id: string; name: string; hidden?: boolean }>(
-  text: string,
-  members: T[],
-  defaultResponder: GroupDefaultResponder,
-  picked: readonly string[] = [],
-): T[] {
-  const available = members.filter((member) => !member.hidden);
-  const everyone = "everyone";
-  for (let at = text.indexOf("@"); at !== -1; at = text.indexOf("@", at + 1)) {
-    const candidate = text.slice(at + 1, at + 1 + everyone.length);
-    if (
-      isMentionBoundary(text, at) &&
-      candidate.toLocaleLowerCase() === everyone &&
-      !isMentionNameContinuation(text.slice(at + 1 + everyone.length))
-    ) {
-      return available;
-    }
-  }
-  const { bots, ambiguous } = resolveMentions(text, available, picked);
-  const mentioned = bots.filter((bot) => !ambiguous.some((sharing) => sharing.includes(bot)));
-  if (mentioned.length) return mentioned;
-  if (defaultResponder.kind === "everyone") return available;
-  if (defaultResponder.kind === "member") {
-    const lead = available.find((member) => member.id === defaultResponder.botId);
-    return lead ? [lead] : [];
-  }
-  if (defaultResponder.kind === "auto") {
-    const fallback = available.find((member) => member.id === defaultResponder.fallbackBotId) ?? available[0];
-    return fallback ? [fallback] : [];
-  }
-  return [];
-}
-
-export function pruneRoomHolds(group: Pick<GroupRecord, "memberIds" | "holds" | "heldMessages">): void {
-  for (const key of ["holds", "heldMessages"] as const) {
-    const map = group[key];
-    if (!map) continue;
-    const kept = Object.fromEntries(Object.entries(map).filter(([botId]) => group.memberIds.includes(botId)));
-    if (Object.keys(kept).length !== Object.keys(map).length) (group as Record<typeof key, unknown>)[key] = kept;
-  }
 }
 
 function taskCountsAsBotUnread(task: { unread?: boolean; routineRunId?: string }): boolean {
@@ -509,6 +420,14 @@ export class Store {
       }
       g.pinnedCwd = active.pinnedCwd;
       g.pinnedMessageId = active.pinnedMessageId;
+      if (g.lastReadMessageId && !active.lastReadMessageId) {
+        active.lastReadMessageId = g.lastReadMessageId;
+        groupsMigrated = true;
+      }
+      if (g.unread && !g.tasks.some((task) => task.unread)) {
+        active.unread = true;
+        groupsMigrated = true;
+      }
     }
     if (groupsMigrated) this.saveGroups();
     const clearModelCopies = !existsSync(THREAD_MODEL_COPIES_CLEARED) && (botsLoaded || !existsSync(BOTS_FILE));
@@ -896,6 +815,15 @@ export class Store {
     }
     this.commitGroupChange(group, group.dm ? "the chat's settings" : "the room's settings", () => {
       Object.assign(group, stored);
+      if (!group.dm && stored.unread !== undefined) {
+        const active = this.activeGroupTask(group.id);
+        if (active) active.unread = stored.unread;
+        group.unread = Boolean(group.tasks?.some((task) => task.unread));
+      }
+      if (!group.dm && stored.lastReadMessageId) {
+        const active = this.activeGroupTask(group.id);
+        if (active) active.lastReadMessageId = stored.lastReadMessageId;
+      }
       if (Object.prototype.hasOwnProperty.call(stored, "turnTimeoutMinutes") && stored.turnTimeoutMinutes == null) {
         delete group.turnTimeoutMinutes;
       }
@@ -999,6 +927,23 @@ export class Store {
     return group.tasks?.find((task) => task.threadId === threadId);
   }
 
+  markGroupThreadUnread(groupId: string, threadId: string, unread: boolean, lastReadMessageId?: string): GroupRecord | null {
+    const group = this.group(groupId);
+    if (group?.dm && group.threadId === threadId) return this.patchGroup(groupId, { unread, ...(!unread && lastReadMessageId ? { lastReadMessageId } : {}) });
+    const task = this.groupTaskByThread(groupId, threadId);
+    if (!group || !task) return null;
+    this.commitGroupChange(group, "the thread's read state", () => {
+      task.unread = unread;
+      group.unread = group.tasks!.some((candidate) => candidate.unread);
+      if (!unread && lastReadMessageId) {
+        task.lastReadMessageId = lastReadMessageId;
+        if (threadId === group.threadId) group.lastReadMessageId = lastReadMessageId;
+      }
+    });
+    this.emit({ type: "group", groupId });
+    return group;
+  }
+
   createGroupTask(groupId: string, title?: string, activate = true): GroupTaskRecord | null {
     const group = this.group(groupId);
     if (!group || group.dm) return null;
@@ -1013,6 +958,29 @@ export class Store {
       group.tasks = [task, ...(group.tasks ?? [])];
       if (activate) mirrorActiveGroupTask(group, task);
     });
+    this.emit({ type: "group", groupId });
+    return task;
+  }
+
+  forkGroupTask(groupId: string, sourceThreadId: string, messageId: string): GroupTaskRecord | null {
+    const group = this.group(groupId);
+    const source = this.groupTaskByThread(groupId, sourceThreadId);
+    if (!group || !source) return null;
+    const history = forkHistory(this.activePath(sourceThreadId), messageId);
+    if (!history) return null;
+    const createdAt = Date.now();
+    const task: GroupTaskRecord = {
+      threadId: newId(),
+      title: titleFromMessage(history.at(-1)?.text ?? ""),
+      createdAt,
+      updatedAt: createdAt,
+      origin: { threadId: sourceThreadId, messageId },
+      lastReadMessageId: messageId,
+      ...(source.pinnedCwd !== undefined ? { pinnedCwd: source.pinnedCwd } : {}),
+    };
+    importFork(task.threadId, history, messageId, () => this.commitGroupChange(group, "the forked thread", () => {
+      group.tasks = [task, ...(group.tasks ?? [])];
+    }));
     this.emit({ type: "group", groupId });
     return task;
   }
@@ -1077,6 +1045,7 @@ export class Store {
     mdb.deleteThreads(deleted, () => this.commitGroupChange(group, "the thread deletion", () => {
       group.tasks = group.tasks!.filter((task) => !doomed.has(task.threadId));
       if (doomed.has(group.threadId)) mirrorActiveGroupTask(group, group.tasks[0]!);
+      group.unread = group.tasks.some((task) => task.unread);
     }));
     for (const id of deleted) this.deleteThreadRecord(id, true);
     this.emit({ type: "group", groupId });
@@ -2177,6 +2146,32 @@ export class Store {
       if (activate) this.mirrorActiveTask(bot, task);
     });
     beforeShown?.(task); this.emit({ type: "bot", botId });
+    return task;
+  }
+
+  forkTask(botId: string, sourceThreadId: string, messageId: string, beforeShown?: (task: TaskRecord) => void): TaskRecord | null {
+    const bot = this.bot(botId);
+    const source = this.taskByThread(botId, sourceThreadId);
+    if (!bot || !source) return null;
+    const history = forkHistory(this.activePath(sourceThreadId), messageId);
+    if (!history) return null;
+    const sourceView = this.projectBotForTask(botId, sourceThreadId)!;
+    const task = this.buildTask(bot, titleFromMessage(history.at(-1)?.text ?? ""), source.projectId, undefined,
+      undefined, source.modelSelection, source.cwd ?? undefined);
+    if (source.cwd === null) task.cwd = null;
+    if (source.modelSelection) task.modelSelection = structuredClone(source.modelSelection);
+    task.approvalMode = approvalModeFor(sourceView);
+    task.autoApprove = task.approvalMode === "auto";
+    task.alwaysAllow = structuredClone(sourceView.alwaysAllow ?? []);
+    task.outside = source.outside;
+    task.botApi = source.botApi;
+    task.origin = { threadId: sourceThreadId, messageId };
+    task.lastReadMessageId = messageId;
+    importFork(task.threadId, history, messageId, () => this.commitBotChange(bot, "the forked thread", () => {
+      bot.tasks = [task, ...(bot.tasks ?? [])];
+    }));
+    beforeShown?.(task);
+    this.emit({ type: "bot", botId });
     return task;
   }
 

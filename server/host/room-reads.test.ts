@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 
+import type { WireGroup } from "../../shared/wire.ts";
 import { personKey } from "../person-key.ts";
 import { createPersonRooms, createRoomReads, roomUnreadFor } from "./room-reads.ts";
 
@@ -36,6 +37,33 @@ it("keeps each person's line apart and across a restart", () => {
   expect(createRoomReads(dir).readUpTo("room", "p_ada")).toBe("m2");
   reads.forgetRoom("room");
   expect(createRoomReads(dir).readUpTo("room", "p_ada")).toBeUndefined();
+});
+
+it("keeps each person's room fork read line private and separate from the main conversation", () => {
+  const reads = createRoomReads(mkdtempSync(join(tmpdir(), "room-fork-reads-")));
+  const paths = new Map([
+    ["main", [{ id: "main-user", role: "user" }, { id: "main-reply", role: "bot", kind: "text" }]],
+    ["fork", [{ id: "fork-user", role: "user" }, { id: "fork-reply", role: "bot", kind: "text" }]],
+  ]);
+  const group = { id: "room", threadId: "main", unread: true, tasks: [
+    { threadId: "main", unread: true, lastReadMessageId: "shared-main" },
+    { threadId: "fork", unread: true, lastReadMessageId: "shared-fork" },
+  ] } as WireGroup;
+  const rooms = createPersonRooms({ reads, store: () => ({
+    activePath: (threadId) => paths.get(threadId) ?? [], messagesFor: (threadId) => paths.get(threadId) ?? [], botByThread: () => null,
+  }), newestMessageId: (threadId) => paths.get(threadId)?.at(-1)?.id,
+  shared: () => false, wireBot: () => null, publicGroupState: () => group, broadcast: () => {},
+  });
+  reads.read("room", "ada", "main-reply", "main");
+  expect(rooms.groupForPerson(group, "ada")).toMatchObject({ unread: true, tasks: [
+    { threadId: "main", unread: false, lastReadMessageId: "main-reply" },
+    { threadId: "fork", unread: true },
+  ] });
+  expect(rooms.groupForPerson(group, "ada").tasks?.[1]).not.toHaveProperty("lastReadMessageId");
+  reads.read("room", "ada", "fork-reply", "fork");
+  expect(rooms.groupForPerson(group, "ada").unread).toBe(false);
+  expect(rooms.groupForPerson(group, "ben").unread).toBe(true);
+  expect(rooms.groupForPerson(group, "ben").tasks?.[1]).not.toHaveProperty("lastReadMessageId");
 });
 
 it("forgets a person's lines in every room, and one person's line in one room", () => {

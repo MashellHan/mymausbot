@@ -119,10 +119,17 @@ export interface BotMovedTo {
 
 /** One task = one conversation with its own context, thread and provider
  * session. */
+export interface ForkOrigin {
+  threadId: string;
+  messageId: string;
+}
+
 export interface WireTask extends InboxTask {
   /** Outstanding handoffs, not an active provider turn. */
   waitingForTeammates?: boolean;
   threadId: string;
+  /** The completed message whose visible history seeded this conversation. */
+  origin?: ForkOrigin;
   title: string;
   createdAt: number;
   /** The first message already drove a title attempt for this thread, so a
@@ -803,6 +810,10 @@ export type GroupDefaultResponder =
 /** One independent conversation inside a user-created channel. */
 export interface GroupTask {
   threadId: string;
+  unread?: boolean;
+  lastReadMessageId?: string;
+  /** The completed message whose visible history seeded this conversation. */
+  origin?: ForkOrigin;
   title: string;
   createdAt: number;
   pinnedCwd?: string | null;

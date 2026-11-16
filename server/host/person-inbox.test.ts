@@ -56,6 +56,7 @@ describe("pending assistant answers", () => {
   it.each(["person", "room"] as const)("does not send a stale answer to the asking %s", async (destination) => {
     const { f, inbox, row, complete } = await pending(destination);
     expect(f.team.replyIn(session(BEN.email), inbox, row.id, "I am busy tomorrow.", {})?.status).toBe(202);
+    if (destination === "room") expect(f.unread).toContain("room-thread");
     const before = f.lines(destination === "person" ? f.inboxOf(CLEO).threadId : "room-thread").slice();
     const notified = f.notified.slice();
     await complete();

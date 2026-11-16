@@ -82,6 +82,38 @@ it("never shows another member or an admin a conversation someone opens, from it
   for (const stream of [...Object.values(streams), own]) await stream.close();
 }, hostTimeout(90_000));
 
+it("keeps a private message fork out of another member's first bot frame", async () => {
+  const opened = await team.as(mira, "POST", `/api/bots/${scout.id}/tasks`, { title: "Private source" });
+  expect(opened.status).toBe(201);
+  const sourceThreadId = opened.body.task.threadId as string;
+  const secret = "Mira's private kumquat plan";
+  expect((await team.as(mira, "POST", `/api/bots/${scout.id}/messages`, { threadId: sourceThreadId, text: secret })).status).toBe(202);
+  const history = async () => (await team.as(mira, "GET", `/api/threads/${sourceThreadId}/messages?limit=100`)).body.messages as Array<{ id: string; role: string; text?: string }>;
+  await expect.poll(async () => (await history()).some((message) => message.role === "bot"), { timeout: 20_000 }).toBe(true);
+  const anchor = (await history()).find((message) => message.role === "user" && message.text === secret)!;
+  const before = { ada: view(await scoutOf(ada)), ben: view(await scoutOf(ben)) };
+  const streams = { ada: await listen(ada), ben: await listen(ben) };
+  const own = await listen(mira);
+  const counts = { ada: botFrames(streams.ada.text(), scout.id).length, ben: botFrames(streams.ben.text(), scout.id).length };
+  try {
+    const forked = await team.as(mira, "POST", `/api/bots/${scout.id}/tasks/${sourceThreadId}/forks`, { messageId: anchor.id });
+    expect(forked.status, JSON.stringify(forked.body)).toBe(201);
+    const forkThreadId = forked.body.task.threadId as string;
+    await expect.poll(() => own.text().includes(forkThreadId), { timeout: 10_000 }).toBe(true);
+    expect((await scoutOf(mira)).tasks!.some((task) => task.threadId === forkThreadId)).toBe(true);
+    for (const [who, token] of [["ada", ada], ["ben", ben]] as const) {
+      const first = botFrames(streams[who].text(), scout.id).slice(counts[who])[0];
+      expect(first, `${who}: first fork bot frame`).toBeDefined();
+      expect(first!.tasks?.map((task) => task.threadId)).not.toContain(forkThreadId);
+      expect(JSON.stringify(first), `${who}: first fork bot frame`).not.toContain(secret);
+      expect(streams[who].text()).not.toContain(forkThreadId);
+      expect(view(await scoutOf(token))).toEqual(before[who]);
+    }
+  } finally {
+    for (const stream of [...Object.values(streams), own]) await stream.close();
+  }
+}, hostTimeout(90_000));
+
 it("keeps a new Just me routine chat private from its first published frame", async () => {
   const dana = (await team.pair(DANA)).token!;
   const before = { ada: view(await scoutOf(ada)), ben: view(await scoutOf(ben)) };
