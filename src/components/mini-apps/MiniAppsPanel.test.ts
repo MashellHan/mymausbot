@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+// @vitest-environment-options {"settings":{"disableIframePageLoading":true}}
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -216,6 +217,35 @@ describe("Mini Apps panel", () => {
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe(MOJO_ID));
     expect(host.querySelector('[data-testid="mojo-whole-page"]')).toBeNull();
+  });
+
+  it.each([
+    ["quotes", "inventory"], ["quotes", "state"], ["poetry", "inventory"], ["poetry", "state"],
+  ] as const)("retires Mojo %s on a failed %s refresh and restores it after recovery", async (view, failure) => {
+    fixture.apps = [app(MOJO_ID, "Mojo")];
+    fixture.mojoHtml = `<html><head>${MOJO_MARKER}</head><body>Quotes</body></html>`;
+    await render();
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="mojo-whole-page"]')).not.toBeNull());
+    if (view === "poetry") {
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-mojo-tab="poetry"]')!.click());
+      expect(host.querySelector<HTMLIFrameElement>('[data-app-preview-frame]')?.src).toBe("https://mao.hexly.ai/#poem=03");
+    }
+    if (failure === "inventory") fixture.api.mockRejectedValueOnce(new Error("Fixture inventory offline"));
+    else fixture.failState = true;
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.textContent).toContain("Showing the last loaded version"));
+    expect(host.querySelector('[data-testid="mojo-whole-page"]')).toBeNull();
+    expect(host.querySelector('[data-mojo-tab="poetry"]')).toBeNull();
+    expect(host.querySelector('[data-app-preview-frame]')).toBeNull();
+    expect(frame()?.dataset.id).toBe(MOJO_ID);
+    fixture.failState = false;
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="mojo-whole-page"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("Showing the last loaded version");
+    expect(host.querySelector('[data-app-preview-frame]')).toBeNull();
+    expect(frame()?.dataset.id).toBe(MOJO_ID);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-mojo-tab="poetry"]')!.click());
+    expect(host.querySelector<HTMLIFrameElement>('[data-app-preview-frame]')?.src).toBe("https://mao.hexly.ai/#poem=03");
   });
 
   it("does not open the remote sibling for a paired desktop's owner-like UI state", async () => {

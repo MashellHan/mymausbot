@@ -95,7 +95,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     && selected?.nativeKind === "hongguo" && document?.app.nativeKind === "hongguo";
   const hongguoRecovery = currentHead && owner === true && selected?.nativeIdentity === "hongguo" && document?.app.nativeIdentity === "hongguo"
     && !selected?.nativeKind && !document?.app.nativeKind;
-  const mojoCurrent = mojoHostEligible({ selected, document, state: appState,
+  const mojoCurrent = !stale && mojoHostEligible({ selected, document, state: appState,
     localOwner: owner === true && typeof window !== "undefined" && window.ogb?.remoteClient?.active !== true, nativeGuard });
 
   useEffect(() => {
