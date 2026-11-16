@@ -60,13 +60,23 @@ it("extends the fetched leaf through live appends received during hydration", ()
   expect(reduceForkPanel(loaded, { type: "forkPanelMessage", threadId: "fork", message: child }).forkPanel?.activeLeafId).toBe(child.id);
 });
 
-it("keeps an explicit loading-time branch choice and does not select a patch-only row", () => {
+it("keeps loading-time branch choices while following later descendants, not earlier or off-path rows", () => {
   const loading = reduceForkPanel(state(), { type: "openForkPanel", kind: "bot", ownerId: "bot", threadId: "fork", loadId: "load-2" });
   const child = { ...source, id: "child", at: 2, parentId: source.id };
   const appended = reduceForkPanel(loading, { type: "forkPanelMessage", threadId: "fork", message: child });
   const selected = reduceForkPanel(appended, { type: "forkPanelActive", threadId: "fork", activeLeafId: source.id });
   expect(reduceForkPanel(selected, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2",
     messages: [source], activeLeafId: source.id }).forkPanel?.activeLeafId).toBe(source.id);
+  const later = { ...child, id: "later", at: 3 };
+  const reply = { ...child, id: "reply", at: 4, parentId: later.id };
+  const aside = { ...child, id: "aside", at: 5 };
+  let live = reduceForkPanel(selected, { type: "forkPanelMessage", threadId: "fork", message: later });
+  live = reduceForkPanel(live, { type: "forkPanelMessage", threadId: "fork", message: aside });
+  live = reduceForkPanel(live, { type: "forkPanelMessage", threadId: "fork", message: reply });
+  const loaded = reduceForkPanel(live, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2",
+    messages: [source], activeLeafId: source.id });
+  expect(loaded.forkPanel?.activeLeafId).toBe(reply.id);
+  expect(visibleMessages(loaded.forkPanel!).map((message) => message.id)).toEqual([source.id, later.id, reply.id]);
   const patched = reduceForkPanel(loading, { type: "forkPanelMessage", threadId: "fork", message: child, patch: true });
   expect(reduceForkPanel(patched, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2",
     messages: [source], activeLeafId: source.id }).forkPanel?.activeLeafId).toBe(source.id);

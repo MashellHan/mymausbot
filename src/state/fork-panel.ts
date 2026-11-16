@@ -54,11 +54,9 @@ export function reduceForkPanel(state: AppState, action: ForkPanelAction): AppSt
       const messages = [...action.messages.map((message) => live.get(message.id) ?? message),
         ...panel.messages.filter((message) => !loaded.has(message.id))];
       let activeLeafId = panel.activeLeafId ?? action.activeLeafId;
-      if (panel.activeLeafId === null) {
-        for (const id of panel.loadingAppends) {
-          const message = live.get(id);
-          if (!loaded.has(id) && message && (message.parentId ?? null) === activeLeafId) activeLeafId = id;
-        }
+      for (const id of panel.loadingAppends) {
+        const message = live.get(id);
+        if (!loaded.has(id) && message && (message.parentId ?? null) === activeLeafId) activeLeafId = id;
       }
       return { ...state, forkPanel: { ...panel, messages, activeLeafId,
         loading: false, loadingAppends: [], loadFailed: false } };
@@ -84,7 +82,7 @@ export function reduceForkPanel(state: AppState, action: ForkPanelAction): AppSt
     }
     case "forkPanelActive":
       return state.forkPanel?.threadId === action.threadId
-        ? { ...state, forkPanel: { ...state.forkPanel, activeLeafId: action.activeLeafId } } : state;
+        ? { ...state, forkPanel: { ...state.forkPanel, activeLeafId: action.activeLeafId, loadingAppends: [] } } : state;
     case "closeForkPanel":
       return state.forkPanel ? { ...state, forkPanel: null } : state;
   }
