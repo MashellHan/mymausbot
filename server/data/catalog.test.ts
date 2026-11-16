@@ -8,6 +8,18 @@ import { DataCatalog } from "./catalog.ts";
 
 const fixtures: Array<{ db: DatabaseSync; dir: string }> = [];
 
+function withWrite<T>(db: DatabaseSync, write: (db: DatabaseSync) => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try { const result = write(db); db.exec("COMMIT"); return result; }
+  catch (error) {
+    try { db.exec("ROLLBACK"); }
+    catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], "Catalog write and rollback failed", { cause: error });
+    }
+    throw error;
+  }
+}
+
 function catalog(): DataCatalog {
   const dir = mkdtempSync(join(tmpdir(), "omb-data-catalog-"));
   const db = new DatabaseSync(join(dir, "messages.db"));
@@ -15,11 +27,7 @@ function catalog(): DataCatalog {
   db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL");
   return new DataCatalog({
     getDatabase: () => db,
-    withWrite: (write) => {
-      db.exec("BEGIN IMMEDIATE");
-      try { const result = write(db); db.exec("COMMIT"); return result; }
-      catch (error) { db.exec("ROLLBACK"); throw error; }
-    },
+    withWrite: (write) => withWrite(db, write),
   });
 }
 
@@ -31,6 +39,35 @@ afterEach(() => {
 });
 
 describe("Data catalog", () => {
+  it("preserves the first write error after a successful rollback", () => {
+    const db = catalog().currentDatabase();
+    db.exec("CREATE TABLE write_probe (value INTEGER)");
+    const primary = Object.assign(new Error("first write failed"), { code: "EIO" });
+    let caught: unknown;
+    try { withWrite(db, (active) => { active.exec("INSERT INTO write_probe VALUES (1)"); throw primary; }); }
+    catch (error) { caught = error; }
+    expect(caught).toBe(primary);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM write_probe").get()).toMatchObject({ count: 0 });
+    withWrite(db, (active) => active.exec("INSERT INTO write_probe VALUES (2)"));
+    expect(db.prepare("SELECT value FROM write_probe").get()).toMatchObject({ value: 2 });
+  });
+
+  it("retains the first error and the rollback error when both fail", () => {
+    const db = catalog().currentDatabase();
+    const primary = Object.assign(new Error("first write failed"), { code: "EIO" });
+    const primaryStack = primary.stack;
+    let caught: unknown;
+    try { withWrite(db, (active) => { active.exec("ROLLBACK"); throw primary; }); }
+    catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(AggregateError);
+    const combined = caught as AggregateError;
+    expect(combined.cause).toBe(primary);
+    expect(combined.errors[0]).toBe(primary);
+    expect(combined.errors[0].code).toBe("EIO");
+    expect(combined.errors[0].stack).toBe(primaryStack);
+    expect(combined.errors[1]).toMatchObject({ message: "cannot rollback - no transaction is active" });
+  });
+
   it("switches a whole store and its bot alias atomically under one owner", () => {
     const data = catalog();
     const promotion = data.beginPromotion("producer", "owner-a");
@@ -65,11 +102,7 @@ describe("Data catalog", () => {
     try {
       const data = new DataCatalog({
         getDatabase: () => active,
-        withWrite: (write) => {
-          active.exec("BEGIN IMMEDIATE");
-          try { const result = write(active); active.exec("COMMIT"); return result; }
-          catch (error) { active.exec("ROLLBACK"); throw error; }
-        },
+        withWrite: (write) => withWrite(active, write),
       });
       data.beginPromotion("producer", "owner");
       expect(data.promotions()).toHaveLength(1);
