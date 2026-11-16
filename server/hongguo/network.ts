@@ -60,8 +60,7 @@ export async function hongguoRequest(raw: string, kind: HongguoUrlKind, options:
     const timer = setTimeout(() => req.destroy(new Error("The provider request timed out.")), 20_000);
     req.once("close", () => clearTimeout(timer));
     req.once("error", reject);
-    if (options.body?.length) req.write(options.body);
-    req.end();
+    req.end(options.body);
   });
 }
 
