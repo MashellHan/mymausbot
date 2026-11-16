@@ -49,6 +49,7 @@ export interface RegistryDeps {
   bots(): BotRecord[];
   sections(): string[];
   reorderBots(botIds: string[]): Promise<string | null>;
+  pinBot(botId: string, pinned: boolean): Promise<string | null>;
   credentials(): CredentialConfig;
   window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
 }
@@ -72,6 +73,7 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   const windowPref = (id: WindowPrefId, label: string, help: string, where: Where, synonyms: string[], allowed: string): SettingEntry =>
     writable({ id, label, help, where, synonyms, tier: "safe", value: WINDOW_PREFS[id], allowed, current: () => deps.window.read(id), write: async (value: unknown) => deps.window.write(id, value) });
   const enumOf = (values: readonly string[]) => values.join(", ");
+  const pinned = () => deps.bots().filter((bot) => bot.pinned).map((bot) => bot.id);
   const groups = () => Object.fromEntries(deps.sections().map((section) => [section, deps.bots().filter((bot) => bot.section === section).map((bot) => bot.id)]));
 
   const safe: SettingEntry[] = [
@@ -90,6 +92,31 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
       id: "bots.order", label: "Bot order", help: "The order bots are listed in the sidebar and on phones. Send bot ids from list_bots; bots you leave out keep their places.", where: "the sidebar",
       synonyms: ["reorder", "sidebar order", "sort bots", "move bot", "arrange"], tier: "safe", value: z.array(z.string().regex(/^[\w-]+$/)).min(1).max(100), allowed: "an array of bot ids in the wanted order",
       current: () => deps.bots().map((bot) => bot.id), read: () => names(deps.bots().map((bot) => bot.id)), write: (botIds: string[]) => deps.reorderBots(botIds),
+    }),
+    writable({
+      id: "bots.pinned", label: "Pinned bots", help: "Which bots are pinned to the top of the sidebar. Send every bot id that should be pinned, including ones already pinned; the rest are unpinned.", where: "the sidebar",
+      synonyms: ["pin", "pinned", "unpin", "favorite", "favourite", "top", "star"], tier: "safe", value: z.array(z.string().regex(/^[\w-]+$/)).max(100), allowed: "an array of the bot ids to pin; an empty array unpins every bot",
+      current: pinned, read: () => names(pinned()),
+      write: async (botIds: string[]) => {
+        const bots = deps.bots();
+        const wanted = new Set(botIds);
+        const known = new Set(bots.map((bot) => bot.id));
+        const unknown = botIds.find((id) => !known.has(id));
+        if (unknown) return `No bot has the id ${unknown}. Use list_bots for the ids.`;
+        const incomplete = "Pinned bots did not finish. Check the current pins in the sidebar, then retry with the full list if needed.";
+        for (const bot of bots) {
+          const shouldPin = wanted.has(bot.id);
+          if (Boolean(bot.pinned) === shouldPin) continue;
+          try {
+            const refusal = await deps.pinBot(bot.id, shouldPin);
+            if (refusal) return `${incomplete} ${refusal}`;
+          } catch {
+            return incomplete;
+          }
+        }
+        const actual = pinned();
+        return actual.length === wanted.size && actual.every((id) => wanted.has(id)) ? null : incomplete;
+      },
     }),
     writable({
       id: "threads.maxConcurrentPerBot", label: "Threads per bot", help: "How many conversations one bot may work on at once.", where: "Settings → You and your bots",
@@ -196,7 +223,7 @@ export function findSettings(entries: readonly SettingEntry[], query: string, li
 export function routeBackedRegistry(deps: {
   cfg(): AppConfig;
   store: Pick<Store, "bots" | "sections">;
-  routes: { config: RouteHandler; botOrder: RouteHandler };
+  routes: { config: RouteHandler; botOrder: RouteHandler; botPatch: RouteHandler };
   credentials(): CredentialConfig;
   window: RegistryDeps["window"];
 }): SettingEntry[] {
@@ -206,5 +233,6 @@ export function routeBackedRegistry(deps: {
     cfg: deps.cfg, bots: () => deps.store.bots, sections: () => deps.store.sections, credentials: deps.credentials, window: deps.window,
     saveConfig: (patch) => refusal(callRoute(deps.routes.config, { method: "PUT", path: "/api/config", body: patch, auth })),
     reorderBots: (botIds) => refusal(callRoute(deps.routes.botOrder, { method: "PUT", path: "/api/bots/order", body: { botIds }, auth })),
+    pinBot: (botId, pinned) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { pinned }, auth })),
   });
 }
