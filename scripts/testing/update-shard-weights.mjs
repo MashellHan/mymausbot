@@ -59,7 +59,7 @@ export function buildWeights(samples, exists) {
 }
 
 export const RUNNER_PLATFORMS = { "ubuntu-latest": "linux", "windows-latest": "win32", "macos-latest": "darwin" };
-const VITEST_JOB = /^vitest \((ubuntu-latest|windows-latest|macos-latest), shard \d+\/\d+\)$/;
+export const VITEST_JOB = /^vitest \((ubuntu-latest|windows-latest|macos-latest), (?:all )?shard \d+\/\d+\)$/;
 
 /** A run's vitest jobs by platform: one sample per platform, its shards together covering that platform's files once. */
 function runSamples(id) {

@@ -6,7 +6,7 @@ import { E2E, hostE2eOnly, isPortableE2e } from "./host-e2e.ts";
 
 // Vitest's --shard cuts equal-count slices; this balances them by recorded
 // seconds instead (slowest first, each to the shard with the least time so
-// far), and `--shard=n/8` on the same OS with the same OMB_VITEST_E2E picks
+// far), and `--shard=n/count` on the same OS with the same OMB_VITEST_E2E picks
 // the same files as that CI shard.
 export const SHARD_WEIGHTS_FILE = "scripts/testing/vitest-shard-weights.json";
 

@@ -11,10 +11,11 @@ import viteConfig from "../../vite.config.ts";
 import { VITEST_SHARDS, VITEST_WORKERS } from "../ci-scope.mjs";
 import { DurationSequencer, SHARD_WEIGHTS_FILE, loadPlatformShardWeights, loadShardWeights, planShards, weightKey } from "./duration-sequencer.ts";
 import { isPortableE2e } from "./host-e2e.ts";
-import { buildWeights, mergePlatformWeights, parseVitestLog, RUNNER_PLATFORMS } from "./update-shard-weights.mjs";
+import { buildWeights, mergePlatformWeights, parseVitestLog, RUNNER_PLATFORMS, VITEST_JOB } from "./update-shard-weights.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const WEIGHTS = loadShardWeights(ROOT);
+const MACOS_SHARDS = VITEST_SHARDS["macos-latest"];
 const FILES = globSync(viteConfig.test?.include ?? [], { cwd: ROOT, exclude: (file) => /(^|[\\/])node_modules$/.test(file) })
   .map((file) => file.split(path.sep).join("/"))
   .sort();
@@ -63,8 +64,8 @@ describe("vitest shard balance", () => {
     expect(Math.max(...loads) * 1.4).toBeLessThan(28 * 60);
   });
 
-  it("runs every test file in exactly one shard for one to eight shards", async () => {
-    for (let count = 1; count <= 8; count++) {
+  it("runs every test file in exactly one shard through the full macOS count", async () => {
+    for (let count = 1; count <= MACOS_SHARDS; count++) {
       const shards = await split(DurationSequencer, FILES, count);
       expect(shards.flat().sort(), `${count} shards`).toEqual(FILES);
     }
@@ -83,28 +84,28 @@ describe("vitest shard balance", () => {
 
   it("applies the same first-shard work to every shard's plan, including local reproduction", async () => {
     vi.stubEnv("OMB_VITEST_FIRST_SHARD_SECONDS", "120");
-    const shards = await split(DurationSequencer, FILES, 8);
-    const planned = planShards(FILES, WEIGHTS, 8, 120);
+    const shards = await split(DurationSequencer, FILES, MACOS_SHARDS);
+    const planned = planShards(FILES, WEIGHTS, MACOS_SHARDS, 120);
     expect(shards.flat().sort()).toEqual(FILES);
-    for (let shard = 0; shard < 8; shard++) {
+    for (let shard = 0; shard < MACOS_SHARDS; shard++) {
       expect(shards[shard]).toEqual(FILES.filter((_, i) => planned.shardOf[i] === shard));
     }
-    const baseline = planShards(FILES, WEIGHTS, 8);
+    const baseline = planShards(FILES, WEIGHTS, MACOS_SHARDS);
     expect(planned.loads[0] - 120).toBeLessThan(baseline.loads[0]);
     expect(Math.max(...planned.loads) - Math.min(...planned.loads)).toBeLessThanOrEqual(1);
     vi.stubEnv("OMB_VITEST_FIRST_SHARD_SECONDS", "");
-    const unseeded = await split(DurationSequencer, FILES, 8);
+    const unseeded = await split(DurationSequencer, FILES, MACOS_SHARDS);
     expect(unseeded[0]).toEqual(FILES.filter((_, i) => baseline.shardOf[i] === 0));
   });
 
   it.each(["-1", "NaN", "Infinity", "unknown"])("refuses an invalid fixed duration %s", async (value) => {
     vi.stubEnv("OMB_VITEST_FIRST_SHARD_SECONDS", value);
-    await expect(new DurationSequencer(context(1, 8)).shard(specs(FILES))).rejects.toThrow("Invalid first-shard work duration");
+    await expect(new DurationSequencer(context(1, MACOS_SHARDS)).shard(specs(FILES))).rejects.toThrow("Invalid first-shard work duration");
   });
 
   it("never puts two of the slowest files in one shard while a shard is free", async () => {
     const slowest = Object.entries(WEIGHTS).sort(([, a], [, b]) => b - a).map(([file]) => file);
-    for (let count = 2; count <= 8; count++) {
+    for (let count = 2; count <= MACOS_SHARDS; count++) {
       const shards = await split(DurationSequencer, FILES, count);
       const owners = slowest.slice(0, count).map((file) => shards.findIndex((shard) => shard.includes(file)));
       expect(new Set(owners).size, `${count} shards: ${slowest.slice(0, count).join(", ")}`).toBe(count);
@@ -175,6 +176,12 @@ describe("vitest shard balance", () => {
 });
 
 describe("update-shard-weights", () => {
+  it("recognizes current all-mode and historical shard job names", () => {
+    expect(VITEST_JOB.exec("vitest (macos-latest, all shard 5/10)")?.[1]).toBe("macos-latest");
+    expect(VITEST_JOB.exec("vitest (macos-latest, shard 5/8)")?.[1]).toBe("macos-latest");
+    expect(VITEST_JOB.exec("renderer smoke (control-omb ui, macOS)")).toBeNull();
+  });
+
   it("reads each file's time from a CI log, colour codes and skipped files included", () => {
     const log = [
       "vitest (windows-latest, shard 4/4)\tUNKNOWN STEP\t2026-10-05T22:52:23.1Z  ✓ server/drivers/acp/acp.test.ts (150 tests) 41750ms",
