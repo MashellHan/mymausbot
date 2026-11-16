@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setLocale } from "@/lib/i18n";
 import type { MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
-import type { HongguoHistoryEntry, HongguoPlaybackResponse } from "../../../shared/hongguo-mini-app";
+import type { HongguoHistoryEntry, HongguoPlaybackResponse, HongguoSeriesCard } from "../../../shared/hongguo-mini-app";
 
 const fixture = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => ({
@@ -42,11 +42,13 @@ let paginationHold: Promise<void> | null;
 let pageable: boolean;
 let episodes: Array<typeof episode | typeof laterEpisode>;
 let historyActions: string[];
+let catalogCard: HongguoSeriesCard;
+let refreshKey = 0;
 
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label)!;
 const seriesButton = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim().startsWith("Drama A"))!;
 const render = async (strict = false) => {
-  const view = createElement(HongguoView, { document: miniAppDocument, state, refreshKey: 0, onRevoked: vi.fn(), onChanged: vi.fn() });
+  const view = createElement(HongguoView, { document: miniAppDocument, state, refreshKey, onRevoked: vi.fn(), onChanged: vi.fn() });
   await act(async () => { root.render(strict ? createElement(StrictMode, null, view) : view); });
 };
 const openPlayer = async () => {
@@ -60,6 +62,7 @@ const openPlayer = async () => {
 };
 
 beforeEach(() => {
+  refreshKey++;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true } });
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
@@ -76,6 +79,7 @@ beforeEach(() => {
   pageable = false;
   episodes = [episode];
   historyActions = [];
+  catalogCard = card;
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit & { timeoutMs?: number }) => {
     expect(path).toBe(`/api/mini-apps/${app.id}/hongguo/${path.split("/").at(-1)}`);
     const body = JSON.parse(String(init?.body)) as { mode?: string; cursor?: string; action?: string; entry?: HongguoHistoryEntry; seriesId?: string };
@@ -90,8 +94,8 @@ beforeEach(() => {
         items: [{ ...card, id: "new_extra", title: "New extra" }], categories: [], nextCursor: null };
       if (pageable && body.mode === "new") return { ...scope,
         items: [{ ...card, id: "new_first", title: "New first" }], categories: [], nextCursor: "new-next" };
-      if (pageable && body.mode === "popular") return { ...scope, items: [card], categories: [], nextCursor: "old-next" };
-      return { ...scope, items: body.mode === "categories" ? [] : [card], categories: [], nextCursor: null };
+      if (pageable && body.mode === "popular") return { ...scope, items: [catalogCard], categories: [], nextCursor: "old-next" };
+      return { ...scope, items: body.mode === "categories" ? [] : [catalogCard], categories: [], nextCursor: null };
     }
     if (path.endsWith("/series")) { await seriesHold; return { ...scope, series: { ...card, episodes } }; }
     if (path.endsWith("/playback")) return playback;
@@ -119,12 +123,48 @@ beforeEach(() => {
 
 afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLocale("en"); });
 
-it("keeps catalog results and errors visible after Strict Mode effect cleanup and setup", async () => {
+it("keeps catalog errors visible and clears them when restoring cached rows after Strict Mode", async () => {
   await render(true);
   await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
   failNew = true;
   await act(async () => { button("New").click(); });
   await vi.waitFor(() => expect(host.textContent).toContain("Synthetic catalog unavailable"));
+  const catalogCalls = fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/catalog")).length;
+  await act(async () => { button("Popular").click(); });
+  expect(seriesButton()).toBeTruthy();
+  expect(host.textContent).not.toContain("Synthetic catalog unavailable");
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/catalog"))).toHaveLength(catalogCalls);
+});
+
+it("uses an owner-scoped supported cover URL and removes a failed image over its placeholder", async () => {
+  catalogCard = { ...card, coverUrl: "https://p.fqnovelpic.com/poster.heic?x-expires=1800000300&x-signature=synthetic" };
+  await render();
+  await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
+  const image = seriesButton().querySelector("img")!;
+  expect(image.getAttribute("src")).toContain(`/api/mini-apps/${app.id}/hongguo/cover?expectedRevision=3&url=`);
+  expect(image.getAttribute("loading")).toBe("eager");
+  await act(async () => { image.dispatchEvent(new Event("error")); });
+  expect(seriesButton().querySelector("img")).toBeNull();
+  expect(seriesButton().querySelector("svg")).not.toBeNull();
+  expect(seriesButton().textContent).toContain("Drama A");
+  refreshKey++;
+  await render();
+  await vi.waitFor(() => expect(seriesButton().querySelector("img")).not.toBeNull());
+});
+
+it("shows a short same-revision revisit from memory without a blank catalog or redundant request", async () => {
+  await render();
+  await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
+  const catalogCalls = () => fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/catalog")).length;
+  const before = catalogCalls();
+  await act(async () => { root.render(null); });
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  expect(host.textContent).not.toContain("Loading…");
+  expect(catalogCalls()).toBe(before);
+  refreshKey++;
+  await render();
+  await vi.waitFor(() => expect(catalogCalls()).toBeGreaterThan(before));
 });
 
 it("keeps a replacement catalog pageable when an old Load more response arrives late", async () => {
