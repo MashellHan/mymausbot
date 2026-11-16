@@ -71,6 +71,10 @@ it("keeps loading-time branch choices while following later descendants, not ear
   const reply = { ...child, id: "reply", at: 4, parentId: later.id };
   const aside = { ...child, id: "aside", at: 5 };
   let live = reduceForkPanel(selected, { type: "forkPanelMessage", threadId: "fork", message: later });
+  const overlapping = reduceForkPanel(live, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2",
+    messages: [source, later], activeLeafId: later.id });
+  expect(overlapping.forkPanel?.activeLeafId).toBe(later.id);
+  expect(visibleMessages(overlapping.forkPanel!).map((message) => message.id)).toEqual([source.id, later.id]);
   live = reduceForkPanel(live, { type: "forkPanelMessage", threadId: "fork", message: aside });
   live = reduceForkPanel(live, { type: "forkPanelMessage", threadId: "fork", message: reply });
   const loaded = reduceForkPanel(live, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2",

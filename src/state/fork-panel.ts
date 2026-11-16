@@ -56,7 +56,7 @@ export function reduceForkPanel(state: AppState, action: ForkPanelAction): AppSt
       let activeLeafId = panel.activeLeafId ?? action.activeLeafId;
       for (const id of panel.loadingAppends) {
         const message = live.get(id);
-        if (!loaded.has(id) && message && (message.parentId ?? null) === activeLeafId) activeLeafId = id;
+        if (message && (message.parentId ?? null) === activeLeafId) activeLeafId = id;
       }
       return { ...state, forkPanel: { ...panel, messages, activeLeafId,
         loading: false, loadingAppends: [], loadFailed: false } };
