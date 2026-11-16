@@ -176,18 +176,25 @@ describe("local Usage panel", () => {
     expect(text()).toContain("2026-11-03 – 2026-11-03");
     expect(text()).toContain("2026-10-28 – 2026-11-03");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
-    expect(host.querySelector("[data-usage-metric-definition]")?.textContent).toContain("Beijing time (UTC+8)");
+    expect(host.querySelector("[data-usage-metric-definition]")).toBeNull();
+    const updated = host.querySelector<HTMLTimeElement>("header [data-usage-latest-update]")!;
+    expect(updated.dateTime).toBe("2026-11-03T08:30:00.000Z");
+    expect(updated.textContent).toContain("2026");
+    expect(updated.textContent).toContain("16:30 Beijing time");
+    expect(updated.classList.contains("ml-auto")).toBe(true);
+    expect(updated.classList.contains("text-right")).toBe(true);
+    expect(updated.classList.contains("min-w-0")).toBe(true);
     expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9")).toBe(true);
     expect(host.querySelector<HTMLDetailsElement>("[data-usage-daily]")?.open).toBe(false);
     expect(text()).toContain("4,000");
     const firstCard = host.querySelector<HTMLElement>("section")!;
     const visibleChanges = [...firstCard.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
-    expect(visibleChanges.slice(0, 3)).toEqual(["DoD +10%", "DoD +50%", "DoD +10%"]);
+    expect(visibleChanges.slice(0, 3)).toEqual(["+10%", "+50%", "+10%"]);
     const tokenChanges = [...host.querySelectorAll("section")].slice(0, 3)
       .map((card) => card.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')[2]?.textContent);
-    expect(tokenChanges).toEqual(["DoD +10%", "WoW New", "30d —"]);
+    expect(tokenChanges).toEqual(["+10%", "New", "—"]);
     for (const change of host.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')) {
-      expect(change.textContent).not.toMatch(/[()]/);
+      expect(change.textContent).not.toMatch(/DoD|WoW|30d|[()]/);
     }
     const comparisons = [
       ["2026-11-02", "DoD: compared with the preceding 1-day period."],
@@ -243,7 +250,7 @@ describe("local Usage panel", () => {
     await render(snapshot);
     const visibleLabels = [...host.querySelectorAll("section")].slice(0, 3)
       .map((card) => card.querySelectorAll('[data-usage-change] > [aria-hidden="true"]')[2]?.textContent);
-    expect(visibleLabels).toEqual(["日环比 +10%", "周环比 新增", "30 日环比 —"]);
+    expect(visibleLabels).toEqual(["+10%", "新增", "—"]);
     for (const [index, period] of ["日环比", "周环比", "30 日环比"].entries()) {
       const change = host.querySelectorAll("section")[index]!.querySelectorAll('[data-usage-change]')[2]!;
       expect(change.getAttribute("title")).toContain(period);
@@ -252,11 +259,11 @@ describe("local Usage panel", () => {
     expect(tokenChange().getAttribute("title")).toContain("对比周期缺少 2 天的 Token 历史记录");
   });
 
-  it.each([[-25, "-25%"], [0, "0%"]] as const)("shows the period beside a %s change", async (value, label) => {
+  it.each([[-25, "-25%"], [0, "0%"]] as const)("shows only the %s change while retaining its period explanation", async (value, label) => {
     await act(async () => root.render(createElement("div", {}, ...(["prs", "commits", "totalTokens"] as const).map((metric) =>
       createElement(UsageChange, { key: metric, value, metric, startDay: "2026-11-02", endDay: "2026-11-02", periodDays: 1 })))));
     const changes = [...host.querySelectorAll('[data-usage-change]')];
-    expect(changes.map((change) => change.querySelector('[aria-hidden="true"]')?.textContent)).toEqual([`DoD ${label}`, `DoD ${label}`, `DoD ${label}`]);
+    expect(changes.map((change) => change.querySelector('[aria-hidden="true"]')?.textContent)).toEqual([label, label, label]);
     for (const [index, change] of changes.entries()) {
       expect(change.getAttribute("title")).toContain(index === 2
         ? `Compared with 2026-11-02 (China time): ${label}.`
@@ -302,10 +309,12 @@ describe("local Usage panel", () => {
     expect([contributions.windows!["1"].knownPrs, contributions.windows!["1"].knownCommits]).toEqual([3, 5]);
     expect(contributions.currentDayPartial).toBe(true);
     await renderRaw({ ...sample, contributions });
+    expect(host.querySelector<HTMLTimeElement>("header [data-usage-latest-update]")?.dateTime).toBe("2026-11-02T16:05:00.000Z");
+    expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toContain("00:05 Beijing time");
     for (const [index, period] of ["DoD", "WoW", "30d"].entries()) {
       const changes = [...host.querySelectorAll("section")][index]!.querySelectorAll("dl > div > dd > [data-usage-change]");
       for (const change of [...changes].slice(0, 2)) {
-        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${period} New`);
+        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("New");
         expect(change.getAttribute("title")).toContain(period);
         expect(change.getAttribute("title")).toContain("Known subtotal");
         expect(change.getAttribute("data-usage-provisional")).toBe("true");
@@ -327,14 +336,14 @@ describe("local Usage panel", () => {
     };
     await renderRaw({ ...sample, contributions });
     expect(displayedChanges().map((change) => change.querySelector('[aria-hidden="true"]')?.textContent))
-      .toEqual(["DoD +27.3%", "DoD -7.4%"]);
+      .toEqual(["+27.3%", "-7.4%"]);
     for (const change of displayedChanges()) {
       expect(change.getAttribute("title")).toContain("Known subtotal");
       expect(change.getAttribute("data-usage-provisional")).toBe("true");
     }
     repository.knownComparison.commits = null;
     await renderRaw({ ...sample, contributions });
-    expect(displayedChanges()[1]?.querySelector('[aria-hidden="true"]')?.textContent).toBe("DoD —");
+    expect(displayedChanges()[1]?.querySelector('[aria-hidden="true"]')?.textContent).toBe("—");
   });
 
   it("shows qualified work and personal category DoD/WoW/MoM with exact-null honesty in both locales", async () => {
@@ -346,7 +355,7 @@ describe("local Usage panel", () => {
       const changes = personal.querySelectorAll('[data-usage-change]');
       expect(changes).toHaveLength(2);
       for (const change of changes) {
-        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${period} New`);
+        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("New");
         expect(change.getAttribute("title")).toContain(period);
         expect(change.getAttribute("title")).toContain("Known subtotal");
         expect(change.getAttribute("data-usage-provisional")).toBe("true");
@@ -355,12 +364,12 @@ describe("local Usage panel", () => {
     }
     contributions.windows!["1"].comparison.knownCategories!.personal.prs = null;
     await renderRaw({ ...sample, contributions });
-    expect(host.querySelector('section [data-usage-category-row="personal"] [data-usage-change] [aria-hidden="true"]')?.textContent).toBe("DoD —");
+    expect(host.querySelector('section [data-usage-category-row="personal"] [data-usage-change] [aria-hidden="true"]')?.textContent).toBe("—");
     setLocale("zh");
     await renderRaw({ ...sample, contributions: primaryUsageFixture("2026-11-03", true) });
     for (const [index, period] of ["日环比", "周环比", "30 日环比"].entries()) {
       const change = host.querySelectorAll("section")[index]!.querySelector('[data-usage-category-row="personal"] [data-usage-change]')!;
-      expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${period} 新增`);
+      expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("新增");
       expect(change.getAttribute("title")).toContain(period);
     }
   });
@@ -494,6 +503,8 @@ describe("local Usage panel", () => {
       trend: trend.map((day) => ({ ...day, day: new Date(Date.parse(day.day + "T00:00:00Z") - 86_400_000).toISOString().slice(0, 10) })) });
     await showSummaryInfo();
     expect(infoText()).toContain("Showing the last captured snapshot");
+    expect(host.querySelector<HTMLTimeElement>("header [data-usage-latest-update]")?.dateTime).toBe("2026-11-02T15:50:00.000Z");
+    expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toContain("23:50 Beijing time");
     expect(text()).toContain("2026-11-02 – 2026-11-02");
     expect(text()).toContain("2026-10-04 – 2026-11-02");
     expect(infoText()).toContain("23:50");
@@ -519,6 +530,8 @@ describe("local Usage panel", () => {
   it("uses unavailable instead of zero when the aggregate or a whole metric is missing", async () => {
     await render({ status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
       prSourceCoverage: null, prCoverage: null, windows: null, trend: [] });
+    expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toBe("Latest update: — Beijing time");
+    expect(host.querySelector("header time[data-usage-latest-update]")).toBeNull();
     expect(text()).toContain("Activity summary unavailable");
     expect(text()).not.toContain("0 PRs");
 
@@ -543,6 +556,7 @@ describe("local Usage panel", () => {
     expect(calls.api).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(calls.api).toHaveBeenCalledTimes(2);
+    expect(host.querySelector<HTMLTimeElement>("header [data-usage-latest-update]")?.dateTime).toBe("2026-11-03T08:30:00.000Z");
     await showSummaryInfo();
     expect(infoText()).toContain("Showing the last captured snapshot");
     expect(text()).toContain("2026-10-05 – 2026-11-03");
@@ -562,6 +576,7 @@ describe("local Usage panel", () => {
     expect(calls.api).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(values()).toEqual(["6", "11", "150"]);
+    expect(host.querySelector<HTMLTimeElement>("header [data-usage-latest-update]")?.dateTime).toBe("2026-11-03T08:31:00.000Z");
     calls.visible = false;
     await renderRaw(null, true);
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
@@ -591,7 +606,7 @@ describe("local Usage panel", () => {
     expect(values()[1]).toMatch(/^1/);
     expect(values()[2]).toContain("2");
     const repositoryChanges = () => [...host.querySelectorAll('[data-usage-repositories] tbody tr:first-child [data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
-    expect(repositoryChanges()).toEqual(["DoD —", "DoD +10%"]);
+    expect(repositoryChanges()).toEqual(["—", "+10%"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-11-02");
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(tabs[3]);
@@ -601,7 +616,7 @@ describe("local Usage panel", () => {
     expect(document.activeElement).toBe(tabs[2]);
     expect(values()[1]).toMatch(/^30/);
     expect(values()[2]).toContain("60");
-    expect(repositoryChanges()).toEqual(["30d —", "30d +30%"]);
+    expect(repositoryChanges()).toEqual(["—", "+30%"]);
     expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-09-05–2026-10-04");
     await render({ ...sample, status: "stale" });
     expect(daily.open).toBe(true);
@@ -625,7 +640,8 @@ describe("local Usage panel", () => {
       window.repositories.rows.push({ ...window.repositories.rows[0]!, id: "legacy-only", name: "legacy/large-count", prs: 900_000, commits: 900_000 });
     }
     await act(async () => root.render(createElement(LocalUsageView, { snapshot: legacy })));
-    expect(text()).toContain("Contribution sources are unavailable");
+    await showSummaryInfo();
+    expect(infoText()).toContain("Contribution sources are unavailable");
     expect([...host.querySelectorAll("section dd")].slice(0, 3).map((value) => value.firstElementChild?.textContent))
       .toEqual(["Unavailable", "Unavailable", "150"]);
     expect(host.querySelectorAll('[data-usage-trend="prs"] [data-usage-day]')).toHaveLength(30);
@@ -642,7 +658,8 @@ describe("local Usage panel", () => {
     await renderRaw(null, true);
     expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("1");
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(text()).toContain("Contribution sources are unavailable");
+    await showSummaryInfo();
+    expect(infoText()).toContain("Contribution sources are unavailable");
     expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("Unavailable");
     expect([...host.querySelectorAll("section dd")][2]?.firstElementChild?.textContent).toBe("150");
   });
@@ -653,10 +670,11 @@ describe("local Usage panel", () => {
     calls.api.mockResolvedValueOnce(legacyOnly).mockRejectedValueOnce(new Error("offline"))
       .mockRejectedValueOnce(new ApiError("forbidden", 403));
     await renderRaw(null, true);
-    expect(text()).toContain("Contribution sources are unavailable");
+    await showSummaryInfo();
+    expect(infoText()).toContain("Contribution sources are unavailable");
     expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("Unavailable");
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(text()).toContain("Contribution sources are unavailable");
+    expect(infoText()).toContain("Contribution sources are unavailable");
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(text()).toContain("Activity summary unavailable");
     expect(host.querySelectorAll("section dd")).toHaveLength(0);
@@ -665,10 +683,11 @@ describe("local Usage panel", () => {
   it("shows source-qualified contributions and per-account details on the main surface", async () => {
     await renderRaw({ ...sample, contributions: primaryUsageFixture() });
     expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
-    const definition = host.querySelector('[data-usage-metric-definition]')?.textContent;
-    expect(definition).toContain("Beijing time (UTC+8)");
-    expect(definition).toContain("00:00–24:00");
-    expect(definition).toContain("including merge commits");
+    expect(host.querySelector('[data-usage-metric-definition]')).toBeNull();
+    await showSummaryInfo();
+    expect(infoText()).toContain("Beijing time (UTC+8)");
+    expect(infoText()).toContain("00:00–24:00");
+    expect(infoText()).toContain("including merge commits");
     expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("5");
     expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("9");
     expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("fixture/github-repo");
@@ -690,8 +709,11 @@ describe("local Usage panel", () => {
     expect(descriptions()[2]).toContain("China time");
     setLocale("zh");
     await render(sample);
-    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("每日 00:00–24:00");
-    expect(host.querySelector('[data-usage-metric-definition]')?.textContent).toContain("包括合并提交");
+    expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toContain("最近更新：北京时间");
+    expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toContain("16:30");
+    await showSummaryInfo();
+    expect(infoText()).toContain("每日 00:00–24:00");
+    expect(infoText()).toContain("包括合并提交");
     expect(descriptions()[0]).toContain("与北京时间日期");
     expect(descriptions()[1]).toContain("与北京时间日期");
     expect(descriptions()[2]).toContain("北京时间");
