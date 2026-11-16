@@ -1,9 +1,12 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY, readCheckPolicy, selectCheckPlan } from "../ci-scope.mjs";
 import { executionComplete, expectedJobs, fullPushPlan, inspectJobs, eligibleRun, holdsFor, MERGE_JOBS, narrowPushPlan, triageOf } from "./contracts.mjs";
-import { fullRunEvidence, github, runJobs } from "./github.mjs";
+import { artifactFiles, fullRunEvidence, github, runJobs } from "./github.mjs";
 import { qaHealth } from "./health.mjs";
 import { deliverReport, makeReport, reportRun, sanitize, setupIncident, supersedingMainRun, testFindings } from "./report.mjs";
 import { drainQueue, promptLead, queueItems, recoverQa } from "./queue.mjs";
@@ -772,6 +775,45 @@ describe("complete CI and trusted QA health", () => {
       vi.unstubAllGlobals();
       vi.unstubAllEnvs();
     }
+  });
+
+  it("reads ten-shard artifact paths while retaining ZIP entry limits", async () => {
+    const archive = (names: string[]) => {
+      const directory = mkdtempSync(join(tmpdir(), "mausbot-qa-test-"));
+      try {
+        const payload = join(directory, "payload");
+        for (const name of names) {
+          const path = join(payload, name);
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, "{}");
+        }
+        const path = join(directory, "results.zip");
+        execFileSync("zip", ["-q", path, ...names], { cwd: payload });
+        return readFileSync(path);
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    };
+    const read = (bytes: Buffer, size_in_bytes = bytes.length) => {
+      const api = vi.fn(async () => bytes);
+      return { result: artifactFiles({ id: 1, size_in_bytes }, api), api };
+    };
+    for (const name of ["qa-plan.json", "vitest-retries.jsonl", "1/vitest.json", "8/vitest.json", "9/vitest.json", "10/vitest.json"]) {
+      const { result, api } = read(archive([name]));
+      await expect(result).resolves.toEqual({ [name]: "{}" });
+      expect(api).toHaveBeenCalledOnce();
+      expect(api).toHaveBeenCalledWith("/actions/artifacts/1/zip", { raw: true });
+    }
+    for (const name of ["9/unknown.json", "0/vitest.json", "01/vitest.json", "11/vitest.json"]) {
+      await expect(read(archive([name])).result).rejects.toThrow("Unexpected artifact entries");
+    }
+    const traversal = archive(["9/xx/vitest.json"]);
+    const traversalZip = Buffer.from(traversal.toString("latin1").replaceAll("9/xx/vitest.json", "9/../vitest.json"), "latin1");
+    await expect(read(traversalZip).result).rejects.toThrow("Unexpected artifact entries");
+    const members = ["vitest", "evals", "qa-report", "qa-plan", "receipt"];
+    const crowded = archive(Array.from({ length: 31 }, (_, i) => `${1 + Math.floor(i / 5)}/${members[i % 5]}.json`));
+    await expect(read(crowded).result).rejects.toThrow("Unexpected artifact entries");
+    const oversized = read(archive(["8/vitest.json"]), 25 * 1024 * 1024 + 1);
+    await expect(oversized.result).rejects.toThrow("Artifact expired or too large");
+    expect(oversized.api).not.toHaveBeenCalled();
   });
 });
 

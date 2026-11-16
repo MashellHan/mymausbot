@@ -132,7 +132,7 @@ export async function artifactFiles(artifact, api = github) {
     const archive = join(directory, "results.zip");
     writeFileSync(archive, await api(`/actions/artifacts/${artifact.id}/zip`, { raw: true }));
     const names = execFileSync("unzip", ["-Z1", archive], { encoding: "utf8", maxBuffer: 100_000 }).trim().split("\n");
-    if (names.length > 30 || names.some((name) => !/^(?:[1-8]\/)?(?:vitest|evals|qa-report|qa-plan|receipt)\.json$|^vitest-retries\.jsonl$/.test(name))) {
+    if (names.length > 30 || names.some((name) => !/^(?:(?:[1-9]|10)\/)?(?:vitest|evals|qa-report|qa-plan|receipt)\.json$|^vitest-retries\.jsonl$/.test(name))) {
       throw new Error("Unexpected artifact entries");
     }
     return Object.fromEntries(names.map((name) => [name, execFileSync("unzip", ["-p", archive, name], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 })]));
