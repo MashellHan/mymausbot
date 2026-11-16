@@ -377,3 +377,34 @@ it("a webhook's run cannot discover, read or change owner settings", async () =>
   for (const result of [find, read, refused]) expect(result).toMatchObject({ isError: true, text: "Settings are available only in the owner's own conversation." });
   expect(config().rooms?.turnTimeoutMinutes).toBe(value);
 }, 60_000);
+
+it("a bot rename waits for owner Change and persists through the existing bot route", async () => {
+  const rename = { botId: bot.id, name: "Setter Renamed" };
+  const pendingCard = async () => {
+    let card: any;
+    await expect.poll(async () => (card = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "bots.name" && !one.card.answered)?.card) !== undefined,
+      { timeout: 20_000 }).toBe(true);
+    return card;
+  };
+  const persistedName = () => JSON.parse(readFileSync(join(dataDir, "bots.json"), "utf8")).find((one: any) => one.id === bot.id)?.name;
+  try {
+    await start("RENAME-CANCEL", [step({ action: "set", id: "bots.name", value: JSON.stringify(rename) }, true)], 60_000);
+    const cancelled = await pendingCard();
+    expect(cancelled).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: 'Rename "Setter" to "Setter Renamed"' } });
+    expect(persistedName()).toBe("Setter");
+    await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: cancelled.requestId, behavior: "deny" }, 200, ownerDevice);
+    expect(results(await finished("RENAME-CANCEL"))[0]).toMatchObject({ isError: true, text: expect.stringContaining("cancelled") });
+    expect(persistedName()).toBe("Setter");
+
+    await start("RENAME-CHANGE", [step({ action: "set", id: "bots.name", value: JSON.stringify(rename) })], 60_000);
+    const approved = await pendingCard();
+    expect(persistedName()).toBe("Setter");
+    await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: approved.requestId, behavior: "allow" }, 200, ownerDevice);
+    expect(results(await finished("RENAME-CHANGE"))[0]).toMatchObject({ isError: false, text: expect.stringContaining('Rename "Setter" to "Setter Renamed"') });
+    expect(persistedName()).toBe("Setter Renamed");
+    expect((await api("GET", "/api/bots")).bots.find((one: any) => one.id === bot.id)?.name).toBe("Setter Renamed");
+    expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: approved.requestId }, 409, ownerDevice)).error).toContain("can't be undone");
+  } finally {
+    await api("PATCH", `/api/bots/${bot.id}`, { name: "Setter" });
+  }
+}, 90_000);

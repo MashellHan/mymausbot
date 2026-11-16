@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { credentialIsConfigured, CREDENTIAL_TARGETS, PROVIDER_CREDENTIAL_TARGETS, type CredentialConfig, type CredentialTargetId } from "../../shared/credential-request.ts";
 import { WINDOW_PREFS, type WindowPrefId } from "../../shared/app-settings.ts";
+import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "../bot-thread-limits.ts";
 import { parseSocks5Proxy } from "../browser/egress/policy.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
@@ -59,6 +60,7 @@ export interface RegistryDeps {
   sections(): string[];
   reorderBots(botIds: string[]): Promise<string | null>;
   pinBot(botId: string, pinned: boolean): Promise<string | null>;
+  renameBot(botId: string, name: string): Promise<string | null>;
   credentials(): CredentialConfig;
   window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
   engines(): Array<{ instanceId: string; name: string; working: boolean }>;
@@ -96,6 +98,11 @@ const engineChange = z.record(z.string(), z.unknown())
     z.object({ kind: z.literal("remove"), instanceId: z.string().regex(/^[\w.-]{1,120}$/) }).strict(),
   ]));
 type EngineChange = z.infer<typeof engineChange>;
+const botRename = z.object({
+  botId: z.string().regex(/^[\w-]{1,120}$/),
+  name: z.string().trim().min(1).max(BOT_PROFILE_LIMITS.name).refine(fitsOnOneLine, "one line without control characters"),
+}).strict();
+type BotRename = z.infer<typeof botRename>;
 const removableKind = (instanceId: string, entry: InstanceConfig | undefined) => isAddedEndpoint(instanceId, entry) ? "OpenAI-compatible server"
   : isClaudeBedrock(entry) ? "Claude on Amazon Bedrock" : isClaudeEndpoint(entry) ? "Claude endpoint" : isCodexEndpoint(entry) ? "Codex endpoint" : null;
 
@@ -195,6 +202,17 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     tier: "confirm", value: url, allowed: "an http(s) address, or empty to clear", current: () => current() ?? "", write: config(patch),
   });
   const confirm: SettingEntry[] = [
+    writable({
+      id: "bots.name", label: "Bot name", help: "The name of one bot in the sidebar and conversations. Use list_bots for its id.", where: "a bot's Settings",
+      synonyms: ["rename bot", "bot name", "name bot"], tier: "confirm", value: botRename, allowed: '{"botId","name"}',
+      current: () => undefined, read: () => deps.bots().map((bot) => `${bot.id}: ${JSON.stringify(bot.name)}`).join("; "),
+      describe: ({ botId, name }: BotRename) => {
+        const bot = deps.bots().find((candidate) => candidate.id === botId);
+        return bot ? { change: `Rename ${JSON.stringify(bot.name)} to ${JSON.stringify(name)}` }
+          : { refusal: `No bot has the id ${botId}. Use list_bots for the ids.` };
+      },
+      write: ({ botId, name }: BotRename) => deps.renameBot(botId, name),
+    }),
     provider("providers.anthropic.url", "Anthropic address", ["anthropic", "claude"], () => cfg().anthropic?.url, (text) => ({ anthropic: { url: text } })),
     provider("providers.xai.url", "xAI address", ["xai", "grok"], () => cfg().xai?.url, (text) => ({ xai: { url: text } })),
     provider("providers.groq.url", "Groq address", ["groq"], () => cfg().groq?.url, (text) => ({ groq: { url: text } })),
@@ -317,6 +335,7 @@ export function routeBackedRegistry(deps: {
     saveConfig: (patch) => refusal(callRoute(deps.routes.config, { method: "PUT", path: "/api/config", body: patch, auth })),
     reorderBots: (botIds) => refusal(callRoute(deps.routes.botOrder, { method: "PUT", path: "/api/bots/order", body: { botIds }, auth })),
     pinBot: (botId, pinned) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { pinned }, auth })),
+    renameBot: (botId, name) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { name }, auth })),
     engines: () => deps.providers.instances().filter((instance) => instance.enabled).map((instance) => ({
       instanceId: instance.instanceId, working: deps.providers.lastSnapshot(instance.instanceId)?.state === "available",
       name: instance.displayName ?? BUILT_IN_DRIVERS.find((driver) => driver.driverKind === instance.driverKind)?.metadata.displayName ?? instance.instanceId,
