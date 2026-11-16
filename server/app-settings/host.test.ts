@@ -19,7 +19,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; window?: boolean } = {}) {
+function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; window?: boolean; pinFailureId?: string } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "app-settings-"));
   dirs.push(dataDir);
   const bots: BotRecord[] = [
@@ -28,6 +28,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   ];
   const cfg = { language: "en", rooms: { turnTimeoutMinutes: 30 }, mcp: {}, threads: { maxConcurrentPerBot: 3 }, openai: { key: OPENAI_KEY }, anthropic: { url: "https://api.anthropic.com" } } as AppConfig;
   const saved: Record<string, unknown>[] = [];
+  const pinCalls: Array<{ botId: string; pinned: boolean }> = [];
   const messages: Array<Record<string, any>> = [];
   const windowValues = new Map<string, unknown>(options.window === false ? [] : [["appearance.skin", "daylight"]]);
   const store = {
@@ -59,6 +60,14 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     bots: () => bots,
     sections: () => ["Sales"],
     reorderBots: async (botIds) => { bots.sort((a, b) => botIds.indexOf(a.id) - botIds.indexOf(b.id)); return null; },
+    pinBot: async (botId, pinned) => {
+      pinCalls.push({ botId, pinned });
+      if (botId === options.pinFailureId) return "pin change refused";
+      const bot = bots.find((candidate) => candidate.id === botId);
+      if (!bot) return "no such bot";
+      bot.pinned = pinned;
+      return null;
+    },
     credentials: () => cfg,
     window: {
       read: (id) => windowValues.get(id),
@@ -85,7 +94,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, cfg, saved, pinCalls, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -99,13 +108,15 @@ describe("reads", () => {
   });
 
   it("keeps settings details and writes out of a turn that is not the owner's", async () => {
-    const { host, turn, set, saved } = fixture({ owner: false });
+    const { host, turn, set, saved, pinCalls } = fixture({ owner: false });
     expect((await host.handle({ action: "get", id: "bots.approvalModes" }, turn)).status).toBe(403);
     expect((await host.handle({ action: "find", query: "anthropic" }, turn)).status).toBe(403);
     const refused = await set("general.language", "de");
     expect(refused.status).toBe(403);
     expect(refused.body.error).toContain("owner's own conversation");
+    expect((await set("bots.pinned", ["kiwi"])).status).toBe(403);
     expect(saved).toEqual([]);
+    expect(pinCalls).toEqual([]);
   });
 
   it("refuses writes in a guest-driven conversation", async () => {
@@ -212,6 +223,36 @@ describe("safe tier", () => {
     expect((await set("bots.groups", { Ops: ["clive"] })).body.error).toContain("only by the owner");
     expect(cards()).toHaveLength(1);
     expect(bots.map((bot) => bot.section)).toEqual(["Sales", undefined]);
+  });
+
+  it("sets the complete pinned-bot list and refuses stale Undo after another pin changes", async () => {
+    const { host, set, bots, cards, turn, pinCalls } = fixture();
+    const pins = () => bots.filter((bot) => bot.pinned).map((bot) => bot.id);
+    expect((await set("bots.pinned", JSON.stringify(["clive"]))).status).toBe(200);
+    expect(pins()).toEqual(["clive"]);
+    expect((await set("bots.pinned", ["kiwi"])).status).toBe(200);
+    expect(pins()).toEqual(["kiwi"]);
+    expect(pinCalls).toEqual([{ botId: "clive", pinned: true }, { botId: "kiwi", pinned: true }, { botId: "clive", pinned: false }]);
+    const requestId = String(cards()[1]!.card.requestId);
+    bots[1]!.pinned = true;
+    expect(await host.undo({ threadId: turn.threadId, requestId })).toMatchObject({ state: "invalid", error: UNDO_STALE, stale: true });
+    expect(pins()).toEqual(["kiwi", "clive"]);
+    bots[1]!.pinned = false;
+    expect(await host.undo({ threadId: turn.threadId, requestId })).toEqual({ claimed: true, state: "undone" });
+    expect(pins()).toEqual(["clive"]);
+    expect((await set("bots.pinned", [])).status).toBe(200);
+    expect(pins()).toEqual([]);
+  });
+
+  it("validates every requested id and reports a later route refusal without a success card or rollback", async () => {
+    const { set, bots, cards, pinCalls } = fixture({ pinFailureId: "clive" });
+    expect((await set("bots.pinned", ["kiwi", "ghost"])).body.error).toContain("No bot has the id ghost");
+    expect(pinCalls).toEqual([]);
+    const partial = await set("bots.pinned", ["kiwi", "clive"]);
+    expect(partial.status).toBe(409);
+    expect(partial.body.error).toContain("Pinned bots did not finish");
+    expect(bots.filter((bot) => bot.pinned).map((bot) => bot.id)).toEqual(["kiwi"]);
+    expect(cards()).toEqual([]);
   });
 
   it("a window preference refuses until a window has reported, then pushes the change", async () => {

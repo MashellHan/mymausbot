@@ -263,6 +263,25 @@ it("an owner-only setting is refused with where to change it", async () => {
     text: "Approval modes is changed only by the owner, in a bot's Settings. Tell the user where to find it; do not try another way." })]);
 }, 60_000);
 
+it("pinning a bot uses the sidebar bot route and Undo restores the previous full list", async () => {
+  const pinnedNow = async () => (await api("GET", "/api/bots")).bots.find((one: any) => one.id === bot.id)?.pinned === true;
+  expect(await pinnedNow()).toBe(false);
+  await start("PIN-1", [
+    step({ action: "find", query: "pinned bots" }),
+    step({ action: "get", id: "bots.pinned" }),
+    step({ action: "set", id: "bots.pinned", value: JSON.stringify([bot.id]) }),
+  ]);
+  const [found, got, applied] = results(await finished("PIN-1"));
+  expect(JSON.parse(found.text).map((hit: any) => hit.id)).toContain("bots.pinned");
+  expect(JSON.parse(got.text)).toMatchObject({ id: "bots.pinned", tier: "safe", value: "not set" });
+  expect(applied).toMatchObject({ isError: false, text: expect.stringMatching(/^Changed Pinned bots from not set to Setter\. The user can undo it/) });
+  expect(await pinnedNow()).toBe(true);
+  const card = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "bots.pinned")!.card;
+  expect(card).toMatchObject({ autoApplied: true, appSettingRequest: { tier: "safe", before: "", after: "Setter" } });
+  expect(await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: card.requestId })).toMatchObject({ ok: true, undone: true });
+  expect(await pinnedNow()).toBe(false);
+}, 60_000);
+
 it("a window preference changes only while the app window's stream is open: refused with none, applied once one connects, refused after it closes, applied again on reconnect", async () => {
   const openWindow = async () => {
     const closed = new AbortController();
