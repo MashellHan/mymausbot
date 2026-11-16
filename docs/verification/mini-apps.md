@@ -79,6 +79,28 @@ Run the new lifecycle and adapter contracts once on stable combined source;
 composition alone does not require another suite, build or visual pass. These
 fixtures do not establish packaged or live App acceptance.
 
+## Mojo whole-page host view
+
+Use the isolated component contracts in `src/components/mini-apps/mojo-host.test.ts`,
+`MojoWholePage.test.ts`, `MiniAppsPanel.test.ts` and
+`src/components/published-apps/preview.security.test.ts`. The host admits only
+the exact Mojo app ID with its quote-layout marker in the HTML head, a current
+active matching document/state, empty Data, the native frame guard and a
+confirmed local owner. A copied marker or paired remote client stays on the
+ordinary Mini App path. The quote document keeps the strict Mini App frame;
+the fixed Poetry site uses the narrower scripts/same-origin sandbox without
+forms, popups, a host bridge or a configurable remote URL.
+
+Check click and keyboard tab selection, horizontal touch starting in the top
+navigation area, synthetic-click suppression without swallowing the next tap,
+vertical/multitouch/cancel
+rejection, and no parent switch from the remote body. Poetry mounts only on
+first selection; both frames retain identity and in-frame state across internal
+switches, while an archive or changed head tears down the wrapper. The existing
+isolated browser proof covers actual-site framing and reading, not the new
+toolbar gesture or an installed App. A focused QA fixture may exercise that
+gesture without repeating content extraction or publication.
+
 ## Contracts and lifecycle
 
 ```sh

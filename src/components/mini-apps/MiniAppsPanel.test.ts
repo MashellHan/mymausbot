@@ -26,6 +26,7 @@ const fixture = vi.hoisted(() => ({
   visible: true,
   usageValue: 1,
   usageDeferred: null as Promise<LocalUsageResponse> | null,
+  mojoHtml: null as string | null,
 }));
 
 vi.mock("@/state/store", () => ({
@@ -77,6 +78,8 @@ const app = (id: string, title: string): MiniAppSummary => ({
   id, slug: id, title, description: `${title} description`, status: "active", revision: 3, templateVersion: 2,
   publisherBotIds: [], createdAt: 1_000, updatedAt: 2_000,
 });
+const MOJO_ID = "01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7";
+const MOJO_MARKER = '<meta name="openmausbot:mojo-view" content="quotes-v1">';
 const shippedDefaults = (): MiniAppSummary[] => [
   { ...app("bookkeeping", "记账管家"), slug: "bookkeeping", shippedTemplateKind: "bookkeeping" },
   { ...app("x_digest", "Daily X AI digest"), slug: "x-ai-digest", shippedTemplateKind: "x_ai_digest" },
@@ -121,6 +124,7 @@ beforeEach(() => {
   fixture.visible = true;
   fixture.usageValue = 1;
   fixture.usageDeferred = null;
+  fixture.mojoHtml = null;
   fixture.dispatch.mockReset();
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/.well-known/openmausbot/environment") return { environmentId: "fixture-environment" };
@@ -150,7 +154,7 @@ beforeEach(() => {
       if (fixture.failState) throw new Error("Fixture offline");
       const summary = fixture.apps.find((entry) => entry.id === path.split("/")[3]);
       return { appId: path.split("/")[3], revision: summary?.revision ?? fixture.stateRevision, templateVersion: summary?.templateVersion ?? 2, status: summary?.status ?? "active",
-        data: summary?.dashboardIdentity ? [] : [{ datasetId: "dataset_demo", revision: fixture.dataRevision }] };
+        data: summary?.dashboardIdentity || summary?.id === MOJO_ID ? [] : [{ datasetId: "dataset_demo", revision: fixture.dataRevision }] };
     }
     if (path.endsWith("/dashboard") && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { resource: string };
@@ -176,7 +180,7 @@ beforeEach(() => {
       if (fixture.failDocument) throw new Error("Fixture document offline");
       const id = path.split("/")[3]!;
       const summary = fixture.apps.find((entry) => entry.id === id)!;
-      return { app: summary, html: "<p>Fixture</p>", bindings: [], versions: [{ version: 1, title: "Older", createdAt: 1_000 }, { version: 2, title: "Current", createdAt: 2_000 }] };
+      return { app: summary, html: fixture.mojoHtml ?? "<p>Fixture</p>", bindings: [], versions: [{ version: 1, title: "Older", createdAt: 1_000 }, { version: 2, title: "Current", createdAt: 2_000 }] };
     }
     throw new Error(`Unexpected API path: ${path}`);
   });
@@ -185,9 +189,45 @@ beforeEach(() => {
   root = createRoot(host);
 });
 
-afterEach(() => { root.unmount(); host.remove(); vi.unstubAllGlobals(); setLocale("en"); });
+afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); setLocale("en"); });
 
 describe("Mini Apps panel", () => {
+  it("opens the exact current Mojo quote document in the host and retires it on archive", async () => {
+    fixture.apps = [app(MOJO_ID, "Mojo")];
+    fixture.mojoHtml = `<html><head>${MOJO_MARKER}</head><body>Quotes</body></html>`;
+    await render();
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="mojo-whole-page"]')).not.toBeNull());
+    expect(host.querySelector('[data-testid="fixture-frame"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="poetry-frame"]')).toBeNull();
+    fixture.apps = [{ ...fixture.apps[0]!, status: "archived", revision: 4 }];
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="mojo-whole-page"]')).toBeNull());
+  });
+
+  it("keeps copied or missing markers on the ordinary Mini App path", async () => {
+    fixture.apps = [app("copied-mojo", "Copied")];
+    fixture.mojoHtml = `<html><head>${MOJO_MARKER}</head><body>Copied</body></html>`;
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("copied-mojo"));
+    expect(host.querySelector('[data-testid="mojo-whole-page"]')).toBeNull();
+    await act(async () => root.render(null));
+    fixture.apps = [app(MOJO_ID, "Mojo")];
+    fixture.mojoHtml = "<html><head></head><body>Old quote document</body></html>";
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe(MOJO_ID));
+    expect(host.querySelector('[data-testid="mojo-whole-page"]')).toBeNull();
+  });
+
+  it("does not open the remote sibling for a paired desktop's owner-like UI state", async () => {
+    fixture.apps = [app(MOJO_ID, "Mojo")];
+    fixture.mojoHtml = `<html><head>${MOJO_MARKER}</head><body>Quotes</body></html>`;
+    vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true },
+      remoteClient: { active: true } });
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe(MOJO_ID));
+    expect(host.querySelector('[data-testid="mojo-whole-page"]')).toBeNull();
+  });
+
   it("keeps the current app visible when its icon is selected again", async () => {
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));

@@ -60,6 +60,16 @@ describe("the sandbox a published site runs in", () => {
     expect(SITE_FRAME_ALLOW).not.toMatch(/\*|'self'|'src'/);
   });
 
+  it("allows a caller to remove forms and popups without changing the default site sandbox", async () => {
+    await act(async () => root.render(createElement(SiteFrame, { url: SITE, title: "Poetry", attempt: 0,
+      sandbox: SITE_THUMB_SANDBOX })));
+    const iframe = host.querySelector("iframe")!;
+    expect(tokens(iframe.getAttribute("sandbox"))).toEqual(["allow-same-origin", "allow-scripts"]);
+    expect(iframe.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(iframe.getAttribute("allow")).toBe(SITE_FRAME_ALLOW);
+    expect(SITE_FRAME_SANDBOX).toContain("allow-forms allow-popups");
+  });
+
   it("gives a card's picture less still: no forms, no new tabs, no pointer, no keyboard, nothing read aloud", async () => {
     await act(async () => root.render(createElement(SiteThumb, { url: SITE, title: "Bakery", loginOnly: false })));
     const iframe = host.querySelector("iframe")!;
