@@ -42,10 +42,18 @@ export function createTeamPeople(dataDir: string, now: () => number = Date.now) 
     }
   };
   const save = () => {
-    try {
-      writeFileAtomic(file, `${JSON.stringify({ version: 1, people })}\n`, { mode: 0o600 });
-    } catch (error) {
-      console.warn(`team people: could not save ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    const text = `${JSON.stringify({ version: 1, people })}\n`;
+    const failures: unknown[] = [];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        writeFileAtomic(file, text, { mode: 0o600 });
+        return;
+      } catch (error) {
+        failures.push(error);
+        if (attempt === 0 && (error as NodeJS.ErrnoException | null)?.code === "EIO") continue;
+        console.warn(`team people: could not save ${file}: ${failures.map((failure) => failure instanceof Error ? failure.message : String(failure)).join("; retry failed: ")}`);
+        return;
+      }
     }
   };
   return {
