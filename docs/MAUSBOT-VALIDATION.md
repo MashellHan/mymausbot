@@ -161,9 +161,9 @@ later clean execution covers it.
 The trusted-main `scan` job in `qa-report.yml` runs after PR CI completes; it is
 not a required PR check and uses `continue-on-error`. Its
 `process-scan.json` reports `passed`, `optimization_needed` or `incomplete`.
-The workflow scan is read-only and retains its report artifact. The existing
-serialized hourly Lead queue scans open PRs and recent PR runs and is the
-only publisher of process issues; there is no new scheduler. Scanner outages cannot fail the quality gate or
+The workflow scan is read-only and retains its report artifact. Lead reviews
+its findings alongside open PRs at the scheduled checkpoint and owns any
+process issue publication. Scanner outages cannot fail the quality gate or
 prevent ordinary QA/PR handoffs.
 It also inspects procedural closure reasons among the latest 100 closed PRs
 within seven days, records preserved source and compares their heads with main.
@@ -172,14 +172,14 @@ Lead verifies recovery or supersession; the scanner never closes or reopens PRs.
 Cases use only `qa:process`, without `qa`. They are deduplicated by rule and
 subject and excluded from QA holds and reduction-health issue classification,
 even if another label is accidentally added. Five-minute gate latency,
-12-hour observed PR inactivity, 24-hour open PR age, 30-minute triage and repair
-due dates are optimization targets. GitHub's update timestamp is an inactivity
+12-hour observed PR inactivity, 24-hour open PR age and issue-specific due dates
+are advisory optimization signals. GitHub's update timestamp is an inactivity
 indicator; Lead inspects substantive progress rather than treating comments,
 labels or empty commits as progress. Local edit/ready receipts already record
 over-budget work without failing successful checks.
 
 QA triage and repair deadlines stay in the scan report and the original QA
-issue's hourly Lead handoff; they never create separate process issues.
+issue's Lead handoff; they never create separate process issues.
 Their observation identity is the rule and original issue number, independent
 of renewed deadlines or failure epochs. Historical deadline reminders are
 excluded from process handoffs. Lead updates the original issue's blocker,
@@ -259,32 +259,45 @@ this reporter support before closing members, and preserve the original links,
 case keys, platforms, assertions, tested revisions, runs and pending work in
 the consolidation handoff.
 
-The local hourly queue uses the existing `mausbot-lead` Herdr agent. It
-submits new QA work, ready PR heads, verification and overdue conditions. Normal
-recurrence updates the issue without another wake-up. A durable submission
-receipt is not an acknowledgement: Lead acknowledges and triages on the issue
-or PR. An ambiguous Herdr submission is retained for inspection, not blindly
-retried. Preflight outages before any prompt attempt retry on the next tick.
-The schedule requires this Mac and Herdr to be available; CI's coverage
-fallback does not depend on them.
+Root owns one MausBot Automation at **06:00 and 21:00 Asia/Shanghai** for the
+existing `mausbot-lead` team. Root retires the local hourly launchd queue while
+preserving its source, state and receipts. No developer starts another schedule.
+The daily remote QA and midnight upstream automation remain separate. An
+automation conversation or prompt receipt proves delivery only.
 
-At the first available hourly tick of each Asia/Shanghai day, the same queue
-reads the complete open issue inventory and hands Lead a bounded review. It
-separates QA, process and other requests, prioritizes verified closure and stale
-defects, and includes paused or product requests only for an explicit disposition.
-Unresolved QA and process work can return on a six-hour cadence without a new
-issue or changed action key. Each handoff states its current owner, next action,
-recorded evidence or blocker, and existing repair PR when present. The durable
-queue state records inventory, delivery, assignment, fixing, review, verification
-and closure evidence separately. A prompt receipt proves only delivery; Lead
-records actual work and exact accepted completion on the original issue or PR.
-For a closed issue, `QA-Disposition-Evidence: <accepted evidence link>` or
-`QA-Closure-Evidence: <accepted evidence link>` or an existing Lead closure
-marker in its body binds the queue's
-closed record; missing closure evidence remains pending. The queue never resumes paused work,
-reassigns an active repair or closes an issue automatically.
+At each checkpoint, Lead inspects the full open issue inventory, open PRs,
+recent QA evidence and active work, then holds a short triage meeting with the
+existing developers and independent QA/review roles. Lead chooses a bounded,
+prioritized repair batch and starts available owners immediately. A later
+checkpoint resumes or reprioritizes that batch without duplicating repairs.
+The existing read-only `planCheckpoint` backlog view can rotate bounded
+attention across triage, active repair and verification while reserving process
+and other requests. It uses recorded severity and prior selection time; its
+selection does not change issue state or assign work. Lead records the deferred
+inventory and chooses the actual batch by impact and available capacity.
 
-Lead targets triage within 30 minutes and sets `qa:triaged`, removes `qa:untriaged`, chooses
+Keep delivery, assigned owner, observed source start, review, integrated
+verification and closure distinct in the team handoff. A triaged owner or a
+text-only owner/next-action/blocker/evidence edit is not developer execution.
+A linked open repair PR with a valid head is an observable source milestone;
+a matching current-head `QA-Handoff` is a review handoff, not acceptance.
+Neither a prompt receipt nor `qa:verified` alone proves closure. Record the
+starting and remaining open counts, fixed-and-verified outcomes separately
+from duplicate/consolidated and obsolete/not-planned closures, remaining
+high-priority issues, PR status, QA completeness and the next checkpoint.
+Preserve original dates, failed evidence and active owners; do not resume
+paused work or reassign a repair because a checkpoint elapsed.
+
+Lead may close a duplicate under a linked canonical issue or a low-value item
+with an explicit reason and disposition. That tracking decision is not a fix.
+For a fixed issue, retain the accepted review, current integrated source and
+complete applicable positive verification. Record a same-repository evidence
+link on the original issue; a free-form claim does not prove completion.
+UNKNOWN cause calls for a bounded diagnostic or a concrete blocker, not
+repeated inspection of unchanged evidence. Shared error text alone does not
+establish a shared cause.
+
+Lead sets `qa:triaged`, removes `qa:untriaged`, chooses
 `qa:p0`, `qa:p1` or `qa:p2`, selects a `qa:kind:*` and `qa:scope:*`, and records:
 
 ```text
@@ -313,11 +326,12 @@ coverage reduction and requests shared recovery. Its age does not invalidate
 an already selected run or independently fail the merge gate.
 This allows the 24-hour cadence plus a two-hour grace period; report health
 and shared execution recovery use the same window.
-The queue requests one shared recovery run per failed scheduled cycle, reusing
-any in-progress full run. A delivery failure retries reporting from durable
-results, without rerunning tests. The queue also backfills coalesced reporter
-events since its installation. An unreadable issue list fails the merge gate
-because it cannot enforce existing holds.
+At the checkpoint, inspect existing runs first. Reuse an active full QA run;
+request one shared recovery only when justified. Replay reporting from durable
+results when delivery failed, without rerunning tests. Transfer old queue
+report-backfill and ready-PR follow-up into the Lead checkpoint and normal
+developer handoff. An unreadable issue list fails the merge gate because it
+cannot enforce existing holds.
 
 ## Local candidate, merge and release
 
@@ -389,19 +403,12 @@ latency, eligibility fraction, runner time, queueing, escaped regressions,
 retries and triage/repair latency, with sample counts and p50/p95. Include
 corrections and retries in the original delivery clock.
 
-The queue entry point is `node scripts/qa/queue.mjs`. It requires
-`GITHUB_REPOSITORY`, `MAUSBOT_QA_STATE`, an authenticated `GH_TOKEN` or a JSON argv
-prefix in `MAUSBOT_GH_COMMAND`, and optional `MAUSBOT_HERDR` /
-`MAUSBOT_HERDR_SESSION` (default `default`). Use the verified personal account
-helper on a Mac with multiple GitHub accounts; never store tokens in a plist.
-Install one launchd job with `StartInterval` set to 3600 seconds against a pinned checkout.
-After an accepted QA-contract change, update that existing runtime to the
-reviewed merged source at an inactive writer boundary; preserve its schedule,
-authentication routing and durable queue state. Do not start a second queue or
-a duplicate recovery run. Preserve the existing upstream sync and activity collectors. Resolve an
-uncertain receipt by reading Lead's actual state/output and the issue/PR;
-clear its pending entry only after determining whether submission happened.
-
+`scripts/qa/queue.mjs` and its durable state are retained as historical
+evidence; they are not the checkpoint executor. Root owns the old launchd
+retirement and the single MausBot Automation configuration. Resolve an
+uncertain historical queue receipt by reading Lead's actual state/output and
+the issue or PR before marking it settled. Keep existing authentication and
+state files protected; never copy credentials into an automation prompt.
 For report delivery only, dispatch `qa-report.yml` with `run_id`. For a shared
 execution recovery, dispatch `ci.yml` on main once after checking existing runs.
 Do not delete failure evidence or rerun a matrix just to obtain a green badge.

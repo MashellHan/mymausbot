@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { backlogSlot, beijingDay, planBacklog } from "./backlog.mjs";
+import { backlogSlot, beijingDay, planBacklog, planCheckpoint } from "./backlog.mjs";
 import { drainQueue, queueItems } from "./queue.mjs";
 import { recordCases } from "./scan.mjs";
 
@@ -120,7 +120,7 @@ describe("hourly QA backlog", () => {
       + "\nProcess-Evidence: bounded trace accepted");
     await h.tick(resumed, start + 6 * 60 * 60_000);
     expect(resumed.backlog.records[9]).toMatchObject({ stage: "assigned", owner: "mausbot-upstream",
-      next: "inspect the saved phase trace", evidence: "bounded trace accepted", lastProgressAt: new Date(start + 6 * 60 * 60_000).toISOString() });
+      next: "inspect the saved phase trace", evidence: "bounded trace accepted", lastProgressAt: new Date(start).toISOString() });
     expect(resumed.backlog.records[9]).not.toHaveProperty("completedAt");
     expect(h.send.mock.calls[1][0]).toContain("Unresolved work follow-up");
     expect(h.send.mock.calls[1][0]).toContain("Process-Next=inspect the saved phase trace");
@@ -176,6 +176,54 @@ describe("hourly QA backlog", () => {
     const verified = planBacklog([{ ...source, labels: [...source.labels, "qa:verified"] }], [], { 2: review }, start + 120_000).observed[0];
     expect([fixing.stage, review.stage, verified.stage]).toEqual(["fixing", "review", "verification"]);
     expect([fixing, review, verified].every((item) => !Object.hasOwn(item, "completedAt"))).toBe(true);
+  });
+
+  it("keeps metadata as assignment and advances progress only for a valid repair head", () => {
+    const source = issue(2), then = start + 6 * 24 * 60 * 60_000;
+    const first = planCheckpoint([source], [], {}, start).observed[0];
+    const edited = { ...source, body: source.body.replace("inspect saved evidence", "inspect saved evidence again")
+      + "\nQA-Blocker: still investigating\nQA-Evidence: notes only" };
+    const assigned = planCheckpoint([edited], [], { 2: first }, then).observed[0];
+    expect(assigned).toMatchObject({ stage: "assigned", stale: true, lastProgressAt: old,
+      execution: { status: "not_observed" }, completion: { status: "pending" } });
+    const malformed = { number: 44, draft: true, head: { sha: "not-a-commit" }, body: "QA-Repair: #2" };
+    expect(planCheckpoint([edited], [malformed], { 2: assigned }, then).observed[0].execution.status).toBe("not_observed");
+    const repair = { ...malformed, head: { sha: "a".repeat(40) } };
+    expect(planCheckpoint([edited], [repair], { 2: assigned }, then).observed[0]).toMatchObject({
+      stage: "fixing", lastProgressAt: new Date(then).toISOString(),
+      execution: { status: "source_started", repair: 44, head: "a".repeat(40) },
+    });
+  });
+
+  it("rotates triage, repair and verification in read-only checkpoints", () => {
+    const triage = Array.from({ length: 4 }, (_, index) => issue(index + 1,
+      ["qa", "qa:untriaged", index === 0 ? "qa:p0" : "qa:p2", "qa:kind:infrastructure", "qa:scope:global"]));
+    const repairs = Array.from({ length: 4 }, (_, index) => issue(index + 10));
+    const verified = Array.from({ length: 4 }, (_, index) => issue(index + 20,
+      ["qa", "qa:verified", "qa:triaged", "qa:p2", "qa:kind:infrastructure", "qa:scope:global", "owner:upstream"]));
+    const all = [...triage, ...repairs, ...verified];
+    let records: Record<number, any> = {};
+    const selected: number[] = [];
+    for (let checkpoint = 0; checkpoint < 2; checkpoint++) {
+      const now = start + checkpoint * 15 * 60 * 60_000;
+      const plan = planCheckpoint(all, [], records, now);
+      expect(plan.selected).toHaveLength(8);
+      expect(new Set(plan.selected.map((item) => item.stage))).toEqual(new Set(["unassigned", "assigned", "verification"]));
+      selected.push(...plan.selected.map((item) => item.number));
+      records = Object.fromEntries(plan.observed.map((item) => [item.number, {
+        ...item, ...(plan.selected.includes(item) ? { lastNotifiedAt: new Date(now).toISOString() } : {}),
+      }]));
+    }
+    expect(selected[0]).toBe(1);
+    expect(new Set(selected).size).toBe(12);
+    expect(all.every((item) => item.state === "open")).toBe(true);
+  });
+
+  it("does not carry the retired thirty-minute triage reminder into checkpoints", () => {
+    const young = { ...issue(1, ["qa", "qa:untriaged", "qa:p1"]),
+      created_at: new Date(start - 60 * 60_000).toISOString() };
+    expect(planCheckpoint([young], [], {}, start).observed[0].action).toBe("triage and assign an existing owner");
+    expect(planBacklog([young], [], {}, start).observed[0].action).toContain("overdue triage");
   });
 
   it("does not wake immediate QA again for cosmetic due or comment changes", () => {
