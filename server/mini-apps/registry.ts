@@ -2,10 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import type { MiniAppDataBinding } from "../../shared/mini-app-data.ts";
+import type { HongguoHistoryEntry, HongguoHistoryRequest, HongguoHistoryResponse, HongguoPreferencesRequest,
+  HongguoPreferencesResponse } from "../../shared/hongguo-mini-app.ts";
 import { MINI_APP_DASHBOARD_RESOURCES, type MiniAppArchive, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
   type MiniAppDashboardKind, type MiniAppDashboardReadResult, type MiniAppDocument, type MiniAppMutationResult,
   type MiniAppDashboardResource, type MiniAppQuery, type MiniAppQueryResult, type MiniAppRollback, type MiniAppState,
-  type MiniAppShippedTemplateKind, type MiniAppSummary } from "../../shared/mini-apps.ts";
+  type MiniAppShippedTemplateKind, type MiniAppNativeKind, type MiniAppSummary } from "../../shared/mini-apps.ts";
 import { AppDocs } from "../app-docs.ts";
 import { rowRate } from "../chat-apps.ts";
 import type { DataEngine } from "../data/types.ts";
@@ -13,6 +15,7 @@ import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
 import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
 import { appFailure, archiveSchema, parseDashboardRead, parsePublish, parseQuery, rollbackSchema } from "./validation.ts";
 import { developedMiniApps, ensureMiniAppDevelopment, recordMiniAppDevelopment } from "./development.ts";
+import { parseHongguoHistory, parseHongguoPreferences } from "./hongguo-validation.ts";
 
 export const MINI_APPS_OWNER = "workspace-owner";
 
@@ -39,6 +42,8 @@ export function ensureMiniApps(db: DatabaseSync): void {
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
       dashboard_kind TEXT CHECK(dashboard_kind IN ('agent-team', 'usage') OR dashboard_kind IS NULL),
       dashboard_identity TEXT CHECK(dashboard_identity IN ('agent-team', 'usage') OR dashboard_identity IS NULL),
+      native_kind TEXT CHECK(native_kind = 'hongguo' OR native_kind IS NULL),
+      native_identity TEXT CHECK(native_identity = 'hongguo' OR native_identity IS NULL),
       shipped_template_kind TEXT CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL),
       responsible_bot_id TEXT, capabilities TEXT NOT NULL DEFAULT '[]',
       UNIQUE(owner_id, slug)
@@ -53,6 +58,16 @@ export function ensureMiniApps(db: DatabaseSync): void {
       content_hash TEXT NOT NULL, result TEXT NOT NULL, created_at INTEGER NOT NULL,
       PRIMARY KEY(actor, target, operation, request_key)
     );
+    CREATE TABLE IF NOT EXISTS mini_app_hongguo_history (
+      app_id TEXT NOT NULL, series_id TEXT NOT NULL, series_title TEXT NOT NULL, cover_url TEXT,
+      episode_id TEXT NOT NULL, episode_number INTEGER, episode_title TEXT NOT NULL,
+      position_seconds REAL NOT NULL, duration_seconds REAL, updated_at INTEGER NOT NULL,
+      PRIMARY KEY(app_id, series_id), FOREIGN KEY(app_id) REFERENCES mini_apps(id)
+    );
+    CREATE TABLE IF NOT EXISTS mini_app_hongguo_preferences (
+      app_id TEXT PRIMARY KEY, autoplay_next INTEGER NOT NULL CHECK(autoplay_next IN (0, 1)),
+      FOREIGN KEY(app_id) REFERENCES mini_apps(id)
+    );
   `);
   const columns = db.prepare("PRAGMA table_info(mini_apps)").all() as Array<{ name: string }>;
   if (!columns.some(({ name }) => name === "dashboard_kind")) {
@@ -61,6 +76,12 @@ export function ensureMiniApps(db: DatabaseSync): void {
   if (!columns.some(({ name }) => name === "dashboard_identity")) {
     db.exec("ALTER TABLE mini_apps ADD COLUMN dashboard_identity TEXT CHECK(dashboard_identity IN ('agent-team', 'usage') OR dashboard_identity IS NULL)");
     db.exec("UPDATE mini_apps SET dashboard_identity = dashboard_kind WHERE dashboard_kind IS NOT NULL");
+  }
+  if (!columns.some(({ name }) => name === "native_kind")) {
+    db.exec("ALTER TABLE mini_apps ADD COLUMN native_kind TEXT CHECK(native_kind = 'hongguo' OR native_kind IS NULL)");
+  }
+  if (!columns.some(({ name }) => name === "native_identity")) {
+    db.exec("ALTER TABLE mini_apps ADD COLUMN native_identity TEXT CHECK(native_identity = 'hongguo' OR native_identity IS NULL)");
   }
   if (!columns.some(({ name }) => name === "shipped_template_kind")) {
     db.exec("ALTER TABLE mini_apps ADD COLUMN shipped_template_kind TEXT CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL)");
@@ -86,6 +107,7 @@ type AppRow = {
   id: string; slug: string; title: string; description: string; status: MiniAppSummary["status"];
   revision: number; template_version: number; publishers: string; created_at: number; updated_at: number;
   dashboard_kind: MiniAppDashboardKind | null; dashboard_identity: MiniAppDashboardKind | null;
+  native_kind: MiniAppNativeKind | null; native_identity: MiniAppNativeKind | null;
   shipped_template_kind: MiniAppShippedTemplateKind | null;
   responsible_bot_id: string | null; capabilities: string;
 };
@@ -103,6 +125,7 @@ const summary = (row: AppRow): MiniAppSummary => ({
   revision: row.revision, templateVersion: row.template_version, publisherBotIds: JSON.parse(row.publishers) as string[],
   responsibleBotId: row.responsible_bot_id, capabilities: JSON.parse(row.capabilities) as string[],
   dashboard: declaration(row.dashboard_kind), dashboardIdentity: row.dashboard_identity,
+  nativeKind: row.native_kind, nativeIdentity: row.native_identity,
   shippedTemplateKind: row.shipped_template_kind,
   createdAt: row.created_at, updatedAt: row.updated_at,
 });
@@ -168,6 +191,69 @@ export class MiniApps {
     return app;
   }
 
+  requireHongguo(actor: MiniAppActor, id: string, revision: number): MiniAppSummary {
+    if (actor.botId) throw appFailure(403, "Only the workspace owner can open Hongguo.");
+    const app = this.require(actor, id);
+    this.expected(app, revision);
+    if (app.status !== "active") throw appFailure(409, "This Mini App is archived.");
+    if (app.nativeKind !== "hongguo" || app.nativeIdentity !== "hongguo") {
+      throw appFailure(403, "This Mini App has no Hongguo grant.");
+    }
+    return app;
+  }
+
+  private hongguoHistoryResult(db: DatabaseSync, app: MiniAppSummary): HongguoHistoryResponse {
+    const rows = db.prepare(`SELECT series_id, series_title, cover_url, episode_id, episode_number,
+      episode_title, position_seconds, duration_seconds, updated_at FROM mini_app_hongguo_history
+      WHERE app_id = ? ORDER BY updated_at DESC, series_id`).all(app.id) as unknown as Array<{
+      series_id: string; series_title: string; cover_url: string | null; episode_id: string; episode_number: number | null;
+      episode_title: string; position_seconds: number; duration_seconds: number | null; updated_at: number;
+    }>;
+    const entries: HongguoHistoryEntry[] = rows.map((row) => ({ seriesId: row.series_id, seriesTitle: row.series_title,
+      coverUrl: row.cover_url, episodeId: row.episode_id, episodeNumber: row.episode_number,
+      episodeTitle: row.episode_title, positionSeconds: row.position_seconds,
+      durationSeconds: row.duration_seconds, updatedAt: row.updated_at }));
+    const preference = db.prepare("SELECT autoplay_next FROM mini_app_hongguo_preferences WHERE app_id = ?")
+      .get(app.id) as { autoplay_next: number } | undefined;
+    return { appId: app.id, revision: app.revision, entries, autoplayNext: preference?.autoplay_next !== 0 };
+  }
+
+  hongguoHistory(actor: MiniAppActor, id: string, raw: unknown): HongguoHistoryResponse {
+    const input: HongguoHistoryRequest = parseHongguoHistory(raw);
+    const app = this.requireHongguo(actor, id, input.expectedRevision);
+    if (input.action === "list") return this.hongguoHistoryResult(this.db(), app);
+    return this.access.write((db) => {
+      const current = this.requireHongguo(actor, id, input.expectedRevision);
+      if (input.action === "save") {
+        const entry = input.entry;
+        db.prepare(`INSERT INTO mini_app_hongguo_history (app_id, series_id, series_title, cover_url, episode_id,
+          episode_number, episode_title, position_seconds, duration_seconds, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(app_id, series_id) DO UPDATE SET series_title=excluded.series_title, cover_url=excluded.cover_url,
+          episode_id=excluded.episode_id, episode_number=excluded.episode_number, episode_title=excluded.episode_title,
+          position_seconds=excluded.position_seconds, duration_seconds=excluded.duration_seconds, updated_at=excluded.updated_at`)
+          .run(id, entry.seriesId, entry.seriesTitle, entry.coverUrl, entry.episodeId, entry.episodeNumber,
+            entry.episodeTitle, entry.positionSeconds, entry.durationSeconds, Date.now());
+      } else if (input.action === "delete") {
+        db.prepare("DELETE FROM mini_app_hongguo_history WHERE app_id = ? AND series_id = ?").run(id, input.seriesId);
+      } else {
+        db.prepare("DELETE FROM mini_app_hongguo_history WHERE app_id = ?").run(id);
+      }
+      return this.hongguoHistoryResult(db, current);
+    });
+  }
+
+  hongguoPreferences(actor: MiniAppActor, id: string, raw: unknown): HongguoPreferencesResponse {
+    const input: HongguoPreferencesRequest = parseHongguoPreferences(raw);
+    this.requireHongguo(actor, id, input.expectedRevision);
+    return this.access.write((db) => {
+      const current = this.requireHongguo(actor, id, input.expectedRevision);
+      db.prepare(`INSERT INTO mini_app_hongguo_preferences (app_id, autoplay_next) VALUES (?, ?)
+        ON CONFLICT(app_id) DO UPDATE SET autoplay_next=excluded.autoplay_next`).run(id, Number(input.autoplayNext));
+      return { appId: id, revision: current.revision, autoplayNext: input.autoplayNext };
+    });
+  }
+
   list(actor: MiniAppActor): MiniAppSummary[] {
     this.authorize(actor);
     return (this.db().prepare("SELECT * FROM mini_apps WHERE owner_id = ? ORDER BY created_at, id").all(MINI_APPS_OWNER) as unknown as AppRow[])
@@ -222,14 +308,15 @@ export class MiniApps {
     if ((app?.revision ?? 0) !== revision) throw appFailure(409, "The Mini App changed. Read its current version before publishing again.");
   }
 
-  private requireDashboardBindings(kind: MiniAppDashboardKind | null, bindings: MiniAppDataBinding[]): void {
-    if (kind && bindings.length) throw appFailure(400, "Native dashboard Mini Apps require empty Data bindings.");
+  private requireNativeBindings(native: boolean, bindings: MiniAppDataBinding[]): void {
+    if (native && bindings.length) throw appFailure(400, "Native Mini Apps require empty Data bindings.");
   }
 
   async publish(actor: MiniAppActor, raw: unknown, id?: string): Promise<MiniAppMutationResult> {
     this.authorize(actor, undefined, true);
     const input = parsePublish(raw);
     if (actor.botId && input.dashboardKind !== undefined) throw appFailure(403, "Only the workspace owner can grant dashboard resources.");
+    if (actor.botId && input.nativeKind !== undefined) throw appFailure(403, "Only the workspace owner can grant native apps.");
     if (actor.botId && input.shippedTemplateKind !== undefined) throw appFailure(403, "Only the workspace owner can identify a shipped template.");
     if (actor.botId && input.responsibleBotId !== undefined) throw appFailure(403, "Only the workspace owner can assign responsibility.");
     if (input.responsibleBotId && !this.validPublisher(input.responsibleBotId)) throw appFailure(400, "The responsible Bot does not exist.");
@@ -247,13 +334,17 @@ export class MiniApps {
     if (existing?.dashboardIdentity && input.dashboardKind && existing.dashboardIdentity !== input.dashboardKind) {
       throw appFailure(409, "An installed native dashboard keeps its built-in identity.");
     }
+    if (existing?.nativeIdentity && input.nativeKind && existing.nativeIdentity !== input.nativeKind) {
+      throw appFailure(409, "An installed native app keeps its built-in identity.");
+    }
     if (existing?.shippedTemplateKind && input.shippedTemplateKind && existing.shippedTemplateKind !== input.shippedTemplateKind) {
       throw appFailure(409, "An installed shipped template keeps its identity.");
     }
-    if ((existing?.dashboardIdentity ?? input.dashboardKind) && (existing?.shippedTemplateKind ?? input.shippedTemplateKind)) {
-      throw appFailure(400, "A native dashboard cannot also be a Data template.");
+    if ([(existing?.dashboardIdentity ?? input.dashboardKind), (existing?.nativeIdentity ?? input.nativeKind),
+      (existing?.shippedTemplateKind ?? input.shippedTemplateKind)].filter(Boolean).length > 1) {
+      throw appFailure(400, "A built-in Mini App keeps one identity.");
     }
-    this.requireDashboardBindings(existing?.dashboardIdentity ?? input.dashboardKind ?? null, input.bindings);
+    this.requireNativeBindings(Boolean(existing?.dashboardIdentity ?? input.dashboardKind ?? existing?.nativeIdentity ?? input.nativeKind), input.bindings);
     const publishers = [...new Set(input.publisherBotIds ?? existing?.publisherBotIds ?? (actor.botId ? [actor.botId] : []))];
     if (actor.botId && input.publisherBotIds !== undefined) throw appFailure(403, "Only the workspace owner can change publisher grants.");
     if (publishers.some((publisher) => !this.validPublisher(publisher))) throw appFailure(400, "A publisher bot no longer exists.");
@@ -277,6 +368,8 @@ export class MiniApps {
       const last = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM mini_app_versions WHERE app_id = ?").get(appId) as { version: number };
       const dashboardKind = input.dashboardKind === undefined ? current?.dashboard?.kind ?? null : input.dashboardKind;
       const dashboardIdentity = current?.dashboardIdentity ?? dashboardKind;
+      const nativeKind = input.nativeKind === undefined ? current?.nativeKind ?? null : input.nativeKind;
+      const nativeIdentity = current?.nativeIdentity ?? nativeKind;
       const shippedTemplateKind = current?.shippedTemplateKind ?? input.shippedTemplateKind ?? null;
       if (current?.dashboardIdentity && dashboardKind && current.dashboardIdentity !== dashboardKind) {
         throw appFailure(409, "An installed native dashboard keeps its built-in identity.");
@@ -284,25 +377,31 @@ export class MiniApps {
       if (current?.shippedTemplateKind && input.shippedTemplateKind && current.shippedTemplateKind !== input.shippedTemplateKind) {
         throw appFailure(409, "An installed shipped template keeps its identity.");
       }
-      if (dashboardIdentity && shippedTemplateKind) throw appFailure(400, "A native dashboard cannot also be a Data template.");
-      this.requireDashboardBindings(dashboardIdentity, input.bindings);
+      if (current?.nativeIdentity && nativeKind && current.nativeIdentity !== nativeKind) {
+        throw appFailure(409, "An installed native app keeps its built-in identity.");
+      }
+      if ([dashboardIdentity, nativeIdentity, shippedTemplateKind].filter(Boolean).length > 1) {
+        throw appFailure(400, "A built-in Mini App keeps one identity.");
+      }
+      this.requireNativeBindings(Boolean(dashboardIdentity || nativeIdentity), input.bindings);
       const previousVersion = current && this.version(appId, current.templateVersion);
       const developed = !current || previousVersion?.doc !== stored.doc ||
         !isDeepStrictEqual(JSON.parse(previousVersion.bindings) as MiniAppDataBinding[], input.bindings);
       const app: MiniAppSummary = { id: appId, slug: input.slug, title: input.title, description: input.description,
         status: "active", revision: (current?.revision ?? 0) + 1, templateVersion: last.version + 1,
         publisherBotIds: publishers, responsibleBotId, capabilities: input.capabilities ?? current?.capabilities ?? [],
-        dashboard: declaration(dashboardKind), dashboardIdentity, shippedTemplateKind,
+        dashboard: declaration(dashboardKind), dashboardIdentity, nativeKind, nativeIdentity, shippedTemplateKind,
         createdAt: current?.createdAt ?? now, updatedAt: now };
-      db.prepare(`INSERT INTO mini_apps (id, owner_id, slug, title, description, status, revision, template_version, publishers, created_at, updated_at, dashboard_kind, dashboard_identity, shipped_template_kind, responsible_bot_id, capabilities)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      db.prepare(`INSERT INTO mini_apps (id, owner_id, slug, title, description, status, revision, template_version, publishers, created_at, updated_at, dashboard_kind, dashboard_identity, native_kind, native_identity, shipped_template_kind, responsible_bot_id, capabilities)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description, status=excluded.status,
         revision=excluded.revision, template_version=excluded.template_version, publishers=excluded.publishers,
         updated_at=excluded.updated_at, dashboard_kind=excluded.dashboard_kind, dashboard_identity=excluded.dashboard_identity,
+        native_kind=excluded.native_kind, native_identity=excluded.native_identity,
         shipped_template_kind=excluded.shipped_template_kind, responsible_bot_id=excluded.responsible_bot_id,
         capabilities=excluded.capabilities`)
         .run(appId, MINI_APPS_OWNER, app.slug, app.title, app.description, app.status, app.revision, app.templateVersion,
-          JSON.stringify(publishers), app.createdAt, now, dashboardKind, dashboardIdentity, shippedTemplateKind,
+          JSON.stringify(publishers), app.createdAt, now, dashboardKind, dashboardIdentity, nativeKind, nativeIdentity, shippedTemplateKind,
           responsibleBotId, JSON.stringify(app.capabilities));
       db.prepare("INSERT INTO mini_app_versions VALUES (?, ?, ?, ?, ?, ?, ?)").run(appId, app.templateVersion, stored.doc, app.title, app.description, JSON.stringify(input.bindings), now);
       if (actor.botId && developed) recordMiniAppDevelopment(db, appId, actor.botId, now);
@@ -320,13 +419,13 @@ export class MiniApps {
     const version = this.version(id, input.data.templateVersion);
     if (!this.docs.read(version.doc)) throw appFailure(503, "The requested template is unavailable.");
     const bindings = JSON.parse(version.bindings) as MiniAppDataBinding[];
-    this.requireDashboardBindings(current.dashboardIdentity ?? null, bindings);
+    this.requireNativeBindings(Boolean(current.dashboardIdentity || current.nativeIdentity), bindings);
     this.authorizeTemplate(actor, current, bindings);
     for (const binding of bindings) await this.data.validateBinding(MINI_APPS_OWNER, binding);
     this.authorizeTemplate(actor, this.require(actor, id, true), bindings);
     return this.changeHead(actor, id, "rollback", input.data, (app) => {
       this.authorizeTemplate(actor, app, bindings);
-      this.requireDashboardBindings(app.dashboardIdentity ?? null, bindings);
+      this.requireNativeBindings(Boolean(app.dashboardIdentity || app.nativeIdentity), bindings);
       return { ...app, title: version.title, description: version.description, templateVersion: version.version, status: "active" };
     });
   }
@@ -334,7 +433,7 @@ export class MiniApps {
   archive(actor: MiniAppActor, id: string, raw: unknown): MiniAppMutationResult {
     const input = archiveSchema.safeParse(raw);
     if (!input.success) throw appFailure(400, "Invalid Mini App archive.");
-    return this.changeHead(actor, id, "archive", input.data, (app) => ({ ...app, status: "archived", dashboard: null }));
+    return this.changeHead(actor, id, "archive", input.data, (app) => ({ ...app, status: "archived", dashboard: null, nativeKind: null }));
   }
 
   private changeHead(actor: MiniAppActor, id: string, operation: string, input: MiniAppRollback | MiniAppArchive, change: (app: MiniAppSummary) => MiniAppSummary): MiniAppMutationResult {
@@ -345,8 +444,8 @@ export class MiniApps {
       if (replay) return replay;
       this.expected(current, input.expectedRevision);
       const app = { ...change(current), revision: current.revision + 1, updatedAt: Date.now() };
-      db.prepare("UPDATE mini_apps SET title = ?, description = ?, status = ?, revision = ?, template_version = ?, updated_at = ?, dashboard_kind = ? WHERE id = ?")
-        .run(app.title, app.description, app.status, app.revision, app.templateVersion, app.updatedAt, app.dashboard?.kind ?? null, id);
+      db.prepare("UPDATE mini_apps SET title = ?, description = ?, status = ?, revision = ?, template_version = ?, updated_at = ?, dashboard_kind = ?, native_kind = ? WHERE id = ?")
+        .run(app.title, app.description, app.status, app.revision, app.templateVersion, app.updatedAt, app.dashboard?.kind ?? null, app.nativeKind ?? null, id);
       return this.receipt(db, actor, id, operation, input, app);
     });
   }

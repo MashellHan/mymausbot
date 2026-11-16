@@ -83,6 +83,7 @@ const shippedDefaults = (): MiniAppSummary[] => [
   { ...app("github", "GitHub activity"), slug: "github-activity", shippedTemplateKind: "github_activity" },
   { ...app("team", "Agent Team"), slug: "agent-team", dashboardIdentity: "agent-team", dashboard },
   { ...app("usage", "Usage"), slug: "usage", dashboardIdentity: "usage", dashboard: usageDashboard },
+  { ...app("hongguo", "红果短剧"), slug: "hongguo", nativeIdentity: "hongguo", nativeKind: "hongguo" },
 ];
 
 let root: Root;
@@ -128,11 +129,13 @@ beforeEach(() => {
       fixture.defaultCalls.push(body);
       if (!body.restore && fixture.defaultApps) for (const candidate of fixture.defaultApps) {
         if (!fixture.apps.some((entry) => entry.dashboardIdentity === candidate.dashboardIdentity && candidate.dashboardIdentity
+          || entry.nativeIdentity === candidate.nativeIdentity && candidate.nativeIdentity
           || entry.shippedTemplateKind === candidate.shippedTemplateKind && candidate.shippedTemplateKind)) fixture.apps.push(candidate);
       }
-      if (body.restore) fixture.apps = fixture.apps.map((entry) => entry.dashboardIdentity === body.restore || entry.shippedTemplateKind === body.restore
+      if (body.restore) fixture.apps = fixture.apps.map((entry) => entry.dashboardIdentity === body.restore || entry.nativeIdentity === body.restore || entry.shippedTemplateKind === body.restore
         ? { ...entry, status: "active", revision: entry.revision + 1,
-          dashboard: entry.dashboardIdentity === "agent-team" ? dashboard : entry.dashboardIdentity === "usage" ? usageDashboard : entry.dashboard }
+          dashboard: entry.dashboardIdentity === "agent-team" ? dashboard : entry.dashboardIdentity === "usage" ? usageDashboard : entry.dashboard,
+          nativeKind: entry.nativeIdentity === "hongguo" ? "hongguo" : entry.nativeKind }
         : entry);
       return { apps: fixture.apps, issues: fixture.defaultIssues };
     }
@@ -163,6 +166,11 @@ beforeEach(() => {
       fixture.stateRevision += 1;
       fixture.apps = fixture.apps.map((entry) => ({ ...entry, revision: fixture.stateRevision }));
       return { app: fixture.apps[0], replayed: false };
+    }
+    if (path.includes("/hongguo/")) {
+      const id = path.split("/")[3]!;
+      return { appId: id, revision: fixture.apps.find((entry) => entry.id === id)?.revision ?? 3,
+        entries: [], autoplayNext: true, items: [], categories: [], nextCursor: null };
     }
     if (path.startsWith("/api/mini-apps/")) {
       if (fixture.failDocument) throw new Error("Fixture document offline");
@@ -272,15 +280,15 @@ describe("Mini Apps panel", () => {
     expect(JSON.parse(call![1].body)).toMatchObject({ expectedRevision: 3, templateVersion: 1 });
   });
 
-  it("registers five persisted defaults on opening without another install click", async () => {
+  it("registers six persisted defaults on opening without another install click", async () => {
     fixture.apps = [];
     fixture.defaultApps = shippedDefaults();
     await render();
-    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(5));
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(6));
     expect(fixture.defaultCalls).toHaveLength(1);
     expect(fixture.defaultCalls[0]?.restore).toBeUndefined();
     expect(fixture.defaultCalls[0]?.bookkeepingHtml.length).toBeGreaterThan(100);
-    expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [data-mini-app-icon]')).toHaveLength(5);
+    expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [data-mini-app-icon]')).toHaveLength(6);
     expect(host.textContent).toContain("Activities");
     expect(host.textContent).not.toContain("Explore included apps");
     expect(host.textContent).not.toContain("0 installed");
@@ -288,23 +296,40 @@ describe("Mini Apps panel", () => {
     expect(fixture.api.mock.calls.some(([path, init]) => path === "/api/mini-apps" && init?.method === "POST")).toBe(false);
   });
 
+  it("opens Hongguo only with its native grant and restores that grant on the same app", async () => {
+    fixture.apps = [shippedDefaults().at(-1)!];
+    await render();
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-view"]')).not.toBeNull());
+    expect(fixture.frameMounts).toBe(0);
+    fixture.apps = fixture.apps.map((entry) => ({ ...entry, nativeKind: null }));
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-recovery"]')).not.toBeNull());
+    expect(host.querySelector('[data-testid="hongguo-view"]')).toBeNull();
+    expect(fixture.frameMounts).toBe(0);
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-testid="hongguo-recovery"] button')!.click(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-view"]')).not.toBeNull());
+    expect(fixture.defaultCalls.at(-1)?.restore).toBe("hongguo");
+    expect(fixture.apps[0]?.id).toBe("hongguo");
+    expect(fixture.frameMounts).toBe(0);
+  });
+
   it("keeps a removed default archived on reopen and adds the same app id only after a click", async () => {
     fixture.apps = shippedDefaults();
     await render();
-    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(5));
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(6));
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-remove="agent-team"]')!.click(); });
-    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(4));
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(5));
     expect(fixture.apps.find((entry) => entry.id === "team")?.status).toBe("archived");
     expect(fixture.defaultCalls).toHaveLength(1);
     await act(async () => { root.render(null); });
     await render();
-    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(4));
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(5));
     expect(fixture.apps.find((entry) => entry.id === "team")?.status).toBe("archived");
     await act(async () => { button("Add Mini App").click(); });
     expect(host.querySelector('[data-mini-app-catalog="agent-team"]')?.getAttribute("data-mini-app-state")).toBe("removed");
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="agent-team"]')!.click(); });
-    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(5));
+    await vi.waitFor(() => expect(host.querySelectorAll('[data-testid="mini-apps-panel"] [role="tab"]')).toHaveLength(6));
     expect(selected()?.dataset.appId).toBe("team");
     expect(fixture.defaultCalls.at(-1)?.restore).toBe("agent-team");
     expect(fixture.apps.find((entry) => entry.id === "team")?.status).toBe("active");
@@ -376,7 +401,7 @@ describe("Mini Apps panel", () => {
     expect(popover).not.toBeNull();
     expect(trigger.parentElement?.contains(popover)).toBe(true);
     expect(popover.getAttribute("aria-modal")).toBe("false");
-    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(5);
+    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(6);
     expect(document.activeElement?.getAttribute("data-mini-app-grid-item")).toBe("bookkeeping");
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
     expect(host.querySelector('[data-mini-app-popover]')).toBeNull();
@@ -415,7 +440,7 @@ describe("Mini Apps panel", () => {
     expect(fixture.defaultCalls).toHaveLength(0);
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
     const popover = host.querySelector<HTMLElement>('[data-mini-app-popover]')!;
-    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(5);
+    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(6);
     expect([...popover.querySelectorAll<HTMLButtonElement>('[data-mini-app-grid-item]')].every((item) => item.disabled)).toBe(true);
     expect(fixture.api.mock.calls.some(([path, init]) => path === "/api/mini-apps" && init?.method === "POST")).toBe(false);
   });

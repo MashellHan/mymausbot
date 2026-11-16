@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { MiniAppNamedPage } from "../../shared/mini-app-data.ts";
-import type { MiniAppMutationResult, MiniAppSources, MiniAppState } from "../../shared/mini-apps.ts";
+import type { MiniAppDocument, MiniAppMutationResult, MiniAppSources, MiniAppState } from "../../shared/mini-apps.ts";
 import { runControlOmb } from "../../scripts/control-omb.ts";
 import { callTool } from "../drivers/agents-call.ts";
 import { createHarnessClient } from "../drivers/agents-client.ts";
@@ -106,6 +106,13 @@ it("keeps a reusable local library through Data refresh, publication, restart, b
       expectedRevision: 0, slug: "fixture-dashboard", title: "Synthetic dashboard", description: "", html: "<p>Fallback</p>",
       bindings: [], dashboardKind: "usage", publisherBotIds: [bot.id] }, 201);
     expect(dashboard.app.dashboard).toMatchObject({ kind: "usage" });
+    const hongguo = await api<MiniAppMutationResult>("POST", "/api/mini-apps", { requestKey: "hongguo-install",
+      expectedRevision: 0, slug: "fixture-hongguo", title: "Synthetic Hongguo", description: "", html: "<p>Fallback</p>",
+      bindings: [], nativeKind: "hongguo" }, 201);
+    const historyPath = `/api/mini-apps/${hongguo.app.id}/hongguo/history`;
+    const historyEntry = { seriesId: "series", seriesTitle: "Drama", coverUrl: null, episodeId: "episode",
+      episodeNumber: 1, episodeTitle: "Episode", positionSeconds: 30, durationSeconds: 120 };
+    await api("POST", historyPath, { expectedRevision: 1, action: "save", entry: historyEntry });
     const backup = await api<{ id: string; summary: { bytes: number } }>("POST", "/api/workspace-backup/export", { password: "synthetic-mini-app-backup-passphrase" });
     expect(backup.id).toBeTypeOf("string");
     expect(existsSync(join(fixture.dataDir, "mini-app-data.json"))).toBe(false);
@@ -129,6 +136,15 @@ it("keeps a reusable local library through Data refresh, publication, restart, b
     const restoredDashboard = await api<{ app: { id: string; dashboard: unknown; publisherBotIds: string[] } }>("GET", `/api/mini-apps/${dashboard.app.id}`);
     expect(restoredDashboard.app).toMatchObject({ id: dashboard.app.id, dashboard: null,
       dashboardIdentity: "usage", publisherBotIds: [] });
+    const restoredHongguo = await api<MiniAppDocument>("GET", `/api/mini-apps/${hongguo.app.id}`);
+    expect(restoredHongguo.app).toMatchObject({ nativeKind: null, nativeIdentity: "hongguo", publisherBotIds: [] });
+    await api("POST", historyPath, { expectedRevision: 1, action: "list" }, 403);
+    const regrantedHongguo = await api<MiniAppMutationResult>("POST", `/api/mini-apps/${hongguo.app.id}/publish`, {
+      requestKey: "hongguo-reauthorize", expectedRevision: 1, slug: "fixture-hongguo", title: "Synthetic Hongguo",
+      description: "", html: "<p>Fallback</p>", bindings: [], nativeKind: "hongguo" });
+    expect(regrantedHongguo.app.nativeKind).toBe("hongguo");
+    expect(await api("POST", historyPath, { expectedRevision: 2, action: "list" })).toMatchObject({
+      entries: [{ seriesId: "series", positionSeconds: 30 }] });
     await api("POST", `/api/mini-apps/${dashboard.app.id}/dashboard`, { resource: "usage", expectedRevision: 1 }, 403);
     const restoredAuth = { authorization: `Bearer ${(await fixture.mint("agents")).token}` };
     const restoredInfo = await api<{ dashboards: Array<{ id: string; dashboardIdentity: string; dashboard: unknown }> }>(

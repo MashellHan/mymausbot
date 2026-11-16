@@ -8,9 +8,10 @@ export const DEFAULT_APPS = {
   ...REPORT_APPS,
   "agent-team": { slug: "agent-team", title: "Agent Team", description: "Your local teams and their current activity." },
   usage: { slug: "usage", title: "Activities", description: "Your work, contributions and agent activity." },
+  hongguo: { slug: "hongguo", title: "红果短剧", description: "Browse short dramas and resume episodes on this device." },
 } as const;
 
-export const NATIVE_DEFAULT_HTML = '<!doctype html><html lang="en"><meta charset="utf-8"><title>Built-in dashboard</title><body>Open this app in the OpenMausBot desktop app.</body></html>';
+export const NATIVE_DEFAULT_HTML = '<!doctype html><html lang="en"><meta charset="utf-8"><title>Built-in Mini App</title><body>Open this app in the OpenMausBot desktop app.</body></html>';
 
 export function updatedDefaultAppTitle(kind: DefaultMiniAppKind, title: string): string {
   return kind === "github_activity" && ["GitHub activity", "GitHub activity & discovery"].includes(title)

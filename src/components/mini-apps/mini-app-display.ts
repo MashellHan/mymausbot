@@ -16,14 +16,16 @@ const defaultDescriptions = {
   github_activity: REPORT_APPS.github_activity.description,
   "agent-team": "Your local teams and their current activity.",
   usage: "Your work, contributions and agent activity.",
+  hongguo: "Browse short dramas and resume episodes on this device.",
 };
 
 export function miniAppDisplayDescription(app: MiniAppSummary): string {
-  const kind = app.dashboardIdentity ?? app.shippedTemplateKind;
+  const kind = app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind;
   if (!kind || app.description !== defaultDescriptions[kind]) return app.description;
   return t(kind === "bookkeeping" ? "computer.miniApps.bookkeepingDefaultDescription"
     : kind === "x_ai_digest" ? "computer.miniApps.report.xDescription"
       : kind === "github_activity" ? "computer.miniApps.report.githubDescription"
         : kind === "agent-team" ? "computer.miniApps.dashboard.teamDescription"
+          : kind === "hongguo" ? "computer.miniApps.hongguo.description"
           : "computer.miniApps.dashboard.workTrackerDescription");
 }

@@ -45,7 +45,7 @@ export function assertInventorySame(before, after) {
   const normalized = (inventory) => {
     requireValue(object(inventory), "Mini App inventory must be an object");
     uniqueRecords(inventory.apps, "Mini App inventory");
-    return { ...inventory, apps: inventory.apps.map((app) => ({ shippedTemplateKind: null, ...app })) };
+    return { ...inventory, apps: inventory.apps.map((app) => ({ shippedTemplateKind: null, nativeKind: null, nativeIdentity: null, ...app })) };
   };
   same(normalized(before), normalized(after), "Owner Mini App inventory");
 }

@@ -45,6 +45,7 @@ export const publishSchema = z.object({
   responsibleBotId: z.string().regex(/^[\w-]{1,128}$/).nullable().optional(),
   capabilities: z.array(z.string().trim().min(8).max(160)).max(8).optional(),
   dashboardKind: z.enum(["agent-team", "usage"]).nullable().optional(),
+  nativeKind: z.literal("hongguo").nullable().optional(),
   shippedTemplateKind: z.enum(["bookkeeping", "x_ai_digest", "github_activity"]).optional(),
 }).strict();
 export const rollbackSchema = z.object({ ...mutationKey, templateVersion: z.number().int().positive() }).strict();

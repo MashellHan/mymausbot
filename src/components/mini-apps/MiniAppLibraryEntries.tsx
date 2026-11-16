@@ -8,6 +8,8 @@ import { miniAppDisplayName } from "./mini-app-display";
 
 export const shippedAppDetails = (kind: DefaultMiniAppKind) => kind === "bookkeeping"
   ? { name: t("computer.miniApps.bookkeepingTitle"), description: t("computer.miniApps.bookkeepingDescription") }
+  : kind === "hongguo"
+    ? { name: t("computer.miniApps.hongguo.title"), description: t("computer.miniApps.hongguo.description") }
   : kind === "agent-team" || kind === "usage"
     ? { name: t(DASHBOARD_APPS[kind].title), description: t(DASHBOARD_APPS[kind].description) }
     : { name: t(kind === "x_ai_digest" ? "computer.miniApps.report.xTitle" : "computer.miniApps.report.githubTitle"),
@@ -31,7 +33,8 @@ export function MiniAppLibraryEntries({ inventory, issues, busyKind, owner, nati
         const matches = inventory.filter((app) => iconKindForApp(app) === kind);
         const app = matches.length === 1 ? matches[0] : null;
         const name = app ? miniAppDisplayName(app) : shippedAppDetails(kind).name;
-        const nativeNeedsGrant = app && (kind === "agent-team" || kind === "usage") && !app.dashboard;
+        const nativeNeedsGrant = app && (kind === "hongguo" ? app.nativeKind !== "hongguo"
+          : (kind === "agent-team" || kind === "usage") && !app.dashboard);
         const canOpen = app?.status === "active" && !nativeNeedsGrant;
         const canAct = owner === true && nativeGuard && matches.length <= 1;
         const issue = issues.find((entry) => entry.kind === kind);

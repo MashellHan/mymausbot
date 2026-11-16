@@ -16,6 +16,7 @@ import { ensureMiniAppDefaults } from "./MiniAppDefaultsBootstrap";
 import { MiniAppFrame } from "./MiniAppFrame";
 import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
 import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
+import { HongguoView } from "./HongguoView";
 import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-display";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 
@@ -87,6 +88,11 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const recoveryKind = currentHead && selected && document && !dashboard && !selected.dashboard && selected.dashboardIdentity
     && document.app.dashboardIdentity === selected.dashboardIdentity ? selected.dashboardIdentity : null;
   const dashboardInstalled = !!(selected?.dashboardIdentity || document?.app.dashboardIdentity || selected?.dashboard || dashboard);
+  const nativeInstalled = !!(selected?.nativeIdentity || document?.app.nativeIdentity || selected?.nativeKind || document?.app.nativeKind);
+  const hongguoCurrent = currentHead && owner === true && selected?.nativeIdentity === "hongguo" && document?.app.nativeIdentity === "hongguo"
+    && selected?.nativeKind === "hongguo" && document?.app.nativeKind === "hongguo";
+  const hongguoRecovery = currentHead && owner === true && selected?.nativeIdentity === "hongguo" && document?.app.nativeIdentity === "hongguo"
+    && !selected?.nativeKind && !document?.app.nativeKind;
 
   useEffect(() => {
     const target = focusAfter.current;
@@ -190,11 +196,13 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         if (!active || target !== selectedRef.current) return;
         const currentDocument = documentRef.current;
         const listed = activeApps.find((app) => app.id === target)!;
-        const dashboardChanged = (currentDocument?.app.dashboard?.kind ?? null) !== (listed.dashboard?.kind ?? null)
-          || (currentDocument?.app.dashboardIdentity ?? null) !== (listed.dashboardIdentity ?? null);
-        if (changedState(stateRef.current, nextState) || dashboardChanged) {
+        const grantChanged = (currentDocument?.app.dashboard?.kind ?? null) !== (listed.dashboard?.kind ?? null)
+          || (currentDocument?.app.dashboardIdentity ?? null) !== (listed.dashboardIdentity ?? null)
+          || (currentDocument?.app.nativeKind ?? null) !== (listed.nativeKind ?? null)
+          || (currentDocument?.app.nativeIdentity ?? null) !== (listed.nativeIdentity ?? null);
+        if (changedState(stateRef.current, nextState) || grantChanged) {
           if (!currentDocument || currentDocument.app.id !== target || currentDocument.app.revision !== nextState.revision
-            || currentDocument.app.templateVersion !== nextState.templateVersion || dashboardChanged) {
+            || currentDocument.app.templateVersion !== nextState.templateVersion || grantChanged) {
             const nextDocument = await api<MiniAppDocument>(`/api/mini-apps/${encodeURIComponent(target)}`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
             if (!active || target !== selectedRef.current) return;
             if (nextDocument.app.revision !== nextState.revision || nextDocument.app.templateVersion !== nextState.templateVersion) throw new Error(t("computer.miniApps.changedDuringRead"));
@@ -254,7 +262,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       const issue = result.issues.find((entry) => entry.kind === kind);
       const target = result.apps.find((app) => iconKindForApp(app) === kind && app.status === "active");
       if (issue) setError(issue.error);
-      else if (target && (kind !== "agent-team" && kind !== "usage" || target.dashboard?.kind === kind)) {
+      else if (target && (kind === "hongguo" ? target.nativeKind === "hongguo"
+        : kind !== "agent-team" && kind !== "usage" || target.dashboard?.kind === kind)) {
         setLibraryOpen(false);
         focusAfter.current = "selected";
         choose(target.id);
@@ -388,7 +397,16 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         {loading && apps === null && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>}
         {selected && <div id="mini-app-content" role="tabpanel" aria-labelledby={`mini-app-tab-${selected.id}`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-accent">
           {document && appState ? <>
-            {appState.status === "active" && nativeGuard && dashboardInstalled ? dashboardCurrent
+            {appState.status === "active" && nativeGuard && nativeInstalled ? hongguoCurrent
+              ? <HongguoView key={`${document.app.id}:${document.app.revision}`} document={document} state={appState}
+                refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
+              : hongguoRecovery ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="hongguo-recovery">
+                <p>{t("computer.miniApps.dashboard.recovery")}</p>
+                <button type="button" onClick={() => void addDefault("hongguo")}
+                  className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.dashboard.reauthorize")}</button>
+              </section>
+              : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
+              : appState.status === "active" && nativeGuard && dashboardInstalled ? dashboardCurrent
               ? <MiniAppDashboard key={`${document.app.id}:${document.app.revision}`} document={document} state={appState} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
               : recoveryKind && owner === true ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="dashboard-recovery">
                 <p>{t("computer.miniApps.dashboard.recovery")}</p>

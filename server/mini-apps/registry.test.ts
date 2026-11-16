@@ -220,6 +220,8 @@ describe("persistent Mini Apps", () => {
         shippedTemplateKind: null, responsibleBotId: null, capabilities: [] }]);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_kind")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "dashboard_identity")).toBe(true);
+      expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "native_kind")).toBe(true);
+      expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "native_identity")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "shipped_template_kind")).toBe(true);
       expect(db.prepare("PRAGMA table_info(mini_apps)").all().some((column) => column.name === "responsible_bot_id")).toBe(true);
     } finally { db.close(); }
@@ -274,6 +276,48 @@ describe("persistent Mini Apps", () => {
     data.listDatasets.mockRejectedValue(new Error("unrelated store is broken"));
     expect(await apps.state(owner, app.id)).toMatchObject({ appId: app.id, revision: 1, data: [] });
     expect(data.listDatasets).not.toHaveBeenCalled();
+  });
+
+  it("keeps Hongguo identity and local playback history through restart, revocation and archive", async () => {
+    const { apps } = fixture();
+    const native = await apps.publish(owner, publication({ bindings: [], slug: "hongguo", nativeKind: "hongguo",
+      publisherBotIds: ["publisher"] }));
+    const id = native.app.id;
+    expect(native.app).toMatchObject({ nativeKind: "hongguo", nativeIdentity: "hongguo" });
+    expect(() => apps.requireHongguo(owner, id, 1)).not.toThrow();
+    expect(() => apps.requireHongguo(bot(), id, 1)).toThrow("Only the workspace owner");
+    await expect(apps.publish(bot(), publication({ slug: "hongguo", bindings: [], expectedRevision: 1, requestKey: "bot-native",
+      nativeKind: null }), id)).rejects.toMatchObject({ status: 403 });
+    await expect(apps.publish(owner, publication({ slug: "hongguo", bindings: [binding], expectedRevision: 1,
+      requestKey: "bind-native" }), id)).rejects.toMatchObject({ status: 400 });
+    const entry = { seriesId: "series-1", seriesTitle: "Drama", coverUrl: null, episodeId: "ep-1",
+      episodeNumber: 1, episodeTitle: "Episode 1", positionSeconds: 42, durationSeconds: 200 };
+    expect(() => apps.hongguoHistory(owner, id, { action: "save", expectedRevision: 1,
+      entry: { ...entry, coverUrl: "https://example.com/private.png" } })).toThrow("Invalid Hongguo history request");
+    expect(apps.hongguoHistory(owner, id, { action: "save", expectedRevision: 1, entry }).entries).toMatchObject([
+      { ...entry, updatedAt: expect.any(Number) }]);
+    expect(apps.hongguoPreferences(owner, id, { expectedRevision: 1, autoplayNext: false }).autoplayNext).toBe(false);
+    closeMessageDb();
+    expect(apps.hongguoHistory(owner, id, { action: "list", expectedRevision: 1 })).toMatchObject({
+      entries: [{ seriesId: "series-1", positionSeconds: 42 }], autoplayNext: false });
+    const revoked = await apps.publish(owner, publication({ slug: "hongguo", bindings: [], expectedRevision: 1,
+      requestKey: "revoke-native", nativeKind: null }), id);
+    expect(revoked.app).toMatchObject({ nativeKind: null, nativeIdentity: "hongguo", revision: 2 });
+    expect(() => apps.hongguoHistory(owner, id, { action: "list", expectedRevision: 2 })).toThrow("no Hongguo grant");
+    const restored = await apps.publish(owner, publication({ slug: "hongguo", bindings: [], expectedRevision: 2,
+      requestKey: "restore-native", nativeKind: "hongguo" }), id);
+    expect(restored.app.revision).toBe(3);
+    apps.hongguoHistory(owner, id, { action: "save", expectedRevision: 3,
+      entry: { ...entry, seriesId: "series-2", episodeId: "ep-2" } });
+    expect(apps.hongguoHistory(owner, id, { action: "delete", expectedRevision: 3, seriesId: "series-2" }).entries)
+      .toMatchObject([{ seriesId: "series-1" }]);
+    expect(apps.hongguoHistory(owner, id, { action: "clear", expectedRevision: 3 }).entries).toEqual([]);
+    apps.hongguoHistory(owner, id, { action: "save", expectedRevision: 3, entry });
+    const archived = apps.archive(owner, id, { requestKey: "archive", expectedRevision: 3 });
+    expect(archived.app).toMatchObject({ nativeKind: null, nativeIdentity: "hongguo", status: "archived" });
+    expect(() => apps.requireHongguo(owner, id, 4)).toThrow("archived");
+    expect(applicationDatabase().prepare("SELECT COUNT(*) AS count FROM mini_app_hongguo_history WHERE app_id = ?")
+      .get(id)).toMatchObject({ count: 1 });
   });
 
   it("keeps owner-assigned shipped provenance through Bot edits and template lifecycle without granting dashboard access", async () => {

@@ -2,7 +2,7 @@
 // packaged app ships no node_modules. Entry points keep their exact relative
 // paths under dist-server, where the server locates each proxy by path.
 import { build } from "esbuild";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { serverLocalePlugin } from "./server-locale-plugin.mjs";
@@ -82,8 +82,17 @@ await build({
   allowOverwrite: true,
   logLevel: "info",
   plugins: [yamlEsmPlugin, serverLocalePlugin],
+  external: ["openhongguo"],
   banner: NODE_REQUIRE,
 });
+
+// openhongguo 0.3.0 locates its Go WASM runtime relative to index.js.
+const hongguoSdk = join(root, "dist-server", "hongguo-sdk");
+rmSync(hongguoSdk, { recursive: true, force: true });
+mkdirSync(hongguoSdk, { recursive: true });
+for (const name of ["index.js", "package.json", "dist", "LICENSE", "GO_LICENSE", "README.md"]) {
+  cpSync(join(root, "node_modules", "openhongguo", name), join(hongguoSdk, name), { recursive: true });
+}
 
 // External MCP clients launch this as an independent stdio process, so release
 // users need no repository, TypeScript, pnpm or node_modules.
