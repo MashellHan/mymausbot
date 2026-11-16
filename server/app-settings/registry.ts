@@ -29,6 +29,7 @@ interface Writable {
   value: z.ZodType;
   allowed: string;
   current(): unknown;
+  preview?(value: unknown): string;
   write(value: unknown): Promise<string | null>;
 }
 interface Secret {
@@ -119,10 +120,11 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     }),
     writable({
       id: "desktops.browserProxy", label: "Browser proxy", help: "An unauthenticated SOCKS5 proxy for public websites in the built-in browser. The address stays hidden; empty sends requests directly.", where: "Settings → Desktops & browser",
-      synonyms: ["proxy", "socks", "socks5", "browser proxy"], tier: "safe",
+      synonyms: ["proxy", "socks", "socks5", "browser proxy"], tier: "confirm",
       value: z.string().trim().max(512).refine((text) => text === "" || parseSocks5Proxy(text) !== null, "an unauthenticated socks5://host:port address, or empty"),
       allowed: 'an unauthenticated "socks5://host:port", or "" for no proxy',
       current: () => cfg().browserEngine?.egress?.proxy ?? "", read: () => (cfg().browserEngine?.egress?.proxy ? "set" : ""),
+      preview: (value: unknown) => value ? "set" : "",
       write: config((proxy: string) => ({ browserEngine: { egress: { proxy } } })),
     }),
   ];

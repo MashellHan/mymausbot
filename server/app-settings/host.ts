@@ -138,7 +138,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
     if (ended?.aborted) return refuse(409, `This turn was stopped, so nothing changed. ${NOT_RETRY}`);
     if (openByBot.has(bot.id)) return refuse(409, "A settings change is already waiting on the user. End your turn and wait for the answer.");
     const requestId = randomUUID();
-    const after = display(value);
+    const after = entry.preview?.(value) ?? display(value);
     let settle!: (outcome: Outcome) => void;
     const answer = new Promise<Outcome>((resolve) => { settle = resolve; });
     const timer = setTimeout(() => settleHold(requestId, { kind: "timeout" }), holdMs);
