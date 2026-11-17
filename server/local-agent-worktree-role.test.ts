@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { localAgentRoles, verifiedLocalAgentMembers } from "./local-agent-association.ts";
+import { createLocalAgentConfigurationProvider } from "./local-agent-configuration.ts";
 import { createLocalAgentTeamsProvider } from "./local-agent-teams.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
@@ -75,5 +76,35 @@ describe("declared roles across registered project worktrees", () => {
     expect(await role({ ...data.upstream, agent_session: { ...data.upstream.agent_session, value: data.roots[0]!.agent_session.value } })).toBeNull();
     await git("-C", data.root, "worktree", "remove", "--force", data.worktree);
     expect(await role(data.upstream)).toBeNull();
+  });
+
+  it("only exposes a registered worktree role document and skill for a unique live member", async () => {
+    const data = await fixture();
+    const skill = join(data.worktree, ".agents/skills/upstream/SKILL.md");
+    await mkdir(join(data.root, ".agents/team/roles"), { recursive: true });
+    await mkdir(join(data.worktree, ".agents/skills/upstream"), { recursive: true });
+    await writeFile(join(data.root, ".agents/team/roles/upstream.md"),
+      `name: Upstream integration\n# Synthetic upstream role\nUse \`${skill}\`.`);
+    await writeFile(skill, "# Synthetic upstream skill");
+    let agents = [...data.roots, data.upstream];
+    const run = async (args: readonly string[]) => JSON.stringify({ result: args.at(-2) === "workspace"
+      ? { workspaces: [{ workspace_id: "w6", label: "Fixture" }] }
+      : { agents } });
+    const provider = createLocalAgentConfigurationProvider({ home: data.home, run,
+      discoverSkills: async () => ({ status: "unavailable", skills: [] }) });
+    const positive = await provider.getAgent("w6:p3");
+    expect(positive).toMatchObject({ agent: { status: "ready", markdown: expect.stringContaining("Synthetic upstream role") },
+      skillReferences: "verified", skills: [{ name: "upstream", association: "agent" }] });
+    expect((await provider.getSkill("w6:p3", positive.skills[0]!.id)).markdown).toBe("# Synthetic upstream skill");
+
+    for (const duplicate of [
+      data.agent("other", data.worktree, "w6:p4", 3),
+      data.agent("fixture-upstream", data.worktree, "w6:p4", 4),
+    ]) {
+      agents = [...data.roots, data.upstream, duplicate];
+      expect(await provider.getAgent("w6:p3")).toMatchObject({ occupantId: null,
+        agent: { status: "unavailable", markdown: null }, skillReferences: "unverified", skills: [] });
+      expect((await provider.getSkill("w6:p3", positive.skills[0]!.id)).status).toBe("unavailable");
+    }
   });
 });
