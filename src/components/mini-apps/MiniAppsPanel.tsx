@@ -17,7 +17,7 @@ import { MiniAppFrame } from "./MiniAppFrame";
 import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
 import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
 import { MojoWholePage } from "./MojoWholePage";
-import { HongguoView } from "./HongguoView";
+import { HongguoView, forgetHongguoHome } from "./HongguoView";
 import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-display";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { mojoHostEligible } from "./mojo-host";
@@ -210,17 +210,20 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     const sync = async () => {
+      let readingInventory = true;
       setChecking(true);
       if (!apps) setLoading(true);
       try {
         const inventory = await api<Inventory>("/api/mini-apps", { background: true, signal: controller.signal, timeoutMs: 10_000 });
         if (!active || !Array.isArray(inventory.apps)) return;
+        readingInventory = false;
         setInventory(inventory.apps);
         const activeApps = inventory.apps.filter((app) => app.status === "active");
         setApps(activeApps);
         const target = selectedRef.current && activeApps.some((app) => app.id === selectedRef.current) ? selectedRef.current
           : activeApps[0]?.id ?? null;
         if (target !== selectedRef.current) {
+          if (selectedRef.current) forgetHongguoHome(storageKey, selectedRef.current);
           setSelectedId(target);
           setDocument(null);
           setAppState(null);
@@ -228,10 +231,13 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
           return;
         }
         if (!target) { setDocument(null); setAppState(null); setStale(false); setError(""); return; }
-        const nextState = await api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(target)}/state`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
-        if (!active || target !== selectedRef.current) return;
         const currentDocument = documentRef.current;
         const listed = activeApps.find((app) => app.id === target)!;
+        const lostHongguoGrant = currentDocument?.app.nativeIdentity === "hongguo"
+          && (listed.nativeIdentity !== "hongguo" || listed.nativeKind !== "hongguo");
+        if (lostHongguoGrant) forgetHongguoHome(storageKey, target);
+        const nextState = await api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(target)}/state`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
+        if (!active || target !== selectedRef.current) return;
         const grantChanged = (currentDocument?.app.dashboard?.kind ?? null) !== (listed.dashboard?.kind ?? null)
           || (currentDocument?.app.dashboardIdentity ?? null) !== (listed.dashboardIdentity ?? null)
           || (currentDocument?.app.nativeKind ?? null) !== (listed.nativeKind ?? null)
@@ -242,6 +248,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
             const nextDocument = await api<MiniAppDocument>(`/api/mini-apps/${encodeURIComponent(target)}`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
             if (!active || target !== selectedRef.current) return;
             if (nextDocument.app.revision !== nextState.revision || nextDocument.app.templateVersion !== nextState.templateVersion) throw new Error(t("computer.miniApps.changedDuringRead"));
+            if (lostHongguoGrant || currentDocument?.app.nativeIdentity === "hongguo"
+              && (nextDocument.app.nativeIdentity !== "hongguo" || nextDocument.app.nativeKind !== "hongguo")) forgetHongguoHome(storageKey, target);
             documentRef.current = nextDocument;
             setDocument(nextDocument);
           }
@@ -253,6 +261,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       } catch (cause) {
         if (!active || controller.signal.aborted) return;
         if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
+          forgetHongguoHome(storageKey, readingInventory ? undefined : selectedRef.current ?? undefined);
           documentRef.current = null;
           stateRef.current = null;
           setDocument(null);
@@ -272,7 +281,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     };
     void sync();
     return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [selectedId, refreshKey, visible, owner, nativeGuard, defaultsReady]);
+  }, [selectedId, refreshKey, visible, owner, nativeGuard, defaultsReady, storageKey]);
 
   const choose = (id: string) => {
     rememberApp(storageKey, id);
@@ -321,6 +330,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         method: "POST", body: JSON.stringify(body), timeoutMs: 20_000,
       });
       if (result.app.id !== app.id || result.app.status !== "archived") throw new Error(t("computer.miniApps.changedDuringRead"));
+      if (kind === "hongguo") forgetHongguoHome(storageKey, app.id);
       setInventory((current) => current?.map((entry) => entry.id === app.id ? result.app : entry) ?? null);
       setApps((current) => current?.filter((entry) => entry.id !== app.id) ?? null);
       if (selectedRef.current === app.id) {
@@ -439,8 +449,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         {selected && <div id="mini-app-content" role="tabpanel" aria-labelledby={`mini-app-tab-${selected.id}`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-accent">
           {document && appState ? <>
             {appState.status === "active" && nativeGuard && nativeInstalled ? hongguoCurrent
-              ? <HongguoView key={`${document.app.id}:${document.app.revision}`} document={document} state={appState}
-                refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
+              ? <HongguoView key={JSON.stringify([storageKey, document.app.id, document.app.revision])} document={document} state={appState}
+                storageKey={storageKey} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
               : hongguoRecovery ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="hongguo-recovery">
                 <p>{t("computer.miniApps.dashboard.recovery")}</p>
                 <button type="button" onClick={() => void addDefault("hongguo")}
