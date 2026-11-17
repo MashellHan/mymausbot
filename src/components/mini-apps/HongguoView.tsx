@@ -193,7 +193,7 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
     mounted.current = true;
     return () => { pauseAndSave(); mounted.current = false; };
   }, [pauseAndSave]);
-  useEffect(() => { if (!visible) pauseAndSave(); }, [visible, pauseAndSave]);
+  useEffect(() => { if (!visible && !window.document.fullscreenElement) pauseAndSave(); }, [visible, pauseAndSave]);
 
   useEffect(() => {
     if (!valid || !visible) return;
@@ -303,7 +303,7 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
   };
 
   useEffect(() => {
-    if (!valid || !visible || !seriesId) return;
+    if (!valid || !seriesId) return;
     const controller = new AbortController();
     setSeries(null); setSeriesError(""); setPlayback(null); setEpisodeId(null);
     void post<HongguoSeriesResponse>("series", { expectedRevision: revision, seriesId }, controller.signal)
@@ -312,7 +312,7 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
         setSeries(result.series);
       }).catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setSeriesError); });
     return () => controller.abort();
-  }, [valid, visible, refreshKey, seriesId, requestedEpisodeId, post, revision, showError]);
+  }, [valid, refreshKey, seriesId, requestedEpisodeId, post, revision, showError]);
 
   useEffect(() => {
     if (!series || series.id !== seriesId || history === null || episodeId !== null) return;
@@ -323,7 +323,7 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
   }, [series, seriesId, history, requestedEpisodeId, episodeId]);
 
   useEffect(() => {
-    if (!valid || !visible || page !== "watch" || !series || !episode) return;
+    if (!valid || page !== "watch" || !series || !episode) return;
     const controller = new AbortController();
     setPlayback(null); setPlaybackError("");
     if (episode.availability === "unavailable") {
@@ -337,7 +337,7 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
         setPlayback(result);
       }).catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setPlaybackError); });
     return () => controller.abort();
-  }, [valid, visible, page, series, episode, appId, revision, post, showError]);
+  }, [valid, page, series, episode, appId, revision, post, showError]);
 
   const openSeries = (id: string, resumeEpisodeId: string | null = null) => {
     pauseAndSave(); progress.current = null; lastQueuedPosition.current = -Infinity;
@@ -494,11 +494,11 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
       </header>
       {seriesError && <p role="alert" className="rounded-lg bg-danger/10 p-3 text-[13px] text-danger">{seriesError}</p>}
       {!series && !seriesError && <p role="status" className="text-[13px] text-ink-secondary">{t("computer.miniApps.hongguo.loading")}</p>}
-      {series && <div className="grid gap-6 @min-[760px]/hongguo:grid-cols-[minmax(0,1fr)_250px]">
+      {series && <div className="grid gap-6">
         <div className="min-w-0">
-          <div className="flex min-h-[260px] aspect-video items-center justify-center overflow-hidden rounded-xl bg-[#181818] text-center text-white">
-            {playback?.status === "ready" ? <video key={`${episodeId}:${playback.mediaUrl}`} ref={videoRef} controls autoPlay playsInline
-              src={scopedMediaUrl(playback.mediaUrl, appId, revision)} className="h-full w-full object-contain"
+          <div className="flex min-h-[260px] aspect-video w-full items-center justify-center overflow-hidden rounded-xl bg-[#181818] text-center text-white">
+            {playback?.status === "ready" ? <video key={`${episodeId}:${playback.mediaUrl}`} ref={videoRef} controls autoPlay={visible || !!window.document.fullscreenElement} playsInline
+              src={scopedMediaUrl(playback.mediaUrl, appId, revision)} className="h-full min-w-0 w-full object-contain"
               onLoadedMetadata={(event) => { const video = event.currentTarget; const saved = history?.find((entry) => entry.seriesId === series.id && entry.episodeId === episodeId);
                 if (saved && Number.isFinite(video.duration) && saved.positionSeconds < video.duration - 1) video.currentTime = saved.positionSeconds;
                 recordPosition(video); }}
