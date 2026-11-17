@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eligibleRun, fullPushPlan, narrowPushPlan, preflightJob } from "./contracts.mjs";
 
+const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024;
 const closedSocket = (error) => error instanceof TypeError && ["fetch failed", "terminated"].includes(error.message)
   && error.cause?.code === "UND_ERR_SOCKET" && error.cause?.message === "other side closed";
 
@@ -36,7 +38,9 @@ export async function github(path, { method = "GET", body, raw = false } = {}) {
       await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
       continue;
     }
-    if (attempt === attempts || ![502, 503, 504].includes(response.status)) throw new Error(`GitHub ${method} ${path.split("?")[0]}: HTTP ${response.status}`);
+    if (attempt === attempts || ![502, 503, 504].includes(response.status)) {
+      throw Object.assign(new Error(`GitHub ${method} ${path.split("?")[0]}: HTTP ${response.status}`), { method, path: path.split("?")[0], status: response.status });
+    }
     await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
   }
 }
@@ -83,7 +87,35 @@ function producingJob(job, jobs) {
   return originals[0];
 }
 
-export async function runPlan(run, jobs, artifacts, { api = github, readArtifact = artifactFiles, shaIdentity = "run-head" } = {}) {
+function artifactBinding(artifact) {
+  if (!artifact || !Number.isSafeInteger(artifact.id) || artifact.id < 1 || typeof artifact.name !== "string"
+    || artifact.expired !== false || !Number.isSafeInteger(artifact.size_in_bytes) || artifact.size_in_bytes < 1 || artifact.size_in_bytes > MAX_ARTIFACT_BYTES
+    || !Number.isSafeInteger(artifact.workflow_run?.id) || artifact.workflow_run.id < 1
+    || !/^[a-f\d]{40}$/i.test(artifact.workflow_run.head_sha ?? "") || !/^sha256:[a-f\d]{64}$/.test(artifact.digest ?? "")) return null;
+  return JSON.stringify([artifact.id, artifact.name, artifact.workflow_run.id, artifact.workflow_run.head_sha, artifact.digest, artifact.size_in_bytes]);
+}
+
+async function planArtifactFiles(artifact, run, producingAttempt, artifactHead, api, readArtifact) {
+  const binding = Number.isSafeInteger(run.id) && run.id > 0 && Number.isSafeInteger(run.run_attempt)
+    && Number.isSafeInteger(producingAttempt) && producingAttempt > 0 && producingAttempt <= run.run_attempt
+    && artifact.workflow_run?.id === run.id && artifact.workflow_run.head_sha === artifactHead
+    && artifact.name === `qa-plan-attempt-${producingAttempt}` ? artifactBinding(artifact) : null;
+  const path = `/actions/artifacts/${artifact.id}/zip`;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await readArtifact(artifact, api);
+    } catch (error) {
+      if (!binding || error?.status !== 404 || error.method !== "GET" || error.path !== path) throw error;
+      console.warn(`GitHub GET ${path}: HTTP 404 (current-run plan ${run.id}, producer attempt ${producingAttempt}, archive read ${attempt}/3)`);
+      if (attempt === 3) throw error;
+      const metadata = await api(`/actions/artifacts/${artifact.id}`);
+      if (artifactBinding(metadata) !== binding) throw new Error("Current-run plan artifact metadata changed", { cause: error });
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
+  }
+}
+
+export async function runPlan(run, jobs, artifacts, { api = github, readArtifact = artifactFiles, shaIdentity = "run-head", artifactHead = run.head_sha } = {}) {
   if (!["run-head", "executed-pr-merge"].includes(shaIdentity)) throw new Error("Invalid plan SHA identity mode");
   const preflight = preflightJob(jobs);
   if (!preflight) return null;
@@ -94,7 +126,7 @@ export async function runPlan(run, jobs, artifacts, { api = github, readArtifact
   if (artifact.workflow_run && artifact.workflow_run.id !== run.id) {
     throw new Error("Missing current-run validation plan; rerun all jobs for this revision");
   }
-  const plan = JSON.parse((await readArtifact(artifact, api))["qa-plan.json"]);
+  const plan = JSON.parse((await planArtifactFiles(artifact, run, preflight.run_attempt, artifactHead, api, readArtifact))["qa-plan.json"]);
   const shaMatches = shaIdentity === "executed-pr-merge"
     ? /^[a-f\d]{40}$/i.test(plan.sha ?? "") && plan.sha === plan.execution?.merge
       && /^[a-f\d]{40}$/i.test(plan.execution?.base ?? "") && plan.execution?.head === run.head_sha
@@ -126,11 +158,13 @@ export async function fullRunEvidence(run, { api = github, readArtifact = artifa
 }
 
 export async function artifactFiles(artifact, api = github) {
-  if (artifact.expired || artifact.size_in_bytes > 25 * 1024 * 1024) throw new Error("Artifact expired or too large");
+  if (artifact.expired || artifact.size_in_bytes > MAX_ARTIFACT_BYTES) throw new Error("Artifact expired or too large");
   const directory = mkdtempSync(join(tmpdir(), "mausbot-qa-"));
   try {
+    const bytes = await api(`/actions/artifacts/${artifact.id}/zip`, { raw: true });
+    if (artifact.digest && artifact.digest !== `sha256:${createHash("sha256").update(bytes).digest("hex")}`) throw new Error("Artifact digest mismatch");
     const archive = join(directory, "results.zip");
-    writeFileSync(archive, await api(`/actions/artifacts/${artifact.id}/zip`, { raw: true }));
+    writeFileSync(archive, bytes);
     const names = execFileSync("unzip", ["-Z1", archive], { encoding: "utf8", maxBuffer: 100_000 }).trim().split("\n");
     if (names.length > 30 || names.some((name) => !/^(?:(?:[1-9]|10)\/)?(?:vitest|evals|qa-report|qa-plan|receipt)\.json$|^vitest-retries\.jsonl$/.test(name))) {
       throw new Error("Unexpected artifact entries");
