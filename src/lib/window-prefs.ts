@@ -6,7 +6,7 @@ import { applyFont, readFont } from "./fonts";
 import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
 import { readSendKey, setSendKey } from "./send-key";
-import { loadPinnedCircles, setPinnedCircles } from "./sidebar-preferences";
+import { loadPinnedCircles, setPinnedCircles, subscribePinnedCircles } from "./sidebar-preferences";
 import { applySkinChoice, readSkinChoice } from "./skins";
 import { onWindowPrefChanged } from "./window-pref-changes";
 
@@ -32,9 +32,14 @@ export function windowPrefValues(): Record<WindowPrefId, unknown> {
 }
 
 let report: ReturnType<typeof setTimeout> | null = null;
+let pinnedCirclesObserved = false;
 /** Tells the server the window's values, once the burst of setters at start-up has settled. */
 export function reportWindowPrefs(): void {
   if (typeof fetch !== "function" || typeof window === "undefined") return;
+  if (!pinnedCirclesObserved && typeof window.addEventListener === "function") {
+    subscribePinnedCircles(() => undefined);
+    pinnedCirclesObserved = true;
+  }
   if (report) clearTimeout(report);
   report = setTimeout(() => {
     report = null;

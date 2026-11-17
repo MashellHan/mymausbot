@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { loadPinnedCircles, PINNED_CIRCLES_KEY, setPinnedCircles, subscribePinnedCircles } from "./sidebar-preferences";
+import { loadPinnedCircles, PINNED_CIRCLES_KEY, subscribePinnedCircles } from "./sidebar-preferences";
 import { applyWindowPref, reportWindowPrefs, windowPrefValues } from "./window-prefs";
 
 const values = new Map<string, string>();
@@ -53,30 +53,36 @@ describe("window preferences", () => {
     expect(JSON.parse(String((fetched.mock.calls[1] as unknown as [string, RequestInit])[1].body)).values["appearance.pinnedCircles"]).toBe(false);
   });
 
-  it("reports a pinned-circle choice made in another window", async () => {
+  it("keeps pinned-circle bridge reports fresh after the last sidebar UI subscriber unmounts", async () => {
     vi.useFakeTimers();
     const fetched = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetched);
     let storageListener: ((event: StorageEvent) => void) | undefined;
     vi.stubGlobal("window", {
       addEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage") storageListener = listener; },
-      removeEventListener: () => undefined,
+      removeEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage" && storageListener === listener) storageListener = undefined; },
     });
-    const unsubscribe = subscribePinnedCircles(() => undefined);
-    try {
-      setPinnedCircles(false);
-      await vi.advanceTimersByTimeAsync(250);
-      fetched.mockClear();
-      values.set(PINNED_CIRCLES_KEY, "true");
-      storageListener?.({ key: PINNED_CIRCLES_KEY, storageArea: null } as StorageEvent);
-      expect(loadPinnedCircles()).toBe(true);
-      await vi.advanceTimersByTimeAsync(250);
-      expect(fetched).toHaveBeenCalledOnce();
-      expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.pinnedCircles"]).toBe(true);
-    } finally {
-      unsubscribe();
-      setPinnedCircles(false);
-    }
+    const unsubscribeUi = subscribePinnedCircles(() => undefined);
+    reportWindowPrefs();
+    await vi.advanceTimersByTimeAsync(250);
+    applyWindowPref({ kind: "window-pref", id: "appearance.pinnedCircles", value: true });
+    expect(loadPinnedCircles()).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    unsubscribeUi();
+    fetched.mockClear();
+    values.set(PINNED_CIRCLES_KEY, "false");
+    storageListener?.({ key: PINNED_CIRCLES_KEY, storageArea: null } as StorageEvent);
+    expect(loadPinnedCircles()).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetched).toHaveBeenCalledOnce();
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.pinnedCircles"]).toBe(false);
+    const unsubscribeRemountedUi = subscribePinnedCircles(() => undefined);
+    expect(loadPinnedCircles()).toBe(false);
+    unsubscribeRemountedUi();
+    fetched.mockClear();
+    reportWindowPrefs();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.pinnedCircles"]).toBe(false);
   });
 
   it("reports the window's values once after a burst of setters", async () => {
