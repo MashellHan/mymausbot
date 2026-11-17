@@ -65,7 +65,9 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     saveConfig: async (patch) => {
       if (patch.anthropic && typeof patch.anthropic === "object" && (patch.anthropic as { url?: string }).url === "https://refused.example") return "the provider refused it";
       saved.push(patch);
+      const features = cfg.features;
       Object.assign(cfg, patch);
+      if (patch.features && typeof patch.features === "object") cfg.features = { ...features, ...patch.features };
       return null;
     },
     bots: () => bots,
@@ -324,6 +326,84 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("reads effective skill review state and permits owner-approved disabling of a dormant setting", async () => {
+    const fx = fixture();
+    const defaultRead = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.skillReview" }, fx.turn)).body.text));
+    expect(JSON.parse(defaultRead.value)).toEqual({ enabled: false, steps: 10 });
+    fx.cfg.features = { skillAuthoring: false, skillReview: true, skillReviewSteps: 7, showToolCalls: true };
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "skill review" }, fx.turn)).body.text));
+    expect(found).toContainEqual(expect.objectContaining({ id: "bots.skillReview", tier: "confirm" }));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.skillReview" }, fx.turn)).body.text));
+    expect(JSON.parse(got.value)).toEqual({ enabled: false, steps: 7, pausedUntilAuthoringOn: true });
+    expect(got).toMatchObject({ allowed: expect.stringContaining("3-100"), help: expect.stringContaining("create or update learned skills") });
+    for (const value of [{ enabled: "true" }, { enabled: false, steps: 2 }, { enabled: false, steps: 101 }, { enabled: false, steps: 7.5 }, { enabled: false, extra: true }]) {
+      expect((await fx.set("bots.skillReview", value)).status).toBe(400);
+    }
+    expect((await fx.set("bots.skillReview", { enabled: true })).body.error).toContain("Turn on bot skill authoring");
+    expect(fx.saved).toEqual([]);
+    expect(fx.cards()).toEqual([]);
+
+    const disabling = fx.set("bots.skillReview", { enabled: false });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const card = fx.cards()[0]!.card;
+    expect(card).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("pausedUntilAuthoringOn") } });
+    fx.answer(String(card.requestId), "allow");
+    expect((await disabling).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { skillReview: false } }]);
+    expect(fx.cfg.features).toEqual({ skillAuthoring: false, skillReview: false, skillReviewSteps: 7, showToolCalls: true });
+    expect(JSON.parse(JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.skillReview" }, fx.turn)).body.text)).value)).toEqual({ enabled: false, steps: 7 });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(card.requestId) })).toMatchObject({ state: "invalid" });
+    expect((await fixture({ owner: false }).set("bots.skillReview", { enabled: false })).status).toBe(403);
+    expect((await fixture({ guest: true }).set("bots.skillReview", { enabled: false })).status).toBe(403);
+  });
+
+  it("holds skill review changes for owner Change and rejects Cancel or stale approval", async () => {
+    const fx = fixture();
+    fx.cfg.features = { skillAuthoring: true, skillReview: false, skillReviewSteps: 8, showToolCalls: true };
+    const change = { enabled: true, steps: 11 };
+    const cancelled = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first.appSettingRequest).toMatchObject({ tier: "confirm", after: expect.stringContaining("create or update learned skills") });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+
+    const staleThreshold = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features.skillReviewSteps = 9;
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await staleThreshold).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+
+    const staleMode = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.cfg.features.skillReview = true;
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await staleMode).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features.skillReview = false;
+
+    const staleAuthoring = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    fx.cfg.features.skillAuthoring = false;
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await staleAuthoring).body.error).toContain("Turn on bot skill authoring");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features.skillAuthoring = true;
+
+    const approved = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    const card = fx.cards()[4]!.card;
+    expect(fx.answer(String(card.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(card.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { skillReview: true, skillReviewSteps: 11 } }]);
+    expect(fx.cfg.features).toEqual({ skillAuthoring: true, skillReview: true, skillReviewSteps: 11, showToolCalls: true });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(card.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };

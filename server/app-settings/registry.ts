@@ -10,7 +10,7 @@ import { parseSocks5Proxy } from "../browser/egress/policy.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
 import { isClaudeEndpoint } from "../claude-endpoints.ts";
 import { isCodexEndpoint } from "../codex-endpoints.ts";
-import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, type AppConfig } from "../config.ts";
+import { DEFAULT_SKILL_REVIEW_STEPS, MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, MAX_SKILL_REVIEW_STEPS, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, MIN_SKILL_REVIEW_STEPS, persistableInstanceConfigs, roomTurnTimeoutMinutes, skillAuthoringEnabled, skillReviewEnabled, skillReviewSteps, type AppConfig } from "../config.ts";
 import type { InstanceConfig } from "../contracts.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
@@ -113,6 +113,8 @@ const botColor = z.object({ botId, color: z.enum(MAUS_COLOR_NAMES) }).strict();
 type BotColor = z.infer<typeof botColor>;
 const botArchive = z.object({ botId, archived: z.boolean() }).strict();
 type BotArchive = z.infer<typeof botArchive>;
+const skillReviewChange = z.object({ enabled: z.boolean(), steps: z.number().int().min(MIN_SKILL_REVIEW_STEPS).max(MAX_SKILL_REVIEW_STEPS).optional() }).strict();
+type SkillReviewChange = z.infer<typeof skillReviewChange>;
 const removableKind = (instanceId: string, entry: InstanceConfig | undefined) => isAddedEndpoint(instanceId, entry) ? "OpenAI-compatible server"
   : isClaudeBedrock(entry) ? "Claude on Amazon Bedrock" : isClaudeEndpoint(entry) ? "Claude endpoint" : isCodexEndpoint(entry) ? "Codex endpoint" : null;
 
@@ -123,6 +125,8 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     return helpers.length === 1 ? helpers[0] : undefined;
   };
   const names = (ids: readonly string[]) => ids.map((id) => deps.bots().find((bot) => bot.id === id)?.name ?? id).join(", ");
+  const reviewState = () => ({ enabled: skillReviewEnabled(cfg()), steps: skillReviewSteps(cfg()),
+    ...(cfg().features?.skillReview === true && !skillAuthoringEnabled(cfg()) ? { pausedUntilAuthoringOn: true } : {}) });
   const writable = (spec: WritableSpec): SettingEntry => ({ ...spec, read: spec.read ?? (() => display(spec.current())), write: spec.write as Writable["write"] });
   const config = <V,>(patch: (value: V) => Record<string, unknown>) => (value: V) => deps.saveConfig(patch(value));
   const windowPref = (id: WindowPrefId, label: string, help: string, where: Where, synonyms: string[], allowed: string): SettingEntry =>
@@ -274,6 +278,20 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
         const bot = deps.bots().find((candidate) => candidate.id === value.botId);
         return deps.archiveBot(value.botId, value.archived, value.archived && Boolean(bot?.chiefOfStaff));
       },
+    }),
+    writable({
+      id: "bots.skillReview", label: "Skill review", help: `On supported engines, review long conversations after ${DEFAULT_SKILL_REVIEW_STEPS} tool steps by default and possibly create or update learned skills. Bot skill authoring must be on to enable it.`, where: "Settings → You and your bots",
+      synonyms: ["skill review", "learned skills", "background review"], tier: "confirm", value: skillReviewChange,
+      allowed: `{"enabled":true|false,"steps"?:${MIN_SKILL_REVIEW_STEPS}-${MAX_SKILL_REVIEW_STEPS}}`,
+      current: reviewState, read: () => display(reviewState()),
+      describe: ({ enabled, steps }: SkillReviewChange) => {
+        if (enabled && !skillAuthoringEnabled(cfg())) return { refusal: "Turn on bot skill authoring in Settings before enabling skill review." };
+        const change = enabled
+          ? `Run background skill review after ${steps ?? skillReviewSteps(cfg())} tool steps on supported engines; it may create or update learned skills`
+          : `Stop background skill review${steps === undefined ? "" : ` and set ${steps} tool steps as the next threshold`}`;
+        return { change: `${change}; currently ${display(reviewState())}` };
+      },
+      write: config(({ enabled, steps }: SkillReviewChange) => ({ features: { skillReview: enabled, ...(steps === undefined ? {} : { skillReviewSteps: steps }) } })),
     }),
     provider("providers.anthropic.url", "Anthropic address", ["anthropic", "claude"], () => cfg().anthropic?.url, (text) => ({ anthropic: { url: text } })),
     provider("providers.xai.url", "xAI address", ["xai", "grok"], () => cfg().xai?.url, (text) => ({ xai: { url: text } })),
