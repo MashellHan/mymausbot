@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import { useAdvancedMode } from "./interface-mode";
+import { windowPrefChanged } from "./window-pref-changes";
 
 export const SHOW_THREADS_KEY = "omb-show-threads";
 
@@ -15,7 +16,7 @@ function storage(): Storage | undefined {
   }
 }
 
-function showThreads(): boolean {
+export function readShowThreadsChoice(): boolean {
   if (sessionChoice !== undefined) return sessionChoice;
   try {
     return storage()?.getItem(SHOW_THREADS_KEY) !== "0";
@@ -33,6 +34,7 @@ function onStorage(event: StorageEvent) {
   if (event.storageArea && event.storageArea !== storage()) return;
   sessionChoice = undefined;
   notify();
+  windowPrefChanged();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -55,10 +57,11 @@ export function setShowThreads(enabled: boolean): void {
   } catch {
   }
   notify();
+  windowPrefChanged();
 }
 
 export function useShowThreadsChoice(): boolean {
-  return useSyncExternalStore(subscribe, showThreads, () => true);
+  return useSyncExternalStore(subscribe, readShowThreadsChoice, () => true);
 }
 
 export function useShowThreads(): boolean {

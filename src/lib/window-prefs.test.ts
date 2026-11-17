@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyWindowPref, reportWindowPrefs, windowPrefValues } from "./window-prefs";
+import { setShowThreads } from "./thread-preferences";
 
 const values = new Map<string, string>();
 beforeEach(() => {
@@ -46,5 +47,21 @@ describe("window preferences", () => {
     const [url, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/window-prefs");
     expect(JSON.parse(String(init.body)).values).toMatchObject({ "general.sendKey": "shift-enter" });
+  });
+
+  it("applies and reports the stored thread choice, rejecting a non-boolean frame", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    applyWindowPref({ kind: "window-pref", id: "appearance.showThreads", value: false });
+    expect(values.get("omb-show-threads")).toBe("0");
+    applyWindowPref({ kind: "window-pref", id: "appearance.showThreads", value: "true" });
+    expect(windowPrefValues()["appearance.showThreads"]).toBe(false);
+    setShowThreads(true);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetched).toHaveBeenCalledTimes(1);
+    const [url, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/window-prefs");
+    expect(JSON.parse(String(init.body)).values["appearance.showThreads"]).toBe(true);
   });
 });
