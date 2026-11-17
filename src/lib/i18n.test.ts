@@ -36,6 +36,14 @@ describe("t", () => {
     expect(t("engines.cloud")).toBe("Cloud");
   });
 
+  it("uses an explicitly scoped pack without changing the host's active language", () => {
+    setLocale("en");
+    expect(t("engines.cloud", undefined, { "engines.cloud": "云端" })).toBe("云端");
+    expect(t("engines.cloud")).toBe("Cloud");
+    expect(t("engines.local", undefined, { "engines.cloud": "云端" })).toBe("Local");
+    expect(intlLocale("en-US")).toBe("en-US");
+  });
+
   it("fills {app} with the product's name, a white-label brand's own name, or the name a caller passes", () => {
     expect(t("routines.runsOn.localHint")).toBe("Starts while mymausbot is open here.");
     expect(t("routines.runsOn.localHint", { app: "Acme" })).toBe("Starts while Acme is open here.");

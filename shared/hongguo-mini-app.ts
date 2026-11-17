@@ -1,5 +1,5 @@
 /** The native Hongguo app uses only these bounded host operations. */
-export type HongguoCatalogMode = "popular" | "new" | "search" | "categories" | "category";
+export type HongguoCatalogMode = "popular" | "new" | "search" | "categories" | "category" | "metrics";
 
 export interface HongguoCatalogRequest {
   expectedRevision: number;
@@ -7,6 +7,8 @@ export interface HongguoCatalogRequest {
   query?: string;
   categoryId?: string;
   cursor?: string;
+  /** Cache-only readback for a bounded set of cards already in the current catalog. */
+  seriesIds?: string[];
 }
 
 export interface HongguoCategory { id: string; title: string }
@@ -17,7 +19,16 @@ export interface HongguoSeriesCard {
   coverUrl: string | null;
   summary: string | null;
   episodeCount: number | null;
+  /** Sourced numeric metrics; absent or null means unknown, not zero. */
+  heat?: number | null;
+  playCount?: number | null;
 }
+
+export function hongguoMetric(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? value : null;
+}
+
+export interface HongguoMetricUpdate { id: string; heat: number | null; playCount: number | null }
 
 export interface HongguoCatalogResponse {
   appId: string;
@@ -25,6 +36,9 @@ export interface HongguoCatalogResponse {
   items: HongguoSeriesCard[];
   categories: HongguoCategory[];
   nextCursor: string | null;
+  /** IDs of existing finite enrichment jobs; completion readback never starts or renews provider work. */
+  pendingMetricIds?: string[];
+  metricUpdates?: HongguoMetricUpdate[];
 }
 
 export interface HongguoSeriesRequest { expectedRevision: number; seriesId: string }
@@ -39,8 +53,6 @@ export interface HongguoEpisode {
 
 export interface HongguoSeries extends HongguoSeriesCard {
   episodes: HongguoEpisode[];
-  heat?: number | null;
-  playCount?: number | null;
 }
 export interface HongguoSeriesResponse { appId: string; revision: number; series: HongguoSeries }
 export interface HongguoPlaybackRequest { expectedRevision: number; seriesId: string; episodeId: string; qualityId?: string }

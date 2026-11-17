@@ -2,7 +2,9 @@
 import { StrictMode, act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { setLocale } from "@/lib/i18n";
+import { activeLocale, setLocale, t as hostText } from "@/lib/i18n";
+import type { LocaleKey } from "@/locales";
+import { hongguoText } from "./hongguo-copy";
 import type { MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
 import type { HongguoHistoryEntry, HongguoPlaybackResponse, HongguoSeriesCard } from "../../../shared/hongguo-mini-app";
 
@@ -52,7 +54,13 @@ let catalogHold: Promise<void> | null;
 let failPopular: boolean;
 let metrics: { heat?: number | null; playCount?: number | null };
 
-const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label)!;
+const controls: Record<string, LocaleKey> = { New: "computer.miniApps.hongguo.new", Popular: "computer.miniApps.hongguo.popular",
+  "Load more": "computer.miniApps.hongguo.more", "Loading…": "computer.miniApps.hongguo.loading",
+  "Viewing history": "computer.miniApps.hongguo.history", "Clear history": "computer.miniApps.hongguo.clear",
+  "Try again": "computer.miniApps.preview.retry" };
+const requestFailed = hongguoText("computer.miniApps.hongguo.requestFailed");
+const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")]
+  .find((item) => item.textContent?.trim() === (controls[label] ? hongguoText(controls[label]) : label))!;
 const seriesButton = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim().startsWith("Drama A"))!;
 const render = async (strict = false) => {
   const view = createElement(HongguoView, { document: miniAppDocument, state, storageKey, refreshKey, onRevoked: vi.fn(), onChanged: vi.fn() });
@@ -157,11 +165,11 @@ it("keeps catalog errors visible and clears them when restoring cached rows afte
   await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
   failNew = true;
   await act(async () => { button("New").click(); });
-  await vi.waitFor(() => expect(host.textContent).toContain("Synthetic catalog unavailable"));
+  await vi.waitFor(() => expect(host.textContent).toContain(requestFailed));
   const catalogCalls = fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/catalog")).length;
   await act(async () => { button("Popular").click(); });
   expect(seriesButton()).toBeTruthy();
-  expect(host.textContent).not.toContain("Synthetic catalog unavailable");
+  expect(host.textContent).not.toContain(requestFailed);
   expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/catalog"))).toHaveLength(catalogCalls);
 });
 
@@ -189,7 +197,7 @@ it("shows a short same-revision revisit from memory without a blank catalog or r
   await act(async () => { root.render(null); });
   await render();
   expect(seriesButton()).toBeTruthy();
-  expect(host.textContent).not.toContain("Loading…");
+  expect(host.textContent).not.toContain("正在加载…");
   expect(catalogCalls()).toBe(before);
   refreshKey++;
   await render();
@@ -238,7 +246,7 @@ it("retains cached rows on a failed refresh and retries through the existing ref
   refreshKey++;
   await render();
   expect(seriesButton()).toBeTruthy();
-  expect(host.textContent).toContain("Synthetic catalog unavailable");
+  expect(host.textContent).toContain(requestFailed);
   expect(popularCalls()).toBe(2);
   let release!: () => void;
   catalogHold = new Promise<void>((resolve) => { release = resolve; });
@@ -249,7 +257,7 @@ it("retains cached rows on a failed refresh and retries through the existing ref
   expect(seriesButton()).toBeTruthy();
   expect(popularCalls()).toBe(3);
   await act(async () => { release(); });
-  expect(host.textContent).not.toContain("Synthetic catalog unavailable");
+  expect(host.textContent).not.toContain(requestFailed);
 });
 
 it("refreshes at five minutes while on the home page and stops the timer while watching", async () => {
@@ -362,7 +370,7 @@ it("keeps the first page and a manual retry when background fill fails", async (
   pageable = true;
   failMore = true;
   await render();
-  await vi.waitFor(() => expect(host.textContent).toContain("Synthetic next page unavailable"));
+  await vi.waitFor(() => expect(host.textContent).toContain(requestFailed));
   expect(seriesButton()).toBeTruthy();
   expect(button("Load more").disabled).toBe(false);
   expect(fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/catalog")
@@ -370,7 +378,7 @@ it("keeps the first page and a manual retry when background fill fails", async (
   failMore = false;
   await act(async () => { button("Load more").click(); });
   await vi.waitFor(() => expect(host.textContent).toContain("Old extra"));
-  expect(host.textContent).not.toContain("Synthetic next page unavailable");
+  expect(host.textContent).not.toContain(requestFailed);
 });
 
 it("keeps replacement pagination current when an old automatic response arrives late", async () => {
@@ -394,7 +402,7 @@ it("keeps anonymous playback unavailable with a finite preparation deadline", as
   await render();
   await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
   await act(async () => { seriesButton().click(); });
-  await vi.waitFor(() => expect(host.textContent).toContain("The provider returned no playback data. This episode was not played."));
+  await vi.waitFor(() => expect(host.textContent).toContain("服务方未返回播放数据。本集未开始播放。"));
   expect(host.querySelector("video")).toBeNull();
   const request = fixture.api.mock.calls.find(([path]) => String(path).endsWith("/playback"));
   expect(request?.[1].timeoutMs).toBe(120_000);
@@ -437,15 +445,15 @@ it.each(["history first", "series first"] as const)("resumes a later episode whe
   else {
     await act(async () => { releaseSeries(); });
     const watch = host.querySelector<HTMLElement>('[aria-labelledby="hongguo-watch-title"]')!;
-    expect(watch.querySelector('[role="status"]')?.textContent).toBe("Loading…");
-    expect(watch.textContent).not.toContain("No episodes are listed");
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="Episode 1"]')?.disabled).toBe(true);
+    expect(watch.querySelector('[role="status"]')?.textContent).toBe("正在加载…");
+    expect(watch.textContent).not.toContain("这部短剧尚无剧集列表");
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="第 1 集"]')?.disabled).toBe(true);
   }
   expect(fixture.api.mock.calls.some(([path]) => String(path).endsWith("/playback"))).toBe(false);
   if (order === "history first") await act(async () => { releaseSeries(); });
   else await act(async () => { releaseHistory(); });
   await vi.waitFor(() => expect(host.querySelector("video")).not.toBeNull());
-  expect(host.querySelector<HTMLButtonElement>('[aria-label="Episode 1"]')?.disabled).toBe(false);
+  expect(host.querySelector<HTMLButtonElement>('[aria-label="第 1 集"]')?.disabled).toBe(false);
   const playbackCalls = fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"));
   expect(playbackCalls).toHaveLength(1);
   expect(JSON.parse(String(playbackCalls[0]![1].body)).episodeId).toBe(laterEpisode.id);
@@ -469,11 +477,11 @@ it("keeps episode selection pending after a failed history read and retries the 
   await render();
   await vi.waitFor(() => expect(seriesButton()).toBeTruthy());
   await act(async () => { seriesButton().click(); });
-  await vi.waitFor(() => expect(host.textContent).toContain("Synthetic history unavailable"));
+  await vi.waitFor(() => expect(host.textContent).toContain(requestFailed));
   const watch = host.querySelector<HTMLElement>('[aria-labelledby="hongguo-watch-title"]')!;
-  expect(watch.querySelector('[role="alert"]')?.textContent).toContain("Synthetic history unavailable");
-  expect(watch.textContent).not.toContain("No episodes are listed");
-  expect(host.querySelector<HTMLButtonElement>('[aria-label="Episode 1"]')?.disabled).toBe(true);
+  expect(watch.querySelector('[role="alert"]')?.textContent).toContain(requestFailed);
+  expect(watch.textContent).not.toContain("这部短剧尚无剧集列表");
+  expect(host.querySelector<HTMLButtonElement>('[aria-label="第 1 集"]')?.disabled).toBe(true);
   expect(fixture.api.mock.calls.some(([path]) => String(path).endsWith("/playback"))).toBe(false);
   await act(async () => { button("Try again").click(); });
   await vi.waitFor(() => expect(fixture.api.mock.calls.some(([path]) => String(path).endsWith("/playback"))).toBe(true));
@@ -488,10 +496,10 @@ it.each(["delete", "clear"] as const)("does not recreate %s history after leavin
   await render();
   const video = await openPlayer();
   await act(async () => { video.currentTime = 12; video.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
-  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Back to browsing"]')!.click(); });
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="返回浏览"]')!.click(); });
   await act(async () => { button("Viewing history").click(); });
   await vi.waitFor(() => expect(host.textContent).toContain("Drama A"));
-  await act(async () => { if (action === "delete") host.querySelector<HTMLButtonElement>('[aria-label="Delete Drama A from viewing history"]')!.click();
+  await act(async () => { if (action === "delete") host.querySelector<HTMLButtonElement>('[aria-label="从观看历史中删除Drama A"]')!.click();
     else button("Clear history").click(); });
   await act(async () => { document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button').item(1)!.click(); });
   await vi.waitFor(() => expect(history).toHaveLength(0));
@@ -519,16 +527,16 @@ it.each(["delete", "clear"] as const)("orders old-instance close saves before a 
   expect(historyActions.filter((item) => item === "delete" || item === "clear")).toHaveLength(0);
   await act(async () => { firstSave = null; releaseOld(); });
   await vi.waitFor(() => expect(historyActions.filter((item) => item === "save")).toHaveLength(2));
-  await vi.waitFor(() => expect(host.querySelector('[aria-label="Delete Drama A from viewing history"]')).not.toBeNull());
-  await act(async () => { if (action === "delete") host.querySelector<HTMLButtonElement>('[aria-label="Delete Drama A from viewing history"]')!.click();
+  await vi.waitFor(() => expect(host.querySelector('[aria-label="从观看历史中删除Drama A"]')).not.toBeNull());
+  await act(async () => { if (action === "delete") host.querySelector<HTMLButtonElement>('[aria-label="从观看历史中删除Drama A"]')!.click();
     else button("Clear history").click(); });
   await act(async () => { document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button').item(1)!.click(); });
   await vi.waitFor(() => expect(history).toHaveLength(0));
   expect(historyActions.indexOf(action)).toBeGreaterThan(historyActions.lastIndexOf("save"));
-  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Back to browsing"]')!.click(); });
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="返回浏览"]')!.click(); });
   await act(async () => { seriesButton().click(); });
-  await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('[aria-label="Episode 2"]')).not.toBeNull());
-  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Episode 2"]')!.click(); });
+  await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('[aria-label="第 2 集"]')).not.toBeNull());
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="第 2 集"]')!.click(); });
   await vi.waitFor(() => expect(host.querySelector("video")?.getAttribute("src")).toContain("/media/"));
   const newVideo = host.querySelector("video")!;
   await act(async () => { newVideo.currentTime = 31; newVideo.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
@@ -605,7 +613,7 @@ it("does not start a pending episode while hidden and keeps the resolved player 
 const qualityPlayback = (id: string) => ({ appId: app.id, revision: 3, status: "ready" as const,
   mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/${id}?expectedRevision=3`, durationSeconds: 100,
   selectedQualityId: id, availableQualityIds: ["1080p", "720p", "480p"] });
-const qualitySelect = () => host.querySelector<HTMLSelectElement>('[aria-label="Video quality"]')!;
+const qualitySelect = () => host.querySelector<HTMLSelectElement>('[aria-label="清晰度"]')!;
 const selectQuality = (id: string) => act(async () => {
   qualitySelect().value = id;
   qualitySelect().dispatchEvent(new Event("change", { bubbles: true }));
@@ -656,7 +664,7 @@ it("keeps current playback and selection when the requested quality is no longer
   expect(host.querySelector("video")).toBe(video);
   expect(video.currentTime).toBe(31);
   expect(qualitySelect().value).toBe("1080p");
-  expect(host.textContent).toContain("This quality is unavailable. Your current video is unchanged.");
+  expect(host.textContent).toContain("此清晰度暂不可用，继续播放当前视频。");
 });
 
 it("discards a late quality response after selecting a different episode", async () => {
@@ -674,27 +682,178 @@ it("discards a late quality response after selecting a different episode", async
   });
   await render(); await openPlayer();
   await selectQuality("720p");
-  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Episode 2"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="第 2 集"]')!.click());
   expect(signal?.aborted).toBe(true);
   const video = host.querySelector("video");
   await act(async () => { release(); });
   expect(host.querySelector("video")).toBe(video);
   expect(video?.src).toContain("/1080p?");
-  expect(host.querySelector('[aria-label="Episode 2"]')?.getAttribute("aria-current")).toBe("true");
+  expect(host.querySelector('[aria-label="第 2 集"]')?.getAttribute("aria-current")).toBe("true");
 });
 
 it.each([
-  [{ heat: 1_200_000, playCount: 34_000_000 }, "Hongguo heat 1.2M", "34M views"],
-  [{ heat: 0, playCount: 0 }, "Hongguo heat 0", "0 views"],
+  [{ heat: 1_200_000, playCount: 34_000_000 }, "120万", "3400万"],
+  [{ heat: 0, playCount: 0 }, "0", "0"],
   [{}, null, null],
   [{ heat: null, playCount: null }, null, null],
-])("shows sourced popularity without inventing missing metrics: %j", async (values, heatLabel, viewsLabel) => {
+])("shows the same sourced metric hierarchy on home and detail without inventing values: %j", async (values, heatLabel, viewsLabel) => {
   metrics = values;
+  catalogCard = { ...card, ...values };
   await render();
+  const homeMetrics = seriesButton().querySelector('[data-hongguo-metrics]');
+  if (heatLabel !== null) {
+    expect(homeMetrics?.querySelector('[data-hongguo-metric="heat"]')?.textContent).toBe(heatLabel);
+    expect(homeMetrics?.querySelector('[data-hongguo-metric="playCount"]')?.textContent).toBe(viewsLabel);
+    expect(homeMetrics?.querySelector("dt")?.classList.contains("text-ink-secondary")).toBe(true);
+    const value = homeMetrics!.querySelector("dd")!;
+    for (const token of ["font-semibold", "text-ink", "tabular-nums"]) expect(value.classList.contains(token)).toBe(true);
+  } else expect(homeMetrics).toBeNull();
   await act(async () => { seriesButton().click(); });
   const header = host.querySelector('[aria-labelledby="hongguo-watch-title"] header')!;
-  if (heatLabel) expect(header.textContent).toContain(heatLabel);
-  else expect(header.textContent).not.toContain("Hongguo heat");
-  if (viewsLabel) expect(header.textContent).toContain(viewsLabel);
-  else expect(header.textContent).not.toContain("views");
+  expect(header.querySelector('[data-hongguo-metric="heat"]')?.textContent ?? null).toBe(heatLabel);
+  expect(header.querySelector('[data-hongguo-metric="playCount"]')?.textContent ?? null).toBe(viewsLabel);
+});
+
+it("keeps all owned navigation Chinese inside an English host and retains tab order", async () => {
+  await render();
+  expect(activeLocale()).toBe("en");
+  expect(document.documentElement.lang).toBe("en");
+  expect(hostText("engines.cloud")).toBe("Cloud");
+  expect(host.querySelector('[data-testid="hongguo-view"]')?.getAttribute("lang")).toBe("zh-CN");
+  expect(host.querySelector("h2")?.textContent).toBe("红果");
+  const tabs = host.querySelector('[aria-labelledby="hongguo-catalog-title"] > div')!;
+  expect([...tabs.querySelectorAll("button")].map((item) => item.textContent)).toEqual(["热门", "最新", "最热", "最多播放"]);
+  expect(host.textContent).not.toContain("当前列表");
+  await act(async () => { button("最热").click(); });
+  expect(host.textContent).toContain("当前列表");
+  expect(activeLocale()).toBe("en");
+});
+
+it("sorts the matching category and appended pages without new requests or per-card detail fanout", async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const original = fixture.api.getMockImplementation()!;
+  const row = (id: string, heat?: number | null, playCount?: number | null) => ({ ...card, id, title: id, heat, playCount });
+  fixture.api.mockImplementation(async (path, init) => {
+    if (!path.endsWith("/catalog")) return original(path, init);
+    const body = JSON.parse(init.body);
+    const scope = { appId: app.id, revision: 3, categories: [{ id: "family", title: "家庭" }] };
+    if (body.mode === "categories") return { ...scope, items: [], nextCursor: null };
+    if (body.mode !== "category") return { ...scope, items: [catalogCard], nextCursor: null };
+    expect(body.categoryId).toBe("family");
+    if (body.cursor === "third") return { ...scope, items: [row("last", 500, 500)], nextCursor: null };
+    if (body.cursor === "second") {
+      await hold;
+      return { ...scope, items: [row("ten", 999, 999), row("largest", 100, 3), row("tie", 10, 2)], nextCursor: "third" };
+    }
+    return { ...scope, items: [row("missing"), row("two", 2, 100), row("ten", 10, 2)], nextCursor: "second" };
+  });
+  const titles = () => [...host.querySelectorAll('[aria-labelledby="hongguo-catalog-title"] .grid > button')]
+    .map((item) => item.querySelector("span")?.textContent);
+  await render();
+  await act(async () => { button("家庭").click(); });
+  const calls = fixture.api.mock.calls.length;
+  await act(async () => { button("最热").click(); });
+  expect(titles()).toEqual(["ten", "two", "missing"]);
+  expect(fixture.api.mock.calls).toHaveLength(calls);
+  await act(async () => { release(); });
+  expect(titles()).toEqual(["largest", "ten", "tie", "two", "missing"]);
+  const afterFill = fixture.api.mock.calls.length;
+  await act(async () => { button("最多播放").click(); });
+  expect(titles()).toEqual(["two", "largest", "ten", "tie", "missing"]);
+  expect(fixture.api.mock.calls).toHaveLength(afterFill);
+  await act(async () => { button("Load more").click(); });
+  expect(titles()).toEqual(["last", "two", "largest", "ten", "tie", "missing"]);
+  expect(fixture.api.mock.calls.some(([path]) => String(path).endsWith("/series"))).toBe(false);
+});
+
+it("sorts the current search without dropping its query or issuing another catalog request", async () => {
+  await render();
+  const input = host.querySelector<HTMLInputElement>('[aria-label="搜索剧名"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "家庭");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => { input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+  const search = fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/catalog") && JSON.parse(String(init.body)).mode === "search");
+  expect(search).toHaveLength(1);
+  expect(JSON.parse(String(search[0]![1].body)).query).toBe("家庭");
+  const before = fixture.api.mock.calls.length;
+  await act(async () => { button("最热").click(); });
+  expect(fixture.api.mock.calls).toHaveLength(before);
+  expect(input.value).toBe("家庭");
+  expect(host.textContent).toContain("“家庭”的搜索结果");
+  expect(host.textContent).toContain("当前列表");
+});
+
+it.each([500, 5000])("hydrates a %sms late success and appended cards into the current sort without renewing catalog freshness", async (delay) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  const original = fixture.api.getMockImplementation()!;
+  const row = (id: string, title: string) => ({ ...card, id, title });
+  fixture.api.mockImplementation(async (path, init) => {
+    if (!path.endsWith("/catalog")) return original(path, init);
+    const body = JSON.parse(init.body);
+    const scope = { appId: app.id, revision: 3, categories: [], nextCursor: null };
+    if (body.mode === "categories") return { ...scope, items: [] };
+    if (body.mode === "metrics") {
+      const readyAt = Math.max(...body.seriesIds.map((id: string) => 1_000_000 + delay + (id === "10" ? 0 : 600)));
+      if (readyAt > Date.now()) await new Promise((resolve) => setTimeout(resolve, readyAt - Date.now()));
+      const available = (id: string) => Date.now() >= 1_000_000 + delay + (id === "10" ? 0 : 600);
+      return { ...scope, items: [], metricUpdates: body.seriesIds.filter(available).map((id: string) => ({
+        id, heat: id === "10" ? 2 : 10, playCount: id === "10" ? 20 : 100,
+      })), pendingMetricIds: body.seriesIds.filter((id: string) => !available(id)) };
+    }
+    if (body.cursor === "later") {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      return { ...scope, items: [row("20", "合成乙")], pendingMetricIds: ["20"] };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return { ...scope, items: [row("10", "合成甲"), row("50", "未知指标")], nextCursor: "later", pendingMetricIds: ["10"] };
+  });
+  const titles = () => [...host.querySelectorAll('[aria-labelledby="hongguo-catalog-title"] .grid > button')]
+    .map((item) => item.querySelector("span")?.textContent);
+  await render();
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+  expect(titles()).toEqual(["合成甲", "未知指标"]);
+  expect(host.querySelector('[data-hongguo-metrics]')).toBeNull();
+  await act(async () => { button("最热").click(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+  expect(host.querySelector('[data-hongguo-metric="heat"]')?.textContent ?? null).toBe(delay === 500 ? "2" : null);
+  await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+  expect(titles()).toEqual(["合成甲", "未知指标", "合成乙"]);
+  expect(host.querySelector('[data-hongguo-metric="heat"]')?.textContent ?? null).toBe(delay === 500 ? "2" : null);
+  await act(async () => { await vi.advanceTimersByTimeAsync(Math.max(300, delay + 600 - 900)); });
+  expect(titles()).toEqual(["合成乙", "合成甲", "未知指标"]);
+  const readbacks = fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/catalog") && JSON.parse(String(init.body)).mode === "metrics");
+  expect(readbacks).toHaveLength(2);
+  expect(popularCalls()).toBe(1);
+  expect(fixture.api.mock.calls.some(([path]) => String(path).endsWith("/series"))).toBe(false);
+  await act(async () => { root.render(null); });
+  vi.setSystemTime(1_000_000 + 300 + 5 * 60_000 - 1);
+  await render();
+  expect(titles()).toEqual(["合成乙", "合成甲", "未知指标"]);
+  expect(popularCalls()).toBe(1);
+  await act(async () => { root.render(null); });
+  vi.setSystemTime(1_000_000 + 300 + 5 * 60_000);
+  await render();
+  expect(popularCalls()).toBe(2);
+});
+
+it("retains metric sorting in a cached revisit without extending the original five-minute freshness", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  await render();
+  vi.setSystemTime(1_000_000 + 4 * 60_000);
+  const before = popularCalls();
+  await act(async () => { button("最多播放").click(); });
+  expect(popularCalls()).toBe(before);
+  await act(async () => { root.render(null); });
+  await render();
+  expect(button("最多播放").getAttribute("aria-pressed")).toBe("true");
+  expect(popularCalls()).toBe(before);
+  await act(async () => { root.render(null); });
+  vi.setSystemTime(1_000_000 + 5 * 60_000);
+  await render();
+  expect(popularCalls()).toBe(before + 1);
 });

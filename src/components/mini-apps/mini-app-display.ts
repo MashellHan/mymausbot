@@ -1,10 +1,12 @@
 import { t } from "@/lib/i18n";
 import type { MiniAppSummary } from "../../../shared/mini-apps";
 import { REPORT_APPS } from "../../../shared/report-mini-app";
+import { hongguoText } from "./hongguo-copy";
 
 const usageDefaultTitles = new Set(["Usage", "用量", "Work Tracker", "工作追踪", "Activities"]);
 
 export function miniAppDisplayName(app: MiniAppSummary): string {
+  if (app.nativeIdentity === "hongguo") return hongguoText("computer.miniApps.hongguo.title");
   if (app.shippedTemplateKind === "github_activity" && ["GitHub activity", "GitHub activity & discovery"].includes(app.title)) return REPORT_APPS.github_activity.title;
   return app.dashboardIdentity === "usage" && usageDefaultTitles.has(app.title)
     ? t("computer.miniApps.dashboard.activitiesTitle") : app.title;
@@ -20,6 +22,7 @@ const defaultDescriptions = {
 };
 
 export function miniAppDisplayDescription(app: MiniAppSummary): string {
+  if (app.nativeIdentity === "hongguo") return hongguoText("computer.miniApps.hongguo.description");
   const kind = app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind;
   if (!kind || app.description !== defaultDescriptions[kind]) return app.description;
   return t(kind === "bookkeeping" ? "computer.miniApps.bookkeepingDefaultDescription"

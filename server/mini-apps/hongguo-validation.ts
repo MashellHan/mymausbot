@@ -11,10 +11,13 @@ const httpsUrl = z.url().max(2048).refine((value) => Boolean(hongguoUrl(value, "
 const optionalUrl = httpsUrl.nullable();
 const seconds = z.number().finite().nonnegative().max(1_000_000_000);
 
-const catalog = z.object({ expectedRevision: revision, mode: z.enum(["popular", "new", "search", "categories", "category"]),
-  query: z.string().trim().min(1).max(200).optional(), categoryId: id.optional(), cursor: z.string().max(4096).optional() }).strict()
+const catalog = z.object({ expectedRevision: revision, mode: z.enum(["popular", "new", "search", "categories", "category", "metrics"]),
+  query: z.string().trim().min(1).max(200).optional(), categoryId: id.optional(), cursor: z.string().max(4096).optional(),
+  seriesIds: z.array(id).min(1).max(100).refine((ids) => new Set(ids).size === ids.length).optional() }).strict()
   .refine((value) => value.mode !== "search" || value.query !== undefined)
-  .refine((value) => value.mode !== "category" || value.categoryId !== undefined);
+  .refine((value) => value.mode !== "category" || value.categoryId !== undefined)
+  .refine((value) => value.mode === "metrics" ? value.seriesIds !== undefined && value.query === undefined
+    && value.categoryId === undefined && value.cursor === undefined : value.seriesIds === undefined);
 const series = z.object({ expectedRevision: revision, seriesId: id }).strict();
 const qualityId = z.string().regex(/^[1-9]\d{2,3}p$/);
 const playback = series.extend({ episodeId: id, qualityId: qualityId.optional() });
@@ -29,14 +32,17 @@ const history = z.discriminatedUnion("action", [
 ]);
 const preferences = z.object({ expectedRevision: revision, autoplayNext: z.boolean() }).strict();
 
+const metricValue = z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable();
+const metric = metricValue.optional();
 const card = z.object({ id, title: label, coverUrl: optionalUrl, summary: z.string().max(2000).nullable(),
-  episodeCount: z.number().int().nonnegative().max(1_000_000).nullable() }).strict();
+  episodeCount: z.number().int().nonnegative().max(1_000_000).nullable(), heat: metric, playCount: metric }).strict();
 const catalogResult = z.object({ items: z.array(card).max(100),
-  categories: z.array(z.object({ id, title: label }).strict()).max(100), nextCursor: z.string().max(4096).nullable() }).strict();
+  categories: z.array(z.object({ id, title: label }).strict()).max(100), nextCursor: z.string().max(4096).nullable(),
+  pendingMetricIds: z.array(id).max(100).optional(),
+  metricUpdates: z.array(z.object({ id, heat: metricValue, playCount: metricValue }).strict()).max(100).optional() }).strict();
 const episode = z.object({ id, number: z.number().int().nonnegative().max(1_000_000), title: label,
   availability: z.enum(["available", "unavailable", "unknown"]), imageUrl: optionalUrl }).strict();
-const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable().optional();
-const seriesResult = card.extend({ episodes: z.array(episode).max(10_000), heat: metric, playCount: metric });
+const seriesResult = card.extend({ episodes: z.array(episode).max(10_000) });
 const preparedPlayback = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ready"), token: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/),
     durationSeconds: seconds.nullable(), selectedQualityId: qualityId.nullable(),

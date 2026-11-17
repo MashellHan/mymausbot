@@ -2,12 +2,13 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Client, SeriesSummary, Transport } from "openhongguo";
-import type { HongguoCatalogRequest, HongguoCatalogResponse, HongguoCategory, HongguoEpisode, HongguoSeries,
-  HongguoSeriesCard } from "../../shared/hongguo-mini-app.ts";
+import { hongguoMetric, type HongguoCatalogRequest, type HongguoCatalogResponse, type HongguoCategory, type HongguoEpisode, type HongguoSeries,
+  type HongguoSeriesCard } from "../../shared/hongguo-mini-app.ts";
 import { SERVER_ROOT } from "../proxy-paths.ts";
 import { availableQualityIds, HongguoMedia, type HongguoMediaScope } from "./media.ts";
 import { hongguoRequest, hongguoUrl } from "./network.ts";
 import { safeHttpFacts, safeSdkError, type PlaybackReason, type PlaybackStage } from "./playback-diagnostic.ts";
+import { createHongguoCatalogMetrics } from "./catalog-metrics.ts";
 
 export type { HongguoMediaScope } from "./media.ts";
 type PreparedPlayback = { status: "ready"; token: string; durationSeconds: number | null;
@@ -27,10 +28,11 @@ const label = (value: string | undefined, max = 300) => (value ?? "").replace(/\
 const number = (value: number | undefined, max = 1_000_000) => Number.isFinite(value) && value! >= 0 && value! <= max ? value! : null;
 const imageUrl = (value: string | undefined) => value && value.length <= 2048 ? hongguoUrl(value, "image")?.href ?? null : null;
 
-function card(value: SeriesSummary): HongguoSeriesCard | null {
+function card(value: SeriesSummary & { heat?: unknown; plays?: unknown; play_count?: unknown }): HongguoSeriesCard | null {
   if (!providerId(value.id) || !label(value.title)) return null;
   return { id: value.id, title: label(value.title), coverUrl: imageUrl(value.cover_url),
-    summary: label(value.description, 2000) || null, episodeCount: number(value.episode_count) };
+    summary: label(value.description, 2000) || null, episodeCount: number(value.episode_count),
+    heat: hongguoMetric(value.heat), playCount: hongguoMetric(value.plays) ?? hongguoMetric(value.play_count) };
 }
 
 export const hongguoTransport: Transport = async (input) => {
@@ -101,6 +103,7 @@ export function createHongguoProvider(options: { dataDir: string; client?: (tran
   const media = options.media ?? new HongguoMedia(join(options.dataDir, "cache", "hongguo"));
   const seriesCache = new Map<string, { series: HongguoSeries; expiresAt: number }>();
   let categoryCache: { items: HongguoCategory[]; expiresAt: number } | undefined;
+  const catalogMetrics = createHongguoCatalogMetrics((ids) => sdkCall(null, null, async () => (await getClient()).getSeriesBatch(ids)));
 
   async function categories(): Promise<HongguoCategory[]> {
     if (categoryCache && categoryCache.expiresAt > Date.now()) return categoryCache.items;
@@ -135,6 +138,8 @@ export function createHongguoProvider(options: { dataDir: string; client?: (tran
 
   return {
     async catalog(input) {
+      const startedAt = Date.now();
+      if (input.mode === "metrics") return { items: [], categories: [], nextCursor: null, ...await catalogMetrics.wait(input.seriesIds ?? []) };
       if (input.mode === "categories") return { items: [], categories: await categories(), nextCursor: null };
       let page: { items: SeriesSummary[]; has_more: boolean; cursor?: string };
       if (input.mode === "search") page = await sdkCall(null, null, async () =>
@@ -150,7 +155,9 @@ export function createHongguoProvider(options: { dataDir: string; client?: (tran
         const result = await sdkCall(null, null, async () => (await getClient()).shortRank({ cursor: input.cursor }));
         page = { ...result, items: result.items.map((item) => ({ ...item, id: item.series_id ?? "", title: item.title ?? "" })) };
       }
-      return { items: page.items.slice(0, 100).map(card).filter((item): item is HongguoSeriesCard => item !== null), categories: [],
+      const items = page.items.slice(0, 100).map(card).filter((item): item is HongguoSeriesCard => item !== null);
+      const enriched = await catalogMetrics(items, Math.max(0, 9_000 - (Date.now() - startedAt)));
+      return { items: enriched, pendingMetricIds: catalogMetrics.read(enriched.map(({ id }) => id)).pendingMetricIds, categories: [],
         nextCursor: page.has_more && page.cursor && page.cursor.length <= 4096 ? page.cursor : null };
     },
     series: (id) => series(id),

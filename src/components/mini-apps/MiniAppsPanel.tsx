@@ -19,6 +19,7 @@ import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
 import { MojoWholePage } from "./MojoWholePage";
 import { HongguoView, forgetHongguoHome } from "./HongguoView";
 import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-display";
+import { hongguoText } from "./hongguo-copy";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { mojoHostEligible } from "./mojo-host";
 
@@ -451,10 +452,10 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
             {appState.status === "active" && nativeGuard && nativeInstalled ? hongguoCurrent
               ? <HongguoView key={JSON.stringify([storageKey, document.app.id, document.app.revision])} document={document} state={appState}
                 storageKey={storageKey} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
-              : hongguoRecovery ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="hongguo-recovery">
-                <p>{t("computer.miniApps.dashboard.recovery")}</p>
+              : hongguoRecovery ? <section lang="zh-CN" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="hongguo-recovery">
+                <p>{hongguoText("computer.miniApps.dashboard.recovery")}</p>
                 <button type="button" onClick={() => void addDefault("hongguo")}
-                  className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.dashboard.reauthorize")}</button>
+                  className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{hongguoText("computer.miniApps.dashboard.reauthorize")}</button>
               </section>
               : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
               : appState.status === "active" && nativeGuard && dashboardInstalled ? dashboardCurrent
