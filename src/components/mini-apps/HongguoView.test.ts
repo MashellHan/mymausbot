@@ -46,13 +46,14 @@ let historyActions: string[];
 let catalogCard: HongguoSeriesCard;
 let refreshKey = 0;
 let fixtureId = 0;
+let storageKey = "fixture-environment";
 let catalogHold: Promise<void> | null;
 let failPopular: boolean;
 
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label)!;
 const seriesButton = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim().startsWith("Drama A"))!;
 const render = async (strict = false) => {
-  const view = createElement(HongguoView, { document: miniAppDocument, state, refreshKey, onRevoked: vi.fn(), onChanged: vi.fn() });
+  const view = createElement(HongguoView, { document: miniAppDocument, state, storageKey, refreshKey, onRevoked: vi.fn(), onChanged: vi.fn() });
   await act(async () => { root.render(strict ? createElement(StrictMode, null, view) : view); });
 };
 const openPlayer = async () => {
@@ -68,6 +69,7 @@ const openPlayer = async () => {
 beforeEach(() => {
   app.id = `hongguo_fixture_${++fixtureId}`;
   state.appId = app.id;
+  storageKey = "fixture-environment";
   refreshKey++;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true } });
@@ -259,6 +261,43 @@ it("refreshes at five minutes while on the home page and stops the timer while w
   expect(popularCalls()).toBe(2);
   await act(async () => { host.querySelector<HTMLButtonElement>('[aria-labelledby="hongguo-watch-title"] button')!.click(); });
   expect(popularCalls()).toBe(3);
+});
+
+it("does not show another environment's cached catalog for the same app id", async () => {
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  await act(async () => { root.render(null); });
+  storageKey = "another-environment";
+  let release!: () => void;
+  catalogHold = new Promise<void>((resolve) => { release = resolve; });
+  catalogCard = { ...card, id: "other", title: "Other environment" };
+  await render();
+  expect(seriesButton()).toBeUndefined();
+  await act(async () => { release(); });
+  expect(host.textContent).toContain("Other environment");
+  await act(async () => { root.render(null); });
+  storageKey = "fixture-environment";
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  expect(host.textContent).not.toContain("Other environment");
+});
+
+it("does not renew category freshness when another catalog succeeds", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  const categoryCalls = () => fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/catalog")
+    && JSON.parse(String(init.body)).mode === "categories").length;
+  await render();
+  expect(categoryCalls()).toBe(1);
+  vi.setSystemTime(1_000_000 + 4 * 60_000);
+  await act(async () => { button("New").click(); });
+  expect(categoryCalls()).toBe(1);
+  await act(async () => { root.render(null); });
+  vi.setSystemTime(1_000_000 + 6 * 60_000);
+  const before = popularCalls();
+  await render();
+  expect(categoryCalls()).toBe(2);
+  expect(popularCalls()).toBe(before);
 });
 
 it("does not extend the first-page freshness when loading additional pages", async () => {

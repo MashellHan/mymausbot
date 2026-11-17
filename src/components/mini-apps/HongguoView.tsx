@@ -17,17 +17,26 @@ const historyMutationTailByApp = new Map<string, Promise<void>>();
 const HOME_FRESH_MS = 5 * 60_000;
 type HomeSnapshot = { mode: BrowseMode; query: string; categoryId: string;
   items: HongguoSeriesCard[]; nextCursor: string | null; categories: HongguoCategory[];
-  categoriesLoaded: boolean; expiresAt: number };
+  categoriesLoaded: boolean; expiresAt: number; categoriesExpiresAt: number };
 const homeSnapshots = new Map<string, HomeSnapshot>();
 
-function recentHome(key: string): HomeSnapshot | null {
-  return homeSnapshots.get(key) ?? null;
+function recentHome(key: string | null): HomeSnapshot | null {
+  return key ? homeSnapshots.get(key) ?? null : null;
 }
 
-function rememberHome(key: string, saved: HomeSnapshot): void {
+function rememberHome(key: string | null, saved: HomeSnapshot): void {
+  if (!key) return;
   homeSnapshots.delete(key);
   homeSnapshots.set(key, saved);
   while (homeSnapshots.size > 8) homeSnapshots.delete(homeSnapshots.keys().next().value!);
+}
+
+export function forgetHongguoHome(storageKey: string | null, appId?: string): void {
+  if (!storageKey) return;
+  for (const key of homeSnapshots.keys()) {
+    const [environment, app] = JSON.parse(key) as [string, string, number];
+    if (environment === storageKey && (!appId || app === appId)) homeSnapshots.delete(key);
+  }
 }
 
 function appendUniqueCards(existing: HongguoSeriesCard[], incoming: HongguoSeriesCard[]): HongguoSeriesCard[] {
@@ -76,8 +85,8 @@ function scopedMediaUrl(value: string, appId: string, revision: number): string 
   return url.pathname + url.search;
 }
 
-export function HongguoView({ document, state, refreshKey, onRevoked, onChanged }: {
-  document: MiniAppDocument; state: MiniAppState; refreshKey: number; onRevoked(): void; onChanged(): void;
+export function HongguoView({ document, state, storageKey, refreshKey, onRevoked, onChanged }: {
+  document: MiniAppDocument; state: MiniAppState; storageKey: string | null; refreshKey: number; onRevoked(): void; onChanged(): void;
 }) {
   const appId = document.app.id;
   const revision = document.app.revision;
@@ -85,7 +94,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   const valid = miniAppNativeFrameGuard() && document.app.status === "active" && state.status === "active"
     && state.appId === appId && state.revision === revision && document.app.nativeIdentity === "hongguo"
     && document.app.nativeKind === "hongguo";
-  const homeKey = `${appId}:${revision}`;
+  const homeKey = storageKey ? JSON.stringify([storageKey, appId, revision]) : null;
   const initialHome = useRef(valid ? recentHome(homeKey) : null).current;
   const lastRefreshKey = useRef(refreshKey);
   const callbacks = useRef({ onRevoked, onChanged });
@@ -106,6 +115,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   const categoriesRef = useRef(categories);
   categoriesRef.current = categories;
   const categoriesLoaded = useRef(initialHome?.categoriesLoaded ?? false);
+  const categoriesExpiresAt = useRef(initialHome?.categoriesExpiresAt ?? 0);
   const [items, setItems] = useState<HongguoSeriesCard[]>(initialHome?.items ?? []);
   const [nextCursor, setNextCursor] = useState<string | null>(initialHome?.nextCursor ?? null);
   const [catalogLoading, setCatalogLoading] = useState(false);
@@ -143,21 +153,21 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   const showError = useCallback((cause: unknown, setError: (message: string) => void) => {
     if (!mounted.current || cause instanceof DOMException && cause.name === "AbortError") return;
     if (!miniAppNativeFrameGuard() || cause instanceof ApiError && [401, 403, 404].includes(cause.status)) {
-      homeSnapshots.delete(homeKey);
+      forgetHongguoHome(storageKey, appId);
       callbacks.current.onRevoked(); return;
     }
-    if (cause instanceof ApiError && cause.status === 409) { homeSnapshots.delete(homeKey); callbacks.current.onChanged(); return; }
+    if (cause instanceof ApiError && cause.status === 409) { forgetHongguoHome(storageKey, appId); callbacks.current.onChanged(); return; }
     setError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
-  }, [homeKey]);
+  }, [storageKey, appId]);
 
   useEffect(() => {
-    if (!valid) homeSnapshots.delete(homeKey);
+    if (!valid) forgetHongguoHome(storageKey, appId);
     else if (lastRefreshKey.current !== refreshKey) {
       const saved = recentHome(homeKey);
-      if (saved) rememberHome(homeKey, { ...saved, expiresAt: 0, categoriesLoaded: false });
+      if (saved) rememberHome(homeKey, { ...saved, expiresAt: 0, categoriesLoaded: false, categoriesExpiresAt: 0 });
     }
     lastRefreshKey.current = refreshKey;
-  }, [valid, homeKey, refreshKey]);
+  }, [valid, homeKey, storageKey, appId, refreshKey]);
 
   const savePosition = useCallback(() => {
     const entry = progress.current;
@@ -201,20 +211,21 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   }, [appId, valid, visible, refreshKey, historyRetry, post, revision, showError]);
 
   useEffect(() => {
-    if (!valid || !visible) return;
+    if (!valid || !visible || page !== "home") return;
     const saved = recentHome(homeKey);
-    if (saved?.categoriesLoaded && saved.expiresAt > Date.now()) { setCategories(saved.categories); categoriesLoaded.current = true; return; }
+    if (saved?.categoriesLoaded && saved.categoriesExpiresAt > Date.now()) { setCategories(saved.categories); categoriesLoaded.current = true; categoriesExpiresAt.current = saved.categoriesExpiresAt; return; }
     categoriesLoaded.current = false;
     const controller = new AbortController();
     void post<HongguoCatalogResponse>("catalog", { expectedRevision: revision, mode: "categories" }, controller.signal)
       .then((result) => { if (!controller.signal.aborted) {
         setCategories(result.categories); categoriesRef.current = result.categories; categoriesLoaded.current = true;
+        categoriesExpiresAt.current = Date.now() + HOME_FRESH_MS;
         const current = recentHome(homeKey);
-        if (current) rememberHome(homeKey, { ...current, categories: result.categories, categoriesLoaded: true });
+        if (current) rememberHome(homeKey, { ...current, categories: result.categories, categoriesLoaded: true, categoriesExpiresAt: categoriesExpiresAt.current });
       } })
       .catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setCatalogError); });
     return () => controller.abort();
-  }, [valid, visible, refreshKey, catalogRefresh, homeKey, post, revision, showError]);
+  }, [valid, visible, page, mode, refreshKey, catalogRefresh, homeKey, post, revision, showError]);
 
   useEffect(() => {
     if (!valid || !visible || page !== "home" || mode === "category" && !categoryId) return;
@@ -253,7 +264,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
         setItems(firstItems); setNextCursor(first.nextCursor); setCatalogLoading(false);
         const expiresAt = Date.now() + HOME_FRESH_MS;
         rememberHome(homeKey, { mode, query, categoryId, items: firstItems, nextCursor: first.nextCursor,
-          categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt });
+          categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, categoriesExpiresAt: categoriesExpiresAt.current, expiresAt });
         if (!first.nextCursor) return;
         setMoreLoading(true);
         try {
@@ -262,7 +273,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
           const updated = appendUniqueCards(firstItems, second.items);
           setItems(updated); setNextCursor(second.nextCursor);
           rememberHome(homeKey, { mode, query, categoryId, items: updated, nextCursor: second.nextCursor,
-            categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt });
+            categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, categoriesExpiresAt: categoriesExpiresAt.current, expiresAt });
         } catch (cause) { if (active()) showError(cause, setCatalogError); }
         finally { if (active()) setMoreLoading(false); }
       } catch (cause) { if (active()) showError(cause, setCatalogError); }
@@ -284,7 +295,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
         const updated = appendUniqueCards(items, result.items);
         setItems(updated); setNextCursor(result.nextCursor); setCatalogError("");
         rememberHome(homeKey, { mode, query, categoryId, items: updated, nextCursor: result.nextCursor,
-          categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current,
+          categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, categoriesExpiresAt: categoriesExpiresAt.current,
           expiresAt: recentHome(homeKey)?.expiresAt ?? Date.now() + HOME_FRESH_MS });
       }
     } catch (cause) { if (!signal.aborted && generation === catalogGeneration.current) showError(cause, setCatalogError); }
