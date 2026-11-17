@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -103,10 +103,47 @@ describe("verified Pi visible assistant preview", () => {
     expect((await data.reader([data.agent()])).get("w6:p1")).toBeNull();
     await writeFile(data.file, line(data.header()) + "{bad json}\n");
     expect((await data.reader([data.agent()])).get("w6:p1")).toBeNull();
-    await data.save([assistant("x".repeat(65 * 1024))]);
+    await data.save([assistant("x".repeat(1024 * 1024))]);
     expect((await data.reader([data.agent()])).get("w6:p1")).toBeNull();
     await data.save([assistant("Orphan", "a1b2c3d4", "b1b2c3d4")]);
     expect((await data.reader([data.agent()])).get("w6:p1")).toBeNull();
+  });
+
+  it("keeps short visible text across large hidden thinking, arguments and tool results", async () => {
+    const data = await fixture([
+      entry("a1b2c3d4", null, { role: "assistant", content: [
+        { type: "text", text: "Visible before tool" },
+        { type: "thinking", thinking: "HIDDEN_THINKING" + "x".repeat(320 * 1024) },
+        { type: "toolCall", id: "call-1", name: "shell.run", arguments: { secret: "HIDDEN_ARGUMENT" + "y".repeat(220 * 1024) } },
+      ] }),
+      entry("b1b2c3d4", "a1b2c3d4", { role: "toolResult", toolCallId: "call-1", toolName: "shell.run",
+        content: [{ type: "text", text: "HIDDEN_RESULT" + "z".repeat(120 * 1024) }] }),
+      assistant("Visible after tool", "c1b2c3d4", "b1b2c3d4"),
+      entry("d1b2c3d4", "c1b2c3d4", { role: "assistant", content: [{ type: "thinking", thinking: "HIDDEN_LAST" + "x".repeat(320 * 1024) }] }),
+    ]);
+    const view = (await data.reader([data.agent()])).get("w6:p1")!;
+    expect(view.preview).toBe("Visible after tool");
+    expect(view.events.map((event) => [event.kind, event.text, event.tool])).toEqual([
+      ["assistant", "Visible before tool", null], ["tool-call", "[Arguments unavailable]", "shell.run"],
+      ["tool-result", "[Result details unavailable]", "shell.run"], ["assistant", "Visible after tool", null],
+    ]);
+    expect(JSON.stringify(view)).not.toMatch(/HIDDEN_/);
+  });
+
+  it("reads the bounded tail of a file above 8 MiB and marks missing history truncated", async () => {
+    const rows: object[] = [assistant("Old text", "00000000")];
+    for (let index = 1; index <= 18; index++) {
+      rows.push(entry(index.toString(16).padStart(8, "0"), (index - 1).toString(16).padStart(8, "0"),
+        { role: "toolResult", toolCallId: `call-${index}`, content: [{ type: "text", text: "HIDDEN_RESULT" + "z".repeat(500 * 1024) }] }));
+    }
+    rows.push(assistant("Latest visible text", "00000013", "00000012"));
+    const data = await fixture(rows);
+    expect((await stat(data.file)).size).toBeGreaterThan(8 * 1024 * 1024);
+    const view = (await data.reader([data.agent()])).get("w6:p1")!;
+    expect(view.preview).toBe("Latest visible text");
+    expect(view.truncated).toBe(true);
+    expect(view.events.at(-1)?.text).toBe("Latest visible text");
+    expect(JSON.stringify(view)).not.toMatch(/Old text|HIDDEN_/);
   });
 
   it("caps current-branch events and tool metadata without losing the latest assistant preview", async () => {
