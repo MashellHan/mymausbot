@@ -28,12 +28,17 @@ export function MiniAppsHost({ enabled, children }: { enabled: boolean; children
   const activeSlot = useRef<HTMLDivElement | null>(null);
   const [opened, setOpened] = useState(false);
   const [requestedApp, setRequestedApp] = useState<AppRequest>();
+  const lastRequest = useRef<AppRequest>(undefined);
+  const requestNonce = useRef(0);
   useLayoutEffect(() => { if (!enabled) setOpened(false); }, [enabled]);
   const attach = useCallback<Attach>((slot, request) => {
     if (!enabled) return () => {};
     activeSlot.current = slot;
     moveContainer(container, slot);
-    setRequestedApp(request);
+    if (request && request !== lastRequest.current) {
+      lastRequest.current = request;
+      setRequestedApp({ id: request.id, nonce: ++requestNonce.current });
+    }
     setOpened(true);
     return () => {
       if (activeSlot.current !== slot) return;

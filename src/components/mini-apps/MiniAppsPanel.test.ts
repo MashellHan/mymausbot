@@ -53,6 +53,7 @@ vi.mock("./MiniAppFrame", () => ({ MiniAppFrame: ({ document, state }: { documen
 
 import { ApiError } from "@/state/store";
 import { MiniAppsPanel } from "./MiniAppsPanel";
+import { MiniAppsHost, MiniAppsSlot } from "./MiniAppsHost";
 import { HongguoView, forgetHongguoHome } from "./HongguoView";
 
 const dashboard = { kind: "agent-team", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["teams", "activity"] } as const;
@@ -845,4 +846,24 @@ describe("Mini Apps panel", () => {
     expect(host.textContent).not.toContain("Add Mini App");
     expect(fixture.api.mock.calls.some(([path]) => String(path).endsWith("/query"))).toBe(false);
   });
+});
+
+
+it("opens first requests from different Bot panels and preserves manual selection on reattach", async () => {
+  const first = { id: "app_a", nonce: 1 };
+  const second = { id: "app_b", nonce: 1 };
+  const mount = async (bot: string, requestedApp: typeof first, attached = true) => {
+    await act(async () => root.render(createElement(MiniAppsHost, { enabled: true,
+      children: attached ? createElement(MiniAppsSlot, { key: bot, requestedApp }) : null })));
+    await settle();
+  };
+  await mount("first", first);
+  await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+  await mount("second", second);
+  await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_b"));
+  await act(async () => { button("First report").click(); });
+  await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+  await mount("second", second, false);
+  await mount("second", second);
+  expect(frame()?.dataset.id).toBe("app_a");
 });
