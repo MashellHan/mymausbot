@@ -467,6 +467,9 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       if (body.hidden === true && existingBot?.chiefOfStaff && body.chiefOfStaff !== false) {
         return json(res, 400, { error: "choose another Chief of Staff before hiding this bot" });
       }
+      if (body.hidden === true && existingBot && !existingBot.hidden && store.bots.filter((bot) => !bot.hidden).length <= 1) {
+        return json(res, 409, { error: "the last active bot cannot be archived" });
+      }
       // Type-checked, not copied: a string alwaysAllow would answer .includes() with substring matches.
       if (body.autoApprove !== undefined) {
         if (typeof body.autoApprove !== "boolean") return json(res, 400, { error: "autoApprove must be true or false" });
@@ -715,6 +718,9 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           patch.browserProfile !== freshBrowserBot.browserProfile &&
           (freshBrowserBot.busy || browserRuntime.heldBy(currentBrowserSession(freshBrowserBot.id, freshBrowserBot.browserProfile)))) {
         return json(res, 409, { error: "Stop the bot and release browser control before changing its profile." });
+      }
+      if (body.hidden === true && freshBrowserBot && !freshBrowserBot.hidden && store.bots.filter((candidate) => !candidate.hidden).length <= 1) {
+        return json(res, 409, { error: "the last active bot cannot be archived" });
       }
       if (profile.patch.soul !== undefined) {
         if (freshBrowserBot) assertTeamComputerChangeIdle(freshBrowserBot, { ...freshBrowserBot, ...patch } as BotRecord);
