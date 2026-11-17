@@ -60,6 +60,20 @@ describe("bounded optional Hongguo catalog metrics", () => {
     expect(read.mock.calls.flatMap(([ids]) => ids).filter((id) => id === "1")).toHaveLength(1);
   });
 
+  it("returns values and terminal completion from one snapshot when a reused reader resolves before the caller resumes", async () => {
+    type Row = { series: { id: string; heat: number; play_count: number } };
+    let release!: (rows: Row[]) => void;
+    const read = vi.fn(() => new Promise<Row[]>((resolve) => { release = resolve; }));
+    const project = createHongguoCatalogMetrics(read);
+    await project([card("1")], 0);
+    release([{ series: { id: "1", heat: 12, play_count: 34 } }]);
+    const stale = await project([card("1")], 0);
+    expect(stale).toEqual([card("1", { heat: null, playCount: null })]);
+    expect(project.snapshot(stale)).toEqual({ items: [card("1", { heat: 12, playCount: 34 })], pendingMetricIds: [] });
+    expect(project.snapshot([card("1", { heat: 0 })])).toEqual({ items: [card("1", { heat: 0, playCount: 34 })], pendingMetricIds: [] });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("retains five-minute results and a failed optional read as unknown without retries", async () => {
     let now = 1000;
     const read = vi.fn(async () => { throw new Error("Synthetic optional metrics failure"); });

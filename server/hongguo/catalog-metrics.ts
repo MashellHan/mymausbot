@@ -48,12 +48,17 @@ export function createHongguoCatalogMetrics(read: (ids: string[]) => Promise<Ser
   const readCached = (ids: string[]) => {
     const selected = [...new Set(ids)].filter((id) => /^\d{1,32}$/.test(id)).slice(0, 100);
     const inFlight = new Set([...pending.keys()].flatMap((key) => key.split(",")));
-    return { metricUpdates: selected.flatMap((id) => {
-      const value = cached(id);
-      return value ? [{ id, heat: value.heat, playCount: value.playCount }] : [];
-    }), pendingMetricIds: selected.filter((id) => inFlight.has(id) && !cached(id)) };
+    const values = selected.map((id) => ({ id, value: cached(id) }));
+    return { metricUpdates: values.flatMap(({ id, value }) => value ? [{ id, heat: value.heat, playCount: value.playCount }] : []),
+      pendingMetricIds: values.filter(({ id, value }) => inFlight.has(id) && !value).map(({ id }) => id) };
   };
   return Object.assign(project, { read: readCached,
+    snapshot(cards: HongguoSeriesCard[]) {
+      const state = readCached(cards.map(({ id }) => id));
+      const values = new Map(state.metricUpdates.map((value) => [value.id, value]));
+      return { items: cards.map((card) => ({ ...card, heat: hongguoMetric(card.heat) ?? values.get(card.id)?.heat ?? null,
+        playCount: hongguoMetric(card.playCount) ?? values.get(card.id)?.playCount ?? null })), pendingMetricIds: state.pendingMetricIds };
+    },
     async wait(ids: string[]) {
       const selected = new Set(ids.slice(0, 100));
       const work = [...pending].filter(([key]) => key.split(",").some((id) => selected.has(id))).map(([, value]) => value);

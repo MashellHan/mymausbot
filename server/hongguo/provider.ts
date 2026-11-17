@@ -193,7 +193,7 @@ export function createHongguoProvider(options: { dataDir: string; client?: (tran
       const items = page.items.slice(0, 100).map(card).filter((item): item is HongguoSeriesCard => item !== null);
       const enriched = await catalogMetrics(items, Math.max(0, 9_000 - (Date.now() - startedAt)));
       signal?.throwIfAborted();
-      return { items: enriched, pendingMetricIds: catalogMetrics.read(enriched.map(({ id }) => id)).pendingMetricIds, categories: [],
+      return { ...catalogMetrics.snapshot(enriched), categories: [],
         nextCursor: page.has_more && page.cursor && page.cursor.length <= 4096 ? page.cursor : null };
     },
     series: (id, signal) => series(id, null, signal),
