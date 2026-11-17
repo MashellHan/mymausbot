@@ -408,3 +408,36 @@ it("a bot rename waits for owner Change and persists through the existing bot ro
     await api("PATCH", `/api/bots/${bot.id}`, { name: "Setter" });
   }
 }, 90_000);
+
+it("a bot colour waits for owner Change and persists through the existing bot route", async () => {
+  const before = (await api("GET", "/api/bots")).bots.find((one: any) => one.id === bot.id)?.color as string;
+  const color = before === "teal" ? "purple" : "teal";
+  const change = { botId: bot.id, color };
+  const persistedColor = () => JSON.parse(readFileSync(join(dataDir, "bots.json"), "utf8")).find((one: any) => one.id === bot.id)?.color;
+  const pendingCard = async () => {
+    let card: any;
+    await expect.poll(async () => (card = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "bots.color" && !one.card.answered)?.card) !== undefined,
+      { timeout: 20_000 }).toBe(true);
+    return card;
+  };
+  try {
+    await start("COLOR-CANCEL", [step({ action: "set", id: "bots.color", value: JSON.stringify(change) }, true)], 60_000);
+    const cancelled = await pendingCard();
+    expect(cancelled).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: `Change "Setter" from ${before} to ${color}` } });
+    expect(persistedColor()).toBe(before);
+    await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: cancelled.requestId, behavior: "deny" }, 200, ownerDevice);
+    expect(results(await finished("COLOR-CANCEL"))[0]).toMatchObject({ isError: true, text: expect.stringContaining("cancelled") });
+    expect(persistedColor()).toBe(before);
+
+    await start("COLOR-CHANGE", [step({ action: "set", id: "bots.color", value: JSON.stringify(change) })], 60_000);
+    const approved = await pendingCard();
+    expect(persistedColor()).toBe(before);
+    await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: approved.requestId, behavior: "allow" }, 200, ownerDevice);
+    expect(results(await finished("COLOR-CHANGE"))[0]).toMatchObject({ isError: false, text: expect.stringContaining(`Change "Setter" from ${before} to ${color}`) });
+    expect(persistedColor()).toBe(color);
+    expect((await api("GET", "/api/bots")).bots.find((one: any) => one.id === bot.id)?.color).toBe(color);
+    expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: approved.requestId }, 409, ownerDevice)).error).toContain("can't be undone");
+  } finally {
+    await api("PATCH", `/api/bots/${bot.id}`, { color: before });
+  }
+}, 90_000);

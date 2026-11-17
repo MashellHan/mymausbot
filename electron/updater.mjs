@@ -89,6 +89,7 @@ function updaterLogger() {
 const HAND_OFF_TYPES = new Set(HAND_OFF_PACKAGE_TYPES);
 const PERSONAL_UPDATE_FEED = { provider: "github", owner: "MashellHan", repo: "mymausbot" };
 const PERSONAL_RELEASES_URL = `https://github.com/${PERSONAL_UPDATE_FEED.owner}/${PERSONAL_UPDATE_FEED.repo}/releases`;
+const UPDATE_CONFIG_KEYS = new Set([...Object.keys(PERSONAL_UPDATE_FEED), "updaterCacheDirName", "channel", "releaseType"]);
 
 function packagedUpdateConfigured() {
   let contents;
@@ -98,16 +99,23 @@ function packagedUpdateConfigured() {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
-  // Only the personal release feed may receive update requests from this build.
+  // Only electron-builder's flat scalar config may reach the vendor parser; other YAML forms can change the feed.
+  const values = new Map();
+  for (const line of contents.split(/\r?\n/)) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const match = /^([A-Za-z][A-Za-z0-9]*): +([A-Za-z][A-Za-z0-9._-]*)(?: +#.*)?$/.exec(line);
+    if (!match || !UPDATE_CONFIG_KEYS.has(match[1]) || values.has(match[1])) {
+      throw new Error("Packaged update configuration contains an unsupported field or form");
+    }
+    values.set(match[1], match[2]);
+  }
   for (const [key, expected] of Object.entries(PERSONAL_UPDATE_FEED)) {
-    const values = [...contents.matchAll(new RegExp(`^${key}:[ \t]*([^\r\n#]+)[ \t]*\r?$`, "gm"))];
-    if (values.length !== 1 || values[0][1].trim() !== expected) {
+    if (values.get(key) !== expected) {
       throw new Error(`Packaged update configuration does not target ${PERSONAL_UPDATE_FEED.owner}/${PERSONAL_UPDATE_FEED.repo}`);
     }
   }
   for (const [key, expected] of [["channel", "latest"], ["releaseType", "release"]]) {
-    const values = [...contents.matchAll(new RegExp(`^${key}:[ \t]*([^\r\n#]+)[ \t]*\r?$`, "gm"))];
-    if (values.length > 1 || (values.length === 1 && values[0][1].trim() !== expected)) {
+    if (values.has(key) && values.get(key) !== expected) {
       throw new Error(`Packaged update configuration selects an unexpected release channel`);
     }
   }

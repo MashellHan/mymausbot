@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Loader2, RotateCw } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, RotateCw } from "lucide-react";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { randomUuid } from "@/lib/random-uuid";
@@ -22,6 +22,7 @@ import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { mojoHostEligible } from "./mojo-host";
 
 const REFRESH_MS = 15_000;
+const DEFAULT_BAR_COLLAPSED_KEY = "omb-mini-apps-bar-collapsed";
 type Inventory = { apps: MiniAppSummary[] };
 
 function savedApp(key: string): string | null {
@@ -31,6 +32,28 @@ function savedApp(key: string): string | null {
 function rememberApp(key: string | null, id: string): void {
   if (!key) return;
   try { localStorage.setItem(key, id); } catch {}
+}
+
+function barKey(storageKey: string | null): string {
+  return storageKey ? `${storageKey}:bar-collapsed` : DEFAULT_BAR_COLLAPSED_KEY;
+}
+
+function savedBarCollapsed(storageKey: string | null): boolean {
+  try {
+    const scoped = storageKey ? localStorage.getItem(barKey(storageKey)) : null;
+    const raw = scoped ?? localStorage.getItem(DEFAULT_BAR_COLLAPSED_KEY);
+    return raw === "1" || raw === "true";
+  } catch {
+    return false;
+  }
+}
+
+function rememberBarCollapsed(storageKey: string | null, collapsed: boolean): void {
+  const value = collapsed ? "1" : "0";
+  try {
+    localStorage.setItem(DEFAULT_BAR_COLLAPSED_KEY, value);
+    if (storageKey) localStorage.setItem(barKey(storageKey), value);
+  } catch {}
 }
 
 function stamp(value: number): string {
@@ -50,6 +73,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const [inventory, setInventory] = useState<MiniAppSummary[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [storageKey, setStorageKey] = useState<string | null>(null);
+  const [barCollapsed, setBarCollapsed] = useState(() => savedBarCollapsed(null));
   const [document, setDocument] = useState<MiniAppDocument | null>(null);
   const [appState, setAppState] = useState<MiniAppState | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -96,6 +120,10 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   useEffect(() => {
     const target = focusAfter.current;
     if (!target) return;
+    if (target === "selected" && barCollapsed) {
+      focusAfter.current = null;
+      return;
+    }
     const element = target === "selected"
       ? [...panelRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []].find((tab) => tab.dataset.appId === selectedId)
       : target === "add" ? panelRef.current?.querySelector<HTMLButtonElement>('[data-mini-app-add]') : null;
@@ -104,9 +132,10 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     if (target === "selected" && tabListRef.current) revealSelectedTab(tabListRef.current);
     else element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
     focusAfter.current = null;
-  }, [apps, selectedId, libraryOpen]);
+  }, [apps, selectedId, libraryOpen, barCollapsed]);
 
   useLayoutEffect(() => {
+    if (barCollapsed) return;
     const row = tabListRef.current;
     if (!row) return;
     revealSelectedTab(row);
@@ -114,12 +143,16 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     const observer = new ResizeObserver(() => revealSelectedTab(row));
     observer.observe(row);
     return () => observer.disconnect();
-  }, [selectedId, apps?.length]);
+  }, [selectedId, apps?.length, barCollapsed]);
 
   useEffect(() => {
     let active = true;
     void api<{ environmentId?: string }>("/.well-known/openmausbot/environment", { timeoutMs: 5_000 }).then((environment) => {
-      if (active && typeof environment.environmentId === "string" && environment.environmentId) setStorageKey(`omb-mini-app:${environment.environmentId}`);
+      if (active && typeof environment.environmentId === "string" && environment.environmentId) {
+        const nextKey = `omb-mini-app:${environment.environmentId}`;
+        setStorageKey(nextKey);
+        setBarCollapsed(savedBarCollapsed(nextKey));
+      }
     }).catch(() => {});
     return () => { active = false; };
   }, []);
@@ -334,19 +367,50 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     setRefreshKey((current) => current + 1);
   };
 
+  const toggleBar = () => {
+    setBarCollapsed((current) => {
+      const next = !current;
+      rememberBarCollapsed(storageKey, next);
+      return next;
+    });
+  };
+
+  const libraryPopover = (
+    <MiniAppLibraryPopover open={libraryOpen} inventory={inventory ?? []} issues={defaultIssues} busyKind={busyKind}
+      focusKind={libraryFocus} owner={owner} nativeGuard={nativeGuard}
+      onToggle={() => { setLibraryFocus(null); setLibraryOpen((current) => !current); }} onClose={() => setLibraryOpen(false)}
+      onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)} />
+  );
+
   return (
     <div ref={panelRef} className="@container/mini-apps flex min-h-0 min-w-0 flex-1 flex-col" data-testid="mini-apps-panel">
-      <header className="shrink-0 border-b border-hairline/50 px-4 pb-3 pt-2">
+      <header className={`shrink-0 border-b border-hairline/50 px-4 ${barCollapsed ? "py-2" : "pb-3 pt-2"}`}>
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <h2 className="text-[15px] font-semibold text-ink">{t("computer.miniApps.heading")}</h2>
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="shrink-0 text-[15px] font-semibold text-ink">{t("computer.miniApps.heading")}</h2>
+            {barCollapsed && selected && <button id={`mini-app-tab-${selected.id}`} data-mini-app-collapsed-current data-app-id={selected.id} type="button"
+              onClick={toggleBar} title={miniAppDisplayName(selected)}
+              className="flex min-w-0 items-center gap-1.5 rounded-lg bg-control px-2 py-1 text-[12px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">
+              <MiniAppIcon kind={iconKindForApp(selected)} app={selected} />
+              <span className="truncate">{miniAppDisplayName(selected)}</span>
+            </button>}
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
             {owner === true && nativeGuard && inventory?.some((app) => app.status === "archived" && iconKindForApp(app))
               && <button type="button" data-mini-app-add className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
                 onClick={() => { setLibraryFocus(iconKindForApp(inventory.find((app) => app.status === "archived" && iconKindForApp(app))!)); setLibraryOpen(true); }}>{t("computer.miniApps.add")}</button>}
+            {apps && barCollapsed && libraryPopover}
             <button type="button" disabled={checking || busyKind !== null} aria-label={t("computer.miniApps.refresh")} title={t("computer.miniApps.refresh")} onClick={() => setRefreshKey((current) => current + 1)} className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"><RotateCw size={15} aria-hidden="true" /></button>
+            {apps && <button type="button" data-mini-app-bar-toggle aria-expanded={!barCollapsed} aria-controls="mini-apps-bar"
+              aria-label={t(barCollapsed ? "computer.miniApps.expandApps" : "computer.miniApps.collapseApps")}
+              title={t(barCollapsed ? "computer.miniApps.expandApps" : "computer.miniApps.collapseApps")}
+              onClick={toggleBar}
+              className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">
+              {barCollapsed ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronUp size={15} aria-hidden="true" />}
+            </button>}
           </div>
         </div>
-        {apps && <div className="mt-2 flex min-w-0 items-center gap-2">
+        {apps && !barCollapsed && <div id="mini-apps-bar" className="mt-2 flex min-w-0 items-center gap-2">
           {apps.length ? <div ref={tabListRef} role="tablist" aria-label={t("computer.miniApps.chooseApp")} onKeyDown={onNavKey} onWheel={scrollTabsWithWheel} className="flex min-w-0 flex-1 flex-nowrap gap-1 overflow-x-auto pb-1 [scrollbar-width:thin]">
             {apps.map((app) => <div key={app.id} className="relative w-[104px] shrink-0">
               <button id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1} onClick={() => choose(app.id)}
@@ -360,10 +424,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               </InfoHint>}
             </div>)}
           </div> : <div className="min-w-0 flex-1" />}
-          <MiniAppLibraryPopover open={libraryOpen} inventory={inventory ?? []} issues={defaultIssues} busyKind={busyKind}
-            focusKind={libraryFocus} owner={owner} nativeGuard={nativeGuard}
-            onToggle={() => { setLibraryFocus(null); setLibraryOpen((current) => !current); }} onClose={() => setLibraryOpen(false)}
-            onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)} />
+          {libraryPopover}
         </div>}
       </header>
       <>

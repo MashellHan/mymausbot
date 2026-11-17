@@ -188,6 +188,7 @@ it("offers only the personal manual release when a packaged local install has no
 });
 
 it("keeps a configured personal updater active", async () => {
+  writeFileSync(join(fixture.home, "app-update.yml"), `${UPDATE_CONFIG}channel: latest # personal stable channel\nreleaseType: release\n`);
   const { updater, autoUpdater, handlers } = await load(() => true);
   updater.startUpdater();
   expect(handlers.get("update:get-state")({})).toMatchObject({ status: "idle", installMode: "restart" });
@@ -201,7 +202,11 @@ it.each([
   `${UPDATE_CONFIG}owner: milind-soni\n`,
   "provider: generic\nowner: MashellHan\nrepo: mymausbot\n",
   `${UPDATE_CONFIG}channel: beta\n`,
+  `${UPDATE_CONFIG}channel: beta # alternate channel\n`,
+  `${UPDATE_CONFIG}channel: "beta"\n`,
   `${UPDATE_CONFIG}releaseType: prerelease\n`,
+  `${UPDATE_CONFIG}host: updates.example.test\n`,
+  `${UPDATE_CONFIG}protocol: http\n`,
 ])("refuses an unsafe packaged update feed without making a provider request", async (config) => {
   writeFileSync(join(fixture.home, "app-update.yml"), config);
   const { updater, autoUpdater, handlers } = await load(() => true);
