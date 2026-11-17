@@ -399,7 +399,7 @@ it("keeps anonymous playback unavailable with a finite preparation deadline", as
 });
 
 it("serializes position writes so an older asynchronous save cannot overwrite the latest position", async () => {
-  playback = { appId: app.id, revision: 3, status: "ready",
+  playback = { appId: app.id, revision: 3, status: "ready", selectedQualityId: null, availableQualityIds: [],
     mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
   let release!: () => void;
   firstSave = new Promise<void>((resolve) => { release = resolve; });
@@ -420,7 +420,7 @@ it("serializes position writes so an older asynchronous save cannot overwrite th
 it.each(["history first", "series first"] as const)("resumes a later episode when %s resolves after opening a catalog card", async (order) => {
   history = [laterEntry];
   episodes = [episode, laterEpisode];
-  playback = { appId: app.id, revision: 3, status: "ready",
+  playback = { appId: app.id, revision: 3, status: "ready", selectedQualityId: null, availableQualityIds: [],
     mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
   let releaseHistory!: () => void;
   let releaseSeries!: () => void;
@@ -480,7 +480,7 @@ it("keeps episode selection pending after a failed history read and retries the 
 
 it.each(["delete", "clear"] as const)("does not recreate %s history after leaving", async (action) => {
   history = [entry];
-  playback = { appId: app.id, revision: 3, status: "ready",
+  playback = { appId: app.id, revision: 3, status: "ready", selectedQualityId: null, availableQualityIds: [],
     mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
   await render();
   const video = await openPlayer();
@@ -501,7 +501,7 @@ it.each(["delete", "clear"] as const)("does not recreate %s history after leavin
 it.each(["delete", "clear"] as const)("orders old-instance close saves before a new-instance %s and keeps newer progress", async (action) => {
   history = [entry];
   episodes = [episode, laterEpisode];
-  playback = { appId: app.id, revision: 3, status: "ready",
+  playback = { appId: app.id, revision: 3, status: "ready", selectedQualityId: null, availableQualityIds: [],
     mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
   let releaseOld!: () => void;
   firstSave = new Promise<void>((resolve) => { releaseOld = resolve; });
@@ -535,7 +535,7 @@ it.each(["delete", "clear"] as const)("orders old-instance close saves before a 
 
 
 it("retains the same player and position across fullscreen visibility changes", async () => {
-  playback = { appId: app.id, revision: 3, status: "ready",
+  playback = { appId: app.id, revision: 3, status: "ready", selectedQualityId: null, availableQualityIds: [],
     mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
   await render();
   const video = await openPlayer();
@@ -557,7 +557,7 @@ it("retains the same player and position across fullscreen visibility changes", 
 });
 
 it("pauses an ordinary hidden page without reloading playback on return", async () => {
-  playback = { appId: app.id, revision: 3, status: "ready",
+  playback = { appId: app.id, revision: 3, status: "ready", selectedQualityId: null, availableQualityIds: [],
     mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
   await render();
   const video = await openPlayer();
@@ -576,7 +576,7 @@ it("pauses an ordinary hidden page without reloading playback on return", async 
 
 
 it("does not start a pending episode while hidden and keeps the resolved player on return", async () => {
-  playback = { appId: app.id, revision: 3, status: "ready",
+  playback = { appId: app.id, revision: 3, status: "ready", selectedQualityId: null, availableQualityIds: [],
     mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
   let release!: () => void;
   playbackHold = new Promise<void>((resolve) => { release = resolve; });
@@ -597,4 +597,86 @@ it("does not start a pending episode while hidden and keeps the resolved player 
   await render();
   expect(host.querySelector("video")).toBe(video);
   expect(reads()).toBe(2);
+});
+
+
+const qualityPlayback = (id: string) => ({ appId: app.id, revision: 3, status: "ready" as const,
+  mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/${id}?expectedRevision=3`, durationSeconds: 100,
+  selectedQualityId: id, availableQualityIds: ["1080p", "720p", "480p"] });
+const qualitySelect = () => host.querySelector<HTMLSelectElement>('[aria-label="Video quality"]')!;
+const selectQuality = (id: string) => act(async () => {
+  qualitySelect().value = id;
+  qualitySelect().dispatchEvent(new Event("change", { bubbles: true }));
+});
+
+it.each([true, false])("keeps the old player during a quality change and restores current position with paused=%s", async (paused) => {
+  playback = qualityPlayback("1080p");
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const original = fixture.api.getMockImplementation()!;
+  fixture.api.mockImplementation(async (path, init) => {
+    if (path.endsWith("/playback") && JSON.parse(init.body).qualityId) {
+      await hold; return qualityPlayback("720p");
+    }
+    return original(path, init);
+  });
+  await render();
+  const old = await openPlayer();
+  Object.defineProperty(old, "paused", { configurable: true, value: paused });
+  expect([...qualitySelect().options].map(option => option.value)).toEqual(["1080p", "720p", "480p"]);
+  expect(qualitySelect().value).toBe("1080p");
+  old.currentTime = 31;
+  await selectQuality("720p");
+  expect(host.querySelector("video")).toBe(old);
+  old.currentTime = 99.5;
+  await act(async () => { release(); });
+  const video = host.querySelector("video")!;
+  expect(video).not.toBe(old);
+  expect(video.src).toContain("/720p?");
+  Object.defineProperty(video, "duration", { configurable: true, value: 100 });
+  await act(async () => video.dispatchEvent(new Event("loadedmetadata", { bubbles: true })));
+  expect(video.currentTime).toBe(99.5);
+  expect(video.autoplay).toBe(!paused);
+  const calls = fixture.api.mock.calls.filter(([path]) => path.endsWith("/playback"));
+  expect(JSON.parse(calls[0]![1].body).qualityId).toBeUndefined();
+  expect(JSON.parse(calls[1]![1].body)).toMatchObject({ seriesId: card.id, episodeId: episode.id, qualityId: "720p" });
+});
+
+it("keeps current playback and selection when the requested quality is no longer available", async () => {
+  playback = qualityPlayback("1080p");
+  const original = fixture.api.getMockImplementation()!;
+  fixture.api.mockImplementation(async (path, init) => path.endsWith("/playback") && JSON.parse(init.body).qualityId
+    ? { appId: app.id, revision: 3, status: "unavailable", reason: "quality-unavailable" } : original(path, init));
+  await render();
+  const video = await openPlayer();
+  video.currentTime = 31;
+  await selectQuality("720p");
+  expect(host.querySelector("video")).toBe(video);
+  expect(video.currentTime).toBe(31);
+  expect(qualitySelect().value).toBe("1080p");
+  expect(host.textContent).toContain("This quality is unavailable. Your current video is unchanged.");
+});
+
+it("discards a late quality response after selecting a different episode", async () => {
+  playback = qualityPlayback("1080p");
+  episodes = [episode, laterEpisode];
+  let release!: () => void;
+  let signal: AbortSignal | undefined;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const original = fixture.api.getMockImplementation()!;
+  fixture.api.mockImplementation(async (path, init) => {
+    if (path.endsWith("/playback") && JSON.parse(init.body).qualityId) {
+      signal = init.signal; await hold; return qualityPlayback("720p");
+    }
+    return original(path, init);
+  });
+  await render(); await openPlayer();
+  await selectQuality("720p");
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Episode 2"]')!.click());
+  expect(signal?.aborted).toBe(true);
+  const video = host.querySelector("video");
+  await act(async () => { release(); });
+  expect(host.querySelector("video")).toBe(video);
+  expect(video?.src).toContain("/1080p?");
+  expect(host.querySelector('[aria-label="Episode 2"]')?.getAttribute("aria-current")).toBe("true");
 });
