@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { join, relative } from "node:path";
-import type { Playback, Transport } from "openhongguo";
+import type { Playback, ShortRanking, Transport } from "openhongguo";
 import { excludedWorkspaceAuthPath } from "../workspace-backup-policy.ts";
 import { createHongguoProvider } from "./provider.ts";
-import { parseHongguoSeriesResult } from "../mini-apps/hongguo-validation.ts";
+import { parseHongguoCatalog, parseHongguoCatalogResult, parseHongguoSeriesResult } from "../mini-apps/hongguo-validation.ts";
 
 const sdkCreate = vi.hoisted(() => vi.fn());
 vi.mock("openhongguo", () => ({ createClient: sdkCreate }));
@@ -12,7 +12,7 @@ function fixture() {
     const series = { id: "10", title: "A\u0000series", episode_count: 2, cover_url: "https://p.fqnovelpic.com/cover.jpg" };
   const client = {
     search: vi.fn(async () => ({ items: [series, { id: "bad/id", title: "Invalid" }], has_more: true, cursor: "next" })),
-    shortRank: vi.fn(async () => ({ items: [{ series_id: "10", title: "A series" }], has_more: false, contents: [], content: "all", board: "1" })),
+    shortRank: vi.fn(async (): Promise<ShortRanking> => ({ items: [{ series_id: "10", title: "A series" }], has_more: false, contents: [], content: "all", board: "1" })),
     shortFilterPanel: vi.fn(async () => [{ key: "category_dim_theme", name: "Theme", options: [{ name: "Family", value: "cate_5001" }] }]),
     shortFilter: vi.fn(async () => ({ items: [series], has_more: false })),
     newReleases: vi.fn(async () => ({ items: [{ series_id: "10", title: "Online", online: true },
@@ -54,6 +54,132 @@ describe("Hongguo provider", () => {
     expect((await provider.catalog({ expectedRevision: 1, mode: "new" })).items.map((item) => item.id)).toEqual(["10"]);
     expect((await provider.catalog({ expectedRevision: 1, mode: "popular" })).items[0]?.id).toBe("10");
     expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps numeric feed counts and original provider order without detail fanout", async () => {
+    const { provider, client } = fixture();
+    const rows = [{ series_id: "10", title: "First", heat: 0, plays: 40 },
+      { series_id: "20", title: "Second", heat: 100, plays: 2 }];
+    client.shortRank.mockResolvedValue({ items: rows, has_more: true, cursor: "rank-next", contents: [], content: "all", board: "1" });
+    const page = await provider.catalog({ expectedRevision: 1, mode: "popular" });
+    expect(parseHongguoCatalogResult(page).items.map(({ id, heat, playCount }) => [id, heat, playCount]))
+      .toEqual([["10", 0, 40], ["20", 100, 2]]);
+    expect(page.nextCursor).toBe("rank-next");
+    expect(client.shortRank).toHaveBeenCalledWith({ cursor: undefined });
+    expect(client.getSeriesBatch).not.toHaveBeenCalled();
+  });
+
+  it("uses one cached matching batch for missing metrics and never treats offline reservations as heat", async () => {
+    const { provider, client } = fixture();
+    const detail = (await client.getSeriesBatch())[0]!;
+    const sourced = { ...detail, series: { ...detail.series, heat: 123, play_count: 456 } };
+    client.getSeriesBatch.mockResolvedValue([sourced]).mockClear();
+    const online = { series_id: "10", title: "Online", online: true, heat: "378万热度" };
+    const offline = { series_id: "11", title: "Not released", online: false, heat: "159.7万人预约" };
+    client.newReleases.mockResolvedValue({ items: [online, offline], has_more: false, dates: [], date: "20261116" });
+    const latest = await provider.catalog({ expectedRevision: 1, mode: "new" });
+    expect(latest.items.map(({ id, heat, playCount }) => [id, heat, playCount])).toEqual([["10", 123, 456]]);
+    expect(client.getSeriesBatch).toHaveBeenCalledExactlyOnceWith(["10"]);
+    const search = await provider.catalog({ expectedRevision: 1, mode: "search", query: "family" });
+    expect(search.items[0]).toMatchObject({ heat: 123, playCount: 456 });
+    expect(search.nextCursor).toBe("next");
+    expect(client.search).toHaveBeenCalledWith("family", { cursor: undefined, pageSize: 24 });
+    expect(client.getSeriesBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows bounded cache-only metric readback without initializing the SDK or accepting an unrelated cursor", async () => {
+    const { provider, load, client } = fixture();
+    const request = parseHongguoCatalog({ expectedRevision: 1, mode: "metrics", seriesIds: ["10"] });
+    expect(parseHongguoCatalogResult(await provider.catalog(request))).toEqual({ items: [], categories: [], nextCursor: null,
+      metricUpdates: [], pendingMetricIds: [] });
+    expect(load).not.toHaveBeenCalled();
+    expect(client.getSeriesBatch).not.toHaveBeenCalled();
+    for (const raw of [
+      { ...request, seriesIds: Array.from({ length: 101 }, (_, index) => String(index)) },
+      { ...request, seriesIds: ["10", "10"] }, { ...request, cursor: "other-feed" },
+      { expectedRevision: 1, mode: "popular", seriesIds: ["10"] },
+    ]) expect(() => parseHongguoCatalog(raw)).toThrow();
+  });
+
+  it("returns valid catalog cards when optional metrics are too slow", async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider, client } = fixture();
+      let release!: () => void;
+      client.getSeriesBatch.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve([]); }));
+      const page = provider.catalog({ expectedRevision: 1, mode: "search", query: "family" });
+      await vi.advanceTimersByTimeAsync(300);
+      expect((await page).items).toEqual([expect.objectContaining({ id: "10", heat: null, playCount: null })]);
+      expect(client.getSeriesBatch).toHaveBeenCalledTimes(1);
+      release();
+      await Promise.resolve();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["catalog", "series"] as const)("does not start %s SDK work after an aborted lazy-client wait", async (kind) => {
+    const { client, media } = fixture();
+    let release!: (value: typeof client) => void;
+    const load = vi.fn(() => new Promise<typeof client>((resolve) => { release = resolve; }));
+    const provider = createHongguoProvider({ dataDir: "/unused", client: load, media });
+    const abort = new AbortController();
+    const operation = kind === "catalog" ? provider.catalog({ expectedRevision: 1, mode: "popular" }, abort.signal)
+      : provider.series("10", abort.signal);
+    const outcome = operation.then(() => null, (error: unknown) => error);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    abort.abort();
+    release(client);
+    expect(await outcome).toMatchObject({ name: "AbortError" });
+    expect(client.shortRank).not.toHaveBeenCalled();
+    expect(client.getSeriesBatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects already-aborted catalog and series callers without initializing the client", async () => {
+    const { provider, load } = fixture();
+    const abort = new AbortController();
+    abort.abort();
+    await expect(provider.catalog({ expectedRevision: 1, mode: "popular" }, abort.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(provider.series("10", abort.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("keeps an active catalog action pending through real settlement after abort", async () => {
+    const { provider, client } = fixture();
+    let release!: (value: ShortRanking) => void;
+    client.shortRank.mockImplementationOnce(() => new Promise<ShortRanking>((resolve) => { release = resolve; }));
+    const abort = new AbortController();
+    let settled = false;
+    const outcome = provider.catalog({ expectedRevision: 1, mode: "popular" }, abort.signal)
+      .then(() => { settled = true; return null; }, (error: unknown) => { settled = true; return error; });
+    await vi.waitFor(() => expect(client.shortRank).toHaveBeenCalledTimes(1));
+    abort.abort();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release({ items: [], has_more: false, contents: [], content: "all", board: "1" });
+    expect(await outcome).toMatchObject({ name: "AbortError" });
+    expect(client.getSeriesBatch).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel detached shared metrics when the completed home request closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider, client } = fixture();
+      const detail = (await client.getSeriesBatch())[0]!;
+      client.getSeriesBatch.mockClear();
+      let release!: (rows: typeof detail[]) => void;
+      client.getSeriesBatch.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+      const abort = new AbortController();
+      const home = provider.catalog({ expectedRevision: 1, mode: "popular" }, abort.signal);
+      await vi.advanceTimersByTimeAsync(300);
+      expect((await home).pendingMetricIds).toEqual(["10"]);
+      abort.abort();
+      const enriched = { ...detail, series: { ...detail.series, heat: 12, play_count: 34 } };
+      release([enriched]);
+      await Promise.resolve();
+      const cached = await provider.catalog({ expectedRevision: 1, mode: "metrics", seriesIds: ["10"] });
+      expect(cached.metricUpdates).toEqual([{ id: "10", heat: 12, playCount: 34 }]);
+      expect(cached.pendingMetricIds).toEqual([]);
+      expect(client.getSeriesBatch).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
   });
 
   it("accepts only categories returned by the provider", async () => {
