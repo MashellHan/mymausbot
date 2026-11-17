@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import type { Transport } from "openhongguo";
 import { excludedWorkspaceAuthPath } from "../workspace-backup-policy.ts";
 import { createHongguoProvider } from "./provider.ts";
+import { parseHongguoSeriesResult } from "../mini-apps/hongguo-validation.ts";
 
 const sdkCreate = vi.hoisted(() => vi.fn());
 vi.mock("openhongguo", () => ({ createClient: sdkCreate }));
@@ -186,4 +187,23 @@ describe("Hongguo provider", () => {
     expect(await playback).toEqual({ status: "unavailable", reason: "provider-unavailable" });
     expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({ stage: "media", correlation: "isolated", responses: [] });
   });
+});
+
+it.each([
+  [1_234_567, 9_876_543, 1_234_567, 9_876_543],
+  [0, 0, 0, 0],
+  [undefined, undefined, null, null],
+  [NaN, Infinity, null, null],
+  [-1, Number.MAX_SAFE_INTEGER + 1, null, null],
+])("preserves only bounded provider metrics %s / %s", async (heat, play_count, expectedHeat, expectedPlays) => {
+  const { provider, client } = fixture();
+  const detail = (await client.getSeriesBatch())[0]!;
+  Object.assign(detail.series, { heat, play_count });
+  client.getSeriesBatch.mockResolvedValueOnce([detail]);
+  const result = await provider.series("10");
+  expect(parseHongguoSeriesResult(result)).toMatchObject({ heat: expectedHeat, playCount: expectedPlays });
+  expect(() => parseHongguoSeriesResult({ ...result, heat: -1 })).toThrow();
+  expect(() => parseHongguoSeriesResult({ ...result, playCount: Infinity })).toThrow();
+  const { heat: _heat, playCount: _plays, ...legacy } = result;
+  expect(parseHongguoSeriesResult(legacy)).toEqual(legacy);
 });

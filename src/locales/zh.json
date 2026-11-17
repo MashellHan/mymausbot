@@ -3620,6 +3620,8 @@
   "computer.miniApps.hongguo.searchButton": "搜索",
   "computer.miniApps.hongguo.synopsis": "剧情简介",
   "computer.miniApps.hongguo.title": "红果",
+  "computer.miniApps.hongguo.heat": "红果热度 {count}",
+  "computer.miniApps.hongguo.playCount": "{count} 次播放",
   "computer.miniApps.hongguo.totalEpisodes": "共 {count} 集",
   "computer.miniApps.install.action": "安装视图",
   "computer.miniApps.install.description": "选择已有的 Data 数据源并对应七个字段。此视图只读取记录，不新增账目。",

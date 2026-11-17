@@ -23,7 +23,7 @@ type CatalogClient = Pick<Client, "search" | "shortRank" | "shortFilterPanel" | 
   | "getSeriesBatch" | "resolvePlayback">;
 const providerId = (id: string) => /^\d{1,32}$/.test(id);
 const label = (value: string | undefined, max = 300) => (value ?? "").replace(/\p{Cc}/gu, " ").trim().slice(0, max);
-const number = (value: number | undefined) => Number.isFinite(value) && value! >= 0 && value! <= 1_000_000 ? value! : null;
+const number = (value: number | undefined, max = 1_000_000) => Number.isFinite(value) && value! >= 0 && value! <= max ? value! : null;
 const imageUrl = (value: string | undefined) => value && value.length <= 2048 ? hongguoUrl(value, "image")?.href ?? null : null;
 
 function card(value: SeriesSummary): HongguoSeriesCard | null {
@@ -120,7 +120,8 @@ export function createHongguoProvider(options: { dataDir: string; client?: (tran
     const detail = details.find((entry) => entry.series.id === id);
     const summary = detail && card(detail.series);
     if (!summary || !detail) throw new Error("This series is unavailable.");
-    const result: HongguoSeries = { ...summary, episodes: detail.episodes
+    const result: HongguoSeries = { ...summary, heat: number(detail.series.heat, Number.MAX_SAFE_INTEGER),
+      playCount: number(detail.series.play_count, Number.MAX_SAFE_INTEGER), episodes: detail.episodes
       .filter((episode) => episode.series_id === id && providerId(episode.id) && Number.isInteger(episode.number) && number(episode.number) !== null)
       .slice(0, 10_000).map((episode): HongguoEpisode => ({ id: episode.id, number: episode.number,
         title: label(episode.title) || String(episode.number), imageUrl: imageUrl(episode.cover_url),

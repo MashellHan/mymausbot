@@ -3839,6 +3839,8 @@
   "computer.miniApps.hongguo.searchButton": "Search",
   "computer.miniApps.hongguo.synopsis": "Synopsis",
   "computer.miniApps.hongguo.title": "Hongguo",
+  "computer.miniApps.hongguo.heat": "Hongguo heat {count}",
+  "computer.miniApps.hongguo.playCount": "{count} views",
   "computer.miniApps.hongguo.totalEpisodes": "{count} episodes",
   "computer.miniApps.install.action": "Install portal",
   "computer.miniApps.install.description": "Choose an existing Data source and match its seven columns. This portal reads records and never adds new entries.",

@@ -50,6 +50,7 @@ let fixtureId = 0;
 let storageKey = "fixture-environment";
 let catalogHold: Promise<void> | null;
 let failPopular: boolean;
+let metrics: { heat?: number | null; playCount?: number | null };
 
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label)!;
 const seriesButton = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim().startsWith("Drama A"))!;
@@ -96,6 +97,7 @@ beforeEach(() => {
   catalogCard = card;
   catalogHold = null;
   failPopular = false;
+  metrics = {};
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit & { timeoutMs?: number }) => {
     expect(path).toBe(`/api/mini-apps/${app.id}/hongguo/${path.split("/").at(-1)}`);
     const body = JSON.parse(String(init?.body)) as { mode?: string; cursor?: string; action?: string; entry?: HongguoHistoryEntry; seriesId?: string };
@@ -124,7 +126,7 @@ beforeEach(() => {
       if (pageable && body.mode === "popular") return { ...scope, items: [catalogCard], categories: [], nextCursor: "old-next" };
       return { ...scope, items: body.mode === "categories" ? [] : [catalogCard], categories: [], nextCursor: null };
     }
-    if (path.endsWith("/series")) { await seriesHold; return { ...scope, series: { ...card, episodes } }; }
+    if (path.endsWith("/series")) { await seriesHold; return { ...scope, series: { ...card, episodes, ...metrics } }; }
     if (path.endsWith("/playback")) { await playbackHold; return playback; }
     if (path.endsWith("/history")) {
       historyActions.push(body.action!);
@@ -241,6 +243,7 @@ it("retains cached rows on a failed refresh and retries through the existing ref
   let release!: () => void;
   catalogHold = new Promise<void>((resolve) => { release = resolve; });
   failPopular = false;
+  metrics = {};
   refreshKey++;
   await render();
   expect(seriesButton()).toBeTruthy();
@@ -597,4 +600,20 @@ it("does not start a pending episode while hidden and keeps the resolved player 
   await render();
   expect(host.querySelector("video")).toBe(video);
   expect(reads()).toBe(2);
+});
+
+it.each([
+  [{ heat: 1_200_000, playCount: 34_000_000 }, "Hongguo heat 1.2M", "34M views"],
+  [{ heat: 0, playCount: 0 }, "Hongguo heat 0", "0 views"],
+  [{}, null, null],
+  [{ heat: null, playCount: null }, null, null],
+])("shows sourced popularity without inventing missing metrics: %j", async (values, heatLabel, viewsLabel) => {
+  metrics = values;
+  await render();
+  await act(async () => { seriesButton().click(); });
+  const header = host.querySelector('[aria-labelledby="hongguo-watch-title"] header')!;
+  if (heatLabel) expect(header.textContent).toContain(heatLabel);
+  else expect(header.textContent).not.toContain("Hongguo heat");
+  if (viewsLabel) expect(header.textContent).toContain(viewsLabel);
+  else expect(header.textContent).not.toContain("views");
 });

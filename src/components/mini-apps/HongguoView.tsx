@@ -490,7 +490,11 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
         <button type="button" onClick={() => leaveWatch("home")} aria-label={t("computer.miniApps.hongguo.back")}
           className="rounded-lg p-2 hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent"><ArrowLeft size={17} /></button>
         <div className="min-w-0"><h2 id="hongguo-watch-title" className="truncate text-[17px] font-semibold">{series?.title ?? t("computer.miniApps.hongguo.loading")}</h2>
-          {series && <p className="text-[12px] text-ink-secondary">{episode && t("computer.miniApps.hongguo.episodeNumber", { number: episode.number })}{series.episodeCount !== null && ` · ${t("computer.miniApps.hongguo.totalEpisodes", { count: series.episodeCount })}`}</p>}</div>
+          {series && <p className="text-[12px] text-ink-secondary">{episode && t("computer.miniApps.hongguo.episodeNumber", { number: episode.number })}{series.episodeCount !== null && ` · ${t("computer.miniApps.hongguo.totalEpisodes", { count: series.episodeCount })}`}</p>}
+          {series && (series.heat != null || series.playCount != null) && <p className="flex flex-wrap gap-x-3 text-[12px] text-ink-secondary">
+            {series.heat != null && <span>{t("computer.miniApps.hongguo.heat", { count: new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(series.heat) })}</span>}
+            {series.playCount != null && <span>{t("computer.miniApps.hongguo.playCount", { count: new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(series.playCount) })}</span>}
+          </p>}</div>
       </header>
       {seriesError && <p role="alert" className="rounded-lg bg-danger/10 p-3 text-[13px] text-danger">{seriesError}</p>}
       {!series && !seriesError && <p role="status" className="text-[13px] text-ink-secondary">{t("computer.miniApps.hongguo.loading")}</p>}
