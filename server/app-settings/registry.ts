@@ -228,6 +228,19 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   });
   const confirm: SettingEntry[] = [
     writable({
+      id: "appearance.toolsLayout", label: "Sidebar tools layout", help: "Choose rows or toolbar icons for sidebar tools in Advanced mode with the sidebar expanded. Simple, Raw, and icon-only keep their own layout.", where: "Settings → Appearance",
+      synonyms: ["tools layout", "toolbar", "sidebar tools", "tool rows"], tier: "confirm", value: z.enum(["rows", "toolbar"]), allowed: "rows or toolbar",
+      current: () => deps.window.read("appearance.toolsLayout"),
+      read: () => { const layout = deps.window.read("appearance.toolsLayout"); return layout === "rows" || layout === "toolbar" ? `saved ${layout}; applies in Advanced with expanded sidebar; Simple, Raw, and icon-only keep their own layout` : "unavailable until mymausbot is open on this computer"; },
+      describe: (layout: "rows" | "toolbar") => {
+        const current = deps.window.read("appearance.toolsLayout");
+        if (current !== "rows" && current !== "toolbar") return { refusal: "Open mymausbot on this computer before changing sidebar tools layout." };
+        if (current === layout) return { refusal: `The saved Advanced sidebar tools layout is already ${layout}; Simple, Raw, and icon-only keep their own layout.` };
+        return { change: `Save ${layout === "toolbar" ? "toolbar icons" : "rows"} for sidebar tools in Advanced with expanded sidebar; currently saved ${current}; Simple, Raw, and icon-only keep their own layout` };
+      },
+      write: async (layout: "rows" | "toolbar") => deps.window.write("appearance.toolsLayout", layout),
+    }),
+    writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },

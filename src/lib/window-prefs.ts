@@ -6,6 +6,7 @@ import { applyFont, readFont } from "./fonts";
 import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
 import { readSendKey, setSendKey } from "./send-key";
+import { readSidebarToolsLayout, setSidebarToolsLayout } from "./sidebar-preferences";
 import { applySkinChoice, readSkinChoice } from "./skins";
 import { onWindowPrefChanged } from "./window-pref-changes";
 
@@ -14,6 +15,7 @@ const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }
   "appearance.mode": { read: () => readInterfaceMode(), write: (mode) => setInterfaceMode(mode) },
   "appearance.font": { read: () => readFont(), write: (font) => applyFont(font) },
   "appearance.chatWidth": { read: () => readChatWidth(), write: (width) => applyChatWidth(width) },
+  "appearance.toolsLayout": { read: () => readSidebarToolsLayout(), write: (layout) => setSidebarToolsLayout(layout) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
   "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
 };
