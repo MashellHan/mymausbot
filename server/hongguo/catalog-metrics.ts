@@ -14,13 +14,15 @@ export function createHongguoCatalogMetrics(read: (ids: string[]) => Promise<Ser
     return undefined;
   };
   const project = async (cards: HongguoSeriesCard[], waitMs = 300): Promise<HongguoSeriesCard[]> => {
+    const inFlight = new Set([...pending.keys()].flatMap((key) => key.split(",")));
     const ids = [...new Set(cards.filter((card) => hongguoMetric(card.heat) === null || hongguoMetric(card.playCount) === null)
-      .map((card) => card.id))].filter((id) => /^\d{1,32}$/.test(id) && !cached(id)).slice(0, 24);
+      .map((card) => card.id))].filter((id) => /^\d{1,32}$/.test(id) && !cached(id) && !inFlight.has(id)).slice(0, 24);
     if (ids.length) {
       const key = [...ids].sort().join(",");
       let work = pending.get(key);
       if (!work && pending.size < 4) {
         work = (async () => {
+          await Promise.resolve();
           let rows: SeriesMetrics[] = [];
           try { const result = await read(ids); rows = Array.isArray(result) ? result : []; } catch {}
           const expiresAt = now() + FRESH_MS;

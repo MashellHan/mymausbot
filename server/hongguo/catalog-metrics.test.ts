@@ -36,6 +36,30 @@ describe("bounded optional Hongguo catalog metrics", () => {
     expect(result.map(({ heat, playCount }) => [heat, playCount])).toEqual([[0, 70], [null, null], [null, null], [null, null]]);
   });
 
+  it("reuses IDs across overlapping batches so late failure cannot overwrite another batch's valid cache", async () => {
+    type Row = { series: { id: string; heat: number; play_count: number } };
+    let rejectOlder!: (error: Error) => void, resolveNewer!: (rows: Row[]) => void;
+    const read = vi.fn((ids: string[]) => new Promise<Row[]>((resolve, reject) => {
+      if (ids.includes("2")) rejectOlder = reject;
+      else resolveNewer = resolve;
+    }));
+    const project = createHongguoCatalogMetrics(read);
+    await project([card("1"), card("2")], 0);
+    await project([card("1"), card("3")], 0);
+    expect(read.mock.calls.map(([ids]) => ids)).toEqual([["1", "2"], ["3"]]);
+    resolveNewer([{ series: { id: "3", heat: 30, play_count: 300 } },
+      { series: { id: "1", heat: 999, play_count: 999 } }]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(project.read(["1", "3"])).toEqual({ metricUpdates: [{ id: "3", heat: 30, playCount: 300 }], pendingMetricIds: ["1"] });
+    rejectOlder(new Error("Synthetic older batch failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(await project([card("1"), card("3")])).toEqual([card("1", { heat: null, playCount: null }), card("3", { heat: 30, playCount: 300 })]);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls.flatMap(([ids]) => ids).filter((id) => id === "1")).toHaveLength(1);
+  });
+
   it("retains five-minute results and a failed optional read as unknown without retries", async () => {
     let now = 1000;
     const read = vi.fn(async () => { throw new Error("Synthetic optional metrics failure"); });

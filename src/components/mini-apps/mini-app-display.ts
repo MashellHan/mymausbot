@@ -29,6 +29,5 @@ export function miniAppDisplayDescription(app: MiniAppSummary): string {
     : kind === "x_ai_digest" ? "computer.miniApps.report.xDescription"
       : kind === "github_activity" ? "computer.miniApps.report.githubDescription"
         : kind === "agent-team" ? "computer.miniApps.dashboard.teamDescription"
-          : kind === "hongguo" ? "computer.miniApps.hongguo.description"
           : "computer.miniApps.dashboard.workTrackerDescription");
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { join, relative } from "node:path";
-import type { Playback, Transport } from "openhongguo";
+import type { Playback, ShortRanking, Transport } from "openhongguo";
 import { excludedWorkspaceAuthPath } from "../workspace-backup-policy.ts";
 import { createHongguoProvider } from "./provider.ts";
 import { parseHongguoCatalog, parseHongguoCatalogResult, parseHongguoSeriesResult } from "../mini-apps/hongguo-validation.ts";
@@ -12,7 +12,7 @@ function fixture() {
     const series = { id: "10", title: "A\u0000series", episode_count: 2, cover_url: "https://p.fqnovelpic.com/cover.jpg" };
   const client = {
     search: vi.fn(async () => ({ items: [series, { id: "bad/id", title: "Invalid" }], has_more: true, cursor: "next" })),
-    shortRank: vi.fn(async () => ({ items: [{ series_id: "10", title: "A series" }], has_more: false, contents: [], content: "all", board: "1" })),
+    shortRank: vi.fn(async (): Promise<ShortRanking> => ({ items: [{ series_id: "10", title: "A series" }], has_more: false, contents: [], content: "all", board: "1" })),
     shortFilterPanel: vi.fn(async () => [{ key: "category_dim_theme", name: "Theme", options: [{ name: "Family", value: "cate_5001" }] }]),
     shortFilter: vi.fn(async () => ({ items: [series], has_more: false })),
     newReleases: vi.fn(async () => ({ items: [{ series_id: "10", title: "Online", online: true },
@@ -113,6 +113,72 @@ describe("Hongguo provider", () => {
       expect(client.getSeriesBatch).toHaveBeenCalledTimes(1);
       release();
       await Promise.resolve();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["catalog", "series"] as const)("does not start %s SDK work after an aborted lazy-client wait", async (kind) => {
+    const { client, media } = fixture();
+    let release!: (value: typeof client) => void;
+    const load = vi.fn(() => new Promise<typeof client>((resolve) => { release = resolve; }));
+    const provider = createHongguoProvider({ dataDir: "/unused", client: load, media });
+    const abort = new AbortController();
+    const operation = kind === "catalog" ? provider.catalog({ expectedRevision: 1, mode: "popular" }, abort.signal)
+      : provider.series("10", abort.signal);
+    const outcome = operation.then(() => null, (error: unknown) => error);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    abort.abort();
+    release(client);
+    expect(await outcome).toMatchObject({ name: "AbortError" });
+    expect(client.shortRank).not.toHaveBeenCalled();
+    expect(client.getSeriesBatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects already-aborted catalog and series callers without initializing the client", async () => {
+    const { provider, load } = fixture();
+    const abort = new AbortController();
+    abort.abort();
+    await expect(provider.catalog({ expectedRevision: 1, mode: "popular" }, abort.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(provider.series("10", abort.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("keeps an active catalog action pending through real settlement after abort", async () => {
+    const { provider, client } = fixture();
+    let release!: (value: ShortRanking) => void;
+    client.shortRank.mockImplementationOnce(() => new Promise<ShortRanking>((resolve) => { release = resolve; }));
+    const abort = new AbortController();
+    let settled = false;
+    const outcome = provider.catalog({ expectedRevision: 1, mode: "popular" }, abort.signal)
+      .then(() => { settled = true; return null; }, (error: unknown) => { settled = true; return error; });
+    await vi.waitFor(() => expect(client.shortRank).toHaveBeenCalledTimes(1));
+    abort.abort();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release({ items: [], has_more: false, contents: [], content: "all", board: "1" });
+    expect(await outcome).toMatchObject({ name: "AbortError" });
+    expect(client.getSeriesBatch).not.toHaveBeenCalled();
+  });
+
+  it("does not cancel detached shared metrics when the completed home request closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { provider, client } = fixture();
+      const detail = (await client.getSeriesBatch())[0]!;
+      client.getSeriesBatch.mockClear();
+      let release!: (rows: typeof detail[]) => void;
+      client.getSeriesBatch.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+      const abort = new AbortController();
+      const home = provider.catalog({ expectedRevision: 1, mode: "popular" }, abort.signal);
+      await vi.advanceTimersByTimeAsync(300);
+      expect((await home).pendingMetricIds).toEqual(["10"]);
+      abort.abort();
+      const enriched = { ...detail, series: { ...detail.series, heat: 12, play_count: 34 } };
+      release([enriched]);
+      await Promise.resolve();
+      const cached = await provider.catalog({ expectedRevision: 1, mode: "metrics", seriesIds: ["10"] });
+      expect(cached.metricUpdates).toEqual([{ id: "10", heat: 12, playCount: 34 }]);
+      expect(cached.pendingMetricIds).toEqual([]);
+      expect(client.getSeriesBatch).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
 
