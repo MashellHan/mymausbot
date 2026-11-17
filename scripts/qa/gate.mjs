@@ -87,7 +87,7 @@ export async function gateRun({ api = github, readArtifact = artifactFiles, runI
     if (failedStep) throw new Error(`Preflight failed: ${failedStep.name}`);
     if (preflight?.status === "completed" && preflight.conclusion !== "success") throw new Error(`Preflight ${preflight.conclusion}`);
     const artifacts = await pages(`/actions/runs/${runId}/artifacts`, "artifacts", api);
-    const plan = await runPlan({ id: Number(runId), run_attempt: Number(attempt), head_sha: sha }, jobs, artifacts, { api, readArtifact });
+    const plan = await runPlan({ id: Number(runId), run_attempt: Number(attempt), head_sha: sha }, jobs, artifacts, { api, readArtifact, artifactHead: prHead ?? sha });
     if (plan) {
       return verifyGate(plan.outputs, { ...options, api, runId, attempt, wait, now, createdAt, deadlineMs: Math.max(0, deadlineMs - (now() - started)) });
     }

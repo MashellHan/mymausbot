@@ -66,9 +66,15 @@ More specific `AGENTS.md` files override this note within their directories.
 ## MausBot repository team
 
 Read `.agents/team/playbook.md` and the assigned role in `.agents/team/roles/`.
-The dedicated Herdr team owns this repository. Its lead and reviewer use
+The dedicated Herdr team owns this repository. Its lead and reviewers use
 `gpt-6-astra` with `max`; designer, frontend and backend use `gpt-6-sol`
 with `xhigh` and a requested 1,000,000-token context. The upstream integration
-developer uses the same Sol settings. Never silently substitute a model or claim
-a runtime configuration was verified from a role file alone.
+developer uses the same Sol settings. The three additional developers share
+`.agents/team/roles/developer.md`: Pi through the existing Raven provider,
+`gpt-6.1-sol`/`max` and requested context 1,000,000. Existing roles are unchanged;
+Reviewer3 is an alternative review owner, not another required approval.
+Follow the playbook's authentication boundary: normal native authentication is
+allowed within existing scope; direct login-Keychain access remains restricted.
+Never silently substitute a model or claim a runtime configuration was verified
+from a role file alone.
 Use small coherent commits and focused PRs as described in `CONTRIBUTING-FORK.md`.
