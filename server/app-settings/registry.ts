@@ -10,7 +10,7 @@ import { parseSocks5Proxy } from "../browser/egress/policy.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
 import { isClaudeEndpoint } from "../claude-endpoints.ts";
 import { isCodexEndpoint } from "../codex-endpoints.ts";
-import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, type AppConfig } from "../config.ts";
+import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, skillAuthoringEnabled, type AppConfig } from "../config.ts";
 import type { InstanceConfig } from "../contracts.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
@@ -227,6 +227,18 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     tier: "confirm", value: url, allowed: "an http(s) address, or empty to clear", current: () => current() ?? "", write: config(patch),
   });
   const confirm: SettingEntry[] = [
+    writable({
+      id: "bots.skillAuthoring", label: "Bots write their own skills", help: "Bots may draft skills for your review; turning this off also pauses automatic skill review.", where: "Settings → You and your bots",
+      synonyms: ["skills", "write skills", "early", "experimental"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => skillAuthoringEnabled(cfg()), read: () => skillAuthoringEnabled(cfg()) ? "on" : "off",
+      describe: (enabled: boolean) => {
+        const review = cfg().features?.skillReview === true
+          ? enabled ? " and allow automatic skill review again" : " and pause automatic skill review"
+          : "";
+        return { change: `${enabled ? "Let bots draft skills for your review" : "Stop bots drafting skills"}${review}; currently ${skillAuthoringEnabled(cfg()) ? "on" : "off"}` };
+      },
+      write: config((skillAuthoring: boolean) => ({ features: { skillAuthoring } })),
+    }),
     writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
