@@ -16,23 +16,41 @@ PR, issue, review and CI records. Preserve upstream license and notices.
 | mausbot-front | Frontend | gpt-6-sol | xhigh | 1,000,000 |
 | mausbot-back | Backend | gpt-6-sol | xhigh | 1,000,000 |
 | mausbot-upstream | Upstream integration | gpt-6-sol | xhigh | 1,000,000 |
+| mausbot-dev1 | Additional developer | gpt-6.1-sol | max | 1,000,000 |
+| mausbot-dev2 | Additional developer | gpt-6.1-sol | max | 1,000,000 |
+| mausbot-dev3 | Additional developer | gpt-6.1-sol | max | 1,000,000 |
 | mausbot-review | Reviewer | gpt-6-astra | max | provider default |
 | mausbot-review2 | Reviewer | gpt-6-astra | max | provider default |
+| mausbot-review3 | Reviewer | gpt-6-astra | max | provider default |
 
-Launch arguments are in each role file; verify live session settings before
-claiming the model is active. A requested context ceiling is not proof the
-provider permits that entire context. Surface errors rather than downgrade.
-The Sol launch explicitly uses `service_tier="default"`: the implicit priority
-tier failed with `service_tier is not supported` on this installation, while
-the explicit default tier was verified by real tool-using responses from all
-four Sol members. Keep that local compatibility setting when restarting them.
+The three additional developers share [roles/developer.md](roles/developer.md):
+Pi 1.5.1 through the existing Raven provider, exact model ID `gpt-6.1-sol`,
+`max` effort and requested context 1,000,000. The catalog advertises a 1,050,000
+limit; successful model, thinking and tool responses do not prove full-context
+use. Reviewer3 uses Codex, `gpt-6-astra`/`max` and a read-only sandbox as recorded
+in [roles/reviewer3.md](roles/reviewer3.md). These additions do not replace or
+reconfigure existing members, providers or permissions.
+
+Existing Codex launch arguments remain in their role files; verify live session
+settings before claiming the model is active. A requested context ceiling is not
+proof the provider permits that entire context. Surface errors rather than
+downgrade. The existing Codex/Sol launch explicitly uses
+`service_tier="default"`: the implicit priority tier failed with
+`service_tier is not supported` on this installation, while the explicit default
+tier was verified by real tool-using responses from all four original Sol
+members. Keep that local compatibility setting when restarting them.
 
 Use the Herdr skill for Herdr operations,
 with `--session default` and explicit names/IDs. Work in the MausBot workspace;
 do not modify or close another team's panes. Keep focus unchanged.
 The lead owns scope, task sequencing, integration and acceptance. Specialists
-report to the lead; no parallel edits to the same file. Use isolated worktrees
+report to the lead. Lead balances the three additional developers across
+exclusive scopes with one source owner each; do not select or duplicate another
+member's active task or edit the same file in parallel. Use isolated worktrees
 for code PRs, rooted beside this project under the user's workspace.
+`mausbot-front` remains the sole App builder/installer; Root alone operates
+GUI/App/provider/Cloud delivery. Additional developers and reviewers do not
+independently build, install or operate the App, or test against live data.
 
 Read the validation policy and role from that task checkout. An older dirty
 coordination root may lack new commands or policy files; read the fetched
@@ -41,6 +59,49 @@ Root routes nonblocking feedback through Lead. Lead batches actionable changes
 for the owning developer at a safe source boundary; do not repeat the same
 instruction from multiple coordinators. Interrupt only for a concrete blocker
 or data/security risk. Cleanup and unrelated QA retain separate owners.
+
+## Authentication: login Keychain boundary
+
+### Applies to every agent and authorized tool (menha, 2026-11-16)
+
+- First try the tool's normal native authentication for the already-authorized
+  task, using its existing signed-in account or designated credential source.
+  This applies to every agent and tool, not just Agency / Work IQ. Verify the
+  intended account before reading private data or taking an authorized action.
+- Native authentication may internally use the operating system's credential
+  storage. That possibility alone is not a reason to block a normal attempt.
+  Do not invent a dependency on the login Keychain, demand a separate token,
+  or require proof that the entire authentication chain avoids it first.
+- Documentation mentioning AzureAuth/MSAL, a credential helper, a browser
+  store or Keychain, and old static audit conclusions, do not establish which
+  credential store the current invocation actually uses. Distinguish evidence,
+  uncertainty and inference; report actual returned errors accurately.
+- Normal native authentication is allowed within the task's existing account,
+  permission and action scope. This does not authorize manual credential
+  extraction, unrelated credential-store searches, account changes, new grants,
+  configuration changes, or bypassing authentication or access controls.
+
+### Direct Keychain access remains restricted
+
+- Do not proactively inspect, enumerate, read/export credential items from,
+  write, unlock or change the macOS login Keychain (login.keychain /
+  login.keychain-db), directly or by repurposing another tool to do so.
+  Never copy credentials out of it or change the Keychain search list.
+- If a normal attempt actually requires Keychain unlocking/access consent,
+  interactive sign-in, MFA or a new grant, stop autonomous retries and ask menha
+  to perform the necessary manual step. Stop on an actual account mismatch or
+  authentication/access denial. Never request passwords, tokens or MFA codes
+  in chat. Existing bounded retries for genuine transient errors remain allowed.
+- Explicit environment credentials, permission-restricted private file caches
+  outside repositories and separately designated other keychains remain usable
+  for authorized work. Do not fall back to unrelated credential sources, print
+  or commit credentials, weaken authentication, or disable security controls.
+- A successful action proves that the action worked; it does not prove which
+  credential store or Keychain item was used. A process finishing does not prove
+  that its intended work succeeded. Keep coverage gaps until actually backfilled.
+- Carry this exact distinction into new project/agent instructions and delegated
+  tasks. Do not turn the direct-access restriction into a blanket ban on normal
+  native authentication, all credential storage, or independent work.
 
 ## Authorized work, in order
 
@@ -121,14 +182,22 @@ not zero. Record remaining coverage, owner and completion condition. An explicit
 request for complete history remains pending until verified. Do not add a
 collector or schedule just to separate backfill from source acceptance.
 
-Lead assigns each independent PR or coherent batch to the available reviewer
-with the shorter queue: `mausbot-review` or `mausbot-review2`. Record one review
-owner with the exact source handoff. Either reviewer's acceptance satisfies the
-independent review requirement; two approvals are not required. Keep correction
-deltas with that owner, or explicitly transfer the existing findings and accepted
-evidence if the other reviewer can unblock the work. Do not send an already
-assigned change to both reviewers or repeat accepted review merely to balance
-their queues. Historical QA triage remains separate from the source review.
+Coherent source, atomic commits and focused PRs come before batch-wide
+acceptance. Start mandatory current-head CI and independent source review
+alongside independent development. At Lead's chosen batch boundary, consolidate
+applicable integration testing and findings, then assign batched repairs. Do not
+postpone blocking findings or applicable QA holds to preserve the cadence, add
+approval gates, or replay broad unchanged product checks.
+
+Lead assigns each independent PR or coherent batch to an available reviewer
+with the shorter queue: `mausbot-review`, `mausbot-review2` or `mausbot-review3`.
+Record one review owner with the exact source handoff. Any one reviewer's
+acceptance satisfies the independent review requirement; Reviewer3 is an
+alternative owner, never an additional approval gate. Keep correction deltas
+with that owner, or explicitly transfer the existing findings and accepted
+evidence if another reviewer can unblock the work. Do not send an already
+assigned change to multiple reviewers or repeat accepted review merely to
+balance their queues. Historical QA triage remains separate from source review.
 
 Follow `CONTRIBUTING-FORK.md`. Keep a factual, short project runbook for build
 commands and incident recovery. No secrets in commits, prompts or artifacts.
@@ -189,7 +258,8 @@ merge decision as soon as review and required results are available; the
 06:00/21:00 Beijing Lead checkpoint catches missed handoffs without delaying
 normal delivery. Check
 current-head acceptance, CI and holds before merging. Do not add polling jobs,
-duplicate notifications, another reviewer or a new approval gate.
+duplicate notifications, a second review owner for the same scope or a new
+approval gate.
 
 Freeze operational callers before their focused review as well. A caller or
 fixture correction does not reopen unchanged product source or require another
