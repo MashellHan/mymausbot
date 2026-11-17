@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Playback } from "openhongguo";
 import { afterEach, expect, it, vi } from "vitest";
-import { compatibleStream, HongguoMedia } from "./media.ts";
+import { availableQualityIds, compatibleStream, HongguoMedia } from "./media.ts";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -21,6 +21,40 @@ it("only accepts browser-compatible single-file streams and supported encryption
   for (const patch of [{ hls: true }, { dash: true }, { codec: "hevc" }, { url: "http://127.0.0.1/" }]) {
     expect(compatibleStream({ ...model, streams: [{ ...model.streams[0]!, ...patch }] })).toBeUndefined();
   }
+});
+
+it("selects only available H264 resolutions, highest by default and an exact requested quality", async () => {
+  const dimensions = [[360, 640], [480, 854], [540, 960], [720, 1280], [1080, 1920]];
+  const model: Playback = { episode_id: "101", protected: false, streams: dimensions.map(([width, height]) => ({
+    url: `https://v.douyinvod.com/${width}.mp4`, definition: `${width}p`, codec: "h264",
+    width, height, protected: false,
+  })) };
+  expect(availableQualityIds(model)).toEqual(["1080p", "720p", "540p", "480p", "360p"]);
+  expect(compatibleStream(model)?.definition).toBe("1080p");
+  expect(compatibleStream(model, undefined, "720p")?.definition).toBe("720p");
+  expect(compatibleStream(model, undefined, "999p")).toBeUndefined();
+  expect(availableQualityIds({ ...model, streams: [
+    { ...model.streams[0]!, definition: "1080p" },
+    { ...model.streams[1]!, codec: "bytevc1" },
+    { ...model.streams[2]!, url: "http://127.0.0.1/clip.mp4" },
+    { ...model.streams[3]!, height: 9000 },
+    { ...model.streams[4]!, size: 65 * 1024 * 1024 },
+  ] })).toEqual([]);
+  const encrypted: Playback = { ...model, protected: true, streams: model.streams.map((stream) => ({
+    ...stream, protected: true, encryption: "cenc-aes-ctr",
+  })) };
+  expect(availableQualityIds(encrypted)).toEqual([]);
+  expect(availableQualityIds(encrypted, "0123456789abcdef0123456789abcdef")).toHaveLength(5);
+
+  const root = await mkdtemp(join(tmpdir(), "hongguo-quality-test-")); roots.push(root);
+  const load = vi.fn(async (_url: string) => Buffer.from("synthetic media"));
+  const media = new HongguoMedia(root, load);
+  const scope = { appId: "a", revision: 1 };
+  expect(await media.prepare(model, undefined, scope, "999p")).toBeNull();
+  expect(load).not.toHaveBeenCalled();
+  expect(await media.prepare(model, undefined, scope, "720p")).toEqual(expect.any(String));
+  expect(load).toHaveBeenCalledOnce();
+  expect(load.mock.calls[0]![0]).toBe("https://v.douyinvod.com/720.mp4");
 });
 
 it("serves scoped ranges, expires tokens and removes only its disposable files after restart", async () => {

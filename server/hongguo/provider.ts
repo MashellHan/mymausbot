@@ -5,17 +5,18 @@ import type { Client, SeriesSummary, Transport } from "openhongguo";
 import type { HongguoCatalogRequest, HongguoCatalogResponse, HongguoCategory, HongguoEpisode, HongguoSeries,
   HongguoSeriesCard } from "../../shared/hongguo-mini-app.ts";
 import { SERVER_ROOT } from "../proxy-paths.ts";
-import { HongguoMedia, type HongguoMediaScope } from "./media.ts";
+import { availableQualityIds, HongguoMedia, type HongguoMediaScope } from "./media.ts";
 import { hongguoRequest, hongguoUrl } from "./network.ts";
 import { safeHttpFacts, safeSdkError, type PlaybackReason, type PlaybackStage } from "./playback-diagnostic.ts";
 
 export type { HongguoMediaScope } from "./media.ts";
-type PreparedPlayback = { status: "ready"; token: string; durationSeconds: number | null }
-  | { status: "unavailable"; reason: "anonymous-limited" | "episode-unavailable" | "provider-unavailable" };
+type PreparedPlayback = { status: "ready"; token: string; durationSeconds: number | null;
+  selectedQualityId: string | null; availableQualityIds: string[] }
+  | { status: "unavailable"; reason: "anonymous-limited" | "episode-unavailable" | "provider-unavailable" | "quality-unavailable" };
 export interface HongguoProvider {
   catalog(input: HongguoCatalogRequest): Promise<Omit<HongguoCatalogResponse, "appId" | "revision">>;
   series(id: string): Promise<HongguoSeries>;
-  preparePlayback(seriesId: string, episodeId: string, scope: HongguoMediaScope): Promise<PreparedPlayback>;
+  preparePlayback(seriesId: string, episodeId: string, scope: HongguoMediaScope, qualityId?: string): Promise<PreparedPlayback>;
   serveMedia(token: string, range: string | undefined, signal: AbortSignal, scope: HongguoMediaScope): Promise<Response>;
 }
 
@@ -153,7 +154,7 @@ export function createHongguoProvider(options: { dataDir: string; client?: (tran
         nextCursor: page.has_more && page.cursor && page.cursor.length <= 4096 ? page.cursor : null };
     },
     series: (id) => series(id),
-    async preparePlayback(seriesId, episodeId, scope) {
+    async preparePlayback(seriesId, episodeId, scope, requestedQualityId) {
       const trace: PlaybackTrace = { stage: "series", ambiguous: false, truncated: false, responses: [] };
       traces.add(trace);
       if (traces.size > 1) for (const active of traces) active.ambiguous = true;
@@ -165,8 +166,14 @@ export function createHongguoProvider(options: { dataDir: string; client?: (tran
         const resolved = await sdkCall(trace, "resolve", async () => (await getClient()).resolvePlayback(episodeId));
         if (resolved.playback.episode_id !== episodeId) return unavailable(trace, "provider-unavailable");
         trace.stage = "media";
-        const token = await media.prepare(resolved.playback, resolved.contentKey?.key, scope);
-        return token ? { status: "ready", token, durationSeconds: number(resolved.playback.duration_seconds) }
+        const available = availableQualityIds(resolved.playback, resolved.contentKey?.key);
+        if (requestedQualityId !== undefined && !available.includes(requestedQualityId)) {
+          return unavailable(trace, "quality-unavailable");
+        }
+        const selectedQualityId = requestedQualityId ?? available[0] ?? null;
+        const token = await media.prepare(resolved.playback, resolved.contentKey?.key, scope, selectedQualityId ?? undefined);
+        return token ? { status: "ready", token, durationSeconds: number(resolved.playback.duration_seconds),
+          selectedQualityId, availableQualityIds: available }
           : unavailable(trace, "provider-unavailable");
       } catch (error) {
         const code = safeSdkError(error).code;

@@ -197,9 +197,10 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
         else {
           const playback = input as ReturnType<typeof parseHongguoPlayback>;
           const prepared = parseHongguoPreparedPlayback(await hongguoProviderResult(() => deps.hongguoProvider!.preparePlayback(
-            playback.seriesId, playback.episodeId, { appId: id, revision: input.expectedRevision })));
+            playback.seriesId, playback.episodeId, { appId: id, revision: input.expectedRevision }, playback.qualityId)));
           result = prepared.status === "ready" ? { status: "ready", durationSeconds: prepared.durationSeconds,
-            mediaUrl: `${ROOT}/${id}/hongguo/media/${prepared.token}?expectedRevision=${input.expectedRevision}` }
+            mediaUrl: `${ROOT}/${id}/hongguo/media/${prepared.token}?expectedRevision=${input.expectedRevision}`,
+            selectedQualityId: prepared.selectedQualityId, availableQualityIds: prepared.availableQualityIds }
             : prepared;
         }
         deps.apps.requireHongguo(owner, id, input.expectedRevision);

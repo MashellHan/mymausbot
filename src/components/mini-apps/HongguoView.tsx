@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, Clapperboard, History, Loader2, Maximize, Search, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { Select } from "../Select";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, ApiError } from "@/state/store";
@@ -138,6 +139,9 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
   const [playback, setPlayback] = useState<HongguoPlaybackResponse | null>(null);
   const [playbackError, setPlaybackError] = useState("");
   const [saveError, setSaveError] = useState("");
+  const [pendingQuality, setPendingQuality] = useState<string | null>(null);
+  const qualityController = useRef<AbortController | null>(null);
+  const qualityResume = useRef<{ position: number; paused: boolean } | null>(null);
   const episodes = series?.episodes ?? [];
   const episode = episodes.find((entry) => entry.id === episodeId) ?? null;
 
@@ -323,6 +327,9 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
   }, [series, seriesId, history, requestedEpisodeId, episodeId]);
 
   useEffect(() => {
+    qualityController.current?.abort();
+    qualityResume.current = null;
+    setPendingQuality(null);
     if (!valid || page !== "watch" || !series || !episode) return;
     const controller = new AbortController();
     setPlayback(null); setPlaybackError("");
@@ -336,8 +343,31 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
         if (result.status === "ready") scopedMediaUrl(result.mediaUrl, appId, revision);
         setPlayback(result);
       }).catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setPlaybackError); });
-    return () => controller.abort();
+    return () => { controller.abort(); qualityController.current?.abort(); };
   }, [valid, page, series, episode, appId, revision, post, showError]);
+
+  const changeQuality = async (qualityId: string) => {
+    if (!series || !episode || playback?.status !== "ready" || !playback.availableQualityIds?.includes(qualityId)) return;
+    qualityController.current?.abort();
+    setPendingQuality(null);
+    if (qualityId === playback.selectedQualityId) return;
+    const controller = new AbortController();
+    qualityController.current = controller;
+    setPendingQuality(qualityId);
+    setPlaybackError("");
+    try {
+      const result = await post<HongguoPlaybackResponse>("playback", {
+        expectedRevision: revision, seriesId: series.id, episodeId: episode.id, qualityId,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      if (result.status !== "ready") { setPlaybackError(t("computer.miniApps.hongguo.qualityUnavailable")); return; }
+      scopedMediaUrl(result.mediaUrl, appId, revision);
+      const video = videoRef.current;
+      if (video) qualityResume.current = { position: Number.isFinite(video.currentTime) ? video.currentTime : 0, paused: video.paused };
+      setPlayback(result);
+    } catch (cause) { if (!controller.signal.aborted) showError(cause, setPlaybackError); }
+    finally { if (qualityController.current === controller) { qualityController.current = null; if (!controller.signal.aborted) setPendingQuality(null); } }
+  };
 
   const openSeries = (id: string, resumeEpisodeId: string | null = null) => {
     pauseAndSave(); progress.current = null; lastQueuedPosition.current = -Infinity;
@@ -498,13 +528,15 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
       </header>
       {seriesError && <p role="alert" className="rounded-lg bg-danger/10 p-3 text-[13px] text-danger">{seriesError}</p>}
       {!series && !seriesError && <p role="status" className="text-[13px] text-ink-secondary">{t("computer.miniApps.hongguo.loading")}</p>}
-      {series && <div className="grid gap-6 @min-[760px]/hongguo:grid-cols-[minmax(0,1fr)_250px]">
+      {series && <div className="grid gap-6">
         <div className="min-w-0">
-          <div className="flex min-h-[260px] aspect-video items-center justify-center overflow-hidden rounded-xl bg-[#181818] text-center text-white">
-            {playback?.status === "ready" ? <video key={`${episodeId}:${playback.mediaUrl}`} ref={videoRef} controls autoPlay={visible || !!window.document.fullscreenElement} playsInline
-              src={scopedMediaUrl(playback.mediaUrl, appId, revision)} className="h-full w-full object-contain"
+          <div className="flex min-h-[260px] aspect-video w-full items-center justify-center overflow-hidden rounded-xl bg-[#181818] text-center text-white">
+            {playback?.status === "ready" ? <video key={`${episodeId}:${playback.mediaUrl}`} ref={videoRef} controls autoPlay={!qualityResume.current?.paused && (visible || !!window.document.fullscreenElement)} playsInline
+              src={scopedMediaUrl(playback.mediaUrl, appId, revision)} className="h-full min-w-0 w-full object-contain"
               onLoadedMetadata={(event) => { const video = event.currentTarget; const saved = history?.find((entry) => entry.seriesId === series.id && entry.episodeId === episodeId);
-                if (saved && Number.isFinite(video.duration) && saved.positionSeconds < video.duration - 1) video.currentTime = saved.positionSeconds;
+                if (qualityResume.current && Number.isFinite(video.duration)) video.currentTime = Math.min(Math.max(0, qualityResume.current.position), video.duration);
+                else if (saved && Number.isFinite(video.duration) && saved.positionSeconds < video.duration - 1) video.currentTime = saved.positionSeconds;
+                if (qualityResume.current?.paused) video.pause();
                 recordPosition(video); }}
               onTimeUpdate={(event) => updatePosition(event.currentTarget)}
               onPause={(event) => { recordPosition(event.currentTarget); savePosition(); }}
@@ -525,8 +557,15 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
           </div>
           {playback?.status === "ready" && <div className="mt-2 flex items-center justify-between gap-2 text-[12px] text-ink-secondary">
             <span>{episode && t("computer.miniApps.hongguo.playing", { number: episode.number })}</span>
+            <div className="flex min-w-0 items-center gap-2">
+              {!!playback.availableQualityIds?.length && <Select size="sm" variant="quiet" aria-label={t("computer.miniApps.hongguo.quality")}
+                value={pendingQuality ?? playback.selectedQualityId ?? ""} onChange={(event) => void changeQuality(event.target.value)}>
+                {playback.availableQualityIds.map((id) => <option key={id} value={id}>{id}</option>)}
+              </Select>}
+              {pendingQuality && <span role="status" aria-label={t("computer.miniApps.hongguo.changingQuality")}><Loader2 size={13} className="animate-spin" aria-hidden="true" /></span>}
             <button type="button" onClick={() => void videoRef.current?.requestFullscreen().catch(() => setPlaybackError(t("computer.miniApps.hongguo.fullscreenFailed")))}
               className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent"><Maximize size={13} />{t("computer.miniApps.hongguo.fullscreen")}</button>
+            </div>
           </div>}
           {playbackError && playback?.status === "ready" && <p role="alert" className="mt-2 text-[12px] text-danger">{playbackError}</p>}
         </div>
