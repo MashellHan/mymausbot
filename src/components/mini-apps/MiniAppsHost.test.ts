@@ -17,7 +17,7 @@ vi.mock("./MiniAppsPanel", async () => {
       nativeKind: "hongguo" as const, createdAt: 1, updatedAt: 1 };
     return createElement(HongguoView, { document: { app, html: "", bindings: [], versions: [] },
       state: { appId: app.id, revision: 1, templateVersion: 1, status: "active", data: [] },
-      refreshKey: 0, onRevoked: vi.fn(), onChanged: vi.fn() });
+      storageKey: "host-fixture", refreshKey: 0, onRevoked: vi.fn(), onChanged: vi.fn() });
   } };
 });
 
