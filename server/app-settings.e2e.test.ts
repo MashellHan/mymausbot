@@ -474,3 +474,38 @@ it("the owner's helper visibility changes only after Change and persists through
     await api("PATCH", `/api/bots/${helper.id}`, { sidebarHidden: initial });
   }
 }, 90_000);
+
+it("the owner's archive card persists a bot's hidden state and preserves its conversations", async () => {
+  const target = (await api("POST", "/api/bots", { name: "Archive Target" }, 201)).bot;
+  const change = { botId: target.id, archived: true };
+  const persisted = () => JSON.parse(readFileSync(join(dataDir, "bots.json"), "utf8")).find((one: any) => one.id === target.id);
+  const pending = async () => {
+    let card: any;
+    await expect.poll(async () => (card = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "bots.archived" && !one.card.answered)?.card) !== undefined,
+      { timeout: 20_000 }).toBe(true);
+    return card;
+  };
+  await start("ARCHIVE-CANCEL", [step({ action: "set", id: "bots.archived", value: JSON.stringify(change) }, true)], 60_000);
+  const cancelled = await pending();
+  expect(cancelled).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining(target.id) } });
+  expect(persisted().hidden).toBeFalsy();
+  await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: cancelled.requestId, behavior: "deny" }, 200, ownerDevice);
+  expect(results(await finished("ARCHIVE-CANCEL"))[0]).toMatchObject({ isError: true, text: expect.stringContaining("cancelled") });
+  expect(persisted().hidden).toBeFalsy();
+
+  await start("ARCHIVE-CHANGE", [step({ action: "set", id: "bots.archived", value: JSON.stringify(change) })], 60_000);
+  const approved = await pending();
+  expect(persisted().hidden).toBeFalsy();
+  await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: approved.requestId, behavior: "allow" }, 200, ownerDevice);
+  expect(results(await finished("ARCHIVE-CHANGE"))[0]).toMatchObject({ isError: false, text: expect.stringContaining(`Archive "Archive Target" (${target.id})`) });
+  expect(persisted().hidden).toBe(true);
+  expect(persisted().tasks).toEqual(expect.arrayContaining([expect.objectContaining({ threadId: target.threadId })]));
+  expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: approved.requestId }, 409, ownerDevice)).error).toContain("can't be undone");
+
+  await start("ARCHIVE-RESTORE", [step({ action: "set", id: "bots.archived", value: JSON.stringify({ botId: target.id, archived: false }) })], 60_000);
+  const restored = await pending();
+  await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: restored.requestId, behavior: "allow" }, 200, ownerDevice);
+  expect(results(await finished("ARCHIVE-RESTORE"))[0]?.isError).toBe(false);
+  expect(persisted().hidden).toBe(false);
+  expect((await api("GET", `/api/threads/${target.threadId}/messages`)).messages).toBeDefined();
+}, 120_000);
