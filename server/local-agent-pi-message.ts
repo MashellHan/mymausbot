@@ -4,7 +4,7 @@ import type { FileHandle } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
 import type { LocalAgentActivityEvent } from "../shared/local-dashboard.ts";
-import { piVisibleMessageText } from "./local-agent-visible-message.ts";
+import { piVisibleMessageText, redactedAgentText } from "./local-agent-visible-message.ts";
 
 const SESSION_ID = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
 const SESSION_FILE = new RegExp(`^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z_(${SESSION_ID})\\.jsonl$`, "i");
@@ -19,7 +19,7 @@ const MAX_TOOL_EVENTS = 30;
 
 type PiIdentity = { pane: string; file: string; directory: string; id: string; cwd: string };
 export type PiSessionView = { preview: string | null; events: LocalAgentActivityEvent[]; truncated: boolean };
-type Cached = { signature: string; view: PiSessionView };
+type Cached = { signature: string; cwd: string; id: string; view: PiSessionView };
 type EntryEvent = { event: LocalAgentActivityEvent; callId?: string };
 type Entry = { parent: string | null; preview: string | null; events: EntryEvent[]; clipped: boolean };
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -70,6 +70,7 @@ function visibleEvents(row: Record<string, unknown>, offset: number, user: strin
     for (const part of message.content) {
       const block = record(part);
       if (block.type === "toolCall" && typeof block.name === "string" && TOOL_NAME.test(block.name) &&
+          redactedAgentText(block.name).text === block.name &&
           typeof block.id === "string" && block.id.length > 0 && block.id.length <= 128) {
         add("tool-call", "[Arguments unavailable]", block.name, block.id);
       }
@@ -158,7 +159,7 @@ async function readSession(identity: PiIdentity, root: string, cached: Cached | 
           info.size > BigInt(Number.MAX_SAFE_INTEGER)) return null;
       const signature = revision(info);
       if (revision(await lstat(identity.file, { bigint: true })) !== signature) return null;
-      if (cached?.signature === signature) return cached;
+      if (cached?.signature === signature && cached.cwd === identity.cwd && cached.id === identity.id) return cached;
       const size = Number(info.size);
       const head = await readRange(handle, Math.min(size, HEADER_BYTES), 0);
       const headerEnd = head?.indexOf(10) ?? -1;
@@ -171,7 +172,7 @@ async function readSession(identity: PiIdentity, root: string, cached: Cached | 
       if (!tail || revision(await handle.stat({ bigint: true })) !== signature ||
           revision(await lstat(identity.file, { bigint: true })) !== signature) return null;
       const view = sessionView(tail, start, headerEnd);
-      return view ? { signature, view } : null;
+      return view ? { signature, cwd: identity.cwd, id: identity.id, view } : null;
     } finally { await handle.close(); }
   } catch { return null; }
 }

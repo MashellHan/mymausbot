@@ -22,10 +22,10 @@ const assistant = (text: string, id = "a1b2c3d4", parentId: string | null = null
 
 afterEach(async () => { for (const folder of folders.splice(0)) await removeTempDir(folder); });
 
-async function fixture(rows: object[] = [assistant("Visible Pi progress")]) {
+async function fixture(rows: object[] = [assistant("Visible Pi progress")], projectPath = "workspace/project") {
   const home = await mkdtemp(join(tmpdir(), "mausbot-pi-card-"));
   folders.push(home);
-  const project = join(home, "workspace/project");
+  const project = join(home, projectPath);
   const piRoot = join(home, ".local/share/mausbot-team/pi-agent");
   const directory = join(piRoot, "sessions", `--${project.slice(1).replaceAll("/", "-")}--`);
   const file = join(directory, `2026-11-17T01-00-00-000Z_${SESSION}.jsonl`);
@@ -199,6 +199,53 @@ describe("verified Pi visible assistant preview", () => {
     ] } });
     expect(JSON.stringify(response)).not.toMatch(/ghp_|private|HIDDEN_/);
     expect((await activity.get("w6:p1")).events).toHaveLength(5);
+  });
+
+  it("rejects secret-shaped Pi tool names from both call and result Trace fields", async () => {
+    const secretName = "ghp_" + "x".repeat(36);
+    const data = await fixture([
+      entry("a1b2c3d4", null, { role: "assistant", content: [
+        { type: "text", text: "Visible work" },
+        { type: "toolCall", id: "safe", name: "shell.run", arguments: { hidden: "HIDDEN_SAFE_ARGS" } },
+        { type: "toolCall", id: "sensitive", name: secretName, arguments: { hidden: "HIDDEN_SECRET_ARGS" } },
+      ] }),
+      entry("b1b2c3d4", "a1b2c3d4", { role: "toolResult", toolCallId: "safe", content: [{ type: "text", text: "HIDDEN_SAFE_RESULT" }] }),
+      entry("c1b2c3d4", "b1b2c3d4", { role: "toolResult", toolCallId: "sensitive", content: [{ type: "text", text: "HIDDEN_SECRET_RESULT" }] }),
+    ]);
+    const view = (await data.reader([data.agent()])).get("w6:p1")!;
+    expect(view.events.map((event) => [event.kind, event.tool])).toEqual([
+      ["assistant", null], ["tool-call", "shell.run"], ["tool-result", "shell.run"], ["tool-result", null],
+    ]);
+    const activity = createLocalAgentActivityProvider({ home: data.home,
+      run: async () => JSON.stringify({ result: { agents: [data.agent()] } }) });
+    const response = await activity.get("w6:p1");
+    expect(response.status).toBe("ready");
+    expect(JSON.stringify(response)).not.toMatch(/ghp_|HIDDEN_/);
+  });
+
+  it("revalidates header cwd on a warm same-file cache hit when Pi path encoding collides", async () => {
+    const data = await fixture([assistant("First occupant text")], "workspace/a/b");
+    const collidingCwd = join(data.home, "workspace/a-b");
+    const first = data.agent();
+    const second = { ...first, cwd: collidingCwd };
+    expect((await data.reader([first])).get("w6:p1")?.preview).toBe("First occupant text");
+    expect((await data.reader([second])).get("w6:p1")).toBeNull();
+    let roster = [first];
+    const activity = createLocalAgentActivityProvider({ home: data.home,
+      run: async () => JSON.stringify({ result: { agents: roster } }) });
+    expect((await activity.get("w6:p1")).events[0]?.text).toBe("First occupant text");
+    roster = [second];
+    expect(await activity.get("w6:p1")).toMatchObject({ status: "unavailable", events: [] });
+    roster = [first];
+    let now = 1000;
+    const teams = createLocalAgentTeamsProvider({ home: data.home, codexHome: join(data.home, ".codex"), now: () => now,
+      run: async (args) => args.at(-2) === "workspace"
+        ? JSON.stringify({ result: { workspaces: [{ workspace_id: "w6", label: "Fixture" }] } })
+        : JSON.stringify({ result: { agents: roster } }) });
+    expect((await teams.get()).teams[0]!.agents[0]!.messagePreview).toBe("First occupant text");
+    roster = [second];
+    now += 2000;
+    expect((await teams.get()).teams[0]!.agents[0]!.messagePreview).toBeNull();
   });
 
   it("drops an old Pi session after occupant replacement or ambiguous binding", async () => {
