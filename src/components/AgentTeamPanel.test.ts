@@ -343,9 +343,10 @@ describe("Agent Team panel", () => {
     external.remove();
   });
 
-  it("recovers focus when an unselected member's configuration control disappears", async () => {
+  it.each(["node", "configuration"])("recovers focus when an unselected member %s disappears", async (control) => {
     await render("content");
-    const config = host.querySelector<HTMLButtonElement>('[data-agent-id="p2"] button[aria-haspopup="dialog"]')!;
+    const config = host.querySelector<HTMLButtonElement>(control === "node" ? '[data-agent-select="p2"]'
+      : '[data-agent-id="p2"] button[aria-haspopup="dialog"]')!;
     config.focus();
     const snapshot = structuredClone(ready);
     snapshot.teams[0]!.agents = snapshot.teams[0]!.agents.filter((agent) => agent.id !== "p2");
