@@ -441,3 +441,36 @@ it("a bot colour waits for owner Change and persists through the existing bot ro
     await api("PATCH", `/api/bots/${bot.id}`, { color: before });
   }
 }, 90_000);
+
+it("the owner's helper visibility changes only after Change and persists through the bot route", async () => {
+  const helper = (await api("GET", "/api/bots")).bots.find((one: any) => one.defaultBot && !one.defaultBot.person);
+  expect(helper).toBeDefined();
+  const initial = Boolean(helper.sidebarHidden);
+  const shown = initial;
+  const persistedHidden = () => JSON.parse(readFileSync(join(dataDir, "bots.json"), "utf8")).find((one: any) => one.id === helper.id)?.sidebarHidden;
+  const pending = async () => {
+    let card: any;
+    await expect.poll(async () => (card = (await settingCards(bot.threadId)).find((one) => one.card.appSettingRequest.settingId === "sidebar.showHelper" && !one.card.answered)?.card) !== undefined,
+      { timeout: 20_000 }).toBe(true);
+    return card;
+  };
+  try {
+    await start("HELPER-CANCEL", [step({ action: "set", id: "sidebar.showHelper", value: String(shown) }, true)], 60_000);
+    const cancelled = await pending();
+    expect(cancelled).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining(helper.id) } });
+    expect(Boolean(persistedHidden())).toBe(initial);
+    await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: cancelled.requestId, behavior: "deny" }, 200, ownerDevice);
+    expect(results(await finished("HELPER-CANCEL"))[0]).toMatchObject({ isError: true, text: expect.stringContaining("cancelled") });
+    expect(Boolean(persistedHidden())).toBe(initial);
+
+    await start("HELPER-CHANGE", [step({ action: "set", id: "sidebar.showHelper", value: String(shown) })], 60_000);
+    const approved = await pending();
+    expect(Boolean(persistedHidden())).toBe(initial);
+    await api("POST", `/api/threads/${bot.threadId}/respond`, { requestId: approved.requestId, behavior: "allow" }, 200, ownerDevice);
+    expect(results(await finished("HELPER-CHANGE"))[0]?.isError).toBe(false);
+    expect(Boolean(persistedHidden())).toBe(!shown);
+    expect((await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: approved.requestId }, 409, ownerDevice)).error).toContain("can't be undone");
+  } finally {
+    await api("PATCH", `/api/bots/${helper.id}`, { sidebarHidden: initial });
+  }
+}, 90_000);
