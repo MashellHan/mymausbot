@@ -6,6 +6,8 @@ import { join } from "node:path";
 import type { LocalAgentActivityEvent, LocalAgentActivityResponse } from "../shared/local-dashboard.ts";
 import { redactedAgentText as safeText, visibleAgentMessage } from "./local-agent-visible-message.ts";
 import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session.ts";
+import { createPiSessionReader } from "./local-agent-pi-message.ts";
+import { verifiedLocalAgentMembers } from "./local-agent-association.ts";
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 
 const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
@@ -108,9 +110,10 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
   } finally { await handle.close(); }
 }
 
-export function createLocalAgentActivityProvider({ run = runHerdr, read = readSession, codexHome = process.env.CODEX_HOME || join(homedir(), ".codex"), now = Date.now }: {
-  run?: HerdrRunner; read?: typeof readSession; codexHome?: string; now?: () => number;
+export function createLocalAgentActivityProvider({ run = runHerdr, read = readSession, home = homedir(), codexHome = process.env.CODEX_HOME || join(home, ".codex"), now = Date.now }: {
+  run?: HerdrRunner; read?: typeof readSession; home?: string; codexHome?: string; now?: () => number;
 } = {}) {
+  const piSessionsFor = createPiSessionReader(join(home, ".local", "share", "mausbot-team", "pi-agent"));
   const paths = new Map<string, { file: string | null; at: number }>();
   const lastGood = new Map<string, { sessionId: string; file: string; response: LocalAgentActivityResponse }>();
   const latest = new Map<string, symbol>();
@@ -124,6 +127,14 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
     const matches = agents.filter((agent) => agent.pane_id === agentId && agent.workspace_id === agentId.split(":")[0]);
     if (matches.length !== 1) { clear(); return unavailable(agentId); }
     const agent = matches[0]!;
+    if (agent.agent === "pi") {
+      clear();
+      const verified = verifiedLocalAgentMembers(agents);
+      if (!verified.includes(agent)) return unavailable(agentId);
+      const observed = (await piSessionsFor(verified)).get(agentId);
+      if (!current() || !observed) return unavailable(agentId);
+      return { agentId, status: "ready", updatedAt: now(), events: observed.events, truncated: observed.truncated };
+    }
     if (agent.agent !== "codex") {
       clear();
       return { ...unavailable(agentId), status: "unsupported" };
