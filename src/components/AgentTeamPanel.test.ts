@@ -61,20 +61,12 @@ afterEach(async () => {
 });
 
 describe("Agent Team panel", () => {
-  it("keeps the count, read time and Pause beside Agent Offices without a separate page header", async () => {
+  it("keeps team selection compact beside the observation time", async () => {
     await render("content");
     const header = host.querySelector<HTMLElement>('[data-testid="agent-offices-header"]')!;
-    const summary = header.querySelector<HTMLElement>('[data-testid="agent-town-summary"]')!;
-    const pause = header.querySelector<HTMLButtonElement>("button")!;
     expect(header.querySelector("h2")?.textContent).toBe("Agent Offices");
-    expect(summary.textContent).toContain("2 teams · Last read");
-    expect(host.querySelector('[data-testid="agent-team-panel"] > header')).toBeNull();
-    expect(text()).not.toContain("Local Herdr ·");
-    expect(pause.getAttribute("aria-label")).toBe("Pause town animation");
-    expect(pause.getAttribute("aria-pressed")).toBe("false");
-    await act(async () => pause.click());
-    expect(pause.getAttribute("aria-label")).toBe("Play town animation");
-    expect(pause.getAttribute("aria-pressed")).toBe("true");
+    expect(header.textContent).toContain("2 teams · Last read");
+    expect(header.querySelector("button")).toBeNull();
     expect(members()?.querySelector("h3")?.textContent).toBe("Atlas Studio");
   });
 
@@ -157,6 +149,7 @@ describe("Agent Team panel", () => {
     calls.api.mockImplementation(async (path: string) => path === "/api/local-dashboard/agents" ? selected : detail);
     await render("panel");
     expect(members()).not.toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-agent-select="w1:p1"]')!.click());
     const activity = members()!.querySelector<HTMLButtonElement>('[data-testid="agent-activity-w1:p1"] button')!;
     expect(activity.getAttribute("aria-expanded")).toBe("false");
     expect(calls.api).toHaveBeenCalledTimes(1);
@@ -211,7 +204,7 @@ describe("Agent Team panel", () => {
     expect(text()).toContain("Showing the last known teams");
     expect(text()).toContain("Last observed · Needs input");
     expect(offices()[0]!.textContent).toContain("1 last active");
-    expect(members()?.querySelector<HTMLElement>("li .bg-ink-secondary\\/30")).not.toBeNull();
+    expect(members()?.querySelector('[data-agent-state="stale"]')).not.toBeNull();
     expect(text()).toContain("2 teams");
 
     await act(async () => offices()[1]!.click());
@@ -289,6 +282,8 @@ describe("Agent Team panel", () => {
     scroller.scrollTop = 90;
     selector.scrollTop = 20;
     expect(first.textContent).toContain("1 active");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-agent-select="p1"]')!.click());
+    first.focus();
     await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
     expect(calls.api).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
@@ -303,6 +298,80 @@ describe("Agent Team panel", () => {
     expect(members()?.textContent).toContain("64,000 / 256,000 · 25%");
     expect(members()?.textContent).not.toContain("Draft a synthetic release plan");
     expect(host.querySelector('[data-team-house="w1"]')?.getAttribute("data-activity")).toBe("blocked");
+  });
+
+  it("keeps selected details through state changes and clears them when the occupant changes", async () => {
+    const snapshot = structuredClone(ready);
+    snapshot.teams[0]!.agents[0]!.occupantId = "original";
+    await render("content", snapshot);
+    const node = host.querySelector<HTMLButtonElement>('[data-agent-select="p1"]')!;
+    await act(async () => node.click());
+    node.focus();
+    for (const state of ["blocked", "done", "idle", "unknown", "working"] as const) {
+      snapshot.teams[0]!.agents[0]!.state = state;
+      await render("content", structuredClone(snapshot));
+      expect(host.querySelector('[data-agent-select="p1"]')).toBe(node);
+      expect(node.getAttribute("aria-expanded")).toBe("true");
+      expect(document.activeElement).toBe(node);
+      expect(host.querySelector('[data-testid="agent-tree-detail"] [data-agent-state]')?.getAttribute("data-agent-state")).toBe(state);
+    }
+    snapshot.teams[0]!.agents[0]!.occupantId = "replacement";
+    await render("content", structuredClone(snapshot));
+    expect(host.querySelector<HTMLElement>('[data-testid="agent-tree-detail"]')?.hidden).toBe(true);
+    expect(host.querySelector('[data-agent-select="p1"]')?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("clears open activity on occupant replacement without stealing outside focus", async () => {
+    const snapshot = structuredClone(ready);
+    snapshot.teams[0]!.agents[0]!.occupantId = "original";
+    await render("content", snapshot);
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-agent-select="p1"]')!.click());
+    const activity = host.querySelector<HTMLButtonElement>('[data-testid="agent-activity-p1"] button')!;
+    activity.focus();
+    snapshot.teams[0]!.agents[0]!.occupantId = "next";
+    await render("content", structuredClone(snapshot));
+    expect(document.activeElement).not.toBe(document.body);
+    expect(host.querySelector('[data-testid="agent-activity-p1"]')).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-agent-select="p1"]')!.click());
+    const external = document.createElement("input");
+    document.body.append(external);
+    external.focus();
+    snapshot.teams[0]!.agents = snapshot.teams[0]!.agents.slice(1);
+    await render("content", structuredClone(snapshot));
+    expect(document.activeElement).toBe(external);
+    external.remove();
+  });
+
+  it("preserves a focused node when new members move it across a visual row", async () => {
+    await render("content");
+    const node = host.querySelector<HTMLButtonElement>('[data-agent-select="p3"]')!;
+    await act(async () => node.click());
+    node.focus();
+    const snapshot = structuredClone(ready);
+    snapshot.teams[0]!.agents.unshift({ ...snapshot.teams[0]!.agents[0]!, id: "p0", name: "New member" });
+    await render("content", snapshot);
+    expect(host.querySelector('[data-agent-select="p3"]')).toBe(node);
+    expect(document.activeElement).toBe(node);
+    expect(node.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector('[data-agent-select="p0"]')).not.toBeNull();
+  });
+
+  it("keeps node order through refreshed input ordering and removes departed member details", async () => {
+    await render("content");
+    const node = host.querySelector<HTMLButtonElement>('[data-agent-select="p2"]')!;
+    await act(async () => node.click());
+    node.focus();
+    const changed = structuredClone(ready);
+    changed.teams[0]!.agents.reverse();
+    await render("content", changed);
+    expect([...host.querySelectorAll<HTMLElement>('[data-agent-select]')].map((item) => item.dataset.agentSelect)).toEqual(["p1", "p2", "p3"]);
+    expect(document.activeElement).toBe(node);
+    changed.teams[0]!.agents = changed.teams[0]!.agents.filter((agent) => agent.id !== "p2");
+    await render("content", structuredClone(changed));
+    expect(host.querySelector('[data-agent-select="p2"]')).toBeNull();
+    expect(host.querySelector<HTMLElement>('[data-testid="agent-tree-detail"]')?.hidden).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   it("clears a departed office and returns focus to the selector", async () => {

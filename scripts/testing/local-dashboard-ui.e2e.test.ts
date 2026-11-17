@@ -74,9 +74,16 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
         expect(await read<number>("(() => { const p = document.querySelector('[data-testid=agent-team-panel]'); return p.scrollWidth - p.clientWidth; })()")).toBeLessThanOrEqual(1);
       }
     }
+    await open(`${agents.split("?")[0]}?width=960&scenario=many-agents`);
+    await expect.poll(() => read<number>("document.querySelectorAll('[data-agent-select]').length")).toBe(8);
+    const rows = await read<number[]>("Array.from(document.querySelectorAll('[data-agent-select]'), node => node.getBoundingClientRect().top)");
+    expect(new Set(rows).size).toBe(3);
+    expect(rows[0]).toBe(rows[2]);
+    expect(rows[3]).toBe(rows[5]);
     await open(`${agents.split("?")[0]}?width=360&locale=en&scenario=live`);
     await expect.poll(() => read<number>("document.querySelectorAll('[data-team-house]').length")).toBe(2);
     await expect.poll(() => read<number>("document.querySelectorAll('[data-testid=selected-agent-team]').length")).toBe(1);
+    await read("document.querySelector('[data-agent-select]').click()");
     const before = await read<{ top: number; selected: string }>(`(() => {
       const panel = document.querySelector('[data-testid=agent-team-panel]');
       const button = document.querySelector('[data-team-house][aria-pressed=true]');
@@ -89,6 +96,8 @@ async function fixture(script: string, children: ChildProcess[]): Promise<string
     await expect.poll(() => read<string>("document.querySelector('[data-testid=selected-agent-team]').textContent"), { timeout: 10_000 }).toContain("Only the newest synthetic instruction");
     const after = await read<{ top: number; max: number; selected: string }>("(() => { const panel = document.querySelector('[data-testid=agent-team-panel]'); return { top: panel.scrollTop, max: panel.scrollHeight - panel.clientHeight, selected: document.activeElement?.dataset.teamHouse }; })()");
     expect(after.selected).toBe(before.selected);
+    expect(await read<string>("document.querySelector('[data-testid=agent-tree-detail] [data-agent-state]').dataset.agentState")).toBe("done");
+    expect(await read<string>("document.querySelector('[data-agent-select]').getAttribute('aria-expanded')")).toBe("true");
     expect(Math.abs(after.top - Math.min(before.top, after.max))).toBeLessThanOrEqual(1);
     await read("document.querySelectorAll('[data-team-house]')[1].click()");
     await expect.poll(() => read<string>("document.querySelector('[data-testid=selected-agent-team]').textContent")).toContain("Lark");
