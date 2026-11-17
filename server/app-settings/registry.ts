@@ -226,17 +226,18 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     id, label, help: `${label}: the address mymausbot sends requests to. Empty uses the provider's own.`, where: "Settings → AI", synonyms: [...synonyms, "url", "base url", "endpoint", "address", "proxy"],
     tier: "confirm", value: url, allowed: "an http(s) address, or empty to clear", current: () => current() ?? "", write: config(patch),
   });
+  const rawBubbleNote = "Raw keeps its fixed styling: ordinary bots stay coloured and the main bot stays dark";
   const confirm: SettingEntry[] = [
     writable({
-      id: "appearance.userBubbles", label: "Coloured messages", help: "Use each bot's colour for your own messages; false keeps your message bubbles plain grey.", where: "Settings → Appearance",
+      id: "appearance.userBubbles", label: "Coloured messages", help: `In Simple and Advanced, on uses each bot's colour for your messages; off uses normal theme bubbles. ${rawBubbleNote}.`, where: "Settings → Appearance",
       synonyms: ["message color", "message colour", "my messages", "user bubbles"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => deps.window.read("appearance.userBubbles"),
-      read: () => { const choice = deps.window.read("appearance.userBubbles"); return typeof choice === "boolean" ? display(choice) : "unavailable until mymausbot is open on this computer"; },
+      read: () => { const choice = deps.window.read("appearance.userBubbles"); return typeof choice === "boolean" ? `saved ${choice ? "on" : "off"} for Simple and Advanced; ${rawBubbleNote}` : "unavailable until mymausbot is open on this computer"; },
       describe: (coloured: boolean) => {
         const choice = deps.window.read("appearance.userBubbles");
         if (typeof choice !== "boolean") return { refusal: "Open mymausbot on this computer before changing message colours." };
-        if (choice === coloured) return { refusal: `Your message bubbles are already ${coloured ? "coloured" : "plain grey"}.` };
-        return { change: `${coloured ? "Colour your messages with each bot's colour" : "Show your messages in plain grey"}; currently ${choice ? "coloured" : "plain grey"}` };
+        if (choice === coloured) return { refusal: `The saved Simple/Advanced colour choice is already ${coloured ? "on" : "off"}; ${rawBubbleNote}.` };
+        return { change: `Save ${coloured ? "bot-coloured" : "normal theme"} message bubbles for Simple and Advanced; ${rawBubbleNote}; currently saved ${choice ? "on" : "off"}` };
       },
       write: async (coloured: boolean) => deps.window.write("appearance.userBubbles", coloured),
     }),
