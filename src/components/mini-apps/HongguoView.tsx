@@ -494,11 +494,11 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
       </header>
       {seriesError && <p role="alert" className="rounded-lg bg-danger/10 p-3 text-[13px] text-danger">{seriesError}</p>}
       {!series && !seriesError && <p role="status" className="text-[13px] text-ink-secondary">{t("computer.miniApps.hongguo.loading")}</p>}
-      {series && <div className="grid gap-6 @min-[760px]/hongguo:grid-cols-[minmax(0,1fr)_250px]">
+      {series && <div className="grid gap-6">
         <div className="min-w-0">
-          <div className="flex min-h-[260px] aspect-video items-center justify-center overflow-hidden rounded-xl bg-[#181818] text-center text-white">
+          <div className="flex min-h-[260px] aspect-video w-full items-center justify-center overflow-hidden rounded-xl bg-[#181818] text-center text-white">
             {playback?.status === "ready" ? <video key={`${episodeId}:${playback.mediaUrl}`} ref={videoRef} controls autoPlay playsInline
-              src={scopedMediaUrl(playback.mediaUrl, appId, revision)} className="h-full w-full object-contain"
+              src={scopedMediaUrl(playback.mediaUrl, appId, revision)} className="h-full min-w-0 w-full object-contain"
               onLoadedMetadata={(event) => { const video = event.currentTarget; const saved = history?.find((entry) => entry.seriesId === series.id && entry.episodeId === episodeId);
                 if (saved && Number.isFinite(video.duration) && saved.positionSeconds < video.duration - 1) video.currentTime = saved.positionSeconds;
                 recordPosition(video); }}
