@@ -8,7 +8,7 @@ import type { LocalAgentConfigurationDocument, LocalAgentConfigurationResponse, 
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { discoverCodexSkills, type CodexSkillDiscovery } from "./local-agent-skill-discovery.ts";
-import { inside, memberRole, readDocument, teamSource, type TeamSource } from "./local-agent-association.ts";
+import { inside, memberRole, readDocument, teamSource, verifiedLocalAgentMembers, type TeamSource } from "./local-agent-association.ts";
 
 const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
 const TEAM_ID = /^w\d+$/;
@@ -100,9 +100,10 @@ export function createLocalAgentConfigurationProvider({ run = runHerdr, home = h
   async function context(teamId: string, agentId?: string) {
     const live = await liveRows(run);
     if (!live || live.workspaces.filter((workspace) => workspace.workspace_id === teamId).length !== 1) return null;
-    const member = agentId ? live.agents.filter((agent) => agent.pane_id === agentId && agent.workspace_id === teamId) : [];
+    const agents = verifiedLocalAgentMembers(live.agents);
+    const member = agentId ? agents.filter((agent) => agent.pane_id === agentId && agent.workspace_id === teamId) : [];
     if (agentId && member.length !== 1) return null;
-    const selected = await teamSource(live.agents, teamId, home);
+    const selected = await teamSource(agents, teamId, home);
     const playbook = selected.source ? await readDocument(selected.source.root, selected.source.playbook)
       : empty(selected.error ? "error" : "unverified");
     return { source: selected.source, playbook, member: member[0] ?? null };
