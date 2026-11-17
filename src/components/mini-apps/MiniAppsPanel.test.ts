@@ -55,6 +55,7 @@ import { ApiError } from "@/state/store";
 import { MiniAppsPanel } from "./MiniAppsPanel";
 import { MiniAppsHost, MiniAppsSlot } from "./MiniAppsHost";
 import { HongguoView, forgetHongguoHome } from "./HongguoView";
+import { DAILY_X_APP_ID } from "./daily-x-host";
 
 const dashboard = { kind: "agent-team", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["teams", "activity"] } as const;
 const usageDashboard = { kind: "usage", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["usage"] } as const;
@@ -264,6 +265,42 @@ describe("Mini Apps panel", () => {
     fixture.apps = [{ ...fixture.apps[0]!, status: "archived", revision: 4 }];
     await act(async () => refresh().click());
     await vi.waitFor(() => expect(host.querySelector('[data-testid="mojo-whole-page"]')).toBeNull());
+  });
+
+  it("shows the existing Daily X website only while its local report head is current", async () => {
+    fixture.apps = [{ ...app(DAILY_X_APP_ID, "Daily X"), slug: "x-ai-digest", shippedTemplateKind: "x_ai_digest" }];
+    await render();
+    await vi.waitFor(() => expect(host.querySelector<HTMLIFrameElement>("[data-daily-x-frame]")?.src).toBe("https://mxhan.com/x/"));
+    expect(frame()).toBeNull();
+    fixture.failState = true;
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector("[data-daily-x-frame]")).toBeNull());
+    expect(frame()?.dataset.id).toBe(DAILY_X_APP_ID);
+    fixture.failState = false;
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector("[data-daily-x-frame]")).not.toBeNull());
+    fixture.apps = [{ ...fixture.apps[0]!, status: "archived", revision: 4 }];
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector("[data-daily-x-frame]")).toBeNull());
+  });
+
+  it("keeps copied and remote Daily X reports on the ordinary guarded document path", async () => {
+    fixture.apps = [{ ...app("copied-daily-x", "Copied"), slug: "x-ai-digest", shippedTemplateKind: "x_ai_digest" }];
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("copied-daily-x"));
+    expect(host.querySelector("[data-daily-x-frame]")).toBeNull();
+    await act(async () => root.render(null));
+    fixture.apps = [{ ...app(DAILY_X_APP_ID, "Daily X"), slug: "x-ai-digest", shippedTemplateKind: "x_ai_digest" }];
+    vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true },
+      remoteClient: { active: true } });
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe(DAILY_X_APP_ID));
+    expect(host.querySelector("[data-daily-x-frame]")).toBeNull();
+    await act(async () => root.render(null));
+    vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: false, blocksOpaqueFrameNavigation: true } });
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe(DAILY_X_APP_ID));
+    expect(host.querySelector("[data-daily-x-frame]")).toBeNull();
   });
 
   it("keeps copied or missing markers on the ordinary Mini App path", async () => {

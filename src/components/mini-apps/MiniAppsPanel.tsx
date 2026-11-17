@@ -12,6 +12,7 @@ import agentTeamHtml from "../../../examples/mini-apps/agent-team/index.html?raw
 import { revealSelectedTab, scrollTabsWithWheel } from "../computer-panel-tabs";
 import { InfoHint } from "../InfoHint";
 import { MiniAppDashboard } from "./MiniAppDashboard";
+import { DailyXWholePage } from "./DailyXWholePage";
 import { ensureMiniAppDefaults } from "./MiniAppDefaultsBootstrap";
 import { MiniAppFrame } from "./MiniAppFrame";
 import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
@@ -21,6 +22,7 @@ import { HongguoView, forgetHongguoHome } from "./HongguoView";
 import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-display";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { mojoHostEligible } from "./mojo-host";
+import { dailyXHostEligible } from "./daily-x-host";
 
 const REFRESH_MS = 15_000;
 const DEFAULT_BAR_COLLAPSED_KEY = "omb-mini-apps-bar-collapsed";
@@ -120,6 +122,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     && !selected?.nativeKind && !document?.app.nativeKind;
   const mojoCurrent = !stale && mojoHostEligible({ selected, document, state: appState,
     localOwner: owner === true && typeof window !== "undefined" && window.ogb?.remoteClient?.active !== true, nativeGuard });
+  const dailyXCurrent = !stale && dailyXHostEligible({ selected, document, state: appState,
+    localOwner: owner === true && typeof window !== "undefined" && window.ogb?.app?.ownPage === true
+      && window.ogb?.remoteClient?.active !== true, nativeGuard });
 
   useEffect(() => {
     const target = focusAfter.current;
@@ -467,6 +472,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === null ? "computer.miniApps.opening" : owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
               : appState.status === "active" && nativeGuard ? mojoCurrent
                 ? <MojoWholePage key={`${document.app.id}:${document.app.revision}:${document.app.templateVersion}`}
+                  document={document} state={appState} onRevoked={revoked} />
+                : dailyXCurrent ? <DailyXWholePage key={`${document.app.id}:${document.app.revision}:${document.app.templateVersion}`}
                   document={document} state={appState} onRevoked={revoked} />
                 : <MiniAppFrame document={document} state={appState} onRevoked={revoked} />
               : appState.status === "active" ? <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t("computer.miniApps.desktopRequired")}</p>
