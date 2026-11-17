@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 
 import type { LocalAgentConfigurationDocument } from "../shared/local-dashboard.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
+import { codexSessionId } from "./local-agent-session.ts";
 
 const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
 const MAX_DOCUMENT_BYTES = 128 * 1024;
@@ -151,7 +152,7 @@ export function memberRole(source: TeamSource, member: Record<string, unknown>, 
 export function verifiedLocalAgentMembers(agents: Record<string, unknown>[]): Record<string, unknown>[] {
   const key = (agent: Record<string, unknown>) => {
     const session = agent.agent_session as Record<string, unknown> | null;
-    return JSON.stringify([session?.source, session?.value]);
+    return JSON.stringify([session?.source, codexSessionId(agent) ?? session?.value]);
   };
   return agents.filter((agent) => {
     const pane = agent.pane_id;

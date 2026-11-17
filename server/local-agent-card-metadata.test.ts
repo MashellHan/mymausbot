@@ -148,6 +148,16 @@ describe("verified Agent Team card metadata", () => {
     expect(await data.member()).toMatchObject({ role: "Developer", messagePreview: null, model: null });
   });
 
+  it("leaves every binding null when two live panes spell the same Codex UUID with different case", async () => {
+    const data = await fixture();
+    await writeFile(data.playbook, "| card-dev | Developer |\n| card-review | Reviewer |\n");
+    data.state.agents = [data.agent(), data.agent(SESSION.toUpperCase(), "card-review", "w6:p2")];
+    const members = (await data.provider.get()).teams[0]!.agents;
+    expect(members).toHaveLength(2);
+    expect(members.every((member) => member.role === null && member.messagePreview === null)).toBe(true);
+    expect(members.every((member) => member.taskHint === "Latest synthetic task" && member.state === "working")).toBe(true);
+  });
+
   it("does not return preview text from a mismatched or ambiguously discovered log", async () => {
     const data = await fixture();
     await data.member();

@@ -1,8 +1,9 @@
 import { redactSecretsInText } from "../shared/redact.ts";
+import { escapeNotes } from "./peer-provenance.ts";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const VISIBLE_PHASES = new Set(["commentary", "final_answer", "final"]);
-const INTERNAL_ENVELOPE = /\[(?:From\b|aside from\b)|<\/?(?:SYSTEM_(?:MESSAGE|NOTIFICATION)|(?:teammate|agent|task|coordinator)[_-](?:message|notification|envelope)|system[_-]reminder)\b/i;
+const INTERNAL_ENVELOPE = /<\/?(?:SYSTEM_(?:MESSAGE|NOTIFICATION)|(?:teammate|agent|task|coordinator)[_-](?:message|notification|envelope)|system[_-]reminder)\b/i;
 
 export function redactedAgentText(value: unknown, limit = 600): { text: string | null; clipped: boolean } {
   if (typeof value !== "string") return { text: null, clipped: false };
@@ -42,6 +43,7 @@ export function assistantMessagePreview(row: Record<string, unknown>): string | 
   }
   if ([payload.recipient, payload.recipient_name].some((value) => value != null && value !== "all")) return null;
   const message = visibleAgentMessage(row);
-  if (message?.kind !== "assistant" || INTERNAL_ENVELOPE.test(message.raw.replace(/[\p{Cc}\p{Cf}]/gu, ""))) return null;
+  if (message?.kind !== "assistant" || escapeNotes(message.raw) !== message.raw ||
+      INTERNAL_ENVELOPE.test(message.raw.replace(/[\p{Cc}\p{Cf}]/gu, ""))) return null;
   return redactedAgentText(message.raw, 400).text;
 }
