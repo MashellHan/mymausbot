@@ -47,4 +47,20 @@ describe("window preferences", () => {
     expect(url).toBe("/api/window-prefs");
     expect(JSON.parse(String(init.body)).values).toMatchObject({ "general.sendKey": "shift-enter" });
   });
+
+  it("applies and reports the notification feed choice, rejecting a non-boolean frame", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    expect(windowPrefValues()["general.notificationFeed"]).toBe(false);
+    applyWindowPref({ kind: "window-pref", id: "general.notificationFeed", value: true });
+    expect(values.get("omb-notification-feed")).toBe("1");
+    applyWindowPref({ kind: "window-pref", id: "general.notificationFeed", value: "false" });
+    expect(windowPrefValues()["general.notificationFeed"]).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetched).toHaveBeenCalledTimes(1);
+    const [url, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/window-prefs");
+    expect(JSON.parse(String(init.body)).values["general.notificationFeed"]).toBe(true);
+  });
 });

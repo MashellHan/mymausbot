@@ -42,6 +42,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const chosen = new Set(options.chosen ?? []);
   const messages: Array<Record<string, any>> = [];
   const windowValues = new Map<string, unknown>(options.window === false ? [] : [["appearance.skin", "daylight"]]);
+  const windowWrites: Array<{ id: string; value: unknown }> = [];
   const store = {
     appendMessage: (threadId: string, message: Record<string, unknown>) => {
       const row = { ...message, id: `m${messages.length + 1}`, threadId };
@@ -115,7 +116,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     removeEngine: async (instanceId) => { engineCalls.push({ remove: instanceId }); await options.engineGate; return null; },
     window: {
       read: (id) => windowValues.get(id),
-      write: (id, value) => { if (!windowValues.size) return "Open mymausbot on this computer first."; windowValues.set(id, value); return null; },
+      write: (id, value) => { if (!windowValues.size) return "Open mymausbot on this computer first."; windowWrites.push({ id, value }); windowValues.set(id, value); return null; },
     },
   });
   const notified: unknown[] = [];
@@ -138,7 +139,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, windowWrites, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -324,6 +325,60 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("changes the notification feed only after the owner's live window approval", async () => {
+    const fx = fixture();
+    fx.windowValues.set("general.notificationFeed", false);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "notification feed" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "general.notificationFeed", tier: "confirm", value: "false" })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "general.notificationFeed" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ value: "false", allowed: "true or false" });
+    expect((await fx.set("general.notificationFeed", "maybe")).status).toBe(400);
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("general.notificationFeed", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("currently off") } });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+
+    const stale = fx.set("general.notificationFeed", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("general.notificationFeed", true);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already on");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("general.notificationFeed", false);
+    const disappeared = fx.set("general.notificationFeed", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("general.notificationFeed");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disappeared).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("general.notificationFeed", true)).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const guest = fixture({ owner: false });
+    guest.windowValues.set("general.notificationFeed", false);
+    expect((await guest.set("general.notificationFeed", true)).status).toBe(403);
+    expect(guest.windowWrites).toEqual([]);
+
+    fx.windowValues.set("general.notificationFeed", false);
+    const approved = fx.set("general.notificationFeed", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "general.notificationFeed", value: true }]);
+    expect(fx.windowValues.get("general.notificationFeed")).toBe(true);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };
