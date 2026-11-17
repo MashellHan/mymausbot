@@ -88,6 +88,15 @@ describe("UpdateBanner", () => {
     expect(html).toContain("Try again");
   });
 
+  it("keeps invalid packaged update metadata visible with a manual release action", () => {
+    const html = render({ status: "error", messageCode: "feed", retryable: false,
+      manualReleaseUrl: "https://github.com/MashellHan/mymausbot/releases" });
+    expect(html).toContain("Update failed");
+    expect(html).toContain("Automatic update setup is unavailable.");
+    expect(html).toContain("Open mymausbot releases");
+    expect(html).not.toContain("Quit and reopen");
+  });
+
   it.each(["ETIMEDOUT while staging", "native error ".repeat(30)])("preserves restart recovery for a nonretryable error: %s", (message) => {
     const html = render({ status: "error", retryable: false, message });
     expect(html).toContain("Quit and reopen MausBot before trying the update again.");

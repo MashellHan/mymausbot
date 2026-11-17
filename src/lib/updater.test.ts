@@ -30,6 +30,8 @@ it("says the updater's own words in the app's language, and keeps a message main
   const restart = { status: "error", retryable: false, message: "Not enough disk space… Quit and reopen OpenMausBot before trying the update again.", messageCode: "disk" } as const;
   expect(updaterMessage(restart)).toMatch(/Libere espaço e tente novamente\. Saia e abra o OpenMausBot de novo antes de tentar a atualização novamente\.$/);
   expect(updaterMessage(restart, { restart: false })).toBe("Não há espaço em disco suficiente para preparar a atualização. Libere espaço e tente novamente.");
+  expect(updaterMessage({ ...restart, manualReleaseUrl: "https://github.com/MashellHan/mymausbot/releases" }))
+    .toBe("Não há espaço em disco suficiente para preparar a atualização. Libere espaço e tente novamente.");
   expect(updaterMessage({ status: "error", message: "HttpError: 418" })).toBe("HttpError: 418");
   expect(updaterMessage(null)).toBeUndefined();
   setLocale("en");

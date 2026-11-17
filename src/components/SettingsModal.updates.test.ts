@@ -28,3 +28,14 @@ it("shows this app's update where the desktop app answers, with no Download step
   expect(ready).toContain("Restart and install");
   expect(render({ status: "downloaded", version: "0.2.0", installMode: "handoff" })).toContain("mymausbot 0.2.0 is ready. Install it in a terminal.");
 });
+
+it("offers the personal manual installer when packaged update metadata is absent or invalid", () => {
+  const manualReleaseUrl = "https://github.com/MashellHan/mymausbot/releases";
+  const manual = render({ status: "idle", manualReleaseUrl });
+  expect(manual).toContain("This installation uses manual updates from mymausbot releases.");
+  expect(manual).toContain("Open mymausbot releases");
+  const broken = render({ status: "error", manualReleaseUrl, messageCode: "feed", retryable: false });
+  expect(broken).toContain("Automatic update setup is unavailable.");
+  expect(broken).toContain("Open mymausbot releases");
+  expect(broken).not.toContain("Quit and reopen");
+});
