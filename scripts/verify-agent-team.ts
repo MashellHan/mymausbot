@@ -28,6 +28,11 @@ const many: LocalAgentTeamsResponse = { ...sample, teamCount: 15, teams: [
     id: `sample-extra-${index}`, name: `Sample Office ${index + 3}`, agentCount: 0, activeAgentCount: 0, agents: [],
   })),
 ] };
+const manyAgents: LocalAgentTeamsResponse = { ...sample, teams: sample.teams.map((team, index) => index ? team : {
+  ...team, agentCount: 8, agents: [...team.agents, ...Array.from({ length: 5 }, (_, memberIndex) => ({
+    ...team.agents[2]!, id: `w6:p${memberIndex + 4}`, name: `Sample member ${memberIndex + 4}`,
+  }))],
+}) };
 let liveSample = sample;
 let activityRevision = 0;
 
@@ -88,7 +93,7 @@ try {
           : scenario === "empty" ? { status: "ready", updatedAt: sample.updatedAt, teamCount: 0, teams: [] }
           : scenario === "stale" ? { ...sample, status: "stale" } : scenario === "live" ? liveSample
             : scenario === "one" ? { ...sample, teamCount: 1, teams: [sample.teams[0]!] }
-              : scenario === "many" ? many : sample;
+              : scenario === "many" ? many : scenario === "many-agents" ? manyAgents : sample;
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify(data));
       } },
