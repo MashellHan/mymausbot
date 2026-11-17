@@ -392,10 +392,18 @@ describe("persistent Mini Apps", () => {
     const { apps } = fixture(undefined, readers);
     const team = (await apps.publish(owner, publication({ bindings: [], dashboardKind: "agent-team", publisherBotIds: ["publisher"] }))).app;
     const usage = (await apps.publish(owner, publication({ requestKey: "usage", slug: "usage", bindings: [], dashboardKind: "usage" }))).app;
-    expect(apps.dashboardCatalog(bot())).toMatchObject([
-      { id: team.id, dashboardIdentity: "agent-team", dashboard: { kind: "agent-team", resources: ["teams", "activity"] } },
-      { id: usage.id, dashboardIdentity: "usage", dashboard: { kind: "usage", resources: ["usage"] } },
-    ]);
+    const setCreatedAt = applicationDatabase().prepare("UPDATE mini_apps SET created_at = ? WHERE id = ?");
+    setCreatedAt.run(2, team.id);
+    setCreatedAt.run(1, usage.id);
+    const catalog = apps.dashboardCatalog(bot());
+    expect(catalog.map((app) => app.id)).toEqual([usage.id, team.id]);
+    expect(catalog).toHaveLength(2);
+    expect(catalog.find((app) => app.id === team.id)).toMatchObject({
+      dashboardIdentity: "agent-team", dashboard: { kind: "agent-team", resources: ["teams", "activity"] },
+    });
+    expect(catalog.find((app) => app.id === usage.id)).toMatchObject({
+      dashboardIdentity: "usage", dashboard: { kind: "usage", resources: ["usage"] },
+    });
     await expect(apps.dashboardRead(bot(), team.id, { resource: "teams", expectedRevision: 1 })).rejects.toMatchObject({ status: 403 });
     await expect(apps.dashboardRead(owner, team.id, { resource: "usage", expectedRevision: 1 })).rejects.toMatchObject({ status: 403 });
     await expect(apps.dashboardRead(owner, usage.id, { resource: "activity", expectedRevision: 1, agentId: "w6:p1", occupantId }))
