@@ -3,6 +3,7 @@ import { z } from "zod";
 import { credentialIsConfigured, CREDENTIAL_TARGETS, PROVIDER_CREDENTIAL_TARGETS, type CredentialConfig, type CredentialTargetId } from "../../shared/credential-request.ts";
 import { WINDOW_PREFS, type WindowPrefId } from "../../shared/app-settings.ts";
 import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
+import { defaultBotPerson } from "../../shared/default-bot.ts";
 import { MAUS_COLOR_NAMES, type MausColor } from "../../shared/wire.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "../bot-thread-limits.ts";
 import { parseSocks5Proxy } from "../browser/egress/policy.ts";
@@ -63,6 +64,7 @@ export interface RegistryDeps {
   pinBot(botId: string, pinned: boolean): Promise<string | null>;
   renameBot(botId: string, name: string): Promise<string | null>;
   colorBot(botId: string, color: MausColor): Promise<string | null>;
+  showHelper(botId: string, shown: boolean): Promise<string | null>;
   credentials(): CredentialConfig;
   window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
   engines(): Array<{ instanceId: string; name: string; working: boolean }>;
@@ -113,6 +115,10 @@ const removableKind = (instanceId: string, entry: InstanceConfig | undefined) =>
 
 export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   const cfg = deps.cfg;
+  const placeHelper = () => {
+    const helpers = deps.bots().filter((bot) => bot.defaultBot && !defaultBotPerson(bot));
+    return helpers.length === 1 ? helpers[0] : undefined;
+  };
   const names = (ids: readonly string[]) => ids.map((id) => deps.bots().find((bot) => bot.id === id)?.name ?? id).join(", ");
   const writable = (spec: WritableSpec): SettingEntry => ({ ...spec, read: spec.read ?? (() => display(spec.current())), write: spec.write as Writable["write"] });
   const config = <V,>(patch: (value: V) => Record<string, unknown>) => (value: V) => deps.saveConfig(patch(value));
@@ -207,6 +213,18 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     tier: "confirm", value: url, allowed: "an http(s) address, or empty to clear", current: () => current() ?? "", write: config(patch),
   });
   const confirm: SettingEntry[] = [
+    writable({
+      id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
+      synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },
+      read: () => { const helper = placeHelper(); return helper ? (helper.sidebarHidden ? "hidden" : "shown") : ""; },
+      describe: (shown: boolean) => {
+        const helper = placeHelper();
+        return helper ? { change: `${shown ? "Show" : "Hide"} ${JSON.stringify(helper.name)} (${helper.id}) in the sidebar; currently ${helper.sidebarHidden ? "hidden" : "shown"}` }
+          : { refusal: "This place has no single helper of its own." };
+      },
+      write: (shown: boolean) => { const helper = placeHelper(); return helper ? deps.showHelper(helper.id, shown) : Promise.resolve("This place has no single helper of its own."); },
+    }),
     writable({
       id: "bots.name", label: "Bot name", help: "The name of one bot in the sidebar and conversations. Use list_bots for its id.", where: "a bot's Settings",
       synonyms: ["rename bot", "bot name", "name bot"], tier: "confirm", value: botRename, allowed: '{"botId","name"}',
@@ -354,6 +372,7 @@ export function routeBackedRegistry(deps: {
     pinBot: (botId, pinned) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { pinned }, auth })),
     renameBot: (botId, name) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { name }, auth })),
     colorBot: (botId, color) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { color }, auth })),
+    showHelper: (botId, shown) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { sidebarHidden: !shown }, auth })),
     engines: () => deps.providers.instances().filter((instance) => instance.enabled).map((instance) => ({
       instanceId: instance.instanceId, working: deps.providers.lastSnapshot(instance.instanceId)?.state === "available",
       name: instance.displayName ?? BUILT_IN_DRIVERS.find((driver) => driver.driverKind === instance.driverKind)?.metadata.displayName ?? instance.instanceId,

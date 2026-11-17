@@ -36,6 +36,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const pinCalls: Array<{ botId: string; pinned: boolean }> = [];
   const renameCalls: Array<{ botId: string; name: string }> = [];
   const colorCalls: Array<{ botId: string; color: string }> = [];
+  const helperCalls: Array<{ botId: string; shown: boolean }> = [];
   const engineCalls: unknown[] = [];
   const chosen = new Set(options.chosen ?? []);
   const messages: Array<Record<string, any>> = [];
@@ -91,6 +92,13 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
       bot.color = color;
       return null;
     },
+    showHelper: async (botId, shown) => {
+      helperCalls.push({ botId, shown });
+      const bot = bots.find((candidate) => candidate.id === botId);
+      if (!bot?.defaultBot) return "no such helper";
+      bot.sidebarHidden = !shown;
+      return null;
+    },
     credentials: () => cfg,
     engines: () => [{ instanceId: "claude", name: "Claude", working: true }, { instanceId: "openai-compat-gw", name: "Gateway", working: true }],
     engineChosen: (instanceId) => chosen.has(instanceId),
@@ -121,7 +129,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, helperCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -135,15 +143,18 @@ describe("reads", () => {
   });
 
   it("keeps settings details and writes out of a turn that is not the owner's", async () => {
-    const { host, turn, set, saved, pinCalls } = fixture({ owner: false });
+    const { host, turn, set, saved, pinCalls, helperCalls, bots } = fixture({ owner: false });
+    bots[1]!.defaultBot = {};
     expect((await host.handle({ action: "get", id: "bots.approvalModes" }, turn)).status).toBe(403);
     expect((await host.handle({ action: "find", query: "anthropic" }, turn)).status).toBe(403);
     const refused = await set("general.language", "de");
     expect(refused.status).toBe(403);
     expect(refused.body.error).toContain("owner's own conversation");
     expect((await set("bots.pinned", ["kiwi"])).status).toBe(403);
+    expect((await set("sidebar.showHelper", false)).status).toBe(403);
     expect(saved).toEqual([]);
     expect(pinCalls).toEqual([]);
+    expect(helperCalls).toEqual([]);
   });
 
   it("refuses writes in a guest-driven conversation", async () => {
@@ -304,6 +315,51 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
+    const fx = fixture();
+    fx.bots[0]!.defaultBot = { person: "other@example.test" };
+    fx.bots[1]!.defaultBot = {};
+    fx.bots[1]!.sidebarHidden = true;
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "show helper" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("sidebar.showHelper");
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "sidebar.showHelper" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ tier: "confirm", value: "hidden" });
+
+    const cancelled = fx.set("sidebar.showHelper", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("Clive") } });
+    expect(fx.helperCalls).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.bots[1]!.sidebarHidden).toBe(true);
+
+    const stale = fx.set("sidebar.showHelper", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.bots[0]!.name = "Clive";
+    fx.bots[1]!.defaultBot = { person: "other@example.test" };
+    fx.bots[0]!.defaultBot = {};
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.helperCalls).toEqual([]);
+
+    fx.bots[1]!.defaultBot = {};
+    expect((await fx.set("sidebar.showHelper", true)).status).toBe(409);
+    expect(fx.helperCalls).toEqual([]);
+    fx.bots[0]!.defaultBot = { person: "other@example.test" };
+
+    const approved = fx.set("sidebar.showHelper", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.helperCalls).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.helperCalls).toEqual([{ botId: "clive", shown: true }]);
+    expect(fx.bots[1]!.sidebarHidden).toBe(false);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
   it("changes one bot colour only after owner Change and refuses stale or invalid requests", async () => {
     const fx = fixture();
     const value = { botId: "clive", color: "teal" };
