@@ -178,7 +178,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
     mounted.current = true;
     return () => { pauseAndSave(); mounted.current = false; };
   }, [pauseAndSave]);
-  useEffect(() => { if (!visible) pauseAndSave(); }, [visible, pauseAndSave]);
+  useEffect(() => { if (!visible && !window.document.fullscreenElement) pauseAndSave(); }, [visible, pauseAndSave]);
 
   useEffect(() => {
     if (!valid || !visible) return;
@@ -274,7 +274,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   };
 
   useEffect(() => {
-    if (!valid || !visible || !seriesId) return;
+    if (!valid || !seriesId) return;
     const controller = new AbortController();
     setSeries(null); setSeriesError(""); setPlayback(null); setEpisodeId(null);
     void post<HongguoSeriesResponse>("series", { expectedRevision: revision, seriesId }, controller.signal)
@@ -283,7 +283,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
         setSeries(result.series);
       }).catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setSeriesError); });
     return () => controller.abort();
-  }, [valid, visible, refreshKey, seriesId, requestedEpisodeId, post, revision, showError]);
+  }, [valid, refreshKey, seriesId, requestedEpisodeId, post, revision, showError]);
 
   useEffect(() => {
     if (!series || series.id !== seriesId || history === null || episodeId !== null) return;
@@ -294,7 +294,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   }, [series, seriesId, history, requestedEpisodeId, episodeId]);
 
   useEffect(() => {
-    if (!valid || !visible || page !== "watch" || !series || !episode) return;
+    if (!valid || page !== "watch" || !series || !episode) return;
     const controller = new AbortController();
     setPlayback(null); setPlaybackError("");
     if (episode.availability === "unavailable") {
@@ -308,7 +308,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
         setPlayback(result);
       }).catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setPlaybackError); });
     return () => controller.abort();
-  }, [valid, visible, page, series, episode, appId, revision, post, showError]);
+  }, [valid, page, series, episode, appId, revision, post, showError]);
 
   const openSeries = (id: string, resumeEpisodeId: string | null = null) => {
     pauseAndSave(); progress.current = null; lastQueuedPosition.current = -Infinity;

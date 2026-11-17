@@ -6,12 +6,12 @@ import { setLocale } from "@/lib/i18n";
 import type { MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
 import type { HongguoHistoryEntry, HongguoPlaybackResponse, HongguoSeriesCard } from "../../../shared/hongguo-mini-app";
 
-const fixture = vi.hoisted(() => ({ api: vi.fn() }));
+const fixture = vi.hoisted(() => ({ api: vi.fn(), visible: true, fullscreen: null as Element | null }));
 vi.mock("@/state/store", () => ({
   api: fixture.api,
   ApiError: class ApiError extends Error { constructor(message: string, readonly status: number) { super(message); } },
 }));
-vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => true }));
+vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => fixture.visible }));
 
 import { HongguoView } from "./HongguoView";
 
@@ -64,6 +64,9 @@ const openPlayer = async () => {
 
 beforeEach(() => {
   refreshKey++;
+  fixture.visible = true;
+  fixture.fullscreen = null;
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fixture.fullscreen });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true } });
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
@@ -130,7 +133,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 
-afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLocale("en"); });
+afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); Reflect.deleteProperty(document, "fullscreenElement"); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLocale("en"); });
 
 it("keeps catalog errors visible and clears them when restoring cached rows after Strict Mode", async () => {
   await render(true);
@@ -371,4 +374,45 @@ it.each(["delete", "clear"] as const)("orders old-instance close saves before a 
   await act(async () => { newVideo.currentTime = 31; newVideo.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
   await vi.waitFor(() => expect(history[0]?.episodeId).toBe(laterEpisode.id));
   expect(history[0]?.positionSeconds).toBe(31);
+});
+
+
+it("retains the same player and position across fullscreen visibility changes", async () => {
+  playback = { appId: app.id, revision: 3, status: "ready",
+    mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
+  await render();
+  const video = await openPlayer();
+  video.currentTime = 31;
+  const reads = () => fixture.api.mock.calls.filter(([path]) => /\/(series|playback)$/.test(String(path))).length;
+  const before = reads();
+  fixture.fullscreen = video;
+  vi.mocked(HTMLMediaElement.prototype.pause).mockClear();
+  fixture.visible = false;
+  await render();
+  expect(host.querySelector("video")).toBe(video);
+  expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+  fixture.fullscreen = null;
+  fixture.visible = true;
+  await render();
+  expect(host.querySelector("video")).toBe(video);
+  expect(video.currentTime).toBe(31);
+  expect(reads()).toBe(before);
+});
+
+it("pauses an ordinary hidden page without reloading playback on return", async () => {
+  playback = { appId: app.id, revision: 3, status: "ready",
+    mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
+  await render();
+  const video = await openPlayer();
+  video.currentTime = 19;
+  const before = fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback")).length;
+  vi.mocked(HTMLMediaElement.prototype.pause).mockClear();
+  fixture.visible = false;
+  await render();
+  expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
+  fixture.visible = true;
+  await render();
+  expect(host.querySelector("video")).toBe(video);
+  expect(video.currentTime).toBe(19);
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(before);
 });
