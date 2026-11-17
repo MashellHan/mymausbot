@@ -4,7 +4,8 @@ import { activeLocale } from "@/lib/i18n";
 import { api, ApiError } from "@/state/store";
 import { utf8Bytes } from "../../../shared/app";
 import type { MiniAppDataBinding, MiniAppNamedQuery } from "../../../shared/mini-app-data";
-import type { MiniAppDocument, MiniAppQuery, MiniAppQueryOptions, MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
+import type { MiniAppDashboardReadResult, MiniAppDashboardRequest, MiniAppDocument, MiniAppQuery, MiniAppQueryOptions,
+  MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
 import { mountAppFrame, type AppFrameHost } from "../app/app-frame-host";
 import { appHostContext, appMaxHeight, appThemeContext } from "../app/app-host-context";
 import { miniAppFrameDocument } from "./mini-app-document";
@@ -15,6 +16,7 @@ const MAX_RESULT_BYTES = 1_000_000;
 const MAX_READS_PER_MINUTE = 240;
 
 type FrameQuery = { mausMiniApp: 1; type: "query"; id: string; queryId: string; parameters: Record<string, string | string[]>; options?: MiniAppQueryOptions };
+type FrameDashboard = { mausMiniApp: 1; type: "dashboard-read"; id: string; selection: MiniAppDashboardRequest };
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -44,6 +46,29 @@ function parseFrameQuery(value: unknown, bindings: MiniAppDataBinding[]): { requ
   return { request: value as FrameQuery, binding: declared.binding };
 }
 
+function parseFrameDashboard(value: unknown): FrameDashboard | null {
+  if (!record(value) || value.mausMiniApp !== 1 || value.type !== "dashboard-read" || typeof value.id !== "string"
+    || !value.id || value.id.length > 100 || !record(value.selection)) return null;
+  const selection = value.selection;
+  const fields: Record<string, string[]> = {
+    teams: ["resource"], activity: ["resource", "agentId", "occupantId"],
+    configuration: ["resource", "agentId", "occupantId"], "team-rules": ["resource", "teamId"],
+    skill: ["resource", "agentId", "occupantId", "skillId"],
+  };
+  if (typeof selection.resource !== "string" || !Object.hasOwn(fields, selection.resource)
+    || Object.keys(selection).length !== fields[selection.resource]!.length
+    || Object.keys(selection).some((key) => !fields[String(selection.resource)]!.includes(key))) return null;
+  if ((selection.resource === "activity" && (typeof selection.agentId !== "string" || !/^w\d+:p[0-9A-Za-z]+$/.test(selection.agentId))
+      || (selection.resource === "configuration" || selection.resource === "skill")
+        && (typeof selection.agentId !== "string" || !/^w\d+:p[0-9A-Za-z]+$/.test(selection.agentId)))
+    || (selection.resource === "activity" || selection.resource === "configuration" || selection.resource === "skill")
+      && (typeof selection.occupantId !== "string" || !/^o[0-9a-f]{16}$/.test(selection.occupantId))
+    || selection.resource === "team-rules" && (typeof selection.teamId !== "string" || !/^w\d+$/.test(selection.teamId))
+    || selection.resource === "skill" && (typeof selection.skillId !== "string" || !/^s[0-9a-f]{16}$/.test(selection.skillId))) return null;
+  try { if (utf8Bytes(JSON.stringify(selection)) > 512) return null; } catch { return null; }
+  return value as FrameDashboard;
+}
+
 export interface MiniAppFrameMount {
   readonly iframe: HTMLIFrameElement;
   update(state: MiniAppState): void;
@@ -64,13 +89,53 @@ export function mountMiniAppFrame(options: {
   let host: AppFrameHost | null = null;
   const frameDocument = miniAppFrameDocument(document, typeof window.ogb?.openExternal === "function");
   const controllers = new Map<AbortController, string>();
+  const dashboardControllers = new Map<AbortController, string>();
   let recentReads: number[] = [];
   const reply = (id: string, result?: MiniAppQueryResult, error?: string) => {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "query-result", id, ...(error ? { error } : { result }) }, "*");
   };
+  const replyDashboard = (id: string, result?: MiniAppDashboardReadResult, error?: string) => {
+    if (!active) return;
+    host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "dashboard-result", id, ...(error ? { error } : { result }) }, "*");
+  };
   const handle = (event: MessageEvent) => {
     if (!active || !host || event.source !== host.iframe.contentWindow) return;
+    if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "dashboard-read") {
+      const request = parseFrameDashboard(event.data);
+      if (!request) {
+        if (typeof event.data.id === "string") replyDashboard(event.data.id, undefined, "This dashboard resource or its parameters are unavailable.");
+        return;
+      }
+      if (!miniAppNativeFrameGuard() || state.appId !== document.app.id || state.status !== "active"
+        || document.app.status !== "active" || state.revision !== document.app.revision
+        || document.app.dashboardIdentity !== "agent-team" || document.app.dashboard?.kind !== "agent-team"
+        || document.app.dashboard.renderer !== "html") {
+        return replyDashboard(request.id, undefined, "This dashboard is unavailable. Refresh and try again.");
+      }
+      const now = Date.now();
+      recentReads = recentReads.filter((at) => now - at < 60_000);
+      if (recentReads.length >= MAX_READS_PER_MINUTE) return replyDashboard(request.id, undefined, "Too many reads. Wait a minute and try again.");
+      recentReads.push(now);
+      const controller = new AbortController();
+      dashboardControllers.set(controller, request.id);
+      const revision = state.revision;
+      void api<MiniAppDashboardReadResult>(`/api/mini-apps/${encodeURIComponent(document.app.id)}/dashboard`, {
+        method: "POST", body: JSON.stringify({ ...request.selection, expectedRevision: revision }), signal: controller.signal, timeoutMs: 15_000,
+      }).then((result) => {
+        if (!active || state.revision !== revision || controller.signal.aborted) return;
+        if (!miniAppNativeFrameGuard() || result.appId !== document.app.id || result.revision !== revision
+          || result.resource !== request.selection.resource || utf8Bytes(JSON.stringify(result)) > MAX_RESULT_BYTES) {
+          return replyDashboard(request.id, undefined, "This dashboard changed while its data was being read.");
+        }
+        replyDashboard(request.id, result);
+      }).catch((error: unknown) => {
+        if (!active || controller.signal.aborted) return;
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) options.onRevoked();
+        replyDashboard(request.id, undefined, error instanceof Error ? error.message : "The dashboard read failed. Try again.");
+      }).finally(() => dashboardControllers.delete(controller));
+      return;
+    }
     const parsed = parseFrameQuery(event.data, document.bindings);
     if (!parsed) {
       if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "query" && typeof event.data.id === "string") {
@@ -80,7 +145,10 @@ export function mountMiniAppFrame(options: {
     }
     const { request, binding } = parsed;
     if (!miniAppNativeFrameGuard()) return reply(request.id, undefined, "This Mini App requires the guarded desktop window.");
-    if (state.status !== "active") return reply(request.id, undefined, "This app is archived and cannot read data.");
+    if (state.appId !== document.app.id || state.status !== "active" || document.app.status !== "active") {
+      return reply(request.id, undefined, "This app is archived and cannot read data.");
+    }
+    if (state.revision !== document.app.revision) return reply(request.id, undefined, "Data changed while this report was being read. Refresh and try again.");
     const dataRevision = state.data.find((entry) => entry.datasetId === binding.datasetId)?.revision;
     if (dataRevision === undefined) return reply(request.id, undefined, "This app's data is unavailable. Refresh and try again.");
     if (request.options?.expectedDataRevision !== undefined && request.options.expectedDataRevision !== dataRevision) {
@@ -138,6 +206,7 @@ export function mountMiniAppFrame(options: {
         && next.data.every((entry, index) => entry.datasetId === state.data[index]?.datasetId && entry.revision === state.data[index]?.revision))) return;
       state = next;
       for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "Data changed while this report was being read. Refresh and try again."); }
+      for (const [controller, id] of dashboardControllers) { controller.abort(); replyDashboard(id, undefined, "This dashboard changed. Refresh and try again."); }
       host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "data-changed" }, "*");
     },
     contextChanged(width) {
@@ -146,6 +215,7 @@ export function mountMiniAppFrame(options: {
     retire() {
       if (!active) return;
       for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "This app was closed."); }
+      for (const [controller, id] of dashboardControllers) { controller.abort(); replyDashboard(id, undefined, "This app was closed."); }
       active = false;
       window.removeEventListener("message", handle);
       host?.retire();

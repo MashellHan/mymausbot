@@ -2,7 +2,7 @@ import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { ErrorCode, TransportResponse } from "openhongguo";
 
 export type PlaybackStage = "series" | "selection" | "resolve" | "media";
-export type PlaybackReason = "anonymous-limited" | "episode-unavailable" | "provider-unavailable";
+export type PlaybackReason = "anonymous-limited" | "episode-unavailable" | "provider-unavailable" | "quality-unavailable";
 
 const MAX_INSPECT_BYTES = 64 * 1024;
 const SDK_CODES = new Set<ErrorCode>([

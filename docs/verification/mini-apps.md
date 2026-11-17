@@ -43,20 +43,25 @@ existing Data sources; count and metadata alone do not prove displayed contents.
 ## Built-in Agent Team and Activities
 
 Use the existing synthetic dashboard snapshots with an isolated Mini Apps
-registry. Open both default entries through the library and compare their
-values with the synthetic snapshots. The original Computer tabs are removed. Keep Bookkeeping and both
+registry. Open the reviewed Agent Team HTML through the guarded frame and keep
+Activities native. Compare both with synthetic provider snapshots. The original
+Computer tabs are removed. Keep Bookkeeping and both
 report apps installed to check that their ordinary HTML path still works.
 
 The focused contracts are:
 
 ```sh
-pnpm exec vitest run server/mini-apps/registry.test.ts server/routes/mini-apps.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts server/mini-apps/mini-apps.e2e.test.ts src/components/AgentActivityDetails.test.ts src/components/mini-apps/DashboardInstall.test.ts src/components/mini-apps/MiniAppDashboard.test.ts src/components/mini-apps/MiniAppsPanel.test.ts
+pnpm exec vitest run server/local-agent-activity.test.ts server/mini-apps/registry.test.ts server/mini-apps/defaults.test.ts server/routes/mini-apps.test.ts server/routes/local-dashboard.test.ts server/local-dashboard.e2e.test.ts server/mini-apps/mini-apps.e2e.test.ts src/components/AgentActivityDetails.test.ts src/components/mini-apps/DashboardInstall.test.ts src/components/mini-apps/MiniAppDashboard.test.ts src/components/mini-apps/MiniAppFrame.test.ts src/components/mini-apps/MiniAppsPanel.test.ts
 ```
 
 Exercise owner initialization and grants, an app reading an ungranted resource,
 paired/service denial, and a pending read during archive, revision change or
 revocation. An old registry without the dashboard column must migrate with no
 grant. Archive and workspace restore clear grants; rollback cannot revive them.
+Publish reviewed vA then vB on the same installed ID, refresh the frame without
+restarting the host, roll back to vA and to old fallback, and revoke the grant.
+Only vA/vB may use the HTML bridge; the old fallback remains native. Reject
+extra frame fields, a spoofed revision, a replaced occupant and oversized replies.
 An explicit owner reinstall retains the archived app's ID and history.
 After restore or explicit revocation, an active built-in entry must offer a
 visible repair action and require an owner regrant before showing live data.
@@ -71,7 +76,9 @@ unmount. Offline data must remain unavailable or stale, and authorization loss
 must clear old observations. Check keyboard navigation, light/dark themes and
 English/Chinese at 960, 400 and 360 pixels. Built-in views must require the
 native guard and current installed revision; HTML markers or a matching title
-must never activate this path. Bot discovery may reveal metadata and editing
+must never activate this path. Agent Team's Tree/Trajectory UI must use bounded
+redacted observations, with tool metadata but no raw arguments or outputs.
+Bot discovery may reveal metadata and editing
 limits, never dashboard snapshots or self-grant authority.
 
 Reuse existing evidence for unchanged shared views and provider validation.

@@ -24,3 +24,12 @@ export const SHIPPED_TEMPLATE_SHA256: Record<MiniAppShippedTemplateKind, readonl
 };
 
 export const GITHUB_PENDING_TEMPLATE_SHA256 = "9ece01a026400263943ee64985792f13592727a3fbda0e005e0b5cae6d6584f8";
+
+/** MashellHan/mymausbotminiapps 0ac9ee68a8ecbf613944d09cac8a092a4566aa08, apps/agent-team/index.html. */
+export const REVIEWED_AGENT_TEAM_HTML_SHA256 = "2c4e806fef13de0bc8a9861bd642876dc89255336b041928d417bdadc22959b0";
+
+/** Native Agent Team placeholders shipped at d45d7e4 and 6ef6637. */
+export const AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256 = [
+  "c3740f8ef57d3b00e6956bd9a168a45a4622afeb4e94edf817958939706c56ee",
+  "6c83e3550c95c47babb8f977a5d17e82445e5ffcfaf904b58cb971334b47a772",
+] as const;

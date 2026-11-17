@@ -37,15 +37,20 @@ export interface HongguoEpisode {
   imageUrl: string | null;
 }
 
-export interface HongguoSeries extends HongguoSeriesCard { episodes: HongguoEpisode[] }
+export interface HongguoSeries extends HongguoSeriesCard {
+  episodes: HongguoEpisode[];
+  heat?: number | null;
+  playCount?: number | null;
+}
 export interface HongguoSeriesResponse { appId: string; revision: number; series: HongguoSeries }
-export interface HongguoPlaybackRequest { expectedRevision: number; seriesId: string; episodeId: string }
+export interface HongguoPlaybackRequest { expectedRevision: number; seriesId: string; episodeId: string; qualityId?: string }
 
 /** An unavailable result has no media URL; the native player must not invent one. */
 export type HongguoPlaybackResponse =
-  | { appId: string; revision: number; status: "ready"; mediaUrl: string; durationSeconds: number | null }
+  | { appId: string; revision: number; status: "ready"; mediaUrl: string; durationSeconds: number | null;
+      selectedQualityId: string | null; availableQualityIds: string[] }
   | { appId: string; revision: number; status: "unavailable";
-      reason: "anonymous-limited" | "episode-unavailable" | "provider-unavailable" };
+      reason: "anonymous-limited" | "episode-unavailable" | "provider-unavailable" | "quality-unavailable" };
 
 export interface HongguoHistoryEntry {
   seriesId: string;

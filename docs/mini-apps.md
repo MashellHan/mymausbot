@@ -74,13 +74,15 @@ permission. The full request and response types are in `shared/hongguo-mini-app.
 
 Open either app directly from **Computer → Mini Apps**. They are no longer
 separate Computer tabs; an older saved Agent Team or Usage tab selection opens
-Mini Apps. Both surfaces use the same providers and shared views;
+Mini Apps. Both surfaces use the same local providers;
 the included apps do not start a collector, copy snapshots into another store
 or change a schedule. Activities keeps the internal `usage` identity and routes.
 
 Agent Team reads local Herdr member status, models and bounded task hints. An
-expanded activity disclosure reads recent redacted user and assistant messages;
-it starts folded. On opening, the app selects an observed working team, then a
+expanded activity disclosure reads recent redacted user and assistant messages
+plus safe tool-call/result metadata. Raw arguments, results, hidden reasoning
+and system/developer messages are withheld. It starts folded. The HTML offers
+Tree and Trajectory views over the same bounded snapshots. On opening, the app selects an observed working team, then a
 blocked or verified recently active team when available; otherwise no office is
 selected. The person's selection or collapse remains in their control. The app
 cannot control agents. Its header shows rolling 24-hour and 7-day Tokens only
@@ -100,11 +102,14 @@ totals. PR counts, total tokens and cache-read tokens retain the existing
 Unavailable data remains unavailable; partial counts, stale snapshots and
 verified zero values retain their separate meanings.
 
-These two views are built into the host. Their registered metadata identifies
-`renderer: "native"`, `htmlRole: "fallback-only"` and the editable title and
-description fields. Publishing HTML changes only the fallback document, never
-the live panel layout or its observations. These views do not offer a chat
-editor. Other Mini Apps retain normal editable HTML behavior.
+Agent Team uses a pinned, independently authored HTML template inside the
+guarded Mini App frame. Its registered metadata identifies `renderer: "html"`
+and `htmlRole: "primary"` only for reviewed and subsequently published template
+versions. An old fallback version remains native after rollback. Activities
+keeps `renderer: "native"` and `htmlRole: "fallback-only"`. Neither view offers
+a chat editor. The owner-scoped dashboard grant and current revision control
+every Agent Team read; publishing HTML cannot grant itself access. Only the
+owner can change or roll back a live Agent Team HTML page.
 
 Removing archives the app and clears its dashboard read grant while keeping
 its identity and history. Adding it again uses that same app ID and requires an
@@ -265,11 +270,13 @@ Consult turns cannot mutate apps. A late response is discarded after revocation,
 an app change or a Data revision change.
 
 Built-in dashboard reads are bound to an installed app ID and current revision.
-The fixed Agent Team grant permits only teams and per-pane activity; Activities
-permits only the existing aggregate. The server checks owner access, active
-status, revision and resource before and after each provider read. The host
+The fixed Agent Team HTML grant permits teams, per-pane activity and
+configuration, team rules and skill documents for a verified current occupant;
+the old native grant permits teams and activity. Activities permits only the
+existing aggregate. The server checks owner access, active status, revision and
+resource before and after each provider read. The host
 aborts pending reads on hide/unmount and clears observations on revocation.
-These resources are not added to the iframe SDK, and app HTML gains no host URL,
+Only the selected Agent Team resources are added to the iframe SDK; app HTML gains no host URL,
 file, command or general fetch capability. The guarded report source opener is
 limited to validated links after user action; it is not general navigation or
 frame network access. Dashboard replies are capped at 1 MiB

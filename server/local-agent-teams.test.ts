@@ -64,7 +64,7 @@ describe("local Agent Team provider", () => {
     const snapshot = await provider.get();
     expect(commands.sort()).toEqual(["--session default agent list", "--session default workspace list"]);
     expect(snapshot).toEqual({ status: "ready", updatedAt: 1000, teamCount: 1, teams: [{ id: "w6", name: "MausBot", agentCount: 1, activeAgentCount: 0, lastActivityAt: Date.UTC(2026, 10, 3, 8), agents: [{
-      id: "w6:p1", name: "mausbot-front", kind: "codex", role: null, model: "gpt-6-sol", reasoningEffort: "xhigh", contextUsed: 150, contextWindow: 256000, state: "done", taskHint: "latest synthetic instruction",
+      id: "w6:p1", name: "mausbot-front", kind: "codex", role: null, model: "gpt-6-sol", reasoningEffort: "xhigh", contextUsed: 150, contextWindow: 256000, state: "done", taskHint: "latest synthetic instruction", messagePreview: null,
     }], tokenUsage24h: { coverage: "partial", knownTokens: null },
       tokenUsage7d: { coverage: "partial", knownTokens: null } }] });
     expect(JSON.stringify(snapshot)).not.toMatch(/private conversation|private\/workspace|session_meta|terminal_title|900000/);

@@ -16,7 +16,8 @@ const catalog = z.object({ expectedRevision: revision, mode: z.enum(["popular", 
   .refine((value) => value.mode !== "search" || value.query !== undefined)
   .refine((value) => value.mode !== "category" || value.categoryId !== undefined);
 const series = z.object({ expectedRevision: revision, seriesId: id }).strict();
-const playback = series.extend({ episodeId: id });
+const qualityId = z.string().regex(/^[1-9]\d{2,3}p$/);
+const playback = series.extend({ episodeId: id, qualityId: qualityId.optional() });
 const historyEntry = z.object({ seriesId: id, seriesTitle: label, coverUrl: optionalUrl,
   episodeId: id, episodeNumber: z.number().int().nonnegative().max(1_000_000).nullable(), episodeTitle: label,
   positionSeconds: seconds, durationSeconds: seconds.nullable() }).strict();
@@ -34,11 +35,16 @@ const catalogResult = z.object({ items: z.array(card).max(100),
   categories: z.array(z.object({ id, title: label }).strict()).max(100), nextCursor: z.string().max(4096).nullable() }).strict();
 const episode = z.object({ id, number: z.number().int().nonnegative().max(1_000_000), title: label,
   availability: z.enum(["available", "unavailable", "unknown"]), imageUrl: optionalUrl }).strict();
-const seriesResult = card.extend({ episodes: z.array(episode).max(10_000) });
+const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable().optional();
+const seriesResult = card.extend({ episodes: z.array(episode).max(10_000), heat: metric, playCount: metric });
 const preparedPlayback = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ready"), token: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/),
-    durationSeconds: seconds.nullable() }).strict(),
-  z.object({ status: z.literal("unavailable"), reason: z.enum(["anonymous-limited", "episode-unavailable", "provider-unavailable"]) }).strict(),
+    durationSeconds: seconds.nullable(), selectedQualityId: qualityId.nullable(),
+    availableQualityIds: z.array(qualityId).max(12) }).strict().refine((value) =>
+    value.selectedQualityId === null ? value.availableQualityIds.length === 0
+      : value.availableQualityIds.includes(value.selectedQualityId)
+        && new Set(value.availableQualityIds).size === value.availableQualityIds.length),
+  z.object({ status: z.literal("unavailable"), reason: z.enum(["anonymous-limited", "episode-unavailable", "provider-unavailable", "quality-unavailable"]) }).strict(),
 ]);
 
 function parse<T>(schema: z.ZodType<T>, raw: unknown, message: string, status = 400): T {

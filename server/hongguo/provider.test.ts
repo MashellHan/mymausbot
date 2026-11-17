@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { join, relative } from "node:path";
-import type { Transport } from "openhongguo";
+import type { Playback, Transport } from "openhongguo";
 import { excludedWorkspaceAuthPath } from "../workspace-backup-policy.ts";
 import { createHongguoProvider } from "./provider.ts";
+import { parseHongguoSeriesResult } from "../mini-apps/hongguo-validation.ts";
 
 const sdkCreate = vi.hoisted(() => vi.fn());
 vi.mock("openhongguo", () => ({ createClient: sdkCreate }));
@@ -21,7 +22,8 @@ function fixture() {
       { id: "102", series_id: "10", number: 2, title: "Episode 2", playable: false },
       { id: "201", series_id: "20", number: 1, playable: true },
     ] }]),
-    resolvePlayback: vi.fn(async (_episodeId: string) => ({ playback: { episode_id: "101", protected: false, streams: [], duration_seconds: 90 } })),
+    resolvePlayback: vi.fn(async (_episodeId: string): Promise<{ playback: Playback }> => ({
+      playback: { episode_id: "101", protected: false, streams: [], duration_seconds: 90 } })),
   };
   const media = { prepare: vi.fn(async () => "media-token"), serve: vi.fn(async () => new Response(null)) };
   const load = vi.fn(async () => client);
@@ -72,9 +74,29 @@ describe("Hongguo provider", () => {
       .toEqual({ status: "unavailable", reason: "episode-unavailable" });
     expect(client.resolvePlayback).not.toHaveBeenCalled();
     expect(await provider.preparePlayback("10", "101", scope))
-      .toEqual({ status: "ready", token: "media-token", durationSeconds: 90 });
-    expect(media.prepare).toHaveBeenCalledWith(expect.objectContaining({ episode_id: "101" }), undefined, scope);
+      .toEqual({ status: "ready", token: "media-token", durationSeconds: 90,
+        selectedQualityId: null, availableQualityIds: [] });
+    expect(media.prepare).toHaveBeenCalledWith(expect.objectContaining({ episode_id: "101" }), undefined, scope, undefined);
     expect(client.getSeriesBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an absent requested quality before media work and returns only sourced choices", async () => {
+    const { provider, client, media } = fixture();
+    const streams = [[360, 640], [720, 1280], [1080, 1920]].map(([width, height]) => ({
+      url: `https://v.douyinvod.com/${width}.mp4`, definition: `${width}p`,
+      width, height, codec: "h264", protected: false }));
+    client.resolvePlayback.mockResolvedValue({ playback: { episode_id: "101", protected: false, streams, duration_seconds: 90 } });
+    const scope = { appId: "a", revision: 1 };
+    expect(await provider.preparePlayback("10", "101", scope, "480p"))
+      .toEqual({ status: "unavailable", reason: "quality-unavailable" });
+    expect(media.prepare).not.toHaveBeenCalled();
+    expect(await provider.preparePlayback("10", "101", scope))
+      .toEqual({ status: "ready", token: "media-token", durationSeconds: 90,
+        selectedQualityId: "1080p", availableQualityIds: ["1080p", "720p", "360p"] });
+    expect(media.prepare).toHaveBeenLastCalledWith(expect.anything(), undefined, scope, "1080p");
+    expect(await provider.preparePlayback("10", "101", scope, "720p"))
+      .toMatchObject({ status: "ready", selectedQualityId: "720p" });
+    expect(media.prepare).toHaveBeenLastCalledWith(expect.anything(), undefined, scope, "720p");
   });
 
   it("does not retry or disguise anonymous denial, mismatched media or transport failures", async () => {
@@ -186,4 +208,23 @@ describe("Hongguo provider", () => {
     expect(await playback).toEqual({ status: "unavailable", reason: "provider-unavailable" });
     expect(JSON.parse(log.mock.calls[0]![0])).toMatchObject({ stage: "media", correlation: "isolated", responses: [] });
   });
+});
+
+it.each([
+  [1_234_567, 9_876_543, 1_234_567, 9_876_543],
+  [0, 0, 0, 0],
+  [undefined, undefined, null, null],
+  [NaN, Infinity, null, null],
+  [-1, Number.MAX_SAFE_INTEGER + 1, null, null],
+])("preserves only bounded provider metrics %s / %s", async (heat, play_count, expectedHeat, expectedPlays) => {
+  const { provider, client } = fixture();
+  const detail = (await client.getSeriesBatch())[0]!;
+  Object.assign(detail.series, { heat, play_count });
+  client.getSeriesBatch.mockResolvedValueOnce([detail]);
+  const result = await provider.series("10");
+  expect(parseHongguoSeriesResult(result)).toMatchObject({ heat: expectedHeat, playCount: expectedPlays });
+  expect(() => parseHongguoSeriesResult({ ...result, heat: -1 })).toThrow();
+  expect(() => parseHongguoSeriesResult({ ...result, playCount: Infinity })).toThrow();
+  const { heat: _heat, playCount: _plays, ...legacy } = result;
+  expect(parseHongguoSeriesResult(legacy)).toEqual(legacy);
 });

@@ -4,53 +4,40 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { LocalAgentActivityEvent, LocalAgentActivityResponse } from "../shared/local-dashboard.ts";
-import { redactSecretsInText } from "../shared/redact.ts";
+import { redactedAgentText as safeText, visibleAgentMessage } from "./local-agent-visible-message.ts";
 import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session.ts";
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 
-const PANE_ID = /^w\d+:p\d+$/;
+const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
 const HEAD_BYTES = 64 * 1024;
 const TAIL_BYTES = 512 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
 const MAX_EVENTS = 60;
-const MAX_TEXT = 600;
+const MAX_TOOL_EVENTS = 30;
 const DISCOVERY_MS = 10_000;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const unavailable = (agentId: string): LocalAgentActivityResponse => ({ agentId, status: "unavailable", updatedAt: null, truncated: false, events: [] });
 
-function safeText(value: unknown): { text: string | null; clipped: boolean } {
-  if (typeof value !== "string") return { text: null, clipped: false };
-  const clean = redactSecretsInText(value)
-    .replace(/\b(?:https?|file):\/\/[^\s"'`<>]+/gi, "[link]")
-    .replace(/(^|[\s"'`=:(])\/[^\s"'`<>]+/gm, (_match, lead: string) => `${lead}[path]`)
-    .replace(/(^|[\s"'`=:(])(?:~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])[^\s"'`<>]+/gm, (_match, lead: string) => `${lead}[path]`)
-    .replace(/\b[A-Za-z0-9._-]+(?:[\\/][A-Za-z0-9._-]+)+\b/g, "[path]")
-    .replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim();
-  const chars = Array.from(clean);
-  return { text: chars.length ? chars.slice(0, MAX_TEXT).join("") : null, clipped: chars.length > MAX_TEXT };
-}
-
-function visibleEvent(line: string, offset: number): { event: LocalAgentActivityEvent | null; clipped: boolean; format?: "legacy" | "canonical"; raw?: string } {
+function visibleEvent(line: string, offset: number): { event: LocalAgentActivityEvent | null; clipped: boolean; format?: "legacy" | "canonical"; raw?: string; callId?: string } {
   let row: Record<string, unknown>;
   try { row = record(JSON.parse(line)); } catch { return { event: null, clipped: true }; }
   const payload = record(row.payload);
-  let kind: "user" | "assistant", raw: string, format: "legacy" | "canonical";
-  if (row.type === "event_msg" && (payload.type === "user_message" || payload.type === "agent_message")) {
-    kind = payload.type === "user_message" ? "user" : "assistant";
-    raw = typeof payload.message === "string" ? payload.message : "";
-    format = "legacy";
-  } else if (row.type === "response_item" && payload.type === "message") {
-    if (payload.channel === "analysis") return { event: null, clipped: false };
-    if (payload.role === "user" && payload.phase !== "analysis") kind = "user";
-    else if (payload.role === "assistant" && (payload.phase === "commentary" || payload.phase === "final_answer" || payload.phase === "final")) kind = "assistant";
-    else return { event: null, clipped: false };
-    const partType = kind === "user" ? "input_text" : "output_text";
-    raw = Array.isArray(payload.content) ? payload.content.flatMap((part) => {
-      const content = record(part);
-      return content.type === partType && typeof content.text === "string" ? [content.text] : [];
-    }).join(" ") : "";
-    format = "canonical";
-  } else return { event: null, clipped: false };
+  if (row.type === "response_item" && ["function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"].includes(String(payload.type))) {
+    const callId = payload.call_id;
+    if (typeof callId !== "string" || !callId || callId.length > 128) return { event: null, clipped: false };
+    const result = payload.type === "function_call_output" || payload.type === "custom_tool_call_output";
+    const name = payload.name;
+    if (!result && (typeof name !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,80}$/.test(name)
+      || safeText(name).text !== name)) return { event: null, clipped: false };
+    const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
+    return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null,
+      kind: result ? "tool-result" : "tool-call", tool: result ? null : name as string,
+      text: result ? "[Result details unavailable]" : "[Arguments unavailable]" }, clipped: false,
+      format: "canonical", raw: "", callId };
+  }
+  const message = visibleAgentMessage(row);
+  if (!message) return { event: null, clipped: false };
+  const { kind, raw, format } = message;
   const { text, clipped } = safeText(raw);
   if (text === null) return { event: null, clipped };
   const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
@@ -82,6 +69,7 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
     const first = start === 0 ? 0 : bytes.indexOf(10) + 1;
     let truncated = start > 0;
     const events: Array<{ event: LocalAgentActivityEvent; format: "legacy" | "canonical"; raw: string }> = [];
+    const toolNames = new Map<string, string>();
     for (let cursor = first; (start === 0 || first > 0) && cursor < bytesRead;) {
       const end = bytes.indexOf(10, cursor);
       if (end < 0) { truncated = true; break; }
@@ -91,12 +79,25 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
         if (found.clipped) truncated = true;
         if (found.event) {
           const event = found.event;
+          if (found.callId && event.kind === "tool-call" && event.tool) {
+            toolNames.set(found.callId, event.tool);
+            if (toolNames.size > MAX_EVENTS) toolNames.delete(toolNames.keys().next().value!);
+          } else if (found.callId && event.kind === "tool-result") {
+            event.tool = toolNames.get(found.callId) ?? null;
+          }
           const duplicate = events.findIndex((prior) => event.at !== null && prior.format !== found.format && prior.event.kind === event.kind
             && prior.event.at === event.at && prior.raw === found.raw);
           if (duplicate >= 0) {
             if (found.format === "canonical") events[duplicate] = { event, format: found.format, raw: found.raw! };
           } else {
             events.push({ event, format: found.format!, raw: found.raw! });
+            if (event.kind === "tool-call" || event.kind === "tool-result") {
+              const tools = events.filter((entry) => entry.event.kind === "tool-call" || entry.event.kind === "tool-result");
+              if (tools.length > MAX_TOOL_EVENTS) {
+                events.splice(events.indexOf(tools[0]!), 1);
+                truncated = true;
+              }
+            }
             if (events.length > MAX_EVENTS) { events.shift(); truncated = true; }
           }
         }

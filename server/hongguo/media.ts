@@ -12,14 +12,40 @@ import { hongguoMediaBytes, hongguoUrl } from "./network.ts";
 export interface HongguoMediaScope { appId: string; revision: number }
 type MediaEntry = HongguoMediaScope & { path: string; directory: string; expiresAt: number };
 const TTL_MS = 60 * 60_000;
+const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
+const h264 = /^(h264|avc|avc1)(?:\.|$)/i;
 
-export function compatibleStream(playback: Playback): Stream | undefined {
-  if (playback.audio_url) return undefined;
-  return playback.streams.filter((stream) => !stream.hls && !stream.dash && stream.url && hongguoUrl(stream.url, "media")
-    && /^(h264|avc|avc1)(?:\.|$)/i.test(stream.codec ?? "")
-    && (!(stream.protected || playback.protected) || stream.encryption === "cenc-aes-ctr"))
-    .sort((a, b) => Math.abs((a.width ?? 0) * (a.height ?? 0) - 1280 * 720)
-      - Math.abs((b.width ?? 0) * (b.height ?? 0) - 1280 * 720))[0];
+const qualityId = (stream: Stream): string | null => {
+  if (!Number.isInteger(stream.width) || !Number.isInteger(stream.height)) return null;
+  const edge = Math.min(stream.width!, stream.height!);
+  const id = `${edge}p`;
+  return edge >= 144 && edge <= 2160 && Math.max(stream.width!, stream.height!) <= 3840
+    && stream.definition === id ? id : null;
+};
+
+const playableStreams = (playback: Playback, key?: string): Stream[] => playback.audio_url ? []
+  : playback.streams.filter((stream) => !stream.hls && !stream.dash && stream.url && hongguoUrl(stream.url, "media")
+    && h264.test(stream.codec ?? "")
+    && (stream.size === undefined || (Number.isSafeInteger(stream.size) && stream.size > 0 && stream.size <= MAX_MEDIA_BYTES))
+    && (!(stream.protected || playback.protected) || (stream.encryption === "cenc-aes-ctr" && /^[\da-f]{32}$/i.test(key ?? ""))));
+
+export function availableQualityIds(playback: Playback, key?: string): string[] {
+  return [...new Set(playableStreams(playback, key).map(qualityId).filter((id): id is string => id !== null))]
+    .sort((a, b) => Number.parseInt(b, 10) - Number.parseInt(a, 10)).slice(0, 12);
+}
+
+export function compatibleStream(playback: Playback, key?: string, requestedQualityId?: string): Stream | undefined {
+  const allowed = availableQualityIds(playback, key);
+  return playableStreams(playback, key).filter((stream) => requestedQualityId === undefined
+    ? !qualityId(stream) || allowed.includes(qualityId(stream)!) : qualityId(stream) === requestedQualityId)
+    .sort((a, b) => {
+      const aQuality = qualityId(a), bQuality = qualityId(b);
+      if (aQuality && bQuality) return Number.parseInt(bQuality, 10) - Number.parseInt(aQuality, 10);
+      if (aQuality) return -1;
+      if (bQuality) return 1;
+      return Math.abs((a.width ?? 0) * (a.height ?? 0) - 1280 * 720)
+        - Math.abs((b.width ?? 0) * (b.height ?? 0) - 1280 * 720);
+    })[0];
 }
 
 async function decryptMedia(input: string, output: string, key: string): Promise<void> {
@@ -52,8 +78,9 @@ export class HongguoMedia {
     this.now = now;
   }
 
-  async prepare(playback: Playback, key: string | undefined, scope: HongguoMediaScope): Promise<string | null> {
-    const stream = compatibleStream(playback);
+  async prepare(playback: Playback, key: string | undefined, scope: HongguoMediaScope,
+    requestedQualityId?: string): Promise<string | null> {
+    const stream = compatibleStream(playback, key, requestedQualityId);
     const encrypted = Boolean(stream?.protected || playback.protected);
     if (!stream?.url || (encrypted && !key) || this.active >= 2) return null;
     this.active++;
@@ -71,7 +98,7 @@ export class HongguoMedia {
         await rm(input);
       }
       const size = (await stat(path)).size;
-      if (!size || size > 64 * 1024 * 1024) throw new Error("This episode's media is unavailable.");
+      if (!size || size > MAX_MEDIA_BYTES) throw new Error("This episode's media is unavailable.");
       const token = randomUUID();
       this.entries.set(token, { ...scope, path, directory, expiresAt: this.now() + TTL_MS });
       while (this.entries.size > 4) await this.remove(this.entries.keys().next().value!);

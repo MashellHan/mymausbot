@@ -205,9 +205,12 @@ Context uses the last request's input plus output tokens, never lifetime token
 totals. A model change clears prior context. Latest instructions replace one
 bounded field. Team active counts include only the live `working` state;
 blocked, idle, unknown and response-ready agents are separate states. Stale
-snapshots label counts as last observed and pause the office artwork's motion.
-The office selector uses bundled, attributed artwork and the same snapshot as
-the selected member list.
+snapshots label counts and member states as last observed and stop working-state
+motion. The compact team selector and team-to-member tree use the same snapshot.
+Tree edges represent workspace membership, not inferred delegation. Response
+ready means the agent finished a reply, not that its assignment was verified.
+Selecting a member reveals its context and activity; stable pane/occupant identity
+preserves selection through polling and clears details when an occupant changes.
 
 ## Per-agent activity
 

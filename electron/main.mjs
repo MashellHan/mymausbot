@@ -49,6 +49,7 @@ import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs
 import { appPermissionHandlers, externalLinkUrl } from "./app-permissions.mjs";
 import { appFrameBlinkSettings, appFrameNavigationAllowed } from "./app-frame-guard.mjs";
 import { mojoPoetryHostNavigationAllowed } from "./mojo-poetry-frame.mjs";
+import { installDailyXFrameGuards } from "./daily-x-frame.mjs";
 import { writeClipboardText } from "./clipboard-write.mjs";
 import {
   managedComposioAccess,
@@ -2055,24 +2056,23 @@ function createWindow({ deferNavigation = false } = {}) {
     slog(`blocked navigation to ${origin ?? "an invalid address"}`);
   };
   win.webContents.on("will-navigate", guardNavigation);
-  win.webContents.on("will-redirect", guardNavigation);
   // No page may embed the local server, or any saved server, in this preload-bearing window.
-  win.webContents.on("will-frame-navigate", (details) => {
-    if (details.isMainFrame) return;
-    if (!appFrameNavigationAllowed(details)
-      && !mojoPoetryHostNavigationAllowed(details, win.webContents.mainFrame, rendererOrigin())) return void details.preventDefault();
-    let target = null;
-    let page = null;
-    try {
-      target = new URL(details.url).origin;
-      page = new URL(win.webContents.getURL()).origin;
-    } catch {}
-    if (!target || !page || target === page) return;
-    if (target === rendererOrigin() || allowedOrigins(environmentsState, rendererOrigin()).has(target)) {
-      details.preventDefault();
-      slog(`blocked subframe navigation to ${details.url}`);
-    }
-  });
+  installDailyXFrameGuards(win.webContents, { localOrigin: rendererOrigin, redirectFallback: guardNavigation,
+    frameFallback: (details) => {
+      if (!appFrameNavigationAllowed(details)
+        && !mojoPoetryHostNavigationAllowed(details, win.webContents.mainFrame, rendererOrigin())) return void details.preventDefault();
+      let target = null;
+      let page = null;
+      try {
+        target = new URL(details.url).origin;
+        page = new URL(win.webContents.getURL()).origin;
+      } catch {}
+      if (!target || !page || target === page) return;
+      if (target === rendererOrigin() || allowedOrigins(environmentsState, rendererOrigin()).has(target)) {
+        details.preventDefault();
+        slog(`blocked subframe navigation to ${details.url}`);
+      }
+    } });
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame || errorCode === -3) return; // -3: aborted by a newer navigation
     const remote = activeRemote(environmentsState);
