@@ -43,7 +43,28 @@ export function assistantMessagePreview(row: Record<string, unknown>): string | 
   }
   if ([payload.recipient, payload.recipient_name].some((value) => value != null && value !== "all")) return null;
   const message = visibleAgentMessage(row);
-  if (message?.kind !== "assistant" || escapeNotes(message.raw) !== message.raw ||
-      INTERNAL_ENVELOPE.test(message.raw.replace(/[\p{Cc}\p{Cf}]/gu, ""))) return null;
-  return redactedAgentText(message.raw, 400).text;
+  return message?.kind === "assistant" ? redactedAssistantPreview(message.raw) : null;
+}
+
+export function redactedAssistantPreview(raw: unknown): string | null {
+  return redactedVisibleText(raw).text;
+}
+
+function redactedVisibleText(raw: unknown): { text: string | null; clipped: boolean } {
+  if (typeof raw !== "string" || escapeNotes(raw) !== raw ||
+      INTERNAL_ENVELOPE.test(raw.replace(/[\p{Cc}\p{Cf}]/gu, ""))) return { text: null, clipped: false };
+  return redactedAgentText(raw, 400);
+}
+
+export function piVisibleMessageText(row: Record<string, unknown>, role: "user" | "assistant"): { text: string | null; clipped: boolean } | null {
+  if (row.type !== "message") return null;
+  const message = record(row.message);
+  if (message.role !== role) return null;
+  const content = typeof message.content === "string" && role === "user" ? [{ type: "text", text: message.content }] : message.content;
+  if (!Array.isArray(content)) return null;
+  const text = content.flatMap((part) => {
+    const block = record(part);
+    return block.type === "text" && typeof block.text === "string" ? [block.text] : [];
+  }).join(" ");
+  return redactedVisibleText(text);
 }

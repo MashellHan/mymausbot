@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { augmentedPath } from "./env-path.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText } from "./local-agent-session.ts";
+import { createPiSessionReader } from "./local-agent-pi-message.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { localAgentRoles, verifiedLocalAgentMembers } from "./local-agent-association.ts";
 
@@ -38,6 +39,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
   run?: HerdrRunner; home?: string; codexHome?: string; now?: () => number;
 } = {}) {
   const observationsFor = createLocalAgentSessionReader(codexHome, now);
+  const piSessionsFor = createPiSessionReader(join(home, ".local", "share", "mausbot-team", "pi-agent"));
   let lastGood: LocalAgentTeamsResponse | null = null;
   let lastResult: LocalAgentTeamsResponse | null = null;
   let lastAttempt = -Infinity;
@@ -62,7 +64,9 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       }
       const verified = verifiedLocalAgentMembers(agents);
       const verifiedIds = new Set(verified.map((agent) => agent.pane_id));
-      const [observations, roles] = await Promise.all([observationsFor(agents), localAgentRoles(verified, home)]);
+      const [observations, roles, piSessions] = await Promise.all([
+        observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
+      ]);
       const seen = new Set<string>();
       for (const agent of agents) {
         const id = agent.pane_id;
@@ -79,7 +83,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
           role: dashboardText(roles.get(id), 40), model: observation?.model ?? null,
           reasoningEffort: observation?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
           contextWindow: observation?.contextWindow ?? null, state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
-          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? null : null,
+          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? piSessions.get(id)?.preview ?? null : null,
         };
         team.agents.push(member);
       }
