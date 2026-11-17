@@ -35,7 +35,8 @@ const catalogResult = z.object({ items: z.array(card).max(100),
   categories: z.array(z.object({ id, title: label }).strict()).max(100), nextCursor: z.string().max(4096).nullable() }).strict();
 const episode = z.object({ id, number: z.number().int().nonnegative().max(1_000_000), title: label,
   availability: z.enum(["available", "unavailable", "unknown"]), imageUrl: optionalUrl }).strict();
-const seriesResult = card.extend({ episodes: z.array(episode).max(10_000) });
+const metric = z.number().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable().optional();
+const seriesResult = card.extend({ episodes: z.array(episode).max(10_000), heat: metric, playCount: metric });
 const preparedPlayback = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ready"), token: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/),
     durationSeconds: seconds.nullable(), selectedQualityId: qualityId.nullable(),

@@ -37,7 +37,11 @@ export interface HongguoEpisode {
   imageUrl: string | null;
 }
 
-export interface HongguoSeries extends HongguoSeriesCard { episodes: HongguoEpisode[] }
+export interface HongguoSeries extends HongguoSeriesCard {
+  episodes: HongguoEpisode[];
+  heat?: number | null;
+  playCount?: number | null;
+}
 export interface HongguoSeriesResponse { appId: string; revision: number; series: HongguoSeries }
 export interface HongguoPlaybackRequest { expectedRevision: number; seriesId: string; episodeId: string; qualityId?: string }
 
