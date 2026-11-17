@@ -130,7 +130,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
   }
 
   return {
-    get(): Promise<LocalAgentTeamsResponse> {
+    get(fresh = false): Promise<LocalAgentTeamsResponse> {
+      if (fresh) return refresh();
       if (pending) return pending;
       if (lastResult && now() - lastAttempt < 1_000) return Promise.resolve(lastResult);
       lastAttempt = now();

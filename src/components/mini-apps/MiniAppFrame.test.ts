@@ -25,6 +25,9 @@ const document: MiniAppDocument = {
 };
 const state: MiniAppState = { appId: app.id, revision: 3, templateVersion: 1, status: "active", data: [{ datasetId: "dataset_demo", revision: 7 }] };
 const page: MiniAppQueryResult = { columns: [{ name: "amount", type: "decimal" }], rows: [["-12.34"]], revision: 7 };
+const teamDocument: MiniAppDocument = { ...document, app: { ...app, dashboardIdentity: "agent-team",
+  dashboard: { kind: "agent-team", renderer: "html", htmlRole: "primary", editableFields: ["title", "description"],
+    resources: ["teams", "activity", "configuration", "team-rules", "skill"] } }, bindings: [] };
 let container: HTMLDivElement;
 
 function send(view: Window, data: unknown) {
@@ -41,6 +44,51 @@ beforeEach(() => {
 afterEach(() => { container.remove(); window.document.body.innerHTML = ""; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("persistent Mini App frame", () => {
+  it("exposes only the selected dashboard resource to the HTML SDK and binds the installed app revision in the host", async () => {
+    const doc = miniAppFrameDocument(teamDocument, false);
+    const child = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+    const sent: Array<Record<string, unknown>> = [];
+    const parent = { postMessage: (message: Record<string, unknown>) => sent.push(message) };
+    Object.defineProperty(child, "parent", { value: parent });
+    child.eval(/<script>([\s\S]*?)<\/script>/.exec(doc.srcdoc)![1]!);
+    const initialized = sent.find((message) => message.method === "ui/initialize")!;
+    child.dispatchEvent(new child.MessageEvent("message", { source: parent as unknown as HappyWindow,
+      data: { jsonrpc: "2.0", id: initialized.id, result: { hostCapabilities: {} } } }));
+    const sdk = (child as unknown as { mausApp: { dashboard: { read(request: object): Promise<unknown> } } }).mausApp;
+    const pending = sdk.dashboard.read({ resource: "configuration", agentId: "w6:p1", occupantId: "o1234567890abcdef" });
+    await vi.waitFor(() => expect(sent.some((message) => message.type === "dashboard-read")).toBe(true));
+    const emitted = sent.find((message) => message.type === "dashboard-read")!;
+    expect(emitted).toMatchObject({ selection: { resource: "configuration", agentId: "w6:p1", occupantId: "o1234567890abcdef" } });
+    expect(JSON.stringify(emitted)).not.toContain("expectedRevision");
+    child.dispatchEvent(new child.MessageEvent("message", { source: parent as unknown as HappyWindow,
+      data: { mausMiniApp: 1, type: "dashboard-result", id: emitted.id,
+        result: { appId: app.id, revision: 3, resource: "configuration", snapshot: { status: "ready" } } } }));
+    await expect(pending).resolves.toMatchObject({ resource: "configuration" });
+    await child.happyDOM.abort();
+
+    const selected = { resource: "configuration", agentId: "w6:p1", occupantId: "o1234567890abcdef" };
+    const answer = { appId: app.id, revision: 3, resource: "configuration", snapshot: { agentId: "w6:p1", occupantId: selected.occupantId } };
+    fixture.api.mockResolvedValue(answer);
+    const mount = mountMiniAppFrame({ container, document: teamDocument, state: { ...state, data: [] }, onRevoked: vi.fn() });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    send(window, { mausMiniApp: 1, type: "dashboard-read", id: "foreign", selection: selected });
+    send(view, { mausMiniApp: 1, type: "dashboard-read", id: "spoof", selection: { ...selected, expectedRevision: 999 } });
+    expect(fixture.api).not.toHaveBeenCalled();
+    send(view, { mausMiniApp: 1, type: "dashboard-read", id: "good", selection: selected });
+    await vi.waitFor(() => expect(posted.mock.calls.find(([value]) => (value as { id?: string }).id === "good")?.[0])
+      .toMatchObject({ result: answer }));
+    expect(fixture.api).toHaveBeenCalledWith(`/api/mini-apps/${app.id}/dashboard`, expect.objectContaining({
+      method: "POST", body: JSON.stringify({ ...selected, expectedRevision: 3 }),
+    }));
+    mount.retire();
+    const old = { ...teamDocument, app: { ...teamDocument.app, dashboard: { ...teamDocument.app.dashboard!,
+      renderer: "native" as const, htmlRole: "fallback-only" as const, resources: ["teams", "activity"] as const } } } as MiniAppDocument;
+    const fallback = mountMiniAppFrame({ container, document: old, state: { ...state, data: [] }, onRevoked: vi.fn() });
+    send(fallback.iframe.contentWindow!, { mausMiniApp: 1, type: "dashboard-read", id: "blocked", selection: selected });
+    expect(fixture.api).toHaveBeenCalledTimes(1);
+    fallback.retire();
+  });
   it("starts with an opaque document and no generic app capability", () => {
     const doc = miniAppFrameDocument(document, false);
     expect(doc.srcdoc).toMatch(/^<!DOCTYPE html><meta http-equiv="Content-Security-Policy"/);

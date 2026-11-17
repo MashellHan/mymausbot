@@ -31,7 +31,7 @@ const documentFor = (kind: "agent-team" | "usage", revision = 3): MiniAppDocumen
 const stateFor = (revision = 3): MiniAppState => ({ appId, revision, templateVersion: 1, status: "active", data: [] });
 const teams: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1_000, teamCount: 1, teams: [
   { id: "w1", name: "Synthetic team", agentCount: 1, activeAgentCount: 1, agents: [
-    { id: "w1:p1", name: "Pine", kind: "codex", role: "Developer", model: "model-a", reasoningEffort: "high",
+    { id: "w1:p1", occupantId: "o1234567890abcdef", name: "Pine", kind: "codex", role: "Developer", model: "model-a", reasoningEffort: "high",
       contextUsed: 100, contextWindow: 1_000, state: "working", taskHint: "Review a synthetic task" },
   ] },
 ] };
@@ -108,13 +108,15 @@ describe("installed native Mini App dashboards", () => {
       [rulesPath, { background: true, signal: expect.any(AbortSignal), timeoutMs: 10_000 }],
     ]);
     expect(host.textContent).not.toContain("Synthetic recent input");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-agent-select="w1:p1"]')!.click());
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agent-activity-w1:p1"] button')!.click());
     await vi.waitFor(() => expect(host.textContent).toContain("Synthetic recent input"));
     expect(calls.api.mock.calls.map(([path]) => path)).toEqual([
       dashboardPath, rulesPath, dashboardPath,
     ]);
     expect(calls.api.mock.calls[2]![1].method).toBe("POST");
-    expect(JSON.parse(calls.api.mock.calls[2]![1].body)).toEqual({ resource: "activity", expectedRevision: 3, agentId: "w1:p1" });
+    expect(JSON.parse(calls.api.mock.calls[2]![1].body)).toEqual({ resource: "activity", expectedRevision: 3,
+      agentId: "w1:p1", occupantId: "o1234567890abcdef" });
   });
 
   it("keeps verified contributions distinct from repository observations and Profile references in an app-scoped snapshot", async () => {

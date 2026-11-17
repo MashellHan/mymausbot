@@ -1,13 +1,14 @@
 import type { MiniAppDataBinding, MiniAppNamedPage, MiniAppSourceTable } from "./mini-app-data.ts";
-import type { LocalAgentActivityResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "./local-dashboard.ts";
+import type { LocalAgentActivityResponse, LocalAgentConfigurationResponse, LocalAgentSkillDocumentResponse,
+  LocalAgentTeamRulesResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "./local-dashboard.ts";
 export type { MiniAppSourceTable } from "./mini-app-data.ts";
 
 export const MINI_APP_DASHBOARD_RESOURCES = {
-  "agent-team": ["teams", "activity"],
+  "agent-team": ["teams", "activity", "configuration", "team-rules", "skill"],
   usage: ["usage"],
 } as const;
 export type MiniAppDashboardKind = keyof typeof MINI_APP_DASHBOARD_RESOURCES;
-export type MiniAppDashboardResource = "teams" | "activity" | "usage";
+export type MiniAppDashboardResource = "teams" | "activity" | "configuration" | "team-rules" | "skill" | "usage";
 export type MiniAppShippedTemplateKind = "bookkeeping" | "x_ai_digest" | "github_activity";
 export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage", "hongguo"] as const;
 export type DefaultMiniAppKind = typeof DEFAULT_MINI_APP_KINDS[number];
@@ -16,6 +17,7 @@ export type MiniAppNativeKind = "hongguo";
 /** The local owner adds bundled apps once; only an explicit restore re-adds a removed app. */
 export interface MiniAppDefaultsInput {
   bookkeepingHtml: string;
+  agentTeamHtml?: string;
   restore?: DefaultMiniAppKind;
 }
 
@@ -24,10 +26,13 @@ export interface MiniAppDefaultsResult {
   issues: Array<{ kind: DefaultMiniAppKind; error: string }>;
 }
 /** A native dashboard grant belongs to the installed app, independent of its HTML template. */
-export type MiniAppDashboardDeclaration = {
-  [K in MiniAppDashboardKind]: { kind: K; renderer: "native"; htmlRole: "fallback-only";
-    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES[K] }
-}[MiniAppDashboardKind];
+export type MiniAppDashboardDeclaration =
+  | { kind: "agent-team"; renderer: "native"; htmlRole: "fallback-only";
+    editableFields: readonly ["title", "description"]; resources: readonly ["teams", "activity"] }
+  | { kind: "agent-team"; renderer: "html"; htmlRole: "primary";
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["agent-team"] }
+  | { kind: "usage"; renderer: "native"; htmlRole: "fallback-only";
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["usage"] };
 export interface MiniAppDashboardDiscovery {
   id: string;
   revision: number;
@@ -37,11 +42,18 @@ export interface MiniAppDashboardDiscovery {
 
 export type MiniAppDashboardRead =
   | { resource: "teams"; expectedRevision: number }
-  | { resource: "activity"; expectedRevision: number; agentId: string }
+  | { resource: "activity" | "configuration"; expectedRevision: number; agentId: string; occupantId: string }
+  | { resource: "team-rules"; expectedRevision: number; teamId: string }
+  | { resource: "skill"; expectedRevision: number; agentId: string; occupantId: string; skillId: string }
   | { resource: "usage"; expectedRevision: number };
+export type MiniAppDashboardRequest = MiniAppDashboardRead extends infer R
+  ? R extends MiniAppDashboardRead ? Omit<R, "expectedRevision"> : never : never;
 export type MiniAppDashboardReadResult =
   | { appId: string; revision: number; resource: "teams"; snapshot: LocalAgentTeamsResponse }
   | { appId: string; revision: number; resource: "activity"; snapshot: LocalAgentActivityResponse }
+  | { appId: string; revision: number; resource: "configuration"; snapshot: LocalAgentConfigurationResponse }
+  | { appId: string; revision: number; resource: "team-rules"; snapshot: LocalAgentTeamRulesResponse }
+  | { appId: string; revision: number; resource: "skill"; snapshot: LocalAgentSkillDocumentResponse }
   | { appId: string; revision: number; resource: "usage"; snapshot: LocalUsageResponse };
 
 /** Local apps belong to the workspace owner; publisher grants do not transfer ownership. */
@@ -177,5 +189,6 @@ export interface MiniAppQueryOptions {
 /** Available in an opaque app frame. It has no chat, model, filesystem, write or generic tool capability. */
 export interface MausApp {
   query(queryId: string, parameters: Record<string, string | string[]>, options?: MiniAppQueryOptions): Promise<MiniAppNamedPage>;
+  dashboard: { read(request: MiniAppDashboardRequest): Promise<MiniAppDashboardReadResult> };
   onDataChanged(listener: () => void): () => void;
 }

@@ -11,7 +11,7 @@ const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const pane = "w6:p3";
 const folders: string[] = [];
 const row = (type: string, payload: object) => ({ timestamp: "2026-11-05T01:00:00.000Z", type, payload });
-const agent = (session = SESSION, kind = "codex") => ({ pane_id: pane, workspace_id: "w6", agent: kind,
+const agent = (session = SESSION, kind = "codex", paneId = pane) => ({ pane_id: paneId, workspace_id: "w6", agent: kind,
   agent_session: { kind: "id", agent: kind, value: session } });
 const listed = (agents: object[]) => JSON.stringify({ result: { agents } });
 
@@ -45,8 +45,8 @@ describe("bounded per-agent Codex activity", () => {
         content: [{ type: "output_text", text: "HIDDEN_CHANNEL" }] }),
       row("response_item", { type: "message", role: "system", content: [{ type: "input_text", text: "HIDDEN_SYSTEM" }] }),
       row("response_item", { type: "message", role: "developer", content: [{ type: "input_text", text: "HIDDEN_DEVELOPER" }] }),
-      row("response_item", { type: "function_call", name: "functions.exec", arguments: "HIDDEN_CALL" }),
-      row("response_item", { type: "function_call_output", output: "HIDDEN_RESULT" }),
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: "call-1", arguments: "HIDDEN_CALL" }),
+      row("response_item", { type: "function_call_output", call_id: "call-1", output: "HIDDEN_RESULT" }),
       row("response_item", { type: "message", role: "assistant", phase: "final_answer", status: "completed", content: [
         { type: "output_text", text: `Synthetic answer. ${secret}` }, { type: "output_image", data: "HIDDEN_IMAGE" },
       ] }),
@@ -56,9 +56,12 @@ describe("bounded per-agent Codex activity", () => {
     const result = await provider.get(pane);
     expect(result).toMatchObject({ status: "ready", truncated: false });
     expect(result.events.map((event) => [event.kind, event.text?.startsWith("Synthetic answer") ? "Synthetic answer" : event.text])).toEqual([
-      ["user", "Plan briefly"], ["assistant", "Checking synthetic notes"], ["assistant", "Synthetic answer"], ["user", "Legacy-only question"],
+      ["user", "Plan briefly"], ["assistant", "Checking synthetic notes"],
+      ["tool-call", "[Arguments unavailable]"], ["tool-result", "[Result details unavailable]"],
+      ["assistant", "Synthetic answer"], ["user", "Legacy-only question"],
     ]);
-    expect(JSON.stringify(result)).not.toMatch(/ghp_|HIDDEN_|functions\.exec/);
+    expect(result.events.filter((event) => event.kind.startsWith("tool")).map((event) => event.tool)).toEqual(["functions.exec", "functions.exec"]);
+    expect(JSON.stringify(result)).not.toMatch(/ghp_|HIDDEN_/);
   });
 
   it("returns only redacted user and assistant messages from the exact session", async () => {
@@ -79,15 +82,15 @@ describe("bounded per-agent Codex activity", () => {
     const first = await provider.get(pane);
     expect(first).toMatchObject({ agentId: pane, status: "ready", updatedAt: 1234, truncated: true });
     expect(first.events.map((event) => [event.kind, event.tool])).toEqual([
-      ["user", null], ["assistant", null],
+      ["user", null], ["assistant", null], ["tool-call", "functions.exec"], ["tool-result", "functions.exec"],
     ]);
     expect(first.events.every((event) => (event.text?.length ?? 0) <= 600)).toBe(true);
     expect(first.events[0]?.at).toBe(Date.parse("2026-11-05T01:00:00.000Z"));
     expect((await provider.get(pane)).events.map((event) => event.id)).toEqual(first.events.map((event) => event.id));
-    expect(JSON.stringify(first)).not.toMatch(/ghp_|Users\/fixture|private\/report|tmp\/private|private\.test|abcdefghijklmnop|SYSTEM_SECRET|DEVELOPER_SECRET|HIDDEN_|functions\.exec/);
+    expect(JSON.stringify(first)).not.toMatch(/ghp_|Users\/fixture|private\/report|tmp\/private|private\.test|abcdefghijklmnop|SYSTEM_SECRET|DEVELOPER_SECRET|HIDDEN_/);
   });
 
-  it("does not let more than 60 tool events crowd out chat messages", async () => {
+  it("retains bounded safe tool metadata without letting a tool burst crowd out visible chat", async () => {
     const tools = Array.from({ length: 75 }, (_, index) => [
       row("response_item", { type: "function_call", name: "functions.exec", call_id: `call-${index}`, arguments: "synthetic tool input" }),
       row("response_item", { type: "function_call_output", call_id: `call-${index}`, output: "synthetic tool output" }),
@@ -99,9 +102,29 @@ describe("bounded per-agent Codex activity", () => {
     ]);
     const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
     const result = await provider.get(pane);
-    expect(result).toMatchObject({ status: "ready", truncated: false });
-    expect(result.events.map((event) => [event.kind, event.text])).toEqual([["user", "First question"], ["assistant", "Final reply"]]);
+    expect(result).toMatchObject({ status: "ready", truncated: true });
+    expect(result.events).toHaveLength(32);
+    expect(result.events[0]).toMatchObject({ kind: "user", text: "First question" });
+    expect(result.events.at(-1)).toMatchObject({ kind: "assistant", text: "Final reply" });
+    expect(result.events.filter((event) => event.kind.startsWith("tool"))).toHaveLength(30);
     expect(JSON.stringify(result)).not.toContain("synthetic tool");
+  });
+
+  it("classifies known custom tool records and supports alphanumeric current pane IDs without exposing payloads", async () => {
+    const home = await fixture([
+      row("response_item", { type: "custom_tool_call", name: "functions.exec", call_id: "c1",
+        input: "private argument", arguments: "private argument" }),
+      row("response_item", { type: "custom_tool_call_output", call_id: "c1", output: "private output" }),
+      row("response_item", { type: "function_call", name: "/private/tool", call_id: "c2", arguments: "private path" }),
+      row("response_item", { type: "reasoning", summary: "private reasoning" }),
+    ]);
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent(SESSION, "codex", "w6:pG")]) });
+    const result = await provider.get("w6:pG");
+    expect(result.events.map(({ kind, tool, text }) => [kind, tool, text])).toEqual([
+      ["tool-call", "functions.exec", "[Arguments unavailable]"],
+      ["tool-result", "functions.exec", "[Result details unavailable]"],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/private argument|private output|private path|private reasoning|c1|c2/);
   });
 
   it("keeps the most recent 60 visible messages and reports omitted history", async () => {

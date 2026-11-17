@@ -81,14 +81,16 @@ export function MiniAppDashboard({ document, state, refreshKey, onRevoked, onCha
 
   const readActivity = useCallback(async (agentId: string, signal: AbortSignal): Promise<LocalAgentActivityResponse> => {
     try {
-      const result = await read({ resource: "activity", expectedRevision: revision, agentId }, signal);
+      const members = teams?.teams.flatMap((team) => team.agents).filter((member) => member.id === agentId && member.occupantId);
+      if (members?.length !== 1) throw new Error("This Agent Team session changed. Refresh and try again.");
+      const result = await read({ resource: "activity", expectedRevision: revision, agentId, occupantId: members[0]!.occupantId! }, signal);
       if (result.resource !== "activity") throw new Error("This app's activity read changed.");
       return result.snapshot;
     } catch (error) {
       if (!signal.aborted) stopFor(error);
       throw error;
     }
-  }, [read, revision, stopFor]);
+  }, [read, revision, stopFor, teams]);
 
   if (!valid) return null;
   return kind === "agent-team" ? <AgentTeamView snapshot={teams} active={visible} readActivity={readActivity} /> : <LocalUsageView snapshot={usage} />;
