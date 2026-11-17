@@ -312,6 +312,43 @@ describe("Mini Apps panel", () => {
     expect(stored.get("omb-mini-app:fixture-environment")).toBe("app_a");
   });
 
+  it("expands the horizontal app bar by default, collapses it with a compact current-app summary, and remembers the last state", async () => {
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+    const toggle = () => host.querySelector<HTMLButtonElement>('[data-mini-app-bar-toggle]')!;
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(toggle().getAttribute("aria-label")).toBe("Collapse app bar");
+    expect(host.querySelector('[role="tablist"]')).not.toBeNull();
+    expect(host.querySelector('[data-mini-app-collapsed-current]')).toBeNull();
+
+    await act(async () => { toggle().click(); });
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(toggle().getAttribute("aria-label")).toBe("Expand app bar");
+    expect(host.querySelector('[role="tablist"]')).toBeNull();
+    expect(host.querySelector('[data-mini-app-collapsed-current]')?.textContent).toBe("First report");
+    expect(host.querySelector('[data-mini-app-all]')).not.toBeNull();
+    expect(stored.get("omb-mini-apps-bar-collapsed")).toBe("1");
+    expect(stored.get("omb-mini-app:fixture-environment:bar-collapsed")).toBe("1");
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="app_b"]')!.click(); });
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_b"));
+    expect(host.querySelector('[data-mini-app-collapsed-current]')?.textContent).toBe("Second report");
+
+    await act(async () => { root.render(null); });
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_b"));
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector('[role="tablist"]')).toBeNull();
+    expect(host.querySelector('[data-mini-app-collapsed-current]')?.textContent).toBe("Second report");
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-collapsed-current]')!.click(); });
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector('[role="tablist"]')).not.toBeNull();
+    expect(stored.get("omb-mini-apps-bar-collapsed")).toBe("0");
+    expect(stored.get("omb-mini-app:fixture-environment:bar-collapsed")).toBe("0");
+  });
+
   it("removes the version status row while stale data remains marked and refreshable", async () => {
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.dataRevision).toBe("7"));
