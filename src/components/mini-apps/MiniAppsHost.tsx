@@ -30,7 +30,13 @@ export function MiniAppsHost({ enabled, children }: { enabled: boolean; children
   const [requestedApp, setRequestedApp] = useState<AppRequest>();
   const lastRequest = useRef<AppRequest>(undefined);
   const requestNonce = useRef(0);
-  useLayoutEffect(() => { if (!enabled) setOpened(false); }, [enabled]);
+  useLayoutEffect(() => {
+    if (!enabled) {
+      setOpened(false);
+      setRequestedApp(undefined);
+      lastRequest.current = undefined;
+    }
+  }, [enabled]);
   const attach = useCallback<Attach>((slot, request) => {
     if (!enabled) return () => {};
     activeSlot.current = slot;

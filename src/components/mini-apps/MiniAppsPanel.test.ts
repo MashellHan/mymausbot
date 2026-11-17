@@ -867,3 +867,19 @@ it("opens first requests from different Bot panels and preserves manual selectio
   await mount("second", second);
   expect(frame()?.dataset.id).toBe("app_a");
 });
+
+
+it("restores the manual app choice after closing instead of replaying an old launch request", async () => {
+  const mount = async (enabled: boolean, requestedApp?: { id: string; nonce: number }) => {
+    await act(async () => root.render(createElement(MiniAppsHost, { enabled,
+      children: enabled ? createElement(MiniAppsSlot, { requestedApp }) : null })));
+  };
+  await mount(true, { id: "app_a", nonce: 1 });
+  await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+  await act(async () => { button("Second report").click(); });
+  await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_b"));
+  await mount(false);
+  expect(frame()).toBeNull();
+  await mount(true);
+  await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_b"));
+});
