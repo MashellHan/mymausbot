@@ -28,6 +28,11 @@ const fixture = vi.hoisted(() => ({
   usageValue: 1,
   usageDeferred: null as Promise<LocalUsageResponse> | null,
   mojoHtml: null as string | null,
+  hongguoCatalogCard: false,
+  hongguoCatalogTitle: "Cached drama",
+  hongguoCatalogHold: null as Promise<void> | null,
+  environmentHold: null as Promise<void> | null,
+  inventoryDenied: false,
 }));
 
 vi.mock("@/state/store", () => ({
@@ -46,7 +51,9 @@ vi.mock("./MiniAppFrame", () => ({ MiniAppFrame: ({ document, state }: { documen
     "data-data-revision": state.data[0]?.revision });
 } }));
 
+import { ApiError } from "@/state/store";
 import { MiniAppsPanel } from "./MiniAppsPanel";
+import { HongguoView, forgetHongguoHome } from "./HongguoView";
 
 const dashboard = { kind: "agent-team", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["teams", "activity"] } as const;
 const usageDashboard = { kind: "usage", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["usage"] } as const;
@@ -107,6 +114,7 @@ const render = async (requestedApp?: { id: string; nonce: number }) => {
 };
 
 beforeEach(() => {
+  forgetHongguoHome("omb-mini-app:fixture-environment");
   setLocale("en");
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true } });
@@ -129,10 +137,18 @@ beforeEach(() => {
   fixture.usageValue = 1;
   fixture.usageDeferred = null;
   fixture.mojoHtml = null;
+  fixture.hongguoCatalogCard = false;
+  fixture.hongguoCatalogTitle = "Cached drama";
+  fixture.hongguoCatalogHold = null;
+  fixture.environmentHold = null;
+  fixture.inventoryDenied = false;
   fixture.dispatch.mockReset();
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
     if (path.startsWith("/api/published-apps/framing?")) return { framing: "allowed" };
-    if (path === "/.well-known/openmausbot/environment") return { environmentId: "fixture-environment" };
+    if (path === "/.well-known/openmausbot/environment") {
+      await fixture.environmentHold;
+      return { environmentId: "fixture-environment" };
+    }
     if (path === "/api/mini-apps/defaults" && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { restore?: string; bookkeepingHtml: string };
       fixture.defaultCalls.push(body);
@@ -148,7 +164,10 @@ beforeEach(() => {
         : entry);
       return { apps: fixture.apps, issues: fixture.defaultIssues };
     }
-    if (path === "/api/mini-apps" && (!init?.method || init.method === "GET")) return { apps: fixture.apps };
+    if (path === "/api/mini-apps" && (!init?.method || init.method === "GET")) {
+      if (fixture.inventoryDenied) throw new ApiError("Forbidden", 403);
+      return { apps: fixture.apps };
+    }
     if (path.endsWith("/archive") && init?.method === "POST") {
       const id = path.split("/")[3]!;
       fixture.apps = fixture.apps.map((entry) => entry.id === id ? { ...entry, status: "archived", revision: entry.revision + 1, dashboard: null } : entry);
@@ -178,8 +197,13 @@ beforeEach(() => {
     }
     if (path.includes("/hongguo/")) {
       const id = path.split("/")[3]!;
+      const body = JSON.parse(String(init?.body)) as { mode?: string };
+      if (path.endsWith("/catalog") && body.mode === "popular") await fixture.hongguoCatalogHold;
       return { appId: id, revision: fixture.apps.find((entry) => entry.id === id)?.revision ?? 3,
-        entries: [], autoplayNext: true, items: [], categories: [], nextCursor: null };
+        entries: [], autoplayNext: true,
+        items: fixture.hongguoCatalogCard && body.mode === "popular"
+          ? [{ id: "cached-drama", title: fixture.hongguoCatalogTitle, coverUrl: null, summary: null, episodeCount: 1 }] : [],
+        categories: [], nextCursor: null };
     }
     if (path.startsWith("/api/mini-apps/")) {
       if (fixture.failDocument) throw new Error("Fixture document offline");
@@ -194,7 +218,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 
-afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); setLocale("en"); });
+afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLocale("en"); });
 
 describe("Mini Apps panel", () => {
   it("refreshes the same installed Agent Team frame after vB, rollback and revocation without a host restart", async () => {
@@ -468,6 +492,93 @@ describe("Mini Apps panel", () => {
     expect(fixture.defaultCalls.at(-1)?.restore).toBe("hongguo");
     expect(fixture.apps[0]?.id).toBe("hongguo");
     expect(fixture.frameMounts).toBe(0);
+  });
+
+  it("drops Hongguo home cards after same-revision native grant loss before restored data arrives", async () => {
+    fixture.apps = [shippedDefaults().at(-1)!];
+    fixture.hongguoCatalogCard = true;
+    await render();
+    await vi.waitFor(() => expect(host.textContent).toContain("Cached drama"));
+    fixture.apps = fixture.apps.map((entry) => ({ ...entry, nativeKind: null }));
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-recovery"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("Cached drama");
+    let release!: () => void;
+    fixture.hongguoCatalogHold = new Promise<void>((resolve) => { release = resolve; });
+    fixture.hongguoCatalogTitle = "Restored drama";
+    fixture.apps = fixture.apps.map((entry) => ({ ...entry, nativeKind: "hongguo" }));
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-view"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("Cached drama");
+    expect(host.textContent).not.toContain("Restored drama");
+    await act(async () => { release(); });
+    await vi.waitFor(() => expect(host.textContent).toContain("Restored drama"));
+  });
+
+  it("discards cached Hongguo cards after parent inventory denial", async () => {
+    fixture.apps = [shippedDefaults().at(-1)!];
+    fixture.hongguoCatalogCard = true;
+    await render();
+    await vi.waitFor(() => expect(host.textContent).toContain("Cached drama"));
+    fixture.inventoryDenied = true;
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-view"]')).toBeNull());
+    fixture.inventoryDenied = false;
+    fixture.hongguoCatalogTitle = "Restored drama";
+    let release!: () => void;
+    fixture.hongguoCatalogHold = new Promise<void>((resolve) => { release = resolve; });
+    await act(async () => { refresh().click(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-view"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("Cached drama");
+    await act(async () => { release(); });
+    await vi.waitFor(() => expect(host.textContent).toContain("Restored drama"));
+  });
+
+  it("evicts the resolved environment cache on an automatic grant-loss poll even when state fails", async () => {
+    const polls: Array<() => Promise<void>> = [];
+    const actualSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((handler, timeout, ...args) => {
+      if (timeout === 15_000 && typeof handler === "function") {
+        polls.push(async () => { await handler(...args); });
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return actualSetTimeout(handler, timeout, ...args);
+    });
+    let releaseEnvironment!: () => void;
+    fixture.environmentHold = new Promise<void>((resolve) => { releaseEnvironment = resolve; });
+    fixture.apps = [shippedDefaults().at(-1)!];
+    fixture.hongguoCatalogCard = true;
+    await render();
+    await vi.waitFor(() => expect(host.textContent).toContain("Cached drama"));
+    await act(async () => { releaseEnvironment(); });
+    const popularCalls = () => fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/hongguo/catalog")
+      && JSON.parse(String(init?.body)).mode === "popular").length;
+    await vi.waitFor(() => expect(popularCalls()).toBe(2));
+    const probeHost = document.createElement("div");
+    document.body.append(probeHost);
+    const probe = createRoot(probeHost);
+    try {
+      await act(async () => { probe.render(createElement(HongguoView, {
+        document: { app: fixture.apps[0]!, html: "", bindings: [], versions: [] },
+        state: { appId: "hongguo", revision: 3, templateVersion: 2, status: "active", data: [] },
+        storageKey: "omb-mini-app:fixture-environment", refreshKey: 0, onRevoked: vi.fn(), onChanged: vi.fn(),
+      })); });
+      expect(probeHost.textContent).toContain("Cached drama");
+    } finally { await act(async () => { probe.unmount(); }); probeHost.remove(); }
+    fixture.apps = fixture.apps.map((entry) => ({ ...entry, nativeKind: null }));
+    fixture.failState = true;
+    await act(async () => { await polls.at(-1)!(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-view"]')).toBeNull());
+    fixture.apps = fixture.apps.map((entry) => ({ ...entry, nativeKind: "hongguo" }));
+    fixture.failState = false;
+    fixture.hongguoCatalogTitle = "Restored drama";
+    let releaseCatalog!: () => void;
+    fixture.hongguoCatalogHold = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+    await act(async () => { await polls.at(-1)!(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="hongguo-view"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("Cached drama");
+    await act(async () => { releaseCatalog(); });
+    await vi.waitFor(() => expect(host.textContent).toContain("Restored drama"));
   });
 
   it("keeps a removed default archived on reopen and adds the same app id only after a click", async () => {
