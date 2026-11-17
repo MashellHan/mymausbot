@@ -55,10 +55,17 @@ export const querySchema = z.object({
   expectedRevision: z.number().int().positive(), expectedDataRevision: z.number().int().nonnegative().optional(), cursor: z.string().max(4096).optional(),
 }).strict();
 const dashboardRevision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER - 1);
+const occupantId = z.string().regex(/^o[0-9a-f]{16}$/);
+const agentId = z.string().regex(/^w\d+:p[0-9A-Za-z]+$/);
 export const dashboardReadSchema = z.discriminatedUnion("resource", [
   z.object({ resource: z.literal("teams"), expectedRevision: dashboardRevision }).strict(),
   z.object({ resource: z.literal("activity"), expectedRevision: dashboardRevision,
-    agentId: z.string().regex(/^w\d+:p\d+$/) }).strict(),
+    agentId, occupantId }).strict(),
+  z.object({ resource: z.literal("configuration"), expectedRevision: dashboardRevision, agentId, occupantId }).strict(),
+  z.object({ resource: z.literal("team-rules"), expectedRevision: dashboardRevision,
+    teamId: z.string().regex(/^w\d+$/) }).strict(),
+  z.object({ resource: z.literal("skill"), expectedRevision: dashboardRevision, agentId, occupantId,
+    skillId: z.string().regex(/^s[0-9a-f]{16}$/) }).strict(),
   z.object({ resource: z.literal("usage"), expectedRevision: dashboardRevision }).strict(),
 ]);
 

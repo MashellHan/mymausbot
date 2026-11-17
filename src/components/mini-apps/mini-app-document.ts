@@ -75,7 +75,7 @@ const MINI_APP_SDK_SOURCE = `(function () {
     }
     if (message.mausMiniApp !== 1) return;
     if (message.type === "data-changed") listeners.forEach(function (listener) { listener(); });
-    else if (message.type === "query-result" && pending.has(message.id)) {
+    else if ((message.type === "query-result" || message.type === "dashboard-result") && pending.has(message.id)) {
       var answer = pending.get(message.id);
       pending.delete(message.id);
       if (message.error) answer.reject(new Error(String(message.error)));
@@ -97,6 +97,9 @@ const MINI_APP_SDK_SOURCE = `(function () {
     query: function (queryId, parameters, options) {
       return ready.then(function () { return request({ mausMiniApp: 1, type: "query", queryId: queryId, parameters: parameters, options: options }); });
     },
+    dashboard: Object.freeze({ read: function (selection) {
+      return ready.then(function () { return request({ mausMiniApp: 1, type: "dashboard-read", selection: selection }); });
+    } }),
     onDataChanged: function (listener) {
       if (typeof listener !== "function") throw new TypeError("A listener is required.");
       listeners.add(listener);
