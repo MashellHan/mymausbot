@@ -44,8 +44,10 @@ export function installDailyXFrameGuards(webContents, { localOrigin, redirectFal
   const decide = createDailyXFrameNavigation();
   webContents.on("will-redirect", (details, url) => {
     const allowed = decide(details, webContents.mainFrame, localOrigin());
-    if (allowed === null) redirectFallback(details, url);
-    else if (!allowed) details.preventDefault();
+    if (allowed === null) {
+      redirectFallback(details, url);
+      if (!details.isMainFrame) frameFallback(details, url);
+    } else if (!allowed) details.preventDefault();
   });
   webContents.on("will-frame-navigate", (details) => {
     if (details.isMainFrame) return;
