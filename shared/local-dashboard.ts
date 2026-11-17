@@ -51,7 +51,7 @@ export interface LocalAgentTeamsResponse {
 export type LocalAgentActivityStatus = "ready" | "stale" | "unavailable" | "unsupported";
 export type LocalAgentActivityKind = "user" | "assistant" | "tool-call" | "tool-result";
 
-/** Redacted, bounded visible Codex events; IDs are local event positions, never session or tool credentials. */
+/** Redacted, bounded visible local-agent events; IDs are local event positions, never session or tool credentials. */
 export interface LocalAgentActivityEvent {
   id: string;
   at: number | null;
