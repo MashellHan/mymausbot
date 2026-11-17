@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 
 import type { LocalAgentConfigurationDocument } from "../shared/local-dashboard.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
@@ -43,8 +45,42 @@ export async function readDocument(root: string, file: string): Promise<LocalAge
 }
 
 type DocumentReader = typeof readDocument;
-export type TeamSource = { root: string; playbook: string; roles: string; roleFiles?: Map<string, string> };
+export type TeamSource = { root: string; playbook: string; roles: string; roleFiles?: Map<string, string>; worktrees?: Set<string> };
 type Role = { label: string; file: string | null };
+const executeGit = promisify(execFile);
+
+async function gitOutput(root: string, args: string[]): Promise<string | null> {
+  try {
+    return (await executeGit("git", ["--no-optional-locks", "-C", root, ...args], {
+      timeout: 3000, maxBuffer: 64 * 1024, windowsHide: true,
+      env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_COMMON_DIR: undefined },
+    })).stdout;
+  } catch { return null; }
+}
+
+async function gitIdentity(root: string): Promise<{ common: string } | null> {
+  const output = await gitOutput(root, ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"]);
+  const lines = output?.split("\n");
+  if (lines?.length !== 3 || lines[0] !== root || !lines[1] || lines[2] !== "") return null;
+  try { return { common: await realpath(lines[1]) }; } catch { return null; }
+}
+
+async function registeredWorktrees(root: string, candidates: string[]): Promise<Set<string>> {
+  const matched = new Set<string>();
+  if (!candidates.length || candidates.length > 20 || root !== resolve(root)) return matched;
+  try { if (await realpath(root) !== root) return matched; } catch { return matched; }
+  const identity = await gitIdentity(root);
+  const listed = await gitOutput(root, ["worktree", "list", "--porcelain", "-z"]);
+  if (!identity || !listed) return matched;
+  const registered = new Set(listed.split("\0").filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9)));
+  if (!registered.has(root)) return matched;
+  for (const candidate of candidates) {
+    if (candidate === root || candidate !== resolve(candidate) || !registered.has(candidate)) continue;
+    try { if (await realpath(candidate) !== candidate) continue; } catch { continue; }
+    if ((await gitIdentity(candidate))?.common === identity.common) matched.add(candidate);
+  }
+  return matched;
+}
 
 async function savedTeamSource(agents: Record<string, unknown>[], teamId: string, home: string, read: DocumentReader): Promise<{ source: TeamSource | null; error: boolean }> {
   const teamsRoot = join(home, "workspace/.agents/teams");
@@ -117,7 +153,8 @@ export async function teamSource(agents: Record<string, unknown>[], teamId: stri
   }
   candidates.sort((a, b) => b.count - a.count);
   const source = candidates[0] && candidates[0].count > (candidates[1]?.count ?? 0) ? candidates[0] : null;
-  if (source) return { source, error };
+  if (source) return { source: { ...source,
+    worktrees: await registeredWorktrees(source.root, [...counts.keys()].filter((cwd) => cwd !== source.root)) }, error };
   const saved = await savedTeamSource(agents, teamId, home, read);
   return { source: saved.source, error: error || saved.error };
 }
@@ -146,7 +183,7 @@ export function memberRole(source: TeamSource, member: Record<string, unknown>, 
     return file && declared !== null && (!declared?.file || declared.file === file)
       ? { label: declared?.label ?? basename(file, ".md"), file } : null;
   }
-  return member.cwd === source.root ? declared ?? null : null;
+  return member.cwd === source.root || source.worktrees?.has(String(member.cwd)) ? declared ?? null : null;
 }
 
 export function verifiedLocalAgentMembers(agents: Record<string, unknown>[]): Record<string, unknown>[] {
