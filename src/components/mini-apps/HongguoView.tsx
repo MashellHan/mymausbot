@@ -14,18 +14,14 @@ type Page = "home" | "history" | "watch";
 type BrowseMode = "popular" | "new" | "search" | "category";
 type HistoryChoice = { action: "delete"; entry: HongguoHistoryEntry } | { action: "clear" };
 const historyMutationTailByApp = new Map<string, Promise<void>>();
-type HomeSnapshot = { refreshKey: number; mode: BrowseMode; query: string; categoryId: string;
+const HOME_FRESH_MS = 5 * 60_000;
+type HomeSnapshot = { mode: BrowseMode; query: string; categoryId: string;
   items: HongguoSeriesCard[]; nextCursor: string | null; categories: HongguoCategory[];
   categoriesLoaded: boolean; expiresAt: number };
 const homeSnapshots = new Map<string, HomeSnapshot>();
 
-function recentHome(key: string, refreshKey: number): HomeSnapshot | null {
-  const saved = homeSnapshots.get(key);
-  if (!saved || saved.refreshKey !== refreshKey || saved.expiresAt <= Date.now()) {
-    homeSnapshots.delete(key);
-    return null;
-  }
-  return saved;
+function recentHome(key: string): HomeSnapshot | null {
+  return homeSnapshots.get(key) ?? null;
 }
 
 function rememberHome(key: string, saved: HomeSnapshot): void {
@@ -90,7 +86,8 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
     && state.appId === appId && state.revision === revision && document.app.nativeIdentity === "hongguo"
     && document.app.nativeKind === "hongguo";
   const homeKey = `${appId}:${revision}`;
-  const initialHome = useRef(valid ? recentHome(homeKey, refreshKey) : null).current;
+  const initialHome = useRef(valid ? recentHome(homeKey) : null).current;
+  const lastRefreshKey = useRef(refreshKey);
   const callbacks = useRef({ onRevoked, onChanged });
   callbacks.current = { onRevoked, onChanged };
   const mounted = useRef(true);
@@ -112,6 +109,7 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
   const [items, setItems] = useState<HongguoSeriesCard[]>(initialHome?.items ?? []);
   const [nextCursor, setNextCursor] = useState<string | null>(initialHome?.nextCursor ?? null);
   const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogRefresh, setCatalogRefresh] = useState(0);
   const [moreLoading, setMoreLoading] = useState(false);
   const [catalogError, setCatalogError] = useState("");
   const [history, setHistory] = useState<HongguoHistoryEntry[] | null>(null);
@@ -152,7 +150,14 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
     setError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
   }, [homeKey]);
 
-  useEffect(() => { if (!valid) homeSnapshots.delete(homeKey); }, [valid, homeKey]);
+  useEffect(() => {
+    if (!valid) homeSnapshots.delete(homeKey);
+    else if (lastRefreshKey.current !== refreshKey) {
+      const saved = recentHome(homeKey);
+      if (saved) rememberHome(homeKey, { ...saved, expiresAt: 0, categoriesLoaded: false });
+    }
+    lastRefreshKey.current = refreshKey;
+  }, [valid, homeKey, refreshKey]);
 
   const savePosition = useCallback(() => {
     const entry = progress.current;
@@ -197,37 +202,48 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
 
   useEffect(() => {
     if (!valid || !visible) return;
-    const saved = recentHome(homeKey, refreshKey);
-    if (saved?.categoriesLoaded) { setCategories(saved.categories); categoriesLoaded.current = true; return; }
+    const saved = recentHome(homeKey);
+    if (saved?.categoriesLoaded && saved.expiresAt > Date.now()) { setCategories(saved.categories); categoriesLoaded.current = true; return; }
     categoriesLoaded.current = false;
     const controller = new AbortController();
     void post<HongguoCatalogResponse>("catalog", { expectedRevision: revision, mode: "categories" }, controller.signal)
       .then((result) => { if (!controller.signal.aborted) {
         setCategories(result.categories); categoriesRef.current = result.categories; categoriesLoaded.current = true;
-        const current = recentHome(homeKey, refreshKey);
+        const current = recentHome(homeKey);
         if (current) rememberHome(homeKey, { ...current, categories: result.categories, categoriesLoaded: true });
       } })
       .catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setCatalogError); });
     return () => controller.abort();
-  }, [valid, visible, refreshKey, homeKey, post, revision, showError]);
+  }, [valid, visible, refreshKey, catalogRefresh, homeKey, post, revision, showError]);
 
   useEffect(() => {
-    if (!valid || !visible || mode === "category" && !categoryId) return;
+    if (!valid || !visible || page !== "home" || mode === "category" && !categoryId) return;
     const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refreshAfter = (delay: number) => {
+      timer = setTimeout(() => setCatalogRefresh((current) => current + 1), Math.max(1, delay));
+    };
+    const cleanup = () => {
+      clearTimeout(timer); controller.abort();
+      if (catalogController.current === controller) catalogController.current = null;
+    };
     const generation = ++catalogGeneration.current;
     catalogController.current = controller;
-    const saved = recentHome(homeKey, refreshKey);
+    const saved = recentHome(homeKey);
     if (saved && saved.mode === mode && saved.query === query && saved.categoryId === categoryId) {
       setItems(saved.items); setNextCursor(saved.nextCursor); setCatalogLoading(false); setMoreLoading(false); setCatalogError("");
-      return () => { controller.abort(); if (catalogController.current === controller) catalogController.current = null; };
+      if (saved.expiresAt > Date.now()) {
+        refreshAfter(saved.expiresAt - Date.now());
+        return cleanup;
+      }
+    } else {
+      setItems([]); setNextCursor(null);
     }
     const body: HongguoCatalogRequest = { expectedRevision: revision, mode,
       ...(mode === "search" ? { query } : mode === "category" ? { categoryId } : {}) };
     setCatalogLoading(true);
     setMoreLoading(false);
     setCatalogError("");
-    setItems([]);
-    setNextCursor(null);
     const active = () => !controller.signal.aborted && generation === catalogGeneration.current;
     void (async () => {
       try {
@@ -235,8 +251,9 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
         if (!active()) return;
         const firstItems = appendUniqueCards([], first.items);
         setItems(firstItems); setNextCursor(first.nextCursor); setCatalogLoading(false);
-        rememberHome(homeKey, { refreshKey, mode, query, categoryId, items: firstItems, nextCursor: first.nextCursor,
-          categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt: Date.now() + 2 * 60_000 });
+        const expiresAt = Date.now() + HOME_FRESH_MS;
+        rememberHome(homeKey, { mode, query, categoryId, items: firstItems, nextCursor: first.nextCursor,
+          categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt });
         if (!first.nextCursor) return;
         setMoreLoading(true);
         try {
@@ -244,19 +261,19 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
           if (!active()) return;
           const updated = appendUniqueCards(firstItems, second.items);
           setItems(updated); setNextCursor(second.nextCursor);
-          rememberHome(homeKey, { refreshKey, mode, query, categoryId, items: updated, nextCursor: second.nextCursor,
-            categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt: Date.now() + 2 * 60_000 });
+          rememberHome(homeKey, { mode, query, categoryId, items: updated, nextCursor: second.nextCursor,
+            categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt });
         } catch (cause) { if (active()) showError(cause, setCatalogError); }
         finally { if (active()) setMoreLoading(false); }
       } catch (cause) { if (active()) showError(cause, setCatalogError); }
-      finally { if (active()) setCatalogLoading(false); }
+      finally { if (active()) { setCatalogLoading(false); refreshAfter(HOME_FRESH_MS); } }
     })();
-    return () => { controller.abort(); if (catalogController.current === controller) catalogController.current = null; };
-  }, [valid, visible, refreshKey, mode, query, categoryId, homeKey, post, revision, showError]);
+    return cleanup;
+  }, [valid, visible, page, refreshKey, catalogRefresh, mode, query, categoryId, homeKey, post, revision, showError]);
 
   const loadMore = async () => {
     const signal = catalogController.current?.signal;
-    if (!nextCursor || moreLoading || !signal || signal.aborted) return;
+    if (!nextCursor || catalogLoading || moreLoading || !signal || signal.aborted) return;
     const generation = catalogGeneration.current;
     const body: HongguoCatalogRequest = { expectedRevision: revision, mode, cursor: nextCursor,
       ...(mode === "search" ? { query } : mode === "category" ? { categoryId } : {}) };
@@ -266,8 +283,9 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
       if (!signal.aborted && generation === catalogGeneration.current) {
         const updated = appendUniqueCards(items, result.items);
         setItems(updated); setNextCursor(result.nextCursor); setCatalogError("");
-        rememberHome(homeKey, { refreshKey, mode, query, categoryId, items: updated, nextCursor: result.nextCursor,
-          categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current, expiresAt: Date.now() + 2 * 60_000 });
+        rememberHome(homeKey, { mode, query, categoryId, items: updated, nextCursor: result.nextCursor,
+          categories: categoriesRef.current, categoriesLoaded: categoriesLoaded.current,
+          expiresAt: recentHome(homeKey)?.expiresAt ?? Date.now() + HOME_FRESH_MS });
       }
     } catch (cause) { if (!signal.aborted && generation === catalogGeneration.current) showError(cause, setCatalogError); }
     finally { if (!signal.aborted && generation === catalogGeneration.current) setMoreLoading(false); }
@@ -401,13 +419,14 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
           </button>)}
         </div>
       </section>}
-      <section aria-labelledby="hongguo-catalog-title">
+      <section aria-labelledby="hongguo-catalog-title" aria-busy={catalogLoading}>
         <div className="flex items-center gap-5 border-b border-hairline/60">
           <h3 id="hongguo-catalog-title" className="sr-only">{t("computer.miniApps.hongguo.catalog")}</h3>
           {(["popular", "new"] as const).map((value) => <button key={value} type="button" aria-pressed={mode === value}
             onClick={() => setMode(value)} className={`border-b-2 pb-2.5 text-[14px] font-semibold focus-visible:outline-2 focus-visible:outline-accent ${mode === value ? "border-ink text-ink" : "border-transparent text-ink-secondary hover:text-ink"}`}>
             {t(value === "popular" ? "computer.miniApps.hongguo.popular" : "computer.miniApps.hongguo.new")}</button>)}
           {mode === "search" && <span className="pb-2.5 text-[13px] text-ink-secondary">{t("computer.miniApps.hongguo.results", { query })}</span>}
+          {catalogLoading && items.length > 0 && <Loader2 size={14} className="mb-2.5 animate-spin text-ink-secondary" role="status" aria-label={t("computer.miniApps.hongguo.loading")} />}
         </div>
         <div className="my-3 flex flex-wrap gap-1.5" aria-label={t("computer.miniApps.hongguo.categories")}>
           <button type="button" aria-pressed={mode !== "category"} onClick={() => setMode("popular")}
@@ -419,14 +438,14 @@ export function HongguoView({ document, state, refreshKey, onRevoked, onChanged 
             {category.title}</button>)}
         </div>
         {catalogError && <p role="alert" className="rounded-lg bg-danger/10 p-3 text-[13px] text-danger">{catalogError}</p>}
-        {catalogLoading ? <p role="status" className="flex items-center gap-2 py-8 text-[13px] text-ink-secondary"><Loader2 size={16} className="animate-spin" />{t("computer.miniApps.hongguo.loading")}</p>
+        {catalogLoading && !items.length ? <p role="status" className="flex items-center gap-2 py-8 text-[13px] text-ink-secondary"><Loader2 size={16} className="animate-spin" />{t("computer.miniApps.hongguo.loading")}</p>
           : items.length ? <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,210px),1fr))] gap-x-4 gap-y-5">
             {items.map((card, index) => <button key={card.id} type="button" onClick={() => openSeries(card.id)} className="min-w-0 text-left focus-visible:outline-2 focus-visible:outline-accent">
               <Poster key={refreshKey} card={card} appId={appId} revision={revision} priority={index < 4} /><span className="mt-1.5 block truncate text-[12px] font-semibold">{card.title}</span>
               {card.episodeCount !== null && <span className="block text-[11px] text-ink-secondary">{t("computer.miniApps.hongguo.totalEpisodes", { count: card.episodeCount })}</span>}
             </button>)}</div>
             : !catalogError && <p role="status" className="py-8 text-[13px] text-ink-secondary">{t("computer.miniApps.hongguo.emptyCatalog")}</p>}
-        {nextCursor && <button type="button" disabled={moreLoading} onClick={() => void loadMore()}
+        {nextCursor && <button type="button" disabled={catalogLoading || moreLoading} onClick={() => void loadMore()}
           className="mt-6 rounded-lg bg-control px-3 py-2 text-[12px] font-medium hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">
           {moreLoading ? t("computer.miniApps.hongguo.loading") : t("computer.miniApps.hongguo.more")}</button>}
       </section>
