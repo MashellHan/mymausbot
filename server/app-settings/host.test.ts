@@ -324,6 +324,56 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("changes new-bot effort only after an owner's current Change and clears it to the provider default", async () => {
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("bots.newBotEffort", "high")).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+
+    const fx = fixture();
+    fx.cfg.newBots = { effort: "medium" };
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "new bot effort" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("bots.newBotEffort");
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.newBotEffort" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ tier: "confirm", value: "medium", change: expect.stringContaining("Change/Cancel") });
+    expect((await fx.set("bots.newBotEffort", "turbo")).status).toBe(400);
+    expect(fx.cards()).toEqual([]);
+
+    const cancelled = fx.set("bots.newBotEffort", "high");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("medium") } });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("bots.newBotEffort", "high");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.newBots = { effort: "low" };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+
+    const approved = fx.set("bots.newBotEffort", "high");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ newBots: { effort: "high" } }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+
+    const cleared = fx.set("bots.newBotEffort", "null");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    expect(fx.cards()[3]!.card.appSettingRequest.after).toContain("provider default");
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await cleared).status).toBe(200);
+    expect(fx.saved[1]).toEqual({ newBots: { effort: null } });
+    const after = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.newBotEffort" }, fx.turn)).body.text));
+    expect(after.value).toBe("provider default");
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };
