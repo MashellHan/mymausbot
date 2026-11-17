@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
 import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "./registry.ts";
 
 const DATASET = "7c39027b-cbb0-461a-aec8-0d7b6e553ec6";
+const reviewedHtml = readFileSync(new URL("../../examples/mini-apps/agent-team/index.html", import.meta.url), "utf8");
 const binding: MiniAppDataBinding = { id: "inventory", datasetId: DATASET, source: { schema: "main", table: "inventory" },
   fields: { item: { column: "item", sourceType: "VARCHAR", as: "text" } },
   queries: { stock: { kind: "rows", columns: ["item"], parameters: {}, filters: [], orderBy: [], pageSize: 10 } } };
@@ -20,11 +21,16 @@ const owner: MiniAppActor = { writeAllowed: true, assertActive: () => undefined,
 const bot = (botId = "publisher"): MiniAppActor => ({ ...owner, botId });
 const publication = (extra: Partial<MiniAppPublish> = {}): MiniAppPublish => ({ requestKey: "create", expectedRevision: 0,
   slug: "inventory", title: "Inventory", description: "Synthetic stock report", html: "<h1>Inventory</h1>", bindings: [binding], ...extra });
-const teamsSnapshot: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1000, teamCount: 0, teams: [] };
+const occupantId = "o1234567890abcdef";
+const teamsSnapshot: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1000, teamCount: 1, teams: [{
+  id: "w6", name: "Fixture team", agentCount: 1, activeAgentCount: 1, agents: [{ id: "w6:p1", occupantId,
+    name: "Fixture agent", kind: "codex", role: null, model: null, reasoningEffort: null, contextUsed: null,
+    contextWindow: null, state: "working", taskHint: null }],
+}] };
 const activitySnapshot: LocalAgentActivityResponse = { agentId: "w6:p1", status: "ready", updatedAt: 1000, truncated: false, events: [] };
-const configurationSnapshot: LocalAgentConfigurationResponse = { agentId: "w6:p1", teamId: "w6", occupantId: null,
+const configurationSnapshot: LocalAgentConfigurationResponse = { agentId: "w6:p1", teamId: "w6", occupantId,
   agent: { status: "unverified", markdown: null }, skillReferences: "unverified", skillDiscovery: "unavailable", skills: [] };
-const skillSnapshot: LocalAgentSkillDocumentResponse = { agentId: "w6:p1", teamId: "w6", occupantId: null,
+const skillSnapshot: LocalAgentSkillDocumentResponse = { agentId: "w6:p1", teamId: "w6", occupantId,
   skillId: "s1234567890abcdef", status: "unavailable", markdown: null };
 const teamRulesSnapshot: LocalAgentTeamRulesResponse = { teamId: "w6", status: "unverified", markdown: null };
 const usageSnapshot: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
@@ -392,19 +398,67 @@ describe("persistent Mini Apps", () => {
     ]);
     await expect(apps.dashboardRead(bot(), team.id, { resource: "teams", expectedRevision: 1 })).rejects.toMatchObject({ status: 403 });
     await expect(apps.dashboardRead(owner, team.id, { resource: "usage", expectedRevision: 1 })).rejects.toMatchObject({ status: 403 });
-    await expect(apps.dashboardRead(owner, usage.id, { resource: "activity", expectedRevision: 1, agentId: "w6:p1" }))
+    await expect(apps.dashboardRead(owner, usage.id, { resource: "activity", expectedRevision: 1, agentId: "w6:p1", occupantId }))
       .rejects.toMatchObject({ status: 403 });
     await expect(apps.dashboardRead(owner, team.id, { resource: "activity", expectedRevision: 1, agentId: "bad" }))
       .rejects.toMatchObject({ status: 400 });
     expect(await apps.dashboardRead(owner, team.id, { resource: "teams", expectedRevision: 1 }))
       .toEqual({ appId: team.id, revision: 1, resource: "teams", snapshot: teamsSnapshot });
-    expect(await apps.dashboardRead(owner, team.id, { resource: "activity", expectedRevision: 1, agentId: "w6:p1" }))
+    expect(await apps.dashboardRead(owner, team.id, { resource: "activity", expectedRevision: 1, agentId: "w6:p1", occupantId }))
       .toEqual({ appId: team.id, revision: 1, resource: "activity", snapshot: activitySnapshot });
     expect(await apps.dashboardRead(owner, usage.id, { resource: "usage", expectedRevision: 1 }))
       .toEqual({ appId: usage.id, revision: 1, resource: "usage", snapshot: usageSnapshot });
-    expect(readers.agents.get).toHaveBeenCalledTimes(1);
+    expect(readers.agents.get).toHaveBeenCalledTimes(3);
     expect(readers.activity.get).toHaveBeenCalledWith("w6:p1");
     expect(readers.usage.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps reviewed Agent Team versions active through publication, rollback and revocation without activating old fallback", async () => {
+    const readers = dashboardProviders();
+    const { apps } = fixture(undefined, readers);
+    const old = (await apps.publish(owner, publication({ bindings: [], dashboardKind: "agent-team" }))).app;
+    expect(old.dashboard).toMatchObject({ renderer: "native", resources: ["teams", "activity"] });
+    const first = (await apps.publish(owner, publication({ requestKey: "reviewed", expectedRevision: 1,
+      bindings: [], dashboardKind: "agent-team", publisherBotIds: ["publisher"], html: reviewedHtml }), old.id, true)).app;
+    expect(first).toMatchObject({ id: old.id, revision: 2, dashboard: { renderer: "html", htmlRole: "primary" } });
+    expect(apps.document(owner, old.id).html).toBe(reviewedHtml);
+    await expect(apps.publish(bot(), publication({ requestKey: "bot-page", expectedRevision: 2,
+      bindings: [], html: "<p>Bot replacement</p>" }), old.id)).rejects.toMatchObject({ status: 403 });
+    await expect(apps.rollback(bot(), old.id, { requestKey: "bot-rollback", expectedRevision: 2,
+      templateVersion: 1 })).rejects.toMatchObject({ status: 403 });
+    const second = (await apps.publish(owner, publication({ requestKey: "publisher-vB", expectedRevision: 2,
+      bindings: [], html: "<p>Published vB</p>" }), old.id)).app;
+    expect(second).toMatchObject({ id: old.id, revision: 3, dashboard: { renderer: "html" } });
+    expect(apps.document(owner, old.id).html).toBe("<p>Published vB</p>");
+    const back = (await apps.rollback(owner, old.id, { requestKey: "back", expectedRevision: 3, templateVersion: 2 })).app;
+    expect(back).toMatchObject({ revision: 4, templateVersion: 2, dashboard: { renderer: "html" } });
+    expect(apps.document(owner, old.id).html).toBe(reviewedHtml);
+    const fallback = (await apps.rollback(owner, old.id, { requestKey: "old", expectedRevision: 4, templateVersion: 1 })).app;
+    expect(fallback).toMatchObject({ revision: 5, dashboard: { renderer: "native" } });
+    const revoked = (await apps.publish(owner, publication({ requestKey: "revoke", expectedRevision: 5,
+      bindings: [], dashboardKind: null }), old.id)).app;
+    expect(revoked.dashboard).toBeNull();
+    await expect(apps.dashboardRead(owner, old.id, { resource: "teams", expectedRevision: 6 })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("checks the exact current occupant before and after each Agent Team detail read", async () => {
+    const readers = dashboardProviders();
+    const { apps } = fixture(undefined, readers);
+    const { app } = await apps.publish(owner, publication({ bindings: [], dashboardKind: "agent-team", html: reviewedHtml }), undefined, true);
+    expect(app.dashboard).toMatchObject({ renderer: "html", resources: ["teams", "activity", "configuration", "team-rules", "skill"] });
+    const base = { expectedRevision: 1, agentId: "w6:p1", occupantId };
+    expect(await apps.dashboardRead(owner, app.id, { resource: "configuration", ...base }))
+      .toMatchObject({ resource: "configuration", snapshot: configurationSnapshot });
+    expect(await apps.dashboardRead(owner, app.id, { resource: "skill", ...base, skillId: skillSnapshot.skillId }))
+      .toMatchObject({ resource: "skill", snapshot: skillSnapshot });
+    expect(await apps.dashboardRead(owner, app.id, { resource: "team-rules", expectedRevision: 1, teamId: "w6" }))
+      .toMatchObject({ resource: "team-rules", snapshot: teamRulesSnapshot });
+    await expect(apps.dashboardRead(owner, app.id, { resource: "configuration", ...base,
+      occupantId: "o0000000000000000" })).rejects.toMatchObject({ status: 409 });
+    expect(readers.configuration.getAgent).toHaveBeenCalledTimes(1);
+    readers.agents.get.mockResolvedValueOnce(teamsSnapshot).mockResolvedValueOnce({ ...teamsSnapshot,
+      teams: [{ ...teamsSnapshot.teams[0]!, agents: [{ ...teamsSnapshot.teams[0]!.agents[0]!, occupantId: "o0000000000000000" }] }] });
+    await expect(apps.dashboardRead(owner, app.id, { resource: "activity", ...base })).rejects.toMatchObject({ status: 409 });
   });
 
   it("drops a pending snapshot after a revision change, archive or owner revocation", async () => {

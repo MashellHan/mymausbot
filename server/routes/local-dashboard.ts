@@ -6,7 +6,7 @@ import { createLocalUsageProvider } from "../local-usage.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
 export interface LocalDashboardProviders {
-  agents: { get(): Promise<LocalAgentTeamsResponse> };
+  agents: { get(fresh?: boolean): Promise<LocalAgentTeamsResponse> };
   activity: { get(agentId: string): Promise<LocalAgentActivityResponse> };
   configuration: {
     getAgent(agentId: string): Promise<LocalAgentConfigurationResponse>;
@@ -18,7 +18,7 @@ export interface LocalDashboardProviders {
 
 export function createLocalDashboardRoutes(providers: LocalDashboardProviders): RouteHandler {
   return async ({ req, res, url, path, method, auth, json }) => {
-    const activity = /^\/api\/local-dashboard\/agents\/(w\d+(?::|%3A)p\d+)\/activity$/i.exec(path);
+    const activity = /^\/api\/local-dashboard\/agents\/(w\d+(?::|%3A)p[0-9a-z]+)\/activity$/i.exec(path);
     const configuration = /^\/api\/local-dashboard\/agents\/(w\d+(?::|%3A)p[0-9a-z]+)\/configuration$/i.exec(path);
     const skill = /^\/api\/local-dashboard\/agents\/(w\d+(?::|%3A)p[0-9a-z]+)\/skills\/(s[0-9a-f]{16})$/i.exec(path);
     const teamRules = /^\/api\/local-dashboard\/teams\/(w\d+)\/rules$/.exec(path);

@@ -41,7 +41,9 @@ vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => fixture.visible }))
 vi.mock("@/lib/thread-preferences", () => ({ useShowThreads: () => false }));
 vi.mock("./MiniAppFrame", () => ({ MiniAppFrame: ({ document, state }: { document: MiniAppDocument; state: MiniAppState }) => {
   fixture.frameMounts += 1;
-  return createElement("div", { "data-testid": "fixture-frame", "data-id": document.app.id, "data-data-revision": state.data[0]?.revision });
+  return createElement("div", { "data-testid": "fixture-frame", "data-id": document.app.id,
+    "data-template-version": document.app.templateVersion, "data-html": document.html,
+    "data-data-revision": state.data[0]?.revision });
 } }));
 
 import { MiniAppsPanel } from "./MiniAppsPanel";
@@ -195,6 +197,38 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); setLocale("en"); });
 
 describe("Mini Apps panel", () => {
+  it("refreshes the same installed Agent Team frame after vB, rollback and revocation without a host restart", async () => {
+    const htmlDashboard = { kind: "agent-team", renderer: "html", htmlRole: "primary", editableFields: ["title", "description"],
+      resources: ["teams", "activity", "configuration", "team-rules", "skill"] } as const;
+    const first = { ...app("app_team", "Agent Team"), slug: "agent-team", dashboardIdentity: "agent-team" as const,
+      dashboard: htmlDashboard };
+    fixture.apps = [first];
+    fixture.mojoHtml = "<p>Reviewed vA</p>";
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.html).toBe("<p>Reviewed vA</p>"));
+    expect(frame()?.dataset.id).toBe("app_team");
+    fixture.apps = [{ ...first, revision: 4, templateVersion: 3 }];
+    fixture.mojoHtml = "<p>Published vB</p>";
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(frame()?.dataset.html).toBe("<p>Published vB</p>"));
+    expect(frame()?.dataset.templateVersion).toBe("3");
+    fixture.apps = [{ ...first, revision: 5, templateVersion: 2 }];
+    fixture.mojoHtml = "<p>Reviewed vA</p>";
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(frame()?.dataset.html).toBe("<p>Reviewed vA</p>"));
+    fixture.apps = [{ ...first, revision: 6, dashboard: null }];
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-recovery"]')).not.toBeNull());
+    expect(frame()).toBeNull();
+    fixture.apps = [{ ...first, revision: 7, templateVersion: 1, dashboard }];
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="selected-agent-team"]')).not.toBeNull());
+    expect(frame()).toBeNull();
+  });
   it("opens the exact current Mojo quote document in the host and retires it on archive", async () => {
     fixture.apps = [app(MOJO_ID, "Mojo")];
     fixture.mojoHtml = `<html><head>${MOJO_MARKER}</head><body>Quotes</body></html>`;

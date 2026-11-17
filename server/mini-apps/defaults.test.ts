@@ -15,7 +15,7 @@ import { MiniApps, type MiniAppActor } from "./registry.ts";
 import { ReportStore } from "./report-store.ts";
 import { reportAppsForBot } from "./report-apps.ts";
 import { DEFAULT_APPS, pendingDefaultHtml } from "./default-documents.ts";
-import { SHIPPED_TEMPLATE_SHA256 } from "./default-template-history.ts";
+import { REVIEWED_AGENT_TEAM_HTML_SHA256, SHIPPED_TEMPLATE_SHA256 } from "./default-template-history.ts";
 
 vi.mock("./default-template-history.ts", async (original) => {
   const history = await original<typeof import("./default-template-history.ts")>();
@@ -33,6 +33,9 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
 const owner: MiniAppActor = { writeAllowed: true, assertActive: () => undefined, canBind: () => true };
 const input: MiniAppDefaultsInput = { bookkeepingHtml: "<h1>Ledger</h1>" };
+const bundledTeamHtml = readFileSync(new URL("../../examples/mini-apps/agent-team/index.html", import.meta.url), "utf8");
+const teamInput: MiniAppDefaultsInput = { ...input, agentTeamHtml: bundledTeamHtml };
+const legacyTeamHtml = '<!doctype html><html lang="en"><meta charset="utf-8"><title>Built-in dashboard</title><body>Open this app in the OpenMausBot desktop app.</body></html>';
 const bundledBookkeepingHtml = readFileSync(new URL("../../examples/mini-apps/bookkeeping/index.html", import.meta.url), "utf8");
 const ledgerSql = 'CREATE TABLE ledger_master ("分类" VARCHAR, "时间" VARCHAR, "金额" VARCHAR, "账户" VARCHAR, "账本" VARCHAR, "货币" VARCHAR, "备注" VARCHAR)';
 
@@ -75,6 +78,62 @@ it("keeps custom slugs, removals and revoked dashboard grants across default ini
   expect(again.apps.find((app) => app.id === book.id)?.status).toBe("archived");
   expect((await defaults.ensure(owner, { ...input, restore: "usage" })).apps.find((app) => app.id === native.id)?.dashboard?.kind).toBe("usage");
   expect((await defaults.ensure(owner, { ...input, restore: "bookkeeping" })).apps.find((app) => app.id === book.id)?.status).toBe("active");
+});
+
+it("migrates only the installed placeholder to reviewed Agent Team HTML", async () => {
+  expect(REVIEWED_AGENT_TEAM_HTML_SHA256).toBe(createHash("sha256").update(teamInput.agentTeamHtml!).digest("hex"));
+  const { defaults, apps } = fixture();
+  const initial = await defaults.ensure(owner, input);
+  const old = initial.apps.find((app) => app.dashboardIdentity === "agent-team")!;
+  expect(old.dashboard).toMatchObject({ renderer: "native" });
+  const migrated = await defaults.ensure(owner, teamInput);
+  expect(migrated.issues).toEqual([]);
+  const team = migrated.apps.find((app) => app.id === old.id)!;
+  expect(team).toMatchObject({ revision: 2, dashboard: { renderer: "html", htmlRole: "primary" } });
+  expect(apps.document(owner, old.id).html).toBe(teamInput.agentTeamHtml);
+  expect((await defaults.ensure(owner, teamInput)).apps.find((app) => app.id === old.id)?.revision).toBe(2);
+
+  const custom = (await apps.publish(owner, { ...publication(apps.document(owner, old.id)),
+    requestKey: "custom-team", html: "<p>Custom vB</p>" }, old.id)).app;
+  expect((await defaults.ensure(owner, teamInput)).apps.find((app) => app.id === old.id)).toEqual(custom);
+  const revoked = (await apps.publish(owner, { ...publication(apps.document(owner, old.id)),
+    requestKey: "revoke-team", dashboardKind: null }, old.id)).app;
+  expect((await defaults.ensure(owner, teamInput)).apps.find((app) => app.id === old.id)).toEqual(revoked);
+  expect(() => defaults.ensure(owner, { ...input, agentTeamHtml: "<p>Unreviewed</p>" })).toThrow("not reviewed");
+});
+
+it("adopts the exact historical stock fallback while preserving metadata-only history and refusing custom rollback history", async () => {
+  expect(createHash("sha256").update(legacyTeamHtml).digest("hex"))
+    .toBe("c3740f8ef57d3b00e6956bd9a168a45a4622afeb4e94edf817958939706c56ee");
+  const createLegacy = async () => {
+    const context = fixture();
+    const first = (await context.apps.publish(owner, { requestKey: "legacy-team", expectedRevision: 0,
+      slug: "agent-team", title: "Owner title", description: "Owner description", html: legacyTeamHtml,
+      bindings: [], publisherBotIds: ["ledger"], dashboardKind: "agent-team" })).app;
+    return { ...context, first };
+  };
+  const installed = await createLegacy();
+  expect(installed.apps.canAdoptAgentTeamDefault(owner, installed.first.id)).toBe(true);
+  const adopted = (await installed.defaults.ensure(owner, teamInput)).apps.find((app) => app.id === installed.first.id)!;
+  expect(adopted).toMatchObject({ id: installed.first.id, revision: 2, title: "Owner title",
+    description: "Owner description", publisherBotIds: ["ledger"], dashboard: { renderer: "html" } });
+  expect(installed.apps.document(owner, adopted.id).html).toBe(bundledTeamHtml);
+
+  const metadata = await createLegacy();
+  await metadata.apps.publish(owner, { ...publication(metadata.apps.document(owner, metadata.first.id)),
+    requestKey: "title-only", title: "Personal title" }, metadata.first.id);
+  expect(metadata.apps.canAdoptAgentTeamDefault(owner, metadata.first.id)).toBe(true);
+  const after = (await metadata.defaults.ensure(owner, teamInput)).apps.find((app) => app.id === metadata.first.id)!;
+  expect(after).toMatchObject({ revision: 3, title: "Personal title", publisherBotIds: ["ledger"], dashboard: { renderer: "html" } });
+
+  const custom = await createLegacy();
+  await custom.apps.publish(owner, { ...publication(custom.apps.document(owner, custom.first.id)),
+    requestKey: "custom-page", html: "<p>Personal page</p>" }, custom.first.id);
+  await custom.apps.rollback(owner, custom.first.id, { requestKey: "old-page", expectedRevision: 2, templateVersion: 1 });
+  expect(custom.apps.canAdoptAgentTeamDefault(owner, custom.first.id)).toBe(false);
+  const unchanged = (await custom.defaults.ensure(owner, teamInput)).apps.find((app) => app.id === custom.first.id)!;
+  expect(unchanged).toMatchObject({ revision: 3, dashboard: { renderer: "native" } });
+  expect(custom.apps.document(owner, unchanged.id).html).toBe(legacyTeamHtml);
 });
 
 it("installs Hongguo by owner identity and restores its revoked grant only when asked", async () => {

@@ -49,8 +49,9 @@ it("initializes included apps from the connected native shell without mounting t
   expect(path).toBe("/api/mini-apps/defaults");
   expect(init.method).toBe("POST");
   const body = JSON.parse(init.body);
-  expect(body).toEqual({ bookkeepingHtml: expect.any(String) });
+  expect(body).toEqual({ bookkeepingHtml: expect.any(String), agentTeamHtml: expect.any(String) });
   expect(body.bookkeepingHtml).toMatch(/^<!doctype html>/i);
+  expect(body.agentTeamHtml).toMatch(/window\.mausApp\.dashboard\.read/);
   expect(host.querySelector('[data-testid="mini-apps-panel"]')).toBeNull();
 
   await act(async () => { root.render(createElement(MiniAppDefaultsBootstrap)); });
