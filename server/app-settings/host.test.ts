@@ -65,7 +65,9 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     saveConfig: async (patch) => {
       if (patch.anthropic && typeof patch.anthropic === "object" && (patch.anthropic as { url?: string }).url === "https://refused.example") return "the provider refused it";
       saved.push(patch);
+      const features = patch.features && typeof patch.features === "object" ? { ...cfg.features, ...patch.features } : undefined;
       Object.assign(cfg, patch);
+      if (features) cfg.features = features;
       return null;
     },
     bots: () => bots,
@@ -149,6 +151,20 @@ describe("reads", () => {
     expect(hits[0]).toMatchObject({ id: "appearance.skin", tier: "safe", value: "daylight", where: "Settings → Appearance" });
     const got = await host.handle({ action: "get", id: "rooms.turnTimeoutMinutes" }, turn);
     expect(JSON.parse(String(got.body.text))).toMatchObject({ id: "rooms.turnTimeoutMinutes", value: "30", allowed: "1 to 1440 minutes", change: "set applies at once, with Undo on the card" });
+  });
+
+  it("reports the effective learned-skill sharing mode and refuses unavailable controls", async () => {
+    const fx = fixture();
+    fx.cfg.features = { shareLearnedSkills: "auto" };
+    const get = async () => JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.shareLearnedSkills" }, fx.turn)).body.text));
+    expect(await get()).toMatchObject({ tier: "confirm", value: "off", allowed: "off, ask or auto" });
+    expect((await fx.set("bots.shareLearnedSkills", "ask")).body.error).toContain("skills library");
+    fx.cfg.features = { skillsLibrary: true };
+    expect(await get()).toMatchObject({ value: "ask" });
+    fx.cfg.features.skillAuthoring = false;
+    expect((await fx.set("bots.shareLearnedSkills", "auto")).body.error).toContain("skill authoring");
+    expect(fx.saved).toEqual([]);
+    expect(fx.cards()).toEqual([]);
   });
 
   it("keeps settings details and writes out of a turn that is not the owner's", async () => {
@@ -324,6 +340,53 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("changes learned-skill sharing only after owner review of the live mode", async () => {
+    const fx = fixture();
+    fx.cfg.features = { skillsLibrary: true };
+    expect((await fx.set("bots.shareLearnedSkills", "always")).status).toBe(400);
+    const first = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const cancelled = fx.cards()[0]!.card;
+    expect(cancelled).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", settingId: "bots.shareLearnedSkills" } });
+    expect(cancelled.subtitle).toContain("eligible bots in the same department under visibility checks; currently ask");
+    expect(fx.answer(String(cancelled.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    fx.answer(String(cancelled.requestId), "deny");
+    expect((await first).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features.shareLearnedSkills = "off";
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+
+    const disabled = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.cfg.features.skillsLibrary = false;
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disabled).body.error).toContain("skills library");
+    expect(fx.saved).toEqual([]);
+
+    fx.cfg.features.skillsLibrary = true;
+    const noAuthoring = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    fx.cfg.features.skillAuthoring = false;
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await noAuthoring).body.error).toContain("skill authoring");
+    expect(fx.saved).toEqual([]);
+
+    fx.cfg.features.skillAuthoring = true;
+    const approved = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    const requestId = String(fx.cards()[4]!.card.requestId);
+    fx.answer(requestId, "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { shareLearnedSkills: "auto" } }]);
+    expect(fx.cfg.features).toMatchObject({ skillsLibrary: true, skillAuthoring: true, shareLearnedSkills: "auto" });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId })).toMatchObject({ state: "invalid" });
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };

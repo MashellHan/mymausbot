@@ -10,7 +10,7 @@ import { parseSocks5Proxy } from "../browser/egress/policy.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
 import { isClaudeEndpoint } from "../claude-endpoints.ts";
 import { isCodexEndpoint } from "../codex-endpoints.ts";
-import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, type AppConfig } from "../config.ts";
+import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, skillAuthoringEnabled, type AppConfig } from "../config.ts";
 import type { InstanceConfig } from "../contracts.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
@@ -19,6 +19,8 @@ import type { RequestAuth } from "../request-auth.ts";
 import { callRoute, type RouteReply } from "../routes/call-route.ts";
 import { engineChosen } from "../routes/instances.ts";
 import type { RouteHandler } from "../routes/table.ts";
+import { skillsLibraryEnabled } from "../skill-library.ts";
+import { shareLearnedSkillsMode, type ShareLearnedSkillsMode } from "../skill-share.ts";
 import type { BotRecord, Store } from "../store.ts";
 
 /** Where the person changes it by hand, as the bot tells them. */
@@ -274,6 +276,18 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
         const bot = deps.bots().find((candidate) => candidate.id === value.botId);
         return deps.archiveBot(value.botId, value.archived, value.archived && Boolean(bot?.chiefOfStaff));
       },
+    }),
+    writable({
+      id: "bots.shareLearnedSkills", label: "Share learned skills", help: "Off disables learned-skill sharing; Ask uses a review receipt; Automatic shares with eligible bots in the same department under visibility checks. Available when the skills library and bot skill authoring are on.", where: "Settings → You and your bots",
+      synonyms: ["share skills", "skills library", "learned skills"], tier: "confirm", value: z.enum(["off", "ask", "auto"]), allowed: "off, ask or auto",
+      current: () => shareLearnedSkillsMode(cfg()),
+      describe: (mode: ShareLearnedSkillsMode) => {
+        if (!skillsLibraryEnabled(cfg())) return { refusal: "Turn on the skills library in Settings first." };
+        if (!skillAuthoringEnabled(cfg())) return { refusal: "Turn on bot skill authoring in Settings first." };
+        const effect = mode === "off" ? "Turn off learned-skill sharing" : mode === "ask" ? "Ask before sharing learned skills" : "Automatically share learned skills with eligible bots in the same department under visibility checks";
+        return { change: `${effect}; currently ${shareLearnedSkillsMode(cfg())}` };
+      },
+      write: config((shareLearnedSkills: ShareLearnedSkillsMode) => ({ features: { shareLearnedSkills } })),
     }),
     provider("providers.anthropic.url", "Anthropic address", ["anthropic", "claude"], () => cfg().anthropic?.url, (text) => ({ anthropic: { url: text } })),
     provider("providers.xai.url", "xAI address", ["xai", "grok"], () => cfg().xai?.url, (text) => ({ xai: { url: text } })),
