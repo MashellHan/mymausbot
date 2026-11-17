@@ -12,17 +12,45 @@ export function dailyXPageAllowed(raw) {
   }
 }
 
-/** A named direct child of the local desktop may navigate only among XReport's canonical reading pages. */
-export function dailyXFrameNavigation(details, mainFrame, localOrigin) {
-  if (!details || details.isMainFrame) return null;
-  let frame;
-  try {
-    frame = details.frame;
-    if (frame?.name !== DAILY_X_FRAME_NAME) return null;
-    if (!mainFrame || mainFrame.origin !== localOrigin || frame.parent !== mainFrame || !dailyXPageAllowed(details.url)) return false;
-    if (frame.origin === "https://mxhan.com") return dailyXPageAllowed(frame.url);
-    return frame.origin === "null" && frame.url === "" && details.initiator === mainFrame;
-  } catch {
-    return false;
-  }
+/** Electron 43.7.9 keeps frameTreeNodeId stable for a frame's lifetime, including redirects and name changes. */
+export function createDailyXFrameNavigation() {
+  const authorized = new Set();
+  return (details, mainFrame, localOrigin, initial = false) => {
+    if (!details || details.isMainFrame) return null;
+    try {
+      const frame = details.frame;
+      if (!frame) return false;
+      const id = frame.frameTreeNodeId;
+      const known = authorized.has(id);
+      const children = mainFrame?.frames;
+      if (!Number.isSafeInteger(id) || id < 0 || !Array.isArray(children)) return known || frame.name === DAILY_X_FRAME_NAME ? false : null;
+      const present = children.some((child) => child.frameTreeNodeId === id);
+      for (const saved of authorized) if (!children.some((child) => child.frameTreeNodeId === saved)) authorized.delete(saved);
+      if (!present) return known || frame.name === DAILY_X_FRAME_NAME ? false : null;
+      if (!known && frame.name !== DAILY_X_FRAME_NAME) return null;
+      if (mainFrame.origin !== localOrigin || frame.parent !== mainFrame || !dailyXPageAllowed(details.url)) return false;
+      if (known) return frame.origin === "https://mxhan.com" ? dailyXPageAllowed(frame.url)
+        : frame.origin === "null" && frame.url === "";
+      if (!initial || frame.origin !== "null" || frame.url !== "" || details.initiator !== mainFrame) return false;
+      authorized.add(id);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+}
+
+export function installDailyXFrameGuards(webContents, { localOrigin, redirectFallback, frameFallback }) {
+  const decide = createDailyXFrameNavigation();
+  webContents.on("will-redirect", (details, url) => {
+    const allowed = decide(details, webContents.mainFrame, localOrigin());
+    if (allowed === null) redirectFallback(details, url);
+    else if (!allowed) details.preventDefault();
+  });
+  webContents.on("will-frame-navigate", (details) => {
+    if (details.isMainFrame) return;
+    const allowed = decide(details, webContents.mainFrame, localOrigin(), true);
+    if (allowed === null) frameFallback(details);
+    else if (!allowed) details.preventDefault();
+  });
 }

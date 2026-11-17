@@ -22,8 +22,20 @@ let host: HTMLDivElement;
 let revoked: () => void;
 const frame = () => host.querySelector<HTMLIFrameElement>("[data-daily-x-frame]");
 const render = () => act(() => root.render(createElement(DailyXWholePage, { document, state, onRevoked: revoked })));
-const message = (type: string, path: string, origin = "https://mxhan.com", source: MessageEventSource | null = frame()?.contentWindow ?? null) =>
-  act(() => window.dispatchEvent(new MessageEvent("message", { origin, source, data: { xreport: 1, type, path } })));
+const watchPosts = (site: HTMLIFrameElement) => {
+  Object.defineProperty(site, "contentWindow", { configurable: true, value: window });
+  return vi.spyOn(window, "postMessage").mockImplementation(() => {});
+};
+const message = (type: string, path: string, nonce?: string, origin = "https://mxhan.com",
+  source: MessageEventSource | null = frame()?.contentWindow ?? null) =>
+  act(() => window.dispatchEvent(new MessageEvent("message", { origin, source, data: { xreport: 1, type, path, nonce } })));
+const load = (site: HTMLIFrameElement, post: ReturnType<typeof vi.spyOn>) => {
+  act(() => site.dispatchEvent(new Event("load")));
+  const [challenge, target] = post.mock.calls.at(-1)! as [{ xreport: number; type: string; nonce: string }, string];
+  expect(challenge).toMatchObject({ xreport: 1, type: "challenge" });
+  expect(target).toBe("https://mxhan.com");
+  return challenge.nonce;
+};
 
 beforeEach(() => {
   setLocale("en");
@@ -33,7 +45,7 @@ beforeEach(() => {
   root = createRoot(host);
   revoked = vi.fn<() => void>();
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 it("keeps the public site in a bounded frame and requires its own positive ready message", () => {
   render();
@@ -44,17 +56,70 @@ it("keeps the public site in a bounded frame and requires its own positive ready
   expect(site.getAttribute("referrerpolicy")).toBe("no-referrer");
   expect(site.getAttribute("allow")).toContain("camera 'none'");
   expect(site.getAttribute("allow")).not.toContain("'self'");
-  act(() => site.dispatchEvent(new Event("load")));
+  const post = watchPosts(site);
+  message("ready", "/x/20261117/", "stale");
   expect(host.querySelector('[role="status"]')).not.toBeNull();
-  message("ready", "/x/20261117/", "https://other.example");
-  message("ready", "/x/20261117/", "https://mxhan.com", window);
+  const nonce = load(site, post);
   expect(host.querySelector('[role="status"]')).not.toBeNull();
   message("ready", "/x/20261117/");
+  message("ready", "/x/20261117/", nonce, "https://other.example");
+  message("ready", "/x/20261117/", nonce, "https://mxhan.com", null);
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  message("ready", "/x/20261117/", nonce);
   expect(host.querySelector('[role="status"]')).toBeNull();
   expect(frame()).toBe(site);
   message("leaving", "/x/20261117/");
   expect(host.querySelector('[role="status"]')).not.toBeNull();
-  message("ready", "/x/20261116/2119569027937063405/");
+  const next = load(site, post);
+  message("ready", "/x/20261116/2119569027937063405/", next);
+  expect(host.querySelector('[role="status"]')).toBeNull();
+});
+
+it("keeps initial pageshow readiness pending until the load's current challenge returns", () => {
+  render();
+  const site = frame()!;
+  const post = watchPosts(site);
+  message("shown", "/x/20261117/");
+  const early = (post.mock.calls.at(-1)![0] as { nonce: string }).nonce;
+  message("ready", "/x/20261117/", early);
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  const loaded = load(site, post);
+  expect(loaded).not.toBe(early);
+  message("ready", "/x/20261117/", early);
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  message("ready", "/x/20261117/", loaded);
+  expect(host.querySelector('[role="status"]')).toBeNull();
+});
+
+it("requires a fresh challenge after every load and times out when a later document stays silent", () => {
+  vi.useFakeTimers();
+  render();
+  const site = frame()!;
+  const post = watchPosts(site);
+  const first = load(site, post);
+  message("ready", "/x/20261117/", first);
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  const next = load(site, post);
+  expect(next).not.toBe(first);
+  message("ready", "/x/20261117/", first);
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  act(() => vi.advanceTimersByTime(10_000));
+  expect(host.querySelector('[data-testid="daily-x-failed"]')).not.toBeNull();
+});
+
+it("renews readiness when a restored document announces pageshow", () => {
+  render();
+  const site = frame()!;
+  const post = watchPosts(site);
+  const first = load(site, post);
+  message("ready", "/x/20261117/", first);
+  message("shown", "/x/20261117/");
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  const restored = (post.mock.calls.at(-1)![0] as { nonce: string }).nonce;
+  expect(restored).not.toBe(first);
+  message("ready", "/x/20261117/", first);
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  message("ready", "/x/20261117/", restored);
   expect(host.querySelector('[role="status"]')).toBeNull();
 });
 

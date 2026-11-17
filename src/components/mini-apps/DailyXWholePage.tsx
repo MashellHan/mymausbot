@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { t } from "@/lib/i18n";
 import { SITE_FRAME_ALLOW } from "@/lib/published-apps";
@@ -17,9 +17,18 @@ export function DailyXWholePage({ document, state, onRevoked }: {
   onRevoked(): void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const challenge = useRef<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [navigation, setNavigation] = useState(0);
   const [phase, setPhase] = useState<Phase>("loading");
+
+  const beginHandshake = useCallback(() => {
+    const nonce = window.crypto.randomUUID();
+    challenge.current = nonce;
+    setNavigation((value) => value + 1);
+    setPhase("loading");
+    frame.current?.contentWindow?.postMessage({ xreport: 1, type: "challenge", nonce }, DAILY_X_ORIGIN);
+  }, []);
 
   useEffect(() => {
     if (phase !== "loading") return;
@@ -32,19 +41,25 @@ export function DailyXWholePage({ document, state, onRevoked }: {
       if (event.origin !== DAILY_X_ORIGIN || event.source !== frame.current?.contentWindow) return;
       const message = event.data;
       if (!message || typeof message !== "object" || message.xreport !== 1
-        || (message.type !== "ready" && message.type !== "leaving") || typeof message.path !== "string") return;
-      if (!dailyXPageAllowed(`${DAILY_X_ORIGIN}${message.path}`)) return setPhase("failed");
-      if (message.type === "ready") setPhase("ready");
+        || !["ready", "leaving", "shown"].includes(message.type) || typeof message.path !== "string") return;
+      if (!dailyXPageAllowed(`${DAILY_X_ORIGIN}${message.path}`)) { challenge.current = null; return setPhase("failed"); }
+      if (message.type === "ready") {
+        if (challenge.current === null || message.nonce !== challenge.current) return;
+        challenge.current = null;
+        setPhase("ready");
+      } else if (message.type === "shown") beginHandshake();
       else {
+        challenge.current = null;
         setNavigation((value) => value + 1);
         setPhase("loading");
       }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, []);
+  }, [beginHandshake]);
 
   const retry = () => {
+    challenge.current = null;
     setAttempt((value) => value + 1);
     setPhase("loading");
   };
@@ -63,7 +78,7 @@ export function DailyXWholePage({ document, state, onRevoked }: {
   return <div className="relative min-h-0 min-w-0 flex-1 bg-panel" data-testid="daily-x-web">
     <iframe key={attempt} ref={frame} data-daily-x-frame="" src={DAILY_X_URL} name={DAILY_X_FRAME_NAME}
       title={t("computer.miniApps.report.xTitle")} sandbox={DAILY_X_SANDBOX} allow={SITE_FRAME_ALLOW}
-      referrerPolicy="no-referrer" onError={() => setPhase("failed")}
+      referrerPolicy="no-referrer" onLoad={beginHandshake} onError={() => { challenge.current = null; setPhase("failed"); }}
       className="absolute inset-0 h-full w-full border-0 bg-white" />
     {phase === "loading" && <div role="status" className="absolute inset-0 flex items-center justify-center bg-panel p-6 text-[13px] text-ink-secondary">
       {t("computer.miniApps.opening")}
