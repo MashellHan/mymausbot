@@ -3,6 +3,7 @@ import { z } from "zod";
 import { credentialIsConfigured, CREDENTIAL_TARGETS, PROVIDER_CREDENTIAL_TARGETS, type CredentialConfig, type CredentialTargetId } from "../../shared/credential-request.ts";
 import { WINDOW_PREFS, type WindowPrefId } from "../../shared/app-settings.ts";
 import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
+import { MAUS_COLOR_NAMES, type MausColor } from "../../shared/wire.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "../bot-thread-limits.ts";
 import { parseSocks5Proxy } from "../browser/egress/policy.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
@@ -61,6 +62,7 @@ export interface RegistryDeps {
   reorderBots(botIds: string[]): Promise<string | null>;
   pinBot(botId: string, pinned: boolean): Promise<string | null>;
   renameBot(botId: string, name: string): Promise<string | null>;
+  colorBot(botId: string, color: MausColor): Promise<string | null>;
   credentials(): CredentialConfig;
   window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
   engines(): Array<{ instanceId: string; name: string; working: boolean }>;
@@ -98,11 +100,14 @@ const engineChange = z.record(z.string(), z.unknown())
     z.object({ kind: z.literal("remove"), instanceId: z.string().regex(/^[\w.-]{1,120}$/) }).strict(),
   ]));
 type EngineChange = z.infer<typeof engineChange>;
+const botId = z.string().regex(/^[\w-]{1,120}$/);
 const botRename = z.object({
-  botId: z.string().regex(/^[\w-]{1,120}$/),
+  botId,
   name: z.string().trim().min(1).max(BOT_PROFILE_LIMITS.name).refine(fitsOnOneLine, "one line without control characters"),
 }).strict();
 type BotRename = z.infer<typeof botRename>;
+const botColor = z.object({ botId, color: z.enum(MAUS_COLOR_NAMES) }).strict();
+type BotColor = z.infer<typeof botColor>;
 const removableKind = (instanceId: string, entry: InstanceConfig | undefined) => isAddedEndpoint(instanceId, entry) ? "OpenAI-compatible server"
   : isClaudeBedrock(entry) ? "Claude on Amazon Bedrock" : isClaudeEndpoint(entry) ? "Claude endpoint" : isCodexEndpoint(entry) ? "Codex endpoint" : null;
 
@@ -212,6 +217,18 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
           : { refusal: `No bot has the id ${botId}. Use list_bots for the ids.` };
       },
       write: ({ botId, name }: BotRename) => deps.renameBot(botId, name),
+    }),
+    writable({
+      id: "bots.color", label: "Bot colour", help: "The colour of one bot in the sidebar and conversations. Use list_bots for its id.", where: "a bot's Settings",
+      synonyms: ["bot color", "bot colour", "colour bot", "color bot"], tier: "confirm", value: botColor,
+      allowed: `{"botId","color"} with color one of ${MAUS_COLOR_NAMES.join(", ")}`,
+      current: () => undefined, read: () => deps.bots().map((bot) => `${bot.id}: ${JSON.stringify(bot.name)} (${bot.color})`).join("; "),
+      describe: ({ botId, color }: BotColor) => {
+        const bot = deps.bots().find((candidate) => candidate.id === botId);
+        return bot ? { change: `Change ${JSON.stringify(bot.name)} from ${bot.color} to ${color}` }
+          : { refusal: `No bot has the id ${botId}. Use list_bots for the ids.` };
+      },
+      write: ({ botId, color }: BotColor) => deps.colorBot(botId, color),
     }),
     provider("providers.anthropic.url", "Anthropic address", ["anthropic", "claude"], () => cfg().anthropic?.url, (text) => ({ anthropic: { url: text } })),
     provider("providers.xai.url", "xAI address", ["xai", "grok"], () => cfg().xai?.url, (text) => ({ xai: { url: text } })),
@@ -336,6 +353,7 @@ export function routeBackedRegistry(deps: {
     reorderBots: (botIds) => refusal(callRoute(deps.routes.botOrder, { method: "PUT", path: "/api/bots/order", body: { botIds }, auth })),
     pinBot: (botId, pinned) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { pinned }, auth })),
     renameBot: (botId, name) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { name }, auth })),
+    colorBot: (botId, color) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { color }, auth })),
     engines: () => deps.providers.instances().filter((instance) => instance.enabled).map((instance) => ({
       instanceId: instance.instanceId, working: deps.providers.lastSnapshot(instance.instanceId)?.state === "available",
       name: instance.displayName ?? BUILT_IN_DRIVERS.find((driver) => driver.driverKind === instance.driverKind)?.metadata.displayName ?? instance.instanceId,

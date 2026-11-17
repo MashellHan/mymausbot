@@ -15,9 +15,12 @@ import { createSettingsRegistry } from "./registry.ts";
 const OPENAI_KEY = "sk-live-9f8e7d6c5b4a3210";
 const GATEWAY_KEY = "sk-gateway-0a1b2c3d";
 const dirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) {
+    await flushDecisionLog(dir);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; window?: boolean; pinFailureId?: string; chosen?: string[]; engineGate?: Promise<void> } = {}) {
@@ -32,6 +35,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const saved: Record<string, unknown>[] = [];
   const pinCalls: Array<{ botId: string; pinned: boolean }> = [];
   const renameCalls: Array<{ botId: string; name: string }> = [];
+  const colorCalls: Array<{ botId: string; color: string }> = [];
   const engineCalls: unknown[] = [];
   const chosen = new Set(options.chosen ?? []);
   const messages: Array<Record<string, any>> = [];
@@ -80,6 +84,13 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
       bot.name = name;
       return null;
     },
+    colorBot: async (botId, color) => {
+      colorCalls.push({ botId, color });
+      const bot = bots.find((candidate) => candidate.id === botId);
+      if (!bot) return "no such bot";
+      bot.color = color;
+      return null;
+    },
     credentials: () => cfg,
     engines: () => [{ instanceId: "claude", name: "Claude", working: true }, { instanceId: "openai-compat-gw", name: "Gateway", working: true }],
     engineChosen: (instanceId) => chosen.has(instanceId),
@@ -110,7 +121,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, pinCalls, renameCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -293,6 +304,42 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("changes one bot colour only after owner Change and refuses stale or invalid requests", async () => {
+    const fx = fixture();
+    const value = { botId: "clive", color: "teal" };
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.color" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ tier: "confirm", value: expect.stringContaining("clive: \"Clive\" (#00f)") });
+    expect((await fx.set("bots.color", { botId: "clive", color: "#123456" })).status).toBe(400);
+    expect((await fx.set("bots.color", { botId: "missing", color: "teal" })).status).toBe(409);
+    expect(fx.cards()).toEqual([]);
+
+    const cancelled = fx.set("bots.color", JSON.stringify(value));
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: 'Change "Clive" from #00f to teal' } });
+    expect(fx.colorCalls).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+
+    const stale = fx.set("bots.color", value);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.bots[1]!.color = "purple";
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.colorCalls).toEqual([]);
+
+    const approved = fx.set("bots.color", value);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.colorCalls).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.colorCalls).toEqual([{ botId: "clive", color: "teal" }]);
+    expect(fx.bots[1]!.color).toBe("teal");
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
   it("renames only after owner Change and refuses Cancel, stale cards and invalid names", async () => {
     const fx = fixture();
     const value = { botId: "clive", name: "   River   " };
