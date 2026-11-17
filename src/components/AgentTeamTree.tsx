@@ -33,30 +33,21 @@ export function AgentTeamTree({ team, stale, active, onConfiguration, readActivi
   const member = members.find((candidate) => identity(candidate) === selected);
   const rootRef = useRef<HTMLDivElement>(null);
   const detailRef = useRef<HTMLElement>(null);
-  const restoreFocus = useRef(false);
-  const focusedElement = useRef<Element | null>(null);
-  const focusedDetail = useRef(false);
+  const focusedElement = useRef<{ element: Element; inside: boolean } | null>(null);
   const id = useId();
   useEffect(() => {
     const rememberFocus = (event: FocusEvent) => {
-      focusedElement.current = event.target as Element;
-      focusedDetail.current = !!detailRef.current?.contains(focusedElement.current);
+      const element = event.target as Element;
+      focusedElement.current = { element, inside: !!rootRef.current?.contains(element) };
     };
     document.addEventListener("focusin", rememberFocus);
     return () => document.removeEventListener("focusin", rememberFocus);
   }, []);
   useLayoutEffect(() => {
-    if (selected && !member) {
-      setSelected(null);
-      if (restoreFocus.current) rootRef.current?.focus({ preventScroll: true });
-    }
-    const selectedNode = rootRef.current?.querySelector('[aria-expanded="true"]');
-    const detail = detailRef.current;
-    return () => {
-      const focused = focusedElement.current;
-      restoreFocus.current = !!focused && !!(focusedDetail.current || detail?.contains(focused) || selectedNode?.contains(focused));
-    };
-  }, [selected, member]);
+    if (selected && !member) setSelected(null);
+    const focused = focusedElement.current;
+    if (focused?.inside && !focused.element.isConnected) rootRef.current?.focus({ preventScroll: true });
+  }, [selected, member, team.agents]);
   const number = (value: number | null) => value === null ? "—" : value.toLocaleString(activeLocale());
   const context = member && member.contextUsed !== null && member.contextWindow !== null && member.contextWindow > 0
     ? Math.round(member.contextUsed / member.contextWindow * 100) : null;

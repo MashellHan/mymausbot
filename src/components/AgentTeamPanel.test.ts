@@ -343,6 +343,17 @@ describe("Agent Team panel", () => {
     external.remove();
   });
 
+  it("recovers focus when an unselected member's configuration control disappears", async () => {
+    await render("content");
+    const config = host.querySelector<HTMLButtonElement>('[data-agent-id="p2"] button[aria-haspopup="dialog"]')!;
+    config.focus();
+    const snapshot = structuredClone(ready);
+    snapshot.teams[0]!.agents = snapshot.teams[0]!.agents.filter((agent) => agent.id !== "p2");
+    await render("content", snapshot);
+    expect(config.isConnected).toBe(false);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
   it("preserves a focused node when new members move it across a visual row", async () => {
     await render("content");
     const node = host.querySelector<HTMLButtonElement>('[data-agent-select="p3"]')!;
