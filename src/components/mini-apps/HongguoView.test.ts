@@ -46,11 +46,15 @@ let episodes: Array<typeof episode | typeof laterEpisode>;
 let historyActions: string[];
 let catalogCard: HongguoSeriesCard;
 let refreshKey = 0;
+let fixtureId = 0;
+let storageKey = "fixture-environment";
+let catalogHold: Promise<void> | null;
+let failPopular: boolean;
 
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim() === label)!;
 const seriesButton = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.trim().startsWith("Drama A"))!;
 const render = async (strict = false) => {
-  const view = createElement(HongguoView, { document: miniAppDocument, state, refreshKey, onRevoked: vi.fn(), onChanged: vi.fn() });
+  const view = createElement(HongguoView, { document: miniAppDocument, state, storageKey, refreshKey, onRevoked: vi.fn(), onChanged: vi.fn() });
   await act(async () => { root.render(strict ? createElement(StrictMode, null, view) : view); });
 };
 const openPlayer = async () => {
@@ -64,6 +68,9 @@ const openPlayer = async () => {
 };
 
 beforeEach(() => {
+  app.id = `hongguo_fixture_${++fixtureId}`;
+  state.appId = app.id;
+  storageKey = "fixture-environment";
   refreshKey++;
   fixture.visible = true;
   fixture.fullscreen = null;
@@ -87,11 +94,17 @@ beforeEach(() => {
   episodes = [episode];
   historyActions = [];
   catalogCard = card;
+  catalogHold = null;
+  failPopular = false;
   fixture.api.mockReset().mockImplementation(async (path: string, init?: RequestInit & { timeoutMs?: number }) => {
     expect(path).toBe(`/api/mini-apps/${app.id}/hongguo/${path.split("/").at(-1)}`);
     const body = JSON.parse(String(init?.body)) as { mode?: string; cursor?: string; action?: string; entry?: HongguoHistoryEntry; seriesId?: string };
     const scope = { appId: app.id, revision: 3 };
     if (path.endsWith("/catalog")) {
+      if (body.mode === "popular" && !body.cursor) {
+        await catalogHold;
+        if (failPopular) throw new Error("Synthetic catalog unavailable");
+      }
       if (body.mode === "new" && failNew) throw new Error("Synthetic catalog unavailable");
       if (pageable && body.cursor === "old-next") {
         await paginationHold;
@@ -135,7 +148,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 
-afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); Reflect.deleteProperty(document, "fullscreenElement"); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLocale("en"); });
+afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); Reflect.deleteProperty(document, "fullscreenElement"); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); setLocale("en"); });
 
 it("keeps catalog errors visible and clears them when restoring cached rows after Strict Mode", async () => {
   await render(true);
@@ -179,6 +192,148 @@ it("shows a short same-revision revisit from memory without a blank catalog or r
   refreshKey++;
   await render();
   await vi.waitFor(() => expect(catalogCalls()).toBeGreaterThan(before));
+});
+
+const popularCalls = () => fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/catalog")
+  && JSON.parse(String(init.body)).mode === "popular" && !JSON.parse(String(init.body)).cursor).length;
+
+it("keeps a nearly five-minute revisit cached when the parent refresh counter resets", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  const before = popularCalls();
+  await act(async () => { root.render(null); });
+  vi.setSystemTime(1_000_000 + 5 * 60_000 - 1);
+  refreshKey = 0;
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  expect(popularCalls()).toBe(before);
+  expect(host.querySelector('[aria-labelledby="hongguo-catalog-title"]')?.getAttribute("aria-busy")).toBe("false");
+});
+
+it("shows expired rows immediately and replaces them after background refresh", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  await render();
+  await act(async () => { root.render(null); });
+  vi.setSystemTime(1_000_000 + 5 * 60_000);
+  let release!: () => void;
+  catalogHold = new Promise<void>((resolve) => { release = resolve; });
+  catalogCard = { ...card, id: "fresh", title: "Fresh catalog" };
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  expect(host.querySelector('[aria-labelledby="hongguo-catalog-title"]')?.getAttribute("aria-busy")).toBe("true");
+  expect(popularCalls()).toBe(2);
+  await act(async () => { release(); });
+  expect(host.textContent).toContain("Fresh catalog");
+  expect(seriesButton()).toBeUndefined();
+});
+
+it("retains cached rows on a failed refresh and retries through the existing refresh control", async () => {
+  await render();
+  failPopular = true;
+  refreshKey++;
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  expect(host.textContent).toContain("Synthetic catalog unavailable");
+  expect(popularCalls()).toBe(2);
+  let release!: () => void;
+  catalogHold = new Promise<void>((resolve) => { release = resolve; });
+  failPopular = false;
+  refreshKey++;
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  expect(popularCalls()).toBe(3);
+  await act(async () => { release(); });
+  expect(host.textContent).not.toContain("Synthetic catalog unavailable");
+});
+
+it("refreshes at five minutes while on the home page and stops the timer while watching", async () => {
+  vi.useFakeTimers();
+  await render();
+  expect(popularCalls()).toBe(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000 - 1); });
+  expect(popularCalls()).toBe(1);
+  let release!: () => void;
+  catalogHold = new Promise<void>((resolve) => { release = resolve; });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(popularCalls()).toBe(2);
+  expect(seriesButton()).toBeTruthy();
+  await act(async () => { release(); });
+  await act(async () => { seriesButton().click(); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+  expect(popularCalls()).toBe(2);
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-labelledby="hongguo-watch-title"] button')!.click(); });
+  expect(popularCalls()).toBe(3);
+});
+
+it("does not show another environment's cached catalog for the same app id", async () => {
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  await act(async () => { root.render(null); });
+  storageKey = "another-environment";
+  let release!: () => void;
+  catalogHold = new Promise<void>((resolve) => { release = resolve; });
+  catalogCard = { ...card, id: "other", title: "Other environment" };
+  await render();
+  expect(seriesButton()).toBeUndefined();
+  await act(async () => { release(); });
+  expect(host.textContent).toContain("Other environment");
+  await act(async () => { root.render(null); });
+  storageKey = "fixture-environment";
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  expect(host.textContent).not.toContain("Other environment");
+});
+
+it("does not renew category freshness when another catalog succeeds", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  const categoryCalls = () => fixture.api.mock.calls.filter(([path, init]) => String(path).endsWith("/catalog")
+    && JSON.parse(String(init.body)).mode === "categories").length;
+  await render();
+  expect(categoryCalls()).toBe(1);
+  vi.setSystemTime(1_000_000 + 4 * 60_000);
+  await act(async () => { button("New").click(); });
+  expect(categoryCalls()).toBe(1);
+  await act(async () => { root.render(null); });
+  vi.setSystemTime(1_000_000 + 6 * 60_000);
+  const before = popularCalls();
+  await render();
+  expect(categoryCalls()).toBe(2);
+  expect(popularCalls()).toBe(before);
+});
+
+it("does not extend the first-page freshness when loading additional pages", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000_000);
+  pageable = true;
+  await render();
+  expect(host.textContent).toContain("Old extra");
+  vi.setSystemTime(1_000_000 + 4 * 60_000);
+  await act(async () => { button("Load more").click(); });
+  expect(host.textContent).toContain("Old last");
+  await act(async () => { root.render(null); });
+  vi.setSystemTime(1_000_000 + 5 * 60_000);
+  await render();
+  expect(popularCalls()).toBe(2);
+});
+
+it("ignores a stale refresh that finishes after choosing a different catalog", async () => {
+  pageable = true;
+  await render();
+  let release!: () => void;
+  catalogHold = new Promise<void>((resolve) => { release = resolve; });
+  refreshKey++;
+  await render();
+  expect(seriesButton()).toBeTruthy();
+  expect(button("Load more").disabled).toBe(true);
+  await act(async () => { button("New").click(); });
+  expect(host.textContent).toContain("New first");
+  await act(async () => { release(); });
+  expect(host.textContent).not.toContain("Drama A");
+  expect(host.textContent).not.toContain("Old extra");
 });
 
 it("shows the first page before one automatic fill, dedupes rows, and leaves manual pagination", async () => {
