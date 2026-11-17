@@ -6,6 +6,7 @@ import { applyFont, readFont } from "./fonts";
 import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
 import { readSendKey, setSendKey } from "./send-key";
+import { loadUniversalPins, setUniversalPins, subscribeUniversalPins } from "./sidebar-preferences";
 import { applySkinChoice, readSkinChoice } from "./skins";
 import { onWindowPrefChanged } from "./window-pref-changes";
 
@@ -14,6 +15,7 @@ const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }
   "appearance.mode": { read: () => readInterfaceMode(), write: (mode) => setInterfaceMode(mode) },
   "appearance.font": { read: () => readFont(), write: (font) => applyFont(font) },
   "appearance.chatWidth": { read: () => readChatWidth(), write: (width) => applyChatWidth(width) },
+  "appearance.universalPins": { read: () => loadUniversalPins(), write: (enabled) => setUniversalPins(enabled) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
   "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
 };
@@ -30,9 +32,14 @@ export function windowPrefValues(): Record<WindowPrefId, unknown> {
 }
 
 let report: ReturnType<typeof setTimeout> | null = null;
+let universalPinsObserved = false;
 /** Tells the server the window's values, once the burst of setters at start-up has settled. */
 export function reportWindowPrefs(): void {
   if (typeof fetch !== "function" || typeof window === "undefined") return;
+  if (!universalPinsObserved && typeof window.addEventListener === "function") {
+    subscribeUniversalPins(() => undefined);
+    universalPinsObserved = true;
+  }
   if (report) clearTimeout(report);
   report = setTimeout(() => {
     report = null;

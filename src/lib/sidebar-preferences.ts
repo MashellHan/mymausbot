@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { z } from "zod";
+import { windowPrefChanged } from "./window-pref-changes";
 
 /** The sidebar as it is, or "icons": the column of avatars the person dragged its edge down to. */
 export type SidebarDensity = "comfortable" | "icons";
@@ -323,8 +324,14 @@ function notifyUniversalPins(): void {
 
 function onUniversalPinsStorage(event: StorageEvent): void {
   if (event.key !== UNIVERSAL_PINS_KEY && event.key !== null) return;
+  try {
+    if (event.storageArea && event.storageArea !== globalThis.localStorage) return;
+  } catch {
+    return;
+  }
   sessionUniversalPins = undefined;
   notifyUniversalPins();
+  windowPrefChanged();
 }
 
 export function subscribeUniversalPins(listener: () => void): () => void {
@@ -373,6 +380,7 @@ export function setUniversalPins(enabled: boolean): void {
   sessionUniversalPins = enabled;
   saveUniversalPins(enabled);
   notifyUniversalPins();
+  windowPrefChanged();
 }
 
 export function useUniversalPins(): boolean {
