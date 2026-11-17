@@ -23,7 +23,7 @@ afterEach(async () => {
   }
 });
 
-function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; window?: boolean; pinFailureId?: string; chosen?: string[]; engineGate?: Promise<void> } = {}) {
+function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; window?: boolean; savedStepsHere?: boolean; pinFailureId?: string; chosen?: string[]; engineGate?: Promise<void> } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "app-settings-"));
   dirs.push(dataDir);
   const bots: BotRecord[] = [
@@ -33,6 +33,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const cfg = { language: "en", rooms: { turnTimeoutMinutes: 30 }, mcp: {}, threads: { maxConcurrentPerBot: 3 }, openai: { key: OPENAI_KEY }, anthropic: { url: "https://api.anthropic.com" },
     instances: { "openai-compat-gw": { driver: "openai-compat", displayName: "Gateway", config: { key: GATEWAY_KEY, url: "https://gw.example/v1" } } } } as unknown as AppConfig;
   const saved: Record<string, unknown>[] = [];
+  const savedStepsHere = { value: options.savedStepsHere !== false };
   const pinCalls: Array<{ botId: string; pinned: boolean }> = [];
   const renameCalls: Array<{ botId: string; name: string }> = [];
   const colorCalls: Array<{ botId: string; color: string }> = [];
@@ -65,9 +66,12 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     saveConfig: async (patch) => {
       if (patch.anthropic && typeof patch.anthropic === "object" && (patch.anthropic as { url?: string }).url === "https://refused.example") return "the provider refused it";
       saved.push(patch);
+      const features = cfg.features;
       Object.assign(cfg, patch);
+      if (patch.features && typeof patch.features === "object") cfg.features = { ...features, ...patch.features };
       return null;
     },
+    savedStepsHere: () => savedStepsHere.value,
     bots: () => bots,
     sections: () => ["Sales"],
     reorderBots: async (botIds) => { bots.sort((a, b) => botIds.indexOf(a.id) - botIds.indexOf(b.id)); return null; },
@@ -138,7 +142,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, cfg, saved, savedStepsHere, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -324,6 +328,88 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("changes saved computer steps only after owner Change and keeps other features", async () => {
+    const fx = fixture();
+    fx.cfg.features = { showToolCalls: true };
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "saved steps" }, fx.turn)).body.text));
+    expect(found).toContainEqual(expect.objectContaining({ id: "desktops.savedSteps", tier: "confirm" }));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "desktops.savedSteps" }, fx.turn)).body.text));
+    expect(JSON.parse(got.value)).toEqual({ enabled: true, availableHere: true });
+    expect(got.help).toContain("existing saved steps stay stored");
+    for (const invalid of [1, "maybe", { enabled: false }]) expect((await fx.set("desktops.savedSteps", invalid)).status).toBe(400);
+    expect(fx.cards()).toEqual([]);
+
+    const cancelled = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("existing saved steps stay stored") } });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+
+    const stale = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features.savedSteps = false;
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features.savedSteps = true;
+
+    const approved = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const card = fx.cards()[2]!.card;
+    expect(fx.answer(String(card.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(card.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { savedSteps: false } }]);
+    expect(fx.cfg.features).toEqual({ showToolCalls: true, savedSteps: false });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(card.requestId) })).toMatchObject({ state: "invalid" });
+
+    const enabled = fx.set("desktops.savedSteps", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await enabled).status).toBe(200);
+    expect(fx.saved[1]).toEqual({ features: { savedSteps: true } });
+    for (const blocked of [fixture({ owner: false }), fixture({ guest: true })]) {
+      expect((await blocked.set("desktops.savedSteps", true)).status).toBe(403);
+      expect(blocked.saved).toEqual([]);
+    }
+  });
+
+  it("reports unavailable saved steps and refuses enabling when support disappears", async () => {
+    const fx = fixture({ savedStepsHere: false });
+    fx.cfg.features = { savedSteps: true, showToolCalls: true };
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "desktops.savedSteps" }, fx.turn)).body.text));
+    expect(JSON.parse(got.value)).toEqual({ enabled: false, availableHere: false, savedOn: true });
+    expect((await fx.set("desktops.savedSteps", true)).body.error).toContain("cannot run on this computer");
+    expect(fx.cards()).toEqual([]);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    fx.savedStepsHere.value = true;
+    fx.answer(String(fx.cards()[0]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+
+    fx.savedStepsHere.value = false;
+    const disabling = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await disabling).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { savedSteps: false } }]);
+    expect(fx.cfg.features).toEqual({ savedSteps: false, showToolCalls: true });
+
+    fx.savedStepsHere.value = true;
+    const enabling = fx.set("desktops.savedSteps", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.savedStepsHere.value = false;
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await enabling).body.error).toContain("cannot run on this computer");
+    expect(fx.saved).toHaveLength(1);
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };

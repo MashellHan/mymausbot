@@ -19,6 +19,7 @@ import type { RequestAuth } from "../request-auth.ts";
 import { callRoute, type RouteReply } from "../routes/call-route.ts";
 import { engineChosen } from "../routes/instances.ts";
 import type { RouteHandler } from "../routes/table.ts";
+import { savedStepsEnabled } from "../saved-steps/saved-steps.ts";
 import type { BotRecord, Store } from "../store.ts";
 
 /** Where the person changes it by hand, as the bot tells them. */
@@ -66,6 +67,7 @@ export interface RegistryDeps {
   colorBot(botId: string, color: MausColor): Promise<string | null>;
   archiveBot(botId: string, archived: boolean, demoteChief: boolean): Promise<string | null>;
   showHelper(botId: string, shown: boolean): Promise<string | null>;
+  savedStepsHere(): boolean;
   credentials(): CredentialConfig;
   window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
   engines(): Array<{ instanceId: string; name: string; working: boolean }>;
@@ -123,6 +125,11 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     return helpers.length === 1 ? helpers[0] : undefined;
   };
   const names = (ids: readonly string[]) => ids.map((id) => deps.bots().find((bot) => bot.id === id)?.name ?? id).join(", ");
+  const savedStepsState = () => {
+    const availableHere = deps.savedStepsHere();
+    const savedOn = savedStepsEnabled(cfg());
+    return { enabled: availableHere && savedOn, availableHere, ...(!availableHere ? { savedOn } : {}) };
+  };
   const writable = (spec: WritableSpec): SettingEntry => ({ ...spec, read: spec.read ?? (() => display(spec.current())), write: spec.write as Writable["write"] });
   const config = <V,>(patch: (value: V) => Record<string, unknown>) => (value: V) => deps.saveConfig(patch(value));
   const windowPref = (id: WindowPrefId, label: string, help: string, where: Where, synonyms: string[], allowed: string): SettingEntry =>
@@ -275,6 +282,15 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
         return deps.archiveBot(value.botId, value.archived, value.archived && Boolean(bot?.chiefOfStaff));
       },
     }),
+    writable({
+      id: "desktops.savedSteps", label: "Saved steps", help: "On a supported Mac, bots can save eligible computer tasks and repeat them without asking AI again. Turning this off stops saving and replay; existing saved steps stay stored.", where: "Settings → Desktops & browser",
+      synonyms: ["saved steps", "repeat computer tasks", "without ai"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: savedStepsState, read: () => display(savedStepsState()),
+      describe: (enabled: boolean) => enabled && !deps.savedStepsHere()
+        ? { refusal: "Saved steps cannot run on this computer. Use Settings on a supported Mac to turn them on." }
+        : { change: `${enabled ? "Let bots save and repeat eligible computer tasks without asking AI again" : "Stop saving and replaying computer steps; existing saved steps stay stored"}; currently ${display(savedStepsState())}` },
+      write: config((savedSteps: boolean) => ({ features: { savedSteps } })),
+    }),
     provider("providers.anthropic.url", "Anthropic address", ["anthropic", "claude"], () => cfg().anthropic?.url, (text) => ({ anthropic: { url: text } })),
     provider("providers.xai.url", "xAI address", ["xai", "grok"], () => cfg().xai?.url, (text) => ({ xai: { url: text } })),
     provider("providers.groq.url", "Groq address", ["groq"], () => cfg().groq?.url, (text) => ({ groq: { url: text } })),
@@ -389,11 +405,13 @@ export function routeBackedRegistry(deps: {
   providers: Pick<ProviderRegistry, "instances" | "lastSnapshot">;
   credentials(): CredentialConfig;
   window: RegistryDeps["window"];
+  savedStepsHere(): boolean;
 }): SettingEntry[] {
   const auth: RequestAuth = { kind: "loopback", scopes: ["admin", "client"] };
   const refusal = async (reply: Promise<RouteReply>) => { const { status, body } = await reply; return status < 300 ? null : String(body.error ?? `HTTP ${status}`); };
   return createSettingsRegistry({
     cfg: deps.cfg, bots: () => deps.store.bots, sections: () => deps.store.sections, credentials: deps.credentials, window: deps.window,
+    savedStepsHere: deps.savedStepsHere,
     saveConfig: (patch) => refusal(callRoute(deps.routes.config, { method: "PUT", path: "/api/config", body: patch, auth })),
     reorderBots: (botIds) => refusal(callRoute(deps.routes.botOrder, { method: "PUT", path: "/api/bots/order", body: { botIds }, auth })),
     pinBot: (botId, pinned) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { pinned }, auth })),
