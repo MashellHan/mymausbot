@@ -34,5 +34,5 @@ export function updaterMessage(state: UpdaterState | null | undefined, { restart
   if (key === "native.update.installFailed" && params.timedOut === "true") params.reason = t("native.update.installTimedOut");
   const missing = key && [...t(key as LocaleKey).matchAll(/\{(\w+)\}/g)].some(([, name]) => !Object.hasOwn(params, name!));
   const text = key ? missing ? state.message : t(key as LocaleKey, params) : code ? t(code) : state.message;
-  return text && (key || code) && restart && state.status === "error" && state.retryable === false ? `${text} ${t("update.error.restartFirst")}` : text;
+  return text && (key || code) && restart && state.status === "error" && state.retryable === false && !state.manualReleaseUrl ? `${text} ${t("update.error.restartFirst")}` : text;
 }

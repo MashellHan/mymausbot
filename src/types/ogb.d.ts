@@ -529,6 +529,8 @@ export interface UpdaterState {
   messageParams?: Record<string, string>;
   /** native work may still be running; recovery requires an app restart */
   retryable?: boolean;
+  /** A packaged install with no usable update metadata offers this personal release page instead of checking a feed. */
+  manualReleaseUrl?: string;
   /**
    * How the download gets applied. "restart" quits and installs in place (an
    * Ubuntu .deb asks for the password once, installs and reopens);

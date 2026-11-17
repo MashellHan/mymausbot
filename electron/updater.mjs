@@ -87,6 +87,32 @@ function updaterLogger() {
 // electron-updater would install a .deb through a polkit root prompt and `dpkg -i` (no dependency resolution) over the running app.
 // A .deb is installed by elevated-install.mjs when a password prompt can be shown; every system package otherwise gets the hand-off below.
 const HAND_OFF_TYPES = new Set(HAND_OFF_PACKAGE_TYPES);
+const PERSONAL_UPDATE_FEED = { provider: "github", owner: "MashellHan", repo: "mymausbot" };
+const PERSONAL_RELEASES_URL = `https://github.com/${PERSONAL_UPDATE_FEED.owner}/${PERSONAL_UPDATE_FEED.repo}/releases`;
+
+function packagedUpdateConfigured() {
+  let contents;
+  try {
+    contents = readFileSync(join(process.resourcesPath, "app-update.yml"), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  // Only the personal release feed may receive update requests from this build.
+  for (const [key, expected] of Object.entries(PERSONAL_UPDATE_FEED)) {
+    const values = [...contents.matchAll(new RegExp(`^${key}:[ \t]*([^\r\n#]+)[ \t]*\r?$`, "gm"))];
+    if (values.length !== 1 || values[0][1].trim() !== expected) {
+      throw new Error(`Packaged update configuration does not target ${PERSONAL_UPDATE_FEED.owner}/${PERSONAL_UPDATE_FEED.repo}`);
+    }
+  }
+  for (const [key, expected] of [["channel", "latest"], ["releaseType", "release"]]) {
+    const values = [...contents.matchAll(new RegExp(`^${key}:[ \t]*([^\r\n#]+)[ \t]*\r?$`, "gm"))];
+    if (values.length > 1 || (values.length === 1 && values[0][1].trim() !== expected)) {
+      throw new Error(`Packaged update configuration selects an unexpected release channel`);
+    }
+  }
+  return true;
+}
 
 // The command is never executed for the person, so nothing here becomes a process argument.
 export function handOffDownloadedPackage(packageType) {
@@ -185,6 +211,20 @@ export function startUpdater(signals = null) {
   if (!app.isPackaged) {
     updaterCoordinator = null;
     setState({ status: "idle" });
+    return;
+  }
+  let configured;
+  try {
+    configured = packagedUpdateConfigured();
+  } catch (error) {
+    updaterCoordinator = null;
+    updaterLogger().error(error);
+    setState({ status: "error", message: UPDATE_TEXT.feed, messageCode: "feed", retryable: false, manualReleaseUrl: PERSONAL_RELEASES_URL });
+    return;
+  }
+  if (!configured) {
+    updaterCoordinator = null;
+    setState({ status: "idle", manualReleaseUrl: PERSONAL_RELEASES_URL });
     return;
   }
   try {

@@ -15,6 +15,8 @@ const LOCAL = "http://127.0.0.1:8799";
 const CLOUD = "https://home-7f3k2.fly.dev";
 const OTHER = "https://bots.example.test";
 const OWN = "https://omb-c-a.fly.dev";
+const UPDATE_CONFIG = "provider: github\nowner: MashellHan\nrepo: mymausbot\nupdaterCacheDirName: openmausbot-updater\n";
+const originalResourcesPath = process.resourcesPath;
 
 const fixture = vi.hoisted(() => ({ autoUpdater: null, handlers: new Map(), home: "" }));
 
@@ -160,13 +162,56 @@ const settle = async () => {
 
 beforeEach(() => {
   fixture.home = mkdtempSync(join(tmpdir(), "omb-updater-home-"));
+  process.resourcesPath = fixture.home;
+  writeFileSync(join(fixture.home, "app-update.yml"), UPDATE_CONFIG);
   localOriginModule.setLocalOrigin(LOCAL);
   vi.useFakeTimers();
 });
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  process.resourcesPath = originalResourcesPath;
   rmSync(fixture.home, { recursive: true, force: true });
+});
+
+it("offers only the personal manual release when a packaged local install has no update metadata", async () => {
+  rmSync(join(fixture.home, "app-update.yml"));
+  const { updater, autoUpdater, handlers } = await load(() => true);
+  updater.startUpdater();
+  expect(handlers.get("update:get-state")({})).toMatchObject({
+    status: "idle", manualReleaseUrl: "https://github.com/MashellHan/mymausbot/releases",
+  });
+  expect(await updater.updateForServerPage(async () => true)).toBe("unavailable");
+  await vi.advanceTimersByTimeAsync(15_000);
+  await handlers.get("update:check")({});
+  expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+});
+
+it("keeps a configured personal updater active", async () => {
+  const { updater, autoUpdater, handlers } = await load(() => true);
+  updater.startUpdater();
+  expect(handlers.get("update:get-state")({})).toMatchObject({ status: "idle", installMode: "restart" });
+  expect(handlers.get("update:get-state")({})).not.toHaveProperty("manualReleaseUrl");
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  "provider: github\nowner: milind-soni\nrepo: OpenMausBot\n",
+  `${UPDATE_CONFIG}owner: milind-soni\n`,
+  "provider: generic\nowner: MashellHan\nrepo: mymausbot\n",
+  `${UPDATE_CONFIG}channel: beta\n`,
+  `${UPDATE_CONFIG}releaseType: prerelease\n`,
+])("refuses an unsafe packaged update feed without making a provider request", async (config) => {
+  writeFileSync(join(fixture.home, "app-update.yml"), config);
+  const { updater, autoUpdater, handlers } = await load(() => true);
+  updater.startUpdater();
+  expect(handlers.get("update:get-state")({})).toMatchObject({
+    status: "error", messageCode: "feed", retryable: false,
+    manualReleaseUrl: "https://github.com/MashellHan/mymausbot/releases",
+  });
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
 });
 
 function bridgeFor(origin, { clicked = false, rule = null } = {}) {
@@ -262,6 +307,7 @@ it("a downloaded update installs when the app quits, except a system package, wh
   const appImage = process.env.APPIMAGE;
   const resources = mkdtempSync(join(tmpdir(), "omb-updater-package-"));
   try {
+    writeFileSync(join(resources, "app-update.yml"), UPDATE_CONFIG);
     for (const [os, marker, image, installsOnQuit] of [
       ["darwin", null, null, true],
       ["win32", null, null, true],
@@ -296,6 +342,7 @@ it("a downloaded update installs by itself at a quiet moment on macOS and Window
   const resources = mkdtempSync(join(tmpdir(), "omb-updater-quiet-"));
   const quiet = { locked: () => true, idleMs: () => 0, typedAt: () => 0, shown: () => true, busy: () => null, work: async () => null, watch: () => {} };
   try {
+    writeFileSync(join(resources, "app-update.yml"), UPDATE_CONFIG);
     for (const [os, marker, image, installs] of [
       ["darwin", null, null, true],
       ["win32", null, null, true],
