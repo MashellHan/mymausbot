@@ -103,6 +103,20 @@ it("demotes a default bot only for an admin and returns the saved mark cleared",
   expect(store.bot(bot.id)?.defaultBot).toEqual({ person: "member@example.com" });
 });
 
+it("keeps one active bot when archiving through PATCH", async () => {
+  const { store, bot, patch } = fixture();
+  expect((await patch(bot.id, { hidden: true })).status).toBe(409);
+  expect(store.bot(bot.id)?.hidden).toBeFalsy();
+
+  const other = store.createBot({ name: "Other" });
+  expect((await patch(bot.id, { hidden: true })).status).toBe(200);
+  expect(store.bot(bot.id)?.hidden).toBe(true);
+  expect((await patch(other.id, { hidden: true })).status).toBe(409);
+  expect(store.bot(other.id)?.hidden).toBeFalsy();
+  expect((await patch(bot.id, { hidden: false })).status).toBe(200);
+  expect(store.bot(bot.id)?.hidden).toBe(false);
+});
+
 describe("PATCH /api/bots/:id vpsAlias relocation guard", () => {
   it("skips the guard when pinning a bot to the host it already uses", async () => {
     const { bot, patch } = fixture();

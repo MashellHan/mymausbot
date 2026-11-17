@@ -36,6 +36,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const pinCalls: Array<{ botId: string; pinned: boolean }> = [];
   const renameCalls: Array<{ botId: string; name: string }> = [];
   const colorCalls: Array<{ botId: string; color: string }> = [];
+  const archiveCalls: Array<{ botId: string; archived: boolean; demoteChief: boolean }> = [];
   const helperCalls: Array<{ botId: string; shown: boolean }> = [];
   const engineCalls: unknown[] = [];
   const chosen = new Set(options.chosen ?? []);
@@ -92,6 +93,14 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
       bot.color = color;
       return null;
     },
+    archiveBot: async (botId, archived, demoteChief) => {
+      archiveCalls.push({ botId, archived, demoteChief });
+      const bot = bots.find((candidate) => candidate.id === botId);
+      if (!bot) return "no such bot";
+      bot.hidden = archived;
+      if (demoteChief) bot.chiefOfStaff = false;
+      return null;
+    },
     showHelper: async (botId, shown) => {
       helperCalls.push({ botId, shown });
       const bot = bots.find((candidate) => candidate.id === botId);
@@ -129,7 +138,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, helperCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -358,6 +367,61 @@ describe("confirm tier", () => {
     expect(fx.helperCalls).toEqual([{ botId: "clive", shown: true }]);
     expect(fx.bots[1]!.sidebarHidden).toBe(false);
     expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
+  it("archives and restores only the approved live bot, retaining chats and refusing unsafe targets", async () => {
+    const fx = fixture();
+    const value = { botId: "clive", archived: true };
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "archive bot" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("bots.archived");
+    expect((await fx.set("bots.archived", { ...value, archived: "true" })).status).toBe(400);
+    expect((await fx.set("bots.archived", { botId: "missing", archived: true })).status).toBe(409);
+    fx.bots[1]!.defaultBot = {};
+    expect((await fx.set("bots.archived", value)).body.error).toContain("sidebar.showHelper");
+    fx.bots[1]!.defaultBot = undefined;
+    fx.bots[0]!.hidden = true;
+    expect((await fx.set("bots.archived", value)).body.error).toContain("last active bot");
+    fx.bots[0]!.hidden = false;
+    fx.bots[1]!.movedTo = { team: { id: "t", name: "Team" }, state: "moved", at: 1 };
+    expect((await fx.set("bots.archived", value)).body.error).toContain("moved to another computer");
+    fx.bots[1]!.movedTo = undefined;
+    expect(fx.archiveCalls).toEqual([]);
+
+    const cancelled = fx.set("bots.archived", value);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("clive") } });
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.archiveCalls).toEqual([]);
+
+    const stale = fx.set("bots.archived", value);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.bots[1]!.chiefOfStaff = true;
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.archiveCalls).toEqual([]);
+
+    const approved = fx.set("bots.archived", value);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(third.appSettingRequest.after).toContain("ending its Chief of Staff role");
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.archiveCalls).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.archiveCalls).toEqual([{ botId: "clive", archived: true, demoteChief: true }]);
+    expect(fx.bots[1]).toMatchObject({ hidden: true, chiefOfStaff: false });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.archived" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ tier: "confirm", value: 'clive: "Clive"' });
+
+    const restored = fx.set("bots.archived", { botId: "clive", archived: false });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await restored).status).toBe(200);
+    expect(fx.archiveCalls[1]).toEqual({ botId: "clive", archived: false, demoteChief: false });
+    expect(fx.bots[1]).toMatchObject({ hidden: false, chiefOfStaff: false });
   });
 
   it("changes one bot colour only after owner Change and refuses stale or invalid requests", async () => {
