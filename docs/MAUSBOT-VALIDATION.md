@@ -85,7 +85,12 @@ or package acceptance. List each pending check with its owner; pending evidence
 cannot be claimed as passed. Source changes require delta review and their
 affected checks, while unchanged evidence remains valid. Root and specialists
 send nonblocking findings through Lead in one batch, avoiding repeated prompts
-and unrelated work on the delivery owner.
+and unrelated work on the delivery owner. Coherent source, atomic commits and
+focused PRs precede batch-wide acceptance. At Lead's chosen boundary, consolidate
+applicable integration testing and findings, then assign batched repairs while
+independent work continues. This cadence does not delay mandatory current-head
+CI or independent review, waive blocking findings/QA holds, add approval gates,
+or justify broad unchanged product-test replay or time-based cancellation.
 
 Development and verification availability are separate. Missing local
 Accessibility, Screen Recording or CUA readiness blocks only the native screen
@@ -308,8 +313,11 @@ QA-Due: 2026-11-06T10:00:00+08:00
 
 Use the actual assigned role (`mausbot-front`, `mausbot-back`,
 `mausbot-upstream` or `mausbot-lead`) and matching `owner:*` label. Role labels
-are not GitHub usernames. Lead assigns baseline/infrastructure work to an
-existing developer or maintainer; unrelated feature authors do not inherit it.
+are not GitHub usernames. Additional developers may execute Lead-assigned repair
+scopes; record their source ownership in the existing handoff without changing
+the supported machine-readable `QA-Owner` or owner-label contract. Lead assigns
+baseline/infrastructure work to an existing developer or maintainer; unrelated
+feature authors do not inherit it.
 P0 holds all ordinary merges/releases; P1 holds its area. P2 and flakes remain
 owned without holding unrelated work. For a reviewed repair PR, Lead writes
 one `QA-Repair: #123` line per hold it repairs before adding `qa:repair`. That

@@ -43,10 +43,11 @@ describe("local dashboard authorization in an isolated server", () => {
       expect(teamsRead.status).toBe(200);
       expect(await teamsRead.json()).toEqual({ appId: team.id, revision: team.revision, resource: "teams",
         snapshot: { status: "unavailable", updatedAt: null, teamCount: null, teams: [] } });
-      const activityRead = await post(teamPath, { resource: "activity", expectedRevision: team.revision, agentId: "w6:p1" });
-      expect(activityRead.status).toBe(200);
-      expect(await activityRead.json()).toEqual({ appId: team.id, revision: team.revision, resource: "activity",
-        snapshot: { agentId: "w6:p1", status: "unavailable", updatedAt: null, truncated: false, events: [] } });
+      const missingOccupant = await post(teamPath, { resource: "activity", expectedRevision: team.revision, agentId: "w6:p1" });
+      expect(missingOccupant.status).toBe(400);
+      const unavailableMember = await post(teamPath, { resource: "activity", expectedRevision: team.revision,
+        agentId: "w6:p1", occupantId: "o0000000000000001" });
+      expect(unavailableMember.status).toBe(409);
       const usageRead = await post(usagePath, { resource: "usage", expectedRevision: usage.revision });
       expect(usageRead.status).toBe(200);
       expect(await usageRead.json()).toMatchObject({ appId: usage.id, revision: usage.revision, resource: "usage",

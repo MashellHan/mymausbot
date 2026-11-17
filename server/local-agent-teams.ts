@@ -7,6 +7,7 @@ import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalA
 import { augmentedPath } from "./env-path.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText } from "./local-agent-session.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
+import { localAgentRoles, verifiedLocalAgentMembers } from "./local-agent-association.ts";
 
 const execute = promisify(execFile);
 const STATES = new Set<LocalAgentState>(["idle", "working", "blocked", "done", "unknown"]);
@@ -33,16 +34,17 @@ function state(value: unknown): LocalAgentState {
   return STATES.has(value as LocalAgentState) ? value as LocalAgentState : "unknown";
 }
 
-export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = process.env.CODEX_HOME || join(homedir(), ".codex"), now = Date.now }: {
-  run?: HerdrRunner; codexHome?: string; now?: () => number;
+export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir(), codexHome = process.env.CODEX_HOME || join(home, ".codex"), now = Date.now }: {
+  run?: HerdrRunner; home?: string; codexHome?: string; now?: () => number;
 } = {}) {
   const observationsFor = createLocalAgentSessionReader(codexHome, now);
   let lastGood: LocalAgentTeamsResponse | null = null;
   let lastResult: LocalAgentTeamsResponse | null = null;
   let lastAttempt = -Infinity;
   let pending: Promise<LocalAgentTeamsResponse> | null = null;
+  let revision = 0;
 
-  async function refresh(): Promise<LocalAgentTeamsResponse> {
+  async function refresh(current: () => boolean): Promise<LocalAgentTeamsResponse> {
     try {
       const responses = await Promise.allSettled([
         run(["--session", "default", "workspace", "list"]),
@@ -58,7 +60,9 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
         if (typeof id !== "string" || !id || teams.has(id)) throw new Error("Invalid workspace identity");
         teams.set(id, { id, name: dashboardText(workspace.label, 100) || id, agentCount: 0, activeAgentCount: 0, lastActivityAt: null, agents: [] });
       }
-      const observations = await observationsFor(agents);
+      const verified = verifiedLocalAgentMembers(agents);
+      const verifiedIds = new Set(verified.map((agent) => agent.pane_id));
+      const [observations, roles] = await Promise.all([observationsFor(agents), localAgentRoles(verified, home)]);
       const seen = new Set<string>();
       for (const agent of agents) {
         const id = agent.pane_id;
@@ -68,14 +72,14 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
         const sessionId = codexSessionId(agent);
         const observation = sessionId ? observations.get(sessionId) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
-        const tokens = agent.tokens as Record<string, unknown> | null;
         const occupantId = localAgentOccupantId(agent, id);
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
-          role: dashboardText(tokens?.role, 40), model: observation?.model ?? null,
+          role: dashboardText(roles.get(id), 40), model: observation?.model ?? null,
           reasoningEffort: observation?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
           contextWindow: observation?.contextWindow ?? null, state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
+          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? null : null,
         };
         team.agents.push(member);
       }
@@ -122,21 +126,28 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, codexHome = proc
               : { coverage: "ready", knownTokens: known };
         }
       }
-      lastGood = { status: "ready", updatedAt: now(), teamCount: teams.size, teams: [...teams.values()] };
-      return lastGood;
+      const response: LocalAgentTeamsResponse = { status: "ready", updatedAt: now(), teamCount: teams.size, teams: [...teams.values()] };
+      if (current()) lastGood = response;
+      return response;
     } catch {
-      return lastGood ? { ...lastGood, status: "stale" } : { status: "unavailable", updatedAt: null, teamCount: null, teams: [] };
+      return lastGood ? { ...lastGood, status: "stale", teams: lastGood.teams.map((team) => ({ ...team,
+        agents: team.agents.map((member) => ({ ...member, role: null, messagePreview: null })),
+      })) } : { status: "unavailable", updatedAt: null, teamCount: null, teams: [] };
     }
   }
 
   return {
     get(fresh = false): Promise<LocalAgentTeamsResponse> {
-      if (fresh) return refresh();
-      if (pending) return pending;
-      if (lastResult && now() - lastAttempt < 1_000) return Promise.resolve(lastResult);
+      if (!fresh && pending) return pending;
+      if (!fresh && lastResult && now() - lastAttempt < 1_000) return Promise.resolve(lastResult);
+      const request = ++revision;
       lastAttempt = now();
-      pending = refresh().then((value) => { lastResult = value; return value; }).finally(() => { pending = null; });
-      return pending;
+      const next: Promise<LocalAgentTeamsResponse> = refresh(() => request === revision).then((value) => {
+        if (request === revision) lastResult = value;
+        return value;
+      }).finally(() => { if (pending === next) pending = null; });
+      pending = next;
+      return next;
     },
   };
 }

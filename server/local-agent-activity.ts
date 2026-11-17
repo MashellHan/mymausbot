@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { LocalAgentActivityEvent, LocalAgentActivityResponse } from "../shared/local-dashboard.ts";
-import { redactSecretsInText } from "../shared/redact.ts";
+import { redactedAgentText as safeText, visibleAgentMessage } from "./local-agent-visible-message.ts";
 import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session.ts";
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 
@@ -14,22 +14,9 @@ const TAIL_BYTES = 512 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
 const MAX_EVENTS = 60;
 const MAX_TOOL_EVENTS = 30;
-const MAX_TEXT = 600;
 const DISCOVERY_MS = 10_000;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const unavailable = (agentId: string): LocalAgentActivityResponse => ({ agentId, status: "unavailable", updatedAt: null, truncated: false, events: [] });
-
-function safeText(value: unknown): { text: string | null; clipped: boolean } {
-  if (typeof value !== "string") return { text: null, clipped: false };
-  const clean = redactSecretsInText(value)
-    .replace(/\b(?:https?|file):\/\/[^\s"'`<>]+/gi, "[link]")
-    .replace(/(^|[\s"'`=:(])\/[^\s"'`<>]+/gm, (_match, lead: string) => `${lead}[path]`)
-    .replace(/(^|[\s"'`=:(])(?:~[\\/]|\.{1,2}[\\/]|[A-Za-z]:[\\/])[^\s"'`<>]+/gm, (_match, lead: string) => `${lead}[path]`)
-    .replace(/\b[A-Za-z0-9._-]+(?:[\\/][A-Za-z0-9._-]+)+\b/g, "[path]")
-    .replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/g, " ").trim();
-  const chars = Array.from(clean);
-  return { text: chars.length ? chars.slice(0, MAX_TEXT).join("") : null, clipped: chars.length > MAX_TEXT };
-}
 
 function visibleEvent(line: string, offset: number): { event: LocalAgentActivityEvent | null; clipped: boolean; format?: "legacy" | "canonical"; raw?: string; callId?: string } {
   let row: Record<string, unknown>;
@@ -48,23 +35,9 @@ function visibleEvent(line: string, offset: number): { event: LocalAgentActivity
       text: result ? "[Result details unavailable]" : "[Arguments unavailable]" }, clipped: false,
       format: "canonical", raw: "", callId };
   }
-  let kind: "user" | "assistant", raw: string, format: "legacy" | "canonical";
-  if (row.type === "event_msg" && (payload.type === "user_message" || payload.type === "agent_message")) {
-    kind = payload.type === "user_message" ? "user" : "assistant";
-    raw = typeof payload.message === "string" ? payload.message : "";
-    format = "legacy";
-  } else if (row.type === "response_item" && payload.type === "message") {
-    if (payload.channel === "analysis") return { event: null, clipped: false };
-    if (payload.role === "user" && payload.phase !== "analysis") kind = "user";
-    else if (payload.role === "assistant" && (payload.phase === "commentary" || payload.phase === "final_answer" || payload.phase === "final")) kind = "assistant";
-    else return { event: null, clipped: false };
-    const partType = kind === "user" ? "input_text" : "output_text";
-    raw = Array.isArray(payload.content) ? payload.content.flatMap((part) => {
-      const content = record(part);
-      return content.type === partType && typeof content.text === "string" ? [content.text] : [];
-    }).join(" ") : "";
-    format = "canonical";
-  } else return { event: null, clipped: false };
+  const message = visibleAgentMessage(row);
+  if (!message) return { event: null, clipped: false };
+  const { kind, raw, format } = message;
   const { text, clipped } = safeText(raw);
   if (text === null) return { event: null, clipped };
   const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
