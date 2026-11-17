@@ -228,6 +228,18 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   });
   const confirm: SettingEntry[] = [
     writable({
+      id: "appearance.runCard", label: "This run card", help: "Show the card that follows a bot's run while it works.", where: "Settings → Appearance",
+      synonyms: ["this run", "run card", "progress"], tier: "confirm", value: WINDOW_PREFS["appearance.runCard"], allowed: "true or false",
+      current: () => deps.window.read("appearance.runCard"),
+      read: () => { const current = deps.window.read("appearance.runCard"); return current === undefined ? "" : current ? "shown" : "hidden"; },
+      describe: (shown: boolean) => {
+        const current = deps.window.read("appearance.runCard");
+        return typeof current === "boolean" ? { change: `${shown ? "Show" : "Hide"} the card that follows each run; currently ${current ? "shown" : "hidden"}` }
+          : { refusal: "Open mymausbot on this computer first; this setting lives in the app window." };
+      },
+      write: async (shown: boolean) => deps.window.write("appearance.runCard", shown),
+    }),
+    writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },

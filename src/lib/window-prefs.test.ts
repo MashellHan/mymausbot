@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyWindowPref, reportWindowPrefs, windowPrefValues } from "./window-prefs";
+import { setShowRunCard } from "./run-card-preferences";
 
 const values = new Map<string, string>();
 beforeEach(() => {
@@ -39,12 +40,15 @@ describe("window preferences", () => {
     const fetched = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetched);
     applyWindowPref({ kind: "window-pref", id: "general.sendKey", value: "shift-enter" });
-    reportWindowPrefs();
+    setShowRunCard(false);
     reportWindowPrefs();
     await vi.advanceTimersByTimeAsync(250);
     expect(fetched).toHaveBeenCalledTimes(1);
     const [url, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/window-prefs");
-    expect(JSON.parse(String(init.body)).values).toMatchObject({ "general.sendKey": "shift-enter" });
+    expect(JSON.parse(String(init.body)).values).toMatchObject({ "general.sendKey": "shift-enter", "appearance.runCard": false });
+    applyWindowPref({ kind: "window-pref", id: "appearance.runCard", value: true });
+    applyWindowPref({ kind: "window-pref", id: "appearance.runCard", value: "false" });
+    expect(windowPrefValues()["appearance.runCard"]).toBe(true);
   });
 });
