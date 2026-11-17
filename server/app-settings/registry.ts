@@ -231,14 +231,13 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   });
   const confirm: SettingEntry[] = [
     writable({
-      id: "bots.keepWarm", label: "Keep caches warm", help: "After a turn, refresh prompt caches for bots following this place's setting; each ping spends a few tokens. A bot's own choice overrides it.", where: "Settings → You and your bots",
+      id: "bots.keepWarm", label: "Keep caches warm", help: "The place's on/off setting is the default for bots without an override. All eligible enabled bots, including bots explicitly set to On, use its shared window after a successful turn; each ping spends a few tokens.", where: "Settings → You and your bots",
       synonyms: ["keep warm", "cache", "prompt cache"], tier: "confirm", value: keepWarmChange, allowed: '{"enabled":true|false,"windowMinutes"?:15-1440}',
       current: () => cacheKeepWarmSettings(cfg()), read: () => display(cacheKeepWarmSettings(cfg())),
       describe: (change: KeepWarmChange) => {
         const before = cacheKeepWarmSettings(cfg());
         const after = { ...before, ...change };
-        const shown = (value: typeof before) => `${value.enabled ? "on" : "off"} (${value.windowMinutes}-minute window)`;
-        return { change: `Set prompt-cache keep-warm for bots following this place from ${shown(before)} to ${shown(after)}; it spends a few tokens per ping while on, and bot-specific overrides stay` };
+        return { change: `Set the prompt-cache keep-warm place default from ${before.enabled ? "on" : "off"} to ${after.enabled ? "on" : "off"} and shared window from ${before.windowMinutes} to ${after.windowMinutes} minutes; all eligible enabled bots, including bots explicitly set to On, use that window after a successful turn. Each ping spends a few tokens; per-bot on/off choices stay unchanged` };
       },
       write: config((change: KeepWarmChange) => ({ cacheKeepWarm: { ...cacheKeepWarmSettings(cfg()), ...change } })),
     }),
