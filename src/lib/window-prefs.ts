@@ -3,6 +3,7 @@
 import { WINDOW_PREFS, type WindowPrefFrame, type WindowPrefId } from "../../shared/app-settings";
 import { applyChatWidth, readChatWidth } from "./chat-width";
 import { applyFont, readFont } from "./fonts";
+import { readFollowUpDefault, setFollowUpDefault, subscribeFollowUpDefault } from "./follow-up";
 import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
 import { readSendKey, setSendKey } from "./send-key";
@@ -15,6 +16,7 @@ const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }
   "appearance.font": { read: () => readFont(), write: (font) => applyFont(font) },
   "appearance.chatWidth": { read: () => readChatWidth(), write: (width) => applyChatWidth(width) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
+  "general.followUp": { read: () => readFollowUpDefault(), write: (choice) => setFollowUpDefault(choice) },
   "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
 };
 
@@ -30,9 +32,14 @@ export function windowPrefValues(): Record<WindowPrefId, unknown> {
 }
 
 let report: ReturnType<typeof setTimeout> | null = null;
+let followUpObserved = false;
 /** Tells the server the window's values, once the burst of setters at start-up has settled. */
 export function reportWindowPrefs(): void {
   if (typeof fetch !== "function" || typeof window === "undefined") return;
+  if (!followUpObserved && typeof window.addEventListener === "function") {
+    subscribeFollowUpDefault(() => undefined);
+    followUpObserved = true;
+  }
   if (report) clearTimeout(report);
   report = setTimeout(() => {
     report = null;

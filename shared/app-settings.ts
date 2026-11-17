@@ -41,6 +41,7 @@ export const WINDOW_PREFS = {
   "appearance.font": z.enum(FONT_IDS),
   "appearance.chatWidth": z.enum(CHAT_WIDTH_IDS),
   "general.sendKey": z.enum(SEND_KEYS),
+  "general.followUp": z.enum(["steer", "queue"]),
   "general.notificationSounds": z.boolean(),
 } as const;
 export type WindowPrefId = keyof typeof WINDOW_PREFS;

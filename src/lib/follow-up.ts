@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import { DEFAULT_FOLLOW_UP, type FollowUpDefault } from "../../shared/follow-up";
 import { isMacPlatform } from "./keyboard-shortcuts";
 import type { SendKey } from "./send-key";
+import { windowPrefChanged } from "./window-pref-changes";
 
 /** What Enter does while a bot works: steer the message into the running turn, or queue it. On this device only. */
 export const FOLLOW_UP_KEY = "omb-follow-up";
@@ -47,14 +48,15 @@ function onStorage(event: StorageEvent) {
   if (event.storageArea && event.storageArea !== storage()) return;
   sessionChoice = undefined;
   for (const listener of listeners) listener();
+  windowPrefChanged();
 }
 
-function subscribe(listener: () => void): () => void {
+export function subscribeFollowUpDefault(listener: () => void): () => void {
   listeners.add(listener);
-  if (listeners.size === 1 && typeof window !== "undefined") window.addEventListener("storage", onStorage);
+  if (listeners.size === 1 && typeof window !== "undefined" && typeof window.addEventListener === "function") window.addEventListener("storage", onStorage);
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0 && typeof window !== "undefined") window.removeEventListener("storage", onStorage);
+    if (listeners.size === 0 && typeof window !== "undefined" && typeof window.removeEventListener === "function") window.removeEventListener("storage", onStorage);
   };
 }
 
@@ -65,8 +67,9 @@ export function setFollowUpDefault(choice: FollowUpDefault): void {
   } catch {
   }
   for (const listener of listeners) listener();
+  windowPrefChanged();
 }
 
 export function useFollowUpDefault(): FollowUpDefault {
-  return useSyncExternalStore(subscribe, readFollowUpDefault, () => DEFAULT_FOLLOW_UP);
+  return useSyncExternalStore(subscribeFollowUpDefault, readFollowUpDefault, () => DEFAULT_FOLLOW_UP);
 }

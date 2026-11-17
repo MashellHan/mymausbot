@@ -228,6 +228,19 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   });
   const confirm: SettingEntry[] = [
     writable({
+      id: "general.followUp", label: "Follow-up while a bot works", help: "On this device, choose whether a typed follow-up steers a bot's running turn or queues behind it. A turn that cannot be steered always queues; the alternate send key can choose the other action when steering is available.", where: "Settings → General",
+      synonyms: ["follow up", "steer", "queue", "while working"], tier: "confirm", value: WINDOW_PREFS["general.followUp"], allowed: "steer or queue",
+      current: () => deps.window.read("general.followUp"),
+      read: () => { const choice = deps.window.read("general.followUp"); return choice === "steer" || choice === "queue" ? `saved ${choice} on this device; turns that cannot be steered always queue` : "unavailable until mymausbot is open on this computer"; },
+      describe: (choice: "steer" | "queue") => {
+        const current = deps.window.read("general.followUp");
+        if (current !== "steer" && current !== "queue") return { refusal: "Open mymausbot on this computer before changing follow-ups." };
+        if (current === choice) return { refusal: `Follow-ups already ${choice} on this device; turns that cannot be steered still queue.` };
+        return { change: `On this device, ${choice === "steer" ? "steer typed follow-ups into a bot's running turn" : "queue typed follow-ups behind a bot's running turn"}; currently ${current}. Turns that cannot be steered always queue, and the alternate send key can choose the other action when steering is available.` };
+      },
+      write: async (choice: "steer" | "queue") => deps.window.write("general.followUp", choice),
+    }),
+    writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },
