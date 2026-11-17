@@ -101,7 +101,7 @@ function packagedUpdateConfigured() {
   }
   // Only electron-builder's flat scalar config may reach the vendor parser; other YAML forms can change the feed.
   const values = new Map();
-  for (const line of contents.split(/\r?\n/)) {
+  for (const line of contents.split(/\r\n|\r|\n/)) {
     if (!line.trim() || /^\s*#/.test(line)) continue;
     const match = /^([A-Za-z][A-Za-z0-9]*): +([A-Za-z][A-Za-z0-9._-]*)(?: +#.*)?$/.exec(line);
     if (!match || !UPDATE_CONFIG_KEYS.has(match[1]) || values.has(match[1])) {

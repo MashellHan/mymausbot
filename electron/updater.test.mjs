@@ -187,8 +187,8 @@ it("offers only the personal manual release when a packaged local install has no
   expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
 });
 
-it("keeps a configured personal updater active", async () => {
-  writeFileSync(join(fixture.home, "app-update.yml"), `${UPDATE_CONFIG}channel: latest # personal stable channel\nreleaseType: release\n`);
+it.each(["\n", "\r\n"])("keeps a configured personal updater active with %j lines", async (lineEnding) => {
+  writeFileSync(join(fixture.home, "app-update.yml"), `${UPDATE_CONFIG}channel: latest # personal stable channel\nreleaseType: release\n`.replaceAll("\n", lineEnding));
   const { updater, autoUpdater, handlers } = await load(() => true);
   updater.startUpdater();
   expect(handlers.get("update:get-state")({})).toMatchObject({ status: "idle", installMode: "restart" });
@@ -207,6 +207,7 @@ it.each([
   `${UPDATE_CONFIG}releaseType: prerelease\n`,
   `${UPDATE_CONFIG}host: updates.example.test\n`,
   `${UPDATE_CONFIG}protocol: http\n`,
+  `${UPDATE_CONFIG}# ignored\rhost: updates.example.test\rprotocol: http\n`,
 ])("refuses an unsafe packaged update feed without making a provider request", async (config) => {
   writeFileSync(join(fixture.home, "app-update.yml"), config);
   const { updater, autoUpdater, handlers } = await load(() => true);
