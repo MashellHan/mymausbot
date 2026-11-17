@@ -38,6 +38,7 @@ let firstSave: Promise<void> | null;
 let historyListHold: Promise<void> | null;
 let historyFailures: number;
 let seriesHold: Promise<void> | null;
+let playbackHold: Promise<void> | null;
 let paginationHold: Promise<void> | null;
 let pageable: boolean;
 let failMore: boolean;
@@ -79,6 +80,7 @@ beforeEach(() => {
   historyListHold = null;
   historyFailures = 0;
   seriesHold = null;
+  playbackHold = null;
   paginationHold = null;
   pageable = false;
   failMore = false;
@@ -110,7 +112,7 @@ beforeEach(() => {
       return { ...scope, items: body.mode === "categories" ? [] : [catalogCard], categories: [], nextCursor: null };
     }
     if (path.endsWith("/series")) { await seriesHold; return { ...scope, series: { ...card, episodes } }; }
-    if (path.endsWith("/playback")) return playback;
+    if (path.endsWith("/playback")) { await playbackHold; return playback; }
     if (path.endsWith("/history")) {
       historyActions.push(body.action!);
       if (body.action === "list") {
@@ -415,4 +417,29 @@ it("pauses an ordinary hidden page without reloading playback on return", async 
   expect(host.querySelector("video")).toBe(video);
   expect(video.currentTime).toBe(19);
   expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(before);
+});
+
+
+it("does not start a pending episode while hidden and keeps the resolved player on return", async () => {
+  playback = { appId: app.id, revision: 3, status: "ready",
+    mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
+  let release!: () => void;
+  playbackHold = new Promise<void>((resolve) => { release = resolve; });
+  const starts = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+  await render();
+  await act(async () => { seriesButton().click(); });
+  const reads = () => fixture.api.mock.calls.filter(([path]) => /\/(series|playback)$/.test(String(path))).length;
+  await vi.waitFor(() => expect(reads()).toBe(2));
+  fixture.visible = false;
+  await render();
+  expect(host.querySelector("video")).toBeNull();
+  await act(async () => { release(); });
+  const video = host.querySelector("video")!;
+  expect(video).not.toBeNull();
+  expect(video.autoplay).toBe(false);
+  expect(starts).not.toHaveBeenCalled();
+  fixture.visible = true;
+  await render();
+  expect(host.querySelector("video")).toBe(video);
+  expect(reads()).toBe(2);
 });
