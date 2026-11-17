@@ -26,6 +26,8 @@ export function MiniAppDashboard({ document, state, refreshKey, onRevoked, onCha
   const callbacks = useRef({ onRevoked, onChanged });
   callbacks.current = { onRevoked, onChanged };
   const [teams, setTeams] = useState<LocalAgentTeamsResponse | null>(null);
+  const teamsRef = useRef(teams);
+  teamsRef.current = teams;
   const [usage, setUsage] = useState<LocalUsageResponse | null>(null);
   const valid = miniAppNativeFrameGuard() && document.app.status === "active" && state.status === "active"
     && state.appId === appId && state.revision === revision && document.app.dashboard?.renderer === "native"
@@ -81,16 +83,22 @@ export function MiniAppDashboard({ document, state, refreshKey, onRevoked, onCha
 
   const readActivity = useCallback(async (agentId: string, signal: AbortSignal): Promise<LocalAgentActivityResponse> => {
     try {
-      const members = teams?.teams.flatMap((team) => team.agents).filter((member) => member.id === agentId && member.occupantId);
-      if (members?.length !== 1) throw new Error("This Agent Team session changed. Refresh and try again.");
-      const result = await read({ resource: "activity", expectedRevision: revision, agentId, occupantId: members[0]!.occupantId! }, signal);
+      const currentOccupant = () => {
+        const members = teamsRef.current?.teams.flatMap((team) => team.agents)
+          .filter((member) => member.id === agentId && member.occupantId);
+        return members?.length === 1 ? members[0]!.occupantId : null;
+      };
+      const occupantId = currentOccupant();
+      if (!occupantId) throw new Error("This Agent Team session changed. Refresh and try again.");
+      const result = await read({ resource: "activity", expectedRevision: revision, agentId, occupantId }, signal);
       if (result.resource !== "activity") throw new Error("This app's activity read changed.");
+      if (currentOccupant() !== occupantId) throw new Error("This Agent Team session changed. Refresh and try again.");
       return result.snapshot;
     } catch (error) {
       if (!signal.aborted) stopFor(error);
       throw error;
     }
-  }, [read, revision, stopFor, teams]);
+  }, [read, revision, stopFor]);
 
   if (!valid) return null;
   return kind === "agent-team" ? <AgentTeamView snapshot={teams} active={visible} readActivity={readActivity} /> : <LocalUsageView snapshot={usage} />;

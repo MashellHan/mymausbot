@@ -119,6 +119,41 @@ describe("installed native Mini App dashboards", () => {
       agentId: "w1:p1", occupantId: "o1234567890abcdef" });
   });
 
+  it.each([false, true])("keeps a three-second native activity read across a two-second poll (occupant replaced: %s)", async (replaced) => {
+    vi.useFakeTimers();
+    let teamReads = 0;
+    let activityReads = 0;
+    let activitySignal: AbortSignal | undefined;
+    calls.api.mockImplementation((path: string, options: { body?: string; signal?: AbortSignal }) => {
+      if (path === "/api/local-dashboard/teams/w1/rules") return Promise.resolve({ teamId: "w1", status: "missing", markdown: null });
+      const body = JSON.parse(options.body!);
+      if (body.resource === "teams") {
+        teamReads++;
+        const occupantId = replaced && teamReads > 1 ? "o0000000000000000" : "o1234567890abcdef";
+        return Promise.resolve({ appId, revision: 3, resource: "teams", snapshot: { ...teams, updatedAt: 1_000 + teamReads,
+          teams: teams.teams.map((team) => ({ ...team, agents: team.agents.map((member) => ({ ...member, occupantId })) })) } });
+      }
+      if (body.resource === "activity") {
+        activityReads++;
+        activitySignal = options.signal;
+        return new Promise((resolve) => setTimeout(() => resolve({ appId, revision: 3, resource: "activity",
+          snapshot: { agentId: "w1:p1", status: "ready", updatedAt: 1_003, truncated: false,
+            events: [{ id: "e1", kind: "assistant", at: null, tool: null, text: "Delayed synthetic reply" }] } }), 3_000));
+      }
+      throw new Error("Unexpected resource");
+    });
+    await render("agent-team");
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-agent-select="w1:p1"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="agent-activity-w1:p1"] button')!.click());
+    expect(activityReads).toBe(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(teamReads).toBe(2);
+    expect(activityReads).toBe(1);
+    expect(activitySignal?.aborted).toBe(replaced);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(host.textContent?.includes("Delayed synthetic reply")).toBe(!replaced);
+  });
+
   it("keeps verified contributions distinct from repository observations and Profile references in an app-scoped snapshot", async () => {
     const snapshot = { ...withGithubUsageFixture(usage), contributions: primaryUsageFixture("2026-11-07") };
     expect(snapshot.windows!["1"].prs).toBe(1);
