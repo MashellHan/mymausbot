@@ -66,7 +66,7 @@ More specific `AGENTS.md` files override this note within their directories.
 ## MausBot repository team
 
 Read `.agents/team/playbook.md` and the assigned role in `.agents/team/roles/`.
-The dedicated Herdr team owns this repository. Its lead and reviewers use
+The dedicated Herdr team owns this repository. Its lead and general reviewers use
 `gpt-6-astra` with `max`; designer, frontend and backend use `gpt-6-sol`
 with `xhigh` and a requested 1,000,000-token context. The upstream integration
 developer uses the same Sol settings. The three additional developers share

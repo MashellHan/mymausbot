@@ -22,6 +22,7 @@ PR, issue, review and CI records. Preserve upstream license and notices.
 | mausbot-review | Reviewer | gpt-6-astra | max | provider default |
 | mausbot-review2 | Reviewer | gpt-6-astra | max | provider default |
 | mausbot-review3 | Reviewer | gpt-6-astra | max | provider default |
+| mausbot-mini-review | Reviewer | gpt-6-astra | xhigh | unchanged |
 
 The three additional developers share [roles/developer.md](roles/developer.md):
 Pi 1.5.1 through the existing Raven provider, exact model ID `gpt-6.1-sol`,
@@ -30,6 +31,13 @@ limit; successful model, thinking and tool responses do not prove full-context
 use. Reviewer3 uses Codex, `gpt-6-astra`/`max` and a read-only sandbox as recorded
 in [roles/reviewer3.md](roles/reviewer3.md). These additions do not replace or
 reconfigure existing members, providers or permissions.
+
+`mausbot-mini-review` is the existing supplemental Mini App reviewer on Codex,
+with `gpt-6-astra`/`xhigh`, not the general reviewers' `max`. Its context and
+launch settings remain unchanged and are not specified by this declaration.
+This declaration adds no agent, grants, QA-owner labels or approval requirement.
+The general review pool remains `mausbot-review`, `mausbot-review2` and
+`mausbot-review3`.
 
 Existing Codex launch arguments remain in their role files; verify live session
 settings before claiming the model is active. A requested context ceiling is not
