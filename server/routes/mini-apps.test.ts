@@ -88,7 +88,7 @@ it("keeps app-scoped dashboard reads behind the existing local owner gate", asyn
 it("keeps Hongguo provider and scoped media behind the owner and revision gates", async () => {
   const requireHongguo = vi.fn(() => ({ revision: 3, nativeKind: "hongguo", nativeIdentity: "hongguo" }));
   const catalog = vi.fn(async () => ({ items: [], categories: [], nextCursor: null }));
-  const preparePlayback = vi.fn(async () => ({ status: "unavailable", reason: "anonymous-limited" }));
+  const preparePlayback = vi.fn(async (): Promise<unknown> => ({ status: "unavailable", reason: "anonymous-limited" }));
   const serveMedia = vi.fn(async () => new Response(null, { status: 416 }));
   const deps = { localEnabled: () => true, apps: { requireHongguo },
     hongguoProvider: { catalog, preparePlayback, serveMedia } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
@@ -113,9 +113,25 @@ it("keeps Hongguo provider and scoped media behind the owner and revision gates"
   expect(catalog).toHaveBeenCalledWith({ expectedRevision: 3, mode: "popular" });
   expect(requireHongguo).toHaveBeenCalledTimes(2);
   await call("POST", "playback", ownerAuth, { expectedRevision: 3, seriesId: "series", episodeId: "episode" });
-  expect(preparePlayback).toHaveBeenCalledWith("series", "episode", { appId: id, revision: 3 });
+  expect(preparePlayback).toHaveBeenCalledWith("series", "episode", { appId: id, revision: 3 }, undefined);
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200,
     { appId: id, revision: 3, status: "unavailable", reason: "anonymous-limited" });
+  await call("POST", "playback", ownerAuth, { expectedRevision: 3, seriesId: "series", episodeId: "episode",
+    qualityId: "https://private.example/key" });
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 400, expect.objectContaining({ error: expect.any(String) }));
+  expect(preparePlayback).toHaveBeenCalledTimes(1);
+  preparePlayback.mockResolvedValueOnce({ status: "ready", token: "synthetic-token", durationSeconds: 90,
+    selectedQualityId: "720p", availableQualityIds: ["1080p", "720p"] });
+  await call("POST", "playback", ownerAuth, { expectedRevision: 3, seriesId: "series", episodeId: "episode", qualityId: "720p" });
+  expect(preparePlayback).toHaveBeenLastCalledWith("series", "episode", { appId: id, revision: 3 }, "720p");
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200,
+    { appId: id, revision: 3, status: "ready", durationSeconds: 90, selectedQualityId: "720p",
+      availableQualityIds: ["1080p", "720p"], mediaUrl: `/api/mini-apps/${id}/hongguo/media/synthetic-token?expectedRevision=3` });
+  preparePlayback.mockResolvedValueOnce({ status: "ready", token: "synthetic-token", durationSeconds: 90,
+    selectedQualityId: "720p", availableQualityIds: ["720p", "https://private.example/key"] });
+  await call("POST", "playback", ownerAuth, { expectedRevision: 3, seriesId: "series", episodeId: "episode" });
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 503, expect.objectContaining({ error: expect.any(String) }));
+  expect(JSON.stringify(json.mock.calls.at(-1))).not.toContain("private.example");
   await call("GET", "media/token?expectedRevision=3", ownerAuth);
   expect(serveMedia).toHaveBeenCalledWith("token", undefined, expect.any(AbortSignal), { appId: id, revision: 3 });
   await call("GET", "media/token?expectedRevision=3&extra=1", ownerAuth);
