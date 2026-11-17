@@ -17,6 +17,8 @@ export interface LocalAgentMember {
   state: LocalAgentState;
   /** Latest user instruction, redacted and bounded; never the full transcript. */
   taskHint: string | null;
+  /** Latest visible assistant commentary or final response for the verified occupant, redacted and bounded. */
+  messagePreview?: string | null;
 }
 
 /** A partial count is a lower bound from verified current-team sessions; null never means zero. */
