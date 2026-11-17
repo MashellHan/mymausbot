@@ -10,7 +10,7 @@ import { useUpdateItem } from "./SidebarProfileMenu";
 afterEach(() => vi.unstubAllGlobals());
 function entry(state: UpdaterState | null) {
   fixture.state = state;
-  vi.stubGlobal("window", { ogb: { updater: { check: vi.fn(), install: vi.fn(), onState: vi.fn() } } });
+  vi.stubGlobal("window", { ogb: { updater: { check: vi.fn(), install: vi.fn(), onState: vi.fn() }, openExternal: vi.fn() } });
   let result: ReturnType<typeof useUpdateItem> = null;
   renderToStaticMarkup(createElement(() => { result = useUpdateItem(); return null; }));
   return result as ReturnType<typeof useUpdateItem>;
@@ -25,4 +25,21 @@ it("offers the restart once an update has downloaded by itself", () => {
   const ready = entry({ status: "downloaded", version: "0.2.0" });
   expect(ready?.label).toBe("Restart to update to mymausbot 0.2.0");
   expect(ready?.item.attention).toBe(true);
+});
+
+it("opens only the personal releases for a local manual install, without retrying its absent feed", () => {
+  const manual = entry({ status: "idle", manualReleaseUrl: "https://github.com/MashellHan/mymausbot/releases" });
+  expect(manual?.label).toBe("Get updates from mymausbot releases");
+  expect(manual?.item.disabled).toBe(false);
+  manual?.item.onSelect?.();
+  expect(window.ogb?.openExternal).toHaveBeenCalledWith("https://github.com/MashellHan/mymausbot/releases");
+  expect(window.ogb?.updater?.check).not.toHaveBeenCalled();
+
+  const broken = entry({ status: "error", manualReleaseUrl: "https://github.com/MashellHan/mymausbot/releases", retryable: false, messageCode: "feed" });
+  expect(broken?.label).toBe("Update setup unavailable · open releases");
+  expect(broken?.item.attention).toBe(true);
+  expect(broken?.item.disabled).toBe(false);
+  broken?.item.onSelect?.();
+  expect(window.ogb?.openExternal).toHaveBeenCalledWith("https://github.com/MashellHan/mymausbot/releases");
+  expect(window.ogb?.updater?.check).not.toHaveBeenCalled();
 });

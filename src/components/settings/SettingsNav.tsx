@@ -70,6 +70,7 @@ export function useAppSubLine(desktop: boolean): string {
   const update = useUpdaterState();
   if (!desktop) return t("settings.scope.browser");
   if (update?.status === "downloaded") return t("settings.app.updateReadyLine", { version: desktopAppVersion() });
+  if (update?.manualReleaseUrl) return t("settings.app.manualLine", { version: desktopAppVersion() });
   return t("settings.app.upToDateLine", { version: desktopAppVersion() });
 }
 

@@ -87,6 +87,40 @@ function updaterLogger() {
 // electron-updater would install a .deb through a polkit root prompt and `dpkg -i` (no dependency resolution) over the running app.
 // A .deb is installed by elevated-install.mjs when a password prompt can be shown; every system package otherwise gets the hand-off below.
 const HAND_OFF_TYPES = new Set(HAND_OFF_PACKAGE_TYPES);
+const PERSONAL_UPDATE_FEED = { provider: "github", owner: "MashellHan", repo: "mymausbot" };
+const PERSONAL_RELEASES_URL = `https://github.com/${PERSONAL_UPDATE_FEED.owner}/${PERSONAL_UPDATE_FEED.repo}/releases`;
+const UPDATE_CONFIG_KEYS = new Set([...Object.keys(PERSONAL_UPDATE_FEED), "updaterCacheDirName", "channel", "releaseType"]);
+
+function packagedUpdateConfigured() {
+  let contents;
+  try {
+    contents = readFileSync(join(process.resourcesPath, "app-update.yml"), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  // Only electron-builder's flat scalar config may reach the vendor parser; other YAML forms can change the feed.
+  const values = new Map();
+  for (const line of contents.split(/\r\n|\r|\n/)) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const match = /^([A-Za-z][A-Za-z0-9]*): +([A-Za-z][A-Za-z0-9._-]*)(?: +#.*)?$/.exec(line);
+    if (!match || !UPDATE_CONFIG_KEYS.has(match[1]) || values.has(match[1])) {
+      throw new Error("Packaged update configuration contains an unsupported field or form");
+    }
+    values.set(match[1], match[2]);
+  }
+  for (const [key, expected] of Object.entries(PERSONAL_UPDATE_FEED)) {
+    if (values.get(key) !== expected) {
+      throw new Error(`Packaged update configuration does not target ${PERSONAL_UPDATE_FEED.owner}/${PERSONAL_UPDATE_FEED.repo}`);
+    }
+  }
+  for (const [key, expected] of [["channel", "latest"], ["releaseType", "release"]]) {
+    if (values.has(key) && values.get(key) !== expected) {
+      throw new Error(`Packaged update configuration selects an unexpected release channel`);
+    }
+  }
+  return true;
+}
 
 // The command is never executed for the person, so nothing here becomes a process argument.
 export function handOffDownloadedPackage(packageType) {
@@ -185,6 +219,20 @@ export function startUpdater(signals = null) {
   if (!app.isPackaged) {
     updaterCoordinator = null;
     setState({ status: "idle" });
+    return;
+  }
+  let configured;
+  try {
+    configured = packagedUpdateConfigured();
+  } catch (error) {
+    updaterCoordinator = null;
+    updaterLogger().error(error);
+    setState({ status: "error", message: UPDATE_TEXT.feed, messageCode: "feed", retryable: false, manualReleaseUrl: PERSONAL_RELEASES_URL });
+    return;
+  }
+  if (!configured) {
+    updaterCoordinator = null;
+    setState({ status: "idle", manualReleaseUrl: PERSONAL_RELEASES_URL });
     return;
   }
   try {

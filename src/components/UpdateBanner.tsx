@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, PackageOpen, RefreshCw, Sparkles, X } from "lucide-react";
 import { updaterMessage, useUpdaterState } from "@/lib/updater";
+import { openExternalLink } from "@/lib/app-links";
 import { productName } from "../lib/brand";
 import { t } from "@/lib/i18n";
 import { NoticeToast } from "./NoticeCard";
@@ -56,6 +57,7 @@ export function UpdateBanner({ sidebarIndicator = false }: UpdateBannerProps) {
   const key = `${s.status}:${s.version ?? ""}`;
   if (dismissed === key) return null;
   const updater = window.ogb!.updater!;
+  const manualReleaseUrl = s.manualReleaseUrl;
 
   const installing = s.status === "installing";
   // Ubuntu system packages can't be swapped under a running app: the command is copied and a terminal opens.
@@ -84,9 +86,11 @@ export function UpdateBanner({ sidebarIndicator = false }: UpdateBannerProps) {
           : updaterMessage(s) || t("update.banner.reopening", { app: productName() })
         : s.status === "handed-off"
           ? `${updaterMessage(s) ? `${updaterMessage(s)} ` : ""}${s.terminalOpened ? t("update.banner.copiedOpened") : t("update.banner.copiedPaste")}`
-          : s.retryable === false
-            ? t("update.banner.quitReopen", { error: friendlyError(updaterMessage(s, { restart: false })?.split(" Quit and reopen ")[0]), app: productName() })
-            : friendlyError(updaterMessage(s));
+          : manualReleaseUrl
+            ? t("settings.updates.manualFailed")
+            : s.retryable === false
+              ? t("update.banner.quitReopen", { error: friendlyError(updaterMessage(s, { restart: false })?.split(" Quit and reopen ")[0]), app: productName() })
+              : friendlyError(updaterMessage(s));
 
   return (
     <div className="animate-panel-in fixed bottom-4 left-[calc(var(--rail-beside,0px)_+_1rem)] z-50 w-[300px] rounded-xl border border-hairline/40 bg-panel p-3.5 shadow-2xl shadow-black/50">
@@ -154,7 +158,15 @@ export function UpdateBanner({ sidebarIndicator = false }: UpdateBannerProps) {
               )}
             </button>
           )}
-          {s.status === "error" && s.retryable !== false && (
+          {s.status === "error" && manualReleaseUrl && (
+            <button
+              onClick={() => void openExternalLink(manualReleaseUrl)}
+              className={primaryAction}
+            >
+              {t("settings.updates.openReleases")}
+            </button>
+          )}
+          {s.status === "error" && !manualReleaseUrl && s.retryable !== false && (
             <button
               onClick={() => {
                 setPending("check");

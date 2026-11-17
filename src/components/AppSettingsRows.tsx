@@ -6,6 +6,7 @@ import { activeLocale, activePackComplete, t } from "@/lib/i18n";
 import { withTourReset } from "@/lib/guided-tour";
 import { completionPatch } from "@/lib/onboarding";
 import { updaterMessage, useUpdaterState } from "@/lib/updater";
+import { openExternalLink } from "@/lib/app-links";
 import { productName } from "../lib/brand";
 import { BrowserProfilesManager } from "./BrowserProfilesManager";
 import { UsbPhoneTakeoverSettings } from "./UsbPhoneTakeoverSettings";
@@ -27,54 +28,59 @@ export function UpdatesRow({ title = t("settings.updates.title") }: { title?: st
   const updater = window.ogb?.updater;
   if (!s || !updater) return null;
   const label =
-    s.status === "checking"
-      ? t("settings.updates.checking")
-      : s.status === "downloading"
-        ? s.percent == null
-          ? t("settings.updates.startingDownload")
-          : t("settings.updates.downloading", { percent: Math.round(s.percent) })
-        : s.status === "preparing"
-          ? t("settings.updates.preparing")
-          : s.status === "downloaded"
-            ? s.installMode === "handoff"
-              ? t("settings.updates.readyInstall", { app: productName(), version: s.version ?? "" })
-              : t("settings.updates.ready", { app: productName(), version: s.version ?? "" })
-            : s.status === "installing"
-              ? updaterMessage(s) ||
-                (s.installMode === "handoff"
-                  ? t("settings.updates.openingTerminal")
-                  : t("settings.updates.restarting"))
-              : s.status === "handed-off"
-                ? t("settings.updates.handedOff")
-                : s.status === "error"
-                  ? t("settings.updates.failed", { message: updaterMessage(s) ?? t("settings.updates.unknownError") })
-                  : t("settings.updates.latest");
+    s.manualReleaseUrl
+      ? t(s.status === "error" ? "settings.updates.manualFailed" : "settings.updates.manual")
+      : s.status === "checking"
+        ? t("settings.updates.checking")
+        : s.status === "downloading"
+          ? s.percent == null
+            ? t("settings.updates.startingDownload")
+            : t("settings.updates.downloading", { percent: Math.round(s.percent) })
+          : s.status === "preparing"
+            ? t("settings.updates.preparing")
+            : s.status === "downloaded"
+              ? s.installMode === "handoff"
+                ? t("settings.updates.readyInstall", { app: productName(), version: s.version ?? "" })
+                : t("settings.updates.ready", { app: productName(), version: s.version ?? "" })
+              : s.status === "installing"
+                ? updaterMessage(s) ||
+                  (s.installMode === "handoff"
+                    ? t("settings.updates.openingTerminal")
+                    : t("settings.updates.restarting"))
+                : s.status === "handed-off"
+                  ? t("settings.updates.handedOff")
+                  : s.status === "error"
+                    ? t("settings.updates.failed", { message: updaterMessage(s) ?? t("settings.updates.unknownError") })
+                    : t("settings.updates.latest");
   return (
     <SettingRow title={title} subtitle={label}>
       <button
         onClick={() => {
+          if (s.manualReleaseUrl) return void openExternalLink(s.manualReleaseUrl);
           if (s.status === "downloaded") return void updater.install();
           void updater.check();
         }}
         disabled={
-          s.status === "checking" || s.status === "downloading" || s.status === "preparing" ||
-          s.status === "installing" || s.retryable === false
+          !s.manualReleaseUrl && (s.status === "checking" || s.status === "downloading" || s.status === "preparing"
+            || s.status === "installing" || s.retryable === false)
         }
         className="ui-button"
       >
-        {s.retryable === false
-          ? t("settings.updates.quitReopen")
-          : s.status === "downloaded"
-            ? s.installMode === "handoff"
-              ? t("settings.updates.install")
-              : t("settings.updates.restart")
-            : s.status === "preparing"
-              ? t("settings.updates.preparingShort")
-              : s.status === "installing"
-                ? s.installMode === "handoff"
-                  ? t("settings.updates.opening")
-                  : t("settings.updates.restartingShort")
-                : t("settings.updates.check")}
+        {s.manualReleaseUrl
+          ? t("settings.updates.openReleases")
+          : s.retryable === false
+            ? t("settings.updates.quitReopen")
+            : s.status === "downloaded"
+              ? s.installMode === "handoff"
+                ? t("settings.updates.install")
+                : t("settings.updates.restart")
+              : s.status === "preparing"
+                ? t("settings.updates.preparingShort")
+                : s.status === "installing"
+                  ? s.installMode === "handoff"
+                    ? t("settings.updates.opening")
+                    : t("settings.updates.restartingShort")
+                  : t("settings.updates.check")}
       </button>
     </SettingRow>
   );

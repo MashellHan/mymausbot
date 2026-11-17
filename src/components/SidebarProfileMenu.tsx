@@ -157,14 +157,15 @@ interface UpdateEntry {
   label: string;
   source?: "desktop" | "server";
   installMode?: string;
+  manualReleaseUrl?: string;
 }
 
 /** The update a Simple account menu raises to its top row: one waiting to be installed, or one that failed. */
-export function simpleUpdateTop(entry: Pick<UpdateEntry, "phase" | "source" | "installMode"> | null): { label: string; action: string } | null {
+export function simpleUpdateTop(entry: Pick<UpdateEntry, "phase" | "source" | "installMode" | "manualReleaseUrl"> | null): { label: string; action: string } | null {
   const ready = () => t("sidebar.update.readyShort");
   if (entry?.source === "desktop") {
     if (entry.phase === "downloaded") return { label: ready(), action: t(entry.installMode === "handoff" ? "sidebar.update.installAction" : "sidebar.update.restartAction") };
-    if (entry.phase === "error") return { label: t("sidebar.update.failedShort"), action: t("sidebar.update.retryAction") };
+    if (entry.phase === "error") return { label: t("sidebar.update.failedShort"), action: t(entry.manualReleaseUrl ? "sidebar.update.openReleases" : "sidebar.update.retryAction") };
   }
   if (entry?.source === "server") {
     if (entry.phase === "available") return { label: ready(), action: t("sidebar.update.installAction") };
@@ -192,22 +193,26 @@ export function useUpdateItem(): UpdateEntry | null {
   if (!updater || !state) return null;
 
   const phase = updatePhase(state, upToDate);
-  const label = updateLabel(phase, state);
+  const label = state.manualReleaseUrl
+    ? t(state.status === "error" ? "sidebar.update.manualFailed" : "sidebar.update.manual")
+    : updateLabel(phase, state);
   return {
     phase,
     pending,
     label,
     source: "desktop",
     installMode: state.installMode,
+    manualReleaseUrl: state.manualReleaseUrl,
     item: {
       key: "update",
       label,
       icon: <UpdateIcon phase={phase} pending={pending} />,
-      disabled: updateBusy(phase, pending) || state?.retryable === false,
+      disabled: updateBusy(phase, pending) || (state.retryable === false && !state.manualReleaseUrl),
       keepOpen: true,
       attention: phase === "downloaded" || phase === "error",
       attentionTone: phase === "error" ? "danger" : "accent",
       onSelect: () => {
+        if (state.manualReleaseUrl) return void openExternalLink(state.manualReleaseUrl);
         if (phase === "downloaded") {
           setPending(true);
           return void updater.install();
