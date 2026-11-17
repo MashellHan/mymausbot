@@ -7,6 +7,7 @@ import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
 import { readSendKey, setSendKey } from "./send-key";
 import { applySkinChoice, readSkinChoice } from "./skins";
+import { readColorUserBubbles, setColorUserBubbles } from "./user-bubble-preference";
 import { onWindowPrefChanged } from "./window-pref-changes";
 
 const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }> = {
@@ -14,6 +15,7 @@ const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }
   "appearance.mode": { read: () => readInterfaceMode(), write: (mode) => setInterfaceMode(mode) },
   "appearance.font": { read: () => readFont(), write: (font) => applyFont(font) },
   "appearance.chatWidth": { read: () => readChatWidth(), write: (width) => applyChatWidth(width) },
+  "appearance.userBubbles": { read: () => readColorUserBubbles(), write: (on) => setColorUserBubbles(on) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
   "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
 };

@@ -228,6 +228,19 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   });
   const confirm: SettingEntry[] = [
     writable({
+      id: "appearance.userBubbles", label: "Coloured messages", help: "Use each bot's colour for your own messages; false keeps your message bubbles plain grey.", where: "Settings → Appearance",
+      synonyms: ["message color", "message colour", "my messages", "user bubbles"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("appearance.userBubbles"),
+      read: () => { const choice = deps.window.read("appearance.userBubbles"); return typeof choice === "boolean" ? display(choice) : "unavailable until mymausbot is open on this computer"; },
+      describe: (coloured: boolean) => {
+        const choice = deps.window.read("appearance.userBubbles");
+        if (typeof choice !== "boolean") return { refusal: "Open mymausbot on this computer before changing message colours." };
+        if (choice === coloured) return { refusal: `Your message bubbles are already ${coloured ? "coloured" : "plain grey"}.` };
+        return { change: `${coloured ? "Colour your messages with each bot's colour" : "Show your messages in plain grey"}; currently ${choice ? "coloured" : "plain grey"}` };
+      },
+      write: async (coloured: boolean) => deps.window.write("appearance.userBubbles", coloured),
+    }),
+    writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },

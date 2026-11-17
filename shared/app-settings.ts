@@ -40,6 +40,7 @@ export const WINDOW_PREFS = {
   "appearance.mode": z.enum(["raw", "simple", "advanced"]),
   "appearance.font": z.enum(FONT_IDS),
   "appearance.chatWidth": z.enum(CHAT_WIDTH_IDS),
+  "appearance.userBubbles": z.boolean(),
   "general.sendKey": z.enum(SEND_KEYS),
   "general.notificationSounds": z.boolean(),
 } as const;

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { applyWindowPref, reportWindowPrefs, windowPrefValues } from "./window-prefs";
+import { setColorUserBubbles } from "./user-bubble-preference";
 
 const values = new Map<string, string>();
 beforeEach(() => {
@@ -46,5 +47,21 @@ describe("window preferences", () => {
     const [url, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/window-prefs");
     expect(JSON.parse(String(init.body)).values).toMatchObject({ "general.sendKey": "shift-enter" });
+  });
+
+  it("applies and reports message bubble colour, rejecting a non-boolean frame", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    applyWindowPref({ kind: "window-pref", id: "appearance.userBubbles", value: false });
+    expect(values.get("omb-color-user-bubbles")).toBe("0");
+    applyWindowPref({ kind: "window-pref", id: "appearance.userBubbles", value: "true" });
+    expect(windowPrefValues()["appearance.userBubbles"]).toBe(false);
+    setColorUserBubbles(true);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetched).toHaveBeenCalledTimes(1);
+    const [url, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/window-prefs");
+    expect(JSON.parse(String(init.body)).values["appearance.userBubbles"]).toBe(true);
   });
 });
