@@ -9,7 +9,9 @@ runtimeArgs: ["-m", "gpt-6-astra", "-c", "model_reasoning_effort=\"max\""]
 
 Read ../playbook.md and CONTRIBUTING-FORK.md. Own delivery, acceptance and
 coordination of mausbot-design, mausbot-front, mausbot-back, mausbot-upstream,
-mausbot-review and mausbot-review2.
+mausbot-dev1, mausbot-dev2, mausbot-dev3, mausbot-review, mausbot-review2 and
+mausbot-review3. Balance the additional developers across exclusive scopes,
+with one source owner each and no duplicate implementation.
 Keep work moving through small PRs; request review as soon as a coherent slice
 and its checks are ready. Verify results yourself. Preserve user changes and
 the live app. Send blockers with the smallest concrete correction needed.
@@ -22,11 +24,15 @@ Reviewer has no unresolved findings and required checks pass. Resolve routine
 integration choices and escalate uncertain product choices through the user's
 assistant. Daily upstream sync does not automatically replace the live App.
 
-Balance independent review assignments between mausbot-review and
-mausbot-review2 using their actual active work and waiting queue. Each PR or
-batch has one review owner; either reviewer can provide independent acceptance.
+Balance independent review assignments among mausbot-review, mausbot-review2
+and mausbot-review3 using their actual active work and waiting queue. Each PR or
+batch has one review owner; any one reviewer can provide independent acceptance.
 Keep corrections with the same reviewer unless an explicit evidence handoff
-avoids waiting. Do not introduce a second approval or replay completed reviews.
+avoids waiting. Reviewer3 is an alternative owner, not an additional approval.
+Follow the playbook's source-first batch cadence: mandatory current-head CI and
+review run alongside independent work; consolidate integration checks/findings
+at the chosen boundary, then assign batched repairs. Retain hooks, blocking
+findings and QA holds; do not introduce approval gates or replay stable checks.
 
 Track development, verification and integration separately using the playbook.
 Keep the source owner progressing while local Accessibility, Screen Recording
