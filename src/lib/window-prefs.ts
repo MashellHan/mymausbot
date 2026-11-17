@@ -6,7 +6,7 @@ import { applyFont, readFont } from "./fonts";
 import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
 import { readSendKey, setSendKey } from "./send-key";
-import { readSidebarToolsLayout, setSidebarToolsLayout } from "./sidebar-preferences";
+import { readSidebarToolsLayout, setSidebarToolsLayout, subscribeSidebarToolsLayout } from "./sidebar-preferences";
 import { applySkinChoice, readSkinChoice } from "./skins";
 import { onWindowPrefChanged } from "./window-pref-changes";
 
@@ -32,9 +32,14 @@ export function windowPrefValues(): Record<WindowPrefId, unknown> {
 }
 
 let report: ReturnType<typeof setTimeout> | null = null;
+let toolsLayoutObserved = false;
 /** Tells the server the window's values, once the burst of setters at start-up has settled. */
 export function reportWindowPrefs(): void {
   if (typeof fetch !== "function" || typeof window === "undefined") return;
+  if (!toolsLayoutObserved && typeof window.addEventListener === "function") {
+    subscribeSidebarToolsLayout(() => undefined);
+    toolsLayoutObserved = true;
+  }
   if (report) clearTimeout(report);
   report = setTimeout(() => {
     report = null;
