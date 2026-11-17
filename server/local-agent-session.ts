@@ -3,6 +3,7 @@ import { open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { LocalAgentMember, LocalAgentTokenUsageWindow } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
+import { assistantMessagePreview } from "./local-agent-visible-message.ts";
 
 const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const SESSION_FILE = /-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i;
@@ -11,8 +12,8 @@ const READ_BYTES = 512 * 1024;
 const INITIAL_BYTES = 8 * 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
-const empty = () => ({ model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, taskHint: null, lastActivityAt: null });
-type Observation = Pick<LocalAgentMember, "model" | "reasoningEffort" | "contextUsed" | "contextWindow" | "taskHint"> & { lastActivityAt: number | null };
+const empty = () => ({ model: null, reasoningEffort: null, contextUsed: null, contextWindow: null, taskHint: null, messagePreview: null, lastActivityAt: null });
+type Observation = Pick<LocalAgentMember, "model" | "reasoningEffort" | "contextUsed" | "contextWindow" | "taskHint"> & { messagePreview: string | null; lastActivityAt: number | null };
 type SessionObservation = Observation & { tokenUsage24h: LocalAgentTokenUsageWindow; tokenUsage7d: LocalAgentTokenUsageWindow };
 type TokenSample = { at: number | null; tokens: number | null; total: number | null; gap: boolean };
 type Cached = { signature: string; identity: string; size: number; offset: number; observation: Observation; pendingLine: boolean;
@@ -42,11 +43,15 @@ export function codexSessionId(agent: Record<string, unknown>): string | null {
 }
 
 function apply(observation: Observation, line: string, highestTotal: number | null): TokenSample | null {
-  if (!line.includes('"turn_context"') && !line.includes('"event_msg"')) return null;
+  const observed = line.includes('"turn_context"') || line.includes('"event_msg"');
+  if (!observed && (!line.includes('"response_item"') || Buffer.byteLength(line) > 64 * 1024)) return null;
   let event: Record<string, unknown>;
-  try { event = record(JSON.parse(line)); } catch { return line.includes('"token_count"') ? { at: null, tokens: null, total: null, gap: true } : null; }
-  if (event.type !== "turn_context" && event.type !== "event_msg")
-    return line.includes('"token_count"') ? { at: null, tokens: null, total: null, gap: true } : null;
+  try { event = record(JSON.parse(line)); } catch { return observed && line.includes('"token_count"') ? { at: null, tokens: null, total: null, gap: true } : null; }
+  if (event.type !== "turn_context" && event.type !== "event_msg" && event.type !== "response_item")
+    return observed && line.includes('"token_count"') ? { at: null, tokens: null, total: null, gap: true } : null;
+  const preview = Buffer.byteLength(line) <= 64 * 1024 ? assistantMessagePreview(event) : null;
+  if (preview !== null) observation.messagePreview = preview;
+  if (event.type === "response_item") return null;
   const at = timestamp(event.timestamp);
   if (at !== null && at > 0) observation.lastActivityAt = Math.max(observation.lastActivityAt ?? 0, at);
   const payload = record(event.payload);

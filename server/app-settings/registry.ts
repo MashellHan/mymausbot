@@ -64,6 +64,7 @@ export interface RegistryDeps {
   pinBot(botId: string, pinned: boolean): Promise<string | null>;
   renameBot(botId: string, name: string): Promise<string | null>;
   colorBot(botId: string, color: MausColor): Promise<string | null>;
+  archiveBot(botId: string, archived: boolean, demoteChief: boolean): Promise<string | null>;
   showHelper(botId: string, shown: boolean): Promise<string | null>;
   credentials(): CredentialConfig;
   window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
@@ -110,6 +111,8 @@ const botRename = z.object({
 type BotRename = z.infer<typeof botRename>;
 const botColor = z.object({ botId, color: z.enum(MAUS_COLOR_NAMES) }).strict();
 type BotColor = z.infer<typeof botColor>;
+const botArchive = z.object({ botId, archived: z.boolean() }).strict();
+type BotArchive = z.infer<typeof botArchive>;
 const removableKind = (instanceId: string, entry: InstanceConfig | undefined) => isAddedEndpoint(instanceId, entry) ? "OpenAI-compatible server"
   : isClaudeBedrock(entry) ? "Claude on Amazon Bedrock" : isClaudeEndpoint(entry) ? "Claude endpoint" : isCodexEndpoint(entry) ? "Codex endpoint" : null;
 
@@ -127,6 +130,17 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   const enumOf = (values: readonly string[]) => values.join(", ");
   const pinned = () => deps.bots().filter((bot) => bot.pinned).map((bot) => bot.id);
   const groups = () => Object.fromEntries(deps.sections().map((section) => [section, deps.bots().filter((bot) => bot.section === section).map((bot) => bot.id)]));
+  const describeArchive = ({ botId, archived }: BotArchive): { change: string } | { refusal: string } => {
+    const bot = deps.bots().find((candidate) => candidate.id === botId);
+    if (!bot) return { refusal: `No bot has the id ${botId}. Use list_bots for the ids.` };
+    if (bot.movedTo) return { refusal: `${bot.name} was moved to another computer and cannot be restored or archived here.` };
+    if (archived && bot.defaultBot) return { refusal: `${bot.name} is this place's helper. Use sidebar.showHelper to hide its row.` };
+    if (Boolean(bot.hidden) === archived) return { refusal: `${bot.name} is already ${archived ? "archived" : "active"}.` };
+    if (archived && deps.bots().filter((candidate) => !candidate.hidden).length <= 1) return { refusal: "The last active bot cannot be archived." };
+    return { change: archived
+      ? `Archive ${JSON.stringify(bot.name)} (${bot.id}), keeping its chats and removing it from the sidebar${bot.chiefOfStaff ? " and ending its Chief of Staff role" : ""}`
+      : `Restore ${JSON.stringify(bot.name)} (${bot.id}) to the sidebar, keeping its chats` };
+  };
 
   const safe: SettingEntry[] = [
     windowPref("appearance.skin", "Skin", "The window's look; \"system\" follows the computer's light or dark mode.", "Settings → Appearance", ["theme", "dark mode", "light mode", "colors", "look"], enumOf(WINDOW_PREFS["appearance.skin"].options)),
@@ -247,6 +261,19 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
           : { refusal: `No bot has the id ${botId}. Use list_bots for the ids.` };
       },
       write: ({ botId, color }: BotColor) => deps.colorBot(botId, color),
+    }),
+    writable({
+      id: "bots.archived", label: "Archived bots", help: "Archive one bot from the sidebar while keeping its chats, or restore it. Use list_bots for its id.", where: "the sidebar",
+      synonyms: ["archive bot", "unarchive", "restore bot", "hidden bots"], tier: "confirm", value: botArchive,
+      allowed: '{"botId","archived":true|false}', current: () => undefined,
+      read: () => deps.bots().filter((bot) => bot.hidden && !bot.movedTo).map((bot) => `${bot.id}: ${JSON.stringify(bot.name)}`).join("; "),
+      describe: describeArchive,
+      write: (value: BotArchive) => {
+        const described = describeArchive(value);
+        if ("refusal" in described) return Promise.resolve(described.refusal);
+        const bot = deps.bots().find((candidate) => candidate.id === value.botId);
+        return deps.archiveBot(value.botId, value.archived, value.archived && Boolean(bot?.chiefOfStaff));
+      },
     }),
     provider("providers.anthropic.url", "Anthropic address", ["anthropic", "claude"], () => cfg().anthropic?.url, (text) => ({ anthropic: { url: text } })),
     provider("providers.xai.url", "xAI address", ["xai", "grok"], () => cfg().xai?.url, (text) => ({ xai: { url: text } })),
@@ -372,6 +399,7 @@ export function routeBackedRegistry(deps: {
     pinBot: (botId, pinned) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { pinned }, auth })),
     renameBot: (botId, name) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { name }, auth })),
     colorBot: (botId, color) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { color }, auth })),
+    archiveBot: (botId, archived, demoteChief) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { hidden: archived, ...(demoteChief ? { chiefOfStaff: false } : {}) }, auth })),
     showHelper: (botId, shown) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { sidebarHidden: !shown }, auth })),
     engines: () => deps.providers.instances().filter((instance) => instance.enabled).map((instance) => ({
       instanceId: instance.instanceId, working: deps.providers.lastSnapshot(instance.instanceId)?.state === "available",
