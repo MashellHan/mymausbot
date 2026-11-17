@@ -192,9 +192,21 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
         deps.apps.requireHongguo(owner, id, input.expectedRevision);
         if (!deps.hongguoProvider) throw appFailure(503, "Hongguo is unavailable.");
         let result: unknown;
-        if (action === "catalog") result = parseHongguoCatalogResult(await hongguoProviderResult(() => deps.hongguoProvider!.catalog(input as ReturnType<typeof parseHongguoCatalog>)));
-        else if (action === "series") result = { series: parseHongguoSeriesResult(await hongguoProviderResult(() => deps.hongguoProvider!.series((input as ReturnType<typeof parseHongguoSeries>).seriesId))) };
-        else {
+        if (action === "catalog" || action === "series") {
+          const abort = new AbortController();
+          const onClose = () => abort.abort();
+          res.once("close", onClose);
+          if (res.destroyed) abort.abort();
+          try {
+            if (abort.signal.aborted) return;
+            if (action === "catalog") result = parseHongguoCatalogResult(await hongguoProviderResult(() =>
+              deps.hongguoProvider!.catalog(input as ReturnType<typeof parseHongguoCatalog>, abort.signal)));
+            else result = { series: parseHongguoSeriesResult(await hongguoProviderResult(() =>
+              deps.hongguoProvider!.series((input as ReturnType<typeof parseHongguoSeries>).seriesId, abort.signal))) };
+          } catch (error) { if (abort.signal.aborted) return; throw error; }
+          finally { res.off("close", onClose); }
+          if (abort.signal.aborted || res.destroyed) return;
+        } else {
           const playback = input as ReturnType<typeof parseHongguoPlayback>;
           const prepared = parseHongguoPreparedPlayback(await hongguoProviderResult(() => deps.hongguoProvider!.preparePlayback(
             playback.seriesId, playback.episodeId, { appId: id, revision: input.expectedRevision }, playback.qualityId)));

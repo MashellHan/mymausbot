@@ -8,7 +8,7 @@ export const DEFAULT_APPS = {
   ...REPORT_APPS,
   "agent-team": { slug: "agent-team", title: "Agent Team", description: "Your local teams and their current activity." },
   usage: { slug: "usage", title: "Activities", description: "Your work, contributions and agent activity." },
-  hongguo: { slug: "hongguo", title: "红果短剧", description: "Browse short dramas and resume episodes on this device." },
+  hongguo: { slug: "hongguo", title: "红果", description: "浏览短剧，并从本机保存的剧集进度继续观看。" },
 } as const;
 
 export const NATIVE_DEFAULT_HTML = '<!doctype html><html lang="en"><meta charset="utf-8"><title>Built-in Mini App</title><body>Open this app in the OpenMausBot desktop app.</body></html>';

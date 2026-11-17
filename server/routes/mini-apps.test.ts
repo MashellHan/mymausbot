@@ -110,7 +110,7 @@ it("keeps Hongguo provider and scoped media behind the owner and revision gates"
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 403, expect.objectContaining({ error: expect.any(String) }));
   expect(requireHongguo).not.toHaveBeenCalled();
   await call("POST", "catalog", ownerAuth, { expectedRevision: 3, mode: "popular" });
-  expect(catalog).toHaveBeenCalledWith({ expectedRevision: 3, mode: "popular" });
+  expect(catalog).toHaveBeenCalledWith({ expectedRevision: 3, mode: "popular" }, expect.any(AbortSignal));
   expect(requireHongguo).toHaveBeenCalledTimes(2);
   await call("POST", "playback", ownerAuth, { expectedRevision: 3, seriesId: "series", episodeId: "episode" });
   expect(preparePlayback).toHaveBeenCalledWith("series", "episode", { appId: id, revision: 3 }, undefined);
@@ -153,6 +153,51 @@ it("keeps Hongguo provider and scoped media behind the owner and revision gates"
   expect(response.getHeader("content-length")).toBe(String(image.length));
   expect(requireHongguo).toHaveBeenLastCalledWith(expect.objectContaining({ writeAllowed: true }), id, 3);
   getCover.mockRestore();
+});
+
+it.each(["catalog", "series"] as const)("cancels the %s request lifetime on response close without writing after abort", async (action) => {
+  const requireHongguo = vi.fn();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const provider = vi.fn(async (_input: unknown, signal?: AbortSignal) => {
+    await held;
+    signal?.throwIfAborted();
+    return { items: [], categories: [], nextCursor: null };
+  });
+  const deps = { localEnabled: () => true, apps: { requireHongguo }, hongguoProvider: { [action]: provider } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
+  const route = createMiniAppRoutes(deps);
+  const req = new IncomingMessage(new Socket());
+  Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+  const res = new ServerResponse(req), json = vi.fn();
+  const path = `/api/mini-apps/11111111-1111-4111-8111-111111111111/hongguo/${action}`;
+  const pending = route({ method: "POST", path, url: new URL(`http://127.0.0.1${path}`), req, res,
+    auth: { kind: "loopback", scopes: ["admin"] }, json,
+    readBody: async () => action === "catalog" ? { expectedRevision: 3, mode: "popular" } : { expectedRevision: 3, seriesId: "10" } });
+  await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1));
+  const signal = provider.mock.calls[0]![1]!;
+  expect(signal.aborted).toBe(false);
+  res.emit("close");
+  expect(signal.aborted).toBe(true);
+  release();
+  await pending;
+  expect(json).not.toHaveBeenCalled();
+  expect(requireHongguo).toHaveBeenCalledTimes(1);
+  expect(res.listenerCount("close")).toBe(0);
+});
+
+it("does not start a catalog action for an already closed response", async () => {
+  const catalog = vi.fn();
+  const deps = { localEnabled: () => true, apps: { requireHongguo: vi.fn() }, hongguoProvider: { catalog } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
+  const req = new IncomingMessage(new Socket());
+  Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+  const res = new ServerResponse(req), json = vi.fn();
+  Object.defineProperty(res, "destroyed", { value: true });
+  const path = "/api/mini-apps/11111111-1111-4111-8111-111111111111/hongguo/catalog";
+  await createMiniAppRoutes(deps)({ method: "POST", path, url: new URL(`http://127.0.0.1${path}`), req, res,
+    auth: { kind: "loopback", scopes: ["admin"] }, json, readBody: async () => ({ expectedRevision: 3, mode: "popular" }) });
+  expect(catalog).not.toHaveBeenCalled();
+  expect(json).not.toHaveBeenCalled();
+  expect(res.listenerCount("close")).toBe(0);
 });
 
 it("keeps suggestions behind the local owner gate and passes only the selected Bot task", async () => {
