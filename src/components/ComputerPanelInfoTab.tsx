@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Bot } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -11,7 +11,7 @@ import { PageBody, pageSurfaceCls } from "./bot-panel/pages";
 import { PageHeader } from "./bot-panel/rows";
 import { TAB_PANEL_FOCUS, tabPanelProps } from "./computer-panel-tabs";
 
-const MiniAppsPanel = lazy(() => import("./mini-apps/MiniAppsPanel").then((module) => ({ default: module.MiniAppsPanel })));
+import { MiniAppsSlot } from "./mini-apps/MiniAppsHost";
 
 function FilesWithLibrary({ bot, filePreview, onPreviewClose }: { bot: Bot; filePreview?: PanelFilePreview | null; onPreviewClose?: () => void }) {
   const derived = useBotSettingsDerived(bot);
@@ -50,9 +50,7 @@ export function ComputerPanelInfoTab({ view, bot, filePreview, onPreviewClose, r
   return (
     <div {...tabPanelProps(view)} className={cn("flex min-h-0 flex-1 flex-col", TAB_PANEL_FOCUS)}>
       {view === "files" && <FilesWithLibrary key={bot.id} bot={bot} filePreview={filePreview} onPreviewClose={onPreviewClose} />}
-      {view === "mini-apps" && <Suspense fallback={<div className="flex flex-1 items-center justify-center text-[13px] text-ink-secondary" role="status">{t("computer.miniApps.loading")}</div>}>
-        <MiniAppsPanel requestedApp={requestedApp} />
-      </Suspense>}
+      {view === "mini-apps" && <MiniAppsSlot requestedApp={requestedApp} />}
     </div>
   );
 }

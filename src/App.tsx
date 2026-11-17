@@ -14,6 +14,7 @@ import { GuidedTour } from "@/components/onboarding/GuidedTour";
 import { LiveCallHost } from "@/components/LiveCallHost";
 import { ThreadRefsProvider } from "@/components/ThreadRefs";
 import { MiniAppDefaultsBootstrap } from "@/components/mini-apps/MiniAppDefaultsBootstrap";
+import { MiniAppsHost } from "@/components/mini-apps/MiniAppsHost";
 import { initAnalytics } from "@/lib/analytics";
 import { parseComputerHelp } from "@/lib/computer-control";
 import { writeComputerPanelView } from "@/lib/computer-panel-view";
@@ -341,6 +342,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   </>;
   return (
     <RawPresentation value={interfaceMode === "raw"}>
+    <MiniAppsHost enabled={state.computerOpen && !!bot && !remoteClient}>
     <div data-interface-mode={interfaceMode} data-raw-mac-frame={interfaceMode === "raw" && framed && capabilities.windowChrome === "mac-inset" ? "" : undefined} className={cn("flex h-full flex-col", framed && "bg-frame")} onClickCapture={drawerOpen ? noteDrawerAction : undefined} onKeyDownCapture={drawerOpen ? noteDrawerAction : undefined}>
       <WindowFrameBar notifications={notificationTray} />
       <BotLimitPopup />
@@ -483,6 +485,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
         visible={capabilities.windowChrome === "win-caption" && Boolean(window.ogb?.windowControls)}
       />
     </div>
+    </MiniAppsHost>
     </RawPresentation>
   );
 }
