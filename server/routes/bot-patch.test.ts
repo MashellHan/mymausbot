@@ -40,7 +40,7 @@ beforeEach(() => {
   lifecycleBusy.mockReturnValue(false);
 });
 
-function fixture() {
+function fixture(interruptAllDirectThreads?: (botId: string) => Promise<void>) {
   const store = new Store(() => sonnet);
   const bot = store.createBot({ name: "Scout" });
   const cfg = { vps: { sshAlias: "production-vps" } } as AppConfig;
@@ -56,7 +56,9 @@ function fixture() {
     broadcast: () => {},
     audienceChanged: () => {},
     assertTeamComputerChangeIdle: () => {},
-    routines: () => null,
+    routines: () => interruptAllDirectThreads ? { activeBotRunForBot: () => null } : null,
+    interruptAllDirectThreads,
+    activeGroupTurnForBot: () => null,
     // A member's session may chat with this bot: the level that still can't move it or change what it may do.
     levelOf: () => "chat",
     mainThreadTasks: (botId: string) => store.tasks(botId).filter((task) => !privateThreads.has(task.threadId)),
@@ -115,6 +117,31 @@ it("keeps one active bot when archiving through PATCH", async () => {
   expect(store.bot(other.id)?.hidden).toBeFalsy();
   expect((await patch(bot.id, { hidden: false })).status).toBe(200);
   expect(store.bot(bot.id)?.hidden).toBe(false);
+});
+
+it("rechecks the last active bot after a concurrent archive during computer interruption", async () => {
+  let entered!: () => void;
+  let resume!: () => void;
+  const interrupted = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const { store, bot, patch } = fixture(async () => { entered(); await gate; });
+  store.patchBot(bot.id, { computer: "local" });
+  const other = store.createBot({ name: "Other" });
+
+  const first = patch(bot.id, { hidden: true, computer: "off" });
+  await interrupted;
+  try {
+    expect((await patch(other.id, { hidden: true })).status).toBe(200);
+  } finally {
+    resume();
+  }
+  const refused = await first;
+  expect(refused.status).toBe(409);
+  expect(refused.body.error).toContain("last active bot");
+  expect(store.bot(bot.id)).toMatchObject({ computer: "local" });
+  expect(store.bot(bot.id)?.hidden).toBeFalsy();
+  expect(store.bot(other.id)?.hidden).toBe(true);
+  expect(store.bots.filter((candidate) => !candidate.hidden).map((candidate) => candidate.id)).toEqual([bot.id]);
 });
 
 describe("PATCH /api/bots/:id vpsAlias relocation guard", () => {

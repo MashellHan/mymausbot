@@ -719,6 +719,9 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           (freshBrowserBot.busy || browserRuntime.heldBy(currentBrowserSession(freshBrowserBot.id, freshBrowserBot.browserProfile)))) {
         return json(res, 409, { error: "Stop the bot and release browser control before changing its profile." });
       }
+      if (body.hidden === true && freshBrowserBot && !freshBrowserBot.hidden && store.bots.filter((candidate) => !candidate.hidden).length <= 1) {
+        return json(res, 409, { error: "the last active bot cannot be archived" });
+      }
       if (profile.patch.soul !== undefined) {
         if (freshBrowserBot) assertTeamComputerChangeIdle(freshBrowserBot, { ...freshBrowserBot, ...patch } as BotRecord);
       // Runtime fields keep their fail-closed order; only the profile fields commit atomically.
