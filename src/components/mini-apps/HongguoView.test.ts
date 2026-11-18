@@ -639,9 +639,16 @@ function controlledNativeVideo(video: HTMLVideoElement, initiallyPaused: boolean
   const seeks: number[] = [];
   const pause = vi.fn(() => { const changed = !paused; paused = true; if (changed) video.dispatchEvent(new Event("pause")); });
   const play = vi.fn(async () => { paused = false; video.dispatchEvent(new Event("play")); });
-  const load = vi.fn(() => {
+  const load = vi.fn();
+  const setAttribute = video.setAttribute.bind(video);
+  const replaceSource = vi.fn((source: string) => {
+    setAttribute("src", source);
     position = 0; duration = NaN; ready = 0; paused = true; ended = false; ranges = [];
     for (const name of ["pause", "timeupdate", "durationchange"]) video.dispatchEvent(new Event(name));
+  });
+  vi.spyOn(video, "setAttribute").mockImplementation((name, value) => {
+    if (name === "src") replaceSource(value);
+    else setAttribute(name, value);
   });
   Object.defineProperties(video, {
     duration: { configurable: true, get: () => duration }, paused: { configurable: true, get: () => paused },
@@ -651,7 +658,7 @@ function controlledNativeVideo(video: HTMLVideoElement, initiallyPaused: boolean
     currentTime: { configurable: true, get: () => position, set: (value: number) => { position = value; seeks.push(value); video.dispatchEvent(new Event("seeking")); } },
     load: { configurable: true, value: load }, play: { configurable: true, value: play }, pause: { configurable: true, value: pause },
   });
-  return { load, play, pause, seeks,
+  return { load, replaceSource, play, pause, seeks,
     metadata() { duration = 108; ready = 4; ranges = [[0, 108]]; video.dispatchEvent(new Event("loadedmetadata")); },
     finish() { position = duration; ended = true; paused = true; video.dispatchEvent(new Event("ended")); },
   };
@@ -669,14 +676,18 @@ it.each([true, false])("completion keeps latest same-video intent when hidden, u
   fixture.visible = false; await render();
   expect(host.querySelector("video")).toBe(video); expect(video.paused).toBe(paused);
   await act(async () => { release(); });
-  await vi.waitFor(() => expect(native.load).toHaveBeenCalledTimes(1));
-  expect(host.querySelector("video")).toBe(video); expect(video.getAttribute("src")).toBe(source);
+  await vi.waitFor(() => expect(native.replaceSource).toHaveBeenCalledExactlyOnceWith(`${source}&completed=1`));
+  expect(host.querySelector("video")).toBe(video); expect(video.getAttribute("src")).toBe(`${source}&completed=1`);
+  expect(native.load).not.toHaveBeenCalled();
   expect(video.paused).toBe(paused); expect(native.play).toHaveBeenCalledTimes(paused ? 0 : 1);
   expect(savePositions).not.toContain(0);
   await act(async () => { native.metadata(); });
   expect(video.currentTime).toBe(31); expect(video.paused).toBe(paused); expect(native.seeks).toEqual([31]);
   await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); video.dispatchEvent(new Event("durationchange")); });
-  expect(native.load).toHaveBeenCalledTimes(1); expect(native.seeks).toEqual([31]);
+  expect(native.replaceSource).toHaveBeenCalledTimes(1); expect(native.seeks).toEqual([31]);
+  await render();
+  expect(video.getAttribute("src")).toBe(`${source}&completed=1`);
+  expect(native.load).not.toHaveBeenCalled();
   expect(fixture.completion).toHaveBeenCalledTimes(1);
   expect(fixture.completion.mock.calls[0]![0]).toBe(source);
   expect(fixture.completion.mock.calls[0]![1]).toMatchObject({ headers: { Range: "bytes=-1" }, credentials: "same-origin" });
@@ -698,15 +709,17 @@ it.each([null, 23])("completion carries pending108/paused60 across reset with la
   await selectQuality("720p");
   const video = host.querySelector("video")!, native = controlledNativeVideo(video, true, 0);
   await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); });
-  expect(native.seeks).toEqual([]); expect(native.load).not.toHaveBeenCalled();
+  const source = video.getAttribute("src");
+  expect(native.seeks).toEqual([]); expect(native.replaceSource).not.toHaveBeenCalled();
   await act(async () => { release(); });
-  await vi.waitFor(() => expect(native.load).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(native.replaceSource).toHaveBeenCalledExactlyOnceWith(`${source}&completed=1`));
+  expect(native.load).not.toHaveBeenCalled();
   expect(video.currentTime).toBe(0); expect(savePositions).not.toContain(0); expect(native.play).not.toHaveBeenCalled();
   if (target !== null) await act(async () => { video.currentTime = target; video.dispatchEvent(new Event("seeked")); });
   await act(async () => { native.metadata(); });
   expect(video.currentTime).toBe(target ?? 60); expect(video.paused).toBe(true); expect(native.seeks).toEqual([target ?? 60]);
   await act(async () => { video.dispatchEvent(new Event("durationchange")); video.dispatchEvent(new Event("loadedmetadata")); });
-  expect(native.load).toHaveBeenCalledTimes(1); expect(native.seeks).toEqual([target ?? 60]); expect(savePositions).not.toContain(0);
+  expect(native.replaceSource).toHaveBeenCalledTimes(1); expect(native.seeks).toEqual([target ?? 60]); expect(savePositions).not.toContain(0);
   expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(2);
 });
 
@@ -716,7 +729,7 @@ it("completion uses the pause selected after the observation and after reopen be
   fixture.completion.mockImplementation(() => new Promise<Response>((resolve) => { release = () => resolve(completionReply()); }));
   await render(); const video = await openPlayer(), native = controlledNativeVideo(video, false);
   await act(async () => { video.dispatchEvent(new Event("play")); release(); });
-  await vi.waitFor(() => expect(native.load).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(native.replaceSource).toHaveBeenCalledTimes(1));
   expect(native.play).toHaveBeenCalledTimes(1);
   await act(async () => { video.pause(); native.metadata(); });
   expect(video.paused).toBe(true); expect(video.currentTime).toBe(31); expect(native.play).toHaveBeenCalledTimes(1);
@@ -762,7 +775,7 @@ it("completion does not advance on an early EOF and retains natural next after f
   expect(host.querySelector('[aria-label="第 1 集"]')?.getAttribute("aria-current")).toBe("true");
   expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(1);
   await act(async () => { release(); });
-  await vi.waitFor(() => expect(native.load).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(native.replaceSource).toHaveBeenCalledTimes(1));
   expect(native.play).toHaveBeenCalledTimes(1);
   await act(async () => { native.metadata(); });
   expect(video.currentTime).toBe(65);
@@ -803,7 +816,7 @@ it("completion failure releases its body without a load or preparation retry", a
   await act(async () => { release({ status: 200, headers: new Headers(), body: { cancel, getReader } }); });
   await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
   await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); });
-  expect(getReader).not.toHaveBeenCalled(); expect(native.load).not.toHaveBeenCalled();
+  expect(getReader).not.toHaveBeenCalled(); expect(native.load).not.toHaveBeenCalled(); expect(native.replaceSource).not.toHaveBeenCalled();
   expect(fixture.completion).toHaveBeenCalledTimes(1);
   expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(1);
   expect(host.textContent).toContain(hongguoText("computer.miniApps.hongguo.playbackFailed"));

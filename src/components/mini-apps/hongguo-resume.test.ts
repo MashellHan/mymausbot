@@ -89,7 +89,7 @@ describe("one pending resume for a growing ordinary video", () => {
     expect(media.seeks).toEqual([]);
     expect(needsFinalSeekability(media, 108)).toBe(true);
     expect(playbackEndIsComplete(media, 108)).toBe(false);
-    restore.reopen(media, 108, () => true);
+    restore.reopen(media, 108, () => true, media.load);
     expect(media.load).toHaveBeenCalledTimes(1);
     expect(restore.canRecord(media)).toBe(false);
     expect(restore.pending(media)?.position).toBe(60);
@@ -109,7 +109,7 @@ describe("one pending resume for a growing ordinary video", () => {
     restore.metadata(media, { position: 60, kind: "history", expectedDuration: 108 });
     media.currentTime = 17; restore.userSeek(media);
     expect(restore.canRecord(media)).toBe(false);
-    restore.reopen(media, 108, () => true);
+    restore.reopen(media, 108, () => true, media.load);
     expect(media.currentTime).toBe(0);
     expect(restore.pending(media)?.position).toBe(17);
     media.duration = 108; media.readyState = 4; media.ranges([[0, 108]]);
@@ -122,7 +122,7 @@ describe("one pending resume for a growing ordinary video", () => {
     const restore = createPlaybackRestoration(), media = video();
     media.duration = 108; media.currentTime = 60; media.ranges([]); media.paused = paused;
     restore.prepare(media, null); restore.intent(media);
-    restore.reopen(media, 108, () => true);
+    restore.reopen(media, 108, () => true, media.load);
     if (paused) void media.play(); else media.pause();
     restore.intent(media);
     media.duration = 108; media.readyState = 4; media.ranges([[0, 108]]);
@@ -135,7 +135,7 @@ describe("one pending resume for a growing ordinary video", () => {
   it("lets a user seek made during reopen win without a second successful seek", () => {
     const restore = createPlaybackRestoration(), media = video();
     media.duration = 108; media.currentTime = 60; media.ranges([]);
-    restore.prepare(media, null); restore.reopen(media, 108, () => true);
+    restore.prepare(media, null); restore.reopen(media, 108, () => true, media.load);
     media.currentTime = 23; restore.userSeek(media);
     media.duration = 108; media.readyState = 4; media.ranges([[0, 108]]);
     restore.metadata(media, null); restore.duration(media);
@@ -148,9 +148,9 @@ describe("one pending resume for a growing ordinary video", () => {
     media.duration = 65; media.ended = true; media.paused = false;
     restore.prepare(media, null); media.ended = false; restore.intent(media); media.ended = true;
     expect(playbackEndIsComplete(media, 108)).toBe(false);
-    restore.reopen(media, 108, () => false);
+    restore.reopen(media, 108, () => false, media.load);
     expect(media.load).not.toHaveBeenCalled();
-    restore.reopen(media, 108, () => true);
+    restore.reopen(media, 108, () => true, media.load);
     expect(media.play).toHaveBeenCalledTimes(1);
   });
 

@@ -15,8 +15,8 @@ export function scopedMediaUrl(value: string, appId: string, revision: number): 
   const url = new URL(value, window.location.origin);
   const prefix = `/api/mini-apps/${encodeURIComponent(appId)}/hongguo/media/`;
   if (url.origin !== window.location.origin || url.username || url.password || !url.pathname.startsWith(prefix)
-    || url.pathname.length === prefix.length || url.searchParams.getAll("expectedRevision").length !== 1
-    || url.searchParams.get("expectedRevision") !== String(revision) || url.hash) {
+    || !/^[A-Za-z0-9_-]{1,256}$/.test(url.pathname.slice(prefix.length))
+    || url.search !== `?expectedRevision=${revision}` || url.hash) {
     throw new Error(t("computer.miniApps.hongguo.playbackFailed"));
   }
   return url.pathname + url.search;

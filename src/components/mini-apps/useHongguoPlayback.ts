@@ -38,18 +38,24 @@ export function useHongguoPlayback(options: {
     const media = currentMedia.current.playback;
     if (!completedMediaOwner || media?.status !== "ready") return;
     const source = scopedMediaUrl(media.mediaUrl, appId, revision);
-    const current = () => currentMedia.current.owner === completedMediaOwner && videoRef.current === video && video.getAttribute("src") === source;
+    const completedSource = `${source}&completed=1`;
+    const current = () => {
+      const src = video.getAttribute("src");
+      return currentMedia.current.owner === completedMediaOwner && videoRef.current === video && (src === source || src === completedSource);
+    };
+    const original = () => current() && video.getAttribute("src") === source;
     const failed = (cause: unknown) => {
       if (!current()) return;
       if (cause instanceof ApiError && [401, 403, 409].includes(cause.status)) callbacks.current.showError(cause, setPlaybackError);
       else if (needsFinalSeekability(video, media.durationSeconds)) setPlaybackError(t("computer.miniApps.hongguo.playbackFailed"));
     };
-    completion.observe(video, completedMediaOwner, (signal) => observeMediaCompletion(media.mediaUrl, appId, revision, signal), current, () => {
+    completion.observe(video, completedMediaOwner, (signal) => observeMediaCompletion(media.mediaUrl, appId, revision, signal), original, () => {
       const latest = currentMedia.current.playback;
       if (latest?.status !== "ready" || !needsFinalSeekability(video, latest.durationSeconds)
         || video.ended && playbackEndIsComplete(video, latest.durationSeconds)) return;
       try {
-        void callbacks.current.restoration.reopen(video, latest.durationSeconds, current)?.catch((cause: unknown) => {
+        void callbacks.current.restoration.reopen(video, latest.durationSeconds, current,
+          () => video.setAttribute("src", completedSource))?.catch((cause: unknown) => {
           if (!(cause instanceof DOMException && cause.name === "AbortError")) failed(cause);
         });
       } catch (cause) { failed(cause); }

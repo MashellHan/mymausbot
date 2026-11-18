@@ -1,6 +1,6 @@
 export type PlaybackRestore = { position: number; kind: "quality" | "history" | "completion"; paused?: boolean; expectedDuration: number | null };
 type Video = Pick<HTMLVideoElement, "duration" | "currentTime" | "paused" | "ended" | "pause" | "networkState" | "NETWORK_IDLE" | "seekable" | "readyState">;
-type ReloadVideo = Video & Pick<HTMLVideoElement, "autoplay" | "load" | "play">;
+type ReloadVideo = Video & Pick<HTMLVideoElement, "autoplay" | "play">;
 type RestoreState = { request: PlaybackRestore | null; done: boolean; metadata: boolean; attempted?: string;
   reopening?: boolean; resetting?: boolean; pausedIntent?: boolean };
 const known = (value: number | null): value is number => value !== null && Number.isFinite(value) && value > 0;
@@ -84,7 +84,7 @@ export function createPlaybackRestoration() {
         kind: "completion", paused: video.paused, expectedDuration: state?.request?.expectedDuration ?? null };
       states.set(video, { ...state, request, done, metadata: state?.metadata ?? false, attempted: undefined, pausedIntent: video.paused });
     },
-    reopen(video: ReloadVideo, expectedDuration: number | null, current: () => boolean): Promise<void> | undefined {
+    reopen(video: ReloadVideo, expectedDuration: number | null, current: () => boolean, replaceSource: () => void): Promise<void> | undefined {
       if (!current()) return undefined;
       const previous = states.get(video);
       const pending = previous && !previous.done ? previous.request : null;
@@ -94,7 +94,7 @@ export function createPlaybackRestoration() {
       const state: RestoreState = { request, done: false, metadata: false, reopening: true, resetting: true, pausedIntent: request.paused };
       states.set(video, state);
       video.autoplay = false;
-      try { video.load(); } finally { state.resetting = false; }
+      try { replaceSource(); } finally { state.resetting = false; }
       if (current() && !state.request?.paused) return video.play();
       return undefined;
     },

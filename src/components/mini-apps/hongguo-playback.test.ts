@@ -69,6 +69,16 @@ describe("one bounded same-token completion response", () => {
     expect(cancel).toHaveBeenCalledTimes(1); expect(body.locked).toBe(false); expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("probes only the canonical original URL, never a completed or noncanonical alias", async () => {
+    const request = vi.fn(); vi.stubGlobal("fetch", request);
+    for (const url of [`${mediaUrl}&completed=1`, `${mediaUrl}&expectedRevision=1`, `${mediaUrl}&extra=1`, `${mediaUrl}#fragment`,
+      mediaUrl.replace("expectedRevision=1", "expectedRevision=%31"), mediaUrl.replace("expectedRevision", "%65xpectedRevision"),
+      mediaUrl.replace("same-token", "same-token/nested"), mediaUrl.replace("same-token", "same%2Dtoken")]) {
+      await expect(observeMediaCompletion(url, "app", 1, new AbortController().signal)).rejects.toThrow();
+    }
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("never forwards another app/revision or cross-origin media URL", async () => {
     const request = vi.fn(); vi.stubGlobal("fetch", request);
     for (const url of [mediaUrl, "https://other.invalid" + mediaUrl]) {
