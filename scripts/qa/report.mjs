@@ -149,10 +149,65 @@ const stateOf = (issue) => {
   try { return JSON.parse(issue.body.match(/<!-- mausbot-qa-state (.+) -->/)?.[1] ?? "null"); } catch { return null; }
 };
 
+const SHA = /^[a-f\d]{40}$/i;
+
 function newerThan(report, state) {
   if (!state) return true;
   const [id, attempt] = String(state.lastExecution ?? state.lastRun).split(":").map(Number);
   return report.runId > id || report.runId === id && report.attempt > attempt;
+}
+
+function verifiedRevisionsOf(issue, state) {
+  const revisions = new Set();
+  if (SHA.test(state?.verifiedSha ?? "")) revisions.add(state.verifiedSha.toLowerCase());
+  const body = String(issue?.body ?? "");
+  for (const match of body.matchAll(/QA verified this contract without retries on `([a-f\d]{40})`/gi)) {
+    revisions.add(match[1].toLowerCase());
+  }
+  for (const match of body.matchAll(/<!--\s*lead-qa[^:]*-verified-sha:([a-f\d]{40})\s*-->/gi)) {
+    revisions.add(match[1].toLowerCase());
+  }
+  return [...revisions];
+}
+
+async function isStrictAncestor(ancestorSha, descendantSha, api) {
+  if (!SHA.test(ancestorSha ?? "") || !SHA.test(descendantSha ?? "")) return false;
+  if (ancestorSha.toLowerCase() === descendantSha.toLowerCase()) return false;
+  try {
+    const comparison = await api(`/compare/${ancestorSha}...${descendantSha}`);
+    return comparison?.status === "ahead"
+      && Number.isSafeInteger(comparison.ahead_by) && comparison.ahead_by > 0
+      && comparison.behind_by === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function isStalePreFixReport(finding, issue, state, report, api) {
+  if (!issue || !state) return false;
+  const labels = issueLabels(issue);
+  if (issue.state !== "closed" && !labels.includes("qa:verified")) return false;
+  if (!SHA.test(report?.sha ?? "")) return false;
+  const candidates = verifiedRevisionsOf(issue, state);
+  if (candidates.length === 0) {
+    try {
+      const comments = await pages(`/issues/${issue.number}/comments`, null, api);
+      for (const comment of comments) {
+        const body = String(comment?.body ?? "");
+        if (!/<!--\s*lead-qa\d+-[^>]+closure[^>]*-->/i.test(body)) continue;
+        for (const match of body.matchAll(/\bmerged at \[`([a-f\d]{40})`\]/gi)) {
+          candidates.push(match[1].toLowerCase());
+        }
+      }
+    } catch {
+      return false;
+    }
+  }
+  if (candidates.length === 0) return false;
+  for (const verifiedSha of new Set(candidates)) {
+    if (await isStrictAncestor(report.sha, verifiedSha, api)) return verifiedSha;
+  }
+  return false;
 }
 
 function findingBody(finding, report, state, previous = "") {
@@ -202,6 +257,17 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       continue;
     }
     const area = finding.cases ? "global" : policy.areas.find((entry) => entry.tests.includes(finding.file))?.id ?? "global";
+    const staleVerifiedSha = recurrence ? await isStalePreFixReport(finding, issue, previous, report, api) : false;
+    if (staleVerifiedSha) {
+      const stalePreFixRuns = [...new Set([...(previous?.stalePreFixRuns ?? []), `${runKey}@${report.sha.toLowerCase()}`])].slice(-10);
+      const staleState = { ...previous, stalePreFixRuns };
+      const note = `\n\nRecorded stale pre-fix report ${report.url} (tested \`${report.sha}\`, strict ancestor of verified \`${staleVerifiedSha}\`); keeping prior closure/verification intact.`;
+      const nextBody = issue.body.includes(note.trim()) ? issue.body
+        : issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(staleState)} -->`) + note;
+      await api(`/issues/${issue.number}`, { method: "PATCH", body: { body: nextBody } });
+      Object.assign(issue, { body: nextBody });
+      continue;
+    }
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
       triageEpoch: !issue || recurrence ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
       lastExecution: runKey, lastExecutionAt: report.finishedAt,
@@ -238,7 +304,7 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     const contractPassed = state.caseKeys?.length ? state.caseKeys.every((key) => report.passed.includes(key)) : state.verificationJobs?.length
       ? state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))) : report.passed.includes(state.key);
     if (!contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
-    const verified = { ...state, ...(state.caseKeys ? { verified: true } : {}), lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
+    const verified = { ...state, ...(state.caseKeys ? { verified: true } : {}), ...(SHA.test(report.sha ?? "") ? { verifiedSha: report.sha.toLowerCase() } : {}), lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
     const alreadyVerified = issueLabels(issue).includes("qa:verified");
     await update(issue, {
       body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)

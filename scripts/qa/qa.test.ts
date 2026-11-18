@@ -1346,3 +1346,183 @@ describe("Lead queue and bounded recovery", () => {
     expect(calls).toEqual(["/actions/workflows/ci.yml/dispatches"]);
   });
 });
+
+describe("stale pre-fix QA report handling", () => {
+  const preFixSha = "6b5eed0bdcb750d5da704efafd89707965e97ffa";
+  const verifiedSha = "c5cf70c66ba07f9026315f1234aa8dca8bdb96b7";
+  const newSha = "e6467af0cd36e4e2bc57b768a4f884677c430819";
+  const contract = "src/components/published-apps/preview.security.test.ts > sandbox";
+  const findingKey = "bfaf85c5c663032c2252a2ec";
+  const makeClosedIssue = (extraState: Record<string, unknown> = {}, extraBody = "") => ({
+    number: 1006,
+    state: "closed",
+    labels: [
+      { name: "qa" },
+      { name: "qa:kind:product" },
+      { name: "qa:p1" },
+      { name: "qa:scope:global" },
+      { name: "qa:triaged" },
+      { name: "qa:verified" },
+    ],
+    body: [
+      `<!-- mausbot-qa:${findingKey} -->`,
+      "<!-- mausbot-qa:start -->",
+      `<!-- mausbot-qa-state ${JSON.stringify({
+        key: findingKey,
+        area: "global",
+        firstSeen: "2026-11-17T14:00:46Z",
+        lastSeen: "2026-11-18T01:00:00Z",
+        count: 3,
+        lastRun: "44081735629:1",
+        triageEpoch: "2026-11-17T14:00:46Z",
+        lastExecution: "44081735629:1",
+        lastExecutionAt: "2026-11-18T01:00:00Z",
+        ...extraState,
+      })} -->`,
+      `Contract: ${contract}`,
+      "<!-- mausbot-qa:end -->",
+      extraBody,
+    ].filter(Boolean).join("\n\n"),
+  });
+
+  const makeLateReport = (sha: string, runId = 44225458164) => ({
+    version: 1,
+    runId,
+    attempt: 1,
+    sha,
+    event: "schedule",
+    url: `https://github.com/example/mausbot/actions/runs/${runId}`,
+    finishedAt: "2026-11-18T04:30:08Z",
+    executionComplete: true,
+    testsPassed: false,
+    deliveryComplete: false,
+    missing: [],
+    failedJobs: ["vitest (macos-latest, all shard 2/10)"],
+    findings: [{
+      key: findingKey,
+      contract,
+      file: "src/components/published-apps/preview.security.test.ts",
+      platform: "darwin",
+      kind: "product",
+      assertion: "stale inline-source assertion",
+      retries: 0,
+    }],
+    passed: [],
+    jobs: [],
+    counts: { total: 1, failed: 1, skipped: 0 },
+  });
+
+  it("records a stale pre-fix report without reopening a closed/verified issue or altering severity/times", async () => {
+    const issue = makeClosedIssue({ verifiedSha });
+    const patches: any[] = [];
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(issue)];
+      if (path === `/compare/${preFixSha}...${verifiedSha}`) return { status: "ahead", ahead_by: 2, behind_by: 0 };
+      if (path === `/issues/${issue.number}` && options.method === "PATCH") {
+        patches.push(options.body);
+        Object.assign(issue, options.body);
+        return structuredClone(issue);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+
+    await deliverReport(makeLateReport(preFixSha), { api, policy: { areas: [] } });
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0].state).toBeUndefined();
+    expect(patches[0].labels).toBeUndefined();
+    expect(issue.state).toBe("closed");
+    expect(issue.labels.map((l) => l.name)).toContain("qa:verified");
+    expect(issue.labels.map((l) => l.name)).toContain("qa:p1");
+    expect(issue.body).toContain("Recorded stale pre-fix report");
+    const savedState = JSON.parse(issue.body.match(/<!-- mausbot-qa-state (.+) -->/)![1]);
+    expect(savedState.lastExecution).toBe("44081735629:1");
+    expect(savedState.firstSeen).toBe("2026-11-17T14:00:46Z");
+    expect(savedState.triageEpoch).toBe("2026-11-17T14:00:46Z");
+    expect(savedState.stalePreFixRuns).toEqual([`44225458164:1@${preFixSha}`]);
+  });
+
+  it("resolves verified revision from Lead closure comment when verifiedSha is not yet in state", async () => {
+    const issue = makeClosedIssue({}, "");
+    const patches: any[] = [];
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(issue)];
+      if (path.startsWith(`/issues/${issue.number}/comments`)) {
+        return [{
+          body: `<!-- lead-qa1006-c5cf-focused-integrated-closure-v1 -->\nFixed and verified by PR #1008, merged at [\`${verifiedSha}\`](https://github.com/example/mausbot/commit/${verifiedSha}).`,
+        }];
+      }
+      if (path === `/compare/${preFixSha}...${verifiedSha}`) return { status: "ahead", ahead_by: 2, behind_by: 0 };
+      if (path === `/issues/${issue.number}` && options.method === "PATCH") {
+        patches.push(options.body);
+        Object.assign(issue, options.body);
+        return structuredClone(issue);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+
+    await deliverReport(makeLateReport(preFixSha), { api, policy: { areas: [] } });
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0].state).toBeUndefined();
+    expect(issue.state).toBe("closed");
+  });
+
+  it("reopens and withdraws verification on real new-source recurrence", async () => {
+    const issue = makeClosedIssue({ verifiedSha });
+    const patches: any[] = [];
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(issue)];
+      if (path === `/compare/${newSha}...${verifiedSha}`) return { status: "behind", ahead_by: 0, behind_by: 5 };
+      if (path === `/issues/${issue.number}` && options.method === "PATCH") {
+        patches.push(options.body);
+        Object.assign(issue, options.body, { labels: options.body.labels.map((name: string) => ({ name })) });
+        return structuredClone(issue);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+
+    await deliverReport(makeLateReport(newSha), { api, policy: { areas: [] } });
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0].state).toBe("open");
+    expect(patches[0].labels).toContain("qa:untriaged");
+    expect(patches[0].labels).not.toContain("qa:verified");
+  });
+
+  it("fails closed and reopens when ancestry is unreadable or closure proof is missing", async () => {
+    const issueNoProof = makeClosedIssue({});
+    const patches: any[] = [];
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(issueNoProof)];
+      if (path.startsWith(`/issues/${issueNoProof.number}/comments`)) return [];
+      if (path === `/issues/${issueNoProof.number}` && options.method === "PATCH") {
+        patches.push(options.body);
+        return structuredClone(issueNoProof);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+
+    await deliverReport(makeLateReport(preFixSha), { api, policy: { areas: [] } });
+    expect(patches).toHaveLength(1);
+    expect(patches[0].state).toBe("open");
+    expect(patches[0].labels).toContain("qa:untriaged");
+
+    const issueApiError = makeClosedIssue({ verifiedSha });
+    const errorPatches: any[] = [];
+    const apiError = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(issueApiError)];
+      if (path === `/compare/${preFixSha}...${verifiedSha}`) throw new Error("GitHub 503");
+      if (path === `/issues/${issueApiError.number}` && options.method === "PATCH") {
+        errorPatches.push(options.body);
+        return structuredClone(issueApiError);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+
+    await deliverReport(makeLateReport(preFixSha), { api: apiError, policy: { areas: [] } });
+    expect(errorPatches).toHaveLength(1);
+    expect(errorPatches[0].state).toBe("open");
+    expect(errorPatches[0].labels).toContain("qa:untriaged");
+  });
+});
