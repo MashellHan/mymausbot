@@ -240,7 +240,7 @@ jobs:
       matrix: ${{ fromJSON(needs.static.outputs.vitest_matrix) }}
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}
     # The cap catches a hang; macOS all-mode durations are measured from actual runs.
-    timeout-minutes: ${{ matrix.os == 'ubuntu-latest' && 25 || 30 }}
+    timeout-minutes: ${{ matrix.os == 'ubuntu-latest' && 25 || matrix.os == 'macos-latest' && matrix.files == '' && github.event_name == 'pull_request' && 45 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10

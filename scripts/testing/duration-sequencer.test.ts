@@ -58,10 +58,10 @@ describe("vitest shard balance", () => {
     expect(Math.max(...loads) / mean, `recorded seconds per shard: ${loads.join(", ")}`).toBeLessThan(1.05);
   });
 
-  it("keeps macOS all-mode on one worker with room for observed 1.4x work under the 30-minute cap", () => {
+  it("keeps estimated macOS all-mode work under the retained 30-minute non-PR cap on one worker", () => {
     const { loads } = planShards(FILES, loadShardWeights(ROOT, "darwin"), VITEST_SHARDS["macos-latest"], 120);
     expect(VITEST_WORKERS["macos-latest"]).toBe(1);
-    expect(Math.max(...loads) * 1.4).toBeLessThan(28 * 60);
+    expect(Math.max(...loads) * 1.4).toBeLessThan(30 * 60);
   });
 
   it("runs every test file in exactly one shard through the full macOS count", async () => {

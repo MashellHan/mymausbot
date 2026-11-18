@@ -137,7 +137,14 @@ describe("CI concurrency", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.vitest.strategy.matrix).toBe("${{ fromJSON(needs.static.outputs.vitest_matrix) }}");
     expect(workflow.jobs.vitest.strategy["max-parallel"]).toBe(4);
-    expect(workflow.jobs.vitest["timeout-minutes"]).toBe("${{ matrix.os == 'ubuntu-latest' && 25 || 30 }}");
+    const timeout = workflow.jobs.vitest["timeout-minutes"];
+    const fullMac = { os: "macos-latest", files: "" };
+    const pr = { event_name: "pull_request" };
+    expect(interpolate(timeout, { matrix: fullMac, github: pr })).toBe(45);
+    expect(interpolate(timeout, { matrix: fullMac, github: { event_name: "push" } })).toBe(30);
+    expect(interpolate(timeout, { matrix: { ...fullMac, files: "server/a.test.ts" }, github: pr })).toBe(30);
+    expect(interpolate(timeout, { matrix: { os: "ubuntu-latest" }, github: pr })).toBe(25);
+    expect(workflow.jobs.gate["timeout-minutes"]).toBe(180);
     // Ubuntu 26.04 (today's ubuntu-latest) lets bubblewrap box the Cloud e2e fixtures; the Linux shards keep 24.04.
     expect(workflow.jobs.vitest["runs-on"]).toBe("${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}");
   });
