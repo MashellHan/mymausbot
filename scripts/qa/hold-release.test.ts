@@ -35,6 +35,7 @@ function fixture() {
       data.run.status = "queued";
       return Buffer.alloc(0);
     }
+    if (path === "/actions/runs/100") return data.run;
     if (path === "/pulls/12") return data.pr;
     if (path.startsWith("/actions/workflows/ci.yml/runs?")) return { workflow_runs: [data.run] };
     if (path === "/actions/runs/100/attempts/1/jobs?per_page=100&page=1" || path === "/actions/runs/100/jobs?filter=all&per_page=100&page=1") return { jobs: data.jobs };
@@ -93,6 +94,21 @@ describe("released QA holds", () => {
   it.each(skips)("makes no write for %s", async (_name, update) => {
     const { data, check, writes } = fixture();
     update(data);
+    expect(await check()).toBe(false);
+    expect(writes).toEqual([]);
+  });
+
+  it.each(["source", "attempt", "hold"])("declines a changed %s after the original job inventory", async (change) => {
+    const { data, api, writes, check } = fixture();
+    const read = api.getMockImplementation()!;
+    let listReads = 0, controlReads = 0;
+    api.mockImplementation(async (path, options) => {
+      if (path.startsWith("/actions/workflows/") && ++listReads > 1 && change === "source")
+        return { workflow_runs: [{ ...run, id: run.id + 1 }, run] };
+      if (path === "/actions/runs/100" && change === "attempt") return { ...run, run_attempt: 2 };
+      if (path.startsWith("/issues?") && ++controlReads > 1 && change === "hold") data.open = [{ ...issue, number: 8, state: "open" }];
+      return read(path, options);
+    });
     expect(await check()).toBe(false);
     expect(writes).toEqual([]);
   });

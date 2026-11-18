@@ -166,7 +166,8 @@ were finishing. Each wake checks the current open PRs, so overlapping events
 can coalesce. It requests a rerun of the individual `CI` job only when the
 failed gate named a changed QA hold, other jobs succeeded or were skipped
 by the plan, and current controls and required jobs pass the normal gate
-precheck. The source run must be bound to the open same-repository PR and
+precheck. The handler rereads the source run list and target attempt near
+the request. The source run must be bound to the open same-repository PR and
 its tested head, base and merge tree. Missing evidence leaves recovery with
 Lead. The rerun checks controls and holds again with the ordinary CI token.
 

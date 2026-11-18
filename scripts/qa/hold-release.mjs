@@ -4,7 +4,7 @@ import { holdsFor, issueLabels } from "./contracts.mjs";
 import { verifyGate } from "./gate.mjs";
 import { github, pages, runJobs, runPlan } from "./github.mjs";
 import { currentMerge, executionMatches, prControls } from "./label-gate.mjs";
-import { associatedWithPr, latestPrSource } from "./pr-source.mjs";
+import { associatedWithPr, latestPrSource, sourceStillCurrent } from "./pr-source.mjs";
 
 function failedHoldGate(jobs) {
   const failures = jobs.filter((job) => !["success", "skipped"].includes(job.conclusion));
@@ -53,11 +53,8 @@ export async function recheckHeldPr(pr, { repository, api = github, loadPlan = r
     if (/^(QA hold:|PR head changed;|Current PR controls require|Required validation failed:|Incomplete required validation:)/.test(error.message)) return false;
     throw error;
   }
-  const latest = await latestPrSource(pr, repository, api);
-  if (latest?.run.id !== run.id || latest.run.run_attempt !== run.run_attempt || latest.run.status !== "completed"
-    || latest.run.conclusion !== "failure" || failedHoldGate(latest.jobs)?.id !== gate.id) return false;
-  const live = await api(`/pulls/${pr.number}`);
-  if (!associatedWithPr(run, live, repository) || live.base.sha !== request.base || live.mergeable_state === "behind"
+  const [fresh, live] = await Promise.all([sourceStillCurrent(source, pr, repository, api), api(`/pulls/${pr.number}`)]);
+  if (!fresh || !associatedWithPr(run, live, repository) || live.base.sha !== request.base || live.mergeable_state === "behind"
     || live.mergeable === false || prControls(live) !== prControls(pr)) return false;
   await api(`/actions/jobs/${gate.id}/rerun`, { method: "POST", raw: true });
   return true;
