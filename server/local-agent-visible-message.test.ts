@@ -144,6 +144,10 @@ describe("bounded tool details", () => {
   it("recognizes a numeric max_output_tokens option in recorded Codex exec JavaScript", () => {
     const source = `const run = await tools.exec_command({ cmd: "printf ready", max_output_tokens: 400 });`;
     expect(visibleToolDetail("tool-call", source, "codex", "exec")).toMatchObject({ text: source, detailStatus: "available" });
+    const blockSource = `{ const run = await tools.exec_command({ cmd: "printf block", max_output_tokens: 400 }); }`;
+    expect(visibleToolDetail("tool-call", blockSource, "codex", "exec")).toMatchObject({ text: blockSource, detailStatus: "available" });
+    expect(visibleToolDetail("tool-call", blockSource + ' text({ cookie: "fixture-value" });', "codex", "exec"))
+      .toMatchObject({ detailStatus: "withheld" });
     expect(visibleToolDetail("tool-call", source, "codex", "other")).toMatchObject({ detailStatus: "withheld" });
     for (const unsafe of ['"fixture-value"', '400 + fixtureValue', '400\n + fixtureValue', '9007199254740992']) {
       expect(visibleToolDetail("tool-call", source.replace("400", unsafe), "codex", "exec")).toMatchObject({ detailStatus: "withheld" });
@@ -157,9 +161,18 @@ describe("bounded tool details", () => {
     const command = (output: string) => ({ type: "input_text",
       text: JSON.stringify({ chunk_id: "abc123", wall_time_seconds: 0.07, exit_code: 0, session_id: 43210,
         original_token_count: 7, output }) });
+    const minimalCommand = { type: "input_text",
+      text: JSON.stringify({ chunk_id: "abc123", wall_time_seconds: 0.07, exit_code: 0, output: "Ready" }) };
     const ordinary = [header, command("Read /Users/fixture/report.txt")];
     expect(visibleToolDetail("tool-result", ordinary, "codex", "exec")).toEqual({
       text: "Script completed Wall time 0.123 seconds Exit code: 0 Read [path]", clipped: false, detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-result", [header, minimalCommand], "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds Exit code: 0 Ready", clipped: false, detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-result", [header, { type: "input_text",
+      text: JSON.stringify({ wall_time_seconds: 0.07, exit_code: 0, unknown_field: "benign", output: "Ready" }) }], "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds · Output excerpt unavailable", clipped: true, detailStatus: "available",
     });
     expect(visibleToolDetail("tool-result", ordinary, "codex", "other")).toMatchObject({ detailStatus: "withheld" });
     expect(visibleToolDetail("tool-result", [header, { ...ordinary[1], encoding: "base64" }], "codex", "exec"))

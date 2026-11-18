@@ -65,24 +65,30 @@ function safeToolText(value: unknown, allowExecOutputLimit = false): { text: str
 
 export function trackAgentToolCalls() {
   // Keep IDs for the entire bounded scan so a consumed or rejected ID cannot be registered again.
-  const calls = new Map<string, { tool: string | null; result?: LocalAgentActivityEvent }>();
+  const calls = new Map<string, { tool: string | null; family?: "function" | "custom"; result?: LocalAgentActivityEvent }>();
   const hide = (event: LocalAgentActivityEvent) => {
     event.tool = null;
     event.text = TOOL_RESULT_UNAVAILABLE;
     event.detailStatus = "withheld";
   };
   return {
+    callFor(id: string) {
+      const entry = calls.get(id);
+      return entry?.tool ? { tool: entry.tool, family: entry.family } : null;
+    },
     toolFor(id: string) { return calls.get(id)?.tool ?? null; },
-    record(id: string, tool: string | null) {
+    record(id: string, tool: string | null, family?: "function" | "custom") {
       const previous = calls.get(id);
       if (previous?.result) hide(previous.result);
-      calls.set(id, { tool: previous ? null : tool });
+      calls.set(id, { tool: previous ? null : tool, family: previous ? undefined : family });
     },
-    associate(id: string, result: LocalAgentActivityEvent) {
+    associate(id: string, result: LocalAgentActivityEvent, family?: "function" | "custom") {
       const call = calls.get(id);
-      if (!call?.tool || call.result) {
+      const familyMismatch = family !== undefined && call?.family !== undefined && call.family !== family;
+      if (!call?.tool || call.result || familyMismatch) {
         hide(result);
         if (!call) calls.set(id, { tool: null });
+        else if (familyMismatch) call.tool = null;
         return;
       }
       result.tool = call.tool;
@@ -116,6 +122,7 @@ function rejectToolArgumentContext(args: object): { text: null; clipped: boolean
 }
 
 export function redactedAgentToolArguments(value: unknown, allowExecOutputLimit = false): { text: string | null; clipped: boolean } {
+  if (allowExecOutputLimit && typeof value === "string") return safeToolText(value, true);
   if (typeof value === "string" && (value.trimStart().startsWith("{") || value.trimStart().startsWith("["))) {
     if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
     try { value = JSON.parse(value); } catch { return { text: null, clipped: false }; }
@@ -165,8 +172,10 @@ export function redactedAgentToolResult(value: unknown, runtime?: "codex"): { te
 
 function execCommandOutput(text: string): { output: string; exitCode?: number } | null {
   if (text.length > MAX_TOOL_SOURCE) return null;
-  let command: Record<string, unknown>;
-  try { command = record(JSON.parse(text)); } catch { return null; }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const command = parsed as Record<string, unknown>;
   if (!Object.keys(command).every(key => EXEC_COMMAND_FIELDS.has(key)) ||
       typeof command.wall_time_seconds !== "number" || !Number.isFinite(command.wall_time_seconds) || command.wall_time_seconds < 0 ||
       typeof command.output !== "string" ||
@@ -204,8 +213,8 @@ export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unkn
 } {
   const result = kind === "tool-result";
   const codexExec = runtime === "codex" && (tool === "exec" || tool === "functions.exec");
-  let detail = result ? redactedAgentToolResult(value, runtime) : redactedAgentToolArguments(value, codexExec);
-  if (result && codexExec && detail.text === null) detail = codexExecResult(value) ?? detail;
+  const execEnvelope = result && codexExec ? codexExecResult(value) : null;
+  const detail = execEnvelope ?? (result ? redactedAgentToolResult(value, runtime) : redactedAgentToolArguments(value, codexExec));
   const emptyText = typeof value === "string" && (!value.trim() || (!result && /^\s*\{\s*\}\s*$/.test(value)));
   const emptyArguments = !result && value !== null && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length;
   const emptyBlocks = Array.isArray(value) && (value.length === 0 || result && !detail.clipped &&
