@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { holdsFor, issueLabels } from "./contracts.mjs";
 import { github, pages } from "./github.mjs";
+import { associatedWithPr, latestPrSource } from "./pr-source.mjs";
 
 const acquisitionFailure = "The job was not acquired by Runner of type hosted even after multiple attempts";
 
@@ -45,21 +46,19 @@ export async function recoverRepair(run, repository, api = github) {
     || run.run_attempt < 1 || run.run_attempt >= 4) return "Ineligible CI attempt";
   const branch = encodeURIComponent(run.head_branch);
   const prs = await api(`/pulls?state=open&base=main&head=${repository.split("/")[0]}:${branch}`);
-  const isRepair = (pr) => pr.state === "open" && pr.base?.repo?.full_name === repository && pr.base.ref === "main"
-    && pr.head?.repo?.full_name === repository && pr.head.ref === run.head_branch && pr.head.sha === run.head_sha
-    && issueLabels(pr).includes("qa:repair");
-  if (prs.length !== 1 || !isRepair(prs[0])) return "No current repair PR";
+  const isRepair = (pr) => associatedWithPr(run, pr, repository) && issueLabels(pr).includes("qa:repair");
+  if (prs.length !== 1 || !isRepair(prs[0])) return "No associated current repair PR";
   const losses = await runnerLosses(run, api);
   if (!losses.length) return "Failure is not attributable solely to hosted runner acquisition";
+  const issues = await pages("/issues?state=open&labels=qa", null, api);
+  const latest = await latestPrSource(prs[0], repository, api);
+  const current = latest?.run;
+  if (current?.id !== run.id || current.run_attempt !== run.run_attempt
+    || current.status !== "completed" || current.conclusion !== "failure") return "Source CI attempt superseded or unproved";
   const pr = await api(`/pulls/${prs[0].number}`);
   if (!isRepair(pr)) return "Repair changed";
   const repairs = [...String(pr.body ?? "").matchAll(/^QA-Repair:[ \t]*#(\d+)[ \t]*\r?$/gm)].map((hit) => Number(hit[1]));
-  const issues = await pages("/issues?state=open&labels=qa", null, api);
   if (!holdsFor(issues.filter((issue) => !issue.pull_request && repairs.includes(issue.number)), []).length) return "No linked global hold";
-  const latest = await api(`/actions/workflows/ci.yml/runs?event=pull_request&branch=${branch}&head_sha=${run.head_sha}&per_page=1`);
-  const current = latest.workflow_runs[0];
-  if (current?.id !== run.id || current.run_attempt !== run.run_attempt
-    || current.status !== "completed" || current.conclusion !== "failure") return "CI attempt already superseded";
   await api(`/actions/runs/${run.id}/rerun-failed-jobs`, { method: "POST", raw: true });
   return `Requested failed jobs of run ${run.id}, attempt ${run.run_attempt} (PR #${pr.number}): ${losses.join(", ")}`;
 }

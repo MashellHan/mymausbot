@@ -4,9 +4,10 @@ import { parse } from "yaml";
 import { recoverRepair } from "./repair-recovery.mjs";
 
 const repository = "example/mausbot";
-const repo = { full_name: repository };
+const repo = { id: 33, full_name: repository };
+const association = { number: 12, base: { ref: "main", repo }, head: { ref: "fix/preview", repo, sha: "a".repeat(40) } };
 const run = { id: 100, event: "pull_request", path: ".github/workflows/ci.yml", head_repository: repo, head_branch: "fix/preview",
-  head_sha: "a".repeat(40), status: "completed", conclusion: "failure", run_attempt: 3, pull_requests: [] };
+  head_sha: "a".repeat(40), status: "completed", conclusion: "failure", run_attempt: 3, pull_requests: [association] };
 const repair = { state: "open", number: 12, base: { ref: "main", repo }, head: { sha: run.head_sha, ref: run.head_branch, repo },
   labels: [{ name: "qa:repair" }], body: "QA-Repair: #7" };
 const shard = "vitest (macos-latest, all shard 9/10)";
@@ -18,9 +19,9 @@ const annotation = { path: ".github", message: "The job was not acquired by Runn
 const issue = { number: 7, labels: ["qa", "qa:p1", "qa:scope:global"] };
 
 function fixture() {
-  const data = { jobs: [job, gate, { ...job, id: 11, name: "another shard", conclusion: "success" }],
+  const data = { jobs: [job, gate, { ...job, id: 11, name: "typecheck + lint", conclusion: "success" }],
     annotations: [annotation], log: `2026-11-18T00:00:00Z Error: Required validation failed: ${shard}\n`,
-    prs: [repair], currentPr: repair, latest: run, issues: [issue] };
+    prs: [repair], currentPr: repair, latest: run, newerRuns: [] as typeof run[], newerJobs: [] as typeof job[], issues: [issue] };
   const writes: string[] = [];
   const api = vi.fn(async (path: string, options?: { method?: string; raw?: boolean }) => {
     if (path === "/actions/runs/100/rerun-failed-jobs" && options?.method === "POST") { writes.push(path); return Buffer.alloc(0); }
@@ -28,10 +29,11 @@ function fixture() {
     if (path === "/pulls?state=open&base=main&head=example:fix%2Fpreview") return data.prs;
     if (path === "/pulls/12") return data.currentPr;
     if (path === "/actions/runs/100/attempts/3/jobs?per_page=100&page=1") return { jobs: data.jobs };
+    if (/^\/actions\/runs\/\d+\/attempts\/\d+\/jobs\?/.test(path)) return { jobs: data.newerJobs };
     if (path.startsWith("/check-runs/") && path.endsWith("/annotations?per_page=100&page=1")) return data.annotations;
     if (path === "/actions/jobs/10/logs" && options?.raw) return Buffer.from(data.log);
     if (path === "/issues?state=open&labels=qa&per_page=100&page=1") return data.issues;
-    if (path === `/actions/workflows/ci.yml/runs?event=pull_request&branch=fix%2Fpreview&head_sha=${run.head_sha}&per_page=1`) return { workflow_runs: [data.latest] };
+    if (path === `/actions/workflows/ci.yml/runs?event=pull_request&branch=fix%2Fpreview&head_sha=${run.head_sha}&per_page=20`) return { workflow_runs: [...data.newerRuns, data.latest] };
     throw new Error(`Unexpected read: ${path}`);
   });
   return { data, api, writes };
@@ -77,6 +79,38 @@ describe("hosted runner recovery for global repairs", () => {
     update(data);
     await recoverRepair(run, repository, api);
     expect(writes).toEqual([]);
+  });
+
+  it.each([{ members: [] }, { members: [{ ...association, number: 16 }] },
+    { members: [{ ...association, base: { ...association.base, ref: "other" } }] }])(
+    "declines unproven or contradictory PR associations %j", async ({ members }) => {
+      const { api, writes } = fixture();
+      await recoverRepair({ ...run, pull_requests: members }, repository, api);
+      expect(writes).toEqual([]);
+    });
+
+  it.each(["metadata", "source", "ambiguous"])("identifies a newer %s run by preflight", async (kind) => {
+    const { data, api, writes } = fixture();
+    data.newerRuns = [{ ...run, id: 101, run_attempt: 1 }];
+    const newer = { ...job, run_id: 101, run_attempt: 1 };
+    data.newerJobs = [{ ...newer, name: "CI", conclusion: "success" },
+      { ...newer, name: kind === "ambiguous" ? "unknown" : "typecheck + lint", conclusion: kind === "source" ? "success" : "skipped" }];
+    await recoverRepair(run, repository, api);
+    expect(writes.length).toBe(kind === "metadata" ? 1 : 0);
+  });
+
+  it.each(["head", "label"])("refreshes the repair %s after issue pagination", async (change) => {
+    const { data, api, writes } = fixture();
+    const read = api.getMockImplementation()!;
+    api.mockImplementation(async (path, options) => {
+      if (path.startsWith("/issues?")) data.currentPr = change === "head"
+        ? { ...repair, head: { ...repair.head, sha: "b".repeat(40) } } : { ...repair, labels: [] };
+      return read(path, options);
+    });
+    await recoverRepair(run, repository, api);
+    expect(writes).toEqual([]);
+    expect(api.mock.calls.findIndex(([path]) => path === "/pulls/12"))
+      .toBeGreaterThan(api.mock.calls.findIndex(([path]) => path.startsWith("/issues?")));
   });
 
   it("executes default-branch code on completed CI events with a per-run lock", () => {
