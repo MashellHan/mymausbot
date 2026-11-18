@@ -111,6 +111,30 @@ describe("one issue per product naming problem", () => {
     }
   });
 
+  it("keeps verified historical cases closed on redelivery and reopens for a separate tracked failure", async () => {
+    const env = fixture(), old = finding(), other = finding("src/banner.test.ts");
+    const oldSha = "b".repeat(40), verified = report(2, [], [old.key, other.key]);
+    await deliverReport(report(1, [old, other]), env);
+    const group = env.issues[0];
+    group.user = { login: "github-actions[bot]", type: "Bot", id: 41898282 };
+    await deliverReport(verified, env);
+    group.state = "closed";
+    const api = (path: string, options?: any) => path === `/compare/${oldSha}...${verified.sha}`
+      ? Promise.resolve({ status: "ahead", ahead_by: 1, behind_by: 0 }) : env.api(path, options);
+    const late = { ...report(3, [old]), sha: oldSha };
+    await deliverReport(late, { ...env, api });
+    expect(group.state).toBe("closed");
+    expect(stateOf(group)).toMatchObject({ verified: true, lastExecution: "2:1", stalePreFixRuns: [`3:1@${oldSha}`] });
+    env.api.mockClear();
+    await deliverReport(late, { ...env, api });
+    expect(env.api.mock.calls.filter(([, options]) => options?.method)).toHaveLength(0);
+
+    await deliverReport({ ...report(4, [old, { ...other, textChange: undefined }]), sha: oldSha }, { ...env, api });
+    expect(group.state).toBe("open");
+    expect(group.labels).toContain("qa:untriaged");
+    expect(stateOf(group).verified).toBe(false);
+  });
+
   it("leaves unrelated failures separate and retries partial delivery without duplicate issues", async () => {
     const env = fixture();
     const unrelated = { ...finding("server/auth.test.ts"), textChange: undefined, assertion: "Expected 403, received 200" };

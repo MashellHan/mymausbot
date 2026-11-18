@@ -169,16 +169,7 @@ function authorizedVerifier(entry) {
 function hasExactCaseCoverage(finding, state) {
   if (!finding?.cases?.length) return true;
   const covered = new Set(Array.isArray(state?.caseKeys) ? state.caseKeys : []);
-  return finding.cases.every((entry) => covered.has(entry.key));
-}
-
-function verifiedProofOf(issue, state, finding) {
-  if (!issue || !state || !hasExactCaseCoverage(finding, state)) return null;
-  if (SHA.test(state.verifiedSha ?? "")) return state.verifiedSha.toLowerCase();
-  const labels = issueLabels(issue);
-  if (!labels.includes("qa:verified")) return null;
-  if (SHA.test(state.lastExecutionSha ?? "")) return state.lastExecutionSha.toLowerCase();
-  return null;
+  return state?.verified === true && finding.cases.every((entry) => covered.has(entry.key));
 }
 
 async function isStrictAncestor(ancestorSha, descendantSha, api) {
@@ -195,15 +186,18 @@ async function isStrictAncestor(ancestorSha, descendantSha, api) {
 }
 
 async function isStalePreFixReport(finding, issue, state, report, api) {
-  if (!issue || !state) return false;
+  if (!issue || state?.key !== finding.key) return false;
   const labels = issueLabels(issue);
   if (issue.state !== "closed" && !labels.includes("qa:verified")) return false;
   if (!SHA.test(report?.sha ?? "")) return false;
   if (!hasExactCaseCoverage(finding, state)) return false;
 
   const candidates = new Set();
-  const directProof = verifiedProofOf(issue, state, finding);
-  if (directProof) candidates.add(directProof);
+  const author = issue.user;
+  if (author?.id === 41898282 && author.type === "Bot" && author.login === "github-actions[bot]") {
+    const revision = state.verifiedSha ?? (labels.includes("qa:verified") ? state.lastExecutionSha : null);
+    if (typeof revision === "string" && SHA.test(revision)) candidates.add(revision.toLowerCase());
+  }
 
   if (candidates.size === 0 && issue.state === "closed" && !finding?.cases?.length) {
     // Only trust an authorized closure comment on the same issue (outside the generated QA block).
@@ -212,7 +206,7 @@ async function isStalePreFixReport(finding, issue, state, report, api) {
       for (const comment of comments) {
         if (!authorizedVerifier(comment)) continue;
         const text = stripGeneratedBlock(comment?.body);
-        if (!/<!--\s*lead-qa\d+-[^>]+closure[^>]*-->/i.test(text)) continue;
+        if (!new RegExp(`<!--\\s*lead-qa${issue.number}-[^>]+closure[^>]*-->`, "i").test(text)) continue;
         for (const match of text.matchAll(/\bmerged at \[`([a-f\d]{40})`\]/gi)) {
           candidates.add(match[1].toLowerCase());
         }
@@ -245,6 +239,7 @@ function findingBody(finding, report, state, scopeBasis, previous = "") {
 export async function deliverReport(report, { api = github, policy = JSON.parse(readFileSync("scripts/testing/check-policy.json", "utf8")) } = {}) {
   const issues = (await pages("/issues?state=all&labels=qa", null, api)).filter((issue) => !issue.pull_request);
   const { groups, byKey } = qaGroups(issues), changedKeys = new Set();
+  const staleCasesByIssue = new Map();
   const update = async (issue, patch) => {
     await api(`/issues/${issue.number}`, { method: "PATCH", body: patch });
     Object.assign(issue, patch);
@@ -281,13 +276,16 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       : "conservative fallback: no test-to-area mapping in check-policy.json";
     const staleVerifiedSha = recurrence ? await isStalePreFixReport(finding, issue, previous, report, api) : false;
     if (staleVerifiedSha) {
+      staleCasesByIssue.set(issue.number, new Set(finding.cases?.map((entry) => entry.key)));
       const stalePreFixRuns = [...new Set([...(previous?.stalePreFixRuns ?? []), `${runKey}@${report.sha.toLowerCase()}`])].slice(-10);
       const staleState = { ...previous, stalePreFixRuns };
       const note = `\n\nRecorded stale pre-fix report ${report.url} (tested \`${report.sha}\`, strict ancestor of verified \`${staleVerifiedSha}\`); keeping prior closure/verification intact.`;
       const nextBody = issue.body.includes(note.trim()) ? issue.body
         : issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(staleState)} -->`) + note;
-      await api(`/issues/${issue.number}`, { method: "PATCH", body: { body: nextBody } });
-      Object.assign(issue, { body: nextBody });
+      if (nextBody !== issue.body) {
+        await api(`/issues/${issue.number}`, { method: "PATCH", body: { body: nextBody } });
+        issue.body = nextBody;
+      }
       continue;
     }
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
@@ -309,7 +307,8 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
   for (const issue of issues) {
     const state = stateOf(issue);
     if (!state || !newerThan(report, state)) continue;
-    const failedCase = state.caseKeys?.some((key) => report.findings.some((finding) => finding.key === key));
+    const staleCases = staleCasesByIssue.get(issue.number);
+    const failedCase = state.caseKeys?.some((key) => !staleCases?.has(key) && report.findings.some((finding) => finding.key === key));
     if (failedCase) {
       const recurrence = issue.state === "closed" || issueLabels(issue).includes("qa:verified");
       const failed = { ...state, verified: false, lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt,
@@ -322,7 +321,7 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       });
       continue;
     }
-    if (!report.executionComplete) continue;
+    if (staleCases || !report.executionComplete) continue;
     const contractPassed = state.caseKeys?.length ? state.caseKeys.every((key) => report.passed.includes(key)) : state.verificationJobs?.length
       ? state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))) : report.passed.includes(state.key);
     if (!contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;

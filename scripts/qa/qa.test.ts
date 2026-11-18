@@ -1371,6 +1371,7 @@ describe("stale pre-fix QA report handling", () => {
   const findingKey = "bfaf85c5c663032c2252a2ec";
   const makeClosedIssue = (extraState: Record<string, unknown> = {}, extraBody = "") => ({
     number: 1006,
+    user: { login: "github-actions[bot]", type: "Bot", id: 41898282 },
     state: "closed",
     labels: [
       { name: "qa" },
@@ -1428,8 +1429,8 @@ describe("stale pre-fix QA report handling", () => {
     counts: { total: 1, failed: 1, skipped: 0 },
   });
 
-  it("records a stale pre-fix report without reopening a closed/verified issue or altering severity/times", async () => {
-    const issue = makeClosedIssue({ verifiedSha });
+  it.each(["verifiedSha", "lastExecutionSha"])("records a stale report proved by %s without reopening or altering severity/times", async (field) => {
+    const issue = makeClosedIssue({ [field]: verifiedSha });
     const patches: any[] = [];
     const api = vi.fn(async (path: string, options: any = {}) => {
       if (path.startsWith("/issues?")) return [structuredClone(issue)];
@@ -1456,6 +1457,19 @@ describe("stale pre-fix QA report handling", () => {
     expect(savedState.firstSeen).toBe("2026-11-17T14:00:46Z");
     expect(savedState.triageEpoch).toBe("2026-11-17T14:00:46Z");
     expect(savedState.stalePreFixRuns).toEqual([`44225458164:1@${preFixSha}`]);
+  });
+
+  it.each(["verifiedSha", "lastExecutionSha"])("requires reporter ownership for %s on a closed, verified issue", async (field) => {
+    const issue = { ...makeClosedIssue({ [field]: verifiedSha }), user: { id: 15, type: "User", login: "contributor" } };
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [issue];
+      if (path.startsWith("/issues/1006/comments?")) return [];
+      if (path === "/issues/1006" && options.method === "PATCH") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport(makeLateReport(preFixSha), { api, policy: { areas: [] } });
+    expect(api.mock.calls.some(([path]) => path.startsWith("/compare/"))).toBe(false);
+    expect(issue.state).toBe("open");
   });
 
   it("resolves verified revision from an authorized Lead closure comment when verifiedSha is not yet in state", async () => {
