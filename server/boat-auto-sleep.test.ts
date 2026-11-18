@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { CloudComputerPowerDeps } from "./host/cloud-computer-power.ts";
 import { hostTimeout } from "./testing/host-timeout.ts";
 
 const INCLUDED = "box_omb_included-relay-token";
@@ -70,10 +71,9 @@ afterAll(async () => {
 
 describe("a cloud computer goes to sleep after its idle window", () => {
   let power: ReturnType<typeof import("./host/cloud-computer-power.ts").createCloudComputerPower>;
-  let logs: string[];
   let busy: boolean;
 
-  async function powerFor(cfg: import("./config.ts").AppConfig) {
+  async function powerFor(cfg: import("./config.ts").AppConfig, overrides: Partial<Pick<CloudComputerPowerDeps, "busy" | "log">> = {}) {
     vi.resetModules();
     const { createCloudComputerPower } = await import("./host/cloud-computer-power.ts");
     power = createCloudComputerPower({
@@ -84,7 +84,8 @@ describe("a cloud computer goes to sleep after its idle window", () => {
       routines: () => [],
       routineComputer: () => null,
       broadcast: () => {},
-      log: line => logs.push(line),
+      log: () => {},
+      ...overrides,
     });
     return power;
   }
@@ -94,7 +95,6 @@ describe("a cloud computer goes to sleep after its idle window", () => {
     state = "ready";
     stopStatus = 200;
     jobRunning = false;
-    logs = [];
     busy = false;
     vi.stubEnv("BOX_TOKEN", undefined);
     vi.stubEnv("OMB_BOAT_API", `${base}/boat/api/v1`);
@@ -105,6 +105,7 @@ describe("a cloud computer goes to sleep after its idle window", () => {
 
   afterEach(() => {
     power?.close();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -171,15 +172,26 @@ describe("a cloud computer goes to sleep after its idle window", () => {
 
   it("a stop the relay refuses is logged and retried after a longer wait each time", async () => {
     stopStatus = 503;
-    await powerFor({});
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const waits = [1_000, 1_000, 2_000, 4_000];
+    const resolveFailure: Array<(line: string) => void> = [];
+    const failures = waits.map(() => new Promise<string>(resolve => { resolveFailure.push(resolve); }));
+    const busyCheck = vi.fn(() => false);
+    let logged = 0;
+    await powerFor({}, { busy: busyCheck, log: line => resolveFailure[logged++]?.(line) });
     power.used(botId);
-    await waitFor(() => stops().length === 3 && logs.length === 3, hostTimeout(10_000));
-    for (const line of logs) {
-      expect(line).toBe("cloud computer auto-sleep-test: could not go to sleep, retrying in 1 min: boat sleep failed: Cloud computers are not available right now.");
+    for (const [index, delay] of waits.entries()) {
+      const previousChecks = busyCheck.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(busyCheck).toHaveBeenCalledTimes(previousChecks);
+      expect(stops()).toHaveLength(index);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await failures[index]).toBe("cloud computer auto-sleep-test: could not go to sleep, retrying in 1 min: boat sleep failed: Cloud computers are not available right now.");
+      expect(logged).toBe(index + 1);
+      expect(stops()).toHaveLength(index + 1);
+      expect(stops()[index]).toMatchObject({ path: `/relay/api/box/v1/boxes/${boxId}/stop`, auth: `Bearer ${INCLUDED}`, at: Date.now() });
+      expect(state).toBe("ready");
+      expect(power.awake()).toBe(true);
     }
-    const [first, second, third] = stops().map(stop => stop.at);
-    // A Node timer may fire up to a millisecond before its delay by Date.now().
-    expect(second! - first!).toBeGreaterThanOrEqual(1_000 - 5);
-    expect(third! - second!).toBeGreaterThanOrEqual(2_000 - 5);
   });
 });
