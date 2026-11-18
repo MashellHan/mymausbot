@@ -234,8 +234,14 @@ function notifyPinnedCircles(): void {
 
 function onPinnedCirclesStorage(event: StorageEvent): void {
   if (event.key !== PINNED_CIRCLES_KEY && event.key !== null) return;
+  try {
+    if (event.storageArea && event.storageArea !== globalThis.localStorage) return;
+  } catch {
+    return;
+  }
   sessionPinnedCircles = undefined;
   notifyPinnedCircles();
+  windowPrefChanged();
 }
 
 export function subscribePinnedCircles(listener: () => void): () => void {
@@ -284,6 +290,7 @@ export function setPinnedCircles(enabled: boolean): void {
   sessionPinnedCircles = enabled;
   savePinnedCircles(enabled);
   notifyPinnedCircles();
+  windowPrefChanged();
 }
 
 export function usePinnedCircles(): boolean {

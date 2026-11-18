@@ -44,6 +44,7 @@ export const WINDOW_PREFS = {
   "appearance.showThreads": z.boolean(),
   "appearance.userBubbles": z.boolean(),
   "appearance.toolsLayout": z.enum(["rows", "toolbar"]),
+  "appearance.pinnedCircles": z.boolean(),
   "general.sendKey": z.enum(SEND_KEYS),
   "general.notificationSounds": z.boolean(),
   "general.notificationFeed": z.boolean(),

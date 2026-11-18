@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { readSidebarToolsLayout, SIDEBAR_TOOLS_LAYOUT_KEY } from "./sidebar-preferences";
+import { readSidebarToolsLayout, SIDEBAR_TOOLS_LAYOUT_KEY, loadPinnedCircles, PINNED_CIRCLES_KEY, subscribePinnedCircles } from "./sidebar-preferences";
 import { applyWindowPref, reportWindowPrefs, windowPrefValues } from "./window-prefs";
 import { setShowRunCard } from "./run-card-preferences";
 import { setShowThreads } from "./thread-preferences";
@@ -81,6 +81,56 @@ describe("window preferences", () => {
     reportWindowPrefs();
     await vi.advanceTimersByTimeAsync(250);
     expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.toolsLayout"]).toBe("rows");
+  });
+
+  it("applies only valid pinned-circle frames and reports the in-session choice when storage is blocked", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    applyWindowPref({ kind: "window-pref", id: "appearance.pinnedCircles", value: true });
+    expect(values.get(PINNED_CIRCLES_KEY)).toBe("true");
+    applyWindowPref({ kind: "window-pref", id: "appearance.pinnedCircles", value: "yes" });
+    expect(loadPinnedCircles()).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.pinnedCircles"]).toBe(true);
+
+    vi.stubGlobal("localStorage", { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } });
+    applyWindowPref({ kind: "window-pref", id: "appearance.pinnedCircles", value: false });
+    expect(loadPinnedCircles()).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[1] as unknown as [string, RequestInit])[1].body)).values["appearance.pinnedCircles"]).toBe(false);
+  });
+
+  it("keeps pinned-circle bridge reports fresh after the last sidebar UI subscriber unmounts", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    let storageListener: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage") storageListener = listener; },
+      removeEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage" && storageListener === listener) storageListener = undefined; },
+    });
+    const unsubscribeUi = subscribePinnedCircles(() => undefined);
+    reportWindowPrefs();
+    await vi.advanceTimersByTimeAsync(250);
+    applyWindowPref({ kind: "window-pref", id: "appearance.pinnedCircles", value: true });
+    expect(loadPinnedCircles()).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    unsubscribeUi();
+    fetched.mockClear();
+    values.set(PINNED_CIRCLES_KEY, "false");
+    storageListener?.({ key: PINNED_CIRCLES_KEY, storageArea: null } as StorageEvent);
+    expect(loadPinnedCircles()).toBe(false);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetched).toHaveBeenCalledOnce();
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.pinnedCircles"]).toBe(false);
+    const unsubscribeRemountedUi = subscribePinnedCircles(() => undefined);
+    expect(loadPinnedCircles()).toBe(false);
+    unsubscribeRemountedUi();
+    fetched.mockClear();
+    reportWindowPrefs();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.pinnedCircles"]).toBe(false);
   });
 
   it("reports the window's values once after a burst of setters", async () => {

@@ -365,6 +365,19 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
       write: async (layout: "rows" | "toolbar") => deps.window.write("appearance.toolsLayout", layout),
     }),
     writable({
+      id: "appearance.pinnedCircles", label: "Pinned bots as circles", help: "Show pinned bots as a circle grid where their roster appears in an expanded sidebar. Icons-only layout and Simple desktop tiles keep their own presentation; with no pinned bots there is no visible change.", where: "Settings → Appearance",
+      synonyms: ["pinned circles", "pinned bots", "circle grid", "pins"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("appearance.pinnedCircles"),
+      read: () => { const enabled = deps.window.read("appearance.pinnedCircles"); return typeof enabled === "boolean" ? `saved ${enabled ? "on" : "off"}; pinned bots use ${enabled ? "a circle grid" : "rows"} where their roster appears in an expanded sidebar; icons-only and Simple desktop tiles keep their own presentation` : "unavailable until mymausbot is open on this computer"; },
+      describe: (enabled: boolean) => {
+        const current = deps.window.read("appearance.pinnedCircles");
+        if (typeof current !== "boolean") return { refusal: "Open mymausbot on this computer before changing pinned bot circles." };
+        if (current === enabled) return { refusal: `Pinned bot circles are already ${enabled ? "on" : "off"}; icons-only and Simple desktop tiles keep their own presentation.` };
+        return { change: `Show pinned bots as ${enabled ? "a circle grid" : "rows"} where their roster appears in an expanded sidebar; currently saved ${current ? "on" : "off"}; icons-only and Simple desktop tiles keep their own presentation` };
+      },
+      write: async (enabled: boolean) => deps.window.write("appearance.pinnedCircles", enabled),
+    }),
+    writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },
