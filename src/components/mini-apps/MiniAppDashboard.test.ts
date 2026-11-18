@@ -169,7 +169,7 @@ describe("installed native Mini App dashboards", () => {
     expect(host.textContent?.includes("Delayed synthetic reply")).toBe(!replaced);
   });
 
-  it("shows repository observations throughout the app-scoped Activities snapshot", async () => {
+  it("keeps verified contributions distinct from repository observations and Profile references in an app-scoped snapshot", async () => {
     const contributions = primaryUsageFixture(endDay);
     const snapshot = { ...usage, github: profile, contributions };
     calls.api.mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot });
@@ -178,7 +178,9 @@ describe("installed native Mini App dashboards", () => {
     expect(host.textContent).toContain("1-day window");
     expect(host.textContent).toContain(endDay);
     expect(host.querySelector('[data-usage-metric-definition], [data-usage-primary-sources]')).toBeNull();
-    expect(host.querySelector('[data-usage-latest-update]')?.getAttribute("datetime")).toBe(`${endDay}T08:00:00.000Z`);
+    const latestUpdate = host.querySelector('[data-usage-latest-update]');
+    expect(latestUpdate?.textContent).toContain("Latest update:");
+    expect(latestUpdate?.getAttribute("datetime")).toBe(`${endDay}T08:00:00.000Z`);
     const metricHeaders = [...host.querySelectorAll("section:first-of-type dt")];
     expect(metricHeaders.map(value => value.textContent)).toEqual(["PRs", "Commits", "Tokens"]);
     expect(metricHeaders[0]?.getAttribute("title")).toContain("PR creations from configured GitHub and ADO sources, dated in China time");
@@ -187,7 +189,9 @@ describe("installed native Mini App dashboards", () => {
     expect(host.querySelector(`[data-usage-trend="prs"] [data-usage-day="${endDay}"]`)?.getAttribute("aria-label")).toMatch(/: PRs 1$/);
     expect(host.querySelector(`[data-usage-trend="commits"] [data-usage-day="${endDay}"]`)?.getAttribute("aria-label")).toMatch(/: Commits 2$/);
     expect([...host.querySelectorAll('[data-usage-daily] tbody tr:first-child > td')].slice(0, 3).map(value => value.textContent)).toEqual(["1", "2", "100"]);
-    expect(host.querySelector('[data-usage-repositories] tbody th')?.textContent).toBe("fixture/local-repo");
+    const repoRow = host.querySelector('[data-usage-repositories] tbody tr');
+    expect(repoRow?.querySelector("th")?.textContent).toBe("fixture/local-repo");
+    expect(Array.from(repoRow?.querySelectorAll("td > span:first-child") ?? [], value => value.textContent)).toEqual(["1", "2"]);
     expect(host.querySelectorAll("section dd [data-usage-provisional]")).toHaveLength(0);
     expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
     expect(host.querySelector('[data-usage-week-start="2026-11-02"]')).not.toBeNull();
@@ -196,7 +200,7 @@ describe("installed native Mini App dashboards", () => {
     expect(JSON.parse(calls.api.mock.calls[0]![1].body)).toEqual({ resource: "usage", expectedRevision: 3 });
   });
 
-  it("refreshes visible repository observations in five seconds without waiting for older tokens or changing its app scope", async () => {
+  it("refreshes visible contributions in five seconds without waiting for older tokens or changing its app scope", async () => {
     vi.useFakeTimers();
     const first = { ...usage, github: profile, contributions: primaryUsageFixture(endDay) };
     const next = { ...repositoryUsage(4, 8, Date.UTC(2026, 10, 7, 8, 5)), github: profile,
