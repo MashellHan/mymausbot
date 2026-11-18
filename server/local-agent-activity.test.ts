@@ -45,8 +45,9 @@ describe("bounded per-agent Codex activity", () => {
         content: [{ type: "output_text", text: "HIDDEN_CHANNEL" }] }),
       row("response_item", { type: "message", role: "system", content: [{ type: "input_text", text: "HIDDEN_SYSTEM" }] }),
       row("response_item", { type: "message", role: "developer", content: [{ type: "input_text", text: "HIDDEN_DEVELOPER" }] }),
-      row("response_item", { type: "function_call", name: "functions.exec", call_id: "call-1", arguments: "HIDDEN_CALL" }),
-      row("response_item", { type: "function_call_output", call_id: "call-1", output: "HIDDEN_RESULT" }),
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: "call-1",
+        arguments: JSON.stringify({ cmd: "rg synthetic-notes" }) }),
+      row("response_item", { type: "function_call_output", call_id: "call-1", output: "2 synthetic matches" }),
       row("response_item", { type: "message", role: "assistant", phase: "final_answer", status: "completed", content: [
         { type: "output_text", text: `Synthetic answer. ${secret}` }, { type: "output_image", data: "HIDDEN_IMAGE" },
       ] }),
@@ -57,7 +58,7 @@ describe("bounded per-agent Codex activity", () => {
     expect(result).toMatchObject({ status: "ready", truncated: false });
     expect(result.events.map((event) => [event.kind, event.text?.startsWith("Synthetic answer") ? "Synthetic answer" : event.text])).toEqual([
       ["user", "Plan briefly"], ["assistant", "Checking synthetic notes"],
-      ["tool-call", "[Arguments unavailable]"], ["tool-result", "[Result details unavailable]"],
+      ["tool-call", "cmd: rg synthetic-notes"], ["tool-result", "2 synthetic matches"],
       ["assistant", "Synthetic answer"], ["user", "Legacy-only question"],
     ]);
     expect(result.events.filter((event) => event.kind.startsWith("tool")).map((event) => event.tool)).toEqual(["functions.exec", "functions.exec"]);
@@ -107,24 +108,53 @@ describe("bounded per-agent Codex activity", () => {
     expect(result.events[0]).toMatchObject({ kind: "user", text: "First question" });
     expect(result.events.at(-1)).toMatchObject({ kind: "assistant", text: "Final reply" });
     expect(result.events.filter((event) => event.kind.startsWith("tool"))).toHaveLength(30);
-    expect(JSON.stringify(result)).not.toContain("synthetic tool");
+    expect(result.events.filter((event) => event.kind.startsWith("tool")).every((event) => (event.text?.length ?? 0) <= 600)).toBe(true);
   });
 
-  it("classifies known custom tool records and supports alphanumeric current pane IDs without exposing payloads", async () => {
+  it("reads custom tool text and supports alphanumeric current pane IDs without exposing other records", async () => {
     const home = await fixture([
       row("response_item", { type: "custom_tool_call", name: "functions.exec", call_id: "c1",
-        input: "private argument", arguments: "private argument" }),
-      row("response_item", { type: "custom_tool_call_output", call_id: "c1", output: "private output" }),
+        input: "inspect synthetic fixture", arguments: "ignored alternative" }),
+      row("response_item", { type: "custom_tool_call_output", call_id: "c1", output: "synthetic output" }),
       row("response_item", { type: "function_call", name: "/private/tool", call_id: "c2", arguments: "private path" }),
       row("response_item", { type: "reasoning", summary: "private reasoning" }),
     ]);
     const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent(SESSION, "codex", "w6:pG")]) });
     const result = await provider.get("w6:pG");
     expect(result.events.map(({ kind, tool, text }) => [kind, tool, text])).toEqual([
+      ["tool-call", "functions.exec", "inspect synthetic fixture"],
+      ["tool-result", "functions.exec", "synthetic output"],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/ignored alternative|private path|private reasoning|c1|c2/);
+  });
+
+  it("does not reveal malformed, unpaired or encoded Codex tool details", async () => {
+    const home = await fixture([
+      row("response_item", { type: "function_call_output", call_id: "missing", output: "UNPAIRED_RESULT" }),
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: "bad", arguments: "{malformed" }),
+      row("response_item", { type: "function_call_output", call_id: "bad", output: "safe paired result" }),
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: "encoded",
+        arguments: { cmd: "data:image/png;base64," + "A".repeat(256) } }),
+      row("response_item", { type: "function_call_output", call_id: "encoded",
+        output: [{ type: "image", data: "BINARY_RESULT" }] }),
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: "duplicate", arguments: "first" }),
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: "duplicate", arguments: "second" }),
+      row("response_item", { type: "function_call_output", call_id: "duplicate", output: "AMBIGUOUS_RESULT" }),
+    ]);
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
+    const result = await provider.get(pane);
+    expect(result).toMatchObject({ status: "ready", truncated: true });
+    expect(result.events.map((event) => [event.kind, event.tool, event.text])).toEqual([
+      ["tool-result", null, "[Result details unavailable]"],
+      ["tool-call", "functions.exec", "[Arguments unavailable]"],
+      ["tool-result", "functions.exec", "safe paired result"],
       ["tool-call", "functions.exec", "[Arguments unavailable]"],
       ["tool-result", "functions.exec", "[Result details unavailable]"],
+      ["tool-call", "functions.exec", "first"],
+      ["tool-call", "functions.exec", "second"],
+      ["tool-result", null, "[Result details unavailable]"],
     ]);
-    expect(JSON.stringify(result)).not.toMatch(/private argument|private output|private path|private reasoning|c1|c2/);
+    expect(JSON.stringify(result)).not.toMatch(/UNPAIRED_RESULT|AMBIGUOUS_RESULT|BINARY_RESULT|base64/);
   });
 
   it("keeps the most recent 60 visible messages and reports omitted history", async () => {

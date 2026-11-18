@@ -209,7 +209,7 @@ describe("verified Pi visible assistant preview", () => {
     const rows = Array.from({ length: 70 }, (_, index) => entry(index.toString(16).padStart(8, "0"),
       index ? (index - 1).toString(16).padStart(8, "0") : null,
       { role: "assistant", content: [{ type: "text", text: `Visible ${index}` },
-        { type: "toolCall", id: `call-${index}`, name: "shell.run", arguments: { hidden: "HIDDEN_ARGUMENT" } }] }));
+        { type: "toolCall", id: `call-${index}`, name: "shell.run", arguments: { secret: "HIDDEN_ARGUMENT" } }] }));
     const data = await fixture(rows);
     const view = (await data.reader([data.agent()])).get("w6:p1")!;
     expect(view.preview).toBe("Visible 69");
@@ -226,10 +226,10 @@ describe("verified Pi visible assistant preview", () => {
       entry("b1b2c3d4", "a1b2c3d4", { role: "assistant", content: [
         { type: "text", text: "I will check" },
         { type: "thinking", thinking: "HIDDEN_THINKING" },
-        { type: "toolCall", id: "call-1", name: "shell.run", arguments: { secret: "HIDDEN_ARGUMENT" } },
+        { type: "toolCall", id: "call-1", name: "shell.run", arguments: { cmd: "rg synthetic-file", secret } },
       ] }),
       entry("c1b2c3d4", "b1b2c3d4", { role: "toolResult", toolCallId: "call-1", toolName: "shell.run",
-        content: [{ type: "text", text: "HIDDEN_OUTPUT" }] }),
+        content: [{ type: "text", text: "synthetic file found" }] }),
       assistant("Finished safely", "d1b2c3d4", "c1b2c3d4"),
       entry("e1b2c3d4", "d1b2c3d4", { role: "assistant", content: [{ type: "thinking", thinking: "HIDDEN_LAST" }] }),
     ]);
@@ -252,12 +252,38 @@ describe("verified Pi visible assistant preview", () => {
     } as unknown as RouteContext);
     expect(response).toMatchObject({ status: 200, body: { status: "ready", truncated: false, events: [
       { kind: "user", tool: null }, { kind: "assistant", text: "I will check" },
-      { kind: "tool-call", tool: "shell.run", text: "[Arguments unavailable]" },
-      { kind: "tool-result", tool: "shell.run", text: "[Result details unavailable]" },
+      { kind: "tool-call", tool: "shell.run", text: "cmd: rg synthetic-file" },
+      { kind: "tool-result", tool: "shell.run", text: "synthetic file found" },
       { kind: "assistant", text: "Finished safely" },
     ] } });
     expect(JSON.stringify(response)).not.toMatch(/ghp_|private|HIDDEN_/);
     expect((await activity.get("w6:p1")).events).toHaveLength(5);
+  });
+
+  it("keeps Pi tool text on the selected branch and withholds unpaired or nontext results", async () => {
+    const secret = "ghp_" + "x".repeat(36);
+    const data = await fixture([
+      entry("a1b2c3d4", null, { role: "assistant", content: [{ type: "toolCall", id: "current", name: "shell.run",
+        arguments: { cmd: "rg synthetic", token: secret } }] }),
+      entry("b1b2c3d4", "a1b2c3d4", { role: "toolResult", toolCallId: "current", content: [
+        { type: "text", text: "synthetic row" }, { type: "image", data: "HIDDEN_IMAGE" },
+      ] }),
+      entry("c1b2c3d4", "b1b2c3d4", { role: "assistant", content: [
+        { type: "toolCall", id: "abandoned", name: "shell.run", arguments: { cmd: "HIDDEN_BRANCH" } },
+      ] }),
+      entry("d1b2c3d4", "b1b2c3d4", { role: "toolResult", toolCallId: "abandoned",
+        content: [{ type: "text", text: "UNPAIRED_RESULT" }] }),
+      assistant("Current answer", "e1b2c3d4", "d1b2c3d4"),
+    ]);
+    const view = (await data.reader([data.agent()])).get("w6:p1")!;
+    expect(view.truncated).toBe(true);
+    expect(view.events.map((event) => [event.kind, event.tool, event.text])).toEqual([
+      ["tool-call", "shell.run", "cmd: rg synthetic"],
+      ["tool-result", "shell.run", "synthetic row"],
+      ["tool-result", null, "[Result details unavailable]"],
+      ["assistant", null, "Current answer"],
+    ]);
+    expect(JSON.stringify(view)).not.toMatch(/ghp_|HIDDEN_|UNPAIRED_RESULT/);
   });
 
   it("rejects secret-shaped Pi tool names from both call and result Trace fields", async () => {
@@ -265,10 +291,10 @@ describe("verified Pi visible assistant preview", () => {
     const data = await fixture([
       entry("a1b2c3d4", null, { role: "assistant", content: [
         { type: "text", text: "Visible work" },
-        { type: "toolCall", id: "safe", name: "shell.run", arguments: { hidden: "HIDDEN_SAFE_ARGS" } },
-        { type: "toolCall", id: "sensitive", name: secretName, arguments: { hidden: "HIDDEN_SECRET_ARGS" } },
+        { type: "toolCall", id: "safe", name: "shell.run", arguments: { secret: "HIDDEN_SAFE_ARGS" } },
+        { type: "toolCall", id: "sensitive", name: secretName, arguments: { secret: "HIDDEN_SECRET_ARGS" } },
       ] }),
-      entry("b1b2c3d4", "a1b2c3d4", { role: "toolResult", toolCallId: "safe", content: [{ type: "text", text: "HIDDEN_SAFE_RESULT" }] }),
+      entry("b1b2c3d4", "a1b2c3d4", { role: "toolResult", toolCallId: "safe", content: [{ type: "text", text: "safe result" }] }),
       entry("c1b2c3d4", "b1b2c3d4", { role: "toolResult", toolCallId: "sensitive", content: [{ type: "text", text: "HIDDEN_SECRET_RESULT" }] }),
     ]);
     const view = (await data.reader([data.agent()])).get("w6:p1")!;
@@ -308,19 +334,27 @@ describe("verified Pi visible assistant preview", () => {
   });
 
   it("drops an old Pi session after occupant replacement or ambiguous binding", async () => {
-    const data = await fixture([assistant("Old occupant")]);
+    const data = await fixture([
+      assistant("Old occupant", "a1b2c3d4"),
+      entry("b1b2c3d4", "a1b2c3d4", { role: "assistant", content: [
+        { type: "toolCall", id: "old-call", name: "shell.run", arguments: { cmd: "old synthetic action" } },
+      ] }),
+      entry("c1b2c3d4", "b1b2c3d4", { role: "toolResult", toolCallId: "old-call",
+        content: [{ type: "text", text: "old synthetic result" }] }),
+    ]);
     const otherFile = join(data.directory, `2026-11-17T01-01-00-000Z_${OTHER}.jsonl`);
     await writeFile(otherFile, [data.header(OTHER), assistant("New occupant")].map(line).join(""));
     let roster = [data.agent()];
     const activity = createLocalAgentActivityProvider({ home: data.home,
       run: async () => JSON.stringify({ result: { agents: roster } }) });
-    expect((await activity.get("w6:p1")).events.map((event) => event.text)).toEqual(["Old occupant"]);
+    const oldTexts = ["Old occupant", "cmd: old synthetic action", "old synthetic result"];
+    expect((await activity.get("w6:p1")).events.map((event) => event.text)).toEqual(oldTexts);
     roster = [data.agent(otherFile)];
     expect((await activity.get("w6:p1")).events.map((event) => event.text)).toEqual(["New occupant"]);
     roster = [data.agent(otherFile), data.agent(otherFile, "another", "w6:p2")];
     expect(await activity.get("w6:p1")).toMatchObject({ status: "unavailable", events: [] });
     roster = [data.agent()];
-    expect((await activity.get("w6:p1")).events.map((event) => event.text)).toEqual(["Old occupant"]);
+    expect((await activity.get("w6:p1")).events.map((event) => event.text)).toEqual(oldTexts);
   });
 
   it("joins the same verified occupant without another native list call or Codex count change", async () => {

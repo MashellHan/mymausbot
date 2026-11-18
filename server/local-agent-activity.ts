@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { LocalAgentActivityEvent, LocalAgentActivityResponse } from "../shared/local-dashboard.ts";
-import { redactedAgentText as safeText, visibleAgentMessage } from "./local-agent-visible-message.ts";
+import { redactedAgentText as safeText, redactedAgentToolArguments, redactedAgentToolResult,
+  visibleAgentMessage } from "./local-agent-visible-message.ts";
 import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session.ts";
 import { createPiSessionReader } from "./local-agent-pi-message.ts";
 import { verifiedLocalAgentMembers } from "./local-agent-association.ts";
@@ -32,9 +33,11 @@ function visibleEvent(line: string, offset: number): { event: LocalAgentActivity
     if (!result && (typeof name !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,80}$/.test(name)
       || safeText(name).text !== name)) return { event: null, clipped: false };
     const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
+    const detail = result ? redactedAgentToolResult(payload.output)
+      : redactedAgentToolArguments(payload.type === "custom_tool_call" ? payload.input : payload.arguments);
     return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null,
       kind: result ? "tool-result" : "tool-call", tool: result ? null : name as string,
-      text: result ? "[Result details unavailable]" : "[Arguments unavailable]" }, clipped: false,
+      text: detail.text ?? (result ? "[Result details unavailable]" : "[Arguments unavailable]") }, clipped: detail.clipped,
       format: "canonical", raw: "", callId };
   }
   const message = visibleAgentMessage(row);
@@ -71,7 +74,7 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
     const first = start === 0 ? 0 : bytes.indexOf(10) + 1;
     let truncated = start > 0;
     const events: Array<{ event: LocalAgentActivityEvent; format: "legacy" | "canonical"; raw: string }> = [];
-    const toolNames = new Map<string, string>();
+    const toolNames = new Map<string, string | null>();
     for (let cursor = first; (start === 0 || first > 0) && cursor < bytesRead;) {
       const end = bytes.indexOf(10, cursor);
       if (end < 0) { truncated = true; break; }
@@ -82,10 +85,12 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
         if (found.event) {
           const event = found.event;
           if (found.callId && event.kind === "tool-call" && event.tool) {
-            toolNames.set(found.callId, event.tool);
+            toolNames.set(found.callId, toolNames.has(found.callId) ? null : event.tool);
             if (toolNames.size > MAX_EVENTS) toolNames.delete(toolNames.keys().next().value!);
           } else if (found.callId && event.kind === "tool-result") {
             event.tool = toolNames.get(found.callId) ?? null;
+            toolNames.delete(found.callId);
+            if (!event.tool) event.text = "[Result details unavailable]";
           }
           const duplicate = events.findIndex((prior) => event.at !== null && prior.format !== found.format && prior.event.kind === event.kind
             && prior.event.at === event.at && prior.raw === found.raw);

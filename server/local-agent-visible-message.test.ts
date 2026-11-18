@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assistantMessagePreview } from "./local-agent-visible-message.ts";
+import { assistantMessagePreview, redactedAgentToolArguments, redactedAgentToolResult } from "./local-agent-visible-message.ts";
 
 const assistant = (text: string, phase = "commentary") => ({ type: "response_item", payload: {
   type: "message", role: "assistant", phase, content: [{ type: "output_text", text }],
@@ -55,5 +55,31 @@ describe("assistant preview internal-note exclusions", () => {
   it("preserves ordinary bracketed prose rather than treating every bracket as an internal envelope", () => {
     const text = "See [the docs], [x] done, [ombudsman], [report.pdf], [OMB-2470] and [omb].";
     expect(assistantMessagePreview(assistant(text))).toBe(text);
+  });
+});
+
+describe("bounded tool details", () => {
+  it("keeps simple arguments while omitting structured secrets and masking paths", () => {
+    const secret = "ghp_" + "x".repeat(36);
+    const result = redactedAgentToolArguments(JSON.stringify({ cmd: "rg /Users/fixture/private/notes.txt", token: secret,
+      count: 2, nested: { content: "unreadable" } }));
+    expect(result).toEqual({ text: "cmd: rg [path]; count: 2", clipped: true });
+    expect(JSON.stringify(result)).not.toMatch(/ghp_|private|unreadable/);
+    expect(redactedAgentToolArguments({ password: "abc" }).text).toBeNull();
+    expect(redactedAgentToolArguments("{malformed").text).toBeNull();
+  });
+
+  it("keeps only bounded textual result blocks and excludes binary or encoded content", () => {
+    expect(redactedAgentToolResult([
+      { type: "text", text: "first line" }, { type: "image", data: "private image" },
+      { type: "text", text: "last line" },
+    ])).toEqual({ text: "first line last line", clipped: true });
+    expect(redactedAgentToolResult("done /Users/fixture/private/report.txt https://private.test/report").text)
+      .toBe("done [path] [link]");
+    expect(redactedAgentToolResult("data:image/png;base64," + "A".repeat(256)).text).toBeNull();
+    expect(redactedAgentToolResult("A".repeat(80) + "==").text).toBeNull();
+    expect(redactedAgentToolResult("password=abc").text).toBeNull();
+    expect(redactedAgentToolResult("Bearer abc").text).toBeNull();
+    expect(redactedAgentToolResult("x".repeat(20_000))).toEqual({ text: null, clipped: true });
   });
 });
