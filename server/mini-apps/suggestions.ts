@@ -16,12 +16,20 @@ function capabilities(app: MiniAppSummary): string[] {
 }
 
 function reportsActivities(title: string): boolean {
-  const task = title.trim().slice(0, 160);
-  return /统计|汇总|监测|跟踪|\b(?:track|monitor|count|measure|compare|report|summarize)\b/iu.test(task)
-    && /拉取请求|合并请求|\b(?:prs?|pull requests?)\b/iu.test(task)
-    && /提交|\bcommits?\b/iu.test(task)
-    && /(?:词元|令牌)(?:用量|消耗)|\btokens?\s*(?:用量|消耗|usage\b|consumption\b|counts?\b)|\b(?:agent|model|llm) tokens?\b/iu.test(task)
-    && !/(?:访问|刷新|登录|会话|鉴权)\s*(?:token|令牌)|\b(?:access|refresh|login|api|session|bearer|auth|oauth|csrf|jwt)[ -]tokens?\b/iu.test(task);
+  const task = title.trim();
+  if (task.length > 160) return false;
+  const operation = task.match(/^(?:please\s+)?(?:track|monitor|count|measure|compare|report|summarize)\s+/iu)
+    ?? task.match(/^(?:请\s*)?(?:按(?:工作[和与及]个人|个人[和与及]工作)\s*)?(?:分别\s*)?(?:统计|汇总|监测|跟踪)\s*/u);
+  if (!operation) return false;
+  const metrics = task.slice(operation[0].length)
+    .replace(/(?:\s+(?:each|every)\s+(?:day|week|month)|[,，]\s*并区分(?:不同用途|工作和个人))?[.!。！]?$/iu, "")
+    .split(/\s*(?:[,，、](?:\s*\band\b)?|\band\b|以及|和|与|及)\s*/iu);
+  const required = [
+    /^(?:示例\s*)?(?:prs?|pull requests?|拉取请求|合并请求)(?:\s*(?:数(?:量)?|counts?))?$/iu,
+    /^(?:commits?|提交)(?:\s*(?:数(?:量)?|counts?))?$/iu,
+    /^(?:(?:(?:agent|model|llm)\s+|模型\s*(?:消耗(?:的)?\s*)?)?(?:tokens?|词元|令牌)\s*(?:usage|consumption|counts?|用量|消耗|数(?:量)?)|(?:agent|model|llm)\s+tokens?)$/iu,
+  ];
+  return metrics.length === required.length && required.every((pattern) => metrics.some((metric) => pattern.test(metric)));
 }
 
 export class MiniAppSuggestions {
@@ -66,7 +74,7 @@ export class MiniAppSuggestions {
     const usage = reportsActivities(task.title) ? apps.filter((app) => app.dashboardIdentity === "usage"
       && app.dashboard?.kind === "usage" && app.dashboard.resources.includes("usage")) : [];
     const activities = usage.length === 1 ? usage[0] : undefined;
-    const candidates = apps.filter((app) => app !== activities && capabilities(app).length)
+    const candidates = apps.filter((app) => app.dashboardIdentity !== "usage" && capabilities(app).length)
       .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)).slice(0, 80);
     const needsWriter = candidates.length > 0 && task.title.trim().length >= 4;
     const byId = new Map(candidates.map((app) => [app.id, app]));

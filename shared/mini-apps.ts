@@ -157,7 +157,7 @@ export interface MiniAppSuggestionsResult {
   threadId: string;
   suggestions: MiniAppSuggestion[];
   refreshPending: boolean;
-  status: "ready" | "pending" | "unavailable";
+  status?: "ready" | "pending" | "unavailable";
   retryAfterMs?: number;
 }
 

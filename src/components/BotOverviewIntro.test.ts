@@ -127,6 +127,23 @@ describe("Bot overview suggestions", () => {
     expect(fixture.api).toHaveBeenCalledTimes(2);
   });
 
+  it("honors legacy refreshPending and shows a completed legacy empty result", async () => {
+    vi.useFakeTimers();
+    const selected = bot();
+    const legacy = { botId: selected.id, threadId: selected.threadId, suggestions: [] };
+    fixture.api.mockResolvedValueOnce({ ...legacy, refreshPending: true })
+      .mockResolvedValue({ ...legacy, refreshPending: false });
+    await render(selected);
+    expect(host.querySelector('[role="status"]')).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_999); });
+    expect(fixture.api).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(host.textContent).toContain("No related Mini Apps.");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["empty", "error"])("keeps More available for an %s result without substituting catalog apps", async (state) => {
     if (state === "empty") fixture.api.mockResolvedValue(response(bot()));
     else fixture.api.mockRejectedValue(new Error("Fixture unavailable"));

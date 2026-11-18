@@ -73,12 +73,13 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
     setResponse({ context, data: null, error: false });
     const load = async (mayFollowUp: boolean, mayRetryUnavailable: boolean) => {
       try {
-        const data = await api<MiniAppSuggestionsResult>("/api/mini-apps/suggestions", {
+        const result = await api<MiniAppSuggestionsResult>("/api/mini-apps/suggestions", {
           method: "POST", body: JSON.stringify({ botId: bot.id, threadId: bot.threadId } satisfies MiniAppSuggestionsRequest),
           background: true, signal: controller.signal, timeoutMs: 10_000,
         });
         if (controller.signal.aborted) return;
-        if (data.botId !== bot.id || data.threadId !== bot.threadId) throw new Error("Suggestion context changed");
+        if (result.botId !== bot.id || result.threadId !== bot.threadId) throw new Error("Suggestion context changed");
+        const data = { ...result, status: result.status ?? (result.refreshPending ? "pending" : "ready") };
         const pending = data.status === "pending";
         setResponse({ context, data, error: !mayFollowUp && pending && !data.suggestions.some(({ app }) => app.status === "active") });
         if (mayFollowUp && pending) {
