@@ -245,16 +245,22 @@ async function cloudEnd(t, { greet = true, answerPings = true } = {}) {
 test("the link signs in like the poll, takes My Cloud's word for this computer's public address, and ends when asked", async (t) => {
   const end = await cloudEnd(t);
   const stop = new AbortController();
+  const started = Date.now();
   let opened = 0;
+  let openedAtMs = null;
   let outcome = null;
+  let outcomeAtMs = null;
   const connects = [];
-  const running = runDeviceLink({ url: end.url, headers: { cookie: "omb_session=s", "x-omb-computer-secret": "a".repeat(64) }, signal: stop.signal, onOpen: () => opened++, openMs: 100,
+  const running = runDeviceLink({ url: end.url, headers: { cookie: "omb_session=s", "x-omb-computer-secret": "a".repeat(64) }, signal: stop.signal, onOpen: () => { opened++; openedAtMs = Date.now() - started; }, openMs: 100,
     egress: { interfaces: () => ({}), resolve: async () => [{ address: SEEN_AS, family: 4 }], connect: (options) => { connects.push(options); return tcpConnect(1, "127.0.0.1"); } } })
-    .then(result => { outcome = result; return result; });
+    .then(result => { outcome = result; outcomeAtMs = Date.now() - started; return result; });
   try {
-    try { await until(() => end.sessions.length === 1 && opened === 1, "the link to open"); }
+    try { await until(() => (end.sessions.length === 1 && opened === 1) || outcome !== null, "the link to open"); }
     catch (error) {
-      throw new Error(`${error instanceof Error ? error.message : String(error)}; onOpen=${opened}; serverConnections=${end.sessions.length}; linkOutcome=${outcome ? JSON.stringify(outcome) : "pending"}`, { cause: error });
+      throw new Error(`${error instanceof Error ? error.message : String(error)}; elapsedMs=${Date.now() - started}; onOpen=${opened}; openedAtMs=${openedAtMs}; serverConnections=${end.sessions.length}; linkOutcome=${outcome ? JSON.stringify(outcome) : "pending"}; outcomeAtMs=${outcomeAtMs}`, { cause: error });
+    }
+    if (outcome !== null) {
+      throw new Error(`the link ended before opening; elapsedMs=${Date.now() - started}; onOpen=${opened}; openedAtMs=${openedAtMs}; serverConnections=${end.sessions.length}; linkOutcome=${JSON.stringify(outcome)}; outcomeAtMs=${outcomeAtMs}`);
     }
     assert.equal(end.sessions[0].headers.cookie, "omb_session=s");
     assert.equal(end.sessions[0].headers["x-omb-computer-secret"], "a".repeat(64));
