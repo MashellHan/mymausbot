@@ -3,7 +3,6 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../shared/local-dashboard";
-import type { LocalContributionsResponse } from "../../shared/local-contributions";
 import { UsageChange } from "./LocalUsageValues";
 import { setLocale } from "@/lib/i18n";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../scripts/testing/merged-usage-fixture";
@@ -71,20 +70,10 @@ const rolled = (offset: number): LocalUsageResponse => ({ ...sample, asOf: asOf 
   trend: trend.map((day) => ({ ...day, day: shiftDay(day.day, offset) })),
 });
 
-const withPrimaryFixture = (snapshot: LocalUsageResponse): LocalUsageResponse => {
-  if (snapshot.contributions) return snapshot;
-  const remote = withMergedUsageFixture(snapshot).merged!;
-  const contributions: LocalContributionsResponse = { ...remote, timeZone: "Asia/Shanghai", metricDefinition: "contributions-v2",
-    dateBasis: { github: { prs: "created-at/Asia-Shanghai", commits: "author-at/Asia-Shanghai" },
-      ado: { prs: "created-at/Asia-Shanghai", commits: "author-at/Asia-Shanghai" }, tokens: "Asia/Shanghai" },
-    cutoffAt: snapshot.asOf, capturedAt: snapshot.asOf, currentDayPartial: true, accounts: [], sourceDays: null };
-  return { ...snapshot, contributions };
-};
-
 let host: HTMLDivElement;
 let root: Root;
 const renderRaw = async (snapshot: LocalUsageResponse | null, panel = false) => {
-  await act(async () => root.render(panel ? createElement(LocalUsagePanel) : createElement(LocalUsageView, { snapshot: snapshot && withPrimaryFixture(snapshot) })));
+  await act(async () => root.render(panel ? createElement(LocalUsagePanel) : createElement(LocalUsageView, { snapshot })));
 };
 const render = (snapshot: LocalUsageResponse | null, panel = false) => renderRaw(snapshot && withGithubUsageFixture(snapshot), panel);
 const text = () => host.textContent ?? "";
@@ -108,28 +97,27 @@ afterEach(async () => {
 });
 
 describe("local Usage panel", () => {
-  it("shows all-branch observations independently of default-branch contributions", async () => {
+  it("shows one Commits metric for all branches, independent of default-branch diagnostics", async () => {
     const snapshot = { ...structuredClone(sample), contributions: primaryUsageFixture() };
-    const today = snapshot.windows!["1"];
-    today.commits = 36;
-    const branchValues = () => [...host.querySelectorAll("[data-usage-branch-commits] dd")].map(node => node.textContent);
-    const mainValue = () => [...host.querySelector("section")!.querySelectorAll("dt")]
-      .find(node => node.textContent === "Default-branch commits")?.nextElementSibling?.firstElementChild?.textContent;
+    snapshot.windows!["1"].commits = 86;
+    const values = () => [...host.querySelectorAll("section")].slice(0, 3).map(card =>
+      [...card.querySelectorAll("dt")].find(node => node.textContent === "Commits")?.nextElementSibling?.firstElementChild?.textContent);
     await renderRaw(snapshot);
-    expect(branchValues()).toEqual(["36Partial", "12Partial", "58Partial"]);
-    expect(mainValue()).toBe(String(snapshot.contributions.windows!["1"].commits));
-    await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-branch-commits] button")!.click());
-    expect(infoText()).toContain("counted once per SHA");
-    expect(infoText()).toContain("16:30 Beijing time");
-
-    today.commits = 0;
+    expect(values()).toEqual(["86", "12", "58"]);
+    expect(host.querySelectorAll("section:first-of-type dt")).toHaveLength(3);
+    expect(host.querySelector("[data-usage-branch-commits], [data-usage-primary-sources]")).toBeNull();
+    const visible = host.cloneNode(true) as HTMLElement;
+    visible.querySelectorAll(".sr-only").forEach(node => node.remove());
+    expect(visible.textContent).not.toMatch(/Default-branch|All-branch|Partial/);
+    snapshot.windows!["1"].commits = 0;
     await renderRaw({ ...snapshot, status: "stale" });
-    expect(branchValues()[0]).toBe("0Stale");
+    expect(values()[0]).toBe("0");
     await renderRaw({ ...rolled(1), contributions: snapshot.contributions });
-    expect(branchValues()).toEqual(["Unavailable", "Unavailable", "Unavailable"]);
-    await renderRaw({ ...snapshot, windows: null });
-    expect(branchValues()[0]).toBe("Unavailable");
-    expect(mainValue()).toBe(String(snapshot.contributions.windows!["1"].commits));
+    expect(values()).toEqual(["2", "12", "58"]);
+    expect(text()).toContain("2026-11-04 – 2026-11-04");
+    await renderRaw({ ...snapshot, status: "unavailable", windows: null });
+    expect(host.querySelector("section dd")).toBeNull();
+    expect(text()).toContain("Activity summary unavailable");
   });
 
   it("shares the extended range across charts, keeps daily details and restores daily bars", async () => {
@@ -231,9 +219,9 @@ describe("local Usage panel", () => {
       expect(change.getAttribute("title")).toContain(period);
       expect(change.querySelector(".sr-only")?.textContent).toBe(change.getAttribute("title"));
     }
-    expect(firstCard.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-11-02: +10%.");
-    expect(firstCard.querySelector('[data-usage-change] .sr-only')?.textContent).toContain("Compared with Beijing dates 2026-11-02");
-    expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("author time in Beijing (UTC+8), including merge commits");
+    expect(firstCard.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-11-02 (China time): +10%.");
+    expect(firstCard.querySelector('[data-usage-change] .sr-only')?.textContent).toContain("Compared with 2026-11-02");
+    expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("Observed non-merge Git commits across local branches");
     expect([...firstCard.querySelectorAll('[data-usage-change]')][2]?.getAttribute("title")).toContain("Based on synced devices; devices not yet synced are excluded.");
     expect(host.querySelector('section [data-usage-category-row="work"]')?.textContent).toContain("—");
     expect(host.querySelector('section [data-usage-category-row="personal"]')?.textContent).toContain("+10%");
@@ -244,10 +232,7 @@ describe("local Usage panel", () => {
     const visibleSummary = host.cloneNode(true) as HTMLElement;
     visibleSummary.querySelectorAll(".sr-only").forEach((element) => element.remove());
     expect(visibleSummary.textContent).not.toContain("Dates without token records:");
-    await act(async () => host.querySelectorAll("section")[2]!.querySelector<HTMLButtonElement>("[data-info-hint]")!.click());
-    expect(infoText()).toContain("Missing dates: 1");
-    expect(infoText()).toContain("Dates without token records: 2");
-    await act(async () => globalThis.window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect([...host.querySelectorAll("section")].slice(0, 3).every(card => !card.querySelector("[data-info-hint]"))).toBe(true);
     expect(text()).not.toContain("Across connected tools and repositories");
     expect(text()).not.toContain("Source coverage");
     expect(text()).not.toContain("Activity sources:");
@@ -260,7 +245,6 @@ describe("local Usage panel", () => {
     expect(host.querySelectorAll('.bg-warning\\/15').length).toBeGreaterThan(0);
     await showSummaryInfo();
     expect(infoText()).toContain("Some sources or dates are incomplete");
-    expect(document.querySelector('[data-info-hint-content] time')?.getAttribute("datetime")).toBe("2026-11-03T08:30:00.000Z");
   });
 
   it("explains missing token history and localizes the comparison periods", async () => {
@@ -325,84 +309,33 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("Shaded columns: unavailable. Pale PR segments");
   });
 
-  it("restores known PR and commit period changes while keeping exact totals unknown", async () => {
-    const contributions = primaryUsageFixture("2026-11-03", true, "2026-11-02T16:05:00Z",
-      { github: { prs: 1, commits: 2 }, ado: { prs: 2, commits: 3 } });
-    expect(contributions.asOf).toBe(Date.parse("2026-11-02T16:05:00Z"));
-    expect(contributions.windows!["1"].startDay).toBe("2026-11-03");
-    expect([contributions.windows!["1"].knownPrs, contributions.windows!["1"].knownCommits]).toEqual([3, 5]);
-    expect(contributions.currentDayPartial).toBe(true);
-    await renderRaw({ ...sample, contributions });
-    expect(host.querySelector<HTMLTimeElement>("header [data-usage-latest-update]")?.dateTime).toBe("2026-11-02T16:05:00.000Z");
-    expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toContain("00:05 Beijing time");
-    for (const [index, period] of ["DoD", "WoW", "30d"].entries()) {
-      const changes = [...host.querySelectorAll("section")][index]!.querySelectorAll("dl > div > dd > [data-usage-change]");
-      for (const change of [...changes].slice(0, 2)) {
-        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("New");
-        expect(change.getAttribute("title")).toContain(period);
-        expect(change.getAttribute("title")).toContain("Known subtotal");
-        expect(change.getAttribute("data-usage-provisional")).toBe("true");
-      }
-    }
-    expect(contributions.windows!["1"].prs).toBeNull();
-    expect(contributions.windows!["1"].comparison.prs).toBeNull();
-  });
-
-  it("labels known repository comparisons with the same period and keeps unavailable values blank", async () => {
-    const contributions = primaryUsageFixture("2026-11-03", true);
-    const repository = contributions.windows!["1"].repositories.rows[0]!;
-    repository.comparison = { prs: null, commits: null };
-    repository.knownComparison = { prs: 27.3, commits: -7.4 };
-    const displayedChanges = () => {
-      const row = [...host.querySelectorAll('[data-usage-repositories] tbody tr')].find((item) =>
-        item.querySelector('th')?.textContent === repository.name)!;
-      return [...row.querySelectorAll<HTMLElement>('[data-usage-change]')];
-    };
-    await renderRaw({ ...sample, contributions });
-    expect(displayedChanges().map((change) => change.querySelector('[aria-hidden="true"]')?.textContent))
-      .toEqual(["+27.3%", "-7.4%"]);
-    for (const change of displayedChanges()) {
-      expect(change.getAttribute("title")).toContain("Known subtotal");
-      expect(change.getAttribute("data-usage-provisional")).toBe("true");
-    }
-    repository.knownComparison.commits = null;
-    await renderRaw({ ...sample, contributions });
-    expect(displayedChanges()[1]?.querySelector('[aria-hidden="true"]')?.textContent).toBe("—");
-  });
-
-  it("shows qualified work and personal category DoD/WoW/MoM with exact-null honesty in both locales", async () => {
-    const contributions = primaryUsageFixture("2026-11-03", true);
-    await renderRaw({ ...sample, contributions });
+  it("keeps partial PR counts and same-source category and repository comparisons", async () => {
+    const snapshot = structuredClone(sample);
+    await renderRaw({ ...snapshot, contributions: primaryUsageFixture("2026-11-03", true) });
+    expect([...host.querySelectorAll("section")].slice(0, 3).map(card => card.querySelector("dd > span")?.textContent))
+      .toEqual(["1", "4", "9"]);
     for (const [index, period] of ["DoD", "WoW", "30d"].entries()) {
       const card = host.querySelectorAll("section")[index]!;
-      const personal = card.querySelector('[data-usage-category-row="personal"]')!;
-      const changes = personal.querySelectorAll('[data-usage-change]');
-      expect(changes).toHaveLength(2);
-      for (const change of changes) {
-        expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("New");
-        expect(change.getAttribute("title")).toContain(period);
-        expect(change.getAttribute("title")).toContain("Known subtotal");
-        expect(change.getAttribute("data-usage-provisional")).toBe("true");
-      }
       expect(card.querySelector('[data-usage-category-row="work"] [data-usage-change]')?.getAttribute("title")).toContain(period);
+      expect(card.querySelector('[data-usage-category-row="work"] [data-usage-change] [aria-hidden="true"]')?.textContent).toBe("—");
     }
-    contributions.windows!["1"].comparison.knownCategories!.personal.prs = null;
-    await renderRaw({ ...sample, contributions });
-    expect(host.querySelector('section [data-usage-category-row="personal"] [data-usage-change] [aria-hidden="true"]')?.textContent).toBe("—");
+    expect(host.querySelector('[data-usage-repositories] tbody [data-usage-change]')?.textContent).toContain("—");
+    expect(host.querySelector('[data-usage-repositories] tbody tr')?.textContent).toContain("sample/team-repo");
+    expect(snapshot.windows!["7"].prs).toBeNull();
+    expect(host.querySelectorAll("section")[1]?.querySelector("dd [data-usage-provisional]")?.textContent).toBe("4");
     setLocale("zh");
-    await renderRaw({ ...sample, contributions: primaryUsageFixture("2026-11-03", true) });
+    await renderRaw(snapshot);
     for (const [index, period] of ["日环比", "周环比", "30 日环比"].entries()) {
-      const change = host.querySelectorAll("section")[index]!.querySelector('[data-usage-category-row="personal"] [data-usage-change]')!;
-      expect(change.querySelector('[aria-hidden="true"]')?.textContent).toBe("新增");
-      expect(change.getAttribute("title")).toContain(period);
+      expect(host.querySelectorAll("section")[index]!.querySelector('[data-usage-category-row="personal"] [data-usage-change]')?.getAttribute("title")).toContain(period);
     }
   });
 
   it("shows a dash for missing hover values and numeric zero for observed zero", async () => {
-    const contributions = primaryUsageFixture();
-    const missing = contributions.trend[0]!;
-    missing.coverage = "unavailable";
-    await renderRaw({ ...sample, contributions });
+    const snapshot = structuredClone(sample);
+    snapshot.trend[0]!.coverage = "unavailable";
+    Object.assign(snapshot.trend[1]!, { prs: 0, knownPrs: 0,
+      categories: { work: { prs: 0, knownPrs: 0, commits: 0 }, personal: { prs: 0, knownPrs: 0, commits: 0 }, unclassified: { prs: 0, knownPrs: 0, commits: 0 } } });
+    await renderRaw(snapshot);
     const bars = [...host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="prs"] [data-usage-day]')];
     await act(async () => bars[0]!.focus());
     expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/PRs: —.*Enterprise: —.*Personal: —/s);
@@ -531,9 +464,7 @@ describe("local Usage panel", () => {
     expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toContain("23:50 Beijing time");
     expect(text()).toContain("2026-11-02 – 2026-11-02");
     expect(text()).toContain("2026-10-04 – 2026-11-02");
-    expect(infoText()).toContain("23:50");
     expect(text()).not.toContain("today");
-    expect(document.querySelector('[data-info-hint-content] time')?.getAttribute("datetime")).toBe("2026-11-02T15:50:00.000Z");
   });
 
   it("renders a China-midnight year rollover without shifting dates or showing 24:05", async () => {
@@ -545,9 +476,9 @@ describe("local Usage panel", () => {
     }, trend: trend.map((day, index) => ({ ...day, day: new Date(Date.UTC(2025, 11, 3 + index)).toISOString().slice(0, 10) })) });
     expect(text()).toContain("2025-12-26 – 2026-01-01");
     expect(text()).toContain("2025-12-03 – 2026-01-01");
-    await showSummaryInfo();
-    expect(infoText()).toContain("00:05");
-    expect(infoText()).not.toContain("24:05");
+    expect(host.querySelector("header [data-info-hint]")).toBeNull();
+    expect(host.querySelector("header time")?.textContent).toContain("00:05");
+    expect(host.querySelector("header time")?.textContent).not.toContain("24:05");
     expect(host.querySelectorAll("[data-usage-daily] table tbody tr")).toHaveLength(30);
   });
 
@@ -563,17 +494,17 @@ describe("local Usage panel", () => {
       coverage: "unavailable", tokenCoverage: "unavailable", prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, totalTokens: null,
     }) } });
     const first = host.querySelector<HTMLElement>("section")!;
-    expect([...first.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["Unavailable", "Unavailable", "Unavailable", "Unavailable"]);
+    expect([...first.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["Unavailable", "Unavailable", "Unavailable"]);
 
     await render({ ...sample, status: "ready", windows: { ...sample.windows!, "1": window(1, "2026-11-03", "2026-11-03", {
       coverage: "ready", tokenCoverage: "ready", prs: 0, knownPrs: 0, commits: 0, newTokens: 0, cacheRead: 0, totalTokens: 0,
     }) } });
-    expect([...host.querySelector<HTMLElement>("section")!.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["0", "0", "0", "0"]);
+    expect([...host.querySelector<HTMLElement>("section")!.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["0", "0", "0"]);
   });
 
   it("refreshes the local summary every five seconds and keeps the last good response on failure", async () => {
     vi.useFakeTimers();
-    calls.api.mockResolvedValueOnce(withPrimaryFixture(withGithubUsageFixture(sample))).mockRejectedValueOnce(new Error("offline"));
+    calls.api.mockResolvedValueOnce(withGithubUsageFixture(sample)).mockRejectedValueOnce(new Error("offline"));
     await render(null, true);
     expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/usage", expect.objectContaining({ background: true, signal: expect.any(AbortSignal) }));
     await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
@@ -586,20 +517,20 @@ describe("local Usage panel", () => {
     expect(text()).toContain("2026-10-05 – 2026-11-03");
   });
 
-  it("shows new primary contributions with older tokens and reads immediately on visibility return", async () => {
+  it("refreshes repository activity and reads immediately on visibility return", async () => {
     vi.useFakeTimers();
-    const local = withGithubUsageFixture(sample);
-    const first = { ...local, contributions: primaryUsageFixture("2026-11-03") };
-    const next = { ...local, contributions: primaryUsageFixture("2026-11-03", false, "2026-11-03T08:31:00Z",
-      { github: { prs: 4, commits: 6 }, ado: { prs: 2, commits: 5 } }) };
+    const first = { ...structuredClone(sample), contributions: primaryUsageFixture() };
+    const next = structuredClone(first);
+    next.asOf = asOf + 60_000;
+    next.windows!["1"].commits = 86;
     calls.api.mockResolvedValueOnce(first).mockResolvedValue(next);
-    const values = () => [...host.querySelectorAll("section dd > span:first-child")].slice(0, 3).map((value) => value.textContent);
+    const values = () => [...host.querySelectorAll("section dd > span:first-child")].slice(0, 3).map(value => value.textContent);
     await renderRaw(null, true);
-    expect(values()).toEqual(["5", "9", "150"]);
+    expect(values()).toEqual(["1", "2", "150"]);
     await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
     expect(calls.api).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-    expect(values()).toEqual(["6", "11", "150"]);
+    expect(values()).toEqual(["1", "86", "150"]);
     expect(host.querySelector<HTMLTimeElement>("header [data-usage-latest-update]")?.dateTime).toBe("2026-11-03T08:31:00.000Z");
     calls.visible = false;
     await renderRaw(null, true);
@@ -621,7 +552,7 @@ describe("local Usage panel", () => {
       .toEqual(["Date", "PRs", "Commits", "Tokens", "Change", "Repository contributions"]);
     expect(daily.querySelector('[data-usage-change] > [aria-hidden="true"]')?.textContent).toMatch(/^(?:\+20%|New|—)$/);
     expect(daily.querySelector('p')?.textContent).not.toMatch(/DoD|WoW|MoM/);
-    expect(daily.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-10-27");
+    expect(daily.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-10-27");
     expect(daily.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Same calendar day last week.");
     const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false"]);
@@ -631,7 +562,7 @@ describe("local Usage panel", () => {
     expect(values()[2]).toContain("2");
     const repositoryChanges = () => [...host.querySelectorAll('[data-usage-repositories] tbody tr:first-child [data-usage-change] > [aria-hidden="true"]')].map((value) => value.textContent);
     expect(repositoryChanges()).toEqual(["—", "+10%"]);
-    expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-11-02");
+    expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-11-02");
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(tabs[3]);
     expect(tabs[3]!.getAttribute("aria-selected")).toBe("true");
@@ -641,7 +572,7 @@ describe("local Usage panel", () => {
     expect(values()[1]).toMatch(/^30/);
     expect(values()[2]).toContain("60");
     expect(repositoryChanges()).toEqual(["—", "+30%"]);
-    expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with Beijing dates 2026-09-05–2026-10-04");
+    expect(host.querySelector('[data-usage-repositories] [data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-09-05–2026-10-04");
     await render({ ...sample, status: "stale" });
     expect(daily.open).toBe(true);
     expect(tabs[2]!.getAttribute("aria-selected")).toBe("true");
@@ -657,91 +588,62 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("2026-10-05 – 2026-11-03");
   });
 
-  it("never admits large legacy observations into missing primary cards, trends or repository totals", async () => {
-    const legacy = structuredClone(withGithubUsageFixture(sample));
-    for (const window of Object.values(legacy.windows!)) {
-      window.prs = 900_000; window.knownPrs = 900_000; window.commits = 900_000;
-      window.repositories.rows.push({ ...window.repositories.rows[0]!, id: "legacy-only", name: "legacy/large-count", prs: 900_000, commits: 900_000 });
-    }
-    await act(async () => root.render(createElement(LocalUsageView, { snapshot: legacy })));
-    await showSummaryInfo();
-    expect(infoText()).toContain("Contribution sources are unavailable");
-    expect([...host.querySelectorAll("section dd")].slice(0, 3).map((value) => value.firstElementChild?.textContent))
-      .toEqual(["Unavailable", "Unavailable", "150"]);
-    expect(host.querySelectorAll('[data-usage-trend="prs"] [data-usage-day]')).toHaveLength(30);
-    expect(host.querySelector('[data-usage-trend="prs"] [data-usage-day]')?.getAttribute("aria-label")).toContain("Unavailable");
-    expect(host.querySelector('[data-usage-repositories]')).toBeNull();
-    expect([...host.querySelectorAll("[data-usage-branch-commits] dd > :first-child")].map(node => node.textContent))
-      .toEqual(["900,000", "900,000", "900,000"]);
-    expect(text().match(/900,000/g)).toHaveLength(3);
-    expect(text()).not.toContain("legacy/large-count");
+  it("shows repository observations without a contribution cache", async () => {
+    await renderRaw(sample);
+    expect([...host.querySelectorAll("section dd")].slice(0, 3).map(value => value.firstElementChild?.textContent))
+      .toEqual(["1", "2", "150"]);
+    expect(host.querySelector('[data-usage-trend="commits"] [data-usage-day]')?.getAttribute("aria-label")).toContain("Commits 2");
+    expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("sample/team-repo");
     expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
   });
 
-  it("clears the primary view when a successful refresh omits the versioned snapshot", async () => {
+  it("keeps repository activity when a refresh omits the independent contribution cache", async () => {
     vi.useFakeTimers();
-    calls.api.mockResolvedValueOnce(withPrimaryFixture(sample)).mockResolvedValueOnce(sample);
+    calls.api.mockResolvedValueOnce({ ...sample, contributions: primaryUsageFixture() }).mockResolvedValueOnce(sample);
     await renderRaw(null, true);
-    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("1");
+    const values = () => [...host.querySelectorAll("section dd")].slice(0, 3).map(value => value.firstElementChild?.textContent);
+    expect(values()).toEqual(["1", "2", "150"]);
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    await showSummaryInfo();
-    expect(infoText()).toContain("Contribution sources are unavailable");
-    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("Unavailable");
-    expect([...host.querySelectorAll("section dd")][2]?.firstElementChild?.textContent).toBe("150");
+    expect(values()).toEqual(["1", "2", "150"]);
   });
 
-  it("keeps primary unknown through legacy-only refresh failure and clears on revoked access", async () => {
+  it("retains repository activity on transport failure and clears on revoked access", async () => {
     vi.useFakeTimers();
-    const legacyOnly: LocalUsageResponse = { ...sample, github: withGithubUsageFixture(sample).github };
-    calls.api.mockResolvedValueOnce(legacyOnly).mockRejectedValueOnce(new Error("offline"))
+    calls.api.mockResolvedValueOnce(sample).mockRejectedValueOnce(new Error("offline"))
       .mockRejectedValueOnce(new ApiError("forbidden", 403));
     await renderRaw(null, true);
-    await showSummaryInfo();
-    expect(infoText()).toContain("Contribution sources are unavailable");
-    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("Unavailable");
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-    expect(infoText()).toContain("Contribution sources are unavailable");
+    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("2");
+    await showSummaryInfo();
+    expect(infoText()).toContain("Showing the last captured snapshot");
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     expect(text()).toContain("Activity summary unavailable");
     expect(host.querySelectorAll("section dd")).toHaveLength(0);
   });
 
-  it("shows source-qualified contributions and per-account details on the main surface", async () => {
+  it("keeps diagnostic contribution sources out of the main surface", async () => {
     await renderRaw({ ...sample, contributions: primaryUsageFixture() });
     expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
-    expect(host.querySelector('[data-usage-metric-definition]')).toBeNull();
-    await showSummaryInfo();
-    expect(infoText()).toContain("Beijing time (UTC+8)");
-    expect(infoText()).toContain("00:00–24:00");
-    expect(infoText()).toContain("including merge commits");
-    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("5");
-    expect([...host.querySelectorAll("section dd")][1]?.firstElementChild?.textContent).toBe("9");
-    expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("fixture/github-repo");
-    expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("fixture/ado-repo");
-    const detail = host.querySelector<HTMLDetailsElement>('[data-usage-primary-sources]')!;
-    await act(async () => { detail.open = true; detail.dispatchEvent(new Event("toggle", { bubbles: true })); });
-    expect(detail.textContent).toContain("fixture-gh");
-    expect(detail.textContent).toContain("fixture-ado");
-    expect(detail.textContent).toContain("fixture-org/fixture-project");
-    expect([...host.querySelectorAll("section dd")][0]?.firstElementChild?.textContent).toBe("5");
+    expect(host.querySelector('[data-usage-metric-definition], [data-usage-primary-sources]')).toBeNull();
+    expect([...host.querySelectorAll("section dd")].slice(0, 3).map(value => value.firstElementChild?.textContent))
+      .toEqual(["1", "2", "150"]);
+    expect(host.querySelector('[data-usage-repositories]')?.textContent).toContain("sample/team-repo");
+    expect(text()).not.toContain("fixture/github-repo");
   });
 
-  it("keeps contribution comparisons on Beijing dates and Token comparisons on China dates", async () => {
+  it("keeps all comparisons on the repository snapshot China dates", async () => {
     await render(sample);
     const descriptions = () => [...host.querySelectorAll<HTMLElement>("section:first-of-type [data-usage-change]")]
       .slice(0, 3).map((value) => value.getAttribute("title") ?? "");
-    expect(descriptions()[0]).toContain("Compared with Beijing dates");
-    expect(descriptions()[1]).toContain("Compared with Beijing dates");
+    expect(descriptions()[0]).toContain("China time");
+    expect(descriptions()[1]).toContain("China time");
     expect(descriptions()[2]).toContain("China time");
     setLocale("zh");
     await render(sample);
     expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toContain("最近更新：北京时间");
     expect(host.querySelector("header [data-usage-latest-update]")?.textContent).toContain("16:30");
-    await showSummaryInfo();
-    expect(infoText()).toContain("每日 00:00–24:00");
-    expect(infoText()).toContain("包括合并提交");
-    expect(descriptions()[0]).toContain("与北京时间日期");
-    expect(descriptions()[1]).toContain("与北京时间日期");
+    expect(descriptions()[0]).toContain("北京时间");
+    expect(descriptions()[1]).toContain("北京时间");
     expect(descriptions()[2]).toContain("北京时间");
   });
 });
