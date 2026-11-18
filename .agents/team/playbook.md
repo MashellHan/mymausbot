@@ -32,17 +32,20 @@ prompts). Preserve existing designated providers, accounts and authentication
 boundaries.
 
 `mausbot-dev1` and `mausbot-dev3` use [roles/developer.md](roles/developer.md)
-with Pi/Raven, exact model ID `gpt-6.2-sol`, `high` effort and requested
+with Pi/Raven (`--model raven/gpt-6.2-sol --thinking high`) and requested
 context 1,000,000 (advertised catalog window 1,050,000). `mausbot-dev2` uses
-the same role instructions with Pi/Raven override `gemini-4-hydrogen` and `high`
-effort, and `mausbot-upstream` uses [roles/upstream.md](roles/upstream.md) with
-Pi/Raven, `gemini-4-hydrogen` and `high` effort (catalog window 1,048,576;
+the shared developer duties in [roles/developer.md](roles/developer.md) with
+its per-member Pi/Raven launch `--model raven/gemini-4-hydrogen --thinking high`
+and provider-default context, and `mausbot-upstream` uses
+[roles/upstream.md](roles/upstream.md) with Pi/Raven,
+`--model raven/gemini-4-hydrogen --thinking high` (catalog window 1,048,576;
 observed prompt-token ceiling may be lower, so keep requested context and
 observed total context distinct). `mausbot-review3` uses Pi/Raven with
-`gemini-4-carbon` and `high` effort as recorded in
-[roles/reviewer3.md](roles/reviewer3.md), with read-only tool scope (catalog
-window 1,000,000). `mausbot-review`, `mausbot-review2` and
-`mausbot-mini-review` use Codex with `gpt-6.2-astra` and `xhigh` effort.
+`--model raven/gemini-4-carbon --thinking high --tools read,grep,find,ls --no-mcp`
+as recorded in [roles/reviewer3.md](roles/reviewer3.md) (catalog window
+1,000,000). `mausbot-review`, `mausbot-review2` and `mausbot-mini-review` use
+Codex with `gpt-6.2-astra` and `xhigh` effort, preserving their source-review
+duties and inherited `--profile raven --yolo` pane alias.
 
 `mausbot-mini-review` remains the supplemental Mini App reviewer on Codex with
 `gpt-6.2-astra`/`xhigh`. This update adds no agent, grants, QA-owner labels or
@@ -54,8 +57,10 @@ runtime verification; verify live session settings before claiming a model or
 effort is active. A requested context ceiling is not proof the provider permits
 that entire context. Surface errors rather than silently substituting a model.
 The existing Codex `gpt-6.2-sol` launch files record `service_tier="default"`
-for local compatibility where `service_tier` is unsupported. Keep existing
-role-specific sandbox and compatibility settings when restarting panes.
+for local compatibility where `service_tier` is unsupported. Keep the existing
+pane shell profile (`--profile raven --yolo`) and `service_tier="default"`
+compatibility settings when restarting Codex panes, and keep
+`--tools read,grep,find,ls --no-mcp` for `mausbot-review3` on Pi.
 
 Use the Herdr skill for Herdr operations,
 with `--session default` and explicit names/IDs. Work in the MausBot workspace;

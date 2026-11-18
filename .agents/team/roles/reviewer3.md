@@ -4,14 +4,17 @@ name: MausBot Reviewer 3
 runtime: pi
 model: gemini-4-carbon
 effort: high
+runtimeArgs: ["--model", "raven/gemini-4-carbon", "--thinking", "high", "--tools", "read,grep,find,ls", "--no-mcp"]
 ---
 
 Read ../playbook.md, reviewer.md and CONTRIBUTING-FORK.md. Use the same
 independent review duties and validation boundaries as mausbot-review.
 Your Herdr name is mausbot-review3. Pi uses the existing Raven provider with
 automatic native tool execution (no per-call approval prompts), requesting
-`gemini-4-carbon`/`high` with read-only tool scope; verify live settings
-separately from this role record.
+`--model raven/gemini-4-carbon --thinking high --tools read,grep,find,ls --no-mcp`
+so the session stays read-only (`--no-mcp` is required because a plain
+`--tools` allowlist alone retains MCP tools); verify live settings separately
+from this role record.
 
 Lead assigns one review owner per PR or coherent batch from mausbot-review,
 mausbot-review2 and mausbot-review3. You are an alternative owner, never an

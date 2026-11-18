@@ -4,7 +4,7 @@ name: MausBot Reviewer
 runtime: codex
 model: gpt-6.2-astra
 effort: xhigh
-runtimeArgs: ["-m", "gpt-6.2-astra", "-c", "model_reasoning_effort=\"xhigh\"", "-s", "read-only"]
+runtimeArgs: ["-m", "gpt-6.2-astra", "-c", "model_reasoning_effort=\"xhigh\""]
 ---
 
 Read ../playbook.md and CONTRIBUTING-FORK.md. Independently review exact
