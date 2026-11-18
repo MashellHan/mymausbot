@@ -378,6 +378,19 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
       write: async (enabled: boolean) => deps.window.write("appearance.pinnedCircles", enabled),
     }),
     writable({
+      id: "appearance.universalPins", label: "Universal pins", help: "Keep visible, already-pinned bots from every group, including a pinned main Chief, in a top sidebar roster above the scrolling list. This changes neither who is pinned nor who can see a bot; Simple desktop tiles keep their own layout.", where: "Settings → Appearance",
+      synonyms: ["universal pins", "pins everywhere", "pinned bots", "top sidebar"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("appearance.universalPins"),
+      read: () => { const enabled = deps.window.read("appearance.universalPins"); return typeof enabled === "boolean" ? `saved ${enabled ? "on" : "off"}; ${enabled ? "visible pinned bots from every group use the fixed top roster" : "pinned bots use their normal sidebar placement"}; no bot's pin or visibility changes, and Simple desktop tiles keep their own layout` : "unavailable until mymausbot is open on this computer"; },
+      describe: (enabled: boolean) => {
+        const current = deps.window.read("appearance.universalPins");
+        if (typeof current !== "boolean") return { refusal: "Open mymausbot on this computer before changing universal pins." };
+        if (current === enabled) return { refusal: `Universal pins are already ${enabled ? "on" : "off"}; no bot's pin or visibility changes, and Simple desktop tiles keep their own layout.` };
+        return { change: `${enabled ? "Keep visible pinned bots from every group, including a pinned main Chief, in the fixed top sidebar roster" : "Use the normal sidebar placement for pinned bots"}; currently saved ${current ? "on" : "off"}; no bot's pin or visibility changes, and Simple desktop tiles keep their own layout` };
+      },
+      write: async (enabled: boolean) => deps.window.write("appearance.universalPins", enabled),
+    }),
+    writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },

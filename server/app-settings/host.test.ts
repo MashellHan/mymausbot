@@ -1174,6 +1174,69 @@ describe("confirm tier", () => {
     expect(fx.windowWrites).toEqual([{ id: "appearance.pinnedCircles", value: true }]);
   });
 
+  it("changes only the saved universal-pins view after owner approval for a live window", async () => {
+    const fx = fixture();
+    fx.windowValues.set("appearance.universalPins", false);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "universal pins" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance.universalPins", tier: "confirm", value: expect.stringContaining("saved off") })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.universalPins" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ allowed: "true or false", help: expect.stringContaining("neither who is pinned nor who can see a bot"), value: expect.stringContaining("Simple desktop tiles") });
+    expect((await fx.set("appearance.universalPins", "all")).status).toBe(400);
+    const same = await fx.set("appearance.universalPins", false);
+    expect(same.body.error).toContain("already off");
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("appearance.universalPins", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("fixed top sidebar roster") } });
+    expect(first.appSettingRequest.after).toContain("no bot's pin or visibility changes");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.universalPins", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.universalPins", true);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already on");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.universalPins", false);
+    const disconnected = fx.set("appearance.universalPins", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("appearance.universalPins");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("appearance.universalPins", true)).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const otherOwner = fixture({ owner: false });
+    otherOwner.windowValues.set("appearance.universalPins", false);
+    expect((await otherOwner.set("appearance.universalPins", true)).status).toBe(403);
+    expect(otherOwner.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.universalPins", false);
+    const approved = fx.set("appearance.universalPins", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.universalPins", value: true }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+
+    const back = fx.set("appearance.universalPins", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    expect(fx.cards()[4]!.card.appSettingRequest.after).toContain("normal sidebar placement");
+    fx.answer(String(fx.cards()[4]!.card.requestId), "deny");
+    expect((await back).status).toBe(409);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.universalPins", value: true }]);
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };
