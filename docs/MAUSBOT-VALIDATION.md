@@ -160,6 +160,16 @@ attempt of each job taking precedence. A pass after an actual failed validation 
 remains a finding for Lead to classify and cannot verify the incident until a
 later clean execution covers it.
 
+Closing or reclassifying a QA hold wakes a trusted default-branch workflow.
+A failed PR CI completion also wakes it if the hold changed while workers
+were finishing. Each wake checks the current open PRs, so overlapping events
+can coalesce. It requests a rerun of the individual `CI` job only when the
+failed gate named a changed QA hold, other jobs succeeded or were skipped
+by the plan, and current controls and required jobs pass the normal gate
+precheck. The source run must be bound to the open same-repository PR and
+its tested head, base and merge tree. Missing evidence leaves recovery with
+Lead. The rerun checks controls and holds again with the ordinary CI token.
+
 ## Advisory process scan and PR recovery
 
 `scripts/qa/scan.mjs` records process cases separately from quality results.
