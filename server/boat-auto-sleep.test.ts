@@ -174,10 +174,11 @@ describe("a cloud computer goes to sleep after its idle window", () => {
     stopStatus = 503;
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const waits = [1_000, 1_000, 2_000, 4_000];
-    const failures = waits.map(() => Promise.withResolvers<string>());
+    const resolveFailure: Array<(line: string) => void> = [];
+    const failures = waits.map(() => new Promise<string>(resolve => { resolveFailure.push(resolve); }));
     const busyCheck = vi.fn(() => false);
     let logged = 0;
-    await powerFor({}, { busy: busyCheck, log: line => failures[logged++]?.resolve(line) });
+    await powerFor({}, { busy: busyCheck, log: line => resolveFailure[logged++]?.(line) });
     power.used(botId);
     for (const [index, delay] of waits.entries()) {
       const previousChecks = busyCheck.mock.calls.length;
@@ -185,7 +186,7 @@ describe("a cloud computer goes to sleep after its idle window", () => {
       expect(busyCheck).toHaveBeenCalledTimes(previousChecks);
       expect(stops()).toHaveLength(index);
       await vi.advanceTimersByTimeAsync(1);
-      expect(await failures[index]!.promise).toBe("cloud computer auto-sleep-test: could not go to sleep, retrying in 1 min: boat sleep failed: Cloud computers are not available right now.");
+      expect(await failures[index]).toBe("cloud computer auto-sleep-test: could not go to sleep, retrying in 1 min: boat sleep failed: Cloud computers are not available right now.");
       expect(logged).toBe(index + 1);
       expect(stops()).toHaveLength(index + 1);
       expect(stops()[index]).toMatchObject({ path: `/relay/api/box/v1/boxes/${boxId}/stop`, auth: `Bearer ${INCLUDED}`, at: Date.now() });
