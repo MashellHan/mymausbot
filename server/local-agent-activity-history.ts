@@ -63,11 +63,7 @@ export function createActivityHistory() {
       streams.set(agentId, stream);
       if (streams.size > 64) streams.delete(streams.keys().next().value!);
     }
-    let first = end, tools = 0;
-    while (first > 0 && end - first < MAX_ACTIVITY_EVENTS) {
-      if (isToolActivity(read.events[first - 1]!) && ++tools > MAX_ACTIVITY_TOOL_EVENTS) break;
-      first--;
-    }
+    const first = Math.max(0, end - MAX_ACTIVITY_EVENTS);
     const anchor = first > 0 ? read.events[first]!.id : null;
     if (anchor) stream.anchors.add(anchor);
     return { agentId, status: "ready", updatedAt, truncated: read.truncated, events: read.events.slice(first, end),

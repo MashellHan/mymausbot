@@ -23,7 +23,7 @@ const DISCOVERY_MS = 10_000;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const unavailable = (agentId: string): LocalAgentActivityResponse => ({ agentId, status: "unavailable", updatedAt: null, truncated: false, events: [] });
 
-function visibleEvent(line: string, offset: number): { event: LocalAgentActivityEvent | null; clipped: boolean; format?: "legacy" | "canonical"; raw?: string; callId?: string } {
+function visibleEvent(line: string, offset: number, toolFor: (id: string) => string | null): { event: LocalAgentActivityEvent | null; clipped: boolean; format?: "legacy" | "canonical"; raw?: string; callId?: string } {
   let row: Record<string, unknown>;
   try { row = record(JSON.parse(line)); } catch { return { event: null, clipped: true }; }
   const payload = record(row.payload);
@@ -36,7 +36,10 @@ function visibleEvent(line: string, offset: number): { event: LocalAgentActivity
       || safeText(name).text !== name)) return { event: null, clipped: false, callId };
     const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
     const kind = result ? "tool-result" : "tool-call";
-    const detail = visibleToolDetail(kind, result ? payload.output : payload.type === "custom_tool_call" ? payload.input : payload.arguments, "codex");
+    const custom = payload.type === "custom_tool_call" || payload.type === "custom_tool_call_output";
+    const tool = result ? toolFor(callId) : name as string;
+    const value = result ? payload.output : custom ? payload.input : payload.arguments;
+    const detail = visibleToolDetail(kind, value, "codex", custom ? tool : null);
     return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null,
       kind, tool: result ? null : name as string, text: detail.text, detailStatus: detail.detailStatus }, clipped: detail.clipped,
       format: "canonical", raw: "", callId };
@@ -82,7 +85,7 @@ async function readSession(file: string, sessionId: string, history = false): Pr
       if (end < 0) { truncated = true; break; }
       if (end - cursor > (history ? MAX_HISTORY_LINE_BYTES : MAX_LINE_BYTES)) truncated = true;
       else {
-        const found = visibleEvent(bytes.toString("utf8", cursor, end), start + cursor);
+        const found = visibleEvent(bytes.toString("utf8", cursor, end), start + cursor, toolCalls.toolFor);
         if (found.clipped) truncated = true;
         if (found.callId) {
           if (found.event?.kind === "tool-result") toolCalls.associate(found.callId, found.event);
