@@ -47,10 +47,10 @@ function fixture(extra: Partial<BotPatchRouteDeps> = {}) {
   const cfg = { vps: { sshAlias: "production-vps" } } as AppConfig;
   const activeVpsThreads = new Set<string>();
   const privateThreads = new Set<string>();
-  // Only what a vpsAlias patch touches; any other dependency is absent, and a route that reached for one would throw.
   const deps = {
     store,
     cfg,
+    routines: () => ({ activeBotRunForBot: () => null }),
     requestedTaskBot: () => null,
     activeVpsThreads,
     wireBot: (record: BotRecord) => record as unknown as WireBot,
@@ -124,8 +124,7 @@ it("rechecks the last active bot after a concurrent archive during computer inte
   let resume!: () => void;
   const interrupted = new Promise<void>((resolve) => { entered = resolve; });
   const gate = new Promise<void>((resolve) => { resume = resolve; });
-  const { store, bot, patch } = fixture({ interruptAllDirectThreads: async () => { entered(); await gate; },
-    routines: () => ({ activeBotRunForBot: () => null }) } as unknown as Partial<BotPatchRouteDeps>);
+  const { store, bot, patch } = fixture({ interruptAllDirectThreads: async () => { entered(); await gate; } });
   store.patchBot(bot.id, { computer: "local" });
   const other = store.createBot({ name: "Other" });
 
@@ -504,8 +503,7 @@ describe("PATCH /api/bots/:id connectorScopes", () => {
     let otherBotId = "";
     const { store, bot, patch } = fixture({
       interruptAllDirectThreads: async () => { store.patchBot(otherBotId, { busy: true }); },
-      routines: () => ({ activeBotRunForBot: () => null }),
-    } as unknown as Partial<BotPatchRouteDeps>);
+    });
     otherBotId = store.createBot({ name: "Other worker" }).id;
     const firstOnly: ConnectorScopes = { apps: { gmail: "read" }, accounts: { gmail: ["first"] } };
     store.patchBot(bot.id, { computer: "local", connectorScopes: firstOnly });
@@ -525,8 +523,7 @@ describe("PATCH /api/bots/:id connectorScopes", () => {
         store.patchBot(botId, { connectorScopes: secondOnly });
         store.patchBot(otherBotId, { busy: true });
       },
-      routines: () => ({ activeBotRunForBot: () => null }),
-    } as unknown as Partial<BotPatchRouteDeps>);
+    });
     botId = bot.id;
     otherBotId = store.createBot({ name: "Other worker" }).id;
     const firstAndSecond: ConnectorScopes = { apps: { gmail: "read" }, accounts: { gmail: ["first", "second"] } };
