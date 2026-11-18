@@ -3,6 +3,7 @@
 import { WINDOW_PREFS, type WindowPrefFrame, type WindowPrefId } from "../../shared/app-settings";
 import { applyChatWidth, readChatWidth } from "./chat-width";
 import { applyFont, readFont } from "./fonts";
+import { readFollowUpDefault, setFollowUpDefault, subscribeFollowUpDefault } from "./follow-up";
 import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationFeedEnabled, notificationSoundsEnabled, setNotificationFeed, setNotificationSounds } from "./notification-preferences";
 import { setShowRunCard, showRunCard } from "./run-card-preferences";
@@ -25,6 +26,7 @@ const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }
   "appearance.pinnedCircles": { read: () => loadPinnedCircles(), write: (enabled) => setPinnedCircles(enabled) },
   "appearance.universalPins": { read: () => loadUniversalPins(), write: (enabled) => setUniversalPins(enabled) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
+  "general.followUp": { read: () => readFollowUpDefault(), write: (choice) => setFollowUpDefault(choice) },
   "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
   "general.notificationFeed": { read: () => notificationFeedEnabled(), write: (on) => setNotificationFeed(on) },
 };
@@ -44,6 +46,7 @@ let report: ReturnType<typeof setTimeout> | null = null;
 let toolsLayoutObserved = false;
 let pinnedCirclesObserved = false;
 let universalPinsObserved = false;
+let followUpObserved = false;
 /** Tells the server the window's values, once the burst of setters at start-up has settled. */
 export function reportWindowPrefs(): void {
   if (typeof fetch !== "function" || typeof window === "undefined") return;
@@ -58,6 +61,10 @@ export function reportWindowPrefs(): void {
   if (!universalPinsObserved && typeof window.addEventListener === "function") {
     subscribeUniversalPins(() => undefined);
     universalPinsObserved = true;
+  }
+  if (!followUpObserved && typeof window.addEventListener === "function") {
+    subscribeFollowUpDefault(() => undefined);
+    followUpObserved = true;
   }
   if (report) clearTimeout(report);
   report = setTimeout(() => {

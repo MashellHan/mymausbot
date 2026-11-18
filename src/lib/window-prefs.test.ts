@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readSidebarToolsLayout, SIDEBAR_TOOLS_LAYOUT_KEY, loadPinnedCircles, PINNED_CIRCLES_KEY, subscribePinnedCircles, loadUniversalPins, UNIVERSAL_PINS_KEY } from "./sidebar-preferences";
+import { FOLLOW_UP_KEY, readFollowUpDefault, subscribeFollowUpDefault } from "./follow-up";
 import { applyWindowPref, reportWindowPrefs, windowPrefValues } from "./window-prefs";
 import { setShowRunCard } from "./run-card-preferences";
 import { setShowThreads } from "./thread-preferences";
@@ -176,6 +177,56 @@ describe("window preferences", () => {
     reportWindowPrefs();
     await vi.advanceTimersByTimeAsync(250);
     expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.universalPins"]).toBe(false);
+  });
+
+  it("applies only valid follow-up frames and reports the in-session choice when storage is blocked", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    applyWindowPref({ kind: "window-pref", id: "general.followUp", value: "queue" });
+    expect(values.get(FOLLOW_UP_KEY)).toBe("queue");
+    applyWindowPref({ kind: "window-pref", id: "general.followUp", value: "restart" });
+    expect(readFollowUpDefault()).toBe("queue");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["general.followUp"]).toBe("queue");
+
+    vi.stubGlobal("localStorage", { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } });
+    applyWindowPref({ kind: "window-pref", id: "general.followUp", value: "steer" });
+    expect(readFollowUpDefault()).toBe("steer");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[1] as unknown as [string, RequestInit])[1].body)).values["general.followUp"]).toBe("steer");
+  });
+
+  it("keeps follow-up reports fresh after the last Settings UI subscriber unmounts", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    let storageListener: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage") storageListener = listener; },
+      removeEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage" && storageListener === listener) storageListener = undefined; },
+    });
+    const unsubscribeUi = subscribeFollowUpDefault(() => undefined);
+    reportWindowPrefs();
+    await vi.advanceTimersByTimeAsync(250);
+    applyWindowPref({ kind: "window-pref", id: "general.followUp", value: "queue" });
+    expect(readFollowUpDefault()).toBe("queue");
+    await vi.advanceTimersByTimeAsync(250);
+    unsubscribeUi();
+    fetched.mockClear();
+    values.set(FOLLOW_UP_KEY, "steer");
+    storageListener?.({ key: FOLLOW_UP_KEY, storageArea: null } as StorageEvent);
+    expect(readFollowUpDefault()).toBe("steer");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetched).toHaveBeenCalledOnce();
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["general.followUp"]).toBe("steer");
+    const unsubscribeRemountedUi = subscribeFollowUpDefault(() => undefined);
+    expect(readFollowUpDefault()).toBe("steer");
+    unsubscribeRemountedUi();
+    fetched.mockClear();
+    reportWindowPrefs();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["general.followUp"]).toBe("steer");
   });
 
   it("reports the window's values once after a burst of setters", async () => {

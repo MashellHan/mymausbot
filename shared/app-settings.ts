@@ -47,6 +47,7 @@ export const WINDOW_PREFS = {
   "appearance.pinnedCircles": z.boolean(),
   "appearance.universalPins": z.boolean(),
   "general.sendKey": z.enum(SEND_KEYS),
+  "general.followUp": z.enum(["steer", "queue"]),
   "general.notificationSounds": z.boolean(),
   "general.notificationFeed": z.boolean(),
 } as const;

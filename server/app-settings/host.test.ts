@@ -1237,6 +1237,61 @@ describe("confirm tier", () => {
     expect(fx.windowWrites).toEqual([{ id: "appearance.universalPins", value: true }]);
   });
 
+  it("changes only the device follow-up default after owner approval for a live window", async () => {
+    const fx = fixture();
+    fx.windowValues.set("general.followUp", "steer");
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "follow up" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "general.followUp", tier: "confirm", value: expect.stringContaining("saved steer") })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "general.followUp" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ allowed: "steer or queue", help: expect.stringContaining("cannot be steered always queues"), value: expect.stringContaining("on this device") });
+    expect((await fx.set("general.followUp", "restart")).status).toBe(400);
+    expect((await fx.set("general.followUp", "steer")).body.error).toContain("already steer");
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("general.followUp", "queue");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("queue typed follow-ups") } });
+    expect(first.appSettingRequest.after).toContain("cannot be steered always queue");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("general.followUp", "queue");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("general.followUp", "queue");
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already queue");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("general.followUp", "steer");
+    const disconnected = fx.set("general.followUp", "queue");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("general.followUp");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("general.followUp", "queue")).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const otherOwner = fixture({ owner: false });
+    otherOwner.windowValues.set("general.followUp", "steer");
+    expect((await otherOwner.set("general.followUp", "queue")).status).toBe(403);
+    expect(otherOwner.windowWrites).toEqual([]);
+
+    fx.windowValues.set("general.followUp", "steer");
+    const approved = fx.set("general.followUp", "queue");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "general.followUp", value: "queue" }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };
