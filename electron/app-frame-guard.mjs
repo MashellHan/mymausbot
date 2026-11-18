@@ -6,6 +6,8 @@
 // Electron 43.7.9: a frame's self-navigation fires will-frame-navigate with frame.origin === "null" and an
 // empty frame.url, and preventDefault() stops it before any request leaves.
 
+import { mojoPoetryHostNavigationAllowed } from "./mojo-poetry-frame.mjs";
+
 const OWN_DOCUMENTS = new Set(["about:srcdoc", "about:blank"]);
 
 // Chromium 150 permits DNS hints from opaque frames despite connect-src 'none'; normal request resolution remains enabled.
@@ -31,4 +33,26 @@ export function appFrameNavigationAllowed(details) {
     return false;
   }
   return origin !== "null";
+}
+
+export function createAppFrameFallback({ webContents, localOrigin, serverOrigins, log }) {
+  return (details, url = details.url) => {
+    if (details.isMainFrame) return;
+    if (!appFrameNavigationAllowed(details)
+      && !mojoPoetryHostNavigationAllowed(details, webContents.mainFrame, localOrigin())) {
+      details.preventDefault();
+      return;
+    }
+    let target;
+    try {
+      target = new URL(url).origin;
+    } catch {
+      details.preventDefault();
+      return;
+    }
+    if (target === localOrigin() || serverOrigins().has(target)) {
+      details.preventDefault();
+      log(`blocked subframe navigation to ${url}`);
+    }
+  };
 }

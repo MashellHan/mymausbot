@@ -190,7 +190,8 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
         const input = action === "catalog" ? parseHongguoCatalog(raw)
           : action === "series" ? parseHongguoSeries(raw) : parseHongguoPlayback(raw);
         deps.apps.requireHongguo(owner, id, input.expectedRevision);
-        if (!deps.hongguoProvider) throw appFailure(503, "Hongguo is unavailable.");
+        const prefetch = action === "playback" && (input as ReturnType<typeof parseHongguoPlayback>).intent === "prefetch";
+        if (!prefetch && !deps.hongguoProvider) throw appFailure(503, "Hongguo is unavailable.");
         let result: unknown;
         if (action === "catalog" || action === "series") {
           const abort = new AbortController();
@@ -206,6 +207,8 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
           } catch (error) { if (abort.signal.aborted) return; throw error; }
           finally { res.off("close", onClose); }
           if (abort.signal.aborted || res.destroyed) return;
+        } else if (prefetch) {
+          result = { status: "unavailable", reason: "provider-unavailable" };
         } else {
           const playback = input as ReturnType<typeof parseHongguoPlayback>;
           const prepared = parseHongguoPreparedPlayback(await hongguoProviderResult(() => deps.hongguoProvider!.preparePlayback(

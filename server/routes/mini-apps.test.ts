@@ -112,12 +112,29 @@ it("keeps Hongguo provider and scoped media behind the owner and revision gates"
   await call("POST", "catalog", ownerAuth, { expectedRevision: 3, mode: "popular" });
   expect(catalog).toHaveBeenCalledWith({ expectedRevision: 3, mode: "popular" }, expect.any(AbortSignal));
   expect(requireHongguo).toHaveBeenCalledTimes(2);
+  const prefetchBody = { expectedRevision: 3, seriesId: "series", episodeId: "episode", intent: "prefetch" };
+  await call("POST", "playback", { kind: "loopback", scopes: [] }, prefetchBody);
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 403, expect.objectContaining({ error: expect.any(String) }));
+  expect(preparePlayback).not.toHaveBeenCalled();
+  const gatedBeforePrefetch = requireHongguo.mock.calls.length;
+  await call("POST", "playback", ownerAuth, prefetchBody);
+  expect(requireHongguo).toHaveBeenCalledTimes(gatedBeforePrefetch + 2);
+  expect(preparePlayback).not.toHaveBeenCalled();
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200,
+    { appId: id, revision: 3, status: "unavailable", reason: "provider-unavailable" });
   await call("POST", "playback", ownerAuth, { expectedRevision: 3, seriesId: "series", episodeId: "episode" });
   expect(preparePlayback).toHaveBeenCalledWith("series", "episode", { appId: id, revision: 3 }, undefined);
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200,
     { appId: id, revision: 3, status: "unavailable", reason: "anonymous-limited" });
   await call("POST", "playback", ownerAuth, { expectedRevision: 3, seriesId: "series", episodeId: "episode",
     qualityId: "https://private.example/key" });
+  expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 400, expect.objectContaining({ error: expect.any(String) }));
+  expect(preparePlayback).toHaveBeenCalledTimes(1);
+  for (const intent of ["foreground", "PREFETCH", null, 1]) {
+    await call("POST", "playback", ownerAuth, { ...prefetchBody, intent });
+    expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 400, expect.objectContaining({ error: expect.any(String) }));
+  }
+  await call("POST", "playback", ownerAuth, { ...prefetchBody, extra: true });
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 400, expect.objectContaining({ error: expect.any(String) }));
   expect(preparePlayback).toHaveBeenCalledTimes(1);
   preparePlayback.mockResolvedValueOnce({ status: "ready", token: "synthetic-token", durationSeconds: 90,

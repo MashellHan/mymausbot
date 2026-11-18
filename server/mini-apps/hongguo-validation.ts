@@ -20,7 +20,7 @@ const catalog = z.object({ expectedRevision: revision, mode: z.enum(["popular", 
     && value.categoryId === undefined && value.cursor === undefined : value.seriesIds === undefined);
 const series = z.object({ expectedRevision: revision, seriesId: id }).strict();
 const qualityId = z.string().regex(/^[1-9]\d{2,3}p$/);
-const playback = series.extend({ episodeId: id, qualityId: qualityId.optional() });
+const playback = series.extend({ episodeId: id, qualityId: qualityId.optional(), intent: z.literal("prefetch").optional() });
 const historyEntry = z.object({ seriesId: id, seriesTitle: label, coverUrl: optionalUrl,
   episodeId: id, episodeNumber: z.number().int().nonnegative().max(1_000_000).nullable(), episodeTitle: label,
   positionSeconds: seconds, durationSeconds: seconds.nullable() }).strict();
