@@ -587,6 +587,59 @@ describe("confirm tier", () => {
     expect(nonOwner.saved).toEqual([]);
   });
 
+  it("changes the event-log cap only after owner review and warns that trimming cannot be undone", async () => {
+    const fx = fixture();
+    const get = () => fx.host.handle({ action: "get", id: "threads.eventLogMaxBytes" }, fx.turn);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "event log size" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("threads.eventLogMaxBytes");
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ tier: "confirm", value: "no limit", allowed: expect.stringContaining("null for no limit") });
+    expect((await fx.set("threads.eventLogMaxBytes", 262_143)).status).toBe(400);
+    expect((await fx.set("threads.eventLogMaxBytes", 4 * 1024 ** 3 + 1)).status).toBe(400);
+    expect((await fx.set("threads.eventLogMaxBytes", "unknown")).status).toBe(400);
+    expect(fx.saved).toEqual([]);
+
+    const cancelled = fx.set("threads.eventLogMaxBytes", 1_048_576);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("no limit to 1048576 bytes") } });
+    expect(first.appSettingRequest.after).toContain("permanently trim older event and native log entries");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("threads.eventLogMaxBytes", 1_048_576);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.threads = { maxConcurrentPerBot: 3, eventLogRetentionDays: 30, eventLogMaxBytes: 2_097_152 };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    delete fx.cfg.threads.eventLogMaxBytes;
+
+    const approved = fx.set("threads.eventLogMaxBytes", 1_048_576);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ threads: { eventLogMaxBytes: 1_048_576 } }]);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "1048576 bytes" });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+
+    const cleared = fx.set("threads.eventLogMaxBytes", null);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fourth.appSettingRequest.after).toContain("previously trimmed entries cannot be restored");
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await cleared).status).toBe(200);
+    expect(fx.saved.at(-1)).toEqual({ threads: { eventLogMaxBytes: null } });
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "no limit" });
+
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("threads.eventLogMaxBytes", 1_048_576)).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };

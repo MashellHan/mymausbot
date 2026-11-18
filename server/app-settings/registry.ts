@@ -11,7 +11,7 @@ import { MAX_WINDOW_MINUTES } from "../cache-keepwarm.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
 import { isClaudeEndpoint } from "../claude-endpoints.ts";
 import { isCodexEndpoint } from "../codex-endpoints.ts";
-import { cacheKeepWarmSettings, MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, showToolCallsEnabled, skillAuthoringEnabled, type AppConfig } from "../config.ts";
+import { cacheKeepWarmSettings, MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, MAX_THREAD_EVENT_LOG_BYTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, MIN_THREAD_EVENT_LOG_BYTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, showToolCallsEnabled, skillAuthoringEnabled, threadEventLogMaxBytes, type AppConfig } from "../config.ts";
 import type { InstanceConfig } from "../contracts.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
@@ -231,6 +231,7 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     id, label, help: `${label}: the address mymausbot sends requests to. Empty uses the provider's own.`, where: "Settings → AI", synonyms: [...synonyms, "url", "base url", "endpoint", "address", "proxy"],
     tier: "confirm", value: url, allowed: "an http(s) address, or empty to clear", current: () => current() ?? "", write: config(patch),
   });
+  const logCapText = (bytes: number | null) => bytes === null ? "no limit" : `${bytes} bytes`;
   const confirm: SettingEntry[] = [
     writable({
       id: "bots.newBotEffort", label: "Effort for new bots", help: "The reasoning effort a new bot starts with when its model names none; null uses the engine's own.", where: "Settings → You and your bots",
@@ -285,6 +286,17 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
         return { change: `Set the prompt-cache keep-warm place default from ${before.enabled ? "on" : "off"} to ${after.enabled ? "on" : "off"} and shared window from ${before.windowMinutes} to ${after.windowMinutes} minutes; all eligible enabled bots, including bots explicitly set to On, use that window after a successful turn. Each ping spends a few tokens; per-bot on/off choices stay unchanged` };
       },
       write: config((change: KeepWarmChange) => ({ cacheKeepWarm: { ...cacheKeepWarmSettings(cfg()), ...change } })),
+    }),
+    writable({
+      id: "threads.eventLogMaxBytes", label: "Thread log size limit", help: "Limit each thread's event and native logs; threads and transcripts stay. Clearing the limit cannot restore trimmed entries.", where: "Settings → Data",
+      synonyms: ["log size", "storage", "event log", "cleanup"], tier: "confirm",
+      value: z.number().int().min(MIN_THREAD_EVENT_LOG_BYTES).max(MAX_THREAD_EVENT_LOG_BYTES).nullable(),
+      allowed: `${MIN_THREAD_EVENT_LOG_BYTES} to ${MAX_THREAD_EVENT_LOG_BYTES} bytes, or null for no limit`,
+      current: () => threadEventLogMaxBytes(cfg()), read: () => logCapText(threadEventLogMaxBytes(cfg())),
+      describe: (bytes: number | null) => ({ change: `Change each thread's event-log limit from ${logCapText(threadEventLogMaxBytes(cfg()))} to ${logCapText(bytes)}; ${bytes === null
+        ? "future writes stop trimming logs, but previously trimmed entries cannot be restored"
+        : "future writes may permanently trim older event and native log entries; threads and transcripts stay"}` }),
+      write: config((eventLogMaxBytes: number | null) => ({ threads: { eventLogMaxBytes } })),
     }),
     writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
