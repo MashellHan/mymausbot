@@ -42,7 +42,9 @@ export interface MiniAppDashboardDiscovery {
 
 export type MiniAppDashboardRead =
   | { resource: "teams"; expectedRevision: number }
-  | { resource: "activity" | "configuration"; expectedRevision: number; agentId: string; occupantId: string }
+  | { resource: "activity"; expectedRevision: number; agentId: string; occupantId: string; history?: never; before?: never }
+  | { resource: "activity"; expectedRevision: number; agentId: string; occupantId: string; history: 1; before?: string }
+  | { resource: "configuration"; expectedRevision: number; agentId: string; occupantId: string }
   | { resource: "team-rules"; expectedRevision: number; teamId: string }
   | { resource: "skill"; expectedRevision: number; agentId: string; occupantId: string; skillId: string }
   | { resource: "usage"; expectedRevision: number };

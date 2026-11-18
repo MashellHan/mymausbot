@@ -1,4 +1,8 @@
 // @vitest-environment happy-dom
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Window as HappyWindow } from "happy-dom";
 import type { MiniAppDocument, MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
@@ -11,6 +15,10 @@ vi.mock("@/state/store", () => ({
 
 import { mountMiniAppFrame } from "./MiniAppFrame";
 import { miniAppFrameDocument, MINI_APP_CSP } from "./mini-app-document";
+import { AppDocs } from "../../../server/app-docs";
+import { MiniApps } from "../../../server/mini-apps/registry";
+import { removeTempDir } from "../../../server/testing/cleanup";
+import type { LocalAgentTeamsResponse } from "../../../shared/local-dashboard";
 
 const app = {
   id: "app_demo", slug: "demo", title: "Sample report", description: "Synthetic data only", status: "active" as const,
@@ -44,6 +52,85 @@ beforeEach(() => {
 afterEach(() => { container.remove(); window.document.body.innerHTML = ""; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("persistent Mini App frame", () => {
+  it("carries an HTML SDK history selection through the existing frame and registry guards", async () => {
+    const root = await mkdtemp(join(tmpdir(), "omb-mini-trace-"));
+    const db = new DatabaseSync(":memory:");
+    const owner = { writeAllowed: true, assertActive: () => undefined, canBind: () => true };
+    const occupantId = "o1234567890abcdef";
+    const agentId = "w6:p1";
+    const streamId = "a".repeat(32);
+    const before = `${streamId}.e42`;
+    const selected = { resource: "activity", agentId, occupantId, history: 1, before };
+    const snapshot = { agentId, status: "ready" as const, updatedAt: 1, truncated: false, events: [],
+      history: { version: 1 as const, streamId, nextBefore: null } };
+    const member = { id: agentId, occupantId, name: "Synthetic agent", kind: "codex", role: null, model: null,
+      reasoningEffort: null, contextUsed: null, contextWindow: null, state: "working" as const, taskHint: null };
+    const teams: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1, teamCount: 1, teams: [{
+      id: "w6", name: "Synthetic team", agentCount: 1, activeAgentCount: 1, agents: [member],
+    }] };
+    const readTeams = vi.fn(async () => teams);
+    const readActivity = vi.fn(async () => snapshot);
+    const unexpected = async () => { throw new Error("unexpected resource"); };
+    const apps = new MiniApps({ docs: new AppDocs(root), data: {
+      validateBinding: unexpected, readNamed: unexpected, listDatasets: async () => [],
+    }, validPublisher: () => false, access: { database: () => db, write: (work) => work(db) }, dashboardProviders: {
+      agents: { get: readTeams }, activity: { get: readActivity },
+      configuration: { getAgent: unexpected, getTeamRules: unexpected, getSkill: unexpected }, usage: { get: unexpected },
+    } });
+    const child = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+    try {
+      const html = await readFile("examples/mini-apps/agent-team/index.html", "utf8");
+      const published = await apps.publish(owner, { requestKey: "trace-fixture", expectedRevision: 0,
+        slug: "trace-fixture", title: "Synthetic trace", description: "Synthetic activity fixture",
+        bindings: [], dashboardKind: "agent-team", html }, undefined, true);
+      const document = apps.document(owner, published.app.id);
+      const state = await apps.state(owner, published.app.id);
+      await expect(apps.dashboardRead(owner, published.app.id, {
+        resource: "activity", agentId, occupantId, before, expectedRevision: state.revision,
+      })).rejects.toMatchObject({ status: 400 });
+      fixture.api.mockImplementation(async (_path, request) => apps.dashboardRead(owner, published.app.id, JSON.parse(request.body)));
+      const mount = mountMiniAppFrame({ container, document, state, onRevoked: vi.fn() });
+      try {
+        const view = mount.iframe.contentWindow!;
+        const posted = vi.spyOn(view, "postMessage");
+        const sent: Array<Record<string, unknown>> = [];
+        const parent = { postMessage: (message: Record<string, unknown>) => sent.push(message) };
+        Object.defineProperty(child, "parent", { value: parent });
+        child.eval(/<script>([\s\S]*?)<\/script>/.exec(miniAppFrameDocument(document, false).srcdoc)![1]!);
+        const initialized = sent.find((message) => message.method === "ui/initialize")!;
+        const reply = (data: unknown) => child.dispatchEvent(new child.MessageEvent("message", { source: parent as unknown as HappyWindow, data }));
+        reply({ jsonrpc: "2.0", id: initialized.id, result: { hostCapabilities: {} } });
+        const sdk = (child as unknown as { mausApp: { dashboard: { read(request: object): Promise<unknown> } } }).mausApp;
+        const pending = sdk.dashboard.read(selected);
+        await vi.waitFor(() => expect(sent.some((message) => message.type === "dashboard-read")).toBe(true));
+        const emitted = sent.find((message) => message.type === "dashboard-read")!;
+        send(view, { ...emitted, id: "invalid", selection: { resource: "activity", agentId, occupantId, before } });
+        send(view, { ...emitted, id: "redirect", selection: { ...selected, expectedRevision: 999 } });
+        expect(fixture.api).not.toHaveBeenCalled();
+        send(view, emitted);
+        await vi.waitFor(() => {
+          const response = posted.mock.calls.find(([value]) => (value as { id?: string }).id === emitted.id)?.[0];
+          expect(response).toMatchObject({ result: { resource: "activity", snapshot } });
+          reply(response);
+        });
+        await expect(pending).resolves.toMatchObject({ snapshot });
+        expect(fixture.api).toHaveBeenCalledWith(`/api/mini-apps/${published.app.id}/dashboard`,
+          expect.objectContaining({ body: JSON.stringify({ ...selected, expectedRevision: state.revision }) }));
+        expect(readActivity).toHaveBeenCalledWith(agentId, { occupantId, before });
+        expect(readTeams).toHaveBeenCalledTimes(2);
+        readTeams.mockResolvedValueOnce(teams).mockResolvedValueOnce({ ...teams,
+          teams: [{ ...teams.teams[0]!, agents: [{ ...member, occupantId: "o0000000000000000" }] }] });
+        send(view, { ...emitted, id: "changed" });
+        await vi.waitFor(() => expect(posted.mock.calls.find(([value]) => (value as { id?: string }).id === "changed")?.[0])
+          .toMatchObject({ error: "The Agent Team session changed while its details were being read." }));
+      } finally { mount.retire(); }
+    } finally {
+      await child.happyDOM.abort();
+      db.close();
+      await removeTempDir(root);
+    }
+  });
+
   it("exposes only the selected dashboard resource to the HTML SDK and binds the installed app revision in the host", async () => {
     const doc = miniAppFrameDocument(teamDocument, false);
     const child = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });

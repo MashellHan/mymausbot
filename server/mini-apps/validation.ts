@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { MiniAppDashboardRead, MiniAppPublish, MiniAppQuery } from "../../shared/mini-apps.ts";
+import { LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR } from "../../shared/local-dashboard.ts";
 
 const name = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/);
 const sourceName = z.string().min(1).max(200).refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32));
@@ -60,7 +61,7 @@ const agentId = z.string().regex(/^w\d+:p[0-9A-Za-z]+$/);
 export const dashboardReadSchema = z.discriminatedUnion("resource", [
   z.object({ resource: z.literal("teams"), expectedRevision: dashboardRevision }).strict(),
   z.object({ resource: z.literal("activity"), expectedRevision: dashboardRevision,
-    agentId, occupantId }).strict(),
+    agentId, occupantId, history: z.literal(1).optional(), before: z.string().regex(LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR).optional() }).strict(),
   z.object({ resource: z.literal("configuration"), expectedRevision: dashboardRevision, agentId, occupantId }).strict(),
   z.object({ resource: z.literal("team-rules"), expectedRevision: dashboardRevision,
     teamId: z.string().regex(/^w\d+$/) }).strict(),
@@ -93,5 +94,9 @@ export function parseQuery(raw: unknown): MiniAppQuery {
 export function parseDashboardRead(raw: unknown): MiniAppDashboardRead {
   const parsed = dashboardReadSchema.safeParse(raw);
   if (!parsed.success) throw appFailure(400, "Invalid Mini App dashboard read.");
-  return parsed.data;
+  if (parsed.data.resource !== "activity") return parsed.data;
+  const { history, before, ...selection } = parsed.data;
+  if (history === 1) return before === undefined ? { ...selection, history } : { ...selection, history, before };
+  if (before !== undefined) throw appFailure(400, "Invalid Mini App dashboard read.");
+  return selection;
 }

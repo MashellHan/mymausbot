@@ -3,10 +3,11 @@ import { lstat, open, realpath } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
-import type { LocalAgentActivityEvent } from "../shared/local-dashboard.ts";
+import type { LocalAgentActivityEvent, LocalAgentToolDetailStatus } from "../shared/local-dashboard.ts";
 import type { PiContextBinding } from "./local-agent-pi-context.ts";
-import { piVisibleMessageText, redactedAgentText, redactedAgentToolArguments,
-  redactedAgentToolResult, trackAgentToolCalls } from "./local-agent-visible-message.ts";
+import { piVisibleMessageText, redactedAgentText, trackAgentToolCalls, visibleToolDetail } from "./local-agent-visible-message.ts";
+import { isToolActivity, MAX_ACTIVITY_EVENTS, MAX_ACTIVITY_HISTORY_EVENTS, MAX_ACTIVITY_TOOL_EVENTS,
+  type ActivityHistorySource } from "./local-agent-activity-history.ts";
 
 const SESSION_ID = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
 const SESSION_FILE = new RegExp(`^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z_(${SESSION_ID})\\.jsonl$`, "i");
@@ -18,13 +19,11 @@ const HEADER_BYTES = 64 * 1024;
 const TAIL_BYTES = 8 * 1024 * 1024;
 const MAX_LINE_BYTES = 1024 * 1024;
 const MAX_ENTRIES = 5000;
-const MAX_EVENTS = 60;
-const MAX_TOOL_EVENTS = 30;
 
 type PiIdentity = { pane: string; file: string; directory: string; id: string; cwd: string };
 export type PiSessionView = { preview: string | null; model: string | null; reasoningEffort: string | null;
   contextWindow: null; events: LocalAgentActivityEvent[]; truncated: boolean;
-  contextBinding?: Omit<PiContextBinding, "pane"> };
+  contextBinding?: Omit<PiContextBinding, "pane">; historySource?: ActivityHistorySource };
 type Cached = { signature: string; cwd: string; id: string; view: PiSessionView };
 type EntryEvent = { event: LocalAgentActivityEvent; callId?: string; clipped?: boolean };
 type Entry = { parent: string | null; preview: string | null; events: EntryEvent[]; clipped: boolean;
@@ -70,8 +69,10 @@ function eventAt(row: Record<string, unknown>): number | null {
 
 function visibleEvents(row: Record<string, unknown>, offset: number, user: string | null, assistant: string | null): EntryEvent[] {
   const events: EntryEvent[] = [];
-  const add = (kind: LocalAgentActivityEvent["kind"], text: string, tool: string | null = null, callId?: string, clipped = false) => {
-    events.push({ event: { id: `e${offset.toString(36)}-${events.length}`, at: eventAt(row), kind, tool, text }, callId, clipped });
+  const add = (kind: LocalAgentActivityEvent["kind"], text: string, tool: string | null = null, callId?: string,
+    clipped = false, detailStatus?: LocalAgentToolDetailStatus) => {
+    events.push({ event: { id: `e${offset.toString(36)}-${events.length}`, at: eventAt(row), kind, tool, text,
+      ...(detailStatus ? { detailStatus } : {}) }, callId, clipped });
   };
   if (user !== null) add("user", user);
   if (assistant !== null) add("assistant", assistant);
@@ -86,18 +87,19 @@ function visibleEvents(row: Record<string, unknown>, offset: number, user: strin
         add("tool-call", "[Arguments unavailable]", null, block.id);
         continue;
       }
-      const detail = redactedAgentToolArguments(block.arguments);
-      add("tool-call", detail.text ?? "[Arguments unavailable]", name, block.id, detail.clipped);
+      const detail = visibleToolDetail("tool-call", block.arguments);
+      add("tool-call", detail.text, name, block.id, detail.clipped, detail.detailStatus);
     }
   } else if (message.role === "toolResult" && typeof message.toolCallId === "string" &&
       message.toolCallId.length > 0 && message.toolCallId.length <= 128) {
-    const detail = redactedAgentToolResult(message.content);
-    add("tool-result", detail.text ?? "[Result details unavailable]", null, message.toolCallId, detail.clipped);
+    const detail = visibleToolDetail("tool-result", message.content);
+    add("tool-result", detail.text, null, message.toolCallId, detail.clipped, detail.detailStatus);
   }
   return events;
 }
 
-function sessionView(bytes: Buffer, start: number, headerEnd: number, identity: PiIdentity, file: string): PiSessionView | null {
+function sessionView(bytes: Buffer, start: number, headerEnd: number, identity: PiIdentity, file: string,
+  history?: ActivityHistorySource): PiSessionView | null {
   const first = start === 0 ? headerEnd + 1 : bytes.indexOf(10) + 1;
   const end = bytes.lastIndexOf(10);
   if (first <= 0 || end < first || end !== bytes.length - 1) return null;
@@ -136,12 +138,12 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number, identity: 
   let preview: string | null = null;
   for (let id = leaf; id !== null;) {
     if (seen.has(id)) return null;
-    seen.add(id);
     const entry = entries.get(id);
     if (!entry) {
       if (start === 0) return null;
       break;
     }
+    seen.add(id);
     branch.push(entry);
     preview ??= entry.preview;
     id = entry.parent;
@@ -168,18 +170,19 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number, identity: 
         toolCalls.associate(callId, event);
       }
       events.push(event);
-      if (event.kind === "tool-call" || event.kind === "tool-result") {
-        const tools = events.filter((item) => item.kind === "tool-call" || item.kind === "tool-result");
-        if (tools.length > MAX_TOOL_EVENTS) { events.splice(events.indexOf(tools[0]!), 1); truncated = true; }
+      if (!history && isToolActivity(event)) {
+        const tools = events.filter(isToolActivity);
+        if (tools.length > MAX_ACTIVITY_TOOL_EVENTS) { events.splice(events.indexOf(tools[0]!), 1); truncated = true; }
       }
-      if (events.length > MAX_EVENTS) { events.shift(); truncated = true; }
+      if (events.length > (history ? MAX_ACTIVITY_HISTORY_EVENTS : MAX_ACTIVITY_EVENTS)) { events.shift(); truncated = true; }
     }
   }
   return { preview, model, reasoningEffort, contextWindow: null, events, truncated,
+    ...(history ? { historySource: { ...history, branch: seen } } : {}),
     ...(leaf && model && provider ? { contextBinding: { sessionId: identity.id, file, cwd: identity.cwd, leaf, provider, model } } : {}) };
 }
 
-async function readSession(identity: PiIdentity, root: string, cached: Cached | undefined): Promise<Cached | null> {
+async function readSession(identity: PiIdentity, root: string, cached: Cached | undefined, history: boolean): Promise<Cached | null> {
   try {
     const canonicalRoot = await realpath(root);
     const canonicalDirectory = await realpath(identity.directory);
@@ -206,13 +209,15 @@ async function readSession(identity: PiIdentity, root: string, cached: Cached | 
       const tail = await readRange(handle, size - start, start);
       if (!tail || revision(await handle.stat({ bigint: true })) !== signature ||
           revision(await lstat(identity.file, { bigint: true })) !== signature) return null;
-      const view = sessionView(tail, start, headerEnd, identity, join(canonicalDirectory, basename(identity.file)));
+      const view = sessionView(tail, start, headerEnd, identity, join(canonicalDirectory, basename(identity.file)),
+        history ? { file: `${info.dev}:${info.ino}`, path: identity.file, size,
+          revision: `${info.mtimeNs}:${info.ctimeNs}` } : undefined);
       return view ? { signature, cwd: identity.cwd, id: identity.id, view } : null;
     } finally { await handle.close(); }
   } catch { return null; }
 }
 
-export function createPiSessionReader(agentDirectory: string) {
+export function createPiSessionReader(agentDirectory: string, { history = false } = {}) {
   const root = join(agentDirectory, "sessions");
   const cache = new Map<string, Cached>();
   return async (agents: Record<string, unknown>[]): Promise<Map<string, PiSessionView | null>> => {
@@ -224,7 +229,7 @@ export function createPiSessionReader(agentDirectory: string) {
     const views = new Map<string, PiSessionView | null>();
     for (const identity of identities) {
       if (counts.get(identity.file) !== 1) { cache.delete(identity.file); views.set(identity.pane, null); continue; }
-      const value = await readSession(identity, root, cache.get(identity.file));
+      const value = await readSession(identity, root, cache.get(identity.file), history);
       if (value) cache.set(identity.file, value); else cache.delete(identity.file);
       views.set(identity.pane, value?.view ?? null);
     }

@@ -50,6 +50,7 @@ export interface LocalAgentTeamsResponse {
 
 export type LocalAgentActivityStatus = "ready" | "stale" | "unavailable" | "unsupported";
 export type LocalAgentActivityKind = "user" | "assistant" | "tool-call" | "tool-result";
+export type LocalAgentToolDetailStatus = "available" | "absent" | "withheld";
 
 /** Redacted, bounded visible local-agent events; IDs are local event positions, never session or tool credentials. */
 export interface LocalAgentActivityEvent {
@@ -58,7 +59,15 @@ export interface LocalAgentActivityEvent {
   kind: LocalAgentActivityKind;
   tool: string | null;
   text: string | null;
+  detailStatus?: LocalAgentToolDetailStatus;
 }
+
+export interface LocalAgentActivityHistoryRequest {
+  occupantId: string;
+  before?: string;
+}
+
+export const LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR = /^([a-f0-9]{32})\.(e[a-z0-9]{1,14}(?:-[0-9]{1,7})?)$/;
 
 /** Details are fetched separately from the team metadata only while a member's disclosure is open. */
 export interface LocalAgentActivityResponse {
@@ -69,6 +78,8 @@ export interface LocalAgentActivityResponse {
   /** Earlier events or long excerpts were omitted by the read/response bounds. */
   truncated: boolean;
   events: LocalAgentActivityEvent[];
+  /** Present on history v1 requests. Do not mix pages from different streams. */
+  history?: { version: 1; streamId: string | null; nextBefore: string | null };
 }
 
 export type LocalAgentConfigurationDocumentStatus = "ready" | "missing" | "error" | "unverified" | "unavailable";

@@ -3,6 +3,7 @@ import { appVersion } from "@/lib/app-links";
 import { activeLocale } from "@/lib/i18n";
 import { api, ApiError } from "@/state/store";
 import { utf8Bytes } from "../../../shared/app";
+import { LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR } from "../../../shared/local-dashboard";
 import type { MiniAppDataBinding, MiniAppNamedQuery } from "../../../shared/mini-app-data";
 import type { MiniAppDashboardReadResult, MiniAppDashboardRequest, MiniAppDocument, MiniAppQuery, MiniAppQueryOptions,
   MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
@@ -50,8 +51,16 @@ function parseFrameDashboard(value: unknown): FrameDashboard | null {
   if (!record(value) || value.mausMiniApp !== 1 || value.type !== "dashboard-read" || typeof value.id !== "string"
     || !value.id || value.id.length > 100 || !record(value.selection)) return null;
   const selection = value.selection;
+  const activityFields = ["resource", "agentId", "occupantId"];
+  if (selection.resource === "activity" && selection.history === 1) {
+    activityFields.push("history");
+    if (selection.before !== undefined) {
+      if (typeof selection.before !== "string" || !LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR.test(selection.before)) return null;
+      activityFields.push("before");
+    }
+  }
   const fields: Record<string, string[]> = {
-    teams: ["resource"], activity: ["resource", "agentId", "occupantId"],
+    teams: ["resource"], activity: activityFields,
     configuration: ["resource", "agentId", "occupantId"], "team-rules": ["resource", "teamId"],
     skill: ["resource", "agentId", "occupantId", "skillId"],
   };

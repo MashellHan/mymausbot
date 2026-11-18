@@ -1,10 +1,11 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { removeTempDir } from "./testing/cleanup.ts";
 import { createLocalAgentActivityProvider } from "./local-agent-activity.ts";
+import { localAgentOccupantId } from "./local-agent-occupant.ts";
 
 const SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -28,6 +29,76 @@ async function fixture(lines: object[], recordedId = SESSION) {
 }
 
 describe("bounded per-agent Codex activity", () => {
+  it("reads actual exec text block shapes and distinguishes safe async detail from absent or withheld data", async () => {
+    const secret = "ghp_" + "x".repeat(36);
+    const call = (id: string, name: string, input: object) => row("response_item", {
+      type: "function_call", call_id: id, name, arguments: JSON.stringify(input),
+    });
+    const result = (id: string, output?: unknown) => row("response_item", { type: "function_call_output", call_id: id, output });
+    const asyncName = "functions.send_message_to_user_async";
+    const home = await fixture([
+      call("exec", "functions.exec", { cmd: "printf 'Synthetic line'", max_output_tokens: 300, token: secret }),
+      result("exec", [{ type: "input_text", text: "Synthetic line" }, { type: "input_text", text: "second line" }]),
+      call("async", asyncName, { message: "The fixture check finished." }),
+      result("async", "Message delivered."),
+      call("absent", asyncName, { message: "Another fixture update" }),
+      result("absent"),
+      call("opaque", asyncName, { message: "A".repeat(120), max_output_tokens: secret }),
+      result("opaque", [{ type: "input_text", text: 'Set-Cookie: fixture-private-cookie' }]),
+    ]);
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
+    const { events } = await provider.get(pane);
+    expect(events.map(({ text, detailStatus }) => [text, detailStatus])).toEqual([
+      ["cmd: printf 'Synthetic line'; max_output_tokens: 300", "available"],
+      ["Synthetic line second line", "available"],
+      ["message: The fixture check finished.", "available"],
+      ["Message delivered.", "available"],
+      ["message: Another fixture update", "available"],
+      ["[Result details unavailable]", "absent"],
+      ["[Arguments unavailable]", "withheld"],
+      ["[Result details unavailable]", "withheld"],
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(/ghp_|fixture-private-cookie|AAAAAAAAAA/);
+  });
+
+  it("pages a bounded Codex tail in source order without moving an older cursor after append", async () => {
+    const pairs = Array.from({ length: 42 }, (_, index) => [
+      row("response_item", { type: "function_call", call_id: `call-${index}`, name: "functions.exec", arguments: '{"cmd":"fixture"}' }),
+      row("response_item", { type: "function_call_output", call_id: `call-${index}`,
+        output: index === 0 ? [{ type: "input_text", text: "Large result " + "x".repeat(300_000) }] : `Result ${index}` }),
+    ]).flat();
+    const home = await fixture([
+      row("event_msg", { type: "user_message", message: "Below scan budget " + "x".repeat(4 * 1024 * 1024) }),
+      row("event_msg", { type: "user_message", message: "Oldest retained" }), ...pairs,
+    ]);
+    const original = { ...agent(), name: "fixture-codex", agent_session: { ...agent().agent_session, source: "herdr:codex" } };
+    let active = original;
+    const occupantId = localAgentOccupantId(original, pane)!;
+    const activity = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([active]) });
+    const first = await activity.get(pane, { occupantId });
+    expect(first).toMatchObject({ status: "ready", truncated: true, history: { version: 1, streamId: expect.any(String) } });
+    expect(first.events).toHaveLength(30);
+    const before = first.history!.nextBefore!;
+    const older = await activity.get(pane, { occupantId, before });
+    expect(older.events).toHaveLength(30);
+    expect(older.events.at(-1)?.text).toBe("Result 26");
+    const oldest = await activity.get(pane, { occupantId, before: older.history!.nextBefore! });
+    expect(oldest.history!.nextBefore).toBeNull();
+    expect(oldest.events[0]?.text).toBe("Oldest retained");
+    expect(oldest.events[2]).toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
+    const ids = [...oldest.events, ...older.events, ...first.events].map((event) => event.id);
+    expect(new Set(ids).size).toBe(85);
+    expect(JSON.stringify(oldest)).not.toMatch(/Below scan budget|Large result/);
+    const file = join(home, "sessions", "2026", "11", "05", `rollout-2026-11-05-${SESSION}.jsonl`);
+    await appendFile(file, JSON.stringify(row("event_msg", { type: "agent_message", message: "Latest reply" })) + "\n");
+    const latest = await activity.get(pane, { occupantId });
+    expect(latest.history?.streamId).toBe(first.history?.streamId);
+    expect(latest.events.at(-1)?.text).toBe("Latest reply");
+    expect((await activity.get(pane, { occupantId, before })).events).toEqual(older.events);
+    active = { ...original, name: "replacement" };
+    expect(await activity.get(pane, { occupantId, before })).toMatchObject({ status: "unavailable", events: [], history: { streamId: null } });
+  });
+
   it("reads visible current-format messages without duplicating legacy copies or exposing hidden content", async () => {
     const secret = "ghp_" + "x".repeat(36);
     const home = await fixture([
