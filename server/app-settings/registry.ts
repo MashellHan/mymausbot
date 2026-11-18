@@ -4,7 +4,7 @@ import { credentialIsConfigured, CREDENTIAL_TARGETS, PROVIDER_CREDENTIAL_TARGETS
 import { WINDOW_PREFS, type WindowPrefId } from "../../shared/app-settings.ts";
 import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
 import { defaultBotPerson } from "../../shared/default-bot.ts";
-import { MAUS_COLOR_NAMES, type MausColor } from "../../shared/wire.ts";
+import { EFFORT_LEVELS, MAUS_COLOR_NAMES, type EffortLevel, type MausColor } from "../../shared/wire.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "../bot-thread-limits.ts";
 import { parseSocks5Proxy } from "../browser/egress/policy.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
@@ -130,6 +130,8 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   const enumOf = (values: readonly string[]) => values.join(", ");
   const pinned = () => deps.bots().filter((bot) => bot.pinned).map((bot) => bot.id);
   const groups = () => Object.fromEntries(deps.sections().map((section) => [section, deps.bots().filter((bot) => bot.section === section).map((bot) => bot.id)]));
+  const newBotEffort = () => cfg().newBots?.effort ?? null;
+  const effortLabel = (effort: EffortLevel | null) => effort ?? "provider default";
   const describeArchive = ({ botId, archived }: BotArchive): { change: string } | { refusal: string } => {
     const bot = deps.bots().find((candidate) => candidate.id === botId);
     if (!bot) return { refusal: `No bot has the id ${botId}. Use list_bots for the ids.` };
@@ -227,6 +229,18 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     tier: "confirm", value: url, allowed: "an http(s) address, or empty to clear", current: () => current() ?? "", write: config(patch),
   });
   const confirm: SettingEntry[] = [
+    writable({
+      id: "bots.newBotEffort", label: "Effort for new bots", help: "The reasoning effort a new bot starts with when its model names none; null uses the engine's own.", where: "Settings → You and your bots",
+      synonyms: ["effort", "reasoning", "new bots", "thinking"], tier: "confirm", value: z.enum(EFFORT_LEVELS).nullable(),
+      allowed: `${EFFORT_LEVELS.join(", ")}, or null for the provider default`,
+      current: newBotEffort, read: () => effortLabel(newBotEffort()),
+      describe: (effort: EffortLevel | null) => {
+        const before = newBotEffort();
+        return before === effort ? { refusal: `New bots already use ${effortLabel(effort)} effort.` }
+          : { change: `Set new bots' effort to ${effortLabel(effort)} instead of ${effortLabel(before)}; existing bots keep their settings` };
+      },
+      write: config((effort: EffortLevel | null) => ({ newBots: { effort } })),
+    }),
     writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
