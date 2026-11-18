@@ -1,4 +1,4 @@
-import { stateRecord } from "./issue-state.mjs";
+import { issueKey, stateRecord } from "./issue-state.mjs";
 import { issueAreas, issueLabels } from "./contracts.mjs";
 
 const marker = /^<!-- mausbot-qa-group (.+) -->$/gm;
@@ -14,7 +14,7 @@ export function qaGroups(issues) {
     if (!Array.isArray(keys) || keys.length < 2 || keys.length > 500 || new Set(keys).size !== keys.length
       || keys.some((key) => typeof key !== "string" || !/^[a-f\d]{24}$/.test(key))) throw new Error(`Invalid QA group members #${parent.number}`);
     const members = keys.map((key) => {
-      const candidates = issues.filter((issue) => issue.body?.includes(`<!-- mausbot-qa:${key} -->`));
+      const candidates = issues.filter((issue) => issueKey(issue.body) === key);
       if (candidates.length !== 1 || byKey.has(key)) throw new Error(`Missing or ambiguous QA group member ${key}`);
       const member = candidates[0];
       const markers = [...member.body.matchAll(/<!-- mausbot-qa:([a-f\d]{24}) -->/g)];
@@ -39,7 +39,8 @@ export async function refreshQaGroups(groups, changedKeys, report, api) {
     const direct = stateRecord(parent.body)?.state;
     if (!keys.some((key) => changedKeys.has(key)) && !changedKeys.has(direct?.key)) continue;
     const verified = members.filter((issue) => issueLabels(issue).includes("qa:verified"));
-    const complete = verified.length === members.length && (!direct?.caseKeys || direct.verified === true);
+    const hasDirect = parent.body.includes("<!-- mausbot-qa-state ") || parent.body.includes("<!-- mausbot-qa:start -->");
+    const complete = verified.length === members.length && (!hasDirect || direct?.verified === true && !direct.coverageUnknown);
     const previousLabels = issueLabels(parent);
     const recurrence = !complete && (parent.state === "closed" || previousLabels.includes("qa:verified"));
     let labels = previousLabels.filter((label) => label !== "qa:verified");

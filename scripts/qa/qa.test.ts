@@ -1525,6 +1525,40 @@ describe("stale pre-fix QA report handling", () => {
     expect(api.mock.calls.every(([, options]) => !options?.method)).toBe(true);
   });
 
+  it("keeps all jobs from competing records until one report verifies their union", async () => {
+    const issue = makeClosedIssue({ verificationJobs: ["A"] });
+    issue.body += "\n\n" + makeClosedIssue({ verificationJobs: ["B"] }).body;
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [issue];
+      if (path === "/issues/1006" && options.method === "PATCH") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const late = makeLateReport(newSha);
+    await deliverReport({ ...late, findings: [{ ...late.findings[0], jobs: ["A"] }] }, { api, policy: { areas: [] } });
+    expect(issue.state).toBe("open");
+    const passed = ["A", "B"].map((job) => signature(`job:${job} > execution`, "job"));
+    await deliverReport({ ...makeLateReport(newSha, late.runId + 1), findings: [], passed: passed.slice(0, 1) }, { api, policy: { areas: [] } });
+    expect(issue.labels).not.toContain("qa:verified");
+    await deliverReport({ ...makeLateReport(newSha, late.runId + 2), findings: [], passed }, { api, policy: { areas: [] } });
+    expect(issue.labels).toContain("qa:verified");
+  });
+
+  it("attributes a finding to its own issue when another closed issue quotes its marker", async () => {
+    const target = makeClosedIssue(), foreign = makeClosedIssue();
+    foreign.number = 1005;
+    foreign.body = foreign.body.replaceAll(findingKey, "d".repeat(24)) + `\n\n<!-- mausbot-qa:${findingKey} -->`;
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [foreign, target];
+      if (path.startsWith("/issues/1006/comments?")) return [];
+      if (path === "/issues/1006" && options.method === "PATCH") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport(makeLateReport(newSha), { api, policy: { areas: [] } });
+    expect(target.state).toBe("open");
+    expect(foreign.state).toBe("closed");
+    expect(api.mock.calls.every(([path]) => !path.includes("/1005"))).toBe(true);
+  });
+
   it("writes positive verification to the same generated record that supplied the cursor", async () => {
     const issue = makeClosedIssue({ verifiedSha: preFixSha });
     const archived = issue.body.match(/<!-- mausbot-qa-state .+ -->/)![0]

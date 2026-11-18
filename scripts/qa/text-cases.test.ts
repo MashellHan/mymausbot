@@ -170,6 +170,21 @@ describe("one issue per product naming problem", () => {
     expect(env.issues[0].labels).toContain("qa:verified");
   });
 
+  it("retains historical aggregate membership when two complete records require reconciliation", async () => {
+    const env = fixture(), a = finding(), b = finding("src/menu-b.test.ts");
+    await deliverReport(report(1, [a, b]), env);
+    const group = env.issues[0];
+    group.body += "\n\n" + group.body;
+    group.state = "closed";
+    await deliverReport(report(2, [a]), env);
+    expect(group.state).toBe("open");
+    expect(stateOf(group).caseKeys).toEqual([a.key, b.key]);
+    await deliverReport(report(3, [], [a.key]), env);
+    expect(group.labels).not.toContain("qa:verified");
+    await deliverReport(report(4, [], [a.key, b.key]), env);
+    expect(group.labels).toContain("qa:verified");
+  });
+
   it("keeps existing consolidated cases and new cases on one parent without clearing pending members", async () => {
     const old = [finding("src/old-a.test.ts"), finding("src/old-b.test.ts", "win32")];
     const keys = old.map((entry) => entry.key);

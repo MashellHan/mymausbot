@@ -39,6 +39,17 @@ function report(id: number, passed: string[] = [], failed: string[] = [], execut
 }
 
 describe("confirmed QA root-cause groups", () => {
+  it("retains pending direct coverage on a parent even when all consolidated members pass", async () => {
+    const { parent, api } = fixture();
+    const directKey = signature("direct parent", "shared");
+    const direct = (caseKey: string) => `<!-- mausbot-qa:${directKey} -->\n<!-- mausbot-qa:start -->\n<!-- mausbot-qa-state ${JSON.stringify({ key: directKey, caseKeys: [caseKey], verified: false, lastExecution: "1:1" })} -->\n<!-- mausbot-qa:end -->`;
+    parent.body += "\n\n" + direct("a".repeat(24)) + "\n\n" + direct("b".repeat(24));
+    await deliverReport(report(2, keys), { api, policy });
+    expect(parent.body).toContain("Verified member cases: 2/2");
+    expect(parent.state).toBe("open");
+    expect(parent.labels).not.toContain("qa:verified");
+  });
+
   it("keeps a closed parent and both verified members intact for an older revision only", async () => {
     const { issues, parent, api } = fixture();
     issues[0].user = { login: "github-actions[bot]", type: "Bot", id: 41898282 };
