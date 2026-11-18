@@ -1,8 +1,8 @@
-export function combineTextFindings(findings, issues, byKey, signature) {
+export function combineTextFindings(findings, issuesByKey, byKey, signature) {
   const combined = new Map();
   for (const finding of findings) {
     const change = finding.textChange;
-    if (!change || byKey.has(finding.key) || issues.some((issue) => issue.body?.includes(`<!-- mausbot-qa:${finding.key} -->`))) {
+    if (!change || byKey.has(finding.key) || issuesByKey.has(finding.key)) {
       combined.set(finding.key, finding);
       continue;
     }

@@ -111,6 +111,30 @@ describe("one issue per product naming problem", () => {
     }
   });
 
+  it("keeps verified historical cases closed on redelivery and reopens for a separate tracked failure", async () => {
+    const env = fixture(), old = finding(), other = finding("src/banner.test.ts");
+    const oldSha = "b".repeat(40), verified = report(2, [], [old.key, other.key]);
+    await deliverReport(report(1, [old, other]), env);
+    const group = env.issues[0];
+    group.user = { login: "github-actions[bot]", type: "Bot", id: 41898282 };
+    await deliverReport(verified, env);
+    group.state = "closed";
+    const api = (path: string, options?: any) => path === `/compare/${oldSha}...${verified.sha}`
+      ? Promise.resolve({ status: "ahead", ahead_by: 1, behind_by: 0 }) : env.api(path, options);
+    const late = { ...report(3, [old]), sha: oldSha };
+    await deliverReport(late, { ...env, api });
+    expect(group.state).toBe("closed");
+    expect(stateOf(group)).toMatchObject({ verified: true, lastExecution: "2:1", stalePreFixRuns: [`3:1@${oldSha}`] });
+    env.api.mockClear();
+    await deliverReport(late, { ...env, api });
+    expect(env.api.mock.calls.filter(([, options]) => options?.method)).toHaveLength(0);
+
+    await deliverReport({ ...report(4, [old, { ...other, textChange: undefined }]), sha: oldSha }, { ...env, api });
+    expect(group.state).toBe("open");
+    expect(group.labels).toContain("qa:untriaged");
+    expect(stateOf(group).verified).toBe(false);
+  });
+
   it("leaves unrelated failures separate and retries partial delivery without duplicate issues", async () => {
     const env = fixture();
     const unrelated = { ...finding("server/auth.test.ts"), textChange: undefined, assertion: "Expected 403, received 200" };
@@ -144,6 +168,54 @@ describe("one issue per product naming problem", () => {
     expect(env.issues[0].labels).not.toContain("qa:verified");
     await deliverReport(report(5, [], [first.key, late.key]), env);
     expect(env.issues[0].labels).toContain("qa:verified");
+  });
+
+  it("retains historical aggregate membership when two complete records require reconciliation", async () => {
+    const env = fixture(), a = finding(), b = finding("src/menu-b.test.ts");
+    await deliverReport(report(1, [a, b]), env);
+    const group = env.issues[0];
+    group.body += "\n\n" + group.body;
+    group.state = "closed";
+    await deliverReport(report(2, [a]), env);
+    expect(group.state).toBe("open");
+    expect(stateOf(group).caseKeys).toEqual([a.key, b.key]);
+    await deliverReport(report(3, [], [a.key]), env);
+    expect(group.labels).not.toContain("qa:verified");
+    await deliverReport(report(4, [], [a.key, b.key]), env);
+    expect(group.labels).toContain("qa:verified");
+  });
+
+  it("reopens a verified aggregate with competing records on an independently classified member failure", async () => {
+    const env = fixture(), a = finding(), b = finding("src/menu-b.test.ts");
+    await deliverReport(report(1, [a, b]), env);
+    await deliverReport(report(2, [], [a.key, b.key]), env);
+    const group = env.issues[0];
+    group.state = "closed";
+    group.body += "\n\n" + group.body;
+    const current = report(3, [{ ...a, textChange: undefined }]);
+    await deliverReport(current, env);
+    expect(group.state).toBe("open");
+    expect(group.labels).not.toContain("qa:verified");
+    expect(group.body).toContain(current.url);
+    env.api.mockClear();
+    await deliverReport(current, env);
+    expect(env.api.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  });
+
+  it("withholds positive verification while a second same-key coverage block is incomplete", async () => {
+    const env = fixture(), a = finding(), b = finding("src/menu-b.test.ts");
+    await deliverReport(report(1, [a]), env);
+    const group = env.issues[0];
+    const second = group.body.split("<!-- mausbot-qa:end -->")[0].replaceAll(a.key, b.key);
+    group.body += "\n\n" + second;
+    await deliverReport(report(2, [], [a.key]), env);
+    expect(group.labels).not.toContain("qa:verified");
+    expect(group.body).toContain(second);
+    await deliverReport(report(3, [a]), env);
+    expect(stateOf(group).caseKeys).toEqual([a.key, b.key]);
+    expect(stateOf(group).coverageUnknown).toBe(true);
+    await deliverReport(report(4, [], [a.key, b.key]), env);
+    expect(group.labels).not.toContain("qa:verified");
   });
 
   it("keeps existing consolidated cases and new cases on one parent without clearing pending members", async () => {
