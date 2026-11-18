@@ -141,7 +141,9 @@ describe("CI concurrency", () => {
     const fullMac = { os: "macos-latest", files: "" };
     const pr = { event_name: "pull_request" };
     expect(interpolate(timeout, { matrix: fullMac, github: pr })).toBe(45);
-    expect(interpolate(timeout, { matrix: fullMac, github: { event_name: "push" } })).toBe(30);
+    for (const event_name of ["push", "merge_group", "schedule", "workflow_dispatch"]) {
+      expect(interpolate(timeout, { matrix: fullMac, github: { event_name } })).toBe(31);
+    }
     expect(interpolate(timeout, { matrix: { ...fullMac, files: "server/a.test.ts" }, github: pr })).toBe(30);
     expect(interpolate(timeout, { matrix: { os: "ubuntu-latest" }, github: pr })).toBe(25);
     expect(workflow.jobs.gate["timeout-minutes"]).toBe(180);

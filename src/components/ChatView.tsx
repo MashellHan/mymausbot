@@ -411,9 +411,11 @@ const Bubble = memo(function Bubble({
   const togglePin = () =>
     dispatch({ type: "updateTask", botId, threadId, patch: { pinnedMessageId: pinned ? "" : message.id } });
   const replyAllowed = canReplyToMessage(message);
-  const replyMenu = (body: string) => replyAndCopy(() => onReply(message), body).filter((item) => (!simple && replyAllowed) || item.key !== "reply");
+  const replyCopyItems = replyAndCopy(() => onReply(message), user ? visibleText : text);
+  const contextItems = replyCopyItems.filter((item) => item.key === "reply" ? replyAllowed : !simple);
+  const moreItems = simple ? replyCopyItems.filter((item) => item.key === "copy") : [];
   const botActions = !user && (
-    <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={simple ? [...replyMenu(text), ...botMenu, ...forkAction] : [...botMenu, ...forkAction]} contextItems={simple ? undefined : replyMenu(text)}>
+    <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={[...moreItems, ...botMenu, ...forkAction]} contextItems={contextItems}>
       {replyAllowed && <ReplyAction onReply={() => onReply(message)} />}
       {canReact && !peer && <ReactAction threadId={threadId} message={message} />}
       {!simple && text && <CopyButton text={text} className={messageActionClass} />}
@@ -429,9 +431,9 @@ const Bubble = memo(function Bubble({
       <div className={cn("flex w-full items-center gap-1.5", user ? "justify-end" : "justify-start")}>
         {user && (
           <MessageActions
-            side="user" contextItems={simple ? undefined : replyMenu(visibleText)}
+            side="user" contextItems={contextItems}
             menu={[
-              ...(simple ? replyMenu(visibleText) : []),
+              ...moreItems,
               ...userMessageMenu({
                 messageId: message.id, save: botMenu.filter((item) => item.key === TEAM_MEMORY_ITEM),
                 onEdit: !speaker && message.kind === "text" && !webhookView && !hasAttachments && !message.id.startsWith("optimistic-")
@@ -441,7 +443,7 @@ const Bubble = memo(function Bubble({
               ...forkAction,
             ]}
           >
-            {canReplyToMessage(message) && <ReplyAction onReply={() => onReply(message)} />}
+            {replyAllowed && <ReplyAction onReply={() => onReply(message)} />}
             {!simple && Boolean(visibleText.trim()) && <CopyButton text={visibleText} className={messageActionClass} />}
           </MessageActions>
         )}
