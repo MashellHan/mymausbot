@@ -228,7 +228,7 @@ async function cloudEnd(t, { greet = true, answerPings = true } = {}) {
   const sessions = [];
   wss.on("connection", (ws, req) => {
     const mux = createLinkMux({ send: (frame) => ws.send(frame) });
-    const session = { ws, mux, headers: req.headers };
+    const session = { ws, mux, headers: req.headers, connectedAt: Date.now() };
     sessions.push(session);
     if (greet) ws.send(JSON.stringify({ t: "hello", seenAs: SEEN_AS }));
     ws.on("message", (data, binary) => {
@@ -245,20 +245,28 @@ async function cloudEnd(t, { greet = true, answerPings = true } = {}) {
 test("the link signs in like the poll, takes My Cloud's word for this computer's public address, and ends when asked", async (t) => {
   const end = await cloudEnd(t);
   const stop = new AbortController();
+  const started = Date.now();
   let opened = 0;
+  let openedAtMs = null;
   let outcome = null;
+  let outcomeAtMs = null;
   const connects = [];
-  const running = runDeviceLink({ url: end.url, headers: { cookie: "omb_session=s", "x-omb-computer-secret": "a".repeat(64) }, signal: stop.signal, onOpen: () => opened++, openMs: 100,
+  const running = runDeviceLink({ url: end.url, headers: { cookie: "omb_session=s", "x-omb-computer-secret": "a".repeat(64) }, signal: stop.signal, onOpen: () => { opened++; openedAtMs = Date.now() - started; }, openMs: 1500,
     egress: { interfaces: () => ({}), resolve: async () => [{ address: SEEN_AS, family: 4 }], connect: (options) => { connects.push(options); return tcpConnect(1, "127.0.0.1"); } } })
-    .then(result => { outcome = result; return result; });
+    .then(result => { outcome = result; outcomeAtMs = Date.now() - started; return result; });
   try {
-    try { await until(() => end.sessions.length === 1 && opened === 1, "the link to open"); }
+    try { await until(() => (end.sessions.length === 1 && opened === 1) || outcome !== null, "the link to open"); }
     catch (error) {
-      throw new Error(`${error instanceof Error ? error.message : String(error)}; onOpen=${opened}; serverConnections=${end.sessions.length}; linkOutcome=${outcome ? JSON.stringify(outcome) : "pending"}`, { cause: error });
+      const acceptedAtMs = end.sessions[0] ? end.sessions[0].connectedAt - started : null;
+      throw new Error(`${error instanceof Error ? error.message : String(error)}; elapsedMs=${Date.now() - started}; acceptedAtMs=${acceptedAtMs}; onOpen=${opened}; openedAtMs=${openedAtMs}; serverConnections=${end.sessions.length}; linkOutcome=${outcome ? JSON.stringify(outcome) : "pending"}; outcomeAtMs=${outcomeAtMs}`, { cause: error });
+    }
+    if (outcome !== null) {
+      const acceptedAtMs = end.sessions[0] ? end.sessions[0].connectedAt - started : null;
+      throw new Error(`the link ended before opening; elapsedMs=${Date.now() - started}; acceptedAtMs=${acceptedAtMs}; onOpen=${opened}; openedAtMs=${openedAtMs}; serverConnections=${end.sessions.length}; linkOutcome=${JSON.stringify(outcome)}; outcomeAtMs=${outcomeAtMs}`);
     }
     assert.equal(end.sessions[0].headers.cookie, "omb_session=s");
     assert.equal(end.sessions[0].headers["x-omb-computer-secret"], "a".repeat(64));
-    await delay(250); // past the opening limit: a link that opened is not ended by it
+    await delay(1600); // past the opening limit: a link that opened is not ended by it
     assert.deepEqual(await end.sessions[0].mux.open({ host: "home-router.test", port: 443 }), { refused: "home-network" }, "the home's own public address is home");
     assert.equal(connects.length, 0);
     stop.abort();
