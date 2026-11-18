@@ -10,6 +10,7 @@ const PRIVATE_TOOL_KEY = /(?:auth|base64|binary|body|cookie|credential|data|env|
 const TOOL_ASSIGNMENT = /"([^"\n]{1,128})"\s*[:=]|\b([A-Za-z][A-Za-z0-9_.-]*(?:[ \t]+(?:id|key|token|data|value))?)['"]?\s*[:=]/gi;
 const TOOL_FIELD_VALUE = /^\s*(?:"([^"\n]{1,128})"|'([^'\n]{1,128})'|([A-Za-z0-9_-]+))/;
 const EXEC_COMPOUND_ASSIGNMENT = /(?:\?\?|\|\||&&|>>>?|<<|\*\*|[-+*/%&|^])=/;
+const EXEC_COMMENT_BEFORE_ASSIGNMENT = /(?:\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])\s*[:=]/;
 const EXEC_DECLARATION_LITERAL = /^\s*(["'`])([A-Za-z0-9 ._-]{1,128})\1\s*(?=$|[,;}\])])/;
 const PRIVATE_HEADER_NAME = /^(?:(?:set-)?cookie|(?:proxy-)?authorization|x-(?:api-key|auth-token|access-token|session-id))$/i;
 const BASE64_ENCODING = /^base64(?:-?url)?$/i;
@@ -49,7 +50,9 @@ function safeToolText(value: unknown, customExec = false): { text: string | null
     .replace(/\\+(?=["'])/g, "");
   if (customExec) {
     const commentedDeclaration = /\/[/*]/.test(decoded) && (/\b(?:encoding|name)\b/i.test(decoded) || /\]\s*\/[/*]/.test(decoded));
-    if (commentedDeclaration || EXEC_COMPOUND_ASSIGNMENT.test(decoded)) return { text: null, clipped: false };
+    if (commentedDeclaration || EXEC_COMMENT_BEFORE_ASSIGNMENT.test(decoded) || EXEC_COMPOUND_ASSIGNMENT.test(decoded)) {
+      return { text: null, clipped: false };
+    }
   }
   const labels = customExec ? decoded.replace(/\[\s*(["'`])([A-Za-z][\w-]{0,127})\1\s*\](?=\s*[:=])/g, ".$2") : decoded;
   if (customExec && /\]\s*(?::|=(?![=>]))/.test(labels)) return { text: null, clipped: false };

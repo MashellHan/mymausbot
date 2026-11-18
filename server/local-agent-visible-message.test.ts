@@ -169,6 +169,9 @@ describe("bounded tool details", () => {
       'options.name /* recorded */ = value;', 'options[field] // recorded\n = "fixture";']) {
       expect(show(assignment)).toMatchObject({ detailStatus: "withheld" });
     }
+    const privateMember = show('options.cookie /* recorded */ = "fixture-marker";');
+    expect(privateMember.detailStatus).toBe("withheld");
+    expect(privateMember.text).not.toContain("fixture-marker");
     for (const source of ['text({ encoding: `base64` });', 'text({ name: `Cookie` });', 'text({ name: fixtureName });']) {
       expect(show(source)).toMatchObject({ detailStatus: "withheld" });
     }
