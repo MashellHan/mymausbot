@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { LocalUsageCategory, LocalUsageResponse } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
-import { primaryUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
+import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
 import { weeklyUsageTrend, type UsageTrendBucket } from "@/lib/local-usage-trends";
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
 import { metricText, countText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
@@ -26,11 +26,6 @@ function asOfTime(value: number) {
   });
 }
 
-function coverageText(coverage: UsageWindow["coverage"]) {
-  return t(coverage === "ready" ? "computer.usage.coverage.ready"
-    : coverage === "partial" ? "computer.usage.coverage.partial" : "computer.usage.coverage.unavailable");
-}
-
 function tokenComparisonUnavailableHint(window: UsageWindow) {
   if (window.totalTokens === null) return t("computer.usage.tokenPeriodUnavailable");
   if (window.comparison.unavailableTokenDays.length) return t("computer.usage.tokenHistoryMissing", {
@@ -40,29 +35,7 @@ function tokenComparisonUnavailableHint(window: UsageWindow) {
   return t("computer.usage.tokenCollectionIncomplete");
 }
 
-function BranchCommits({ window, snapshot }: { window: UsageWindow; snapshot: LocalUsageResponse }) {
-  const local = snapshot.windows?.[window.days];
-  const matched = local?.startDay === window.startDay && local.endDay === window.endDay
-    && local.coverage !== "unavailable" && snapshot.status !== "unavailable" ? local : null;
-  const value = matched?.commits ?? null;
-  const sources = snapshot.sourceCoverage;
-  const partial = !sources || sources.total === 0 || sources.ready !== sources.total || !!matched?.missingDays.length;
-  const status = snapshot.status === "stale" ? "stale" : partial ? "partial" : null;
-  return <dl className="mt-2 flex flex-wrap items-center gap-x-1.5 border-t border-hairline/40 pt-1.5 text-[13px]" data-usage-branch-commits>
-    <dt className="flex items-center gap-1 text-ink-secondary">{t("computer.usage.branchCommits")}
-      <InfoHint label={t("computer.usage.branchCommits")}>
-        <p>{t("computer.usage.branchCommitScope")}</p>
-        {matched && <p>{t("computer.usage.latestUpdate", { time: asOfTime(matched.asOf) })}</p>}
-      </InfoHint>
-    </dt>
-    <dd className="ml-auto flex flex-wrap items-baseline gap-1.5 tabular-nums">
-      <span className="font-semibold text-ink">{metricText(value)}</span>
-      {value !== null && status && <span className="text-ink-secondary">{t(`computer.usage.primaryApi.${status}`)}</span>}
-    </dd>
-  </dl>;
-}
-
-function WindowCard({ window, snapshot }: { window: UsageWindow; snapshot: LocalUsageResponse }) {
+function WindowCard({ window }: { window: UsageWindow }) {
   const usageMetricHint = useUsageMetricHint();
   const rows = [
     ["prs", countText(window.prs, window.knownPrs), window.comparison.prs ?? window.comparison.known?.prs ?? null],
@@ -77,17 +50,11 @@ function WindowCard({ window, snapshot }: { window: UsageWindow; snapshot: Local
           <h3 className="text-[16px] font-semibold text-ink">{window.days === 1 ? t("computer.usage.windowOne") : t("computer.usage.window", { days: window.days })}</h3>
           <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay} – {window.endDay}</span>
         </div>
-        {window.coverage !== "ready" && <InfoHint label={coverageText(window.coverage)} warning>
-          <p>{coverageText(window.coverage)}</p>
-          <p>{t(window.coverage === "unavailable" ? "computer.usage.noData" : "computer.usage.partial")}</p>
-          {window.missingDays.length > 0 && <p>{t("computer.usage.missingDays", { count: window.missingDays.length })}</p>}
-          {window.unavailableTokenDays.length > 0 && <p>{t("computer.usage.unavailableTokenDays", { count: window.unavailableTokenDays.length })}</p>}
-        </InfoHint>}
       </div>
       <dl className="mt-2 grid grid-cols-3 gap-2">
         {rows.map(([metric, value, comparison]) => (
           <div key={metric} className="min-w-0">
-            <dt title={usageMetricHint(metric)} className="text-[13px] text-ink-secondary">{t(metric === "commits" ? "computer.usage.defaultBranchCommits" : `computer.usage.metric.${metric}`)}</dt>
+            <dt title={usageMetricHint(metric)} className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
             <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
               <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
               <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric}
@@ -117,7 +84,6 @@ function WindowCard({ window, snapshot }: { window: UsageWindow; snapshot: Local
           );
         })}
       </div>
-      <BranchCommits window={window} snapshot={snapshot} />
     </section>
   );
 }
@@ -231,53 +197,21 @@ function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric
   );
 }
 
-function ContributionSources({ snapshot }: { snapshot: LocalUsageResponse }) {
-  const contributions = snapshot.contributions;
-  if (!contributions) return null;
-  return <details className="mt-4 rounded-lg border border-hairline/60 px-3 py-2 text-[13px] text-ink-secondary" data-usage-primary-sources>
-    <summary className="min-h-8 cursor-pointer font-medium text-ink outline-none focus-visible:ring-2 focus-visible:ring-accent/60">{t("computer.usage.primarySources")}</summary>
-    <p className="mt-1">{t("computer.usage.primaryDateBasis")}</p>
-    {!contributions.accounts.length ? <p className="mt-2">{t("computer.usage.primaryUnavailable")}</p>
-      : <ul className="mt-2 space-y-2">
-        {contributions.accounts.map(account => <li key={`${account.provider}:${account.sourceId}`} className="rounded-md bg-inset px-2 py-1.5">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <span className="font-medium text-ink [overflow-wrap:anywhere]" dir="auto">{account.login} · {account.host}{account.scopes.length ? ` · ${account.scopes.map(scope => `${scope.organization}/${scope.project}`).join(", ")}` : ""}</span>
-            <span>{t(`computer.usage.primaryApi.${account.status}`)}</span>
-          </div>
-          <p>{t("computer.usage.primarySourceCutoff", { time: asOfTime(account.cutoffAt) })}</p>
-          <p>{t("computer.usage.primarySourceCaptured", { time: asOfTime(account.capturedAt) })}</p>
-          <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 @min-[42rem]/usage:grid-cols-4">
-            {(["1", "7", "30", "60"] as const).map(period => <div key={period} className="min-w-0 tabular-nums">
-              <dt className="font-medium text-ink">{t("computer.usage.periodDays", { days: period })}</dt>
-              <dd className="[overflow-wrap:anywhere]">{t("computer.usage.primarySourceCounts", {
-                prs: countText(account.windows[period].prs, account.windows[period].knownPrs),
-                commits: countText(account.windows[period].commits, account.windows[period].knownCommits),
-              })}</dd>
-            </div>)}
-          </dl>
-          {account.coverage.reasons.length > 0 && <p>{t("computer.usage.primaryCoverageReasons", { reasons: account.coverage.reasons.join(", ") })}</p>}
-        </li>)}
-      </ul>}
-  </details>;
-}
-
 export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | null }) {
   const [range, setRange] = useState<UsageTrendRange>("30");
-  const view = snapshot && primaryUsageView(snapshot, range);
+  const view = snapshot && localUsageView(snapshot, range);
   const chartDays = view ? range === "6m" ? weeklyUsageTrend(view.trend) : view.trend : [];
   const windows = view?.windows;
   const showUnclassified = view?.trend.some((day) => (day.categories.unclassified.prs ?? day.categories.unclassified.knownPrs ?? 0) > 0
     || (day.categories.unclassified.commits ?? day.categories.unclassified.knownCommits ?? 0) > 0) ?? false;
   return (
-    <UsageSourceContext.Provider value="primary">
+    <UsageSourceContext.Provider value="repositories">
     <div className="@container/usage min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="local-usage-panel">
       <header className="mb-3 flex flex-wrap items-center gap-1 pt-2">
         <h2 className="text-[18px] font-semibold text-ink">{t("computer.usage.heading")}</h2>
-        {view && view.status !== "unavailable" && <InfoHint label={t("app.info")} warning={view.status !== "ready"}>
+        {view && (view.status === "partial" || view.status === "stale") && <InfoHint label={t("app.info")} warning>
           {view.status === "partial" && <p>{t("computer.usage.partial")}</p>}
           {view.status === "stale" && <p>{t("computer.usage.stale")}</p>}
-          <p>{t(snapshot?.contributions?.windows ? "computer.usage.primaryDateBasis" : "computer.usage.primaryMissingDateBasis")}</p>
-          {view.asOf != null && <p><time dateTime={new Date(view.asOf).toISOString()}>{t("computer.usage.primarySourceCutoff", { time: asOfTime(view.asOf) })}</time></p>}
         </InfoHint>}
         {view?.asOf != null ? <time data-usage-latest-update dateTime={new Date(view.asOf).toISOString()}
           className="ml-auto min-w-0 text-right text-[13px] tabular-nums text-ink-secondary [overflow-wrap:anywhere]">
@@ -290,7 +224,7 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
       {view?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
       {snapshot && windows && <>
         <div className="grid grid-cols-1 gap-2 @min-[42rem]/usage:grid-cols-3">
-          {(["1", "7", "30"] as const).map((key) => <WindowCard key={key} window={windows[key]} snapshot={snapshot} />)}
+          {(["1", "7", "30"] as const).map((key) => <WindowCard key={key} window={windows[key]} />)}
         </div>
         <section className="mt-4">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -314,7 +248,6 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
         </section>
         <UsageRepositoryTable key={range} windows={windows} historyWindow={view.sixtyDayRepositories} defaultPeriod={range === "60" ? "60" : "1"} />
       </>}
-      {snapshot && <ContributionSources snapshot={snapshot} />}
     </div>
     </UsageSourceContext.Provider>
   );

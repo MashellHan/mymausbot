@@ -9,38 +9,29 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
 
 ## Usage definitions
 
-- The main Activities surface always displays **Contributions** (`contributions-v2`).
-  GitHub and ADO PRs use creation instants on Beijing dates; verified reachable
-  default-head commits use author instants on the same dates, including merges.
-  A source day can be complete through its cutoff while the calendar day is
-  still open. Tokens use the same calendar dates with an independent capture time.
-- The 1-, 7- and 30-day cards also show observed non-merge commits across local branches and synced origin refs from the matching repository-observation window. This count includes work on branches before merge and can overlap the default-branch count. Its coverage and capture time are independent. Missing or misaligned observations stay unavailable.
-- The canonical 60-day snapshot atomically replaces verified GitHub and ADO
-  envelopes. Cards, charts, categories, repositories and account details use
-  that one version. A missing account, date, pagination, visibility or attribution
-  leaves exact totals unknown; known typed subtotals stay separate. The older
-  90-day and six-month dates remain unavailable until this definition has real
-  observations for them. If the contribution cache is missing, PRs, commits and
-  repositories remain unknown while independently available Tokens use their
-  China-day dates. The old readers below remain explicit API diagnostics.
+- The main Activities surface uses **Repository activity** (`repository-observations-v1`).
+  Each card has one Commits metric: observed non-merge commits across local
+  branches and synced origin refs, matched to configured author emails and
+  deduplicated by SHA. PRs use configured GitHub/ADO created-PR observations;
+  Tokens use existing synced-device observations, including cache reads.
+- Cards, trends, comparisons, categories and repository details use that same
+  source. The 1-, 7- and 30-day windows include the capture date through the
+  displayed timestamp in Asia/Shanghai. Window changes compare the preceding
+  non-overlapping period; daily changes compare the same date one week earlier.
+- There is no separate default-branch row, source selector, account disclosure
+  or per-card coverage badge. Missing values remain unavailable, observed zero
+  remains zero, and header information retains incomplete/stale status on demand.
+  Missing devices, unreadable repositories and insufficient history remain
+  incomplete. Verified previous zero yields New, or zero when both periods are zero.
 
-### Legacy diagnostic definitions
+### Independent API diagnostics
 
-- The 1, 7 and 30 day windows include the capture date through the displayed
-  timestamp in Asia/Shanghai. The trend uses the same 30 dates. Window changes
-  compare the previous non-overlapping period; daily changes compare the same
-  China-calendar date one week earlier. The capture day is still in progress.
-- The legacy **Repository activity** reader (`repository-observations-v1`)
-  preserves all configured work, enterprise, ADO and personal repository
-  observations, categories and same-definition comparisons. Created PR observations
-  come from the configured GitHub/ADO collectors; repository commits are non-merge
-  local Git observations across branches matched to configured author emails.
-  Neither is relabeled as Profile-qualified activity. Missing devices, unreadable
-  repositories and insufficient history remain incomplete; verified previous zero
-  yields New (or zero when both periods are zero), never a fabricated percentage.
-- The legacy **GitHub Profile references** reader uses only `github-profile-v1`.
-  It retains dated observations as a separate diagnostic contract. No legacy
-  source adds to or substitutes for the main contribution metric.
+- The canonical `contributions-v2` snapshot remains available for diagnosis.
+  It uses GitHub/ADO created PRs and reachable default-head commits by Beijing
+  author date, including merges. Its accounts, known subtotals and independent
+  capture time do not replace or add to the main repository activity view.
+- **GitHub Profile references** (`github-profile-v1`) retain their own dated
+  observations and source rules below.
 - PR references come from the authenticated account's typed GitHub contribution
   connection, with both excludeFirst and excludePopular false. They count creations
   by PR createdAt in Asia/Shanghai, not merges. Repositories currently marked isFork
@@ -87,13 +78,9 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
 - The legacy Profile reference does not include the new ADO equivalent. Legacy
   merged ADO counts are not added to Profile parity claims.
 - Tokens remain local, including cache reads. Their existing synced-device
-  comparison scope is preserved. Remote and token captures have independent
-  timestamps; open the information icon beside Usage to inspect both. If capture dates
-  differ, tokens are joined by calendar date to the displayed remote windows.
-  Missing token dates stay unavailable, and an unavailable comparison stays null.
-  Missing primary contributions never fall back to repository observations in
-  the main cards, chart or repository rows. Legacy observations remain available
-  to read separately for diagnosis.
+  comparison scope is preserved. Missing token dates stay unavailable, and an
+  unavailable comparison stays null. Separate remote diagnostics never fill
+  missing local dates.
 - The refresh wrapper records independent per-machine Token completeness. A
   partial machine whose only failures are Git fetches can compare complete
   observed Token periods; Git coverage stays partial. Unknown, log-read,
@@ -246,11 +233,10 @@ polls without overlap only while open and visible, and clears on 401/403.
 ## Isolated verification
 
 Activities shares a 30/60/90-day or six-month range across its three trends.
-The primary 1/7/30-day cards, comparisons and repository tables use only the
-versioned GitHub Profile and ADO sources. Longer ranges expose unavailable
-source days rather than substituting legacy observations. Token dates are joined
-by their printed China date; GitHub Profile and ADO dates retain their separate
-source-day definitions.
+The 1/7/30-day cards, comparisons and repository tables use repository
+observations. Longer ranges use retained repository and Token history on their
+printed China dates. Missing days remain unavailable; independent contribution
+and Profile diagnostics never fill them.
 
 Six months means the interval after the clamped same date six calendar months
 earlier, through the data date, inclusive. For 2026-11-09 this is 2026-05-10 through
@@ -298,9 +284,10 @@ Use their printed URLs, never a live app URL. Check `width=360`, `400` and `960`
 `skin=midnight` and `atelier`, and `locale=en` and `zh`. Verify three stacked
 trends, initially collapsed daily details, all three WoW values, and keyboard
 navigation of repository period tabs. Check unavailable, stale and zero states.
-Use `scenario=ready` to verify the primary 60-day source, account details and
-the independent Token join. `scenario=remote-only` and `scenario=legacy-only`
-confirm that old observations cannot fill missing primary cards or trends.
+Use `scenario=ready` to verify one ordinary Commits metric, matching repository
+trends and details, and no default/all-branch duplication or Partial badge.
+`scenario=remote-only` and `scenario=legacy-only` confirm that remote diagnostic
+sources do not replace repository observations or supply missing local values.
 Change the trend range at 60/90 days and six calendar months; check unknown,
 partial and true-zero states and same-definition comparisons. Faint full-height
 Monday separators mark each week.
@@ -349,9 +336,9 @@ snapshot. Missing per-day detail stays unavailable/partial; it is not reconstruc
 from category totals. Legacy snapshots without detail remain readable. The 1/7/30
 cards, comparisons and repository windows keep their definitions.
 
-The main Activities surface has one source-qualified definition. Legacy local
-repository observations, remote PR records and old Profile references remain
-independent API diagnostics and cannot fill a missing primary day.
+The main Activities surface uses repository observations throughout. Remote
+PR records, canonical contributions and Profile references remain independent
+API diagnostics and cannot fill a missing repository day.
 Remote history retains configured GitHub/enterprise/ADO repository identities;
 its PR-associated commit counts are neither all repository Git commits nor Profile
 commit contributions. Dates and source identities must match before reconciliation.
