@@ -395,8 +395,12 @@ describe("control-omb ui drives the real renderer", () => {
     expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 
     await ui("click", info.ui, "--name", "Open Pepper's profile");
-    await ui("click", info.ui, "--name", "Bot settings");
-    await ui("click", info.ui, "--name", "Inspector");
+    await expect.poll(async () => (await ui("eval", info.ui, "--js", `(() => {
+      const panel = document.querySelector('[data-computer-panel]');
+      return Boolean(panel && !panel.getAnimations().some(animation => animation.playState === 'running'));
+    })()`)).result, { timeout: 10_000 }).toBe(true);
+    await clickUiControl(info.ui, '[data-computer-panel] button[aria-label="Bot settings"]');
+    await clickUiControl(info.ui, '#bot-panel [data-panel-tabpanel="details"] button[data-panel-item="inspector"]');
     // A local page fetches a screen when it opens, so the panel arrives just after the click.
     const inspected = await vi.waitFor(async () => {
       const snapshot = await ui("snapshot", info.ui);
