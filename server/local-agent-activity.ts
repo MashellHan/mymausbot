@@ -1,22 +1,24 @@
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { LocalAgentActivityEvent, LocalAgentActivityResponse } from "../shared/local-dashboard.ts";
-import { redactedAgentText as safeText, redactedAgentToolArguments, redactedAgentToolResult,
-  trackAgentToolCalls, visibleAgentMessage } from "./local-agent-visible-message.ts";
+import type { LocalAgentActivityEvent, LocalAgentActivityHistoryRequest, LocalAgentActivityResponse } from "../shared/local-dashboard.ts";
+import { redactedAgentText as safeText, trackAgentToolCalls, visibleAgentMessage, visibleToolDetail } from "./local-agent-visible-message.ts";
+import { createActivityHistory, isToolActivity, MAX_ACTIVITY_EVENTS, MAX_ACTIVITY_HISTORY_EVENTS, MAX_ACTIVITY_TOOL_EVENTS,
+  unavailableActivityHistory, type ActivityHistoryRead } from "./local-agent-activity-history.ts";
 import { codexSessionId, discoverCodexSessionFiles } from "./local-agent-session.ts";
 import { createPiSessionReader } from "./local-agent-pi-message.ts";
 import { verifiedLocalAgentMembers } from "./local-agent-association.ts";
+import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { herdrRows, runHerdr, type HerdrRunner } from "./local-agent-teams.ts";
 
 const PANE_ID = /^w\d+:p[0-9A-Za-z]+$/;
 const HEAD_BYTES = 64 * 1024;
 const TAIL_BYTES = 512 * 1024;
+const HISTORY_TAIL_BYTES = 4 * 1024 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
-const MAX_EVENTS = 60;
-const MAX_TOOL_EVENTS = 30;
+const MAX_HISTORY_LINE_BYTES = 1024 * 1024;
 const DISCOVERY_MS = 10_000;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const unavailable = (agentId: string): LocalAgentActivityResponse => ({ agentId, status: "unavailable", updatedAt: null, truncated: false, events: [] });
@@ -33,11 +35,10 @@ function visibleEvent(line: string, offset: number): { event: LocalAgentActivity
     if (!result && (typeof name !== "string" || !/^[A-Za-z][A-Za-z0-9_.-]{0,80}$/.test(name)
       || safeText(name).text !== name)) return { event: null, clipped: false, callId };
     const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
-    const detail = result ? redactedAgentToolResult(payload.output)
-      : redactedAgentToolArguments(payload.type === "custom_tool_call" ? payload.input : payload.arguments);
+    const kind = result ? "tool-result" : "tool-call";
+    const detail = visibleToolDetail(kind, result ? payload.output : payload.type === "custom_tool_call" ? payload.input : payload.arguments, "codex");
     return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null,
-      kind: result ? "tool-result" : "tool-call", tool: result ? null : name as string,
-      text: detail.text ?? (result ? "[Result details unavailable]" : "[Arguments unavailable]") }, clipped: detail.clipped,
+      kind, tool: result ? null : name as string, text: detail.text, detailStatus: detail.detailStatus }, clipped: detail.clipped,
       format: "canonical", raw: "", callId };
   }
   const message = visibleAgentMessage(row);
@@ -49,7 +50,7 @@ function visibleEvent(line: string, offset: number): { event: LocalAgentActivity
   return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null, kind, tool: null, text }, clipped, format, raw };
 }
 
-async function readSession(file: string, sessionId: string): Promise<{ events: LocalAgentActivityEvent[]; truncated: boolean } | null> {
+async function readSession(file: string, sessionId: string, history = false): Promise<ActivityHistoryRead | null> {
   let handle;
   try { handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)); }
   catch (error) {
@@ -57,9 +58,10 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
     throw error;
   }
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size <= 0) return null;
-    const head = Buffer.alloc(Math.min(stat.size, HEAD_BYTES));
+    const stat = await handle.stat({ bigint: true });
+    const size = Number(stat.size);
+    if (!stat.isFile() || !Number.isSafeInteger(size) || size <= 0) return null;
+    const head = Buffer.alloc(Math.min(size, HEAD_BYTES));
     const firstRead = await handle.read(head, 0, head.length, 0);
     const endOfMeta = head.indexOf(10);
     if (endOfMeta < 0 || endOfMeta >= firstRead.bytesRead) return null;
@@ -67,8 +69,8 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
     try { meta = record(JSON.parse(head.toString("utf8", 0, endOfMeta))); } catch { return null; }
     const recordedId = record(meta.payload).id;
     if (meta.type !== "session_meta" || typeof recordedId !== "string" || recordedId.toLowerCase() !== sessionId) return null;
-    const start = Math.max(0, stat.size - TAIL_BYTES);
-    const bytes = Buffer.alloc(stat.size - start);
+    const start = Math.max(0, size - (history ? HISTORY_TAIL_BYTES : TAIL_BYTES));
+    const bytes = Buffer.alloc(size - start);
     const { bytesRead } = await handle.read(bytes, 0, bytes.length, start);
     if (bytesRead !== bytes.length) throw new Error("Session changed during read");
     const first = start === 0 ? 0 : bytes.indexOf(10) + 1;
@@ -78,7 +80,7 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
     for (let cursor = first; (start === 0 || first > 0) && cursor < bytesRead;) {
       const end = bytes.indexOf(10, cursor);
       if (end < 0) { truncated = true; break; }
-      if (end - cursor > MAX_LINE_BYTES) truncated = true;
+      if (end - cursor > (history ? MAX_HISTORY_LINE_BYTES : MAX_LINE_BYTES)) truncated = true;
       else {
         const found = visibleEvent(bytes.toString("utf8", cursor, end), start + cursor);
         if (found.clipped) truncated = true;
@@ -91,23 +93,31 @@ async function readSession(file: string, sessionId: string): Promise<{ events: L
           const duplicate = events.findIndex((prior) => event.at !== null && prior.format !== found.format && prior.event.kind === event.kind
             && prior.event.at === event.at && prior.raw === found.raw);
           if (duplicate >= 0) {
-            if (found.format === "canonical") events[duplicate] = { event, format: found.format, raw: found.raw! };
+            if (found.format === "canonical") {
+              event.id = events[duplicate]!.event.id;
+              events[duplicate] = { event, format: found.format, raw: found.raw! };
+            }
           } else {
             events.push({ event, format: found.format!, raw: found.raw! });
-            if (event.kind === "tool-call" || event.kind === "tool-result") {
-              const tools = events.filter((entry) => entry.event.kind === "tool-call" || entry.event.kind === "tool-result");
-              if (tools.length > MAX_TOOL_EVENTS) {
+            if (!history && isToolActivity(event)) {
+              const tools = events.filter((entry) => isToolActivity(entry.event));
+              if (tools.length > MAX_ACTIVITY_TOOL_EVENTS) {
                 events.splice(events.indexOf(tools[0]!), 1);
                 truncated = true;
               }
             }
-            if (events.length > MAX_EVENTS) { events.shift(); truncated = true; }
+            if (events.length > (history ? MAX_ACTIVITY_HISTORY_EVENTS : MAX_ACTIVITY_EVENTS)) { events.shift(); truncated = true; }
           }
         }
       }
       cursor = end + 1;
     }
-    return { events: events.map(({ event }) => event), truncated };
+    const result = { events: events.map(({ event }) => event), truncated };
+    if (!history) return result;
+    const current = await lstat(file, { bigint: true });
+    if (!current.isFile() || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size ||
+        current.mtimeNs !== stat.mtimeNs || current.ctimeNs !== stat.ctimeNs) return null;
+    return { ...result, historySource: { file: `${stat.dev}:${stat.ino}`, path: file, size, revision: `${stat.mtimeNs}:${stat.ctimeNs}` } };
   } finally { await handle.close(); }
 }
 
@@ -115,9 +125,43 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
   run?: HerdrRunner; read?: typeof readSession; home?: string; codexHome?: string; now?: () => number;
 } = {}) {
   const piSessionsFor = createPiSessionReader(join(home, ".local", "share", "mausbot-team", "pi-agent"));
+  const piHistoryFor = createPiSessionReader(join(home, ".local", "share", "mausbot-team", "pi-agent"), { history: true });
+  const activityHistory = createActivityHistory();
   const paths = new Map<string, { file: string | null; at: number }>();
   const lastGood = new Map<string, { sessionId: string; file: string; response: LocalAgentActivityResponse }>();
   const latest = new Map<string, symbol>();
+  const pendingNewest = new Map<string, Promise<LocalAgentActivityResponse>>();
+
+  async function historyAgent(agentId: string, expected: string): Promise<Record<string, unknown> | undefined> {
+    const agents = herdrRows(await run(["--session", "default", "agent", "list"]), "agents");
+    const agent = verifiedLocalAgentMembers(agents).find((row) => row.pane_id === agentId);
+    return agent && localAgentOccupantId(agent, agentId) === expected ? agent : undefined;
+  }
+
+  async function refreshHistory(agentId: string, request: LocalAgentActivityHistoryRequest): Promise<LocalAgentActivityResponse> {
+    const missing = unavailableActivityHistory(agentId);
+    if (!PANE_ID.test(agentId)) return missing;
+    try {
+      const agent = await historyAgent(agentId, request.occupantId);
+      if (!agent) return missing;
+      let observed: ActivityHistoryRead | null | undefined;
+      if (agent.agent === "pi") observed = (await piHistoryFor([agent])).get(agentId);
+      else if (agent.agent === "codex") {
+        const sessionId = codexSessionId(agent);
+        if (!sessionId) return missing;
+        const file = (await discoverCodexSessionFiles(codexHome, new Set([sessionId]))).get(sessionId);
+        if (file) observed = await read(file, sessionId, true);
+      } else return { ...missing, status: "unsupported" };
+      if (!observed?.historySource) return missing;
+      const live = await historyAgent(agentId, request.occupantId);
+      if (!live || live.cwd !== agent.cwd) return missing;
+      const source = observed.historySource;
+      const stat = await lstat(source.path, { bigint: true });
+      if (!stat.isFile() || source.file !== `${stat.dev}:${stat.ino}` || BigInt(source.size) !== stat.size ||
+          source.revision !== `${stat.mtimeNs}:${stat.ctimeNs}`) return missing;
+      return activityHistory(agentId, request, observed, now());
+    } catch { return missing; }
+  }
 
   async function refresh(agentId: string, current: () => boolean): Promise<LocalAgentActivityResponse> {
     if (!PANE_ID.test(agentId)) return unavailable(agentId);
@@ -165,7 +209,16 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
   }
 
   return {
-    get(agentId: string): Promise<LocalAgentActivityResponse> {
+    get(agentId: string, history?: LocalAgentActivityHistoryRequest): Promise<LocalAgentActivityResponse> {
+      if (history) {
+        if (history.before !== undefined) return refreshHistory(agentId, history);
+        const key = `${agentId}\0${history.occupantId}`;
+        const pending = pendingNewest.get(key);
+        if (pending) return pending;
+        const newest = refreshHistory(agentId, history).finally(() => pendingNewest.delete(key));
+        pendingNewest.set(key, newest);
+        return newest;
+      }
       const request = Symbol();
       latest.set(agentId, request);
       const current = () => latest.get(agentId) === request;

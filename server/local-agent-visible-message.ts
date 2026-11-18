@@ -1,4 +1,4 @@
-import type { LocalAgentActivityEvent } from "../shared/local-dashboard.ts";
+import type { LocalAgentActivityEvent, LocalAgentToolDetailStatus } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
 import { escapeNotes } from "./peer-provenance.ts";
 
@@ -62,6 +62,7 @@ export function trackAgentToolCalls() {
   const hide = (event: LocalAgentActivityEvent) => {
     event.tool = null;
     event.text = TOOL_RESULT_UNAVAILABLE;
+    event.detailStatus = "withheld";
   };
   return {
     record(id: string, tool: string | null) {
@@ -118,7 +119,8 @@ export function redactedAgentToolArguments(value: unknown): { text: string | nul
   const fields: string[] = [];
   let clipped = false;
   for (const [key, raw] of Object.entries(value)) {
-    if (!TOOL_KEY.test(key) || PRIVATE_TOOL_KEY.test(key) || redactedAgentText(key).text !== key) continue;
+    const outputLimit = key === "max_output_tokens" && typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0;
+    if (!TOOL_KEY.test(key) || (!outputLimit && PRIVATE_TOOL_KEY.test(key)) || redactedAgentText(key).text !== key) continue;
     const scalar = typeof raw === "string" ? raw : typeof raw === "number" || typeof raw === "boolean" ? String(raw) : null;
     const safe = safeToolText(scalar);
     if (safe.text) fields.push(`${key}: ${safe.text}`);
@@ -128,7 +130,7 @@ export function redactedAgentToolArguments(value: unknown): { text: string | nul
   return { text: result.text, clipped: clipped || result.clipped };
 }
 
-export function redactedAgentToolResult(value: unknown): { text: string | null; clipped: boolean } {
+export function redactedAgentToolResult(value: unknown, runtime?: "codex"): { text: string | null; clipped: boolean } {
   if (typeof value === "string") return safeToolText(value);
   if (!Array.isArray(value)) return { text: null, clipped: false };
   if (value.length > MAX_TOOL_FIELDS) return { text: null, clipped: true };
@@ -138,13 +140,36 @@ export function redactedAgentToolResult(value: unknown): { text: string | null; 
   for (const item of value) {
     const block = record(item);
     if (typeof block.text !== "string") { clipped = true; continue; }
-    if (block.type !== "text" && block.type !== "output_text") return { text: null, clipped: true };
+    if (block.type !== "text" && block.type !== "output_text" && !(runtime === "codex" && block.type === "input_text")) {
+      return { text: null, clipped: true };
+    }
+    // Text blocks with metadata can declare privacy or encoding outside the scalar.
+    for (const key in block) {
+      if (key !== "type" && key !== "text" && Object.hasOwn(block, key)) return { text: null, clipped: true };
+    }
     sourceLength += block.text.length + (parts.length ? 1 : 0);
     if (sourceLength > MAX_TOOL_SOURCE) return { text: null, clipped: true };
     parts.push(block.text);
   }
   const safe = safeToolText(parts.join(" "));
   return { text: safe.text, clipped: clipped || safe.clipped };
+}
+
+export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unknown, runtime?: "codex"): {
+  text: string; clipped: boolean; detailStatus: LocalAgentToolDetailStatus;
+} {
+  const result = kind === "tool-result";
+  const detail = result ? redactedAgentToolResult(value, runtime) : redactedAgentToolArguments(value);
+  const emptyText = typeof value === "string" && (!value.trim() || (!result && /^\s*\{\s*\}\s*$/.test(value)));
+  const emptyArguments = !result && value !== null && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length;
+  const emptyBlocks = Array.isArray(value) && (value.length === 0 || result && !detail.clipped &&
+    value.every((block) => {
+      const { text } = record(block);
+      return typeof text === "string" && !text.trim();
+    }));
+  const absent = value == null || emptyText || emptyArguments || emptyBlocks;
+  return { text: detail.text ?? (result ? TOOL_RESULT_UNAVAILABLE : "[Arguments unavailable]"),
+    clipped: detail.clipped, detailStatus: detail.text ? "available" : absent ? "absent" : "withheld" };
 }
 
 export function visibleAgentMessage(row: Record<string, unknown>): { kind: "user" | "assistant"; raw: string; format: "legacy" | "canonical" } | null {

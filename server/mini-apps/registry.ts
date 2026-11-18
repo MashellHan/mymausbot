@@ -545,7 +545,9 @@ export class MiniApps {
       if (input.resource === "teams") result = { appId: id, revision: app.revision, resource: "teams",
         snapshot: await providers.agents.get() };
       else if (input.resource === "activity") result = { appId: id, revision: app.revision, resource: "activity",
-        snapshot: await providers.activity.get(input.agentId) };
+        snapshot: input.history === 1
+          ? await providers.activity.get(input.agentId, { occupantId: input.occupantId, before: input.before })
+          : await providers.activity.get(input.agentId) };
       else if (input.resource === "configuration") result = { appId: id, revision: app.revision, resource: "configuration",
         snapshot: await providers.configuration.getAgent(input.agentId) };
       else if (input.resource === "team-rules") result = { appId: id, revision: app.revision, resource: "team-rules",
