@@ -118,6 +118,7 @@ export interface BotLinkDeps {
   openThread(bot: LocalBot, title: string, opener: { botId: string; name: string; threadId: string }): string | undefined;
   hasThread(botId: string, threadId: string): boolean;
   personName(threadId: string): string | undefined;
+  senderProblem(source: CoordinateContext["address"], targetId: string, approvalGranted: boolean): string | undefined;
   /** "Sent to …" in the requester's conversation. */
   sentRow(input: { sender: LocalBot; threadId: string; recipient: { id: string; name: string }; workThreadId: string; nodeId: string; reason?: string; doneWhen?: string;
     /** The room the sender speaks in: the bot of the other place is not in it, so it got the work directly. */ roomId?: string }): void;
@@ -166,6 +167,7 @@ export interface CoordinateContext {
   external: boolean;
   /** Why this conversation may not hand work on at all (it left its room, its task is gone), as for any hand-off. */
   problem?: string;
+  approveLinked(target: { id: string; name: string }): Promise<boolean | string>;
   handed(nodeId: string): void;
 }
 type CoordinateResult = { status: number; body: Record<string, unknown> };
@@ -247,10 +249,13 @@ export function createBotLink(deps: BotLinkDeps) {
 
   /** A computer puts the files a frame names before it sends the frame, each only if the Cloud does not hold it already;
    * the Cloud sends the frame and the computer gets them. */
-  async function carry(id: string, way: FileWay, files: readonly PassedFile[]): Promise<void> {
+  async function carry(id: string, way: FileWay, files: readonly PassedFile[], allowed = () => true): Promise<void> {
     if (!files.length || state?.role !== "dialer") return;
     if (!transfer) throw new Error("not connected");
-    for (const [index, file] of files.slice(0, FILES_MAX).entries()) if (!await transfer.holds(id, way, index, file)) await transfer.push(id, way, index, file);
+    for (const [index, file] of files.slice(0, FILES_MAX).entries()) {
+      if (!allowed()) return;
+      if (!await transfer.holds(id, way, index, file) && allowed()) await transfer.push(id, way, index, file);
+    }
   }
 
   /** The files a frame names, in the attachment store: got from the Cloud, or already put here by the computer. */
@@ -334,11 +339,42 @@ export function createBotLink(deps: BotLinkDeps) {
     alive.unref?.();
   }
 
+  function remoteProblem(node: HandoffView, parent: HandoffView | undefined): string | undefined {
+    if (!state) return "The link to the person's other place was turned off, so this was not delivered.";
+    if (!remoteOf(node.botId)) return "That bot's place is no longer linked, or the bot is no longer there.";
+    const left = deps.rooms?.problem(node);
+    if (left) return left;
+    if (!parent) return "Source membership or task was removed";
+    // Native room-member turns have a synthesized room root, not a bot acting as sender.
+    if (parent.groupId && parent.botId === `link-room-${parent.groupId}` && node.rootId.startsWith("link-room-")
+      && deps.rooms?.member(parent.groupId, node.botId)) return undefined;
+    return deps.senderProblem(parent, node.botId, node.approvalGranted === true);
+  }
+
+  function pendingAllowed(entry: Pending): boolean {
+    const id = entry.frame.id;
+    if (entry.cancelled || pending.get(id) !== entry) return false;
+    const coordinator = deps.coordinator();
+    const node = coordinator.node(id);
+    const problem = node ? remoteProblem(node, node.parentId ? coordinator.node(node.parentId) : undefined) : "Source assignment was removed";
+    if (!problem) return true;
+    pending.delete(id);
+    settled(`out:${id}`);
+    resulted.add(id);
+    const connection = live.get(entry.peer);
+    if (connection) connection.outbox = connection.outbox.filter(({ frame }) => frame.t !== "handoff" || frame.id !== id);
+    keepAlive();
+    entry.settle({ ok: false, text: problem });
+    return false;
+  }
+
   /** The requester's side of one hand-off: sent now and again at every new session until its result is here. */
   function runRemote(node: HandoffView, signal: AbortSignal): Promise<HostTurnResult> {
     const coordinator = deps.coordinator();
     const address = parseLinked(node.botId)!;
     const parent = node.parentId ? coordinator.node(node.parentId) : undefined;
+    const problem = remoteProblem(node, parent);
+    if (problem) return Promise.resolve({ ok: false, text: problem });
     const sender = parent ? deps.bot(parent.botId) : undefined;
     const record = coordinator.status(node.id)?.assignment;
     const origin = record?.origin;
@@ -376,12 +412,12 @@ export function createBotLink(deps: BotLinkDeps) {
   /** Sends a hand-off, its files first where a computer sends them. Files that could not go yet are tried again on a
    * timer and with the next session; ones the Cloud refuses three times end the hand-off with the reason. */
   function dispatch(entry: Pending): void {
-    const id = entry.frame.id, mine = () => !entry.cancelled && pending.get(id) === entry;
+    const id = entry.frame.id, mine = () => pendingAllowed(entry);
     if (!mine()) return;
     if (!entry.files.length || state?.role !== "dialer") { send(entry.peer, entry.frame); return; }
     if (entry.busy) return;
     entry.busy = true;
-    carry(id, "sent", entry.files).then(() => { settled(`out:${id}`); if (mine()) send(entry.peer, entry.frame); }, (error) => {
+    carry(id, "sent", entry.files, mine).then(() => { settled(`out:${id}`); if (mine()) send(entry.peer, entry.frame); }, (error) => {
       log(`bot link: the files of ${id} did not go (${said(error)})`);
       if (!mine()) return;
       if (!isGone(error) || (entry.tries += 1) < FILE_TRIES) { retryLater(`out:${id}`, () => dispatch(entry)); return; }
@@ -628,7 +664,8 @@ export function createBotLink(deps: BotLinkDeps) {
   }
 
   /** coordinate_bots for targets that live in another place; the rest go on as they always did (`local`). */
-  async function coordinate(call: CoordinateBotsCall, context: CoordinateContext, local: (call: CoordinateBotsCall) => Promise<CoordinateResult>): Promise<CoordinateResult> {
+  async function coordinate(call: CoordinateBotsCall, context: CoordinateContext,
+    local: (call: CoordinateBotsCall, beforeDispatch?: () => string | undefined) => Promise<CoordinateResult>): Promise<CoordinateResult> {
     if (!state || context.external) return local(call);
     const away = new Map<string, Remote>();
     for (const raw of call.botIds) { const remote = resolve(raw); if (remote) away.set(raw, remote); }
@@ -639,14 +676,44 @@ export function createBotLink(deps: BotLinkDeps) {
     const targets = [...new Map([...away.values()].map((remote) => [linkedId(remote.peer, remote.bot.id), remote])).values()];
     const mode = call.consult ? "consult" as const : call.reply === "none" ? "notify" as const : "work" as const;
     const coordinator = deps.coordinator();
+    const refuse = (error: string): CoordinateResult => ({ status: 403, body: { error } });
+    const approvals = new Map<string, boolean>();
+    const authorize = (remote: Remote, checkingReach = false) => {
+      const target = linkedId(remote.peer, remote.bot.id);
+      return unsupportedHere(call, context, placeName(remote.peer)) ?? (!remoteOf(target) ? "That bot's place is no longer linked, or the bot is no longer there."
+        : deps.senderProblem(context.address, target, checkingReach || approvals.get(target) === true));
+    };
+    for (const remote of targets) {
+      const unsupported = unsupportedHere(call, context, placeName(remote.peer));
+      if (unsupported) return { status: 409, body: { error: unsupported, receipts: [receipt(remote, "failed", unsupported)] } };
+      const problem = authorize(remote, true);
+      if (problem) return refuse(problem);
+    }
+    for (const remote of targets) {
+      const id = linkedId(remote.peer, remote.bot.id);
+      const granted = await context.approveLinked({ id, name: remote.bot.name });
+      if (typeof granted === "string") return refuse(granted);
+      approvals.set(id, granted);
+    }
+    const batchProblem = () => targets.map((target) => authorize(target)).find((problem) => problem != null) ?? undefined;
+    const problem = batchProblem();
+    if (problem) return refuse(problem);
+    let admitted = false;
+    const rest = here.length ? await local({ ...call, botIds: here }, () => {
+      const problem = batchProblem();
+      admitted = !problem;
+      return problem;
+    }) : undefined;
+    if (rest && !admitted) return rest;
     for (const remote of targets) {
       const place = placeName(remote.peer), linked = linkedId(remote.peer, remote.bot.id);
-      const unsupported = unsupportedHere(call, context, place);
-      if (unsupported) { refused.push(unsupported); receipts.push(receipt(remote, "failed", unsupported)); continue; }
+      const problem = authorize(remote);
+      if (problem) { refused.push(problem); receipts.push(receipt(remote, "failed", problem)); continue; }
       const threadId = `${linked}:${call.thread === "new" ? `${context.generation}:${receipts.length}` : context.address.threadId}`;
       try {
         const { node, duplicate } = coordinator.enqueue(context.address, context.generation, context.parentId, { botId: linked, threadId }, call.message, {
-          mode, reply: call.reply === "none" ? "none" : "resume", thread: call.thread === "new" ? "new" : "standing", rework: call.rework, ...(call.doneWhen ? { doneWhen: call.doneWhen } : {}) });
+          mode, reply: call.reply === "none" ? "none" : "resume", thread: call.thread === "new" ? "new" : "standing", rework: call.rework,
+          approvalGranted: approvals.get(linked) === true, ...(call.doneWhen ? { doneWhen: call.doneWhen } : {}) });
         const returns = mode === "notify" ? "nothing comes back from it" : "its result will resume you";
         if (!duplicate && call.files?.length) deps.files?.crossed(node.id, "sent", { botId: context.sender.id, name: context.sender.name }, call.files);
         const files = call.files?.length && !deps.files ? " Its files were not sent: files do not cross to the other place here, so put what it needs in the message." : "";
@@ -669,8 +736,7 @@ export function createBotLink(deps: BotLinkDeps) {
     }
     const sent = refused.length < receipts.length;
     const mine = sent ? `Handed to the person's other place. ${call.reply === "none" ? "Nothing comes back from a one-way notice." : "Finish your turn now: the result resumes you when it is back."}` : "";
-    if (here.length === 0) return { status: sent ? 200 : 409, body: { receipts, ...(sent ? { message: mine } : { error: refused.join("; ") }) } };
-    const rest = await local({ ...call, botIds: here });
+    if (!rest) return { status: sent ? 200 : 409, body: { receipts, ...(sent ? { message: mine } : { error: refused.join("; ") }) } };
     const theirs = Array.isArray(rest.body.receipts) ? rest.body.receipts as PeerDeliveryReceipt[] : [];
     const ok = sent || rest.status === 200;
     const errors = [...refused, ...(typeof rest.body.error === "string" ? [rest.body.error] : [])];
@@ -697,10 +763,7 @@ export function createBotLink(deps: BotLinkDeps) {
       validate: (node, parent) => {
         if (!awayNode(node)) return inner.validate(node, parent && awayNode(parent) ? undefined : parent);
         if (!node.parentId) return undefined;
-        if (!state) return "The link to the person's other place was turned off, so this was not delivered.";
-        const left = deps.rooms?.problem(node);
-        if (left) return left;
-        return remoteOf(node.botId) ? undefined : "That bot's place is no longer linked, or the bot is no longer there.";
+        return remoteProblem(node, parent);
       },
       // A node that only stands for who asked (a room, another place's requester) has no parent and runs nothing: it is
       // never busy, so it ends as soon as the work under it has ended, whether or not any place is connected.
@@ -852,7 +915,7 @@ export function createBotLink(deps: BotLinkDeps) {
     /** On the Cloud: a file a computer gets: one a hand-off out to that computer carries, or one a result for it returns. */
     outgoingFile(peer: string, id: string, way: FileWay, index: number): PassedFile | undefined {
       if (!state?.peers[peer] || !deps.files) return undefined;
-      if (way === "sent") { const entry = pending.get(id); return entry?.peer === peer ? entry.files[index] : undefined; }
+      if (way === "sent") { const entry = pending.get(id); return entry?.peer === peer && pendingAllowed(entry) ? entry.files[index] : undefined; }
       const work = state.work[id];
       return work?.peer === peer ? returned(work)[index] : undefined;
     },
@@ -869,6 +932,11 @@ export function createBotLink(deps: BotLinkDeps) {
       const one = live.get(peer);
       if (!one) return [];
       one.outbox = one.outbox.filter((entry) => entry.seq > ack);
+      for (const { frame } of one.outbox) {
+        if (frame.t !== "handoff") continue;
+        const entry = pending.get(frame.id);
+        if (!entry || !pendingAllowed(entry)) one.outbox = one.outbox.filter((queued) => queued.frame !== frame);
+      }
       const taken: Numbered[] = [];
       let bytes = 0;
       for (const entry of one.outbox) {

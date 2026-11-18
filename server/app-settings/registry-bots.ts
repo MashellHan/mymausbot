@@ -5,7 +5,8 @@ import { z } from "zod";
 import { approvalModeFor, type ApprovalMode } from "../../shared/approval-mode.ts";
 import { BOT_PROFILE_LIMITS } from "../../shared/bot-profile.ts";
 import { TOOL_GROUP_LABELS, TOOL_GROUPS, type ToolGroup } from "../../shared/tool-groups.ts";
-import { EFFORT_LEVELS, MAUS_COLOR_NAMES } from "../../shared/wire.ts";
+import { MAUS_COLOR_NAMES } from "../../shared/wire.ts";
+import { botDefaultModelSchema } from "../model-selection-schema.ts";
 import type { BotRecord } from "../store.ts";
 import { withoutKeys, type RegistryDeps, type SettingEntry, type WritableSpec } from "./registry.ts";
 
@@ -99,15 +100,18 @@ export function botEntries(deps: Pick<RegistryDeps, "bots" | "engines" | "patchB
     perBot({
       id: "bots.model", label: "Bot model", help: "The engine and model one bot runs on, for its conversations. Ids come from list_models.", where: "bot-settings",
       synonyms: ["model", "engine", "switch model", "change model", "effort", "reasoning"],
-      value: forBot({ instanceId: z.string().min(1).max(120), model: z.string().min(1).max(200), effort: z.enum(EFFORT_LEVELS).optional() }),
-      allowed: '{"botId","instanceId","model","effort"?} from list_models', read: everyBot((one) => `${one.modelSelection.instanceId} / ${one.modelSelection.model}`),
-      effect: (one, { instanceId, model, effort }) => {
+      value: withoutKeys(botDefaultModelSchema.safeExtend({ botId }), ["contextWindowTokens"]),
+      allowed: '{"botId","instanceId","model","effort"?,"variant"?,"contextWindowTokens"?} from list_models; use effort or variant',
+      read: everyBot((one) => `${one.modelSelection.instanceId} / ${one.modelSelection.model}`),
+      effect: (one, { instanceId, model, effort, variant, contextWindowTokens }) => {
         const engine = deps.engines().find((candidate) => candidate.instanceId === instanceId);
         if (!engine) return { refusal: `No engine has the id ${instanceId}. Use list_models for engine and model ids.` };
-        return { change: `Move ${one.name} to ${engine.name}, model ${model}${effort ? `, ${effort} effort` : ""}` };
+        const reasoning = variant ? `, variant ${variant}` : effort ? `, ${effort} effort` : "";
+        const context = contextWindowTokens === undefined ? "" : `, ${contextWindowTokens} context tokens`;
+        return { change: `Move ${one.name} to ${engine.name}, model ${model}${reasoning}${context}` };
       },
-      was: (one, { botId }) => ({ botId, instanceId: one.modelSelection.instanceId, model: one.modelSelection.model, ...(one.modelSelection.effort ? { effort: one.modelSelection.effort } : {}) }),
-      patch: (_one, { instanceId, model, effort }) => ({ modelSelection: { instanceId, model, ...(effort ? { effort } : {}) }, requireAvailableModel: true }),
+      was: (one, { botId }) => ({ botId, ...one.modelSelection }),
+      patch: (_one, { botId: _id, ...modelSelection }) => ({ modelSelection, requireAvailableModel: true }),
     }),
     perBot({
       id: "bots.archived", label: "Archived bots", help: "Archive a bot to take it out of the sidebar, keeping its chats; false brings it back.", where: "sidebar",

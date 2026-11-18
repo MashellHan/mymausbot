@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { credentialIsConfigured, CREDENTIAL_TARGETS, PROVIDER_CREDENTIAL_TARGETS, type CredentialConfig, type CredentialTargetId } from "../../shared/credential-request.ts";
-import { WINDOW_PREFS, type WindowPrefId } from "../../shared/app-settings.ts";
+import { WINDOW_PREFS, type WindowPrefId, type WindowPrefValue } from "../../shared/app-settings.ts";
 import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
 import { defaultBotPerson } from "../../shared/default-bot.ts";
 import { EFFORT_LEVELS, MAUS_COLOR_NAMES, type EffortLevel, type MausColor } from "../../shared/wire.ts";
@@ -31,6 +31,8 @@ import { botEntries } from "./registry-bots.ts";
 import { configEntries } from "./registry-config.ts";
 import { pictureEntries } from "./registry-pictures.ts";
 import { windowEntries } from "./registry-window.ts";
+
+const LEGACY_ADVANCED_MODE_ID = "appearance.advanced";
 
 export type Where = string;
 export const settingLocation = (where: Where) => SETTINGS_PLACES.some((place) => place.id === where) ? placePath(where as SettingsPlaceId) : where;
@@ -213,10 +215,15 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     windowPref("appearance.skin", "Skin", "The window's look; \"system\" follows the computer's light or dark mode.", "Settings → Appearance", ["theme", "dark mode", "light mode", "colors", "look"], enumOf(WINDOW_PREFS["appearance.skin"].options)),
     windowPref("appearance.mode", "Interface mode", "Raw is the first-use layout; Simple shows everyday controls; Advanced shows every setting and tool.", "Settings → Appearance", ["raw mode", "simple mode", "advanced mode", "interface mode"], enumOf(WINDOW_PREFS["appearance.mode"].options)),
     writable({
-      id: "appearance.advanced", label: "Advanced mode", help: "Advanced shows every setting and tool; Simple keeps the everyday ones.", where: "advanced-mode",
-      synonyms: ["advanced mode"], value: WINDOW_PREFS["appearance.advanced"], allowed: "true or false",
-      current: () => deps.window.read("appearance.mode") === "advanced",
-      write: async (enabled: boolean) => deps.window.write("appearance.mode", enabled ? "advanced" : "simple"),
+      id: LEGACY_ADVANCED_MODE_ID, label: "Advanced mode", help: "Advanced shows every setting and tool; Simple keeps the everyday ones.", where: "advanced-mode",
+      synonyms: ["advanced mode"], value: WINDOW_PREFS[LEGACY_ADVANCED_MODE_ID], allowed: "true or false",
+      current: () => deps.window.read("appearance.mode"),
+      read: () => display(deps.window.read("appearance.mode") === "advanced"),
+      write: async (value: boolean | WindowPrefValue<"appearance.mode">) => {
+        if (typeof value !== "boolean") return deps.window.write("appearance.mode", value);
+        if (value) return deps.window.write("appearance.mode", "advanced");
+        return deps.window.write("appearance.mode", deps.window.read("appearance.mode") === "raw" ? "raw" : "simple");
+      },
     }),
     windowPref("appearance.font", "Font", "The app's typeface.", "Settings → Appearance", ["typeface", "typography"], enumOf(WINDOW_PREFS["appearance.font"].options)),
     windowPref("appearance.chatWidth", "Chat width", "How wide the chat column is.", "Settings → Appearance", ["layout", "column", "wide"], enumOf(WINDOW_PREFS["appearance.chatWidth"].options)),
@@ -660,7 +667,7 @@ export function findSettings(entries: readonly SettingEntry[], query: string, li
   const words = query.toLowerCase().split(/[^a-z0-9.-]+/).filter((word) => word.length > 1);
   if (!words.length) return [];
   const phrase = words.join(" ");
-  const scored = entries.map((entry) => {
+  const scored = entries.filter((entry) => entry.id !== LEGACY_ADVANCED_MODE_ID).map((entry) => {
     const label = entry.label.toLowerCase(), id = entry.id.toLowerCase();
     const synonyms = entry.synonyms.map((synonym) => synonym.toLowerCase());
     const loose = [entry.help, ...synonyms].join(" ").toLowerCase();

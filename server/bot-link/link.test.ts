@@ -58,6 +58,8 @@ function place(label: string, bots: Bot[], version?: number) {
   /** Requests this place's server answers with a failure, once each. */
   const failing: Array<{ match: RegExp; status: number }> = [];
   let run: Run = async (node) => ({ ok: true, text: `${node.botId} did: ${node.text}` });
+  let senderProblem: Parameters<typeof createBotLink>[0]["senderProblem"] = () => undefined;
+  let approveLinked: NonNullable<Parameters<BotLink["coordinate"]>[1]["approveLinked"]> = async () => false;
   /** Rooms of this place, their words, and the receipts that make a line posted under one key one line: all three are
    * what the store keeps on disk, so they outlive `boot()`. */
   type Line = { id: string; role: "user" | "bot"; kind: string; text?: string; from?: { botId: string; name: string }; tool?: { name: string; ok?: boolean }; via?: "api"; relayed?: boolean; webhookPost?: unknown; peerPost?: { unattended?: boolean } };
@@ -95,6 +97,7 @@ function place(label: string, bots: Bot[], version?: number) {
     link = createBotLink({
       rooms, directoryChanged: () => { directoryChanges += 1; rooms.sync(); },
       dataDir: dir, coordinator: () => coordinator, bots: () => bots, bot: (id) => bots.find((bot) => bot.id === id), level: () => "full",
+      senderProblem: (...args) => senderProblem(...args),
       openThread: (bot) => { const id = `${bot.id}-work-${++opened}`; threads.add(id); return id; },
       hasThread: (_botId, threadId) => threads.has(threadId), personName: () => "Sam",
       sentRow: (input) => { sent.push({ recipient: input.recipient.name, threadId: input.threadId, ...(input.roomId ? { roomId: input.roomId } : {}) }); },
@@ -167,11 +170,14 @@ function place(label: string, bots: Bot[], version?: number) {
   }
 
   /** One of this place's bots takes a turn in which it hands work on; the turn then ends and waits for it. */
-  async function handOff(from: string, input: CoordinateBotsCall, local: (input: CoordinateBotsCall) => Promise<{ status: number; body: Record<string, unknown> }> = async () => ({ status: 200, body: { receipts: [] } }),
+  async function handOff(from: string, input: CoordinateBotsCall, local: Parameters<BotLink["coordinate"]>[2] = async (_call, beforeDispatch) => {
+    const problem = beforeDispatch?.();
+    return problem ? { status: 403, body: { error: problem } } : { status: 200, body: { receipts: [] } };
+  },
     room?: { id: string; problem?: string }) {
     const id = `${label}-turn-${++generation}`, address = room ? { groupId: room.id, botId: from, threadId: `${room.id}-thread` } : { botId: from, threadId: `${from}-chat` };
     coordinator.beginTurn({ id, address, brief: "Sort it out", level: "full", origin: { kind: "user", request: "Sort it out" } });
-    const answer = await link.coordinate(input, { sender: bots.find((bot) => bot.id === from)!, address, generation: id, external: false, handed: () => {}, ...(room?.problem ? { problem: room.problem } : {}) }, local);
+    const answer = await link.coordinate(input, { sender: bots.find((bot) => bot.id === from)!, address, generation: id, external: false, approveLinked, handed: () => {}, ...(room?.problem ? { problem: room.problem } : {}) }, local);
     coordinator.endTurn(id, { ok: true, text: "Handed on." });
     return { id, answer, receipts: (answer.body.receipts ?? []) as Array<{ botId: string; outcome: string; detail: string; requestId?: string }> };
   }
@@ -199,6 +205,7 @@ function place(label: string, bots: Bot[], version?: number) {
     said: (groupId: string) => (words.get(groups.find((one) => one.id === groupId)!.threadId) ?? []).map((line) => (line.kind === "text" ? `${line.from?.name ?? "Sam"}: ${line.text}` : `(${line.tool?.name})`)),
     get link() { return link; }, get dialer() { return dialer; }, get coordinator() { return coordinator; }, get port() { return port; },
     engine(next: Run) { run = next; },
+    policy(problem: typeof senderProblem, approve: typeof approveLinked = async () => false) { senderProblem = problem; approveLinked = approve; },
     /** Time passes for this place's link. */
     later(ms: number) { skew += ms; },
     sessions: () => [...issued.values()],
@@ -256,6 +263,62 @@ describe("the link between a computer and its Cloud", () => {
     const inner: CoordinatorHost = { validate: () => "x", busy: () => true, run: async () => ({ ok: true, text: "" }), report: () => {}, changed: () => {}, names: () => ({ requester: "a", assignee: "b" }), park: () => {}, levelOf: () => ({ level: "ask" }), chiefOf: () => true };
     const wrapped = computer.link.host(inner), node = { botId: "local-writer", threadId: "t", id: "n", parentId: "p" } as HandoffView;
     expect([wrapped.validate(node), wrapped.busy(node), wrapped.away?.(node), wrapped.chiefOf(node)]).toEqual(["x", true, false, true]);
+  });
+
+  it("sender policy rejects a restricted linked target and a mixed batch before either dispatches", async () => {
+    const { computer, cloud } = await two();
+    let local = 0;
+    computer.policy(() => "The addressed bot is not an allowed peer of the sender");
+    const linked = await computer.handOff("local-writer", call(["Analyst"], "No hand-off"));
+    expect(linked.answer).toMatchObject({ status: 403, body: { error: "The addressed bot is not an allowed peer of the sender" } });
+    const mixed = await computer.handOff("local-writer", call(["Analyst", "Scout"], "No hand-off"), async () => {
+      local++;
+      return { status: 200, body: { receipts: [] } };
+    });
+    expect(mixed.answer.status).toBe(403);
+    expect(local).toBe(0);
+    expect(computer.sent).toEqual([]);
+    expect(cloud.runs).toEqual([]);
+  });
+
+  it("sender policy rejects without linked approval, or when the local batch denies after linked approval", async () => {
+    const { computer, cloud } = await two();
+    computer.policy((_source, _target, approved) => approved ? undefined : "Sender requires approval", async () => "denied by user");
+    const denied = await computer.handOff("local-writer", call(["Analyst"], "Do not send"));
+    expect(denied.answer).toMatchObject({ status: 403, body: { error: "denied by user" } });
+    computer.policy((_source, _target, approved) => approved ? undefined : "Sender requires approval", async () => true);
+    const mixed = await computer.handOff("local-writer", call(["Analyst", "Scout"], "Do not send"), async () => ({ status: 403, body: { error: "Denied by user; no work sent." } }));
+    expect(mixed.answer.status).toBe(403);
+    expect(computer.sent).toEqual([]);
+    expect(cloud.runs).toEqual([]);
+  });
+
+  it("sender policy allows an approved partial operational failure after all recipients pass admission", async () => {
+    const { computer, cloud } = await two();
+    computer.policy((_source, _target, approved) => approved ? undefined : "Sender requires approval", async () => true);
+    const mixed = await computer.handOff("local-writer", call(["Analyst", "Scout"], "Count the orders"), async (_input, beforeDispatch) => {
+      expect(beforeDispatch?.()).toBeUndefined();
+      expect(computer.sent).toEqual([]);
+      return { status: 409, body: { error: "Local task disappeared", receipts: [{ botId: "shared", outcome: "failed", detail: "Local task disappeared" }] } };
+    });
+    expect(mixed.answer).toMatchObject({ status: 200, body: { notSent: "Local task disappeared" } });
+    expect(mixed.receipts.map(({ outcome }) => outcome)).toEqual(["queued", "failed"]);
+    expect(computer.coordinator.node(mixed.receipts[0]!.requestId!)?.approvalGranted).toBe(true);
+    await until(() => cloud.runs.length === 1, "approved linked work arrives");
+  });
+
+  it("sender policy rechecks a queued linked request when the peer reconnects", async () => {
+    const { computer, cloud } = await two();
+    await computer.dialer.stop();
+    await until(() => !cloud.link.online(COMPUTER), "the computer disconnects");
+    const queued = await cloud.handOff("cloud-analyst", call(["Writer"], "Do not send after the policy changes"));
+    const id = queued.receipts[0]!.requestId!;
+    expect(cloud.coordinator.node(id)?.status).toBe("queued");
+    cloud.policy(() => "The addressed bot is not an allowed peer of the sender");
+    computer.dialer.start();
+    await until(() => cloud.coordinator.node(id)?.status === "failed", "stale linked work is refused");
+    expect(computer.runs).toEqual([]);
+    expect(cloud.link.outgoing(COMPUTER, 0).some(({ frame }) => frame.t === "handoff" && frame.id === id)).toBe(false);
   });
 
   it("only the owner pairs, only the app on the computer flips the switch, and only the link's own sign-in exchanges", async () => {

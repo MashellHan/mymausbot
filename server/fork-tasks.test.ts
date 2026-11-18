@@ -53,6 +53,37 @@ it("forks a bot conversation at a completed message and keeps it after deleting 
   expect(reopened.activePath(fork!.threadId).map((message) => message.text)).toEqual([...expectedHistory.map(([, text]) => text), "Independent follow-up"]);
 });
 
+it("keeps pinned and inherited models distinct in a fork even when they currently match", async () => {
+  const store = await freshStore();
+  const bot = store.createBot();
+  const pinned = { instanceId: "opencodeGo", model: "provider/model", effort: "high", variant: "low", contextWindowTokens: 65_536 } as const;
+  const inherited = store.createTask(bot.id, "Inherited", false)!;
+  store.switchTaskModel(bot.id, bot.threadId, pinned, false, false);
+  store.applyModelDefault(bot.id, pinned);
+
+  const pinnedAnchor = store.appendMessage(bot.threadId, { role: "user", kind: "text", text: "Pinned model" });
+  const inheritedAnchor = store.appendMessage(inherited.threadId, { role: "user", kind: "text", text: "Inherited model" });
+  const pinnedFork = store.forkTask(bot.id, bot.threadId, pinnedAnchor.id)!;
+  const inheritedFork = store.forkTask(bot.id, inherited.threadId, inheritedAnchor.id)!;
+  expect(pinnedFork.modelSelection).toEqual(pinned);
+  expect(pinnedFork.modelSelection).not.toBe(store.taskByThread(bot.id, bot.threadId)?.modelSelection);
+  expect(inheritedFork).not.toHaveProperty("modelSelection");
+
+  const nextDefault = { instanceId: "claude", model: "next" };
+  store.applyModelDefault(bot.id, nextDefault);
+  const { Store, toWireTask } = await import("./store.ts");
+  const reopened = new Store(() => nextDefault);
+  const reloadedBot = reopened.bot(bot.id)!;
+  expect(toWireTask(reopened.taskByThread(bot.id, pinnedFork.threadId)!, reloadedBot.modelSelection)).toMatchObject({
+    modelSelection: pinned,
+    followsBotModel: false,
+  });
+  expect(toWireTask(reopened.taskByThread(bot.id, inheritedFork.threadId)!, reloadedBot.modelSelection)).toMatchObject({
+    modelSelection: nextDefault,
+    followsBotModel: true,
+  });
+});
+
 it("forks a room conversation into a normal room task", async () => {
   const store = await freshStore();
   const bot = store.createBot();

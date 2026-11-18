@@ -49,7 +49,8 @@ export function createBotFork(bot: BotRecord, source: TaskRecord, path: Message[
   const history = forkHistory(path, messageId);
   if (!history) return null;
   const task = buildTask(bot, titleFromMessage(history.at(-1)?.text ?? ""), source.projectId, undefined,
-    undefined, source.modelSelection, source.cwd);
+    undefined, undefined, source.cwd);
+  if (source.modelSelection !== undefined) task.modelSelection = structuredClone(source.modelSelection);
   // A fork starts with the source's effective permissions, including an Ask mask for an unconfirmed grant.
   task.approvalMode = approval.mode;
   task.autoApprove = approval.mode === "auto";

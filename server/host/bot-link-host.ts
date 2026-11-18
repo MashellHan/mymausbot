@@ -4,8 +4,10 @@
 import { dirname } from "node:path";
 
 import { createDialer } from "../bot-link/dial.ts";
-import { createBotLink } from "../bot-link/link.ts";
-import type { Coordinator, HandoffView } from "../coordinator.ts";
+import { createBotLink, type CoordinateContext } from "../bot-link/link.ts";
+import type { CoordinateBotsCall, Coordinator, HandoffView } from "../coordinator.ts";
+import { peerApprovalFailure, requestPeerApproval, type ApprovalBus } from "../peer-approval.ts";
+import { peerAllowed } from "../peer-roster.ts";
 import { redactSecretsInText } from "../redact.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { createBotLinkRoutes, linkSessionUser } from "../routes/bot-link.ts";
@@ -34,6 +36,9 @@ export interface BotLinkHostDeps {
   refusal(bot: BotRecord): string | null;
   language(threadId: string): string | undefined;
   personName(threadId: string): string | undefined;
+  roomHandoffProblem(source: CoordinateContext["address"]): string | undefined;
+  peerReviewRequired(bot: BotRecord, threadId: string): boolean;
+  approvalBus(): ApprovalBus;
   sessions: { issue(input: { label: string; scopes: Array<"admin" | "client">; email?: string; userId?: string }): { token: string; session: { id: string } }; revoke(id: string): boolean };
   local(auth: RequestAuth): boolean;
   owner(auth: RequestAuth): boolean;
@@ -46,6 +51,22 @@ export interface BotLinkHostDeps {
 
 export function createBotLinkHost(deps: BotLinkHostDeps) {
   const { store } = deps;
+  function sourceProblem(address: CoordinateContext["address"]): string | undefined {
+    const source = address.groupId ? store.group(address.groupId) : undefined;
+    if (source && (source.dm || !source.memberIds.includes(address.botId))) {
+      return "Coordination needs a room you are a member of, or your own conversation.";
+    }
+    return deps.roomHandoffProblem(address);
+  }
+
+  function senderProblem(source: CoordinateContext["address"], targetId: string, approved: boolean): string | undefined {
+    const sender = store.bot(source.botId);
+    if (!sender || sender.hidden) return "Source membership or task was removed";
+    const problem = deps.roomHandoffProblem(source);
+    if (problem) return problem;
+    if (!peerAllowed(sender, targetId)) return "The addressed bot is not an allowed peer of the sender";
+    if (!approved && deps.peerReviewRequired(sender, source.threadId)) return "Sender now requires peer approval; submit a new approved request";
+  }
   /** Each bot of each linked place as a record this place finds by its address: its name and look, and where it lives.
    * It has no conversation, model or tools here, and takes no turn here. */
   const syncStandIns = () => {
@@ -83,7 +104,7 @@ export function createBotLinkHost(deps: BotLinkHostDeps) {
     level: (bot) => deps.level(bot as BotRecord),
     openThread: (bot, title, opener) => store.createTask(bot.id, title, false, undefined, { ...opener, at: Date.now(), kind: "work" })?.threadId,
     hasThread: (botId, threadId) => Boolean(store.taskByThread(botId, threadId)),
-    personName: deps.personName,
+    personName: deps.personName, senderProblem,
     files: {
       carried: deps.files.carried, crossed: deps.files.crossed,
       store: async (files) => {
@@ -134,7 +155,24 @@ export function createBotLinkHost(deps: BotLinkHostDeps) {
     },
     revoke: (sessionId) => { deps.sessions.revoke(sessionId); } });
   return {
-    link, routes, rooms,
+    link, routes, rooms, sourceProblem,
+    coordinate(call: CoordinateBotsCall, context: Omit<CoordinateContext, "problem" | "approveLinked">,
+      requireActive: () => void, local: Parameters<typeof link.coordinate>[2]) {
+      const { botId, threadId } = context.address;
+      return link.coordinate(call, {
+        ...context,
+        problem: sourceProblem(context.address),
+        approveLinked: async (target) => {
+          requireActive();
+          const sender = store.bot(botId);
+          if (!sender || !peerAllowed(sender, target.id)) return "The addressed bot is not an allowed peer of the sender";
+          if (!deps.peerReviewRequired(sender, threadId)) return false;
+          const verdict = await requestPeerApproval(deps.approvalBus(), sender, target, call.message, call.consult ? "ask_bot" : "delegate_bot", threadId);
+          requireActive();
+          return verdict === "allow" ? true : peerApprovalFailure(verdict).error;
+        },
+      }, local);
+    },
     /** Once the server is up. Off: nothing. On, on the computer: it starts asking the Cloud. */
     start(): void {
       // Off: nothing, unless a room here still has a member from another place, which is then found and shown as away.

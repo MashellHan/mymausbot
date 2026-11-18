@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AppConfig } from "../config.ts";
 import { flushDecisionLog } from "../decision-log.ts";
@@ -155,17 +155,31 @@ describe("upstream app_settings additions", () => {
     expect([cards(), saved, routeCalls]).toEqual([[], [], []]);
   });
 
-  it("turns a way in to this computer on with Undo, but leaves turning one off to the person", async () => {
+  it("reserves every remote access route for the person, even in an owner-started turn", async () => {
     const fx = fixture();
-    fx.windowValues.set("remote.relay", false);
-    const on = await fx.set("remote.relay", "true");
-    expect(on.body.text).toMatch(/^Done: Let your paired phones reach this computer from anywhere, through MausBot's relay\./);
-    expect(fx.windowValues.get("remote.relay")).toBe(true);
-    const off = await fx.set("remote.relay", false);
-    expect(off).toMatchObject({ status: 409, body: { error: "Turning off Reach from anywhere is changed only by the person, in Settings → Phone & devices → How your phone reaches this computer → Anywhere, through MausBot (only in the desktop app, on this computer's own page). Tell them where in one line; do not try another way." } });
-    expect(fx.windowValues.get("remote.relay")).toBe(true);
-    expect(await fx.undo()).toEqual({ claimed: true, state: "undone" });
-    expect(fx.windowValues.get("remote.relay")).toBe(false);
+    const routes = ["remote.wifi", "remote.relay", "remote.tailscale"];
+    for (const id of routes) fx.windowValues.set(id, false);
+    const writes = vi.spyOn(fx.windowValues, "set");
+    try {
+      for (const id of ["remote.access", ...routes]) {
+        const get = await fx.host.handle({ action: "get", id }, fx.turn);
+        expect(get.status, id).toBe(200);
+        const description = JSON.parse(String(get.body.text));
+        expect(description, id).toMatchObject({ tier: "owner-only", where: expect.stringContaining("Settings → Phone & devices") });
+        if (routes.includes(id)) expect(description.value, id).toBe("false");
+        for (const value of [true, false, "true"]) {
+          const denied = await fx.set(id, value);
+          expect(denied.status, id).toBe(403);
+          expect(denied.body.error, id).toMatch(/only by the (person|owner), in Settings → Phone & devices/);
+        }
+      }
+      expect(writes).not.toHaveBeenCalled();
+      expect(fx.cards()).toEqual([]);
+      expect(fx.routeCalls).toEqual([]);
+      expect(fx.saved).toEqual([]);
+    } finally {
+      writes.mockRestore();
+    }
   });
 
   it("gives a bot the stored picture in a circle, with Undo back to its mascot face", async () => {

@@ -1,17 +1,17 @@
 // More preferences the app window keeps, or reaches through the desktop app's bridge, each applied with Undo on a card
 // saying what it does. A window that can't apply one (a browser has no desktop bridge) refuses it.
 import { PLACE_SWATCHES, TALK_KEYS } from "../../shared/app-settings.ts";
-import { personOnly, type SettingEntry, type WindowPref } from "./registry.ts";
+import type { SettingEntry, WindowPref } from "./registry.ts";
 
 const turn = (on: boolean, yes: string, no: string) => (on ? yes : no);
 
 export function windowEntries(windowPref: WindowPref): SettingEntry[] {
   const flag = (id: Parameters<WindowPref>[0], label: string, help: string, where: Parameters<WindowPref>[3], synonyms: string[], yes: string, no: string) =>
     windowPref(id, label, help, where, synonyms, "true or false", { says: (on: boolean) => turn(on, yes, no) });
-  /** A way in to this computer: a bot may turn it on, but turning it off can cut off the device the person is using now. */
-  const wayIn = (id: Parameters<WindowPref>[0], label: string, help: string, where: Parameters<WindowPref>[3], synonyms: string[], yes: string) =>
-    windowPref(id, label, help, where, synonyms, "true (turning it off is done by the person, in Settings)",
-      { says: () => yes, refusal: (on: boolean) => (on ? null : personOnly(`Turning off ${label}`, where)) });
+  const wayIn = (id: Parameters<WindowPref>[0], label: string, help: string, where: Parameters<WindowPref>[3], synonyms: string[]): SettingEntry => {
+    const { read } = windowPref(id, label, help, where, synonyms, "true or false");
+    return { id, label, help, where, synonyms, tier: "owner-only", read };
+  };
   return [
     flag("appearance.userBubbles", "Coloured messages", "Your own messages take the bot's colour.", "bubbles", ["bubbles", "message color", "my messages"],
       "Colour your messages with each bot's colour", "Show your messages in plain grey"),
@@ -50,12 +50,9 @@ export function windowEntries(windowPref: WindowPref): SettingEntry[] {
       }),
     flag("account.productEmails", "Product update emails", "MausBot emails you product updates.", "emails", ["emails", "newsletter", "product updates", "email updates"],
       "Get MausBot product update emails (your email address is sent to MausBot)", "Stop MausBot product update emails"),
-    wayIn("remote.wifi", "Same Wi-Fi", "Paired phones reach this computer on the same Wi-Fi network.", "wifi", ["wifi", "wi-fi", "lan", "local network", "remote access"],
-      "Let your paired phones reach this computer on the same Wi-Fi"),
-    wayIn("remote.relay", "Reach from anywhere", "Paired phones reach this computer from anywhere through MausBot's relay (needs a MausBot sign-in).", "relay", ["relay", "anywhere", "away", "remote access"],
-      "Let your paired phones reach this computer from anywhere, through MausBot's relay"),
-    wayIn("remote.tailscale", "Tailscale", "Paired devices reach this computer over your Tailscale network (Tailscale must be installed and signed in).", "tailscale", ["tailscale", "tailnet", "remote access"],
-      "Let your devices reach this computer over Tailscale"),
+    wayIn("remote.wifi", "Same Wi-Fi", "Paired phones reach this computer on the same Wi-Fi network.", "wifi", ["wifi", "wi-fi", "lan", "local network", "remote access"]),
+    wayIn("remote.relay", "Reach from anywhere", "Paired phones reach this computer from anywhere through MausBot's relay (needs a MausBot sign-in).", "relay", ["relay", "anywhere", "away", "remote access"]),
+    wayIn("remote.tailscale", "Tailscale", "Paired devices reach this computer over your Tailscale network (Tailscale must be installed and signed in).", "tailscale", ["tailscale", "tailnet", "remote access"]),
     flag("remote.keepAwake", "Keep awake", "Keep this computer awake while a way in is on, so paired phones can reach it.", "keep-awake", ["sleep", "awake", "overnight"],
       "Keep this computer awake so paired phones can reach it", "Let this computer sleep"),
   ];
