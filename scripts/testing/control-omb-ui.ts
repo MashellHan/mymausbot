@@ -524,8 +524,7 @@ export async function launchUi(
     const env = sessionEnv(session, parentEnv);
     opened = { binary, env };
     phase("browser-open-start");
-    const openTimeoutMs = 120_000;
-    await agentBrowser(binary, { ...env, AGENT_BROWSER_DEFAULT_TIMEOUT: String(openTimeoutMs) }, ["open", previewUrl.href], openTimeoutMs);
+    await agentBrowser(binary, env, ["open", previewUrl.href], 120_000);
     checkpoint();
     phase("browser-opened");
     const handle: UiHandle = {

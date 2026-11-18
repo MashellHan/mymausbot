@@ -411,7 +411,7 @@ const Bubble = memo(function Bubble({
   const togglePin = () =>
     dispatch({ type: "updateTask", botId, threadId, patch: { pinnedMessageId: pinned ? "" : message.id } });
   const replyAllowed = canReplyToMessage(message);
-  const replyMenu = (body: string) => replyAndCopy(() => onReply(message), body).filter((item) => replyAllowed || item.key !== "reply");
+  const replyMenu = (body: string) => replyAndCopy(() => onReply(message), body).filter((item) => (!simple && replyAllowed) || item.key !== "reply");
   const botActions = !user && (
     <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={simple ? [...replyMenu(text), ...botMenu, ...forkAction] : [...botMenu, ...forkAction]} contextItems={simple ? undefined : replyMenu(text)}>
       {replyAllowed && <ReplyAction onReply={() => onReply(message)} />}
@@ -431,7 +431,7 @@ const Bubble = memo(function Bubble({
           <MessageActions
             side="user" contextItems={simple ? undefined : replyMenu(visibleText)}
             menu={[
-              ...(simple ? replyMenu(visibleText).filter((item) => item.key !== "reply") : []),
+              ...(simple ? replyMenu(visibleText) : []),
               ...userMessageMenu({
                 messageId: message.id, save: botMenu.filter((item) => item.key === TEAM_MEMORY_ITEM),
                 onEdit: !speaker && message.kind === "text" && !webhookView && !hasAttachments && !message.id.startsWith("optimistic-")

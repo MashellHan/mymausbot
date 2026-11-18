@@ -242,10 +242,10 @@ describe("Computer panel tab", () => {
     expect(document.activeElement).toBe(tab("Bot"));
   });
 
-  it("moves over an Android tab that appeared", async () => {
+  it("moves to Phone when an Android device appears", async () => {
     fixture.android = true;
     await open(makeBot());
-    expect(tabLabels()).toEqual(["Bot", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabLabels()).toEqual(["Bot", "Routines", "Phone", "Browser", "Data", "Files", "Mini Apps"]);
     press("Routines", "ArrowRight");
     await settle();
     expect(selected()).toBe("Phone");
@@ -260,7 +260,7 @@ describe("Computer panel tab", () => {
 
     fixture.android = false;
     await open(makeBot());
-    expect(tabLabels()).not.toContain("Android");
+    expect(tabLabels()).not.toContain("Phone");
     expect(selected()).toBe("Bot");
   });
 
