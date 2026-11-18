@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { augmentedPath } from "./env-path.ts";
 import { codexSessionId, createLocalAgentSessionReader, dashboardText } from "./local-agent-session.ts";
-import { createPiSessionReader } from "./local-agent-pi-message.ts";
+import { PI_CONTEXT_KEY, parsePiContext, readPiProcessStart, type PiProcessStart } from "./local-agent-pi-context.ts";
+import { createPiSessionReader, type PiSessionView } from "./local-agent-pi-message.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { localAgentRoles, verifiedLocalAgentMembers } from "./local-agent-association.ts";
 
@@ -35,8 +36,52 @@ function state(value: unknown): LocalAgentState {
   return STATES.has(value as LocalAgentState) ? value as LocalAgentState : "unknown";
 }
 
-export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir(), codexHome = process.env.CODEX_HOME || join(home, ".codex"), now = Date.now }: {
-  run?: HerdrRunner; home?: string; codexHome?: string; now?: () => number;
+function piContextValue(agent: Record<string, unknown>): unknown {
+  const tokens = agent.tokens;
+  return tokens && typeof tokens === "object" ? (tokens as Record<string, unknown>)[PI_CONTEXT_KEY] : undefined;
+}
+
+async function observePiContexts(agents: Record<string, unknown>[], sessions: Map<string, PiSessionView | null>,
+  run: HerdrRunner, readStart: PiProcessStart, now: () => number): Promise<Map<string, number>> {
+  const candidates = agents.flatMap((agent) => {
+    const pane = String(agent.pane_id);
+    const session = sessions.get(pane)?.contextBinding;
+    if (!session) return [];
+    const binding = { pane, ...session };
+    const sample = parsePiContext(piContextValue(agent), binding, now());
+    return sample ? [{ agent, pane, binding, sample }] : [];
+  }).slice(0, 16);
+  if (!candidates.length) return new Map();
+  const checked = await Promise.all(candidates.map(async (candidate) => {
+    const { pane, sample } = candidate;
+    try {
+      const { result } = JSON.parse(await run(["--session", "default", "pane", "process-info", "--pane", pane]));
+      const info = result?.process_info;
+      if (info?.pane_id !== pane || !Array.isArray(info.foreground_processes) ||
+          !info.foreground_processes.some((entry: { pid?: number; name?: string }) =>
+            entry?.pid === sample.pid && entry.name === "node")) return null;
+      return await readStart(sample.pid) === sample.start ? candidate : null;
+    } catch { return null; }
+  }));
+  if (!checked.some(Boolean)) return new Map();
+  try {
+    const fresh = verifiedLocalAgentMembers(herdrRows(await run(["--session", "default", "agent", "list"]), "agents"));
+    return new Map(checked.flatMap((entry) => {
+      if (!entry) return [];
+      const { agent, pane, binding, sample } = entry;
+      const row = fresh.find((candidate) => candidate.pane_id === pane);
+      if (row?.agent !== "pi" || row.cwd !== agent.cwd ||
+          localAgentOccupantId(row, pane) !== localAgentOccupantId(agent, pane)) return [];
+      const current = parsePiContext(piContextValue(row), binding, now());
+      return current && current.pid === sample.pid && current.start === sample.start && current.window === sample.window
+        ? [[pane, current.window] as const] : [];
+    }));
+  } catch { return new Map(); }
+}
+
+export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir(), codexHome = process.env.CODEX_HOME || join(home, ".codex"),
+  now = Date.now, readProcessStart = readPiProcessStart }: {
+  run?: HerdrRunner; home?: string; codexHome?: string; now?: () => number; readProcessStart?: PiProcessStart;
 } = {}) {
   const observationsFor = createLocalAgentSessionReader(codexHome, now);
   const piSessionsFor = createPiSessionReader(join(home, ".local", "share", "mausbot-team", "pi-agent"));
@@ -67,6 +112,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       const [observations, roles, piSessions] = await Promise.all([
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
       ]);
+      const piContexts = await observePiContexts(verified, piSessions, run, readProcessStart, now);
       const seen = new Set<string>();
       for (const agent of agents) {
         const id = agent.pane_id;
@@ -83,7 +129,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
           ...(occupantId ? { occupantId } : {}),
           role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? null,
           reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
-          contextWindow: observation?.contextWindow ?? pi?.contextWindow ?? null, state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
+          contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? null,
+          state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
           messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? null : null,
         };
         team.agents.push(member);
@@ -136,7 +183,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       return response;
     } catch {
       return lastGood ? { ...lastGood, status: "stale", teams: lastGood.teams.map((team) => ({ ...team,
-        agents: team.agents.map((member) => ({ ...member, role: null, messagePreview: null })),
+        agents: team.agents.map((member) => ({ ...member, role: null, messagePreview: null,
+          contextWindow: member.kind === "pi" ? null : member.contextWindow })),
       })) } : { status: "unavailable", updatedAt: null, teamCount: null, teams: [] };
     }
   }
@@ -144,7 +192,10 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
   return {
     get(fresh = false): Promise<LocalAgentTeamsResponse> {
       if (!fresh && pending) return pending;
-      if (!fresh && lastResult && now() - lastAttempt < 1_000) return Promise.resolve(lastResult);
+      if (!fresh && lastResult && now() - lastAttempt < 1_000 &&
+          !lastResult.teams.some((team) => team.agents.some((member) => member.kind === "pi" && member.contextWindow !== null))) {
+        return Promise.resolve(lastResult);
+      }
       const request = ++revision;
       lastAttempt = now();
       const next: Promise<LocalAgentTeamsResponse> = refresh(() => request === revision).then((value) => {

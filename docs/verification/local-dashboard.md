@@ -213,6 +213,18 @@ ready means the agent finished a reply, not that its assignment was verified.
 Selecting a member reveals its context and activity; stable pane/occupant identity
 preserves selection through polling and clears details when an occupant changes.
 
+Pi model and effort use the verified session file. Showing a Pi context ceiling
+also requires the opt-in `server/local-agent-pi-context-extension.ts` companion
+loaded with Pi's `-e` flag from a checkout that includes the adjacent helper.
+The existing Herdr state integration stays in place. The supported source is
+Pi 1.5.1 in a local Herdr 0.9.5 pane on macOS with the Xcode or Command Line
+Tools Python interpreter available for the kernel's process start lookup.
+The companion reports the running physical model's total ceiling as an expiring
+token. The Host checks the exact foreground PID and start time, and matches the
+verified pane, session file, branch and provider/model before exposing the
+ceiling. Missing or mismatched reports, virtual models and unsupported runtimes
+leave the ceiling unavailable.
+
 ## Per-agent activity
 
 `GET /api/local-dashboard/agents/{paneId}/activity` is a separate local-owner
