@@ -9,44 +9,58 @@ PR, issue, review and CI records. Preserve upstream license and notices.
 
 ## Roles
 
-| Herdr name | Role | Model | Effort | Context requested |
-| --- | --- | --- | --- | --- |
-| mausbot-lead | Lead | gpt-6-astra | max | provider default |
-| mausbot-design | Designer | gpt-6-sol | xhigh | 1,000,000 |
-| mausbot-front | Frontend | gpt-6-sol | xhigh | 1,000,000 |
-| mausbot-back | Backend | gpt-6-sol | xhigh | 1,000,000 |
-| mausbot-upstream | Upstream integration | gpt-6-sol | xhigh | 1,000,000 |
-| mausbot-dev1 | Additional developer | gpt-6.1-sol | max | 1,000,000 |
-| mausbot-dev2 | Additional developer | gpt-6.1-sol | max | 1,000,000 |
-| mausbot-dev3 | Additional developer | gpt-6.1-sol | max | 1,000,000 |
-| mausbot-review | Reviewer | gpt-6-astra | max | provider default |
-| mausbot-review2 | Reviewer | gpt-6-astra | max | provider default |
-| mausbot-review3 | Reviewer | gpt-6-astra | max | provider default |
-| mausbot-mini-review | Reviewer | gpt-6-astra | xhigh | unchanged |
+| Herdr name | Role | Runtime | Model | Effort | Context requested |
+| --- | --- | --- | --- | --- | --- |
+| mausbot-lead | Lead | Codex (Raven YOLO) | gpt-6-astra | max | provider default |
+| mausbot-design | Designer | Codex (Raven YOLO) | gpt-6.2-sol | xhigh | 1,000,000 |
+| mausbot-front | Frontend | Codex (Raven YOLO) | gpt-6.2-sol | high | 1,000,000 |
+| mausbot-back | Backend | Codex (Raven YOLO) | gpt-6.2-sol | high | 1,000,000 |
+| mausbot-upstream | Upstream integration | Pi (Raven, native execution) | gemini-4-hydrogen | high | provider default |
+| mausbot-dev1 | Additional developer | Pi (Raven, native execution) | gpt-6.2-sol | high | 1,000,000 |
+| mausbot-dev2 | Additional developer | Pi (Raven, native execution) | gemini-4-hydrogen | high | provider default |
+| mausbot-dev3 | Additional developer | Pi (Raven, native execution) | gpt-6.2-sol | high | 1,000,000 |
+| mausbot-review | Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
+| mausbot-review2 | Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
+| mausbot-review3 | Reviewer | Pi (Raven, native execution) | gemini-4-carbon | high | provider default |
+| mausbot-mini-review | Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
 
-The three additional developers share [roles/developer.md](roles/developer.md):
-Pi 1.5.1 through the existing Raven provider, exact model ID `gpt-6.1-sol`,
-`max` effort and requested context 1,000,000. The catalog advertises a 1,050,000
-limit; successful model, thinking and tool responses do not prove full-context
-use. Reviewer3 uses Codex, `gpt-6-astra`/`max` and a read-only sandbox as recorded
-in [roles/reviewer3.md](roles/reviewer3.md). These additions do not replace or
-reconfigure existing members, providers or permissions.
+All seven current MausBot Codex roles launch with the existing Raven provider
+in YOLO mode (preserving any existing pane shell profile without duplicating
+`--profile`). All five current MausBot Pi roles run through the existing Raven
+provider with automatic native tool execution (no per-call tool approval
+prompts). Preserve existing designated providers, accounts and authentication
+boundaries.
 
-`mausbot-mini-review` is the existing supplemental Mini App reviewer on Codex,
-with `gpt-6-astra`/`xhigh`, not the general reviewers' `max`. Its context and
-launch settings remain unchanged and are not specified by this declaration.
-This declaration adds no agent, grants, QA-owner labels or approval requirement.
-The general review pool remains `mausbot-review`, `mausbot-review2` and
-`mausbot-review3`.
+`mausbot-dev1` and `mausbot-dev3` use [roles/developer.md](roles/developer.md)
+with Pi/Raven (`--model raven/gpt-6.2-sol --thinking high`) and requested
+context 1,000,000 (advertised catalog window 1,050,000). `mausbot-dev2` uses
+the shared developer duties in [roles/developer.md](roles/developer.md) with
+its per-member Pi/Raven launch `--model raven/gemini-4-hydrogen --thinking high`
+and provider-default context, and `mausbot-upstream` uses
+[roles/upstream.md](roles/upstream.md) with Pi/Raven,
+`--model raven/gemini-4-hydrogen --thinking high` (catalog window 1,048,576;
+observed prompt-token ceiling may be lower, so keep requested context and
+observed total context distinct). `mausbot-review3` uses Pi/Raven with
+`--model raven/gemini-4-carbon --thinking high --tools read,grep,find,ls --no-mcp`
+as recorded in [roles/reviewer3.md](roles/reviewer3.md) (catalog window
+1,000,000). `mausbot-review`, `mausbot-review2` and `mausbot-mini-review` use
+Codex with `gpt-6.2-astra` and `xhigh` effort, preserving their source-review
+duties and inherited `--profile raven --yolo` pane alias.
 
-Existing Codex launch arguments remain in their role files; verify live session
-settings before claiming the model is active. A requested context ceiling is not
-proof the provider permits that entire context. Surface errors rather than
-downgrade. The existing Codex/Sol launch explicitly uses
-`service_tier="default"`: the implicit priority tier failed with
-`service_tier is not supported` on this installation, while the explicit default
-tier was verified by real tool-using responses from all four original Sol
-members. Keep that local compatibility setting when restarting them.
+`mausbot-mini-review` remains the supplemental Mini App reviewer on Codex with
+`gpt-6.2-astra`/`xhigh`. This update adds no agent, grants, QA-owner labels or
+approval requirement. The general review pool remains `mausbot-review`,
+`mausbot-review2` and `mausbot-review3`.
+
+Role files and launch defaults are requested settings, not claims of live
+runtime verification; verify live session settings before claiming a model or
+effort is active. A requested context ceiling is not proof the provider permits
+that entire context. Surface errors rather than silently substituting a model.
+The existing Codex `gpt-6.2-sol` launch files record `service_tier="default"`
+for local compatibility where `service_tier` is unsupported. Keep the existing
+pane shell profile (`--profile raven --yolo`) and `service_tier="default"`
+compatibility settings when restarting Codex panes, and keep
+`--tools read,grep,find,ls --no-mcp` for `mausbot-review3` on Pi.
 
 Use the Herdr skill for Herdr operations,
 with `--session default` and explicit names/IDs. Work in the MausBot workspace;

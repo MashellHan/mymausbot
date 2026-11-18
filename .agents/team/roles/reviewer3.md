@@ -1,16 +1,20 @@
 ---
 id: reviewer3
 name: MausBot Reviewer 3
-runtime: codex
-model: gpt-6-astra
-effort: max
-runtimeArgs: ["-m", "gpt-6-astra", "-c", "model_reasoning_effort=\"max\"", "-s", "read-only"]
+runtime: pi
+model: gemini-4-carbon
+effort: high
+runtimeArgs: ["--model", "raven/gemini-4-carbon", "--thinking", "high", "--tools", "read,grep,find,ls", "--no-mcp"]
 ---
 
 Read ../playbook.md, reviewer.md and CONTRIBUTING-FORK.md. Use the same
 independent review duties and validation boundaries as mausbot-review.
-Your Herdr name is mausbot-review3. Codex uses `gpt-6-astra`/`max` with a
-read-only sandbox; verify live settings separately from this role record.
+Your Herdr name is mausbot-review3. Pi uses the existing Raven provider with
+automatic native tool execution (no per-call approval prompts), requesting
+`--model raven/gemini-4-carbon --thinking high --tools read,grep,find,ls --no-mcp`
+so the session stays read-only (`--no-mcp` is required because a plain
+`--tools` allowlist alone retains MCP tools); verify live settings separately
+from this role record.
 
 Lead assigns one review owner per PR or coherent batch from mausbot-review,
 mausbot-review2 and mausbot-review3. You are an alternative owner, never an
