@@ -1543,10 +1543,11 @@ describe("stale pre-fix QA report handling", () => {
     expect(issue.labels).toContain("qa:verified");
   });
 
-  it("attributes a finding to its own issue when another closed issue quotes its marker", async () => {
+  it.each([true, false])("ignores a foreign issue quoting the marker, with generated state %s", async (hasForeignState) => {
     const target = makeClosedIssue(), foreign = makeClosedIssue();
     foreign.number = 1005;
-    foreign.body = foreign.body.replaceAll(findingKey, "d".repeat(24)) + `\n\n<!-- mausbot-qa:${findingKey} -->`;
+    foreign.body = (hasForeignState ? foreign.body.replaceAll(findingKey, "d".repeat(24)) : "Manual QA notes")
+      + `\n\n<!-- mausbot-qa:${findingKey} -->`;
     const api = vi.fn(async (path: string, options: any = {}) => {
       if (path.startsWith("/issues?")) return [foreign, target];
       if (path.startsWith("/issues/1006/comments?")) return [];

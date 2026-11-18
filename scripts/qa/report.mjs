@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels, preflightJob } from "./contracts.mjs";
-import { generatedBlock, issueKey, previousCoverage, stateRecord, withState } from "./issue-state.mjs";
+import { generatedSections, issueKey, previousCoverage, stateRecord, withState } from "./issue-state.mjs";
 import { qaGroups, refreshQaGroups } from "./groups.mjs";
 import { combineTextFindings, textCaseEvidence } from "./text-cases.mjs";
 
@@ -230,13 +230,14 @@ function findingBody(finding, report, state, scopeBasis, previous = "") {
     finding.jobs ? `Affected jobs: ${finding.jobs.map(sanitize).join(", ")}` : "",
     finding.file && finding.file !== "unknown test file" ? `Reproduce on an isolated fixture: checkout the tested revision, install the locked dependencies, then run \`pnpm exec vitest run ${finding.file}\` on ${sanitize(finding.platform)}. Match the job's OMB_VITEST_E2E and opt-in flags; never use live app data.` : "Reproducer and environment: use the linked job's exact command on the tested revision.",
     `\nAssertion:\n\`\`\`text\n${finding.assertion}\n\`\`\``, textCaseEvidence(finding, report, previous, sanitize), "<!-- mausbot-qa:end -->"].filter(Boolean).join("\n\n");
-  const blocks = [...previous.matchAll(generatedBlock)].filter((block) => block[1] === finding.key);
-  if (blocks.length === 1) {
+  const blocks = generatedSections(previous).filter((block) => block.key === finding.key);
+  if (blocks.length === 1 && blocks[0].complete) {
     const [block] = blocks;
-    return previous.slice(0, block.index) + text + previous.slice(block.index + block[0].length);
+    return previous.slice(0, block.start) + text + previous.slice(block.start + block.text.length);
   }
-  if (blocks.length > 1) {
-    previous = previous.replace(generatedBlock, (block, key) => key === finding.key ? block.replaceAll("<!-- mausbot-qa", "<!-- archived-mausbot-qa") : block);
+  for (const block of blocks.reverse()) {
+    const archived = block.text.replaceAll("<!-- mausbot-qa", "<!-- archived-mausbot-qa");
+    previous = previous.slice(0, block.start) + archived + previous.slice(block.start + block.text.length);
   }
   return `${previous ? `${previous.replace(marker(finding.key), "")}\n\n` : ""}${text}\n\nLead triage due within 30 minutes: priority (P0/P1/P2), classification, scope, owner role, next action, due date. Use role labels, not invented GitHub assignees. Close only after Reviewer and post-integration verification evidence.\n`;
 }
@@ -250,9 +251,10 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     Object.assign(issue, patch);
     changedKeys.add(key);
   };
+  const groupParents = new Set(groups.map((group) => group.parent));
   const issuesByKey = new Map();
   for (const issue of issues) {
-    const key = issueKey(issue.body);
+    const key = issueKey(issue.body, groupParents.has(issue));
     if (key && !issuesByKey.has(key)) issuesByKey.set(key, issue);
   }
   const findings = combineTextFindings(report.findings, issuesByKey, byKey, signature);
@@ -328,8 +330,22 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
   for (const issue of issues) {
     const record = stateRecord(issue.body);
     const state = record?.state;
-    if (!state || !newerThan(report, state)) continue;
+    if (!newerThan(report, state)) continue;
     const staleCases = staleCasesByIssue.get(issue.number);
+    if (!state) {
+      const key = issueKey(issue.body, groupParents.has(issue));
+      if (!key) continue;
+      const coverage = previousCoverage(issue.body, key);
+      if (!coverage.caseKeys.some((item) => !staleCases?.has(item) && report.findings.some((finding) => finding.key === item))) continue;
+      const note = `A tracked case failed in ${report.url} (attempt ${report.attempt}). Its historical coverage records require reconciliation.`;
+      const labels = issueLabels(issue);
+      if (issue.state === "open" && !labels.includes("qa:verified") && issue.body.includes(note)) continue;
+      await update(issue, key, {
+        body: issue.body.includes(note) ? issue.body : issue.body + "\n\n" + note,
+        labels: [...new Set([...labels.filter((label) => !["qa:verified", "qa:triaged"].includes(label)), "qa:untriaged"])], state: "open",
+      });
+      continue;
+    }
     const failedCase = state.caseKeys?.some((key) => !staleCases?.has(key) && report.findings.some((finding) => finding.key === key));
     if (failedCase) {
       const recurrence = issue.state === "closed" || issueLabels(issue).includes("qa:verified");

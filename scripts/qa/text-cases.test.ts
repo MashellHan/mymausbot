@@ -185,6 +185,39 @@ describe("one issue per product naming problem", () => {
     expect(group.labels).toContain("qa:verified");
   });
 
+  it("reopens a verified aggregate with competing records on an independently classified member failure", async () => {
+    const env = fixture(), a = finding(), b = finding("src/menu-b.test.ts");
+    await deliverReport(report(1, [a, b]), env);
+    await deliverReport(report(2, [], [a.key, b.key]), env);
+    const group = env.issues[0];
+    group.state = "closed";
+    group.body += "\n\n" + group.body;
+    const current = report(3, [{ ...a, textChange: undefined }]);
+    await deliverReport(current, env);
+    expect(group.state).toBe("open");
+    expect(group.labels).not.toContain("qa:verified");
+    expect(group.body).toContain(current.url);
+    env.api.mockClear();
+    await deliverReport(current, env);
+    expect(env.api.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  });
+
+  it("withholds positive verification while a second same-key coverage block is incomplete", async () => {
+    const env = fixture(), a = finding(), b = finding("src/menu-b.test.ts");
+    await deliverReport(report(1, [a]), env);
+    const group = env.issues[0];
+    const second = group.body.split("<!-- mausbot-qa:end -->")[0].replaceAll(a.key, b.key);
+    group.body += "\n\n" + second;
+    await deliverReport(report(2, [], [a.key]), env);
+    expect(group.labels).not.toContain("qa:verified");
+    expect(group.body).toContain(second);
+    await deliverReport(report(3, [a]), env);
+    expect(stateOf(group).caseKeys).toEqual([a.key, b.key]);
+    expect(stateOf(group).coverageUnknown).toBe(true);
+    await deliverReport(report(4, [], [a.key, b.key]), env);
+    expect(group.labels).not.toContain("qa:verified");
+  });
+
   it("keeps existing consolidated cases and new cases on one parent without clearing pending members", async () => {
     const old = [finding("src/old-a.test.ts"), finding("src/old-b.test.ts", "win32")];
     const keys = old.map((entry) => entry.key);
