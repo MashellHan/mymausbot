@@ -209,7 +209,7 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
     <div className="@container/usage min-h-0 flex-1 overflow-y-auto px-4 pb-5" data-testid="local-usage-panel">
       <header className="mb-3 flex flex-wrap items-center gap-1 pt-2">
         <h2 className="text-[18px] font-semibold text-ink">{t("computer.usage.heading")}</h2>
-        {view && (view.status === "partial" || view.status === "stale") && <InfoHint label={t("app.info")} warning={view.status !== "ready"}>
+        {view && (view.status === "partial" || view.status === "stale") && <InfoHint label={t("app.info")} warning>
           {view.status === "partial" && <p>{t("computer.usage.partial")}</p>}
           {view.status === "stale" && <p>{t("computer.usage.stale")}</p>}
         </InfoHint>}
