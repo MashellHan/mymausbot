@@ -47,8 +47,7 @@ let desktopTray = null;
 import { collisionFreeDownloadPath, defaultSaveName, openFolder, openHtmlCopy, openLogsFolder, revealDownloadWhenDone, revealInFolder, withSavableFile } from "./save-file.mjs";
 import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs";
 import { appPermissionHandlers, externalLinkUrl } from "./app-permissions.mjs";
-import { appFrameBlinkSettings, appFrameNavigationAllowed } from "./app-frame-guard.mjs";
-import { mojoPoetryHostNavigationAllowed } from "./mojo-poetry-frame.mjs";
+import { appFrameBlinkSettings, createAppFrameFallback } from "./app-frame-guard.mjs";
 import { installDailyXFrameGuards } from "./daily-x-frame.mjs";
 import { writeClipboardText } from "./clipboard-write.mjs";
 import {
@@ -2058,21 +2057,8 @@ function createWindow({ deferNavigation = false } = {}) {
   win.webContents.on("will-navigate", guardNavigation);
   // No page may embed the local server, or any saved server, in this preload-bearing window.
   installDailyXFrameGuards(win.webContents, { localOrigin: rendererOrigin, redirectFallback: guardNavigation,
-    frameFallback: (details) => {
-      if (!appFrameNavigationAllowed(details)
-        && !mojoPoetryHostNavigationAllowed(details, win.webContents.mainFrame, rendererOrigin())) return void details.preventDefault();
-      let target = null;
-      let page = null;
-      try {
-        target = new URL(details.url).origin;
-        page = new URL(win.webContents.getURL()).origin;
-      } catch {}
-      if (!target || !page || target === page) return;
-      if (target === rendererOrigin() || allowedOrigins(environmentsState, rendererOrigin()).has(target)) {
-        details.preventDefault();
-        slog(`blocked subframe navigation to ${details.url}`);
-      }
-    } });
+    frameFallback: createAppFrameFallback({ webContents: win.webContents, localOrigin: rendererOrigin,
+      serverOrigins: () => allowedOrigins(environmentsState, rendererOrigin()), log: slog }) });
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame || errorCode === -3) return; // -3: aborted by a newer navigation
     const remote = activeRemote(environmentsState);
