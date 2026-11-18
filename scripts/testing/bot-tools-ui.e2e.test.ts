@@ -23,7 +23,8 @@ const LAUNCH_TIMEOUT_MS = forced && !binary ? 600_000 : 180_000;
 const PHASE_PREFIX = "QA507_PHASE:";
 const LAUNCH_PHASES = new Set([
   "browser-ensure", "browser-ready", "fixture-start", "fixture-ready", "fixture-configured",
-  "preview-start", "preview-ready", "browser-open-start", "browser-opened",
+  "preview-start", "preview-ready", "browser-open-start", "chrome-start", "chrome-ready",
+  "browser-cdp-ready", "preview-mounted", "browser-opened",
 ]);
 
 function readLaunchPhases(onPhase: (phase: string) => void): (chunk: string) => void {
@@ -258,18 +259,28 @@ describe("bot setup and tools in the real renderer", () => {
       return (await agentBrowser(handle.binary, sessionEnv(handle), ["eval", js], 2_000)).result;
     };
     const snapshot = async () => (await ui("snapshot")).snapshot as string;
-    const openPanel = () => expect.poll(() => evaluate(`(() => {
-      if (document.querySelector('[data-chathead-pill][aria-expanded="true"]')) return true;
-      document.querySelector('[data-chathead-pill]')?.click();
-      return false;
-    })()`), { timeout: 10_000 }).toBe(true);
+    const computerSettings = '[data-computer-panel] button[aria-label="Bot settings"]';
+    const botPanelVisible = () => evaluate("Boolean(document.querySelector('#bot-panel')?.getClientRects().length)");
+    const openBotSettings = async () => {
+      if (await botPanelVisible()) return;
+      await expect.poll(() => evaluate(`(() => {
+        const pill = document.querySelector('[data-chathead-pill]');
+        if (pill && pill.getAttribute('aria-expanded') !== 'true') pill.click();
+        return Boolean(document.querySelector(${JSON.stringify(computerSettings)})?.getClientRects().length);
+      })()`), { timeout: 10_000 }).toBe(true);
+      await agentBrowser(browser.binary, sessionEnv(browser), ["click", computerSettings]);
+      await expect.poll(botPanelVisible, { timeout: 10_000 }).toBe(true);
+    };
     const appsEntryState = (expectedBotName: string) => diagnosticEval(`(() => {
       const panel = document.querySelector('#bot-panel');
       const gear = document.querySelector('[data-panel-gear]');
       const pill = document.querySelector('[data-chathead-pill]');
       const page = panel?.querySelector('[data-panel-page-view]')?.getAttribute('data-panel-page-view') ?? null;
       const tab = panel?.querySelector('[data-panel-tab][aria-selected="true"]')?.getAttribute('data-panel-tab') ?? null;
+      const mode = localStorage.getItem('omb-interface-mode');
       return {
+        mode: mode === 'raw' || mode === 'simple' || mode === 'advanced' ? mode : null,
+        viewport: { width: innerWidth, height: innerHeight },
         panel: { exists: !!panel, visible: !!panel?.getClientRects().length,
           botMatchesExpected: panel?.querySelector('#bot-settings-title')?.textContent?.trim() === ${JSON.stringify(expectedBotName)} },
         pill: { expanded: pill?.getAttribute('aria-expanded') ?? null,
@@ -281,11 +292,11 @@ describe("bot setup and tools in the real renderer", () => {
       };
     })()`);
     const openApps = async (expectedBotName: string) => {
-      await openPanel();
-      await click("Bot settings");
-      await expect.poll(() => evaluate("(() => { const gear = document.querySelector('[data-panel-gear]'); gear?.click(); return Boolean(gear); })()"), { timeout: 10_000 }).toBe(true);
-      const afterGear = await appsEntryState(expectedBotName).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
+      let afterGear: unknown;
       try {
+        await openBotSettings();
+        await expect.poll(() => evaluate("(() => { const gear = document.querySelector('[data-panel-gear]'); gear?.click(); return Boolean(gear); })()"), { timeout: 10_000 }).toBe(true);
+        afterGear = await appsEntryState(expectedBotName).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
         await expect.poll(() => evaluate("Boolean(document.querySelector('[data-panel-page=\"apps\"]'))"), { timeout: 10_000 }).toBe(true);
       } catch (original) {
         try {
@@ -349,8 +360,7 @@ describe("bot setup and tools in the real renderer", () => {
     const searchValue = () => evaluate("document.querySelector('[data-settings-search]')?.value ?? null");
     // The panel's Usage row shows what this bot has spent and opens Settings on Spending, in Advanced mode.
     const openPanelUsage = async () => {
-      await openPanel();
-      await click("Bot settings");
+      await openBotSettings();
       const probeInstalled = await diagnosticEval(`(() => {
         window.__qa507UsageProbe?.close();
         const state = () => {
