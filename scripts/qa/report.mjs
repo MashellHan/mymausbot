@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels, preflightJob } from "./contracts.mjs";
+import { generatedBlock, stateRecord, withState } from "./issue-state.mjs";
 import { qaGroups, refreshQaGroups } from "./groups.mjs";
 import { combineTextFindings, textCaseEvidence } from "./text-cases.mjs";
 
@@ -145,14 +146,6 @@ export function makeReport({ run, jobs, results = [], expected = expectedJobs(),
 }
 
 const marker = (key) => `<!-- mausbot-qa:${key} -->`;
-const generatedState = /^<!-- mausbot-qa:([a-f\d]{24}) -->\s+<!-- mausbot-qa:start -->\s+<!-- mausbot-qa-state ([^\r\n]+) -->\r?$[\s\S]*?^<!-- mausbot-qa:end -->\r?$/m;
-const stateOf = (issue) => {
-  try {
-    const raw = issue.body.match(generatedState)?.[2] ?? issue.body.match(/<!-- mausbot-qa-state (.+) -->/)?.[1];
-    return JSON.parse(raw ?? "null");
-  } catch { return null; }
-};
-
 const SHA = /^[a-f\d]{40}$/i;
 
 function newerThan(report, state) {
@@ -170,12 +163,6 @@ function authorizedVerifier(entry) {
   return ["OWNER", "MEMBER", "COLLABORATOR"].includes(assoc);
 }
 
-function hasCanonicalState(body, key) {
-  const controls = body.match(/<!-- mausbot-qa:(?:[a-f\d]{24}|start|end) -->|<!-- mausbot-qa-state /g);
-  if (controls?.length !== 4) return false;
-  return generatedState.exec(body)?.[1] === key;
-}
-
 async function isStrictAncestor(ancestorSha, descendantSha, api) {
   if (!SHA.test(ancestorSha ?? "") || !SHA.test(descendantSha ?? "")) return false;
   if (ancestorSha.toLowerCase() === descendantSha.toLowerCase()) return false;
@@ -189,19 +176,20 @@ async function isStrictAncestor(ancestorSha, descendantSha, api) {
   }
 }
 
-async function isStalePreFixReport(finding, issue, state, report, api) {
-  if (!issue || state?.key !== finding.key) return false;
+async function isStalePreFixReport(finding, issue, record, report, api) {
+  if (!issue) return false;
+  const state = record?.state;
   const labels = issueLabels(issue);
   if (issue.state !== "closed" && !labels.includes("qa:verified")) return false;
   if (!SHA.test(report?.sha ?? "")) return false;
-  if (finding.cases?.length && (state.verified !== true || !Array.isArray(state.caseKeys)
+  if (finding.cases?.length && (state?.verified !== true || !Array.isArray(state.caseKeys)
     || !finding.cases.every((entry) => state.caseKeys.includes(entry.key)))) return false;
-  if (finding.jobs?.length && (!Array.isArray(state.verificationJobs)
+  if (finding.jobs?.length && (!Array.isArray(state?.verificationJobs)
     || !finding.jobs.every((job) => state.verificationJobs.includes(job)))) return false;
 
   const candidates = new Set();
   const author = issue.user;
-  if (author?.id === 41898282 && author.type === "Bot" && author.login === "github-actions[bot]" && hasCanonicalState(issue.body, finding.key)) {
+  if (author?.id === 41898282 && author.type === "Bot" && author.login === "github-actions[bot]" && record?.canonical) {
     const revision = state.verifiedSha ?? (labels.includes("qa:verified") ? state.lastExecutionSha : null);
     if (typeof revision === "string" && SHA.test(revision)) candidates.add(revision.toLowerCase());
   }
@@ -239,7 +227,14 @@ function findingBody(finding, report, state, scopeBasis, previous = "") {
     finding.jobs ? `Affected jobs: ${finding.jobs.map(sanitize).join(", ")}` : "",
     finding.file && finding.file !== "unknown test file" ? `Reproduce on an isolated fixture: checkout the tested revision, install the locked dependencies, then run \`pnpm exec vitest run ${finding.file}\` on ${sanitize(finding.platform)}. Match the job's OMB_VITEST_E2E and opt-in flags; never use live app data.` : "Reproducer and environment: use the linked job's exact command on the tested revision.",
     `\nAssertion:\n\`\`\`text\n${finding.assertion}\n\`\`\``, textCaseEvidence(finding, report, previous, sanitize), "<!-- mausbot-qa:end -->"].filter(Boolean).join("\n\n");
-  if (previous.includes("<!-- mausbot-qa:start -->")) return previous.replace(/<!-- mausbot-qa:[a-f\d]+ -->\s*<!-- mausbot-qa:start -->[\s\S]*?<!-- mausbot-qa:end -->/, text);
+  const blocks = [...previous.matchAll(generatedBlock)].filter((block) => block[1] === finding.key);
+  if (blocks.length === 1) {
+    const [block] = blocks;
+    return previous.slice(0, block.index) + text + previous.slice(block.index + block[0].length);
+  }
+  if (blocks.length > 1) {
+    previous = previous.replace(generatedBlock, (block, key) => key === finding.key ? block.replaceAll("<!-- mausbot-qa", "<!-- archived-mausbot-qa") : block);
+  }
   return `${previous ? `${previous.replace(marker(finding.key), "")}\n\n` : ""}${text}\n\nLead triage due within 30 minutes: priority (P0/P1/P2), classification, scope, owner role, next action, due date. Use role labels, not invented GitHub assignees. Close only after Reviewer and post-integration verification evidence.\n`;
 }
 
@@ -247,16 +242,17 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
   const issues = (await pages("/issues?state=all&labels=qa", null, api)).filter((issue) => !issue.pull_request);
   const { groups, byKey } = qaGroups(issues), changedKeys = new Set();
   const staleCasesByIssue = new Map();
-  const update = async (issue, patch) => {
+  const update = async (issue, key, patch) => {
     await api(`/issues/${issue.number}`, { method: "PATCH", body: patch });
     Object.assign(issue, patch);
-    changedKeys.add(stateOf(issue).key);
+    changedKeys.add(key);
   };
   const findings = combineTextFindings(report.findings, issues, byKey, signature);
   for (const finding of findings) {
     const issue = issues.find((entry) => entry.body?.includes(marker(finding.key)));
     const grouped = byKey.has(finding.key);
-    const previous = issue ? stateOf(issue) : null;
+    const record = issue && stateRecord(issue.body, finding.key);
+    const previous = record?.state;
     const recurrence = issue && !grouped && (issue.state === "closed" || issueLabels(issue).includes("qa:verified"));
     const runKey = `${report.runId}:${report.attempt}`;
     if (!newerThan(report, previous)) {
@@ -268,8 +264,8 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
         caseKeys: [...new Set([...(previous.caseKeys ?? []), ...finding.cases.map((entry) => entry.key)])],
         ...(recurrence ? { triageEpoch: new Date().toISOString() } : {}) };
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified" && (!recurrence || label !== "qa:triaged"));
-      await update(issue, {
-        body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(state)} -->`)
+      await update(issue, state.key, {
+        body: withState(issue.body, record, state)
           .replace(evidence, textCaseEvidence(finding, report, issue.body, sanitize))
           + `\n\nLate report ${report.url} added ${added.length} previously untracked cases. Newer execution evidence is retained; the added cases still need positive verification.`,
         state: "open", labels: recurrence ? [...new Set([...labels, "qa:untriaged"])] : labels,
@@ -282,18 +278,18 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       : mapped ? "test listed in check-policy.json"
       : "conservative fallback: no test-to-area mapping in check-policy.json";
     const verifiedMember = grouped && issueLabels(issue).includes("qa:verified");
-    const staleVerifiedSha = recurrence || verifiedMember ? await isStalePreFixReport(finding, issue, previous, report, api) : false;
+    const staleVerifiedSha = recurrence || verifiedMember ? await isStalePreFixReport(finding, issue, record, report, api) : false;
     if (staleVerifiedSha) {
       staleCasesByIssue.set(issue.number, new Set(finding.cases?.map((entry) => entry.key)));
       const entry = `${runKey}@${report.sha.toLowerCase()}`;
       const note = `Recorded stale pre-fix report ${report.url} (attempt ${report.attempt}, tested \`${report.sha}\`, strict ancestor of verified \`${staleVerifiedSha}\`).`;
       if (issue.body.includes(note)) continue;
       let body = issue.body;
-      if (hasCanonicalState(body, finding.key)) {
+      if (record?.canonical) {
         const history = Array.isArray(previous.stalePreFixRuns) ? previous.stalePreFixRuns : [];
         if (history.includes(entry)) continue;
         const staleState = { ...previous, stalePreFixRuns: [...history, entry].slice(-10) };
-        body = body.replace(/<!-- mausbot-qa-state (.+) -->/, () => `<!-- mausbot-qa-state ${JSON.stringify(staleState)} -->`);
+        body = withState(body, record, staleState);
       }
       body += `\n\n${note}`;
       await api(`/issues/${issue.number}`, { method: "PATCH", body: { body } });
@@ -310,14 +306,15 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     const defaults = ["qa", "qa:untriaged", `qa:kind:${finding.kind}`, `qa:scope:${area}`, "owner:lead"];
     if (issue) {
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified");
-      await update(issue, { body, ...(!grouped ? { state: "open" } : {}), labels: recurrence ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
+      await update(issue, state.key, { body, ...(!grouped ? { state: "open" } : {}), labels: recurrence ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
     } else {
       const created = await api("/issues", { method: "POST", body: { title: `[QA] ${sanitize(finding.contract).slice(0, 150)} (${sanitize(finding.platform).slice(0, 35)})`, body, labels: defaults } });
       issues.push(created);
     }
   }
   for (const issue of issues) {
-    const state = stateOf(issue);
+    const record = stateRecord(issue.body);
+    const state = record?.state;
     if (!state || !newerThan(report, state)) continue;
     const staleCases = staleCasesByIssue.get(issue.number);
     const failedCase = state.caseKeys?.some((key) => !staleCases?.has(key) && report.findings.some((finding) => finding.key === key));
@@ -326,8 +323,8 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       const failed = { ...state, verified: false, lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt,
         ...(recurrence ? { triageEpoch: report.finishedAt } : {}) };
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified" && (!recurrence || label !== "qa:triaged"));
-      await update(issue, {
-        body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(failed)} -->`)
+      await update(issue, state.key, {
+        body: withState(issue.body, record, failed)
           + (recurrence ? `\n\nA tracked case failed or retried in ${report.url}. Aggregate verification is withdrawn; each failure retains its own current classification and evidence.` : ""),
         state: "open", labels: recurrence ? [...new Set([...labels, "qa:untriaged"])] : labels,
       });
@@ -339,17 +336,17 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     if (!contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
     const verified = { ...state, ...(state.caseKeys ? { verified: true } : {}), ...(SHA.test(report.sha ?? "") ? { verifiedSha: report.sha.toLowerCase() } : {}), lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
     const alreadyVerified = issueLabels(issue).includes("qa:verified");
-    await update(issue, {
-      body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)
+    await update(issue, state.key, {
+      body: withState(issue.body, record, verified)
         + (alreadyVerified ? "" : `\n\nQA verified this contract without retries on \`${report.sha}\`: ${report.url}. Lead: check the integrated fix and Reviewer evidence before closing.`),
       ...(!alreadyVerified ? { labels: [...issueLabels(issue), "qa:verified"] } : {}),
     });
   }
   for (const { parent, keys, members } of groups) {
-    const direct = stateOf(parent);
+    const direct = stateRecord(parent.body)?.state;
     if (direct?.lastExecution === `${report.runId}:${report.attempt}` || direct?.lastMembershipRun === `${report.runId}:${report.attempt}`) changedKeys.add(direct.key);
     for (let i = 0; i < keys.length; i++) {
-      if (stateOf(members[i])?.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(keys[i]);
+      if (stateRecord(members[i].body, keys[i])?.state.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(keys[i]);
     }
   }
   await refreshQaGroups(groups, changedKeys, report, api);

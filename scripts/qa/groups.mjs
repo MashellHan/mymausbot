@@ -1,3 +1,4 @@
+import { stateRecord } from "./issue-state.mjs";
 import { issueAreas, issueLabels } from "./contracts.mjs";
 
 const marker = /^<!-- mausbot-qa-group (.+) -->$/gm;
@@ -35,7 +36,7 @@ export function qaGroups(issues) {
 
 export async function refreshQaGroups(groups, changedKeys, report, api) {
   for (const { parent, keys, members } of groups) {
-    const direct = JSON.parse(parent.body.match(/<!-- mausbot-qa-state (.+) -->/)?.[1] ?? "null");
+    const direct = stateRecord(parent.body)?.state;
     if (!keys.some((key) => changedKeys.has(key)) && !changedKeys.has(direct?.key)) continue;
     const verified = members.filter((issue) => issueLabels(issue).includes("qa:verified"));
     const complete = verified.length === members.length && (!direct?.caseKeys || direct.verified === true);

@@ -1502,6 +1502,48 @@ describe("stale pre-fix QA report handling", () => {
     expect(JSON.parse(issue.body.match(/<!-- mausbot-qa-state (.+) -->/)![1]).verificationJobs).toEqual(jobs);
   });
 
+  it("reopens a current failure when two complete records disagree about the latest execution", async () => {
+    const issue = makeClosedIssue({ verifiedSha });
+    const archived = issue.body.replace('"lastExecution":"44081735629:1"', '"lastExecution":"99999999999:1"');
+    issue.body = archived + "\n\nPrevious investigation notes\n\n" + issue.body;
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [issue];
+      if (path.startsWith("/issues/1006/comments?")) return [];
+      if (path === "/issues/1006" && options.method === "PATCH") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const current = makeLateReport(newSha);
+    await deliverReport(current, { api, policy: { areas: [] } });
+    expect(issue.state).toBe("open");
+    expect(issue.body).toContain("Previous investigation notes");
+    expect(issue.body).toContain('"lastExecution":"99999999999:1"');
+    const records = [...issue.body.matchAll(/<!-- mausbot-qa-state (.+) -->/g)];
+    expect(records).toHaveLength(1);
+    expect(JSON.parse(records[0][1]).lastExecution).toBe("44225458164:1");
+    api.mockClear();
+    await deliverReport(current, { api, policy: { areas: [] } });
+    expect(api.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  });
+
+  it("writes positive verification to the same generated record that supplied the cursor", async () => {
+    const issue = makeClosedIssue({ verifiedSha: preFixSha });
+    const archived = issue.body.match(/<!-- mausbot-qa-state .+ -->/)![0]
+      .replace('"lastExecution":"44081735629:1"', '"lastExecution":"99999999999:1"');
+    issue.body = archived + "\n\n" + issue.body;
+    issue.labels = issue.labels.filter((label) => label.name !== "qa:verified");
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [issue];
+      if (path === "/issues/1006" && options.method === "PATCH") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport({ ...makeLateReport(newSha), findings: [], passed: [findingKey] }, { api, policy: { areas: [] } });
+    expect(issue.body.startsWith(archived + "\n\n")).toBe(true);
+    const records = [...issue.body.matchAll(/<!-- mausbot-qa-state (.+) -->/g)];
+    expect(records).toHaveLength(2);
+    expect(JSON.parse(records[1][1])).toMatchObject({ verifiedSha: newSha, lastExecution: "44225458164:1" });
+    expect(issue.labels).toContain("qa:verified");
+  });
+
   it.each(["verifiedSha", "lastExecutionSha"])("requires reporter ownership for %s on a closed, verified issue", async (field) => {
     const issue = { ...makeClosedIssue({ [field]: verifiedSha }), user: { id: 15, type: "User", login: "contributor" } };
     const api = vi.fn(async (path: string, options: any = {}) => {
@@ -1540,6 +1582,36 @@ describe("stale pre-fix QA report handling", () => {
     expect(patches).toHaveLength(1);
     expect(patches[0].state).toBeUndefined();
     expect(issue.state).toBe("closed");
+  });
+
+  it("uses independent closure evidence when two complete archived blocks make the cursor ambiguous", async () => {
+    const issue = makeClosedIssue({ lastExecution: "99999999999:1" });
+    const before = issue.body + "\n\n" + makeClosedIssue().body;
+    issue.body = before;
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [issue];
+      if (path.startsWith("/issues/1006/comments?")) return [{
+        author_association: "OWNER", body: `<!-- lead-qa1006-test-closure-v1 -->\nmerged at [\`${verifiedSha}\`]`,
+      }];
+      if (path === `/compare/${preFixSha}...${verifiedSha}`) return { status: "ahead", ahead_by: 1, behind_by: 0 };
+      if (path === "/issues/1006" && options.method === "PATCH") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport(makeLateReport(preFixSha), { api, policy: { areas: [] } });
+    expect(issue.state).toBe("closed");
+    expect(issue.body.startsWith(before + "\n\nRecorded stale pre-fix report")).toBe(true);
+  });
+
+  it("retains ordering for a legacy issue with one marker and one state", async () => {
+    const issue = makeClosedIssue({ lastExecution: "99999999999:1" });
+    issue.body = issue.body.replace("<!-- mausbot-qa:start -->", "").replace("<!-- mausbot-qa:end -->", "");
+    const api = vi.fn(async (path: string) => {
+      if (path.startsWith("/issues?")) return [issue];
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport(makeLateReport(newSha), { api, policy: { areas: [] } });
+    expect(issue.state).toBe("closed");
+    expect(api.mock.calls).toHaveLength(1);
   });
 
   it("rejects untrusted comments, forged assertion text, ambiguous multiple closure SHAs, and uncovered group members", async () => {
