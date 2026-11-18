@@ -39,11 +39,11 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const colorCalls: Array<{ botId: string; color: string }> = [];
   const archiveCalls: Array<{ botId: string; archived: boolean; demoteChief: boolean }> = [];
   const helperCalls: Array<{ botId: string; shown: boolean }> = [];
-  const windowWrites: Array<{ id: string; value: unknown }> = [];
   const engineCalls: unknown[] = [];
   const chosen = new Set(options.chosen ?? []);
   const messages: Array<Record<string, any>> = [];
   const windowValues = new Map<string, unknown>(options.window === false ? [] : [["appearance.skin", "daylight"]]);
+  const windowWrites: Array<{ id: string; value: unknown }> = [];
   const store = {
     appendMessage: (threadId: string, message: Record<string, unknown>) => {
       const row = { ...message, id: `m${messages.length + 1}`, threadId };
@@ -863,6 +863,61 @@ describe("confirm tier", () => {
     fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
     expect((await enabling).body.error).toContain("cannot run on this computer");
     expect(fx.saved).toHaveLength(1);
+  });
+
+  it("changes the stored sidebar-thread choice only after a live owner's review", async () => {
+    const fx = fixture();
+    fx.windowValues.set("appearance.showThreads", false);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "show threads" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance.showThreads", tier: "confirm", value: "false" })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.showThreads" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ value: "false", help: expect.stringContaining("Advanced mode") });
+    expect((await fx.set("appearance.showThreads", "yes")).status).toBe(400);
+    expect((await fx.set("appearance.showThreads", false)).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("appearance.showThreads", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("Advanced mode") } });
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.showThreads", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.showThreads", true);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.showThreads", false);
+    const disconnected = fx.set("appearance.showThreads", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("appearance.showThreads");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.showThreads", false);
+    const approved = fx.set("appearance.showThreads", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.showThreads", value: true }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("appearance.showThreads", true)).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    expect(closed.windowWrites).toEqual([]);
+    const guest = fixture({ owner: false });
+    guest.windowValues.set("appearance.showThreads", false);
+    expect((await guest.set("appearance.showThreads", true)).status).toBe(403);
+    expect(guest.windowWrites).toEqual([]);
   });
 
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {

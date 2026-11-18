@@ -312,6 +312,19 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
       write: config((eventLogMaxBytes: number | null) => ({ threads: { eventLogMaxBytes } })),
     }),
     writable({
+      id: "appearance.showThreads", label: "Threads in the sidebar", help: "Show each bot's conversations beneath it in the sidebar when Advanced mode is on; Simple mode keeps them hidden without changing this choice.", where: "Settings → Appearance",
+      synonyms: ["show threads", "sidebar threads", "conversations", "thread list"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("appearance.showThreads"),
+      read: () => { const choice = deps.window.read("appearance.showThreads"); return typeof choice === "boolean" ? display(choice) : "unavailable until mymausbot is open on this computer"; },
+      describe: (shown: boolean) => {
+        const choice = deps.window.read("appearance.showThreads");
+        if (typeof choice !== "boolean") return { refusal: "Open mymausbot on this computer before changing sidebar threads." };
+        if (choice === shown) return { refusal: `Sidebar threads are already ${shown ? "shown" : "hidden"} when Advanced mode is on.` };
+        return { change: `${shown ? "Show" : "Hide"} each bot's conversations in the sidebar when Advanced mode is on; currently ${choice ? "shown" : "hidden"}` };
+      },
+      write: async (shown: boolean) => deps.window.write("appearance.showThreads", shown),
+    }),
+    writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },
