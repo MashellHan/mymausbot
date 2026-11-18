@@ -653,6 +653,7 @@ export async function launchUi(
   let opened: { binary: string; env: NodeJS.ProcessEnv } | undefined;
   let ownedChrome: Awaited<ReturnType<typeof launchLoopbackChrome>> | undefined;
   let handlePath: string | undefined;
+  let failure: { error: unknown } | undefined;
   try {
     phase("browser-ensure");
     const { binary, chrome } = await ensureUiBrowser(parentEnv, note);
@@ -720,6 +721,8 @@ export async function launchUi(
       const processName = reason === ownedChrome?.child ? "owned Chrome" : "verification server";
       io.stderr.write(`${JSON.stringify({ ok: false, error: `${processName} exited unexpectedly; see ${fixture.info.logPath}` }, null, 2)}\n`);
     }
+  } catch (error) {
+    failure = { error };
   } finally {
     process.off("SIGINT", requestStop);
     process.off("SIGTERM", requestStop);
@@ -730,8 +733,12 @@ export async function launchUi(
     catch (error) { report(error); }
     try {
       if (opened && !await closeBrowserSession(opened.binary, opened.env)) {
-        if (ownedChrome) throw new ControlOmbError("the owned browser daemon shutdown could not be confirmed");
-        await agentBrowser(opened.binary, opened.env, ["close"], 15_000).catch(() => {});
+        if (ownedChrome) {
+          keepDataDir = true;
+          failures.push("the owned browser daemon shutdown could not be confirmed");
+        } else {
+          await agentBrowser(opened.binary, opened.env, ["close"], 15_000).catch(() => {});
+        }
       }
     } catch (error) {
       keepDataDir = Boolean(ownedChrome);
@@ -745,7 +752,10 @@ export async function launchUi(
     catch (error) { report(error); }
     if (ownedChrome && fixture && !keepDataDir && existsSync(fixture.info.dataDir)) failures.push("the owned fixture directory was not removed");
     if (failures.length) {
-      throw new ControlOmbError(`UI fixture teardown failed: ${failures.join("; ")}`, keepDataDir && fixture ? `inspect the isolated fixture at ${fixture.info.dataDir}` : undefined);
+      failure = {
+        error: new ControlOmbError(`UI fixture teardown failed: ${failures.join("; ")}`, keepDataDir && fixture ? `inspect the isolated fixture at ${fixture.info.dataDir}` : undefined),
+      };
     }
   }
+  if (failure) throw failure.error;
 }
