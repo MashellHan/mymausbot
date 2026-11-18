@@ -246,6 +246,8 @@ describe("bot setup and tools in the real renderer", () => {
     phase("launcher-spawned");
     info = await waitForUiLauncher(child, LAUNCH_TIMEOUT_MS + 120_000, phase);
     phase("handle-ready");
+    const browser = JSON.parse(readFileSync(info.ui, "utf8")) as UiHandle;
+    await agentBrowser(browser.binary, sessionEnv(browser), ["set", "viewport", "1280", "900"], 60_000);
     const ui = (verb: string, ...args: string[]) => runControlOmb(["ui", verb, "--ui", info.ui, ...args]) as Promise<Record<string, any>>;
     const evaluate = async (js: string) => (await ui("eval", "--js", js)).result;
     const click = (name: string) => ui("click", "--name", name);
