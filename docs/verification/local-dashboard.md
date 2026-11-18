@@ -214,21 +214,46 @@ leave the ceiling unavailable.
 
 ## Per-agent activity
 
-`GET /api/local-dashboard/agents/{paneId}/activity` is a separate local-owner
-route. It accepts a Herdr pane ID such as `w6:p1` and no query parameters. Each
-read rechecks that pane's current Codex session, matches its exact session file
-ID, then returns at most 60 user-input and assistant-reply messages from a
-512 KiB tail. Tool calls and results do not count toward the message limit.
-Each excerpt is limited to 600 characters;
-path-like values and recognized credential shapes are masked. System/developer
-messages and reasoning records are skipped. The two-second team metadata
-response carries no history.
+`GET /api/local-dashboard/agents/{paneId}/activity` is the legacy local-owner
+read for a recent snapshot. It accepts a Herdr pane ID such as `w6:p1` and no
+query parameters. Codex uses a 512 KiB recent tail. Pi verifies the session
+path, header and current persisted branch. Both return at most 60 events,
+including at most 30 tool events. Tool detail is redacted and bounded, and may
+be available, absent or withheld. Path-like values and recognized credential
+shapes are masked. System, developer and reasoning records are skipped.
 
 The response names the pane, status, last successful read time, events and a
-`truncated` flag. `unavailable` and `unsupported` have no rows. `stale` retains
+`truncated` flag. `unavailable` and `unsupported` have no rows. Legacy `stale` retains
 last-good rows only after Herdr still identifies the same Codex session; a
 missing or changed session clears them. The detail disclosure starts closed,
 polls without overlap only while open and visible, and clears on 401/403.
+
+The HTML Agent Team Mini uses the existing SDK:
+
+```js
+await window.mausApp.dashboard.read({
+  resource: "activity", agentId, occupantId, history: 1,
+  // For an older page, pass the previous response's opaque nextBefore.
+});
+```
+
+The bridge inserts `expectedRevision`. Omit `history` and `before` for the
+legacy request. History v1 accepts `before` only with `history: 1`. Every page
+revalidates the installed app, resource grant and current selected occupant.
+The history scan retains at most 360 events from a bounded tail of up to
+4 MiB for Codex or 8 MiB for Pi. A v1 page has at most 60 events including
+30 tool events and is ordered oldest first. Use `snapshot.history.nextBefore`
+for the next earlier page. A null cursor ends the available history.
+
+Keep older rows by event ID while polling the newest page within the same
+`streamId`. A changed stream or unavailable cursor calls for a fresh newest
+read. Never merge across a session or stream change. A successful same-bound
+newest response without `snapshot.history` is a legacy result. The exact
+older-Host parameter errors `This dashboard resource or its parameters are
+unavailable.` and `Invalid Mini App dashboard read.` allow one same-bound
+legacy newest request. Remember legacy support for the frame revision and
+hide the older control. Other errors and cursor reads keep their failure;
+authorization, revision and selected occupant checks still apply.
 
 ## Isolated verification
 

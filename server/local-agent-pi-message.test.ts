@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rename, stat, symlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, rename, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import { createPiSessionReader } from "./local-agent-pi-message.ts";
 import { PI_CONTEXT_KEY, piContextToken, type PiContextBinding } from "./local-agent-pi-context.ts";
 import { createLocalAgentActivityProvider } from "./local-agent-activity.ts";
 import { createLocalAgentTeamsProvider } from "./local-agent-teams.ts";
+import { localAgentOccupantId } from "./local-agent-occupant.ts";
 import { createLocalDashboardRoutes } from "./routes/local-dashboard.ts";
 import type { RouteContext } from "./routes/table.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
@@ -44,6 +45,56 @@ async function fixture(rows: object[] = [assistant("Visible Pi progress")], proj
 }
 
 describe("verified Pi visible assistant preview", () => {
+  it("keeps older Pi pages bound to the current branch even when an abandoned fork shares the cursor history", async () => {
+    const root = assistant("Start of selected history", "00000001");
+    const sibling = assistant("Other branch", "00000002", root.id);
+    const records: object[] = [root, sibling];
+    let parent = root.id;
+    for (let index = 0; index < 38; index++) {
+      const id = (10 + 2 * index).toString(16).padStart(8, "0");
+      const resultId = (11 + 2 * index).toString(16).padStart(8, "0");
+      const toolCallId = `fixture-${index}`;
+      records.push(entry(id, parent, { role: "assistant", content: [
+        { type: "toolCall", id: toolCallId, name: "send_message_to_user_async", arguments: { message: `Synthetic update ${index}` } },
+      ] }));
+      const content = index === 3 ? [{ type: "text", text: "fixture-private-short", name: "Cookie" }] : [
+        { type: "text", text: index === 1 ? "Authorization: fixture-token" : index === 2 ? " \n" : `Acknowledged ${index}` },
+      ];
+      records.push(entry(resultId, id, { role: "toolResult", toolCallId, content: index === 0 ? undefined : content }));
+      parent = resultId;
+    }
+    const data = await fixture(records);
+    const member = data.agent();
+    const pane = member.pane_id;
+    const occupantId = localAgentOccupantId(member, pane)!;
+    const activity = createLocalAgentActivityProvider({ home: data.home,
+      run: async () => JSON.stringify({ result: { agents: [member] } }) });
+    const first = await activity.get(pane, { occupantId });
+    expect(first.history).toMatchObject({ version: 1, streamId: expect.any(String), nextBefore: expect.any(String) });
+    const before = first.history!.nextBefore!;
+    const older = await activity.get(pane, { occupantId, before });
+    const oldest = await activity.get(pane, { occupantId, before: older.history!.nextBefore! });
+    expect(oldest.history!.nextBefore).toBeNull();
+    expect(oldest.events.slice(0, 5).map(({ text, detailStatus }) => [text, detailStatus])).toEqual([
+      ["Start of selected history", undefined], ["message: Synthetic update 0", "available"],
+      ["[Result details unavailable]", "absent"], ["message: Synthetic update 1", "available"],
+      ["[Result details unavailable]", "withheld"],
+    ]);
+    expect(oldest.events[6]).toMatchObject({ detailStatus: "absent", text: "[Result details unavailable]" });
+    expect(oldest.events[8]).toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
+    expect(JSON.stringify([...first.events, ...older.events, ...oldest.events])).not.toMatch(/Other branch|fixture-token|fixture-private-short/);
+    await appendFile(data.file, line(assistant("New descendant", "00000100", parent)));
+    const appended = await activity.get(pane, { occupantId });
+    expect(appended.history?.streamId).toBe(first.history?.streamId);
+    expect((await activity.get(pane, { occupantId, before })).events).toEqual(older.events);
+    await appendFile(data.file, line(assistant("Switched branch", "00000101", sibling.id)));
+    expect(await activity.get(pane, { occupantId, before })).toMatchObject({ status: "unavailable", events: [],
+      history: { version: 1, streamId: null, nextBefore: null } });
+    const newBranch = await activity.get(pane, { occupantId });
+    expect(newBranch.history?.streamId).not.toBe(first.history?.streamId);
+    expect(newBranch.events.map((event) => event.text)).toEqual(["Start of selected history", "Other branch", "Switched branch"]);
+  });
+
   it("joins a Pi ceiling only to the same foreground process and verified session, branch and model", async () => {
     const change = (id: string, parentId: string | null, provider: string, modelId: string) =>
       ({ type: "model_change", id, parentId, timestamp: "2026-11-17T01:00:00.000Z", provider, modelId });

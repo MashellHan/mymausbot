@@ -1,4 +1,5 @@
-import type { LocalAgentActivityResponse, LocalAgentConfigurationResponse, LocalAgentSkillDocumentResponse, LocalAgentTeamRulesResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
+import type { LocalAgentActivityHistoryRequest, LocalAgentActivityResponse, LocalAgentConfigurationResponse,
+  LocalAgentSkillDocumentResponse, LocalAgentTeamRulesResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
 import { createLocalAgentActivityProvider } from "../local-agent-activity.ts";
 import { createLocalAgentConfigurationProvider } from "../local-agent-configuration.ts";
 import { createLocalAgentTeamsProvider } from "../local-agent-teams.ts";
@@ -7,7 +8,7 @@ import { PASS, type RouteHandler } from "./table.ts";
 
 export interface LocalDashboardProviders {
   agents: { get(fresh?: boolean): Promise<LocalAgentTeamsResponse> };
-  activity: { get(agentId: string): Promise<LocalAgentActivityResponse> };
+  activity: { get(agentId: string, history?: LocalAgentActivityHistoryRequest): Promise<LocalAgentActivityResponse> };
   configuration: {
     getAgent(agentId: string): Promise<LocalAgentConfigurationResponse>;
     getSkill(agentId: string, skillId: string): Promise<LocalAgentSkillDocumentResponse>;
