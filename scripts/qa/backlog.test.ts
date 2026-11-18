@@ -36,6 +36,21 @@ function harness(initial = [issue(1)]) {
 }
 
 describe("hourly QA backlog", () => {
+  it("shows global hold evidence separately from reporter content and old triage labels", () => {
+    const source = issue(2);
+    source.labels = source.labels.map((name) => name === "qa:p2" ? "qa:p1" : name);
+    source.body += "\n<!-- mausbot-qa:start -->\nQA-Scope-Evidence: global | reported assertion\n<!-- mausbot-qa:end -->";
+    const view = () => planCheckpoint([source], [], {}, start).selected[0];
+    expect(view()).toMatchObject({ stage: "assigned", scopeReview: "pending impact evidence" });
+    source.body += "\nQA-Scope-Evidence: global | Shared navigation guard is reached by every embedded app.";
+    expect(view().scopeReview).toContain("Shared navigation guard");
+    expect(planBacklog([source], [], {}, start).items[0].text).toContain("global scope: Shared navigation");
+    source.labels.push("qa:untriaged");
+    expect(view().scopeReview).toBe("pending impact evidence");
+    source.labels = source.labels.map((name) => name === "qa:scope:global" ? "qa:scope:usage" : name);
+    expect(view()).not.toHaveProperty("scopeReview");
+  });
+
   it("runs one Beijing daily inventory, resurfaces unchanged stale work by cadence and survives state reload", async () => {
     expect(beijingDay(Date.parse("2026-11-12T15:59:59Z"))).toBe("2026-11-12");
     expect(beijingDay(Date.parse("2026-11-12T16:00:00Z"))).toBe("2026-11-13");

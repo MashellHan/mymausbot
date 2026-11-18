@@ -40,8 +40,16 @@ export const WINDOW_PREFS = {
   "appearance.mode": z.enum(["raw", "simple", "advanced"]),
   "appearance.font": z.enum(FONT_IDS),
   "appearance.chatWidth": z.enum(CHAT_WIDTH_IDS),
+  "appearance.runCard": z.boolean(),
+  "appearance.showThreads": z.boolean(),
+  "appearance.userBubbles": z.boolean(),
+  "appearance.toolsLayout": z.enum(["rows", "toolbar"]),
+  "appearance.pinnedCircles": z.boolean(),
+  "appearance.universalPins": z.boolean(),
   "general.sendKey": z.enum(SEND_KEYS),
+  "general.followUp": z.enum(["steer", "queue"]),
   "general.notificationSounds": z.boolean(),
+  "general.notificationFeed": z.boolean(),
 } as const;
 export type WindowPrefId = keyof typeof WINDOW_PREFS;
 export type WindowPrefValue<I extends WindowPrefId> = z.infer<(typeof WINDOW_PREFS)[I]>;

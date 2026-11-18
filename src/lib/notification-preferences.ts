@@ -39,6 +39,7 @@ function onStorage(event: StorageEvent) {
   feedSessionChoice = undefined;
   finishedSessionChoice = undefined;
   notify();
+  if (event.key === NOTIFICATION_FEED_KEY || event.key === null) windowPrefChanged();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -90,6 +91,7 @@ export function setNotificationFeed(enabled: boolean): void {
   } catch {
   }
   notify();
+  windowPrefChanged();
 }
 
 export function useNotificationFeed(): boolean {

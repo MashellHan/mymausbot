@@ -7,10 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLocale } from "@/lib/i18n";
 import { ThreadCleanupSettings } from "./ThreadCleanupSettings";
 
-const fixture = vi.hoisted(() => ({ api: vi.fn() }));
+const fixture = vi.hoisted(() => ({
+  api: vi.fn(),
+  threads: { maxConcurrentPerBot: 3, eventLogRetentionDays: 14, eventLogMaxBytes: 52428800 },
+}));
 vi.mock("@/state/store", () => ({
   api: fixture.api,
-  useStore: () => ({ state: { config: { threads: { maxConcurrentPerBot: 3, eventLogRetentionDays: 14, eventLogMaxBytes: 52428800 } } }, dispatch: vi.fn() }),
+  useStore: () => ({ state: { config: { threads: fixture.threads } }, dispatch: vi.fn() }),
 }));
 
 let host: HTMLDivElement;
@@ -28,6 +31,7 @@ const rowOfAlert = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fixture.threads.eventLogMaxBytes = 52428800;
   setLocale("en");
   host = document.createElement("div");
   document.body.append(host);
@@ -40,6 +44,17 @@ afterEach(() => {
 });
 
 describe("ThreadCleanupSettings errors", () => {
+  it("keeps an exact byte cap when the rounded MiB input is focused and blurred without an edit", () => {
+    fixture.threads.eventLogMaxBytes = 1048577;
+    flushSync(() => root.render(createElement(ThreadCleanupSettings)));
+    const field = host.querySelector<HTMLInputElement>("#thread-log-cap-mib")!;
+    expect(field.value).toBe("1");
+    flushSync(() => field.focus());
+    flushSync(() => field.blur());
+    expect(fixture.api).not.toHaveBeenCalled();
+    expect(fixture.threads.eventLogMaxBytes).toBe(1048577);
+  });
+
   it("shows an invalid retention under the retention row", () => {
     type("thread-log-retention-days", "0");
     expect(rowOfAlert()).toBe("Delete old event logs");
