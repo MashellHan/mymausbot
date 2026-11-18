@@ -12,7 +12,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentBrowserBinary } from "../../server/browser-engine.ts";
 import { removeTempDir, waitForExit } from "../../server/testing/cleanup.ts";
 import { runControlOmb } from "../control-omb.ts";
-import { agentBrowser, UI_TOOLS_DIR } from "./control-omb-ui.ts";
+import { agentBrowser, sessionEnv, UI_TOOLS_DIR, type UiHandle } from "./control-omb-ui.ts";
 import { fixtureApi } from "./preview-fixture.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -120,6 +120,25 @@ function launch(args: string[]): Promise<Launched> {
 const ui = (verb: string, handle: string, ...args: string[]) =>
   runControlOmb(["ui", verb, "--ui", handle, ...args]) as Promise<Record<string, any>>;
 
+function browserCommand(path: string, args: string[]) {
+  const handle = JSON.parse(readFileSync(path, "utf8")) as UiHandle;
+  return agentBrowser(handle.binary, sessionEnv(handle), args);
+}
+
+async function desktopViewport(handle: string) {
+  await browserCommand(handle, ["set", "viewport", "1280", "900"]);
+  await expect.poll(async () => (await ui("eval", handle, "--js", "innerWidth")).result, { timeout: 10_000 }).toBe(1280);
+}
+
+async function clickUiControl(handle: string, selector: string) {
+  await expect.poll(async () => (await ui("eval", handle, "--js", `(() => {
+    const buttons = document.querySelectorAll(${JSON.stringify(selector)});
+    const button = buttons[0];
+    return buttons.length === 1 && button instanceof HTMLButtonElement && !button.disabled && button.checkVisibility();
+  })()`)).result, { timeout: 10_000 }).toBe(true);
+  await browserCommand(handle, ["click", selector]);
+}
+
 /** Interactive refs by accessible name, from a snapshot's `refs` table. */
 const refsNamed = (snapshot: Record<string, any>, name: string, role?: string) =>
   Object.entries(snapshot.refs as Record<string, { name: string; role: string }>)
@@ -185,6 +204,7 @@ describe("control-omb ui drives the real renderer", () => {
   run("saves a key on Enter, checks it once saved, shows it masked, and keeps a refused or failed draft", async () => {
     launched = await launch(["--simple"]);
     const { info } = launched;
+    await desktopViewport(info.ui);
     await fixtureApi(info.url)("PUT", "/api/config", {
       openaiCompat: { key: "fixture-saved-key", url: "http://127.0.0.1:1/v1" },
     });
@@ -222,7 +242,7 @@ describe("control-omb ui drives the real renderer", () => {
       return true;
     })()`);
     await click("You");
-    await click("Settings");
+    await clickUiControl(info.ui, '[role="menuitem"][data-menu-key="settings"]');
     // Settings is a lazy chunk: it paints once the chunk arrives. Keys sit on the AI page, under Other services.
     await expect.poll(() => evaluate(`(() => {
       document.querySelector('[data-settings-page="ai"]')?.click();
@@ -277,6 +297,7 @@ describe("control-omb ui drives the real renderer", () => {
     const handle = JSON.parse(readFileSync(info.ui, "utf8"));
     expect(handle).toMatchObject({ url: info.url, previewUrl: info.previewUrl, botId: info.botId, home: info.dataDir, session: `omb-ui-${new URL(info.url).port}` });
     expect(existsSync(handle.binary)).toBe(true);
+    await desktopViewport(info.ui);
 
     const dry = await ui("flag", info.ui, "--set", "features.showToolCalls=true", "--dry-run");
     expect(dry).toMatchObject({ ok: true, dryRun: true, patch: { features: { showToolCalls: true } } });
@@ -294,7 +315,7 @@ describe("control-omb ui drives the real renderer", () => {
     const nextModel = options.find((option: any) => option.id !== originalModel && !option.needsCliUpdate);
     // The picker sets the bot's model, which every chat of it uses.
     const threadModel = async () => (await savedBot()).tasks.find((task: any) => task.threadId === originalBot.threadId).modelSelection.model;
-    await ui("click", info.ui, "--name", originalLabel);
+    await clickUiControl(info.ui, '[data-chathead-controls] button[data-tour="model"]');
     await expect.poll(async () => (await ui("snapshot", info.ui)).snapshot, { timeout: 10_000 }).toContain("Pepper's model, used in all its chats");
     mkdirSync(evidenceDir, { recursive: true });
     await ui("screenshot", info.ui, "--out", join(evidenceDir, "model-picker.png"));

@@ -195,7 +195,10 @@ async function until<T>(probe: () => Promise<T> | T, what: string, timeoutMs = 3
     await until(async () => !(await evaluate(`Boolean(document.querySelector('${opened}'))`)), "the page to close");
 
     await inView(boardRow.id);
-    await ui("click", "--name", "Paint it red");
+    const boardRefs = (await ui("snapshot")).refs as Record<string, { role: string; name: string }>;
+    const paint = Object.entries(boardRefs).filter(([, ref]) => ref.role === "button" && ref.name === "Paint it red");
+    expect(paint).toHaveLength(1);
+    await ui("click", "--ref", paint[0]![0]);
     await until(() => shows(`Error -32000: ${ROOM_VIEW_ONLY}`), "the board to show the host's refusal");
     await inView(boardRow.id);
     await ui("screenshot", "--out", join(evidenceDir, "room-pages-clicked-app.png"));

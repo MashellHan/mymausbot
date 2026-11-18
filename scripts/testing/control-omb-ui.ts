@@ -532,14 +532,14 @@ async function launchLoopbackChrome(executable: string, home: string, env: NodeJ
 async function openLoopbackPreview(binary: string, env: NodeJS.ProcessEnv, chrome: Awaited<ReturnType<typeof launchLoopbackChrome>>,
   url: URL, deadline: number, phase: (name: UiLaunchPhase) => void): Promise<void> {
   const remaining = () => Math.max(1, deadline - Date.now());
-  const canary = await agentBrowser(binary, env, ["open", chrome.canaryUrl], remaining());
-  if (canary.title !== CANARY_TITLE) throw new ControlOmbError("the fixture driver did not read the loopback canary");
-  phase("browser-cdp-ready");
   const transport = await webSocketTransport(`ws://127.0.0.1:${chrome.port}${chrome.path}`, { timeoutMs: remaining() });
   const deadlineTimer = setTimeout(() => transport.close(), remaining());
   try {
     const browser = await CdpBrowser.connect(transport, { viewport: null, permissions: false, timeoutMs: remaining() });
-    const page = await browser.waitForPage((candidate) => candidate.url() === chrome.canaryUrl, remaining());
+    const page = await browser.waitForPage((candidate) => candidate.url() === "about:blank", remaining());
+    await page.navigate(chrome.canaryUrl, { readiness: "domcontentloaded", timeoutMs: remaining() });
+    if (await page.evaluate("document.title") !== CANARY_TITLE) throw new ControlOmbError("the fixture Chrome did not read the loopback canary");
+    phase("browser-cdp-ready");
     await page.navigate(url.href, { readiness: "domcontentloaded", timeoutMs: remaining() });
     await page.waitFor({ target: { selector: "#root > *" }, urlIncludes: url.href, timeoutMs: remaining() });
   } finally {

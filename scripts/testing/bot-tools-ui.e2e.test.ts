@@ -266,7 +266,11 @@ describe("bot setup and tools in the real renderer", () => {
       await expect.poll(() => evaluate(`(() => {
         const pill = document.querySelector('[data-chathead-pill]');
         if (pill && pill.getAttribute('aria-expanded') !== 'true') pill.click();
-        return Boolean(document.querySelector(${JSON.stringify(computerSettings)})?.getClientRects().length);
+        const button = document.querySelector(${JSON.stringify(computerSettings)});
+        const panel = button?.closest('[data-computer-panel]');
+        if (!button || !panel || panel.getAnimations().some(animation => animation.playState === 'running')) return false;
+        const { x, y, width, height } = button.getBoundingClientRect();
+        return width > 0 && height > 0 && button.contains(document.elementFromPoint(x + width / 2, y + height / 2));
       })()`), { timeout: 10_000 }).toBe(true);
       await agentBrowser(browser.binary, sessionEnv(browser), ["click", computerSettings]);
       await expect.poll(botPanelVisible, { timeout: 10_000 }).toBe(true);
