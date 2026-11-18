@@ -157,17 +157,28 @@ function newerThan(report, state) {
   return report.runId > id || report.runId === id && report.attempt > attempt;
 }
 
-function verifiedRevisionsOf(issue, state) {
-  const revisions = new Set();
-  if (SHA.test(state?.verifiedSha ?? "")) revisions.add(state.verifiedSha.toLowerCase());
-  const body = String(issue?.body ?? "");
-  for (const match of body.matchAll(/QA verified this contract without retries on `([a-f\d]{40})`/gi)) {
-    revisions.add(match[1].toLowerCase());
-  }
-  for (const match of body.matchAll(/<!--\s*lead-qa[^:]*-verified-sha:([a-f\d]{40})\s*-->/gi)) {
-    revisions.add(match[1].toLowerCase());
-  }
-  return [...revisions];
+function stripGeneratedBlock(body) {
+  return String(body ?? "").replace(/<!-- mausbot-qa:[a-f\d]+ -->\s*<!-- mausbot-qa:start -->[\s\S]*?<!-- mausbot-qa:end -->/g, "");
+}
+
+function authorizedVerifier(entry) {
+  const assoc = String(entry?.author_association ?? "").toUpperCase();
+  return ["OWNER", "MEMBER", "COLLABORATOR"].includes(assoc);
+}
+
+function hasExactCaseCoverage(finding, state) {
+  if (!finding?.cases?.length) return true;
+  const covered = new Set(Array.isArray(state?.caseKeys) ? state.caseKeys : []);
+  return finding.cases.every((entry) => covered.has(entry.key));
+}
+
+function verifiedProofOf(issue, state, finding) {
+  if (!issue || !state || !hasExactCaseCoverage(finding, state)) return null;
+  if (SHA.test(state.verifiedSha ?? "")) return state.verifiedSha.toLowerCase();
+  const labels = issueLabels(issue);
+  if (!labels.includes("qa:verified")) return null;
+  if (SHA.test(state.lastExecutionSha ?? "")) return state.lastExecutionSha.toLowerCase();
+  return null;
 }
 
 async function isStrictAncestor(ancestorSha, descendantSha, api) {
@@ -188,26 +199,32 @@ async function isStalePreFixReport(finding, issue, state, report, api) {
   const labels = issueLabels(issue);
   if (issue.state !== "closed" && !labels.includes("qa:verified")) return false;
   if (!SHA.test(report?.sha ?? "")) return false;
-  const candidates = verifiedRevisionsOf(issue, state);
-  if (candidates.length === 0) {
+  if (!hasExactCaseCoverage(finding, state)) return false;
+
+  const candidates = new Set();
+  const directProof = verifiedProofOf(issue, state, finding);
+  if (directProof) candidates.add(directProof);
+
+  if (candidates.size === 0 && issue.state === "closed" && !finding?.cases?.length) {
+    // Only trust an authorized closure comment on the same issue (outside the generated QA block).
     try {
       const comments = await pages(`/issues/${issue.number}/comments`, null, api);
       for (const comment of comments) {
-        const body = String(comment?.body ?? "");
-        if (!/<!--\s*lead-qa\d+-[^>]+closure[^>]*-->/i.test(body)) continue;
-        for (const match of body.matchAll(/\bmerged at \[`([a-f\d]{40})`\]/gi)) {
-          candidates.push(match[1].toLowerCase());
+        if (!authorizedVerifier(comment)) continue;
+        const text = stripGeneratedBlock(comment?.body);
+        if (!/<!--\s*lead-qa\d+-[^>]+closure[^>]*-->/i.test(text)) continue;
+        for (const match of text.matchAll(/\bmerged at \[`([a-f\d]{40})`\]/gi)) {
+          candidates.add(match[1].toLowerCase());
         }
       }
     } catch {
       return false;
     }
   }
-  if (candidates.length === 0) return false;
-  for (const verifiedSha of new Set(candidates)) {
-    if (await isStrictAncestor(report.sha, verifiedSha, api)) return verifiedSha;
-  }
-  return false;
+
+  if (candidates.size !== 1) return false;
+  const [verifiedSha] = candidates;
+  return (await isStrictAncestor(report.sha, verifiedSha, api)) ? verifiedSha : false;
 }
 
 function findingBody(finding, report, state, previous = "") {

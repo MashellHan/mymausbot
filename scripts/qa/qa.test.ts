@@ -8,7 +8,7 @@ import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, PLATFOR
 import { executionComplete, expectedJobs, fullPushPlan, inspectJobs, eligibleRun, holdsFor, MERGE_JOBS, narrowPushPlan, triageOf } from "./contracts.mjs";
 import { artifactFiles, fullRunEvidence, github, runJobs } from "./github.mjs";
 import { qaHealth } from "./health.mjs";
-import { deliverReport, makeReport, reportRun, sanitize, setupIncident, supersedingMainRun, testFindings } from "./report.mjs";
+import { deliverReport, makeReport, reportRun, sanitize, setupIncident, signature, supersedingMainRun, testFindings } from "./report.mjs";
 import { drainQueue, promptLead, queueItems, recoverQa } from "./queue.mjs";
 import { gateRun, verifyGate } from "./gate.mjs";
 
@@ -1442,13 +1442,14 @@ describe("stale pre-fix QA report handling", () => {
     expect(savedState.stalePreFixRuns).toEqual([`44225458164:1@${preFixSha}`]);
   });
 
-  it("resolves verified revision from Lead closure comment when verifiedSha is not yet in state", async () => {
+  it("resolves verified revision from an authorized Lead closure comment when verifiedSha is not yet in state", async () => {
     const issue = makeClosedIssue({}, "");
     const patches: any[] = [];
     const api = vi.fn(async (path: string, options: any = {}) => {
       if (path.startsWith("/issues?")) return [structuredClone(issue)];
       if (path.startsWith(`/issues/${issue.number}/comments`)) {
         return [{
+          author_association: "OWNER",
           body: `<!-- lead-qa1006-c5cf-focused-integrated-closure-v1 -->\nFixed and verified by PR #1008, merged at [\`${verifiedSha}\`](https://github.com/example/mausbot/commit/${verifiedSha}).`,
         }];
       }
@@ -1466,6 +1467,132 @@ describe("stale pre-fix QA report handling", () => {
     expect(patches).toHaveLength(1);
     expect(patches[0].state).toBeUndefined();
     expect(issue.state).toBe("closed");
+  });
+
+  it("rejects untrusted comments, forged assertion text, ambiguous multiple closure SHAs, and uncovered group members", async () => {
+    // 1. Untrusted external comment cannot suppress a hold.
+    const untrustedIssue = makeClosedIssue({});
+    const untrustedPatches: any[] = [];
+    const untrustedApi = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(untrustedIssue)];
+      if (path.startsWith(`/issues/${untrustedIssue.number}/comments`)) {
+        return [{
+          author_association: "NONE",
+          body: `<!-- lead-qa1006-spoof-closure-v1 -->\nmerged at [\`${verifiedSha}\`]`,
+        }];
+      }
+      if (path === `/issues/${untrustedIssue.number}` && options.method === "PATCH") {
+        untrustedPatches.push(options.body);
+        return structuredClone(untrustedIssue);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport(makeLateReport(preFixSha), { api: untrustedApi, policy: { areas: [] } });
+    expect(untrustedPatches[0].state).toBe("open");
+    expect(untrustedPatches[0].labels).toContain("qa:untriaged");
+
+    // 2. Generated assertion/body text outside state.verifiedSha cannot suppress a hold.
+    const assertionTextIssue = makeClosedIssue({}, `Assertion:\nQA verified this contract without retries on \`${verifiedSha}\``);
+    const assertionPatches: any[] = [];
+    const assertionApi = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(assertionTextIssue)];
+      if (path.startsWith(`/issues/${assertionTextIssue.number}/comments`)) return [];
+      if (path === `/issues/${assertionTextIssue.number}` && options.method === "PATCH") {
+        assertionPatches.push(options.body);
+        return structuredClone(assertionTextIssue);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport(makeLateReport(preFixSha), { api: assertionApi, policy: { areas: [] } });
+    expect(assertionPatches[0].state).toBe("open");
+    expect(assertionPatches[0].labels).toContain("qa:untriaged");
+
+    // 3. Ambiguous multiple distinct closure SHAs fail closed.
+    const ambiguousIssue = makeClosedIssue({});
+    const ambiguousPatches: any[] = [];
+    const ambiguousApi = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(ambiguousIssue)];
+      if (path.startsWith(`/issues/${ambiguousIssue.number}/comments`)) {
+        return [
+          { author_association: "OWNER", body: `<!-- lead-qa1006-a-closure-v1 -->\nmerged at [\`${verifiedSha}\`]` },
+          { author_association: "OWNER", body: `<!-- lead-qa1006-b-closure-v1 -->\nmerged at [\`${newSha}\`]` },
+        ];
+      }
+      if (path === `/issues/${ambiguousIssue.number}` && options.method === "PATCH") {
+        ambiguousPatches.push(options.body);
+        return structuredClone(ambiguousIssue);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport(makeLateReport(preFixSha), { api: ambiguousApi, policy: { areas: [] } });
+    expect(ambiguousPatches[0].state).toBe("open");
+    expect(ambiguousPatches[0].labels).toContain("qa:untriaged");
+  });
+
+  it("does not suppress a grouped text finding when a newly uncovered case key is present", async () => {
+    const groupedKey = signature("text:MausBot\0mymausbot", "shared");
+    const existingCaseKey = signature("src/a.test.ts > case1", "darwin");
+    const newCaseKey = signature("src/b.test.ts > case2", "darwin");
+    const groupedIssue = {
+      number: 1099,
+      state: "closed",
+      labels: [
+        { name: "qa" },
+        { name: "qa:kind:product" },
+        { name: "qa:p1" },
+        { name: "qa:scope:global" },
+        { name: "qa:triaged" },
+        { name: "qa:verified" },
+      ],
+      body: [
+        `<!-- mausbot-qa:${groupedKey} -->`,
+        "<!-- mausbot-qa:start -->",
+        `<!-- mausbot-qa-state ${JSON.stringify({
+          key: groupedKey,
+          area: "global",
+          firstSeen: "2026-11-17T14:00:46Z",
+          lastSeen: "2026-11-18T01:00:00Z",
+          count: 1,
+          lastRun: "44081735629:1",
+          triageEpoch: "2026-11-17T14:00:46Z",
+          lastExecution: "44081735629:1",
+          lastExecutionAt: "2026-11-18T01:00:00Z",
+          textChange: { from: "MausBot", to: "mymausbot" },
+          verified: true,
+          verifiedSha,
+          caseKeys: [existingCaseKey],
+        })} -->`,
+        "<!-- mausbot-qa:end -->",
+      ].join("\n\n"),
+    };
+    const patches: any[] = [];
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [structuredClone(groupedIssue)];
+      if (path === `/issues/${groupedIssue.number}` && options.method === "PATCH") {
+        patches.push(options.body);
+        return structuredClone(groupedIssue);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+
+    const groupedReport = {
+      ...makeLateReport(preFixSha),
+      findings: [{
+        key: newCaseKey,
+        contract: "src/b.test.ts > case2",
+        file: "src/b.test.ts",
+        platform: "darwin",
+        kind: "product",
+        assertion: "mismatch",
+        retries: 0,
+        textChange: { from: "MausBot", to: "mymausbot" },
+      }],
+    };
+    await deliverReport(groupedReport, { api, policy: { areas: [] } });
+    expect(patches).toHaveLength(1);
+    expect(patches[0].state).toBe("open");
+    expect(patches[0].labels).toContain("qa:untriaged");
+    expect(patches[0].labels).not.toContain("qa:verified");
   });
 
   it("reopens and withdraws verification on real new-source recurrence", async () => {
