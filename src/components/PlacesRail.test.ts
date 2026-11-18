@@ -272,7 +272,7 @@ it("Connect to a server says how another computer's desktop app is opened from h
   await click(host.querySelector("[data-rail-add]"));
   await click(document.querySelector('[data-place-add-choice="server"]'));
   const form = document.querySelector('[data-place-add="own-server"]')!;
-  expect(form.querySelector("[data-connect-other-computer]")?.textContent).toBe("For another computer running the MausBot app: on that computer, open Settings → Phone & devices → Your other computers.");
+  expect(form.querySelector("[data-connect-other-computer]")?.textContent).toBe("For another computer running the mymausbot app: on that computer, open Settings → Phone & devices → Your other computers.");
   await type(form.querySelector("[data-own-server-link]"), "192.168.1.30:8799");
   await settle();
   const line = form.querySelector("[data-connect-problem]")?.textContent ?? "";

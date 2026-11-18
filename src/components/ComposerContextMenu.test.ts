@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { contextReading, contextRows, roomContextReadings } from "@/lib/context-usage";
-import { ADVANCED_MODE_KEY } from "@/lib/interface-mode";
+import { setInterfaceMode } from "@/lib/interface-mode";
 import { BotEditorStore, type Bot, type Group, type Message, type TaskUsage, type useStore } from "@/state/store";
 import type { ContextBreakdown } from "../../shared/context-breakdown";
 import { ComposerContextMenu } from "./ComposerContextMenu";
@@ -33,7 +33,7 @@ const panel = () => host.querySelector<HTMLElement>("[data-context-panel]");
 const press = (element: HTMLElement) => act(async () => { element.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
 const words = () => panel()!.textContent!.replace(/\s+/g, " ");
 const requests = () => fetched.mock.calls.map(([url, init]) => [String(url).replace(/^.*(?=\/api\/)/, ""), JSON.parse(String((init as RequestInit).body))]);
-const advancedMode = () => localStorage.setItem(ADVANCED_MODE_KEY, "1");
+const advancedMode = () => act(() => setInterfaceMode("advanced"));
 const posted = () => requests().filter(([path]) => !path.endsWith("/context"));
 const counted: ContextBreakdown = {
   tokens: 136_000, window: 200_000,
@@ -52,7 +52,7 @@ beforeEach(() => {
   breakdown = null;
   fetched = vi.fn(async (url: unknown) => new Response(String(url).endsWith("/context") ? JSON.stringify({ threadId: "t1", breakdown }) : "{}", { status: 200, headers: { "content-type": "application/json" } }));
   vi.stubGlobal("fetch", fetched);
-  localStorage.setItem(ADVANCED_MODE_KEY, "0");
+  setInterfaceMode("simple");
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
