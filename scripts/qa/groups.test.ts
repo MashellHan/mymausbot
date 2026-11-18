@@ -39,6 +39,36 @@ function report(id: number, passed: string[] = [], failed: string[] = [], execut
 }
 
 describe("confirmed QA root-cause groups", () => {
+  it.each([true, false])("prefers an owned issue to a marker quoted on a confirmed parent, parent first %s", async (parentFirst) => {
+    const { issues, parent, api } = fixture();
+    const key = signature("separate contract", "linux");
+    parent.body += `\n\n<!-- mausbot-qa:${key} -->`;
+    const originalParent = structuredClone(parent);
+    const owner = { ...structuredClone(issues[0]), number: 4, body: issues[0].body.replaceAll(keys[0], key) };
+    if (parentFirst) issues.push(owner);
+    else issues.unshift(owner);
+    await deliverReport(report(2, [], [key]), { api, policy });
+    expect(owner.state).toBe("open");
+    expect(owner.body).toContain("new failure");
+    expect(parent).toEqual(originalParent);
+  });
+
+  it("preserves confirmed membership after reconciling an unfinished direct record on the parent", async () => {
+    const { issues, parent, api } = fixture();
+    await deliverReport(report(2, keys), { api, policy });
+    const key = signature("direct parent", "linux");
+    const partial = `<!-- mausbot-qa:${key} -->\n<!-- mausbot-qa:start -->\n<!-- mausbot-qa-state ${JSON.stringify({ key, lastExecution: "1:1" })} -->`;
+    parent.state = "closed";
+    parent.body = partial + "\n\n" + parent.body;
+    await deliverReport(report(3, [], [key]), { api, policy });
+    expect(qaGroups(issues).byKey.get(keys[0])).toBe(parent);
+    expect(parent.body).toContain(`<!-- mausbot-qa-group ${JSON.stringify(keys)} -->`);
+    await deliverReport(report(4, [], [keys[0]]), { api, policy });
+    expect(issues[0].state).toBe("closed");
+    expect(parent.state).toBe("open");
+    expect(parent.body).toContain("Verified member cases: 1/2");
+  });
+
   it("retains pending direct coverage on a parent even when all consolidated members pass", async () => {
     const { parent, api } = fixture();
     const directKey = signature("direct parent", "shared");

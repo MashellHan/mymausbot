@@ -236,7 +236,11 @@ function findingBody(finding, report, state, scopeBasis, previous = "") {
     return previous.slice(0, block.start) + text + previous.slice(block.start + block.text.length);
   }
   for (const block of blocks.reverse()) {
-    const archived = block.text.replaceAll("<!-- mausbot-qa", "<!-- archived-mausbot-qa");
+    const controls = /<!-- mausbot-qa:(?:[a-f\d]{24}|start|end) -->|<!-- mausbot-qa-state [^\r\n]+ -->|<!-- mausbot-qa-cases:(?:start|end) -->/g;
+    const archived = block.text.replace(controls, (control) => {
+      const pointedKey = /^<!-- mausbot-qa:([a-f\d]{24}) -->$/.exec(control)?.[1];
+      return pointedKey && pointedKey !== finding.key ? control : control.replace("<!-- mausbot-qa", "<!-- archived-mausbot-qa");
+    });
     previous = previous.slice(0, block.start) + archived + previous.slice(block.start + block.text.length);
   }
   return `${previous ? `${previous.replace(marker(finding.key), "")}\n\n` : ""}${text}\n\nLead triage due within 30 minutes: priority (P0/P1/P2), classification, scope, owner role, next action, due date. Use role labels, not invented GitHub assignees. Close only after Reviewer and post-integration verification evidence.\n`;
@@ -252,14 +256,19 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     changedKeys.add(key);
   };
   const groupParents = new Set(groups.map((group) => group.parent));
-  const issuesByKey = new Map();
+  const issuesByKey = new Map(), groupFallbacks = new Map();
   for (const issue of issues) {
-    const key = issueKey(issue.body, groupParents.has(issue));
-    if (key && !issuesByKey.has(key)) issuesByKey.set(key, issue);
+    const directKey = issueKey(issue.body);
+    const key = directKey ?? (groupParents.has(issue) ? issueKey(issue.body, true) : null);
+    if (!key) continue;
+    const claims = directKey ? issuesByKey : groupFallbacks;
+    claims.set(key, claims.has(key) ? null : issue);
   }
+  for (const [key, owner] of groupFallbacks) if (!issuesByKey.has(key)) issuesByKey.set(key, owner);
   const findings = combineTextFindings(report.findings, issuesByKey, byKey, signature);
   for (const finding of findings) {
     const issue = issuesByKey.get(finding.key);
+    if (issue === null) throw new Error(`Multiple QA issues claim contract ${finding.key}`);
     const grouped = byKey.has(finding.key);
     const record = issue && stateRecord(issue.body, finding.key);
     const previous = record?.state;
