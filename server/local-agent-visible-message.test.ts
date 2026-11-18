@@ -156,6 +156,15 @@ describe("bounded tool details", () => {
       .toMatchObject({ detailStatus: "withheld" });
   });
 
+  it("only displays classified literal declarations in custom exec source", () => {
+    const show = (source: string) => visibleToolDetail("tool-call", source, "codex", "exec");
+    const safe = 'text({ encoding: `utf-8`, name: "fixture" });';
+    expect(show(safe)).toMatchObject({ text: safe, detailStatus: "available" });
+    for (const source of ['text({ encoding: `base64` });', 'text({ name: `Cookie` });', 'text({ name: fixtureName });']) {
+      expect(show(source)).toMatchObject({ detailStatus: "withheld" });
+    }
+  });
+
   it("shows a verified Codex exec result envelope and ordinary redacted output", () => {
     const header = { type: "input_text", text: "Script completed\nWall time 0.123 seconds\nOutput:\n" };
     const command = (output: string) => ({ type: "input_text",
@@ -169,6 +178,9 @@ describe("bounded tool details", () => {
     });
     expect(visibleToolDetail("tool-result", [header, minimalCommand], "codex", "exec")).toEqual({
       text: "Script completed Wall time 0.123 seconds Exit code: 0 Ready", clipped: false, detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-result", [header, { ...minimalCommand, type: "output_text" }], "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds · Output excerpt unavailable", clipped: true, detailStatus: "available",
     });
     expect(visibleToolDetail("tool-result", [header, { type: "input_text",
       text: JSON.stringify({ wall_time_seconds: 0.07, exit_code: 0, unknown_field: "benign", output: "Ready" }) }], "codex", "exec")).toEqual({

@@ -9,6 +9,7 @@ const TOOL_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
 const PRIVATE_TOOL_KEY = /(?:auth|base64|binary|body|cookie|credential|data|env|header|image|key|passwd|password|private|secret|session|token)|^sid$/i;
 const TOOL_ASSIGNMENT = /"([^"\n]{1,128})"\s*[:=]|\b([A-Za-z][A-Za-z0-9_.-]*(?:[ \t]+(?:id|key|token|data|value))?)['"]?\s*[:=]/gi;
 const TOOL_FIELD_VALUE = /^\s*(?:"([^"\n]{1,128})"|'([^'\n]{1,128})'|([A-Za-z0-9_-]+))/;
+const EXEC_DECLARATION_LITERAL = /^\s*(["'`])([A-Za-z0-9 ._-]{1,128})\1\s*(?=$|[,;}\])])/;
 const PRIVATE_HEADER_NAME = /^(?:(?:set-)?cookie|(?:proxy-)?authorization|x-(?:api-key|auth-token|access-token|session-id))$/i;
 const BASE64_ENCODING = /^base64(?:-?url)?$/i;
 const ENCODED_TOOL_TEXT = /data:[^\s,]{0,100};base64,|[A-Za-z0-9+/_-]{64,}={0,2}/i;
@@ -35,7 +36,7 @@ function privateToolDeclaration(key: string, value: string): boolean {
   return key === "name" && PRIVATE_HEADER_NAME.test(value.trim());
 }
 
-function safeToolText(value: unknown, allowExecOutputLimit = false): { text: string | null; clipped: boolean } {
+function safeToolText(value: unknown, customExec = false): { text: string | null; clipped: boolean } {
   if (typeof value !== "string") return { text: null, clipped: false };
   if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
   if (ENCODED_TOOL_TEXT.test(value)) return { text: null, clipped: true };
@@ -48,13 +49,19 @@ function safeToolText(value: unknown, allowExecOutputLimit = false): { text: str
   for (const match of labels.matchAll(TOOL_ASSIGNMENT)) {
     const key = (match[1] ?? match[2] ?? "").trim().toLowerCase();
     if (PRIVATE_TOOL_KEY.test(key)) {
-      const option = allowExecOutputLimit && key === "max_output_tokens"
+      const option = customExec && key === "max_output_tokens"
         ? /^[ \t]*(0|[1-9]\d{0,15})(?=\s*(?:[,}\];]|$))/.exec(labels.slice(match.index! + match[0].length))
         : null;
       if (!option || !Number.isSafeInteger(Number(option[1]))) return { text: null, clipped: false };
     }
     if (key !== "encoding" && key !== "name") continue;
-    const field = TOOL_FIELD_VALUE.exec(labels.slice(match.index! + match[0].length));
+    const rest = labels.slice(match.index! + match[0].length);
+    if (customExec) {
+      const literal = EXEC_DECLARATION_LITERAL.exec(rest);
+      if (!literal || privateToolDeclaration(key, literal[2])) return { text: null, clipped: false };
+      continue;
+    }
+    const field = TOOL_FIELD_VALUE.exec(rest);
     if (privateToolDeclaration(key, field?.[1] ?? field?.[2] ?? field?.[3] ?? "")) {
       return { text: null, clipped: false };
     }
@@ -121,13 +128,13 @@ function rejectToolArgumentContext(args: object): { text: null; clipped: boolean
   return inspect(args);
 }
 
-export function redactedAgentToolArguments(value: unknown, allowExecOutputLimit = false): { text: string | null; clipped: boolean } {
-  if (allowExecOutputLimit && typeof value === "string") return safeToolText(value, true);
+export function redactedAgentToolArguments(value: unknown, customExec = false): { text: string | null; clipped: boolean } {
+  if (customExec && typeof value === "string") return safeToolText(value, true);
   if (typeof value === "string" && (value.trimStart().startsWith("{") || value.trimStart().startsWith("["))) {
     if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
     try { value = JSON.parse(value); } catch { return { text: null, clipped: false }; }
   }
-  if (typeof value === "string") return safeToolText(value, allowExecOutputLimit);
+  if (typeof value === "string") return safeToolText(value, customExec);
   if (!value || typeof value !== "object" || Array.isArray(value)) return { text: null, clipped: false };
   const rejected = rejectToolArgumentContext(value);
   if (rejected) return rejected;
@@ -187,19 +194,19 @@ function execCommandOutput(text: string): { output: string; exitCode?: number } 
 }
 
 function codexExecResult(value: unknown): { text: string | null; clipped: boolean } | null {
-  if (!Array.isArray(value) || value.length < 2 || value.length > MAX_TOOL_FIELDS) return null;
-  const parts: string[] = [];
-  for (const item of value) {
-    const block = record(item);
-    if (block.type !== "input_text" || typeof block.text !== "string" ||
-        Object.keys(block).some(key => key !== "type" && key !== "text")) return null;
-    parts.push(block.text);
+  if (!Array.isArray(value) || !value.length || value.length > MAX_TOOL_FIELDS) return null;
+  const header = record(value[0]);
+  if (typeof header.text !== "string" || !EXEC_RUN_STATUS.test(header.text)) return null;
+  const blocks = value.map(record);
+  if (header.type !== "input_text" || blocks.some(block => Object.keys(block).some(key => key !== "type" && key !== "text"))) {
+    return { text: null, clipped: true };
   }
-  const [header, ...blocks] = parts;
-  if (!header || !EXEC_RUN_STATUS.test(header)) return null;
-  const status = header.slice(0, header.indexOf("Output:")).trim();
-  const commands = blocks.map(execCommandOutput);
-  if (!commands.every(command => command !== null)) return { text: redactedAgentText(status + " · Output excerpt unavailable").text, clipped: true };
+  const status = header.text.slice(0, header.text.indexOf("Output:")).trim();
+  const commands = blocks.slice(1).map(block =>
+    block.type === "input_text" && typeof block.text === "string" ? execCommandOutput(block.text) : null);
+  if (!commands.length || !commands.every(command => command !== null)) {
+    return { text: redactedAgentText(status + " · Output excerpt unavailable").text, clipped: true };
+  }
   const stdout = commands.map(command => command.output).join(" ");
   const output = safeToolText(stdout);
   const exitCodes = commands.flatMap(command => command.exitCode === undefined ? [] : [`Exit code: ${command.exitCode}`]);
