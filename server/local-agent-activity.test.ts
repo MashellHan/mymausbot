@@ -61,6 +61,34 @@ describe("bounded per-agent Codex activity", () => {
     expect(JSON.stringify(events)).not.toMatch(/ghp_|fixture-private-cookie|AAAAAAAAAA/);
   });
 
+  it("checks output block metadata before displaying text and requires a verified association for absent", async () => {
+    const outputs = [
+      [{ type: "input_text", text: "Ordinary fixture text" }],
+      [{ type: "input_text", text: " \n" }, { type: "output_text", text: "" }],
+      [{ type: "input_text", text: "c2hvcnQ=", encoding: "base64" }],
+      [{ type: "input_text", text: "fixture-cookie-value", name: "Cookie" }],
+      [{ type: "input_text", text: "", encoding: "base64" }],
+      [{ type: "input_text", text: "fixture-late-declaration", ...Object.fromEntries(
+        Array.from({ length: 10 }, (_, index) => [`annotation${index}`, true])), encoding: "base64" }],
+    ];
+    const home = await fixture([
+      ...outputs.flatMap((output, index) => [
+        row("response_item", { type: "function_call", call_id: `call-${index}`, name: "functions.exec", arguments: '{"cmd":"fixture"}' }),
+        row("response_item", { type: "function_call_output", call_id: `call-${index}`, output }),
+      ]),
+      row("response_item", { type: "function_call_output", call_id: "unpaired" }),
+    ]);
+    const activity = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
+    const results = (await activity.get(pane)).events.filter((event) => event.kind === "tool-result");
+    expect(results.map((event) => event.detailStatus)).toEqual([
+      "available", "absent", "withheld", "withheld", "withheld", "withheld", "withheld",
+    ]);
+    expect(results[0]?.text).toBe("Ordinary fixture text");
+    expect(results[1]?.text).toBe("[Result details unavailable]");
+    expect(results.at(-1)).toMatchObject({ text: "[Result details unavailable]", tool: null });
+    expect(JSON.stringify(results)).not.toMatch(/c2hvcnQ|fixture-cookie-value|fixture-late-declaration/);
+  });
+
   it("pages a bounded Codex tail in source order without moving an older cursor after append", async () => {
     const pairs = Array.from({ length: 42 }, (_, index) => [
       row("response_item", { type: "function_call", call_id: `call-${index}`, name: "functions.exec", arguments: '{"cmd":"fixture"}' }),
@@ -97,6 +125,57 @@ describe("bounded per-agent Codex activity", () => {
     expect((await activity.get(pane, { occupantId, before })).events).toEqual(older.events);
     active = { ...original, name: "replacement" };
     expect(await activity.get(pane, { occupantId, before })).toMatchObject({ status: "unavailable", events: [], history: { streamId: null } });
+  });
+
+  it("retires the stream if an issued earlier anchor rolls out while a newer anchor is still retained", async () => {
+    const line = (index: number) => row("event_msg", { type: "user_message", message: `Message ${index}` });
+    const home = await fixture(Array.from({ length: 360 }, (_, index) => line(index)));
+    const member = { ...agent(), name: "fixture-codex", agent_session: { ...agent().agent_session, source: "herdr:codex" } };
+    const occupantId = localAgentOccupantId(member, pane)!;
+    const observe = () => createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([member]) });
+    const first = observe();
+    const second = observe();
+    async function cursors(activity: ReturnType<typeof observe>) {
+      const newest = (await activity.get(pane, { occupantId })).history!;
+      const older = (await activity.get(pane, { occupantId, before: newest.nextBefore! })).history!;
+      expect(older.nextBefore).not.toBeNull();
+      return { newest, older };
+    }
+    const prior = await cursors(first);
+    const other = await cursors(second);
+    const file = join(home, "sessions", "2026", "11", "05", `rollout-2026-11-05-${SESSION}.jsonl`);
+    await appendFile(file, Array.from({ length: 251 }, (_, index) => JSON.stringify(line(360 + index))).join("\n") + "\n");
+    expect(await first.get(pane, { occupantId, before: prior.older.nextBefore! })).toMatchObject({
+      status: "unavailable", events: [], history: { streamId: null },
+    });
+    expect((await first.get(pane, { occupantId })).history?.streamId).not.toBe(prior.newest.streamId);
+    expect((await second.get(pane, { occupantId })).history?.streamId).not.toBe(other.newest.streamId);
+    expect(await second.get(pane, { occupantId, before: other.newest.nextBefore! })).toMatchObject({
+      status: "unavailable", events: [], history: { streamId: null },
+    });
+  });
+
+  it("lets two same-occupant frames finish concurrent newest history reads", async () => {
+    const home = await fixture([row("event_msg", { type: "user_message", message: "Same fixture session" })]);
+    const member = { ...agent(), name: "fixture-codex", agent_session: { ...agent().agent_session, source: "herdr:codex" } };
+    const occupantId = localAgentOccupantId(member, pane)!;
+    let started!: () => void;
+    let release!: () => void;
+    const began = new Promise<void>((resolve) => { started = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const activity = createLocalAgentActivityProvider({ codexHome: home, run: async () => {
+      if (++calls === 1) { started(); await held; }
+      return listed([member]);
+    } });
+    const first = activity.get(pane, { occupantId });
+    await began;
+    const second = activity.get(pane, { occupantId });
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toMatchObject({ status: "ready", events: [{ text: "Same fixture session" }], history: { streamId: expect.any(String) } });
+    expect(b).toEqual(a);
+    expect(calls).toBe(2);
   });
 
   it("reads visible current-format messages without duplicating legacy copies or exposing hidden content", async () => {

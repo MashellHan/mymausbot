@@ -62,7 +62,7 @@ export function trackAgentToolCalls() {
   const hide = (event: LocalAgentActivityEvent) => {
     event.tool = null;
     event.text = TOOL_RESULT_UNAVAILABLE;
-    if (event.detailStatus !== "absent") event.detailStatus = "withheld";
+    event.detailStatus = "withheld";
   };
   return {
     record(id: string, tool: string | null) {
@@ -143,6 +143,10 @@ export function redactedAgentToolResult(value: unknown, runtime?: "codex"): { te
     if (block.type !== "text" && block.type !== "output_text" && !(runtime === "codex" && block.type === "input_text")) {
       return { text: null, clipped: true };
     }
+    // Text blocks with metadata can declare privacy or encoding outside the scalar.
+    for (const key in block) {
+      if (key !== "type" && key !== "text" && Object.hasOwn(block, key)) return { text: null, clipped: true };
+    }
     sourceLength += block.text.length + (parts.length ? 1 : 0);
     if (sourceLength > MAX_TOOL_SOURCE) return { text: null, clipped: true };
     parts.push(block.text);
@@ -158,7 +162,12 @@ export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unkn
   const detail = result ? redactedAgentToolResult(value, runtime) : redactedAgentToolArguments(value);
   const emptyText = typeof value === "string" && (!value.trim() || (!result && /^\s*\{\s*\}\s*$/.test(value)));
   const emptyArguments = !result && value !== null && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length;
-  const absent = value == null || emptyText || emptyArguments || Array.isArray(value) && !value.length;
+  const emptyBlocks = Array.isArray(value) && (value.length === 0 || result && !detail.clipped &&
+    value.every((block) => {
+      const { text } = record(block);
+      return typeof text === "string" && !text.trim();
+    }));
+  const absent = value == null || emptyText || emptyArguments || emptyBlocks;
   return { text: detail.text ?? (result ? TOOL_RESULT_UNAVAILABLE : "[Arguments unavailable]"),
     clipped: detail.clipped, detailStatus: detail.text ? "available" : absent ? "absent" : "withheld" };
 }

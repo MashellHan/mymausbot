@@ -57,9 +57,10 @@ describe("verified Pi visible assistant preview", () => {
       records.push(entry(id, parent, { role: "assistant", content: [
         { type: "toolCall", id: toolCallId, name: "send_message_to_user_async", arguments: { message: `Synthetic update ${index}` } },
       ] }));
-      records.push(entry(resultId, id, { role: "toolResult", toolCallId, content: index === 0 ? undefined : [
-        { type: "text", text: index === 1 ? "Authorization: fixture-token" : `Acknowledged ${index}` },
-      ] }));
+      const content = index === 3 ? [{ type: "text", text: "fixture-private-short", name: "Cookie" }] : [
+        { type: "text", text: index === 1 ? "Authorization: fixture-token" : index === 2 ? " \n" : `Acknowledged ${index}` },
+      ];
+      records.push(entry(resultId, id, { role: "toolResult", toolCallId, content: index === 0 ? undefined : content }));
       parent = resultId;
     }
     const data = await fixture(records);
@@ -79,7 +80,9 @@ describe("verified Pi visible assistant preview", () => {
       ["[Result details unavailable]", "absent"], ["message: Synthetic update 1", "available"],
       ["[Result details unavailable]", "withheld"],
     ]);
-    expect(JSON.stringify([...first.events, ...older.events, ...oldest.events])).not.toMatch(/Other branch|fixture-token/);
+    expect(oldest.events[6]).toMatchObject({ detailStatus: "absent", text: "[Result details unavailable]" });
+    expect(oldest.events[8]).toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
+    expect(JSON.stringify([...first.events, ...older.events, ...oldest.events])).not.toMatch(/Other branch|fixture-token|fixture-private-short/);
     await appendFile(data.file, line(assistant("New descendant", "00000100", parent)));
     const appended = await activity.get(pane, { occupantId });
     expect(appended.history?.streamId).toBe(first.history?.streamId);

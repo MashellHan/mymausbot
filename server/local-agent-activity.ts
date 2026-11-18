@@ -130,7 +130,7 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
   const paths = new Map<string, { file: string | null; at: number }>();
   const lastGood = new Map<string, { sessionId: string; file: string; response: LocalAgentActivityResponse }>();
   const latest = new Map<string, symbol>();
-  const latestHistory = new Map<string, symbol>();
+  const pendingNewest = new Map<string, Promise<LocalAgentActivityResponse>>();
 
   async function historyAgent(agentId: string, expected: string): Promise<Record<string, unknown> | undefined> {
     const agents = herdrRows(await run(["--session", "default", "agent", "list"]), "agents");
@@ -138,7 +138,7 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
     return agent && localAgentOccupantId(agent, agentId) === expected ? agent : undefined;
   }
 
-  async function refreshHistory(agentId: string, request: LocalAgentActivityHistoryRequest, current: () => boolean): Promise<LocalAgentActivityResponse> {
+  async function refreshHistory(agentId: string, request: LocalAgentActivityHistoryRequest): Promise<LocalAgentActivityResponse> {
     const missing = unavailableActivityHistory(agentId);
     if (!PANE_ID.test(agentId)) return missing;
     try {
@@ -152,12 +152,12 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
         const file = (await discoverCodexSessionFiles(codexHome, new Set([sessionId]))).get(sessionId);
         if (file) observed = await read(file, sessionId, true);
       } else return { ...missing, status: "unsupported" };
-      if (!observed?.historySource || !current()) return missing;
+      if (!observed?.historySource) return missing;
       const live = await historyAgent(agentId, request.occupantId);
-      if (!live || live.cwd !== agent.cwd || !current()) return missing;
+      if (!live || live.cwd !== agent.cwd) return missing;
       const source = observed.historySource;
       const stat = await lstat(source.path, { bigint: true });
-      if (!current() || !stat.isFile() || source.file !== `${stat.dev}:${stat.ino}` || BigInt(source.size) !== stat.size ||
+      if (!stat.isFile() || source.file !== `${stat.dev}:${stat.ino}` || BigInt(source.size) !== stat.size ||
           source.revision !== `${stat.mtimeNs}:${stat.ctimeNs}`) return missing;
       return activityHistory(agentId, request, observed, now());
     } catch { return missing; }
@@ -211,11 +211,13 @@ export function createLocalAgentActivityProvider({ run = runHerdr, read = readSe
   return {
     get(agentId: string, history?: LocalAgentActivityHistoryRequest): Promise<LocalAgentActivityResponse> {
       if (history) {
-        if (history.before !== undefined) return refreshHistory(agentId, history, () => true);
-        const newest = Symbol();
-        latestHistory.set(agentId, newest);
-        const current = () => latestHistory.get(agentId) === newest;
-        return refreshHistory(agentId, history, current).finally(() => { if (current()) latestHistory.delete(agentId); });
+        if (history.before !== undefined) return refreshHistory(agentId, history);
+        const key = `${agentId}\0${history.occupantId}`;
+        const pending = pendingNewest.get(key);
+        if (pending) return pending;
+        const newest = refreshHistory(agentId, history).finally(() => pendingNewest.delete(key));
+        pendingNewest.set(key, newest);
+        return newest;
       }
       const request = Symbol();
       latest.set(agentId, request);
