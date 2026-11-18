@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LocalAgentTeamsResponse, LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../../shared/local-dashboard";
+import type { LocalAgentTeamsResponse, LocalUsageCounts, LocalUsageRepositories, LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../../shared/local-dashboard";
 import type { MiniAppDashboardDeclaration, MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
 import { setLocale } from "@/lib/i18n";
 import { withGithubUsageFixture } from "../../../scripts/testing/merged-usage-fixture";
@@ -36,30 +36,44 @@ const teams: LocalAgentTeamsResponse = { status: "ready", updatedAt: 1_000, team
   ] },
 ] };
 const emptyCategory = { prs: 0, knownPrs: 0, commits: 0 };
-const trend: LocalUsageTrendDay[] = Array.from({ length: 30 }, (_, index) => ({
-  day: new Date(Date.UTC(2026, 9, 9 + index)).toISOString().slice(0, 10), coverage: "ready", tokenStatus: "ready",
-  prs: 1, knownPrs: 1, commits: 2, newTokens: 80, cacheRead: 20, totalTokens: 100,
-  categories: { work: { prs: 1, knownPrs: 1, commits: 2 }, personal: emptyCategory, unclassified: emptyCategory },
-  wow: { prs: null, commits: null, newTokens: null, totalTokens: null },
-}));
+const endDay = "2026-11-07";
 const shiftDay = (day: string, offset: number) => new Date(Date.parse(`${day}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
-const windowFor = (days: 1 | 7 | 30): LocalUsageWindow => ({
-  days, startDay: trend[30 - days]!.day, endDay: "2026-11-07", asOf: Date.UTC(2026, 10, 7, 8),
-  coverage: "ready", tokenCoverage: "ready", missingDays: [], unavailableTokenDays: [],
-  prs: days, knownPrs: days, commits: days * 2, newTokens: days * 80, cacheRead: days * 20, totalTokens: days * 100,
-  comparison: { startDay: shiftDay(trend[30 - days]!.day, -days), endDay: shiftDay(trend[30 - days]!.day, -1), missingDays: [], unavailableTokenDays: [],
-    prs: null, commits: null, totalTokens: null,
-    categories: { work: { prs: null, commits: null }, personal: { prs: null, commits: null }, unclassified: { prs: null, commits: null } } },
-  categories: { work: { prs: days, knownPrs: days, commits: days * 2 }, personal: emptyCategory, unclassified: emptyCategory },
-  repositories: { sharedCommits: 0, coverage: "ready", unattributedPrs: 0, unattributedCommits: 0, rows: [] },
-});
-const usage: LocalUsageResponse = {
-  status: "ready", asOf: Date.UTC(2026, 10, 7, 8), timeZone: "Asia/Shanghai",
-  sourceCoverage: { total: 1, ready: 1, partial: 0, stale: 0, missing: 0 },
-  prSourceCoverage: { total: 1, ready: 1, stale: 0, unavailable: 0, missing: 0 },
-  prCoverage: { work: "ready", personal: "ready", unclassified: "ready" },
-  windows: { "1": windowFor(1), "7": windowFor(7), "30": windowFor(30) }, trend,
-};
+function repositoryUsage(prs: number, commits: number, asOf = Date.UTC(2026, 10, 7, 8)): LocalUsageResponse {
+  const counts = (days: number): LocalUsageCounts => ({ prs: days * prs, knownPrs: days * prs, commits: days * commits });
+  const categories = (observed: LocalUsageCounts) => ({ work: observed, personal: emptyCategory, unclassified: emptyCategory });
+  const repositories = (observed: LocalUsageCounts): LocalUsageRepositories => ({
+    sharedCommits: 0, coverage: "ready", unattributedPrs: 0, unattributedCommits: 0,
+    rows: [{ id: "local-repo", name: "fixture/local-repo", category: "work", ...observed, comparison: { prs: null, commits: null } }],
+  });
+  const trend: LocalUsageTrendDay[] = Array.from({ length: 30 }, (_, index) => ({
+    day: shiftDay(endDay, index - 29), coverage: "ready", tokenStatus: "ready",
+    ...counts(1), newTokens: 80, cacheRead: 20, totalTokens: 100,
+    categories: categories(counts(1)), repositories: repositories(counts(1)),
+    wow: { prs: null, commits: null, newTokens: null, totalTokens: null },
+  }));
+  const windowFor = (days: 1 | 7 | 30): LocalUsageWindow => {
+    const startDay = shiftDay(endDay, 1 - days);
+    const observed = counts(days);
+    return {
+      days, startDay, endDay, asOf, coverage: "ready", tokenCoverage: "ready", missingDays: [], unavailableTokenDays: [],
+      ...observed, newTokens: days * 80, cacheRead: days * 20, totalTokens: days * 100,
+      comparison: { startDay: shiftDay(startDay, -days), endDay: shiftDay(startDay, -1), missingDays: [],
+        unavailableTokenDays: days === 30 ? Array.from({ length: days }, (_, index) => shiftDay(startDay, index - days)) : [],
+        prs: null, commits: null, totalTokens: null,
+        categories: { work: { prs: null, commits: null }, personal: { prs: null, commits: null }, unclassified: { prs: null, commits: null } } },
+      categories: categories(observed), repositories: repositories(observed),
+    };
+  };
+  return {
+    status: "ready", asOf, timeZone: "Asia/Shanghai",
+    sourceCoverage: { total: 1, ready: 1, partial: 0, stale: 0, missing: 0 },
+    prSourceCoverage: { total: 1, ready: 1, stale: 0, unavailable: 0, missing: 0 },
+    prCoverage: { work: "ready", personal: "ready", unclassified: "ready" },
+    windows: { "1": windowFor(1), "7": windowFor(7), "30": windowFor(30) }, trend,
+  };
+}
+const usage = repositoryUsage(1, 2);
+const profile = withGithubUsageFixture(repositoryUsage(3, 7)).github!;
 
 let host: HTMLDivElement;
 let root: Root;
@@ -70,6 +84,7 @@ const render = async (kind: "agent-team" | "usage", revision = 3) => {
     key: `${kind}:${revision}`, document: documentFor(kind, revision), state: stateFor(revision), refreshKey: 0, onRevoked: revoked, onChanged: changed,
   })));
 };
+const activityValues = () => [...host.querySelectorAll("section:first-of-type dd > span:first-child")].slice(0, 3).map(value => value.textContent);
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -154,21 +169,26 @@ describe("installed native Mini App dashboards", () => {
     expect(host.textContent?.includes("Delayed synthetic reply")).toBe(!replaced);
   });
 
-  it("keeps verified contributions distinct from repository observations and Profile references in an app-scoped snapshot", async () => {
-    const snapshot = { ...withGithubUsageFixture(usage), contributions: primaryUsageFixture("2026-11-07") };
-    expect(snapshot.windows!["1"].prs).toBe(1);
-    expect(snapshot.github!.windows!["1"].knownPrs).toBe(1);
+  it("shows repository observations throughout the app-scoped Activities snapshot", async () => {
+    const contributions = primaryUsageFixture(endDay);
+    const snapshot = { ...usage, github: profile, contributions };
     calls.api.mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot });
     await render("usage");
     await vi.waitFor(() => expect(host.querySelectorAll("[data-usage-trend]")).toHaveLength(3));
     expect(host.textContent).toContain("1-day window");
-    expect(host.textContent).toContain("2026-11-07");
-    expect(host.querySelector('[data-usage-metric-definition]')).toBeNull();
-    expect(host.querySelector('[data-usage-latest-update]')?.textContent).toContain("Latest update:");
-    expect(host.querySelector('[data-usage-primary-sources]')?.textContent).toContain("PRs use creation time; commits use author time, including merge commits");
-    expect([...host.querySelectorAll("section dd > span:first-child")].slice(0, 2).map(value => value.textContent)).toEqual(["5", "9"]);
+    expect(host.textContent).toContain(endDay);
+    expect(host.querySelector('[data-usage-metric-definition], [data-usage-primary-sources]')).toBeNull();
+    expect(host.querySelector('[data-usage-latest-update]')?.getAttribute("datetime")).toBe(`${endDay}T08:00:00.000Z`);
+    const metricHeaders = [...host.querySelectorAll("section:first-of-type dt")];
+    expect(metricHeaders.map(value => value.textContent)).toEqual(["PRs", "Commits", "Tokens"]);
+    expect(metricHeaders[0]?.getAttribute("title")).toContain("PR creations from configured GitHub and ADO sources, dated in China time");
+    expect(metricHeaders[1]?.getAttribute("title")).toContain("non-merge Git commits across local branches");
+    expect(activityValues()).toEqual(["1", "2", "100"]);
+    expect(host.querySelector(`[data-usage-trend="prs"] [data-usage-day="${endDay}"]`)?.getAttribute("aria-label")).toMatch(/: PRs 1$/);
+    expect(host.querySelector(`[data-usage-trend="commits"] [data-usage-day="${endDay}"]`)?.getAttribute("aria-label")).toMatch(/: Commits 2$/);
+    expect([...host.querySelectorAll('[data-usage-daily] tbody tr:first-child > td')].slice(0, 3).map(value => value.textContent)).toEqual(["1", "2", "100"]);
+    expect(host.querySelector('[data-usage-repositories] tbody th')?.textContent).toBe("fixture/local-repo");
     expect(host.querySelectorAll("section dd [data-usage-provisional]")).toHaveLength(0);
-    expect(host.querySelector('[data-usage-primary-sources]')?.textContent).toContain("fixture-gh");
     expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
     expect(host.querySelector('[data-usage-week-start="2026-11-02"]')).not.toBeNull();
     expect(host.querySelector('[data-usage-weekend-tick]')).toBeNull();
@@ -176,21 +196,23 @@ describe("installed native Mini App dashboards", () => {
     expect(JSON.parse(calls.api.mock.calls[0]![1].body)).toEqual({ resource: "usage", expectedRevision: 3 });
   });
 
-  it("refreshes visible contributions in five seconds without waiting for older tokens or changing its app scope", async () => {
+  it("refreshes visible repository observations in five seconds without waiting for older tokens or changing its app scope", async () => {
     vi.useFakeTimers();
-    const local = withGithubUsageFixture(usage);
-    const first = { ...local, contributions: primaryUsageFixture("2026-11-07") };
-    const next = { ...local, contributions: primaryUsageFixture("2026-11-07", false, "2026-11-07T08:31:00Z",
+    const first = { ...usage, github: profile, contributions: primaryUsageFixture(endDay) };
+    const next = { ...repositoryUsage(4, 8, Date.UTC(2026, 10, 7, 8, 5)), github: profile,
+      contributions: primaryUsageFixture(endDay, false, `${endDay}T08:31:00Z`,
       { github: { prs: 4, commits: 6 }, ado: { prs: 2, commits: 5 } }) };
     calls.api.mockResolvedValueOnce({ appId, revision: 3, resource: "usage", snapshot: first })
       .mockResolvedValue({ appId, revision: 3, resource: "usage", snapshot: next });
-    const values = () => [...host.querySelectorAll("section dd > span:first-child")].slice(0, 3).map((value) => value.textContent);
     await render("usage");
-    expect(values()).toEqual(["5", "9", "100"]);
+    expect(activityValues()).toEqual(["1", "2", "100"]);
     await act(async () => { await vi.advanceTimersByTimeAsync(4_999); });
     expect(calls.api).toHaveBeenCalledTimes(1);
+    expect(activityValues()).toEqual(["1", "2", "100"]);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-    expect(values()).toEqual(["6", "11", "100"]);
+    expect(calls.api).toHaveBeenCalledTimes(2);
+    expect(activityValues()).toEqual(["4", "8", "100"]);
+    expect(host.querySelector('[data-usage-latest-update]')?.getAttribute("datetime")).toBe(`${endDay}T08:05:00.000Z`);
     calls.visible = false;
     await render("usage");
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
@@ -198,8 +220,9 @@ describe("installed native Mini App dashboards", () => {
     calls.visible = true;
     await render("usage");
     expect(calls.api).toHaveBeenCalledTimes(3);
-    expect(calls.api.mock.calls.every(([path, options]) => path === `/api/mini-apps/${appId}/dashboard`
-      && options.method === "POST" && JSON.parse(options.body).expectedRevision === 3)).toBe(true);
+    expect(calls.api.mock.calls).toEqual(Array.from({ length: 3 }, () => [`/api/mini-apps/${appId}/dashboard`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ resource: "usage", expectedRevision: 3 }) }),
+    ]));
   });
 
   it("aborts an in-flight read when hidden or when its installed revision changes", async () => {
@@ -210,7 +233,7 @@ describe("installed native Mini App dashboards", () => {
     calls.visible = false;
     await render("usage");
     expect(firstSignal.aborted).toBe(true);
-    await act(async () => finish({ appId, revision: 3, resource: "usage", snapshot: withGithubUsageFixture(usage) }));
+    await act(async () => finish({ appId, revision: 3, resource: "usage", snapshot: usage }));
     expect(host.querySelector('[data-usage-trend]')).toBeNull();
     calls.visible = true;
     await render("usage", 4);
