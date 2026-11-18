@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { z } from "zod";
+import { windowPrefChanged } from "./window-pref-changes";
 
 /** The sidebar as it is, or "icons": the column of avatars the person dragged its edge down to. */
 export type SidebarDensity = "comfortable" | "icons";
@@ -125,7 +126,7 @@ export function useSidebarDensity(): SidebarDensity {
 let toolsLayoutSessionChoice: SidebarToolsLayout | undefined;
 const toolsLayoutListeners = new Set<() => void>();
 
-function currentSidebarToolsLayout(): SidebarToolsLayout {
+export function readSidebarToolsLayout(): SidebarToolsLayout {
   return toolsLayoutSessionChoice ?? loadSidebarToolsLayout();
 }
 
@@ -142,6 +143,7 @@ function onToolsLayoutStorage(event: StorageEvent) {
   }
   toolsLayoutSessionChoice = undefined;
   notifyToolsLayout();
+  windowPrefChanged();
 }
 
 export function subscribeSidebarToolsLayout(listener: () => void): () => void {
@@ -161,10 +163,11 @@ export function setSidebarToolsLayout(layout: SidebarToolsLayout): void {
   toolsLayoutSessionChoice = layout;
   saveSidebarToolsLayout(layout);
   notifyToolsLayout();
+  windowPrefChanged();
 }
 
 export function useSidebarToolsLayout(): SidebarToolsLayout {
-  return useSyncExternalStore(subscribeSidebarToolsLayout, currentSidebarToolsLayout, () => "rows");
+  return useSyncExternalStore(subscribeSidebarToolsLayout, readSidebarToolsLayout, () => "rows");
 }
 
 /** The narrowest the open sidebar gets. */
@@ -231,8 +234,14 @@ function notifyPinnedCircles(): void {
 
 function onPinnedCirclesStorage(event: StorageEvent): void {
   if (event.key !== PINNED_CIRCLES_KEY && event.key !== null) return;
+  try {
+    if (event.storageArea && event.storageArea !== globalThis.localStorage) return;
+  } catch {
+    return;
+  }
   sessionPinnedCircles = undefined;
   notifyPinnedCircles();
+  windowPrefChanged();
 }
 
 export function subscribePinnedCircles(listener: () => void): () => void {
@@ -281,6 +290,7 @@ export function setPinnedCircles(enabled: boolean): void {
   sessionPinnedCircles = enabled;
   savePinnedCircles(enabled);
   notifyPinnedCircles();
+  windowPrefChanged();
 }
 
 export function usePinnedCircles(): boolean {
@@ -323,8 +333,14 @@ function notifyUniversalPins(): void {
 
 function onUniversalPinsStorage(event: StorageEvent): void {
   if (event.key !== UNIVERSAL_PINS_KEY && event.key !== null) return;
+  try {
+    if (event.storageArea && event.storageArea !== globalThis.localStorage) return;
+  } catch {
+    return;
+  }
   sessionUniversalPins = undefined;
   notifyUniversalPins();
+  windowPrefChanged();
 }
 
 export function subscribeUniversalPins(listener: () => void): () => void {
@@ -373,6 +389,7 @@ export function setUniversalPins(enabled: boolean): void {
   sessionUniversalPins = enabled;
   saveUniversalPins(enabled);
   notifyUniversalPins();
+  windowPrefChanged();
 }
 
 export function useUniversalPins(): boolean {

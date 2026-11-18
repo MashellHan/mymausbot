@@ -66,15 +66,24 @@ More specific `AGENTS.md` files override this note within their directories.
 ## MausBot repository team
 
 Read `.agents/team/playbook.md` and the assigned role in `.agents/team/roles/`.
-The dedicated Herdr team owns this repository. Its lead and general reviewers use
-`gpt-6-astra` with `max`; designer, frontend and backend use `gpt-6-sol`
-with `xhigh` and a requested 1,000,000-token context. The upstream integration
-developer uses the same Sol settings. The three additional developers share
-`.agents/team/roles/developer.md`: Pi through the existing Raven provider,
-`gpt-6.1-sol`/`max` and requested context 1,000,000. Existing roles are unchanged;
-Reviewer3 is an alternative review owner, not another required approval.
+The dedicated Herdr team owns this repository. Requested launch defaults: Lead
+uses Codex `gpt-6-astra` with `max` effort; Designer uses Codex `gpt-6.2-sol`
+with `xhigh` effort and a requested 1,000,000-token context; Frontend and
+Backend use Codex `gpt-6.2-sol` with `high` effort and a requested
+1,000,000-token context. All seven Codex roles use the existing Raven YOLO
+launch mode. Upstream integration, additional developers, and Reviewer3 use Pi
+through the existing Raven provider with automatic native tool execution (no
+per-call approval prompts): `mausbot-upstream` and `mausbot-dev2` request
+`gemini-4-hydrogen` with `high` effort, `mausbot-dev1` and `mausbot-dev3`
+request `gpt-6.2-sol` with `high` effort and a requested 1,000,000-token
+context, and `mausbot-review3` requests `gemini-4-carbon` with `high` effort
+and read-only tool scope. The other three w6 reviewers (`mausbot-review`,
+`mausbot-review2`, `mausbot-mini-review`) use Codex `gpt-6.2-astra` with
+`xhigh` effort in Raven YOLO mode. `mausbot-review3` remains an alternative
+general review owner, not another required approval.
 Follow the playbook's authentication boundary: normal native authentication is
 allowed within existing scope; direct login-Keychain access remains restricted.
-Never silently substitute a model or claim a runtime configuration was verified
-from a role file alone.
+Never silently substitute a model, conflate requested context with observed
+provider limits, or claim a runtime configuration was verified from a role file
+alone.
 Use small coherent commits and focused PRs as described in `CONTRIBUTING-FORK.md`.

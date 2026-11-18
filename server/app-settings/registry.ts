@@ -4,13 +4,14 @@ import { credentialIsConfigured, CREDENTIAL_TARGETS, PROVIDER_CREDENTIAL_TARGETS
 import { WINDOW_PREFS, type WindowPrefId } from "../../shared/app-settings.ts";
 import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
 import { defaultBotPerson } from "../../shared/default-bot.ts";
-import { MAUS_COLOR_NAMES, type MausColor } from "../../shared/wire.ts";
+import { EFFORT_LEVELS, MAUS_COLOR_NAMES, type EffortLevel, type MausColor } from "../../shared/wire.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "../bot-thread-limits.ts";
 import { parseSocks5Proxy } from "../browser/egress/policy.ts";
+import { MAX_WINDOW_MINUTES } from "../cache-keepwarm.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
 import { isClaudeEndpoint } from "../claude-endpoints.ts";
 import { isCodexEndpoint } from "../codex-endpoints.ts";
-import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, type AppConfig } from "../config.ts";
+import { cacheKeepWarmSettings, DEFAULT_SKILL_REVIEW_STEPS, MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, MAX_THREAD_EVENT_LOG_BYTES, MAX_SKILL_REVIEW_STEPS, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, MIN_THREAD_EVENT_LOG_BYTES, MIN_SKILL_REVIEW_STEPS, persistableInstanceConfigs, roomTurnTimeoutMinutes, showToolCallsEnabled, skillAuthoringEnabled, threadEventLogMaxBytes, skillReviewEnabled, skillReviewSteps, type AppConfig } from "../config.ts";
 import type { InstanceConfig } from "../contracts.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
@@ -19,6 +20,9 @@ import type { RequestAuth } from "../request-auth.ts";
 import { callRoute, type RouteReply } from "../routes/call-route.ts";
 import { engineChosen } from "../routes/instances.ts";
 import type { RouteHandler } from "../routes/table.ts";
+import { savedStepsEnabled } from "../saved-steps/saved-steps.ts";
+import { skillsLibraryEnabled } from "../skill-library.ts";
+import { shareLearnedSkillsMode, type ShareLearnedSkillsMode } from "../skill-share.ts";
 import type { BotRecord, Store } from "../store.ts";
 
 /** Where the person changes it by hand, as the bot tells them. */
@@ -66,6 +70,7 @@ export interface RegistryDeps {
   colorBot(botId: string, color: MausColor): Promise<string | null>;
   archiveBot(botId: string, archived: boolean, demoteChief: boolean): Promise<string | null>;
   showHelper(botId: string, shown: boolean): Promise<string | null>;
+  savedStepsHere(): boolean;
   credentials(): CredentialConfig;
   window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
   engines(): Array<{ instanceId: string; name: string; working: boolean }>;
@@ -113,6 +118,10 @@ const botColor = z.object({ botId, color: z.enum(MAUS_COLOR_NAMES) }).strict();
 type BotColor = z.infer<typeof botColor>;
 const botArchive = z.object({ botId, archived: z.boolean() }).strict();
 type BotArchive = z.infer<typeof botArchive>;
+const keepWarmChange = z.object({ enabled: z.boolean(), windowMinutes: z.number().int().min(15).max(MAX_WINDOW_MINUTES).optional() }).strict();
+type KeepWarmChange = z.infer<typeof keepWarmChange>;
+const skillReviewChange = z.object({ enabled: z.boolean(), steps: z.number().int().min(MIN_SKILL_REVIEW_STEPS).max(MAX_SKILL_REVIEW_STEPS).optional() }).strict();
+type SkillReviewChange = z.infer<typeof skillReviewChange>;
 const removableKind = (instanceId: string, entry: InstanceConfig | undefined) => isAddedEndpoint(instanceId, entry) ? "OpenAI-compatible server"
   : isClaudeBedrock(entry) ? "Claude on Amazon Bedrock" : isClaudeEndpoint(entry) ? "Claude endpoint" : isCodexEndpoint(entry) ? "Codex endpoint" : null;
 
@@ -123,6 +132,13 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     return helpers.length === 1 ? helpers[0] : undefined;
   };
   const names = (ids: readonly string[]) => ids.map((id) => deps.bots().find((bot) => bot.id === id)?.name ?? id).join(", ");
+  const reviewState = () => ({ enabled: skillReviewEnabled(cfg()), steps: skillReviewSteps(cfg()),
+    ...(cfg().features?.skillReview === true && !skillAuthoringEnabled(cfg()) ? { pausedUntilAuthoringOn: true } : {}) });
+  const savedStepsState = () => {
+    const availableHere = deps.savedStepsHere();
+    const savedOn = savedStepsEnabled(cfg());
+    return { enabled: availableHere && savedOn, availableHere, ...(!availableHere ? { savedOn } : {}) };
+  };
   const writable = (spec: WritableSpec): SettingEntry => ({ ...spec, read: spec.read ?? (() => display(spec.current())), write: spec.write as Writable["write"] });
   const config = <V,>(patch: (value: V) => Record<string, unknown>) => (value: V) => deps.saveConfig(patch(value));
   const windowPref = (id: WindowPrefId, label: string, help: string, where: Where, synonyms: string[], allowed: string): SettingEntry =>
@@ -130,6 +146,8 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   const enumOf = (values: readonly string[]) => values.join(", ");
   const pinned = () => deps.bots().filter((bot) => bot.pinned).map((bot) => bot.id);
   const groups = () => Object.fromEntries(deps.sections().map((section) => [section, deps.bots().filter((bot) => bot.section === section).map((bot) => bot.id)]));
+  const newBotEffort = () => cfg().newBots?.effort ?? null;
+  const effortLabel = (effort: EffortLevel | null) => effort ?? "provider default";
   const describeArchive = ({ botId, archived }: BotArchive): { change: string } | { refusal: string } => {
     const bot = deps.bots().find((candidate) => candidate.id === botId);
     if (!bot) return { refusal: `No bot has the id ${botId}. Use list_bots for the ids.` };
@@ -226,7 +244,165 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     id, label, help: `${label}: the address mymausbot sends requests to. Empty uses the provider's own.`, where: "Settings → AI", synonyms: [...synonyms, "url", "base url", "endpoint", "address", "proxy"],
     tier: "confirm", value: url, allowed: "an http(s) address, or empty to clear", current: () => current() ?? "", write: config(patch),
   });
+  const logCapText = (bytes: number | null) => bytes === null ? "no limit" : `${bytes} bytes`;
+  const rawBubbleNote = "Raw keeps its fixed styling: ordinary bots stay coloured and the main bot stays dark";
   const confirm: SettingEntry[] = [
+    writable({
+      id: "bots.newBotEffort", label: "Effort for new bots", help: "The reasoning effort a new bot starts with when its model names none; null uses the engine's own.", where: "Settings → You and your bots",
+      synonyms: ["effort", "reasoning", "new bots", "thinking"], tier: "confirm", value: z.enum(EFFORT_LEVELS).nullable(),
+      allowed: `${EFFORT_LEVELS.join(", ")}, or null for the provider default`,
+      current: newBotEffort, read: () => effortLabel(newBotEffort()),
+      describe: (effort: EffortLevel | null) => {
+        const before = newBotEffort();
+        return before === effort ? { refusal: `New bots already use ${effortLabel(effort)} effort.` }
+          : { change: `Set new bots' effort to ${effortLabel(effort)} instead of ${effortLabel(before)}; existing bots keep their settings` };
+      },
+      write: config((effort: EffortLevel | null) => ({ newBots: { effort } })),
+    }),
+    writable({
+      id: "appearance.runCard", label: "This run card", help: "Show the card that follows a bot's run while it works.", where: "Settings → Appearance",
+      synonyms: ["this run", "run card", "progress"], tier: "confirm", value: WINDOW_PREFS["appearance.runCard"], allowed: "true or false",
+      current: () => deps.window.read("appearance.runCard"),
+      read: () => { const current = deps.window.read("appearance.runCard"); return current === undefined ? "" : current ? "shown" : "hidden"; },
+      describe: (shown: boolean) => {
+        const current = deps.window.read("appearance.runCard");
+        return typeof current === "boolean" ? { change: `${shown ? "Show" : "Hide"} the card that follows each run; currently ${current ? "shown" : "hidden"}` }
+          : { refusal: "Open mymausbot on this computer first; this setting lives in the app window." };
+      },
+      write: async (shown: boolean) => deps.window.write("appearance.runCard", shown),
+    }),
+    writable({
+      id: "appearance.toolCalls", label: "Show tool calls", help: "Show each tool a bot runs in the conversation.", where: "Settings → Appearance",
+      synonyms: ["tool calls", "tools", "show tools"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => showToolCallsEnabled(cfg()), read: () => showToolCallsEnabled(cfg()) ? "shown" : "hidden",
+      describe: (shown: boolean) => ({ change: `${shown ? "Show" : "Hide"} tool calls in conversations; currently ${showToolCallsEnabled(cfg()) ? "shown" : "hidden"}` }),
+      write: config((showToolCalls: boolean) => ({ features: { showToolCalls } })),
+    }),
+    writable({
+      id: "bots.skillAuthoring", label: "Bots write their own skills", help: "Bots may draft skills for your review; turning this off also pauses automatic skill review.", where: "Settings → You and your bots",
+      synonyms: ["skills", "write skills", "early", "experimental"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => skillAuthoringEnabled(cfg()), read: () => skillAuthoringEnabled(cfg()) ? "on" : "off",
+      describe: (enabled: boolean) => {
+        const review = cfg().features?.skillReview === true
+          ? enabled ? " and allow automatic skill review again" : " and pause automatic skill review"
+          : "";
+        return { change: `${enabled ? "Let bots draft skills for your review" : "Stop bots drafting skills"}${review}; currently ${skillAuthoringEnabled(cfg()) ? "on" : "off"}` };
+      },
+      write: config((skillAuthoring: boolean) => ({ features: { skillAuthoring } })),
+    }),
+    writable({
+      id: "bots.keepWarm", label: "Keep caches warm", help: "The place's on/off setting is the default for bots without an override. All eligible enabled bots, including bots explicitly set to On, use its shared window after a successful turn; each ping spends a few tokens.", where: "Settings → You and your bots",
+      synonyms: ["keep warm", "cache", "prompt cache"], tier: "confirm", value: keepWarmChange, allowed: '{"enabled":true|false,"windowMinutes"?:15-1440}',
+      current: () => cacheKeepWarmSettings(cfg()), read: () => display(cacheKeepWarmSettings(cfg())),
+      describe: (change: KeepWarmChange) => {
+        const before = cacheKeepWarmSettings(cfg());
+        const after = { ...before, ...change };
+        return { change: `Set the prompt-cache keep-warm place default from ${before.enabled ? "on" : "off"} to ${after.enabled ? "on" : "off"} and shared window from ${before.windowMinutes} to ${after.windowMinutes} minutes; all eligible enabled bots, including bots explicitly set to On, use that window after a successful turn. Each ping spends a few tokens; per-bot on/off choices stay unchanged` };
+      },
+      write: config((change: KeepWarmChange) => ({ cacheKeepWarm: { ...cacheKeepWarmSettings(cfg()), ...change } })),
+    }),
+    writable({
+      id: "threads.eventLogMaxBytes", label: "Thread log size limit", help: "Limit each thread's event and native logs; threads and transcripts stay. Clearing the limit cannot restore trimmed entries.", where: "Settings → Data",
+      synonyms: ["log size", "storage", "event log", "cleanup"], tier: "confirm",
+      value: z.number().int().min(MIN_THREAD_EVENT_LOG_BYTES).max(MAX_THREAD_EVENT_LOG_BYTES).nullable(),
+      allowed: `${MIN_THREAD_EVENT_LOG_BYTES} to ${MAX_THREAD_EVENT_LOG_BYTES} bytes, or null for no limit`,
+      current: () => threadEventLogMaxBytes(cfg()), read: () => logCapText(threadEventLogMaxBytes(cfg())),
+      describe: (bytes: number | null) => ({ change: `Change each thread's event-log limit from ${logCapText(threadEventLogMaxBytes(cfg()))} to ${logCapText(bytes)}; ${bytes === null
+        ? "future writes stop trimming logs, but previously trimmed entries cannot be restored"
+        : "future writes may permanently trim older event and native log entries; threads and transcripts stay"}` }),
+      write: config((eventLogMaxBytes: number | null) => ({ threads: { eventLogMaxBytes } })),
+    }),
+    writable({
+      id: "appearance.showThreads", label: "Threads in the sidebar", help: "Show each bot's conversations beneath it in the sidebar when Advanced mode is on; Simple mode keeps them hidden without changing this choice.", where: "Settings → Appearance",
+      synonyms: ["show threads", "sidebar threads", "conversations", "thread list"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("appearance.showThreads"),
+      read: () => { const choice = deps.window.read("appearance.showThreads"); return typeof choice === "boolean" ? display(choice) : "unavailable until mymausbot is open on this computer"; },
+      describe: (shown: boolean) => {
+        const choice = deps.window.read("appearance.showThreads");
+        if (typeof choice !== "boolean") return { refusal: "Open mymausbot on this computer before changing sidebar threads." };
+        if (choice === shown) return { refusal: `Sidebar threads are already ${shown ? "shown" : "hidden"} when Advanced mode is on.` };
+        return { change: `${shown ? "Show" : "Hide"} each bot's conversations in the sidebar when Advanced mode is on; currently ${choice ? "shown" : "hidden"}` };
+      },
+      write: async (shown: boolean) => deps.window.write("appearance.showThreads", shown),
+    }),
+    writable({
+      id: "appearance.userBubbles", label: "Coloured messages", help: `In Simple and Advanced, on uses each bot's colour for your messages; off uses normal theme bubbles. ${rawBubbleNote}.`, where: "Settings → Appearance",
+      synonyms: ["message color", "message colour", "my messages", "user bubbles"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("appearance.userBubbles"),
+      read: () => { const choice = deps.window.read("appearance.userBubbles"); return typeof choice === "boolean" ? `saved ${choice ? "on" : "off"} for Simple and Advanced; ${rawBubbleNote}` : "unavailable until mymausbot is open on this computer"; },
+      describe: (coloured: boolean) => {
+        const choice = deps.window.read("appearance.userBubbles");
+        if (typeof choice !== "boolean") return { refusal: "Open mymausbot on this computer before changing message colours." };
+        if (choice === coloured) return { refusal: `The saved Simple/Advanced colour choice is already ${coloured ? "on" : "off"}; ${rawBubbleNote}.` };
+        return { change: `Save ${coloured ? "bot-coloured" : "normal theme"} message bubbles for Simple and Advanced; ${rawBubbleNote}; currently saved ${choice ? "on" : "off"}` };
+      },
+      write: async (coloured: boolean) => deps.window.write("appearance.userBubbles", coloured),
+    }),
+    writable({
+      id: "general.notificationFeed", label: "Notification feed", help: "Keep a feed of bot updates in the notifications panel on this device. Remote clients do not display the feed.", where: "Settings → General",
+      synonyms: ["notification feed", "updates feed", "notification history", "inbox"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("general.notificationFeed"),
+      read: () => { const choice = deps.window.read("general.notificationFeed"); return typeof choice === "boolean" ? display(choice) : "unavailable until mymausbot is open on this computer"; },
+      describe: (enabled: boolean) => {
+        const choice = deps.window.read("general.notificationFeed");
+        if (typeof choice !== "boolean") return { refusal: "Open mymausbot on this computer before changing the notification feed." };
+        if (choice === enabled) return { refusal: `The notification feed is already ${enabled ? "on" : "off"}.` };
+        return { change: `${enabled ? "Keep a feed of bot updates" : "Turn off the feed of bot updates"}; currently ${choice ? "on" : "off"}` };
+      },
+      write: async (enabled: boolean) => deps.window.write("general.notificationFeed", enabled),
+    }),
+    writable({
+      id: "appearance.toolsLayout", label: "Sidebar tools layout", help: "Choose rows or toolbar icons for sidebar tools in Advanced mode with the sidebar expanded. Simple, Raw, and icon-only keep their own layout.", where: "Settings → Appearance",
+      synonyms: ["tools layout", "toolbar", "sidebar tools", "tool rows"], tier: "confirm", value: z.enum(["rows", "toolbar"]), allowed: "rows or toolbar",
+      current: () => deps.window.read("appearance.toolsLayout"),
+      read: () => { const layout = deps.window.read("appearance.toolsLayout"); return layout === "rows" || layout === "toolbar" ? `saved ${layout}; applies in Advanced with expanded sidebar; Simple, Raw, and icon-only keep their own layout` : "unavailable until mymausbot is open on this computer"; },
+      describe: (layout: "rows" | "toolbar") => {
+        const current = deps.window.read("appearance.toolsLayout");
+        if (current !== "rows" && current !== "toolbar") return { refusal: "Open mymausbot on this computer before changing sidebar tools layout." };
+        if (current === layout) return { refusal: `The saved Advanced sidebar tools layout is already ${layout}; Simple, Raw, and icon-only keep their own layout.` };
+        return { change: `Save ${layout === "toolbar" ? "toolbar icons" : "rows"} for sidebar tools in Advanced with expanded sidebar; currently saved ${current}; Simple, Raw, and icon-only keep their own layout` };
+      },
+      write: async (layout: "rows" | "toolbar") => deps.window.write("appearance.toolsLayout", layout),
+    }),
+    writable({
+      id: "appearance.pinnedCircles", label: "Pinned bots as circles", help: "Show pinned bots as a circle grid where their roster appears in an expanded sidebar. Icons-only layout and Simple desktop tiles keep their own presentation; with no pinned bots there is no visible change.", where: "Settings → Appearance",
+      synonyms: ["pinned circles", "pinned bots", "circle grid", "pins"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("appearance.pinnedCircles"),
+      read: () => { const enabled = deps.window.read("appearance.pinnedCircles"); return typeof enabled === "boolean" ? `saved ${enabled ? "on" : "off"}; pinned bots use ${enabled ? "a circle grid" : "rows"} where their roster appears in an expanded sidebar; icons-only and Simple desktop tiles keep their own presentation` : "unavailable until mymausbot is open on this computer"; },
+      describe: (enabled: boolean) => {
+        const current = deps.window.read("appearance.pinnedCircles");
+        if (typeof current !== "boolean") return { refusal: "Open mymausbot on this computer before changing pinned bot circles." };
+        if (current === enabled) return { refusal: `Pinned bot circles are already ${enabled ? "on" : "off"}; icons-only and Simple desktop tiles keep their own presentation.` };
+        return { change: `Show pinned bots as ${enabled ? "a circle grid" : "rows"} where their roster appears in an expanded sidebar; currently saved ${current ? "on" : "off"}; icons-only and Simple desktop tiles keep their own presentation` };
+      },
+      write: async (enabled: boolean) => deps.window.write("appearance.pinnedCircles", enabled),
+    }),
+    writable({
+      id: "appearance.universalPins", label: "Universal pins", help: "Keep visible, already-pinned bots from every group, including a pinned main Chief, in a top sidebar roster above the scrolling list. This changes neither who is pinned nor who can see a bot; Simple desktop tiles keep their own layout.", where: "Settings → Appearance",
+      synonyms: ["universal pins", "pins everywhere", "pinned bots", "top sidebar"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("appearance.universalPins"),
+      read: () => { const enabled = deps.window.read("appearance.universalPins"); return typeof enabled === "boolean" ? `saved ${enabled ? "on" : "off"}; ${enabled ? "visible pinned bots from every group use the fixed top roster" : "pinned bots use their normal sidebar placement"}; no bot's pin or visibility changes, and Simple desktop tiles keep their own layout` : "unavailable until mymausbot is open on this computer"; },
+      describe: (enabled: boolean) => {
+        const current = deps.window.read("appearance.universalPins");
+        if (typeof current !== "boolean") return { refusal: "Open mymausbot on this computer before changing universal pins." };
+        if (current === enabled) return { refusal: `Universal pins are already ${enabled ? "on" : "off"}; no bot's pin or visibility changes, and Simple desktop tiles keep their own layout.` };
+        return { change: `${enabled ? "Keep visible pinned bots from every group, including a pinned main Chief, in the fixed top sidebar roster" : "Use the normal sidebar placement for pinned bots"}; currently saved ${current ? "on" : "off"}; no bot's pin or visibility changes, and Simple desktop tiles keep their own layout` };
+      },
+      write: async (enabled: boolean) => deps.window.write("appearance.universalPins", enabled),
+    }),
+    writable({
+      id: "general.followUp", label: "Follow-up while a bot works", help: "On this device, choose whether a typed follow-up steers a bot's running turn or queues behind it. A turn that cannot be steered always queues; the alternate send key can choose the other action when steering is available.", where: "Settings → General",
+      synonyms: ["follow up", "steer", "queue", "while working"], tier: "confirm", value: WINDOW_PREFS["general.followUp"], allowed: "steer or queue",
+      current: () => deps.window.read("general.followUp"),
+      read: () => { const choice = deps.window.read("general.followUp"); return choice === "steer" || choice === "queue" ? `saved ${choice} on this device; turns that cannot be steered always queue` : "unavailable until mymausbot is open on this computer"; },
+      describe: (choice: "steer" | "queue") => {
+        const current = deps.window.read("general.followUp");
+        if (current !== "steer" && current !== "queue") return { refusal: "Open mymausbot on this computer before changing follow-ups." };
+        if (current === choice) return { refusal: `Follow-ups already ${choice} on this device; turns that cannot be steered still queue.` };
+        return { change: `On this device, ${choice === "steer" ? "steer typed follow-ups into a bot's running turn" : "queue typed follow-ups behind a bot's running turn"}; currently ${current}. Turns that cannot be steered always queue, and the alternate send key can choose the other action when steering is available.` };
+      },
+      write: async (choice: "steer" | "queue") => deps.window.write("general.followUp", choice),
+    }),
     writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
@@ -274,6 +450,41 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
         const bot = deps.bots().find((candidate) => candidate.id === value.botId);
         return deps.archiveBot(value.botId, value.archived, value.archived && Boolean(bot?.chiefOfStaff));
       },
+    }),
+    writable({
+      id: "bots.shareLearnedSkills", label: "Share learned skills", help: "Off disables learned-skill sharing; Ask uses a review receipt; Automatic shares with eligible bots in the same department under visibility checks. Available when the skills library and bot skill authoring are on.", where: "Settings → You and your bots",
+      synonyms: ["share skills", "skills library", "learned skills"], tier: "confirm", value: z.enum(["off", "ask", "auto"]), allowed: "off, ask or auto",
+      current: () => shareLearnedSkillsMode(cfg()),
+      describe: (mode: ShareLearnedSkillsMode) => {
+        if (!skillsLibraryEnabled(cfg())) return { refusal: "Turn on the skills library in Settings first." };
+        if (!skillAuthoringEnabled(cfg())) return { refusal: "Turn on bot skill authoring in Settings first." };
+        const effect = mode === "off" ? "Turn off learned-skill sharing" : mode === "ask" ? "Ask before sharing learned skills" : "Automatically share learned skills with eligible bots in the same department under visibility checks";
+        return { change: `${effect}; currently ${shareLearnedSkillsMode(cfg())}` };
+      },
+      write: config((shareLearnedSkills: ShareLearnedSkillsMode) => ({ features: { shareLearnedSkills } })),
+    }),
+    writable({
+      id: "bots.skillReview", label: "Skill review", help: `On supported engines, review long conversations after ${DEFAULT_SKILL_REVIEW_STEPS} tool steps by default and possibly create or update learned skills. Bot skill authoring must be on to enable it.`, where: "Settings → You and your bots",
+      synonyms: ["skill review", "learned skills", "background review"], tier: "confirm", value: skillReviewChange,
+      allowed: `{"enabled":true|false,"steps"?:${MIN_SKILL_REVIEW_STEPS}-${MAX_SKILL_REVIEW_STEPS}}`,
+      current: reviewState, read: () => display(reviewState()),
+      describe: ({ enabled, steps }: SkillReviewChange) => {
+        if (enabled && !skillAuthoringEnabled(cfg())) return { refusal: "Turn on bot skill authoring in Settings before enabling skill review." };
+        const change = enabled
+          ? `Run background skill review after ${steps ?? skillReviewSteps(cfg())} tool steps on supported engines; it may create or update learned skills`
+          : `Stop background skill review${steps === undefined ? "" : ` and set ${steps} tool steps as the next threshold`}`;
+        return { change: `${change}; currently ${display(reviewState())}` };
+      },
+      write: config(({ enabled, steps }: SkillReviewChange) => ({ features: { skillReview: enabled, ...(steps === undefined ? {} : { skillReviewSteps: steps }) } })),
+    }),
+    writable({
+      id: "desktops.savedSteps", label: "Saved steps", help: "On a supported Mac, bots can save eligible computer tasks and repeat them without asking AI again. Turning this off stops saving and replay; existing saved steps stay stored.", where: "Settings → Desktops & browser",
+      synonyms: ["saved steps", "repeat computer tasks", "without ai"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: savedStepsState, read: () => display(savedStepsState()),
+      describe: (enabled: boolean) => enabled && !deps.savedStepsHere()
+        ? { refusal: "Saved steps cannot run on this computer. Use Settings on a supported Mac to turn them on." }
+        : { change: `${enabled ? "Let bots save and repeat eligible computer tasks without asking AI again" : "Stop saving and replaying computer steps; existing saved steps stay stored"}; currently ${display(savedStepsState())}` },
+      write: config((savedSteps: boolean) => ({ features: { savedSteps } })),
     }),
     provider("providers.anthropic.url", "Anthropic address", ["anthropic", "claude"], () => cfg().anthropic?.url, (text) => ({ anthropic: { url: text } })),
     provider("providers.xai.url", "xAI address", ["xai", "grok"], () => cfg().xai?.url, (text) => ({ xai: { url: text } })),
@@ -389,11 +600,13 @@ export function routeBackedRegistry(deps: {
   providers: Pick<ProviderRegistry, "instances" | "lastSnapshot">;
   credentials(): CredentialConfig;
   window: RegistryDeps["window"];
+  savedStepsHere(): boolean;
 }): SettingEntry[] {
   const auth: RequestAuth = { kind: "loopback", scopes: ["admin", "client"] };
   const refusal = async (reply: Promise<RouteReply>) => { const { status, body } = await reply; return status < 300 ? null : String(body.error ?? `HTTP ${status}`); };
   return createSettingsRegistry({
     cfg: deps.cfg, bots: () => deps.store.bots, sections: () => deps.store.sections, credentials: deps.credentials, window: deps.window,
+    savedStepsHere: deps.savedStepsHere,
     saveConfig: (patch) => refusal(callRoute(deps.routes.config, { method: "PUT", path: "/api/config", body: patch, auth })),
     reorderBots: (botIds) => refusal(callRoute(deps.routes.botOrder, { method: "PUT", path: "/api/bots/order", body: { botIds }, auth })),
     pinBot: (botId, pinned) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { pinned }, auth })),

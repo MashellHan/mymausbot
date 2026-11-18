@@ -155,10 +155,11 @@ function newerThan(report, state) {
   return report.runId > id || report.runId === id && report.attempt > attempt;
 }
 
-function findingBody(finding, report, state, previous = "") {
-  const area = state.area;
+function findingBody(finding, report, state, scopeBasis, previous = "") {
   const text = [marker(finding.key), "<!-- mausbot-qa:start -->", `<!-- mausbot-qa-state ${JSON.stringify(state)} -->`,
-    `Contract: ${sanitize(finding.contract)}`, `Classification: ${finding.kind}; scope: ${area}; platform: ${sanitize(finding.platform)}`,
+    `Contract: ${sanitize(finding.contract)}`, `Classification: ${finding.kind}; platform: ${sanitize(finding.platform)}`,
+    `Automated scope: ${state.area} (${scopeBasis}).`,
+    state.area === "global" ? "Lead: verify affected callers. Retain global while impact is unknown; record the decision and supporting evidence outside this block." : "",
     `Tested revision: \`${report.sha}\`; last green revision: ${report.lastGreenSha ?? "not yet recorded"}`,
     `Run: ${report.url}`, `First seen: ${state.firstSeen}; last seen: ${state.lastSeen}; occurrences: ${state.count}`,
     `Retries: ${finding.retries}; retry passes remain findings.`,
@@ -201,14 +202,18 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       });
       continue;
     }
-    const area = finding.cases ? "global" : policy.areas.find((entry) => entry.tests.includes(finding.file))?.id ?? "global";
+    const mapped = policy.areas.find((entry) => entry.tests.includes(finding.file));
+    const area = finding.cases ? "global" : mapped?.id ?? "global";
+    const scopeBasis = finding.cases ? "grouped-case policy"
+      : mapped ? "test listed in check-policy.json"
+      : "conservative fallback: no test-to-area mapping in check-policy.json";
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
       triageEpoch: !issue || recurrence ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
       lastExecution: runKey, lastExecutionAt: report.finishedAt,
       ...(finding.cases ? { textChange: finding.textChange, verified: false,
         caseKeys: [...new Set([...(previous?.caseKeys ?? []), ...(groups.find((group) => group.parent === issue)?.keys ?? []), ...finding.cases.map((entry) => entry.key)])] } : {}),
       ...(finding.jobs?.length ? { verificationJobs: [...new Set([...(previous?.verificationJobs ?? []), ...finding.jobs])] } : {}) };
-    const body = findingBody(finding, report, state, issue?.body);
+    const body = findingBody(finding, report, state, scopeBasis, issue?.body);
     const defaults = ["qa", "qa:untriaged", `qa:kind:${finding.kind}`, `qa:scope:${area}`, "owner:lead"];
     if (issue) {
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified");
