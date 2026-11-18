@@ -108,6 +108,30 @@ afterEach(async () => {
 });
 
 describe("local Usage panel", () => {
+  it("shows all-branch observations independently of default-branch contributions", async () => {
+    const snapshot = { ...structuredClone(sample), contributions: primaryUsageFixture() };
+    const today = snapshot.windows!["1"];
+    today.commits = 36;
+    const branchValues = () => [...host.querySelectorAll("[data-usage-branch-commits] dd")].map(node => node.textContent);
+    const mainValue = () => [...host.querySelector("section")!.querySelectorAll("dt")]
+      .find(node => node.textContent === "Default-branch commits")?.nextElementSibling?.firstElementChild?.textContent;
+    await renderRaw(snapshot);
+    expect(branchValues()).toEqual(["36Partial", "12Partial", "58Partial"]);
+    expect(mainValue()).toBe(String(snapshot.contributions.windows!["1"].commits));
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-usage-branch-commits] button")!.click());
+    expect(infoText()).toContain("counted once per SHA");
+    expect(infoText()).toContain("16:30 Beijing time");
+
+    today.commits = 0;
+    await renderRaw({ ...snapshot, status: "stale" });
+    expect(branchValues()[0]).toBe("0Stale");
+    await renderRaw({ ...rolled(1), contributions: snapshot.contributions });
+    expect(branchValues()).toEqual(["Unavailable", "Unavailable", "Unavailable"]);
+    await renderRaw({ ...snapshot, windows: null });
+    expect(branchValues()[0]).toBe("Unavailable");
+    expect(mainValue()).toBe(String(snapshot.contributions.windows!["1"].commits));
+  });
+
   it("shares the extended range across charts, keeps daily details and restores daily bars", async () => {
     const history = Array.from({ length: 184 }, (_, index) => ({ ...trend[0]!, day: shiftDay("2026-11-03", index - 183) }));
     Object.assign(history.find((day) => day.day === "2026-09-20")!, { tokenStatus: "partial", newTokens: 0, cacheRead: 0, totalTokens: 0 });
@@ -539,12 +563,12 @@ describe("local Usage panel", () => {
       coverage: "unavailable", tokenCoverage: "unavailable", prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, totalTokens: null,
     }) } });
     const first = host.querySelector<HTMLElement>("section")!;
-    expect([...first.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["Unavailable", "Unavailable", "Unavailable"]);
+    expect([...first.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["Unavailable", "Unavailable", "Unavailable", "Unavailable"]);
 
     await render({ ...sample, status: "ready", windows: { ...sample.windows!, "1": window(1, "2026-11-03", "2026-11-03", {
       coverage: "ready", tokenCoverage: "ready", prs: 0, knownPrs: 0, commits: 0, newTokens: 0, cacheRead: 0, totalTokens: 0,
     }) } });
-    expect([...host.querySelector<HTMLElement>("section")!.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["0", "0", "0"]);
+    expect([...host.querySelector<HTMLElement>("section")!.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["0", "0", "0", "0"]);
   });
 
   it("refreshes the local summary every five seconds and keeps the last good response on failure", async () => {
@@ -647,7 +671,9 @@ describe("local Usage panel", () => {
     expect(host.querySelectorAll('[data-usage-trend="prs"] [data-usage-day]')).toHaveLength(30);
     expect(host.querySelector('[data-usage-trend="prs"] [data-usage-day]')?.getAttribute("aria-label")).toContain("Unavailable");
     expect(host.querySelector('[data-usage-repositories]')).toBeNull();
-    expect(text()).not.toContain("900,000");
+    expect([...host.querySelectorAll("[data-usage-branch-commits] dd > :first-child")].map(node => node.textContent))
+      .toEqual(["900,000", "900,000", "900,000"]);
+    expect(text().match(/900,000/g)).toHaveLength(3);
     expect(text()).not.toContain("legacy/large-count");
     expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
   });

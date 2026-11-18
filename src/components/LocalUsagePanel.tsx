@@ -40,7 +40,29 @@ function tokenComparisonUnavailableHint(window: UsageWindow) {
   return t("computer.usage.tokenCollectionIncomplete");
 }
 
-function WindowCard({ window }: { window: UsageWindow }) {
+function BranchCommits({ window, snapshot }: { window: UsageWindow; snapshot: LocalUsageResponse }) {
+  const local = snapshot.windows?.[window.days];
+  const matched = local?.startDay === window.startDay && local.endDay === window.endDay
+    && local.coverage !== "unavailable" && snapshot.status !== "unavailable" ? local : null;
+  const value = matched?.commits ?? null;
+  const sources = snapshot.sourceCoverage;
+  const partial = !sources || sources.total === 0 || sources.ready !== sources.total || !!matched?.missingDays.length;
+  const status = snapshot.status === "stale" ? "stale" : partial ? "partial" : null;
+  return <dl className="mt-2 flex flex-wrap items-center gap-x-1.5 border-t border-hairline/40 pt-1.5 text-[13px]" data-usage-branch-commits>
+    <dt className="flex items-center gap-1 text-ink-secondary">{t("computer.usage.branchCommits")}
+      <InfoHint label={t("computer.usage.branchCommits")}>
+        <p>{t("computer.usage.branchCommitScope")}</p>
+        {matched && <p>{t("computer.usage.latestUpdate", { time: asOfTime(matched.asOf) })}</p>}
+      </InfoHint>
+    </dt>
+    <dd className="ml-auto flex flex-wrap items-baseline gap-1.5 tabular-nums">
+      <span className="font-semibold text-ink">{metricText(value)}</span>
+      {value !== null && status && <span className="text-ink-secondary">{t(`computer.usage.primaryApi.${status}`)}</span>}
+    </dd>
+  </dl>;
+}
+
+function WindowCard({ window, snapshot }: { window: UsageWindow; snapshot: LocalUsageResponse }) {
   const usageMetricHint = useUsageMetricHint();
   const rows = [
     ["prs", countText(window.prs, window.knownPrs), window.comparison.prs ?? window.comparison.known?.prs ?? null],
@@ -65,7 +87,7 @@ function WindowCard({ window }: { window: UsageWindow }) {
       <dl className="mt-2 grid grid-cols-3 gap-2">
         {rows.map(([metric, value, comparison]) => (
           <div key={metric} className="min-w-0">
-            <dt title={usageMetricHint(metric)} className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
+            <dt title={usageMetricHint(metric)} className="text-[13px] text-ink-secondary">{t(metric === "commits" ? "computer.usage.defaultBranchCommits" : `computer.usage.metric.${metric}`)}</dt>
             <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
               <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
               <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric}
@@ -95,6 +117,7 @@ function WindowCard({ window }: { window: UsageWindow }) {
           );
         })}
       </div>
+      <BranchCommits window={window} snapshot={snapshot} />
     </section>
   );
 }
@@ -265,9 +288,9 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
       </header>
       {snapshot === null ? <p role="status" className="text-[14px] text-ink-secondary">{t("computer.usage.loading")}</p> : null}
       {view?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
-      {windows && <>
+      {snapshot && windows && <>
         <div className="grid grid-cols-1 gap-2 @min-[42rem]/usage:grid-cols-3">
-          {(["1", "7", "30"] as const).map((key) => <WindowCard key={key} window={windows[key]} />)}
+          {(["1", "7", "30"] as const).map((key) => <WindowCard key={key} window={windows[key]} snapshot={snapshot} />)}
         </div>
         <section className="mt-4">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">

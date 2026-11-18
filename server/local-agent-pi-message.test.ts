@@ -79,6 +79,65 @@ describe("verified Pi visible assistant preview", () => {
     ]);
   });
 
+  it("uses current-branch Pi runtime model and thinking changes without inventing a context ceiling", async () => {
+    const change = (type: string, id: string, parentId: string | null, fields: object) =>
+      ({ type, id, parentId, timestamp: "2026-11-17T01:00:00.000Z", ...fields });
+    const oldModel = change("model_change", "11111111", null, { provider: "raven", modelId: "old-model" });
+    const oldEffort = change("thinking_level_change", "22222222", "11111111", { thinkingLevel: "low" });
+    const abandoned = change("model_change", "33333333", "22222222", { provider: "raven", modelId: "abandoned-model" });
+    const selected = change("model_change", "44444444", "22222222", {
+      provider: "raven", modelId: "selected-model", contextWindow: 1_000_000,
+    });
+    const runtime = entry("55555555", "44444444", { role: "assistant", provider: "raven", model: "runtime-model",
+      thinkingLevel: "max", usage: { input: 123 }, content: [{ type: "text", text: "Current response" }] });
+    const data = await fixture([oldModel, oldEffort, abandoned, selected, runtime]);
+    expect((await data.reader([data.agent()])).get("w6:p1")).toMatchObject({
+      model: "runtime-model", reasoningEffort: "max", contextWindow: null, preview: "Current response",
+    });
+    let roster = [data.agent()];
+    let now = 1000;
+    const teams = createLocalAgentTeamsProvider({ home: data.home, codexHome: join(data.home, ".codex"), now: () => now,
+      run: async (args) => args.at(-2) === "workspace"
+        ? JSON.stringify({ result: { workspaces: [{ workspace_id: "w6", label: "Fixture" }] } })
+        : JSON.stringify({ result: { agents: roster } }) });
+    expect((await teams.get()).teams[0]!.agents[0]).toMatchObject({
+      model: "runtime-model", reasoningEffort: "max", contextWindow: null,
+    });
+    await data.save([oldModel, oldEffort, abandoned]);
+    now += 2000;
+    expect((await teams.get()).teams[0]!.agents[0]).toMatchObject({
+      model: "abandoned-model", reasoningEffort: "low", contextWindow: null,
+    });
+    await data.save([oldModel, oldEffort, abandoned, selected, runtime,
+      change("model_change", "66666666", "55555555", { provider: "raven", modelId: "new-selection" })]);
+    now += 2000;
+    expect((await teams.get()).teams[0]!.agents[0]).toMatchObject({ model: "new-selection", contextWindow: null });
+    await data.save([assistant("No runtime metadata")]);
+    now += 2000;
+    expect((await teams.get()).teams[0]!.agents[0]).toMatchObject({ model: null, reasoningEffort: null, contextWindow: null });
+    const otherFile = join(data.directory, `2026-11-17T01-01-00-000Z_${OTHER}.jsonl`);
+    await writeFile(otherFile, [data.header(OTHER),
+      change("model_change", "11111111", null, { provider: "raven", modelId: "replacement-model" })].map(line).join(""));
+    roster = [data.agent(otherFile)];
+    now += 2000;
+    expect((await teams.get()).teams[0]!.agents[0]).toMatchObject({
+      model: "replacement-model", reasoningEffort: null, contextWindow: null,
+    });
+  });
+
+  it("clears malformed Pi runtime metadata instead of carrying the previous branch value", async () => {
+    const secret = "ghp_" + "x".repeat(36);
+    const data = await fixture([
+      { type: "model_change", id: "11111111", parentId: null, provider: "raven", modelId: "safe-model" },
+      { type: "thinking_level_change", id: "22222222", parentId: "11111111", thinkingLevel: "high" },
+      { type: "model_change", id: "33333333", parentId: "22222222", provider: "raven", modelId: secret },
+      { type: "thinking_level_change", id: "44444444", parentId: "33333333", thinkingLevel: secret },
+    ]);
+    const view = (await data.reader([data.agent()])).get("w6:p1")!;
+    expect(view).toMatchObject({ model: null, reasoningEffort: null, contextWindow: null });
+    expect(JSON.stringify(view)).not.toContain(secret);
+  });
+
   it("fails closed for mismatched header, escaped path, symlink and duplicate bindings", async () => {
     const data = await fixture();
     expect((await data.reader([data.agent()])).get("w6:p1")?.preview).toBe("Visible Pi progress");
