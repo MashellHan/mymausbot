@@ -82,4 +82,21 @@ describe("bounded tool details", () => {
     expect(redactedAgentToolResult("Bearer abc").text).toBeNull();
     expect(redactedAgentToolResult("x".repeat(20_000))).toEqual({ text: null, clipped: true });
   });
+
+  it("applies the structured private field policy to textual tool details", () => {
+    for (const text of [
+      '{"cookie":"SID=fixture-cookie"}',
+      'Set-Cookie: SID=fixture-cookie',
+      '{"request":{"sessionId":"fixture-session"}}',
+      'Request-Header: fixture-header',
+      '{"base64":"c3ludGhldGlj"}',
+      String.raw`{"coo\u006bie":"fixture-cookie"}`,
+      String.raw`response: {\"base64\":\"c3ludGhldGlj\"}`,
+    ]) {
+      expect(redactedAgentToolResult(text).text).toBeNull();
+      expect(redactedAgentToolArguments({ output: text }).text).toBeNull();
+    }
+    expect(redactedAgentToolResult('{"status":"finished","count":2}').text).toBe('{"status":"finished","count":2}');
+    expect(redactedAgentToolArguments("Inspect fixture status: finished").text).toBe("Inspect fixture status: finished");
+  });
 });

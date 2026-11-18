@@ -5,7 +5,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 
 import type { LocalAgentActivityEvent } from "../shared/local-dashboard.ts";
 import { piVisibleMessageText, redactedAgentText, redactedAgentToolArguments,
-  redactedAgentToolResult } from "./local-agent-visible-message.ts";
+  redactedAgentToolResult, trackAgentToolCalls } from "./local-agent-visible-message.ts";
 
 const SESSION_ID = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
 const SESSION_FILE = new RegExp(`^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z_(${SESSION_ID})\\.jsonl$`, "i");
@@ -78,12 +78,14 @@ function visibleEvents(row: Record<string, unknown>, offset: number, user: strin
   if (message.role === "assistant" && Array.isArray(message.content)) {
     for (const part of message.content) {
       const block = record(part);
-      if (block.type === "toolCall" && typeof block.name === "string" && TOOL_NAME.test(block.name) &&
-          redactedAgentText(block.name).text === block.name &&
-          typeof block.id === "string" && block.id.length > 0 && block.id.length <= 128) {
-        const detail = redactedAgentToolArguments(block.arguments);
-        add("tool-call", detail.text ?? "[Arguments unavailable]", block.name, block.id, detail.clipped);
+      if (block.type !== "toolCall" || typeof block.id !== "string" || !block.id || block.id.length > 128) continue;
+      const name = block.name;
+      if (typeof name !== "string" || !TOOL_NAME.test(name) || redactedAgentText(name).text !== name) {
+        add("tool-call", "[Arguments unavailable]", null, block.id);
+        continue;
       }
+      const detail = redactedAgentToolArguments(block.arguments);
+      add("tool-call", detail.text ?? "[Arguments unavailable]", name, block.id, detail.clipped);
     }
   } else if (message.role === "toolResult" && typeof message.toolCallId === "string" &&
       message.toolCallId.length > 0 && message.toolCallId.length <= 128) {
@@ -141,7 +143,7 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number): PiSession
     id = entry.parent;
   }
   const events: LocalAgentActivityEvent[] = [];
-  const toolNames = new Map<string, string | null>();
+  const toolCalls = trackAgentToolCalls();
   let truncated = start > 0;
   let model: string | null = null;
   let reasoningEffort: string | null = null;
@@ -151,13 +153,11 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number): PiSession
     if (entry.clipped) truncated = true;
     for (const { event, callId, clipped } of entry.events) {
       if (clipped) truncated = true;
-      if (callId && event.kind === "tool-call" && event.tool) {
-        toolNames.set(callId, toolNames.has(callId) ? null : event.tool);
-        if (toolNames.size > MAX_EVENTS) toolNames.delete(toolNames.keys().next().value!);
+      if (callId && event.kind === "tool-call") {
+        toolCalls.record(callId, event.tool);
+        if (!event.tool) continue;
       } else if (callId && event.kind === "tool-result") {
-        event.tool = toolNames.get(callId) ?? null;
-        toolNames.delete(callId);
-        if (!event.tool) event.text = "[Result details unavailable]";
+        toolCalls.associate(callId, event);
       }
       events.push(event);
       if (event.kind === "tool-call" || event.kind === "tool-result") {

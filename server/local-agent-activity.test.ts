@@ -167,6 +167,46 @@ describe("bounded per-agent Codex activity", () => {
     expect(result.events.at(-1)?.text).toBe("message 69");
   });
 
+  it("withholds private fields in paired Codex result text", async () => {
+    const outputs = [
+      '{"cookie":"SID=fixture-cookie"}', 'Set-Cookie: SID=fixture-cookie',
+      '{"sessionId":"fixture-session"}', 'Request-Header: fixture-header',
+      '{"base64":"c3ludGhldGlj"}', "Two matching rows",
+    ];
+    const home = await fixture(outputs.flatMap((output, index) => [
+      row("response_item", { type: "function_call", name: "fixture.read", call_id: `read-${index}`, arguments: '{"count":2}' }),
+      row("response_item", { type: "function_call_output", call_id: `read-${index}`, output }),
+    ]));
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
+    const result = await provider.get(pane);
+    expect(result.events.filter((event) => event.kind === "tool-result").map(({ tool, text }) => [tool, text])).toEqual(
+      outputs.map((output, index) => ["fixture.read", index < outputs.length - 1 ? "[Result details unavailable]" : output]),
+    );
+    expect(JSON.stringify(result)).not.toMatch(/fixture-cookie|fixture-session|fixture-header|c3ludGhldGlj/);
+  });
+
+  it("keeps reused and rejected Codex call IDs ineligible throughout the scan", async () => {
+    const call = (id: string, name = "fixture.read") => row("response_item", {
+      type: "function_call", name, call_id: id, arguments: '{"count":2}',
+    });
+    const output = (id: string, text: string) => row("response_item", { type: "function_call_output", call_id: id, output: text });
+    const home = await fixture([
+      call("older"), ...Array.from({ length: 70 }, (_, index) => call(`filler-${index}`)),
+      call("older"), output("older", "OLD_ID_RESULT"),
+      call("consumed"), output("consumed", "FIRST_RESULT"), call("consumed"), output("consumed", "REUSED_RESULT"),
+      call("rejected"), call("rejected", "ghp_" + "x".repeat(36)), output("rejected", "REJECTED_NAME_RESULT"),
+      call("safe"), output("safe", "Unique paired result"),
+    ]);
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
+    const result = await provider.get(pane);
+    expect(result).toMatchObject({ status: "ready", truncated: true });
+    expect(result.events.filter((event) => event.kind === "tool-result").map(({ tool, text }) => [tool, text])).toEqual([
+      ...Array.from({ length: 4 }, () => [null, "[Result details unavailable]"]),
+      ["fixture.read", "Unique paired result"],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/ghp_|OLD_ID_RESULT|FIRST_RESULT|REUSED_RESULT|REJECTED_NAME_RESULT/);
+  });
+
   it("reads only the bounded tail and ignores an incomplete or oversized record", async () => {
     const home = await fixture([
       row("event_msg", { type: "user_message", message: "PRIVATE_OLD " + "x".repeat(600_000) }),

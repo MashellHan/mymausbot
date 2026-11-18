@@ -308,6 +308,54 @@ describe("verified Pi visible assistant preview", () => {
     expect(JSON.stringify(response)).not.toMatch(/ghp_|HIDDEN_/);
   });
 
+  it("withholds private fields in paired Pi result text", async () => {
+    const outputs = [
+      '{"cookie":"SID=fixture-cookie"}', 'Set-Cookie: SID=fixture-cookie',
+      '{"sessionId":"fixture-session"}', 'Request-Header: fixture-header',
+      '{"base64":"c3ludGhldGlj"}', "Two matching rows",
+    ];
+    const messages = outputs.flatMap((text, index) => [
+      { role: "assistant", content: [{ type: "toolCall", id: `read-${index}`, name: "fixture.read", arguments: { count: 2 } }] },
+      { role: "toolResult", toolCallId: `read-${index}`, content: [{ type: "text", text }] },
+    ]);
+    const id = (index: number) => index.toString(16).padStart(8, "0");
+    const data = await fixture(messages.map((message, index) => entry(id(index), index ? id(index - 1) : null, message)));
+    const activity = createLocalAgentActivityProvider({ home: data.home,
+      run: async () => JSON.stringify({ result: { agents: [data.agent()] } }) });
+    const result = await activity.get("w6:p1");
+    expect(result.events.filter((event) => event.kind === "tool-result").map(({ tool, text }) => [tool, text])).toEqual(
+      outputs.map((output, index) => ["fixture.read", index < outputs.length - 1 ? "[Result details unavailable]" : output]),
+    );
+    expect(JSON.stringify(result)).not.toMatch(/fixture-cookie|fixture-session|fixture-header|c3ludGhldGlj/);
+  });
+
+  it("keeps reused and rejected Pi call IDs ineligible throughout the selected branch", async () => {
+    const call = (id: string, name = "fixture.read") => ({
+      role: "assistant", content: [{ type: "toolCall", id, name, arguments: { count: 2 } }],
+    });
+    const output = (toolCallId: string, text: string) => ({
+      role: "toolResult", toolCallId, content: [{ type: "text", text }],
+    });
+    const messages = [
+      call("older"), ...Array.from({ length: 70 }, (_, index) => call(`filler-${index}`)),
+      call("older"), output("older", "OLD_ID_RESULT"),
+      call("consumed"), output("consumed", "FIRST_RESULT"), call("consumed"), output("consumed", "REUSED_RESULT"),
+      call("rejected"), call("rejected", "ghp_" + "x".repeat(36)), output("rejected", "REJECTED_NAME_RESULT"),
+      call("safe"), output("safe", "Unique paired result"),
+    ];
+    const id = (index: number) => index.toString(16).padStart(8, "0");
+    const data = await fixture(messages.map((message, index) => entry(id(index), index ? id(index - 1) : null, message)));
+    const activity = createLocalAgentActivityProvider({ home: data.home,
+      run: async () => JSON.stringify({ result: { agents: [data.agent()] } }) });
+    const result = await activity.get("w6:p1");
+    expect(result).toMatchObject({ status: "ready", truncated: true });
+    expect(result.events.filter((event) => event.kind === "tool-result").map(({ tool, text }) => [tool, text])).toEqual([
+      ...Array.from({ length: 4 }, () => [null, "[Result details unavailable]"]),
+      ["fixture.read", "Unique paired result"],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/ghp_|OLD_ID_RESULT|FIRST_RESULT|REUSED_RESULT|REJECTED_NAME_RESULT/);
+  });
+
   it("revalidates header cwd on a warm same-file cache hit when Pi path encoding collides", async () => {
     const data = await fixture([assistant("First occupant text")], "workspace/a/b");
     const collidingCwd = join(data.home, "workspace/a-b");

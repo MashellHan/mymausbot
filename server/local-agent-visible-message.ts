@@ -1,3 +1,4 @@
+import type { LocalAgentActivityEvent } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
 import { escapeNotes } from "./peer-provenance.ts";
 
@@ -5,11 +6,12 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 const VISIBLE_PHASES = new Set(["commentary", "final_answer", "final"]);
 const INTERNAL_ENVELOPE = /<\/?(?:SYSTEM_(?:MESSAGE|NOTIFICATION)|(?:teammate|agent|task|coordinator)[_-](?:message|notification|envelope)|system[_-]reminder)\b/i;
 const TOOL_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
-const PRIVATE_TOOL_KEY = /(?:auth|base64|binary|body|cookie|credential|data|env|header|image|key|password|private|secret|session|token)/i;
-const PRIVATE_TOOL_ASSIGNMENT = /\b(?:api[_-]?key|secret|token|password|passwd|authorization|access[_-]?key|private[_-]?key)["']?\s*[:=]\s*\S+/i;
+const PRIVATE_TOOL_KEY = /(?:auth|base64|binary|body|cookie|credential|data|env|header|image|key|passwd|password|private|secret|session|token)|^sid$/i;
+const TOOL_ASSIGNMENT = /"([^"\n]{1,128})"\s*[:=]|\b([A-Za-z][A-Za-z0-9_.-]*(?:[ \t]+(?:id|key|token|data|value))?)['"]?\s*[:=]/gi;
 const ENCODED_TOOL_TEXT = /data:[^\s,]{0,100};base64,|[A-Za-z0-9+/_-]{64,}={0,2}/i;
 const MAX_TOOL_SOURCE = 16 * 1024;
 const MAX_TOOL_FIELDS = 8;
+const TOOL_RESULT_UNAVAILABLE = "[Result details unavailable]";
 
 export function redactedAgentText(value: unknown, limit = 600): { text: string | null; clipped: boolean } {
   if (typeof value !== "string") return { text: null, clipped: false };
@@ -26,13 +28,44 @@ export function redactedAgentText(value: unknown, limit = 600): { text: string |
 function safeToolText(value: unknown): { text: string | null; clipped: boolean } {
   if (typeof value !== "string") return { text: null, clipped: false };
   if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
-  if (PRIVATE_TOOL_ASSIGNMENT.test(value) || /\bBearer\s+\S+/i.test(value)) return { text: null, clipped: false };
   if (ENCODED_TOOL_TEXT.test(value)) return { text: null, clipped: true };
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index);
     if (code < 9 || (code > 13 && code < 32)) return { text: null, clipped: true };
   }
+  const labels = value.replace(/\\u([\da-f]{4})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/\\+(?=["'])/g, "");
+  for (const [, quoted, bare] of labels.matchAll(TOOL_ASSIGNMENT)) {
+    if (PRIVATE_TOOL_KEY.test(quoted ?? bare ?? "")) return { text: null, clipped: false };
+  }
+  if (/\bBearer\s+\S+/i.test(labels)) return { text: null, clipped: false };
   return redactedAgentText(value);
+}
+
+export function trackAgentToolCalls() {
+  // Keep IDs for the entire bounded scan so a consumed or rejected ID cannot be registered again.
+  const calls = new Map<string, { tool: string | null; result?: LocalAgentActivityEvent }>();
+  const hide = (event: LocalAgentActivityEvent) => {
+    event.tool = null;
+    event.text = TOOL_RESULT_UNAVAILABLE;
+  };
+  return {
+    record(id: string, tool: string | null) {
+      const previous = calls.get(id);
+      if (previous?.result) hide(previous.result);
+      calls.set(id, { tool: previous ? null : tool });
+    },
+    associate(id: string, result: LocalAgentActivityEvent) {
+      const call = calls.get(id);
+      if (!call?.tool || call.result) {
+        hide(result);
+        if (!call) calls.set(id, { tool: null });
+        return;
+      }
+      result.tool = call.tool;
+      call.result = result;
+    },
+  };
 }
 
 export function redactedAgentToolArguments(value: unknown): { text: string | null; clipped: boolean } {
