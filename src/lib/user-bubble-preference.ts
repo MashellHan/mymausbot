@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { windowPrefChanged } from "./window-pref-changes";
 
 export const USER_BUBBLE_COLOR_KEY = "omb-color-user-bubbles";
 
@@ -31,6 +32,7 @@ function onStorage(event: StorageEvent) {
   if (event.storageArea && event.storageArea !== storage()) return;
   sessionChoice = undefined;
   notify();
+  windowPrefChanged();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -53,6 +55,7 @@ export function setColorUserBubbles(enabled: boolean): void {
   } catch {
   }
   notify();
+  windowPrefChanged();
 }
 
 export function useColorUserBubbles(): boolean {

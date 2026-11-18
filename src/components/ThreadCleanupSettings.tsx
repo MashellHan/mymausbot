@@ -127,7 +127,7 @@ export function ThreadCleanupSettings() {
   };
 
   const commitCap = () => {
-    if (confirmedCapBytes === null) return;
+    if (confirmedCapBytes === null || capDraft === null) return;
     const bytes = parseCapMib(capValue);
     if (bytes === null) {
       setError(t("settings.threadCleanup.invalidCap"));

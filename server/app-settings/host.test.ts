@@ -23,7 +23,7 @@ afterEach(async () => {
   }
 });
 
-function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; window?: boolean; pinFailureId?: string; chosen?: string[]; engineGate?: Promise<void> } = {}) {
+function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; window?: boolean; savedStepsHere?: boolean; pinFailureId?: string; chosen?: string[]; engineGate?: Promise<void> } = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "app-settings-"));
   dirs.push(dataDir);
   const bots: BotRecord[] = [
@@ -33,6 +33,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const cfg = { language: "en", rooms: { turnTimeoutMinutes: 30 }, mcp: {}, threads: { maxConcurrentPerBot: 3 }, openai: { key: OPENAI_KEY }, anthropic: { url: "https://api.anthropic.com" },
     instances: { "openai-compat-gw": { driver: "openai-compat", displayName: "Gateway", config: { key: GATEWAY_KEY, url: "https://gw.example/v1" } } } } as unknown as AppConfig;
   const saved: Record<string, unknown>[] = [];
+  const savedStepsHere = { value: options.savedStepsHere !== false };
   const pinCalls: Array<{ botId: string; pinned: boolean }> = [];
   const renameCalls: Array<{ botId: string; name: string }> = [];
   const colorCalls: Array<{ botId: string; color: string }> = [];
@@ -42,6 +43,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const chosen = new Set(options.chosen ?? []);
   const messages: Array<Record<string, any>> = [];
   const windowValues = new Map<string, unknown>(options.window === false ? [] : [["appearance.skin", "daylight"]]);
+  const windowWrites: Array<{ id: string; value: unknown }> = [];
   const store = {
     appendMessage: (threadId: string, message: Record<string, unknown>) => {
       const row = { ...message, id: `m${messages.length + 1}`, threadId };
@@ -65,9 +67,12 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     saveConfig: async (patch) => {
       if (patch.anthropic && typeof patch.anthropic === "object" && (patch.anthropic as { url?: string }).url === "https://refused.example") return "the provider refused it";
       saved.push(patch);
+      const features = patch.features && typeof patch.features === "object" ? { ...cfg.features, ...patch.features } : undefined;
       Object.assign(cfg, patch);
+      if (features) cfg.features = features;
       return null;
     },
+    savedStepsHere: () => savedStepsHere.value,
     bots: () => bots,
     sections: () => ["Sales"],
     reorderBots: async (botIds) => { bots.sort((a, b) => botIds.indexOf(a.id) - botIds.indexOf(b.id)); return null; },
@@ -115,7 +120,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     removeEngine: async (instanceId) => { engineCalls.push({ remove: instanceId }); await options.engineGate; return null; },
     window: {
       read: (id) => windowValues.get(id),
-      write: (id, value) => { if (!windowValues.size) return "Open mymausbot on this computer first."; windowValues.set(id, value); return null; },
+      write: (id, value) => { if (!windowValues.size) return "Open mymausbot on this computer first."; windowWrites.push({ id, value }); windowValues.set(id, value); return null; },
     },
   });
   const notified: unknown[] = [];
@@ -138,7 +143,7 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
     return { claimed, sent: sent as { status: number; body: Record<string, unknown> } | null };
   };
   const cards = () => messages.filter((message) => message.card?.appSettingRequest);
-  return { host, cfg, saved, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
+  return { host, cfg, saved, savedStepsHere, pinCalls, renameCalls, colorCalls, archiveCalls, helperCalls, windowWrites, engineCalls, chosen, messages, cards, credentialCards, notified, windowValues, bots, turn, set, answer, dataDir, entries };
 }
 
 describe("reads", () => {
@@ -149,6 +154,20 @@ describe("reads", () => {
     expect(hits[0]).toMatchObject({ id: "appearance.skin", tier: "safe", value: "daylight", where: "Settings → Appearance" });
     const got = await host.handle({ action: "get", id: "rooms.turnTimeoutMinutes" }, turn);
     expect(JSON.parse(String(got.body.text))).toMatchObject({ id: "rooms.turnTimeoutMinutes", value: "30", allowed: "1 to 1440 minutes", change: "set applies at once, with Undo on the card" });
+  });
+
+  it("reports the effective learned-skill sharing mode and refuses unavailable controls", async () => {
+    const fx = fixture();
+    fx.cfg.features = { shareLearnedSkills: "auto" };
+    const get = async () => JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.shareLearnedSkills" }, fx.turn)).body.text));
+    expect(await get()).toMatchObject({ tier: "confirm", value: "off", allowed: "off, ask or auto" });
+    expect((await fx.set("bots.shareLearnedSkills", "ask")).body.error).toContain("skills library");
+    fx.cfg.features = { skillsLibrary: true };
+    expect(await get()).toMatchObject({ value: "ask" });
+    fx.cfg.features.skillAuthoring = false;
+    expect((await fx.set("bots.shareLearnedSkills", "auto")).body.error).toContain("skill authoring");
+    expect(fx.saved).toEqual([]);
+    expect(fx.cards()).toEqual([]);
   });
 
   it("keeps settings details and writes out of a turn that is not the owner's", async () => {
@@ -324,6 +343,955 @@ describe("safe tier", () => {
 });
 
 describe("confirm tier", () => {
+  it("changes new-bot effort only after an owner's current Change and clears it to the provider default", async () => {
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("bots.newBotEffort", "high")).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+
+    const fx = fixture();
+    fx.cfg.newBots = { effort: "medium" };
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "new bot effort" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("bots.newBotEffort");
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.newBotEffort" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ tier: "confirm", value: "medium", change: expect.stringContaining("Change/Cancel") });
+    expect((await fx.set("bots.newBotEffort", "turbo")).status).toBe(400);
+    expect(fx.cards()).toEqual([]);
+
+    const cancelled = fx.set("bots.newBotEffort", "high");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("medium") } });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("bots.newBotEffort", "high");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.newBots = { effort: "low" };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+
+    const approved = fx.set("bots.newBotEffort", "high");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ newBots: { effort: "high" } }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+
+    const cleared = fx.set("bots.newBotEffort", "null");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    expect(fx.cards()[3]!.card.appSettingRequest.after).toContain("provider default");
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await cleared).status).toBe(200);
+    expect(fx.saved[1]).toEqual({ newBots: { effort: null } });
+    const after = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.newBotEffort" }, fx.turn)).body.text));
+    expect(after.value).toBe("provider default");
+  });
+
+  it("changes the run card only after owner review, refusing an absent window value and a stale card", async () => {
+    const fx = fixture();
+    expect((await fx.set("appearance.runCard", false)).status).toBe(409);
+    expect(fx.cards()).toEqual([]);
+    fx.windowValues.set("appearance.runCard", true);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "run card" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("appearance.runCard");
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.runCard" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ tier: "confirm", value: "shown", change: "set shows the user a Change/Cancel card and waits" });
+    expect((await fx.set("appearance.runCard", "not a boolean")).status).toBe(400);
+
+    const cancelled = fx.set("appearance.runCard", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: "Hide the card that follows each run; currently shown" } });
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.runCard", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.runCard", false);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.runCard", true);
+    const approved = fx.set("appearance.runCard", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.runCard", value: false }]);
+    expect(fx.windowValues.get("appearance.runCard")).toBe(false);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
+  it("changes tool-call visibility only after owner Change and rejects a stale card", async () => {
+    const fx = fixture();
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "show tool calls" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("appearance.toolCalls");
+    const get = () => fx.host.handle({ action: "get", id: "appearance.toolCalls" }, fx.turn);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ tier: "confirm", value: "hidden", change: "set shows the user a Change/Cancel card and waits" });
+    expect((await fx.set("appearance.toolCalls", "yes")).status).toBe(400);
+
+    const cancelled = fx.set("appearance.toolCalls", "true");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: "Show tool calls in conversations; currently hidden" } });
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("appearance.toolCalls", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features = { showToolCalls: true };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features = { showToolCalls: false };
+
+    const approved = fx.set("appearance.toolCalls", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { showToolCalls: true } }]);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "shown" });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+
+    const hidden = fx.set("appearance.toolCalls", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fourth.appSettingRequest.after).toBe("Hide tool calls in conversations; currently shown");
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await hidden).status).toBe(200);
+    expect(fx.saved.at(-1)).toEqual({ features: { showToolCalls: false } });
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "hidden" });
+
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("appearance.toolCalls", false)).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+  });
+
+  it("changes skill authoring only after owner Change and rechecks its review effect", async () => {
+    const fx = fixture();
+    fx.cfg.features = { skillReview: true };
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "write skills" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("bots.skillAuthoring");
+    const get = () => fx.host.handle({ action: "get", id: "bots.skillAuthoring" }, fx.turn);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ tier: "confirm", value: "on" });
+    expect((await fx.set("bots.skillAuthoring", "off")).status).toBe(400);
+
+    const cancelled = fx.set("bots.skillAuthoring", "false");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: "Stop bots drafting skills and pause automatic skill review; currently on" } });
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const staleReview = fx.set("bots.skillAuthoring", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features = { skillReview: false };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await staleReview).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features = { skillReview: true };
+
+    const staleToggle = fx.set("bots.skillAuthoring", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.cfg.features = { skillAuthoring: false, skillReview: true };
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await staleToggle).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features = { skillReview: true };
+
+    const approved = fx.set("bots.skillAuthoring", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { skillAuthoring: false } }]);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "off" });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+
+    const resume = fixture();
+    resume.cfg.features = { skillAuthoring: false, skillReview: true };
+    const enabled = resume.set("bots.skillAuthoring", true);
+    await vi.waitFor(() => expect(resume.cards()).toHaveLength(1));
+    const card = resume.cards()[0]!.card;
+    expect(card.appSettingRequest.after).toBe("Let bots draft skills for your review and allow automatic skill review again; currently off");
+    resume.answer(String(card.requestId), "allow");
+    expect((await enabled).status).toBe(200);
+    expect(resume.saved).toEqual([{ features: { skillAuthoring: true } }]);
+
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("bots.skillAuthoring", false)).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+  });
+
+  it("keeps the approved cache window and bot overrides while refusing stale keep-warm cards", async () => {
+    const fx = fixture();
+    const get = () => fx.host.handle({ action: "get", id: "bots.keepWarm" }, fx.turn);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ tier: "confirm", value: '{"enabled":false,"windowMinutes":180}', help: expect.stringContaining("including bots explicitly set to On") });
+    fx.cfg.cacheKeepWarm = { enabled: false, windowMinutes: 120 };
+    fx.bots[1]!.cacheKeepWarm = false;
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "keep warm" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("bots.keepWarm");
+    expect((await fx.set("bots.keepWarm", { enabled: "true" })).status).toBe(400);
+    expect((await fx.set("bots.keepWarm", { enabled: true, windowMinutes: 14 })).status).toBe(400);
+
+    const cancelled = fx.set("bots.keepWarm", { enabled: true });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("place default from off to on and shared window from 120 to 120 minutes") } });
+    expect(first.appSettingRequest.after).toContain("Each ping spends a few tokens");
+    expect(first.appSettingRequest.after).toContain("per-bot on/off choices stay unchanged");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("bots.keepWarm", { enabled: true });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.cacheKeepWarm = { enabled: false, windowMinutes: 360 };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.cacheKeepWarm = { enabled: false, windowMinutes: 120 };
+
+    const approved = fx.set("bots.keepWarm", '{"enabled":true}');
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ cacheKeepWarm: { enabled: true, windowMinutes: 120 } }]);
+    expect(fx.bots[1]!.cacheKeepWarm).toBe(false);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+
+    const disabled = fx.set("bots.keepWarm", { enabled: false, windowMinutes: 60 });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fourth.appSettingRequest.after).toContain("place default from on to off and shared window from 120 to 60 minutes");
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await disabled).status).toBe(200);
+    expect(fx.saved.at(-1)).toEqual({ cacheKeepWarm: { enabled: false, windowMinutes: 60 } });
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: '{"enabled":false,"windowMinutes":60}' });
+
+    fx.bots[1]!.cacheKeepWarm = true;
+    const sharedWindow = fx.set("bots.keepWarm", { enabled: false, windowMinutes: 1440 });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    const fifth = fx.cards()[4]!.card;
+    expect(fifth.appSettingRequest.after).toContain("place default from off to off and shared window from 60 to 1440 minutes");
+    expect(fifth.appSettingRequest.after).toContain("including bots explicitly set to On, use that window after a successful turn");
+    fx.answer(String(fifth.requestId), "allow");
+    expect((await sharedWindow).status).toBe(200);
+    expect(fx.saved.at(-1)).toEqual({ cacheKeepWarm: { enabled: false, windowMinutes: 1440 } });
+    expect(fx.bots[1]!.cacheKeepWarm).toBe(true);
+
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("bots.keepWarm", { enabled: true })).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+  });
+
+  it("changes the event-log cap only after owner review and warns that trimming cannot be undone", async () => {
+    const fx = fixture();
+    const get = () => fx.host.handle({ action: "get", id: "threads.eventLogMaxBytes" }, fx.turn);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "event log size" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("threads.eventLogMaxBytes");
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ tier: "confirm", value: "no limit", allowed: expect.stringContaining("null for no limit") });
+    expect((await fx.set("threads.eventLogMaxBytes", 262_143)).status).toBe(400);
+    expect((await fx.set("threads.eventLogMaxBytes", 4 * 1024 ** 3 + 1)).status).toBe(400);
+    expect((await fx.set("threads.eventLogMaxBytes", "unknown")).status).toBe(400);
+    expect(fx.saved).toEqual([]);
+
+    const cancelled = fx.set("threads.eventLogMaxBytes", 1_048_576);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("no limit to 1048576 bytes") } });
+    expect(first.appSettingRequest.after).toContain("permanently trim older event and native log entries");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("threads.eventLogMaxBytes", 1_048_576);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.threads = { maxConcurrentPerBot: 3, eventLogRetentionDays: 30, eventLogMaxBytes: 2_097_152 };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    delete fx.cfg.threads.eventLogMaxBytes;
+
+    const approved = fx.set("threads.eventLogMaxBytes", 1_048_576);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ threads: { eventLogMaxBytes: 1_048_576 } }]);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "1048576 bytes" });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+
+    const cleared = fx.set("threads.eventLogMaxBytes", null);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fourth.appSettingRequest.after).toContain("previously trimmed entries cannot be restored");
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await cleared).status).toBe(200);
+    expect(fx.saved.at(-1)).toEqual({ threads: { eventLogMaxBytes: null } });
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "no limit" });
+
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("threads.eventLogMaxBytes", 1_048_576)).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+  });
+
+  it("changes learned-skill sharing only after owner review of the live mode", async () => {
+    const fx = fixture();
+    fx.cfg.features = { skillsLibrary: true };
+    expect((await fx.set("bots.shareLearnedSkills", "always")).status).toBe(400);
+    const first = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const cancelled = fx.cards()[0]!.card;
+    expect(cancelled).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", settingId: "bots.shareLearnedSkills" } });
+    expect(cancelled.subtitle).toContain("eligible bots in the same department under visibility checks; currently ask");
+    expect(fx.answer(String(cancelled.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    fx.answer(String(cancelled.requestId), "deny");
+    expect((await first).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features.shareLearnedSkills = "off";
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+
+    const disabled = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.cfg.features.skillsLibrary = false;
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disabled).body.error).toContain("skills library");
+    expect(fx.saved).toEqual([]);
+
+    fx.cfg.features.skillsLibrary = true;
+    const noAuthoring = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    fx.cfg.features.skillAuthoring = false;
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await noAuthoring).body.error).toContain("skill authoring");
+    expect(fx.saved).toEqual([]);
+
+    fx.cfg.features.skillAuthoring = true;
+    const approved = fx.set("bots.shareLearnedSkills", "auto");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    const requestId = String(fx.cards()[4]!.card.requestId);
+    fx.answer(requestId, "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { shareLearnedSkills: "auto" } }]);
+    expect(fx.cfg.features).toMatchObject({ skillsLibrary: true, skillAuthoring: true, shareLearnedSkills: "auto" });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId })).toMatchObject({ state: "invalid" });
+  });
+
+  it("reads effective skill review state and permits owner-approved disabling of a dormant setting", async () => {
+    const fx = fixture();
+    const defaultRead = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.skillReview" }, fx.turn)).body.text));
+    expect(JSON.parse(defaultRead.value)).toEqual({ enabled: false, steps: 10 });
+    fx.cfg.features = { skillAuthoring: false, skillReview: true, skillReviewSteps: 7, showToolCalls: true };
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "skill review" }, fx.turn)).body.text));
+    expect(found).toContainEqual(expect.objectContaining({ id: "bots.skillReview", tier: "confirm" }));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.skillReview" }, fx.turn)).body.text));
+    expect(JSON.parse(got.value)).toEqual({ enabled: false, steps: 7, pausedUntilAuthoringOn: true });
+    expect(got).toMatchObject({ allowed: expect.stringContaining("3-100"), help: expect.stringContaining("create or update learned skills") });
+    for (const value of [{ enabled: "true" }, { enabled: false, steps: 2 }, { enabled: false, steps: 101 }, { enabled: false, steps: 7.5 }, { enabled: false, extra: true }]) {
+      expect((await fx.set("bots.skillReview", value)).status).toBe(400);
+    }
+    expect((await fx.set("bots.skillReview", { enabled: true })).body.error).toContain("Turn on bot skill authoring");
+    expect(fx.saved).toEqual([]);
+    expect(fx.cards()).toEqual([]);
+
+    const disabling = fx.set("bots.skillReview", { enabled: false });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const card = fx.cards()[0]!.card;
+    expect(card).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("pausedUntilAuthoringOn") } });
+    fx.answer(String(card.requestId), "allow");
+    expect((await disabling).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { skillReview: false } }]);
+    expect(fx.cfg.features).toEqual({ skillAuthoring: false, skillReview: false, skillReviewSteps: 7, showToolCalls: true });
+    expect(JSON.parse(JSON.parse(String((await fx.host.handle({ action: "get", id: "bots.skillReview" }, fx.turn)).body.text)).value)).toEqual({ enabled: false, steps: 7 });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(card.requestId) })).toMatchObject({ state: "invalid" });
+    expect((await fixture({ owner: false }).set("bots.skillReview", { enabled: false })).status).toBe(403);
+    expect((await fixture({ guest: true }).set("bots.skillReview", { enabled: false })).status).toBe(403);
+  });
+
+  it("holds skill review changes for owner Change and rejects Cancel or stale approval", async () => {
+    const fx = fixture();
+    fx.cfg.features = { skillAuthoring: true, skillReview: false, skillReviewSteps: 8, showToolCalls: true };
+    const change = { enabled: true, steps: 11 };
+    const cancelled = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first.appSettingRequest).toMatchObject({ tier: "confirm", after: expect.stringContaining("create or update learned skills") });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+
+    const staleThreshold = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features.skillReviewSteps = 9;
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await staleThreshold).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+
+    const staleMode = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.cfg.features.skillReview = true;
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await staleMode).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features.skillReview = false;
+
+    const staleAuthoring = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    fx.cfg.features.skillAuthoring = false;
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await staleAuthoring).body.error).toContain("Turn on bot skill authoring");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features.skillAuthoring = true;
+
+    const approved = fx.set("bots.skillReview", change);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    const card = fx.cards()[4]!.card;
+    expect(fx.answer(String(card.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(card.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { skillReview: true, skillReviewSteps: 11 } }]);
+    expect(fx.cfg.features).toEqual({ skillAuthoring: true, skillReview: true, skillReviewSteps: 11, showToolCalls: true });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(card.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
+  it("changes saved computer steps only after owner Change and keeps other features", async () => {
+    const fx = fixture();
+    fx.cfg.features = { showToolCalls: true };
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "saved steps" }, fx.turn)).body.text));
+    expect(found).toContainEqual(expect.objectContaining({ id: "desktops.savedSteps", tier: "confirm" }));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "desktops.savedSteps" }, fx.turn)).body.text));
+    expect(JSON.parse(got.value)).toEqual({ enabled: true, availableHere: true });
+    expect(got.help).toContain("existing saved steps stay stored");
+    for (const invalid of [1, "maybe", { enabled: false }]) expect((await fx.set("desktops.savedSteps", invalid)).status).toBe(400);
+    expect(fx.cards()).toEqual([]);
+
+    const cancelled = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("existing saved steps stay stored") } });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+
+    const stale = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features.savedSteps = false;
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features.savedSteps = true;
+
+    const approved = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const card = fx.cards()[2]!.card;
+    expect(fx.answer(String(card.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(card.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { savedSteps: false } }]);
+    expect(fx.cfg.features).toEqual({ showToolCalls: true, savedSteps: false });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(card.requestId) })).toMatchObject({ state: "invalid" });
+
+    const enabled = fx.set("desktops.savedSteps", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    fx.answer(String(fx.cards()[3]!.card.requestId), "allow");
+    expect((await enabled).status).toBe(200);
+    expect(fx.saved[1]).toEqual({ features: { savedSteps: true } });
+    for (const blocked of [fixture({ owner: false }), fixture({ guest: true })]) {
+      expect((await blocked.set("desktops.savedSteps", true)).status).toBe(403);
+      expect(blocked.saved).toEqual([]);
+    }
+  });
+
+  it("reports unavailable saved steps and refuses enabling when support disappears", async () => {
+    const fx = fixture({ savedStepsHere: false });
+    fx.cfg.features = { savedSteps: true, showToolCalls: true };
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "desktops.savedSteps" }, fx.turn)).body.text));
+    expect(JSON.parse(got.value)).toEqual({ enabled: false, availableHere: false, savedOn: true });
+    expect((await fx.set("desktops.savedSteps", true)).body.error).toContain("cannot run on this computer");
+    expect(fx.cards()).toEqual([]);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    fx.savedStepsHere.value = true;
+    fx.answer(String(fx.cards()[0]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+
+    fx.savedStepsHere.value = false;
+    const disabling = fx.set("desktops.savedSteps", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await disabling).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { savedSteps: false } }]);
+    expect(fx.cfg.features).toEqual({ savedSteps: false, showToolCalls: true });
+
+    fx.savedStepsHere.value = true;
+    const enabling = fx.set("desktops.savedSteps", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.savedStepsHere.value = false;
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await enabling).body.error).toContain("cannot run on this computer");
+    expect(fx.saved).toHaveLength(1);
+  });
+
+  it("changes the stored sidebar-thread choice only after a live owner's review", async () => {
+    const fx = fixture();
+    fx.windowValues.set("appearance.showThreads", false);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "show threads" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance.showThreads", tier: "confirm", value: "false" })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.showThreads" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ value: "false", help: expect.stringContaining("Advanced mode") });
+    expect((await fx.set("appearance.showThreads", "yes")).status).toBe(400);
+    expect((await fx.set("appearance.showThreads", false)).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("appearance.showThreads", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("Advanced mode") } });
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.showThreads", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.showThreads", true);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.showThreads", false);
+    const disconnected = fx.set("appearance.showThreads", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("appearance.showThreads");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.showThreads", false);
+    const approved = fx.set("appearance.showThreads", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.showThreads", value: true }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("appearance.showThreads", true)).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    expect(closed.windowWrites).toEqual([]);
+    const guest = fixture({ owner: false });
+    guest.windowValues.set("appearance.showThreads", false);
+    expect((await guest.set("appearance.showThreads", true)).status).toBe(403);
+    expect(guest.windowWrites).toEqual([]);
+  });
+
+  it("changes coloured message bubbles only after a live owner's review", async () => {
+    const fx = fixture();
+    fx.windowValues.set("appearance.userBubbles", true);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "message colour" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance.userBubbles", tier: "confirm", value: expect.stringContaining("saved on for Simple and Advanced") })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.userBubbles" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ value: expect.stringContaining("Raw keeps its fixed styling"), help: expect.stringContaining("off uses normal theme bubbles") });
+    expect(got.help).toContain("ordinary bots stay coloured and the main bot stays dark");
+    expect((await fx.set("appearance.userBubbles", "no")).status).toBe(400);
+    const sameOn = await fx.set("appearance.userBubbles", true);
+    expect(sameOn.status).toBe(409);
+    expect(sameOn.body.error).toContain("saved Simple/Advanced colour choice is already on");
+    expect(sameOn.body.error).toContain("Raw keeps its fixed styling");
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("appearance.userBubbles", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("normal theme message bubbles for Simple and Advanced") } });
+    expect(first.appSettingRequest.after).toContain("Raw keeps its fixed styling");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.userBubbles", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.userBubbles", false);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.userBubbles", true);
+    const disconnected = fx.set("appearance.userBubbles", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("appearance.userBubbles");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.userBubbles", true);
+    const approved = fx.set("appearance.userBubbles", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.userBubbles", value: false }]);
+    expect(fx.windowValues.get("appearance.skin")).toBe("daylight");
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+    const sameOff = await fx.set("appearance.userBubbles", false);
+    expect(sameOff.body.error).toContain("saved Simple/Advanced colour choice is already off");
+    expect(sameOff.body.error).toContain("Raw keeps its fixed styling");
+
+    const enable = fx.set("appearance.userBubbles", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    const fifth = fx.cards()[4]!.card;
+    expect(fifth.appSettingRequest.after).toContain("bot-coloured message bubbles for Simple and Advanced");
+    expect(fifth.appSettingRequest.after).toContain("Raw keeps its fixed styling");
+    fx.answer(String(fifth.requestId), "deny");
+    expect((await enable).status).toBe(409);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.userBubbles", value: false }]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("appearance.userBubbles", false)).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    expect(closed.windowWrites).toEqual([]);
+    const guest = fixture({ owner: false });
+    guest.windowValues.set("appearance.userBubbles", true);
+    expect((await guest.set("appearance.userBubbles", false)).status).toBe(403);
+    expect(guest.windowWrites).toEqual([]);
+  });
+
+  it("changes the notification feed only after the owner's live window approval", async () => {
+    const fx = fixture();
+    fx.windowValues.set("general.notificationFeed", false);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "notification feed" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "general.notificationFeed", tier: "confirm", value: "false" })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "general.notificationFeed" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ value: "false", allowed: "true or false" });
+    expect((await fx.set("general.notificationFeed", "maybe")).status).toBe(400);
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("general.notificationFeed", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("currently off") } });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+
+    const stale = fx.set("general.notificationFeed", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("general.notificationFeed", true);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already on");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("general.notificationFeed", false);
+    const disappeared = fx.set("general.notificationFeed", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("general.notificationFeed");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disappeared).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("general.notificationFeed", true)).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const guest = fixture({ owner: false });
+    guest.windowValues.set("general.notificationFeed", false);
+    expect((await guest.set("general.notificationFeed", true)).status).toBe(403);
+    expect(guest.windowWrites).toEqual([]);
+
+    fx.windowValues.set("general.notificationFeed", false);
+    const approved = fx.set("general.notificationFeed", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "general.notificationFeed", value: true }]);
+    expect(fx.windowValues.get("general.notificationFeed")).toBe(true);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
+  it("changes saved sidebar tools layout only after owner approval for a live window", async () => {
+    const fx = fixture();
+    fx.windowValues.set("appearance.toolsLayout", "rows");
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "tools layout" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance.toolsLayout", tier: "confirm", value: expect.stringContaining("saved rows") })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.toolsLayout" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ allowed: "rows or toolbar", help: expect.stringContaining("Advanced mode with the sidebar expanded"), value: expect.stringContaining("Simple, Raw, and icon-only") });
+    expect((await fx.set("appearance.toolsLayout", "icons")).status).toBe(400);
+    const same = await fx.set("appearance.toolsLayout", "rows");
+    expect(same.body.error).toContain("already rows");
+    expect(same.body.error).toContain("Simple, Raw, and icon-only");
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("appearance.toolsLayout", "toolbar");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("toolbar icons for sidebar tools in Advanced with expanded sidebar") } });
+    expect(first.appSettingRequest.after).toContain("Simple, Raw, and icon-only");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.toolsLayout", "toolbar");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.toolsLayout", "toolbar");
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already toolbar");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.toolsLayout", "rows");
+    const disconnected = fx.set("appearance.toolsLayout", "toolbar");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("appearance.toolsLayout");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("appearance.toolsLayout", "toolbar")).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const guest = fixture({ owner: false });
+    guest.windowValues.set("appearance.toolsLayout", "rows");
+    expect((await guest.set("appearance.toolsLayout", "toolbar")).status).toBe(403);
+    expect(guest.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.toolsLayout", "rows");
+    const approved = fx.set("appearance.toolsLayout", "toolbar");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.toolsLayout", value: "toolbar" }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+
+    const back = fx.set("appearance.toolsLayout", "rows");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    expect(fx.cards()[4]!.card.appSettingRequest.after).toContain("Save rows for sidebar tools in Advanced with expanded sidebar");
+    fx.answer(String(fx.cards()[4]!.card.requestId), "deny");
+    expect((await back).status).toBe(409);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.toolsLayout", value: "toolbar" }]);
+  });
+
+  it("changes pinned bot circles only after owner approval for a live window", async () => {
+    const fx = fixture();
+    fx.windowValues.set("appearance.pinnedCircles", false);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "pinned circles" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance.pinnedCircles", tier: "confirm", value: expect.stringContaining("saved off") })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.pinnedCircles" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ allowed: "true or false", help: expect.stringContaining("expanded sidebar"), value: expect.stringContaining("Simple desktop tiles") });
+    expect((await fx.set("appearance.pinnedCircles", "icons")).status).toBe(400);
+    const same = await fx.set("appearance.pinnedCircles", false);
+    expect(same.body.error).toContain("already off");
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("appearance.pinnedCircles", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("circle grid") } });
+    expect(first.appSettingRequest.after).toContain("icons-only and Simple desktop tiles");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.pinnedCircles", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.pinnedCircles", true);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already on");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.pinnedCircles", false);
+    const disconnected = fx.set("appearance.pinnedCircles", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("appearance.pinnedCircles");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("appearance.pinnedCircles", true)).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const otherOwner = fixture({ owner: false });
+    otherOwner.windowValues.set("appearance.pinnedCircles", false);
+    expect((await otherOwner.set("appearance.pinnedCircles", true)).status).toBe(403);
+    expect(otherOwner.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.pinnedCircles", false);
+    const approved = fx.set("appearance.pinnedCircles", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.pinnedCircles", value: true }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+
+    const back = fx.set("appearance.pinnedCircles", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    expect(fx.cards()[4]!.card.appSettingRequest.after).toContain("as rows");
+    fx.answer(String(fx.cards()[4]!.card.requestId), "deny");
+    expect((await back).status).toBe(409);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.pinnedCircles", value: true }]);
+  });
+
+  it("changes only the saved universal-pins view after owner approval for a live window", async () => {
+    const fx = fixture();
+    fx.windowValues.set("appearance.universalPins", false);
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "universal pins" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance.universalPins", tier: "confirm", value: expect.stringContaining("saved off") })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.universalPins" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ allowed: "true or false", help: expect.stringContaining("neither who is pinned nor who can see a bot"), value: expect.stringContaining("Simple desktop tiles") });
+    expect((await fx.set("appearance.universalPins", "all")).status).toBe(400);
+    const same = await fx.set("appearance.universalPins", false);
+    expect(same.body.error).toContain("already off");
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("appearance.universalPins", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("fixed top sidebar roster") } });
+    expect(first.appSettingRequest.after).toContain("no bot's pin or visibility changes");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.universalPins", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.universalPins", true);
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already on");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.universalPins", false);
+    const disconnected = fx.set("appearance.universalPins", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("appearance.universalPins");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("appearance.universalPins", true)).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const otherOwner = fixture({ owner: false });
+    otherOwner.windowValues.set("appearance.universalPins", false);
+    expect((await otherOwner.set("appearance.universalPins", true)).status).toBe(403);
+    expect(otherOwner.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.universalPins", false);
+    const approved = fx.set("appearance.universalPins", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.universalPins", value: true }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+
+    const back = fx.set("appearance.universalPins", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    expect(fx.cards()[4]!.card.appSettingRequest.after).toContain("normal sidebar placement");
+    fx.answer(String(fx.cards()[4]!.card.requestId), "deny");
+    expect((await back).status).toBe(409);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.universalPins", value: true }]);
+  });
+
+  it("changes only the device follow-up default after owner approval for a live window", async () => {
+    const fx = fixture();
+    fx.windowValues.set("general.followUp", "steer");
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "follow up" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "general.followUp", tier: "confirm", value: expect.stringContaining("saved steer") })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "general.followUp" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ allowed: "steer or queue", help: expect.stringContaining("cannot be steered always queues"), value: expect.stringContaining("on this device") });
+    expect((await fx.set("general.followUp", "restart")).status).toBe(400);
+    expect((await fx.set("general.followUp", "steer")).body.error).toContain("already steer");
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("general.followUp", "queue");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("queue typed follow-ups") } });
+    expect(first.appSettingRequest.after).toContain("cannot be steered always queue");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("general.followUp", "queue");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("general.followUp", "queue");
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already queue");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("general.followUp", "steer");
+    const disconnected = fx.set("general.followUp", "queue");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("general.followUp");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("general.followUp", "queue")).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const otherOwner = fixture({ owner: false });
+    otherOwner.windowValues.set("general.followUp", "steer");
+    expect((await otherOwner.set("general.followUp", "queue")).status).toBe(403);
+    expect(otherOwner.windowWrites).toEqual([]);
+
+    fx.windowValues.set("general.followUp", "steer");
+    const approved = fx.set("general.followUp", "queue");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "general.followUp", value: "queue" }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };

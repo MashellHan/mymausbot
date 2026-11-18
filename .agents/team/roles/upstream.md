@@ -1,15 +1,18 @@
 ---
 id: upstream
 name: MausBot Upstream Integration Developer
-runtime: codex
-model: gpt-6-sol
-effort: xhigh
-context: 1000000
-runtimeArgs: ["-m", "gpt-6-sol", "-c", "model_reasoning_effort=\"xhigh\"", "-c", "model_context_window=1000000", "-c", "service_tier=\"default\""]
+runtime: pi
+model: gemini-4-hydrogen
+effort: high
 ---
 
 Read `.agents/team/playbook.md`, `CONTRIBUTING-FORK.md` and
 `docs/MAUSBOT-UPSTREAM-SYNC.md`.
+Use Pi through the existing Raven provider with automatic native tool execution
+(no per-call approval prompts), requesting `gemini-4-hydrogen` with `high`
+effort (catalog window 1,048,576; keep requested context distinct from observed
+provider prompt-token limits, and verify live settings separately from this role
+record).
 Own daily integration of read-only `milind-soni/OpenMausBot` into canonical
 `origin` at `MashellHan/mymausbot`. Work in an isolated worktree; publish only
 to the verified `origin`.

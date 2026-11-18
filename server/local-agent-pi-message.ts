@@ -4,7 +4,8 @@ import type { FileHandle } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
 import type { LocalAgentActivityEvent } from "../shared/local-dashboard.ts";
-import { piVisibleMessageText, redactedAgentText } from "./local-agent-visible-message.ts";
+import { piVisibleMessageText, redactedAgentText, redactedAgentToolArguments,
+  redactedAgentToolResult, trackAgentToolCalls } from "./local-agent-visible-message.ts";
 
 const SESSION_ID = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
 const SESSION_FILE = new RegExp(`^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z_(${SESSION_ID})\\.jsonl$`, "i");
@@ -23,7 +24,7 @@ type PiIdentity = { pane: string; file: string; directory: string; id: string; c
 export type PiSessionView = { preview: string | null; model: string | null; reasoningEffort: string | null;
   contextWindow: null; events: LocalAgentActivityEvent[]; truncated: boolean };
 type Cached = { signature: string; cwd: string; id: string; view: PiSessionView };
-type EntryEvent = { event: LocalAgentActivityEvent; callId?: string };
+type EntryEvent = { event: LocalAgentActivityEvent; callId?: string; clipped?: boolean };
 type Entry = { parent: string | null; preview: string | null; events: EntryEvent[]; clipped: boolean;
   model?: string | null; reasoningEffort?: string | null };
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -67,8 +68,8 @@ function eventAt(row: Record<string, unknown>): number | null {
 
 function visibleEvents(row: Record<string, unknown>, offset: number, user: string | null, assistant: string | null): EntryEvent[] {
   const events: EntryEvent[] = [];
-  const add = (kind: LocalAgentActivityEvent["kind"], text: string, tool: string | null = null, callId?: string) => {
-    events.push({ event: { id: `e${offset.toString(36)}-${events.length}`, at: eventAt(row), kind, tool, text }, callId });
+  const add = (kind: LocalAgentActivityEvent["kind"], text: string, tool: string | null = null, callId?: string, clipped = false) => {
+    events.push({ event: { id: `e${offset.toString(36)}-${events.length}`, at: eventAt(row), kind, tool, text }, callId, clipped });
   };
   if (user !== null) add("user", user);
   if (assistant !== null) add("assistant", assistant);
@@ -77,15 +78,19 @@ function visibleEvents(row: Record<string, unknown>, offset: number, user: strin
   if (message.role === "assistant" && Array.isArray(message.content)) {
     for (const part of message.content) {
       const block = record(part);
-      if (block.type === "toolCall" && typeof block.name === "string" && TOOL_NAME.test(block.name) &&
-          redactedAgentText(block.name).text === block.name &&
-          typeof block.id === "string" && block.id.length > 0 && block.id.length <= 128) {
-        add("tool-call", "[Arguments unavailable]", block.name, block.id);
+      if (block.type !== "toolCall" || typeof block.id !== "string" || !block.id || block.id.length > 128) continue;
+      const name = block.name;
+      if (typeof name !== "string" || !TOOL_NAME.test(name) || redactedAgentText(name).text !== name) {
+        add("tool-call", "[Arguments unavailable]", null, block.id);
+        continue;
       }
+      const detail = redactedAgentToolArguments(block.arguments);
+      add("tool-call", detail.text ?? "[Arguments unavailable]", name, block.id, detail.clipped);
     }
   } else if (message.role === "toolResult" && typeof message.toolCallId === "string" &&
       message.toolCallId.length > 0 && message.toolCallId.length <= 128) {
-    add("tool-result", "[Result details unavailable]", null, message.toolCallId);
+    const detail = redactedAgentToolResult(message.content);
+    add("tool-result", detail.text ?? "[Result details unavailable]", null, message.toolCallId, detail.clipped);
   }
   return events;
 }
@@ -138,7 +143,7 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number): PiSession
     id = entry.parent;
   }
   const events: LocalAgentActivityEvent[] = [];
-  const toolNames = new Map<string, string>();
+  const toolCalls = trackAgentToolCalls();
   let truncated = start > 0;
   let model: string | null = null;
   let reasoningEffort: string | null = null;
@@ -146,12 +151,13 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number): PiSession
     if (entry.model !== undefined) model = entry.model;
     if (entry.reasoningEffort !== undefined) reasoningEffort = entry.reasoningEffort;
     if (entry.clipped) truncated = true;
-    for (const { event, callId } of entry.events) {
-      if (callId && event.kind === "tool-call" && event.tool) {
-        toolNames.set(callId, event.tool);
-        if (toolNames.size > MAX_EVENTS) toolNames.delete(toolNames.keys().next().value!);
+    for (const { event, callId, clipped } of entry.events) {
+      if (clipped) truncated = true;
+      if (callId && event.kind === "tool-call") {
+        toolCalls.record(callId, event.tool);
+        if (!event.tool) continue;
       } else if (callId && event.kind === "tool-result") {
-        event.tool = toolNames.get(callId) ?? null;
+        toolCalls.associate(callId, event);
       }
       events.push(event);
       if (event.kind === "tool-call" || event.kind === "tool-result") {

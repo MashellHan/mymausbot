@@ -311,6 +311,15 @@ QA-Next: reproduce in an isolated fixture, fix, and request Reviewer
 QA-Due: 2026-11-06T10:00:00+08:00
 ```
 
+The reporter shows how it selected the initial scope. An unmapped test or job
+defaults to `global`. For a global hold, Lead traces the failing contract and
+its affected callers. If global impact is confirmed, record
+`QA-Scope-Evidence: global | <affected paths and reproducer or run>` outside
+the reporter-managed block in the original issue. Keep unknown impact global.
+Narrow a P1 only when the evidence covers the boundary and the gate can
+represent all affected areas. The checkpoint shows missing or recorded evidence;
+existing priority and scope labels continue to control the gate.
+
 Use the actual assigned role (`mausbot-front`, `mausbot-back`,
 `mausbot-upstream` or `mausbot-lead`) and matching `owner:*` label. Role labels
 are not GitHub usernames. Additional developers may execute Lead-assigned repair

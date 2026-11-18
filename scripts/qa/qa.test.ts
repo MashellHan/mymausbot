@@ -958,6 +958,22 @@ describe("QA findings and idempotent delivery", () => {
     expect(issues[0].labels.map((item: any) => item.name)).toContain("qa:verified");
   });
 
+  it("shows why scope was selected and preserves the Lead decision across reporting", async () => {
+    const { api, issues } = issueApi();
+    const policy = { areas: [{ id: "agents", tests: ["server/local-agent-teams.test.ts"] }] };
+    const initial = makeReport({ run, expected, jobs: [job], results: [{ name: expected[0].artifact, ...testFindings(result(), "linux") }] });
+    await deliverReport(initial, { api, policy });
+    expect(issues[0].body).toContain("Automated scope: global (conservative fallback");
+    expect(issues[0].labels).toContainEqual({ name: "qa:scope:global" });
+    issues[0].body += "\nQA-Scope-Evidence: global | All embedded navigation reaches the affected guard.";
+    await deliverReport({ ...initial, runId: 101 }, { api, policy });
+    expect(issues[0].body).toContain("QA-Scope-Evidence: global | All embedded navigation");
+    const mapped = { ...initial.findings[0], key: "a".repeat(24), file: policy.areas[0].tests[0] };
+    await deliverReport({ ...initial, runId: 102, findings: [mapped] }, { api, policy });
+    expect(issues[1].body).toContain("Automated scope: agents (test listed in check-policy.json)");
+    expect(issues[1].labels).toContainEqual({ name: "qa:scope:agents" });
+  });
+
   it("creates once, preserves triage, reopens recurrence and marks verified without auto-closing", async () => {
     const { api, issues } = issueApi();
     const initial = makeReport({ run, expected, jobs: [job], results: [{ name: expected[0].artifact, ...testFindings(result(), "linux") }] });

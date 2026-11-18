@@ -150,6 +150,22 @@ describe("notification sounds preference", () => {
 });
 
 describe("notification feed preference", () => {
+  it("reports a local change and another window's change while the feed is mounted", async () => {
+    const changed = await import("./window-pref-changes");
+    const report = vi.fn();
+    changed.onWindowPrefChanged(report);
+    const preference = await import("./notification-preferences");
+    preference.useNotificationFeed();
+    const unsubscribe = hook.subscribe!(vi.fn());
+    preference.setNotificationFeed(true);
+    expect(report).toHaveBeenCalledOnce();
+    local.setItem(preference.NOTIFICATION_FEED_KEY, "0");
+    storageEvent(preference.NOTIFICATION_FEED_KEY);
+    expect(report).toHaveBeenCalledTimes(2);
+    expect(preference.notificationFeedEnabled()).toBe(false);
+    unsubscribe();
+  });
+
   it("defaults off, persists a choice, and leaves the sounds choice alone", async () => {
     let preference = await import("./notification-preferences");
     expect(preference.useNotificationFeed()).toBe(false);

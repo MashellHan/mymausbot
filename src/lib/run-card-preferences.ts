@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { windowPrefChanged } from "./window-pref-changes";
 
 export const RUN_CARD_KEY = "omb-show-run-card";
 
@@ -13,7 +14,7 @@ function storage(): Storage | undefined {
   }
 }
 
-function showRunCard(): boolean {
+export function showRunCard(): boolean {
   if (sessionChoice !== undefined) return sessionChoice;
   try {
     return storage()?.getItem(RUN_CARD_KEY) !== "0";
@@ -31,6 +32,7 @@ function onStorage(event: StorageEvent) {
   if (event.storageArea && event.storageArea !== storage()) return;
   sessionChoice = undefined;
   notify();
+  windowPrefChanged();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -53,6 +55,7 @@ export function setShowRunCard(enabled: boolean): void {
   } catch {
   }
   notify();
+  windowPrefChanged();
 }
 
 export function useShowRunCard(): boolean {
