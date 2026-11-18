@@ -1,4 +1,4 @@
-import { issueLabels, triageOf } from "./contracts.mjs";
+import { issueAreas, issueLabels, triageOf } from "./contracts.mjs";
 
 const DAY_MS = 24 * 60 * 60_000;
 const CADENCE_MS = 6 * 60 * 60_000;
@@ -59,6 +59,10 @@ function observe(issue, prs, previous, now, checkpoint = false) {
     && (previous ? progressAge >= DAY_MS : true);
   const priority = verified ? 0 : qa && !triage.complete ? 1 : qa && stale ? 2 : process ? 3 : qa ? 4 : 5;
   const severity = labels.includes("qa:p0") ? 0 : labels.includes("qa:p1") ? 1 : labels.includes("qa:p2") ? 2 : 3;
+  const globalHold = qa && severity <= 1 && issueAreas(issue).includes("global");
+  const triageText = issue.body?.replace(/<!-- mausbot-qa:start -->[\s\S]*?<!-- mausbot-qa:end -->/g, "");
+  const globalEvidence = triage.complete && triageText?.match(/^QA-Scope-Evidence:[ \t]*global[ \t]*\|[ \t]*([^\s|][^\r\n]*)$/m)?.[1];
+  const scopeReview = globalHold ? (globalEvidence ? safe(globalEvidence) : "pending impact evidence") : undefined;
   const action = stage === "disposition_needed" ? "request explicit disposition; do not resume paused or product work"
     : stage === "verification" ? "review exact integrated evidence for closure"
     : stage === "review" ? "finish existing review and verification"
@@ -76,6 +80,7 @@ function observe(issue, prs, previous, now, checkpoint = false) {
     completion: { status: "pending" }, closedAt: null, closureEvidence: null,
     owner: safe(owner), next: safe(next), blocker: safe(blocker), evidence: safe(evidence),
     repair: repair && { number: repair.number, head: repair.head?.sha, draft: repair.draft },
+    ...(scopeReview ? { scopeReview } : {}),
     action: overdue + action,
   };
 }
@@ -107,7 +112,7 @@ function fairQa(items, limit) {
 
 function line(item) {
   const proof = item.evidence || item.blocker || "no evidence/blocker recorded";
-  return `#${item.number} ${safe(item.url)}: ${item.action}; stage=${item.stage}; owner=${item.owner}; ${item.process ? "Process" : "QA"}-Next=${item.next || "unrecorded"}; evidence/blocker=${proof}${item.repair ? `; existing PR #${item.repair.number}` : ""}`;
+  return `#${item.number} ${safe(item.url)}: ${item.action}; stage=${item.stage}; owner=${item.owner}; ${item.process ? "Process" : "QA"}-Next=${item.next || "unrecorded"}; evidence/blocker=${proof}${item.scopeReview ? `; global scope: ${item.scopeReview}` : ""}${item.repair ? `; existing PR #${item.repair.number}` : ""}`;
 }
 
 export function planBacklog(issues, prs, records = {}, now = Date.now(), { daily = true, followup = true, checkpoint = false } = {}) {
