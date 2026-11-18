@@ -12416,7 +12416,7 @@ const instanceRoutes = createInstanceRoutes({
 const windowPrefs = createWindowPrefs({ broadcast, ownerOrAdmin, windowOpen: () => [...sseClients].some((client) => client.admin && client.window) });
 const appSettings = createAppSettings({ store, dataDir: DATA_DIR, entries: routeBackedRegistry({
   cfg: () => cfg, store, routes: { config: configRoutes, botOrder: botOrderRoutes, botPatch: botPatchRoutes, instances: instanceRoutes },
-  providers: registry, credentials: () => botLogins.credentialConfig(cfg), window: windowPrefs,
+  providers: registry, credentials: () => botLogins.credentialConfig(cfg), window: windowPrefs, savedStepsHere: () => savedSteps.here(),
 }), turnOwner: (turn) => phones.turnOwner(turn), guestDriven: cloudGuestDriven, requestCredential: (bot, threadId, body) => secretCards.requestCredential(bot, threadId, body), connectorThread, activeGroupTurnForBot, notify, language: threadLanguage });
 ROUTES.push(windowPrefs.routes, instanceRoutes);
 ROUTES.push(createMcpServerRoutes({
