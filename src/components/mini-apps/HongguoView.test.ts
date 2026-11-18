@@ -738,11 +738,16 @@ it("completion uses the pause selected after the observation and after reopen be
 
 it("completion does not reopen a player already fully seekable", async () => {
   playback = { ...qualityPlayback("1080p"), durationSeconds: 100 };
-  fixture.completion.mockResolvedValue(completionReply());
+  let release!: () => void;
+  fixture.completion.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = () => resolve(completionReply()); }));
   const loads = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   await render(); const video = await openPlayer();
   await vi.waitFor(() => expect(fixture.completion).toHaveBeenCalledTimes(1));
-  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  const source = video.getAttribute("src"), signal = fixture.completion.mock.calls[0]![1].signal as AbortSignal;
+  expect(source).toBe(qualityPlayback("1080p").mediaUrl);
+  await act(async () => { release(); });
+  await vi.waitFor(() => expect(signal.aborted).toBe(true));
+  expect(video.getAttribute("src")).toBe(source);
   expect(loads).not.toHaveBeenCalled(); expect(host.querySelector("video")).toBe(video);
   expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(1);
 });
@@ -750,19 +755,29 @@ it("completion does not reopen a player already fully seekable", async () => {
 it("completion ignores an aborted old-quality response without touching the newer player", async () => {
   playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
   let release!: () => void, signal: AbortSignal | undefined;
-  const raw = fixture.completion.getMockImplementation()!;
-  fixture.completion.mockImplementation((path, init) => String(path).includes("/1080p?")
-    ? new Promise<Response>((resolve) => { signal = init.signal; release = () => resolve(completionReply()); }) : raw(path, init));
+  fixture.completion.mockImplementationOnce((_path, init) => new Promise<Response>((resolve) => {
+    signal = init.signal; release = () => resolve(completionReply());
+  }));
   const original = fixture.api.getMockImplementation()!;
   fixture.api.mockImplementation(async (path, init) => path.endsWith("/playback") && JSON.parse(init.body).qualityId
     ? { ...qualityPlayback("720p"), durationSeconds: 108 } : original(path, init));
   const loads = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
-  await render(); await openPlayer(); await selectQuality("720p");
-  const current = host.querySelector("video");
+  await render(); const old = await openPlayer(), oldSource = old.getAttribute("src");
+  await selectQuality("720p");
+  const current = host.querySelector("video")!;
+  expect(current).not.toBe(old);
+  expect(current.getAttribute("src")).toBe(qualityPlayback("720p").mediaUrl);
+  await act(async () => { current.dispatchEvent(new Event("loadedmetadata")); });
+  expect(fixture.completion).toHaveBeenCalledTimes(2);
+  const currentSignal = fixture.completion.mock.calls[1]![1].signal as AbortSignal;
   expect(signal?.aborted).toBe(true);
   await act(async () => { release(); });
-  expect(host.querySelector("video")).toBe(current); expect(current?.getAttribute("src")).toContain("/720p?");
+  expect(old.getAttribute("src")).toBe(oldSource);
+  expect(host.querySelector("video")).toBe(current);
+  expect(current.getAttribute("src")).toBe(qualityPlayback("720p").mediaUrl);
+  expect(currentSignal.aborted).toBe(false);
   expect(loads).not.toHaveBeenCalled();
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(2);
 });
 
 it("completion does not advance on an early EOF and retains natural next after full duration", async () => {
@@ -787,7 +802,7 @@ it("completion does not advance on an early EOF and retains natural next after f
 it.each(["environment", "revision"])("completion cannot act after the current %s scope changes", async (scope) => {
   playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
   let release!: () => void, signal: AbortSignal | undefined;
-  fixture.completion.mockImplementation((_path, init) => new Promise<Response>((resolve) => {
+  fixture.completion.mockImplementationOnce((_path, init) => new Promise<Response>((resolve) => {
     signal = init.signal; release = () => resolve(completionReply());
   }));
   const original = fixture.api.getMockImplementation()!;
@@ -797,14 +812,26 @@ it.each(["environment", "revision"])("completion cannot act after the current %s
       ? { mediaUrl: String(result.mediaUrl).replace("expectedRevision=3", `expectedRevision=${app.revision}`) } : {}) };
   });
   const loads = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
-  await render(); await openPlayer();
+  await render(); const old = await openPlayer(), oldSource = old.getAttribute("src");
   if (scope === "environment") storageKey = "another-completion-environment";
   else { app.revision = 4; state.revision = 4; }
   await render();
+  const current = host.querySelector("video")!, currentSource = current.getAttribute("src");
+  expect(current).not.toBe(old);
+  expect(currentSource).toBe(`/api/mini-apps/${app.id}/hongguo/media/1080p?expectedRevision=${app.revision}`);
+  await act(async () => { current.dispatchEvent(new Event("loadedmetadata")); });
+  const playbackCalls = () => fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback")).length;
+  const beforeRelease = playbackCalls();
+  expect(fixture.completion).toHaveBeenCalledTimes(2);
+  const currentSignal = fixture.completion.mock.calls[1]![1].signal as AbortSignal;
   expect(signal?.aborted).toBe(true);
-  const current = host.querySelector("video");
   await act(async () => { release(); });
-  expect(host.querySelector("video")).toBe(current); expect(loads).not.toHaveBeenCalled();
+  expect(old.getAttribute("src")).toBe(oldSource);
+  expect(host.querySelector("video")).toBe(current);
+  expect(current.getAttribute("src")).toBe(currentSource);
+  expect(currentSignal.aborted).toBe(false);
+  expect(loads).not.toHaveBeenCalled();
+  expect(playbackCalls()).toBe(beforeRelease);
 });
 
 it("completion failure releases its body without a load or preparation retry", async () => {
