@@ -46,15 +46,23 @@ const open = async (window, query, expected = 6) => {
 };
 async function resizePanel(window, width) {
   const widthNow = () => evaluate(window, 'document.querySelector("[data-computer-panel]")?.getBoundingClientRect().width');
-  await until(widthNow, (value) => Math.abs(value - 960) <= 1, "default measured 960px panel");
+  await until(widthNow, (value) => Math.abs(value - 1152) <= 1, "default measured 1152px panel");
   await until(() => evaluate(window, 'Number(document.querySelector("[role=separator][aria-orientation=vertical]")?.getAttribute("aria-valuenow"))'),
-    (value) => Math.abs(value - 960) <= 1, "resize signal ready");
-  for (let expected = 920; expected >= width; expected -= 40) {
-    await evaluate(window, `(() => { const separator = document.querySelector('[role=separator][aria-orientation=vertical]');
-      separator.focus(); separator.dispatchEvent(new KeyboardEvent('keydown', { key:'ArrowRight', bubbles:true, cancelable:true })); return true; })()`);
-    await until(widthNow, (value) => Math.abs(value - expected) <= 1, `${expected}px measured panel`);
+    (value) => Math.abs(value - 1152) <= 1, "resize signal ready");
+  const separator = '[role=separator][aria-orientation=vertical]';
+  const box = await evaluate(window, `(() => { const node = document.querySelector(${JSON.stringify(separator)});
+    const rect = node.getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }; })()`);
+  const startWidth = await widthNow();
+  const delta = Math.round(startWidth - width);
+  if (delta !== 0) {
+    await evaluate(window, `(() => { const node = document.querySelector(${JSON.stringify(separator)});
+      node.dispatchEvent(new PointerEvent("pointerdown", { clientX: ${box.x}, clientY: ${box.y}, pointerId: 1, bubbles: true, cancelable: true }));
+      node.dispatchEvent(new PointerEvent("pointermove", { clientX: ${box.x + delta}, clientY: ${box.y}, pointerId: 1, bubbles: true, cancelable: true }));
+      node.dispatchEvent(new PointerEvent("pointerup", { clientX: ${box.x + delta}, clientY: ${box.y}, pointerId: 1, bubbles: true, cancelable: true }));
+      return true; })()`);
+    await until(widthNow, (value) => Math.abs(value - width) <= 1, `${width}px measured panel`);
     await until(() => evaluate(window, 'Number(document.querySelector("[role=separator][aria-orientation=vertical]")?.getAttribute("aria-valuenow"))'),
-      (value) => Math.abs(value - expected) <= 1, `${expected}px resize signal`);
+      (value) => Math.abs(value - width) <= 1, `${width}px resize signal`);
   }
   return widthNow();
 }

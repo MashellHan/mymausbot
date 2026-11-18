@@ -61,4 +61,18 @@ describe("the computer panel's resize edge", () => {
     expect(computerPanelMaxWidth(2560)).toBe(PANEL_MAX_WIDTH);
     expect(computerPanelMaxWidth(320)).toBe(320);
   });
+
+  it("supports a 1152px controlled width while preserving pointer and keyboard resize", () => {
+    function ControlledPanel({ initialWidth }: { initialWidth: number }) {
+      const { panelWidth, separatorRef, onSeparatorKeyDown } = useComputerPanelResize({ defaultWidth: initialWidth });
+      width = panelWidth;
+      return createElement("aside", null, createElement("div", { ref: separatorRef, role: "separator", tabIndex: 0, onKeyDown: onSeparatorKeyDown }));
+    }
+    act(() => root.render(createElement(ControlledPanel, { initialWidth: 1152 })));
+    expect(width).toBe(1152);
+    press("ArrowLeft");
+    expect(width).toBe(1192);
+    press("ArrowRight");
+    expect(width).toBe(1152);
+  });
 });

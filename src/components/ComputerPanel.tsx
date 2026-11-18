@@ -55,7 +55,7 @@ import {
 } from "@/lib/local-computer";
 import { moveBetweenTabs, PANEL_TABS, panelTabProps, revealSelectedTab, scrollTabsWithWheel, TAB_PANEL_FOCUS, tabPanelProps, useAndroidTabFallback } from "./computer-panel-tabs";
 import { COMPUTER_PANEL_ID, releaseComputerPanelFocus, useComputerPanelEntry } from "@/lib/computer-panel-focus";
-import { PANEL_MIN_WIDTH, useComputerPanelResize } from "./computer-panel-resize";
+import { COMPUTER_PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH, useComputerPanelResize } from "./computer-panel-resize";
 import {
   computerPanelTabs,
   readComputerPanelView,
@@ -101,15 +101,11 @@ const computerControlSnapshotSchema = z.object({
   owned: z.boolean().optional(),
 }).passthrough();
 
-export function ComputerPanel({
-  bot: profileBot,
-  onOpenVmWorkspace,
-}: {
-  bot: Bot;
-  onOpenVmWorkspace?: (botId: string) => void;
+export function ComputerPanel({ bot: profileBot, onOpenVmWorkspace, panelWidth: sharedPanelWidth, onPanelWidthChange }: {
+  bot: Bot; onOpenVmWorkspace?: (botId: string) => void; panelWidth?: number; onPanelWidthChange?: (width: number) => void;
 }) {
   const { dragProps } = useCaptionChrome();
-  const { panelWidth, panelMaxWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd } = useComputerPanelResize();
+  const { panelWidth, panelMaxWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd } = useComputerPanelResize({ defaultWidth: COMPUTER_PANEL_DEFAULT_WIDTH, width: sharedPanelWidth, onWidthChange: onPanelWidthChange });
   const { state, dispatch, flushBotPatches } = useStore();
   const liveTask = profileBot.tasks?.find((task) => task.threadId === profileBot.threadId);
   const livePlace = effectivePlace(profileBot, liveTask);

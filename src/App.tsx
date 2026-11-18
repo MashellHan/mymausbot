@@ -17,6 +17,7 @@ import { MiniAppDefaultsBootstrap } from "@/components/mini-apps/MiniAppDefaults
 import { MiniAppsHost } from "@/components/mini-apps/MiniAppsHost";
 import { initAnalytics } from "@/lib/analytics";
 import { parseComputerHelp } from "@/lib/computer-control";
+import { COMPUTER_PANEL_DEFAULT_WIDTH } from "@/components/computer-panel-resize";
 import { writeComputerPanelView } from "@/lib/computer-panel-view";
 import { useFilePreviewScope } from "@/lib/file-preview";
 import { viewerClosedRelease } from "@/components/computer-takeover";
@@ -153,6 +154,7 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
   const cloudAddOpened = useRef(false);
   cloudAddOpened.current ||= Boolean(state.cloudAdd);
   const [localVmWorkspaceBotId, setLocalVmWorkspaceBotId] = useState<string | null>(null);
+  const [computerPanelWidth, setComputerPanelWidth] = useState(COMPUTER_PANEL_DEFAULT_WIDTH);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const previousViewRef = useRef(state.activeView);
   const calendarOriginRef = useRef<"chat" | "team-map" | "web-panel">("chat");
@@ -440,11 +442,20 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
           <ComputerPanel
             key={`computer:${bot.id}`}
             bot={bot}
+            panelWidth={computerPanelWidth}
+            onPanelWidthChange={setComputerPanelWidth}
             onOpenVmWorkspace={openLocalVmWorkspace}
           />
         )
       )}
-      {state.computerOpen && group && !remoteClient && <GroupComputerPanel key={`computer:group:${group.id}`} groupId={group.id} />}
+      {state.computerOpen && group && !remoteClient && (
+        <GroupComputerPanel
+          key={`computer:group:${group.id}`}
+          groupId={group.id}
+          panelWidth={computerPanelWidth}
+          onPanelWidthChange={setComputerPanelWidth}
+        />
+      )}
       <AppPreviewPanel />
       {state.forkPanel && sidebarInline && <ForkPanel />}
       {!state.forkPanel && roomPanelOpen && group && (

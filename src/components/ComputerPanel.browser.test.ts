@@ -74,7 +74,7 @@ describe("Computer panel on a narrow screen", () => {
     host.innerHTML = markup;
     const aside = host.querySelector<HTMLElement>("aside[data-computer-panel]")!;
     expect(aside.className.split(" ")).toEqual(expect.arrayContaining(["max-2xl:absolute", "max-2xl:inset-y-0", "max-2xl:right-0", "max-2xl:z-40"]));
-    expect(markup).toContain("width:960px;max-width:");
+    expect(markup).toContain("width:1152px;max-width:");
     const separator = aside.querySelector<HTMLElement>('[role="separator"]')!;
     expect(separator.className.split(" ")).toContain("max-2xl:hidden");
   });

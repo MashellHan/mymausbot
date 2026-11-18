@@ -4,16 +4,28 @@ import { releaseComputerPanelFocus, useComputerPanelEntry } from "@/lib/computer
 import { t } from "@/lib/i18n";
 import { useStore } from "@/state/store";
 import { useCaptionChrome } from "./DesktopCapabilities";
-import { PANEL_MIN_WIDTH, useComputerPanelResize } from "./computer-panel-resize";
+import { COMPUTER_PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH, useComputerPanelResize } from "./computer-panel-resize";
 import { panelTabProps, TAB_PANEL_FOCUS, tabPanelProps } from "./computer-panel-tabs";
 import { MiniAppsPanel } from "./mini-apps/MiniAppsPanel";
 
-export function GroupComputerPanel({ groupId }: { groupId: string }) {
+export function GroupComputerPanel({
+  groupId,
+  panelWidth: sharedPanelWidth,
+  onPanelWidthChange,
+}: {
+  groupId: string;
+  panelWidth?: number;
+  onPanelWidthChange?: (width: number) => void;
+}) {
   const { dispatch } = useStore();
   const { dragProps, noDragStyle } = useCaptionChrome();
   const scope = `group:${groupId}`;
   const panelRef = useComputerPanelEntry(scope, "mini-apps");
-  const { panelWidth, panelMaxWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd } = useComputerPanelResize();
+  const { panelWidth, panelMaxWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd } = useComputerPanelResize({
+    defaultWidth: COMPUTER_PANEL_DEFAULT_WIDTH,
+    width: sharedPanelWidth,
+    onWidthChange: onPanelWidthChange,
+  });
   return (
     <aside
       ref={panelRef}

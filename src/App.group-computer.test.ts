@@ -9,6 +9,7 @@ import { closeRoomPanel } from "./lib/room-panel";
 
 let initial: AppState;
 let current: AppState;
+let selectChat: ((id: string) => void) | undefined;
 vi.mock("./state/store", async (original) => {
   const store = await original<typeof import("./state/store")>();
   return {
@@ -16,6 +17,7 @@ vi.mock("./state/store", async (original) => {
     StoreProvider: ({ children }: { children: ReactNode }) => {
       const [state, dispatch] = useReducer(store.reducer, initial);
       current = state;
+      selectChat = (id: string) => dispatch({ type: "select", id });
       return createElement(store.BotEditorStore, { value: {
         state, dispatch, flushBotPatches: async () => null, refreshInstances: async () => {}, refreshModels: async () => {},
       }, children });
@@ -121,4 +123,33 @@ it("does not expose a desktop Computer panel on remote clients", () => {
   draw();
   expect(opener()).toBeNull();
   expect(panel()).toBeNull();
+});
+
+it("defaults the outer panel to 1152px and retains a resized width across group and bot switches", async () => {
+  vi.stubGlobal("innerWidth", 2560);
+  const secondBot: Bot = {
+    ...bot,
+    id: "scout",
+    threadId: "scout-thread",
+    name: "Scout",
+    messages: [{ id: "scout-msg", role: "user", kind: "text", text: "Scout conversation", at: 2 }],
+  };
+  initial = { ...initial, computerOpen: true, bots: [bot, secondBot], groups: [group], selectedId: group.id };
+  draw();
+  await vi.waitFor(() => expect(panel()).not.toBeNull());
+  expect(panel()!.style.width).toBe("1152px");
+
+  const separator = panel()!.querySelector<HTMLElement>('[role="separator"]')!;
+  separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+  await vi.waitFor(() => expect(panel()!.style.width).toBe("1192px"));
+
+  flushSync(() => selectChat!(secondBot.id));
+  await vi.waitFor(() => expect(current.selectedId).toBe(secondBot.id));
+  await vi.waitFor(() => expect(panel()).not.toBeNull(), { timeout: 5000 });
+  expect(panel()!.style.width).toBe("1192px");
+
+  flushSync(() => selectChat!(bot.id));
+  await vi.waitFor(() => expect(current.selectedId).toBe(bot.id));
+  await vi.waitFor(() => expect(panel()).not.toBeNull(), { timeout: 5000 });
+  expect(panel()!.style.width).toBe("1192px");
 });
