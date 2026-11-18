@@ -3352,7 +3352,7 @@
   "cloudWelcome.engine.connected": "Conectado",
   "cloudWelcome.engine.credit": "Você tem {amount} de crédito do teste para o Claude, então seus bots podem começar agora mesmo. Faça login quando quiser.",
   "cloudWelcome.engine.creditPlain": "Seu teste inclui crédito para o Claude, então seus bots podem começar agora mesmo. Faça login quando quiser.",
-  "cloudWelcome.engine.sub": "Seus bots usam o plano do Claude ou do ChatGPT que você já tem. Faça login uma vez em {name}.",
+  "cloudWelcome.engine.sub": "Seus bots usam o plano do Claude ou do ChatGPT que você já tem, ou o OpenCode. Configure um deles uma vez em {name}.",
   "cloudWelcome.engine.useCredit": "Usar meu crédito por enquanto",
   "cloudWelcome.files.apps": "Conectar apps",
   "cloudWelcome.files.appsAction": "Conectar apps",
@@ -3371,7 +3371,7 @@
   "cloudWelcome.skip": "Pular configuração",
   "cloudWelcome.step.bring": "Trazer suas coisas",
   "cloudWelcome.step.bringHint": "Seus bots e conversas",
-  "cloudWelcome.step.engineHint": "Claude ou ChatGPT",
+  "cloudWelcome.step.engineHint": "Claude, ChatGPT ou OpenCode",
   "cloudWelcome.step.files": "Arquivos e apps",
   "cloudWelcome.step.filesHint": "Opcional",
   "cloudWelcome.steps": "Etapas da configuração",
@@ -11340,5 +11340,8 @@
   "changes.tooLarge": "Estes arquivos são grandes demais para comparar aqui (até 2 MB e 20.000 frases cada).",
   "changes.notText": "Um destes arquivos não é texto simples.",
   "changes.refused": "Não foi possível abrir um arquivo para comparar: {reason}",
-  "changes.coarse": "Alguns trechos longos diferem demais para alinhar frase por frase; aparecem como removidos e adicionados."
+  "changes.coarse": "Alguns trechos longos diferem demais para alinhar frase por frase; aparecem como removidos e adicionados.",
+  "cloudSignIn.opencode": "OpenCode",
+  "cloudSignIn.opencodeHint": "Modelos gratuitos, sem precisar de conta.",
+  "onboarding.meet.setUp": "Configurar {name}"
 }

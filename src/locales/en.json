@@ -3421,7 +3421,7 @@
   "cloudWelcome.engine.connected": "Connected",
   "cloudWelcome.engine.credit": "You have {amount} of Claude credit, so your bots can start right now. Sign in whenever you're ready.",
   "cloudWelcome.engine.creditPlain": "Your trial comes with Claude credit, so your bots can start right now. Sign in whenever you're ready.",
-  "cloudWelcome.engine.sub": "Your bots think with your own Claude or ChatGPT plan. Sign in once on {name}.",
+  "cloudWelcome.engine.sub": "Your bots think with your own Claude or ChatGPT plan, or with OpenCode. Set one up once on {name}.",
   "cloudWelcome.engine.useCredit": "Use my credit for now",
   "cloudWelcome.files.apps": "Connect apps",
   "cloudWelcome.files.appsAction": "Connect apps",
@@ -3440,7 +3440,7 @@
   "cloudWelcome.skip": "Skip setup",
   "cloudWelcome.step.bring": "Bring your stuff",
   "cloudWelcome.step.bringHint": "Your bots and chats",
-  "cloudWelcome.step.engineHint": "Claude or ChatGPT",
+  "cloudWelcome.step.engineHint": "Claude, ChatGPT or OpenCode",
   "cloudWelcome.step.files": "Files and apps",
   "cloudWelcome.step.filesHint": "Optional",
   "cloudWelcome.steps": "Setup steps",
@@ -11986,5 +11986,8 @@
   "changes.tooLarge": "These files are too large to compare here (each up to 2 MB and 20,000 sentences).",
   "changes.notText": "One of these files isn't plain text.",
   "changes.refused": "Couldn't open a file to compare: {reason}",
-  "changes.coarse": "Some long stretches differ too much to match sentence by sentence; they show as removed and added."
+  "changes.coarse": "Some long stretches differ too much to match sentence by sentence; they show as removed and added.",
+  "cloudSignIn.opencode": "OpenCode",
+  "cloudSignIn.opencodeHint": "Free models, no account needed.",
+  "onboarding.meet.setUp": "Set up {name}"
 }
