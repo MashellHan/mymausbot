@@ -24,7 +24,7 @@ function exactPr(pr, request, repository) {
     && Array.isArray(pr.labels) && pr.labels.every((label) => typeof label.name === "string");
 }
 
-async function currentMerge(request, api) {
+export async function currentMerge(request, api) {
   const branch = await api(`/branches/${encodeURIComponent(request.baseRef)}`);
   const base = branch?.commit?.sha;
   if (!SHA.test(base ?? "")) throw new Error("Current PR base ref is unavailable");
@@ -37,7 +37,7 @@ async function currentMerge(request, api) {
   return { base, merge };
 }
 
-const controls = (pr) => JSON.stringify({ labels: pr.labels.map((label) => label.name.toLowerCase())
+export const prControls = (pr) => JSON.stringify({ labels: pr.labels.map((label) => label.name.toLowerCase())
   .filter((name) => CONTROLS.has(name)).sort(), repairs: pr.labels.some((label) => label.name.toLowerCase() === "qa:repair")
     ? [...String(pr.body ?? "").matchAll(/^QA-Repair:\s*#\d+\s*$/gm)].map((hit) => hit[0]).sort() : [] });
 
@@ -114,7 +114,7 @@ export async function reattestMetadata({ event, repository = process.env.GITHUB_
   if (!Number.isFinite(createdAt)) throw new Error("Invalid source CI attempt time");
   await verify(plan.outputs, { api, runId: run.id, attempt, createdAt, deadlineMs: 0 });
   const finalPr = await api(`/pulls/${request.number}`);
-  if (!exactPr(finalPr, request, repository) || controls(finalPr) !== controls(firstPr)) throw new Error("Current PR identity or controls changed during metadata proof");
+  if (!exactPr(finalPr, request, repository) || prControls(finalPr) !== prControls(firstPr)) throw new Error("Current PR identity or controls changed during metadata proof");
   const finalMerge = await currentMerge(request, api);
   if (finalMerge.base !== request.base || finalMerge.merge.commit.tree.sha !== current.merge.commit.tree.sha) {
     throw new Error("Current PR merge changed during metadata proof");
