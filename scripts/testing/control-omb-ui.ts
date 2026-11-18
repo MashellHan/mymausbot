@@ -4,7 +4,7 @@
 // harmless whichever loads first.
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -73,22 +73,33 @@ export interface UiHandle {
   logPath: string;
   /** Chrome the session launched with; null when agent-browser located a browser itself. */
   chrome: string | null;
-  /** Loopback DevTools port of the Chrome owned by this fixture. */
-  cdpPort?: number;
+  ownedChrome?: OwnedChromeSession;
 }
 
-type SessionEnv = Pick<UiHandle, "home" | "session" | "chrome" | "cdpPort">;
+interface OwnedChromeSession {
+  endpoint: string;
+  pid: number;
+}
+
+type SessionEnv = Pick<UiHandle, "home" | "session" | "chrome" | "ownedChrome">;
 
 const CHROME_PROFILE = "chrome-profile";
 
-function fixtureDevTools(profile: string): { port: number; path: string } | undefined {
+function fixtureDevTools(home: string): string | undefined {
   try {
-    const [rawPort, path] = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n");
+    const [rawPort, path] = readFileSync(join(home, CHROME_PROFILE, "DevToolsActivePort"), "utf8").split("\n");
     const port = Number(rawPort);
     if (Number.isInteger(port) && port > 0 && port <= 65535 && /^\/devtools\/browser\/[a-f0-9-]+$/i.test(path ?? "")) {
-      return { port, path: path! };
+      return `ws://127.0.0.1:${port}${path}`;
     }
   } catch {}
+}
+
+function requireOwnedChrome(home: string | undefined, chrome: OwnedChromeSession): void {
+  if (home && Number.isSafeInteger(chrome.pid) && chrome.pid > 0 && typeof chrome.endpoint === "string" && fixtureDevTools(home) === chrome.endpoint) {
+    try { process.kill(chrome.pid, 0); return; } catch {}
+  }
+  throw new ControlOmbError("the ui session's owned Chrome endpoint is no longer available", "run `ui launch` again");
 }
 
 /** The exact environment `open` launched with. Later verbs must repeat it:
@@ -109,8 +120,10 @@ export function sessionEnv(handle: SessionEnv, parentEnv: NodeJS.ProcessEnv = pr
   for (const [key, value] of Object.entries(parentEnv)) {
     if (value && PLATFORM_ENV.includes(key.toUpperCase())) env[key.toUpperCase()] = value;
   }
-  if (handle.cdpPort !== undefined) env.AGENT_BROWSER_CDP = String(handle.cdpPort);
-  else {
+  if (handle.ownedChrome) {
+    env.AGENT_BROWSER_CDP = handle.ownedChrome.endpoint;
+    env.OMB_UI_CHROME_PID = String(handle.ownedChrome.pid);
+  } else {
     env.AGENT_BROWSER_HEADLESS = "1";
     env.AGENT_BROWSER_ARGS = credentialStoreFlags().join("\n");
     if (handle.chrome) env.AGENT_BROWSER_EXECUTABLE_PATH = handle.chrome;
@@ -125,17 +138,19 @@ export function agentBrowser(
   env: NodeJS.ProcessEnv,
   args: string[],
   timeoutMs = 30_000,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   return new Promise((done, fail) => {
     let child: ChildProcess;
     try {
-      const { AGENT_BROWSER_CDP: cdp, ...childEnv } = env;
-      const attach = cdp && /^\d{1,5}$/.test(cdp) && Number(cdp) > 0 && Number(cdp) <= 65535 ? ["--cdp", cdp] : [];
+      const { AGENT_BROWSER_CDP: cdp, OMB_UI_CHROME_PID: pid, ...childEnv } = env;
+      if (cdp !== undefined) requireOwnedChrome(env.HOME, { endpoint: cdp, pid: Number(pid) });
+      const attach = cdp === undefined ? [] : ["--cdp", cdp];
       child = spawn(binary, [...attach, ...args, "--json"], {
-        env: attach.length ? childEnv : env, stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+        env: childEnv, stdio: ["ignore", "pipe", "ignore"], windowsHide: true, signal,
       });
     } catch (error) {
-      fail(new ControlOmbError(`could not start agent-browser: ${error instanceof Error ? error.message : String(error)}`));
+      fail(error instanceof ControlOmbError ? error : new ControlOmbError(`could not start agent-browser: ${error instanceof Error ? error.message : String(error)}`));
       return;
     }
     let output = "";
@@ -254,8 +269,9 @@ function loadHandle(raw: unknown, verb: string): UiHandle {
   }
   if (handle.chrome !== null && typeof handle.chrome !== "string") throw new ControlOmbError(`the ui handle ${path} has an invalid chrome entry`);
   if (!existsSync(handle.home!)) throw new ControlOmbError(`the ui session's data directory is gone: ${handle.home}`, "its launch was stopped; run `ui launch` again");
-  if (handle.cdpPort !== undefined && fixtureDevTools(join(handle.home!, CHROME_PROFILE))?.port !== handle.cdpPort) {
-    throw new ControlOmbError("the ui session's owned Chrome endpoint is no longer available", "run `ui launch` again");
+  if (handle.ownedChrome !== undefined) {
+    if (!handle.ownedChrome || typeof handle.ownedChrome !== "object") throw new ControlOmbError(`the ui handle ${path} has an invalid owned Chrome entry`);
+    requireOwnedChrome(handle.home, handle.ownedChrome);
   }
   return handle as UiHandle;
 }
@@ -455,20 +471,24 @@ export async function runControlOmbUi(args: string[]): Promise<unknown> {
   throw new ControlOmbError(`unknown ui command ${JSON.stringify(verb)}`, "run control-omb ui help");
 }
 
-function parkUntilSignalOrExit(child: ChildProcess, stopRequested: () => boolean): Promise<"signal" | "exit"> {
+const exited = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
+
+function parkUntilSignalOrExit(children: ChildProcess[], stopRequested: () => boolean): Promise<"signal" | ChildProcess> {
   return new Promise((settle) => {
     if (stopRequested()) { settle("signal"); return; }
-    const finish = (reason: "signal" | "exit") => {
+    const finish = (reason: "signal" | ChildProcess) => {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
-      child.off("close", onExit);
+      for (const child of children) child.off("exit", onExit);
       settle(reason);
     };
     const onSignal = () => finish("signal");
-    const onExit = () => finish("exit");
+    function onExit(this: ChildProcess) { finish(this); }
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
-    child.once("close", onExit);
+    for (const child of children) child.once("exit", onExit);
+    const stopped = children.find(exited);
+    if (stopped) finish(stopped);
   });
 }
 
@@ -478,7 +498,7 @@ type UiLaunchPhase = "browser-ensure" | "browser-ready" | "fixture-start" | "fix
 
 const CANARY_TITLE = "Isolated Chrome ready";
 
-async function launchLoopbackChrome(executable: string, home: string, env: NodeJS.ProcessEnv, deadline: number, signal: AbortSignal) {
+async function launchLoopbackChrome(executable: string, home: string, env: NodeJS.ProcessEnv, signal: AbortSignal) {
   const proxy = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/fixture-canary") {
       res.writeHead(200, { "content-type": "text/html" });
@@ -491,11 +511,16 @@ async function launchLoopbackChrome(executable: string, home: string, env: NodeJ
   proxy.on("clientError", (_error, socket) => socket.destroy());
   proxy.on("connect", (_req, socket) => {
     socket.on("error", () => socket.destroy());
-    socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.end("HTTP/1.1 403 Forbidden\r\n\r\n", () => socket.destroy());
   });
   let child: ChildProcess | undefined;
   const close = async () => {
-    try { if (child?.pid) await waitForExit(child, { signal: "SIGTERM", graceMs: 3_000 }); }
+    try {
+      if (child?.pid) {
+        await waitForExit(child, { signal: "SIGTERM", graceMs: 3_000 });
+        if (!exited(child)) throw new ControlOmbError("the owned Chrome process exit could not be confirmed");
+      }
+    }
     finally {
       const closed = new Promise<void>((done) => proxy.close(() => done()));
       proxy.closeAllConnections();
@@ -514,39 +539,64 @@ async function launchLoopbackChrome(executable: string, home: string, env: NodeJ
     child = spawn(executable, ["--headless=new", "--no-first-run", "--no-default-browser-check", ...credentialStoreFlags(),
       "--disable-background-networking", "--disable-component-update", "--disable-sync", `--proxy-server=http://127.0.0.1:${address.port}`,
       "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { env, stdio: "ignore" });
+    const browser = child;
     let failed = false;
-    child.once("error", () => { failed = true; });
-    while (Date.now() < deadline && !failed && child.exitCode === null && child.signalCode === null) {
-      signal.throwIfAborted();
-      const endpoint = fixtureDevTools(profile);
-      if (endpoint) return { ...endpoint, canaryUrl: `http://127.0.0.1:${address.port}/fixture-canary`, close };
-      await delay(50, undefined, { signal });
-    }
-    throw new ControlOmbError("the fixture Chrome did not open its loopback DevTools port");
+    browser.once("error", () => { failed = true; });
+    const ready = async (deadline: number): Promise<OwnedChromeSession> => {
+      while (Date.now() < deadline && !failed && !exited(browser)) {
+        signal.throwIfAborted();
+        const endpoint = fixtureDevTools(home);
+        if (endpoint && browser.pid) return { endpoint, pid: browser.pid };
+        await delay(50, undefined, { signal });
+      }
+      throw new ControlOmbError("the fixture Chrome did not open its loopback DevTools port");
+    };
+    return { child: browser, canaryUrl: `http://127.0.0.1:${address.port}/fixture-canary`, ready, close };
   } catch (error) {
     await close();
     throw error;
   }
 }
 
-async function openLoopbackPreview(binary: string, env: NodeJS.ProcessEnv, chrome: Awaited<ReturnType<typeof launchLoopbackChrome>>,
-  url: URL, deadline: number, phase: (name: UiLaunchPhase) => void): Promise<void> {
+async function openLoopbackPreview(binary: string, env: NodeJS.ProcessEnv, endpoint: string, canaryUrl: string,
+  url: URL, deadline: number, signal: AbortSignal, phase: (name: UiLaunchPhase) => void): Promise<void> {
   const remaining = () => Math.max(1, deadline - Date.now());
-  const transport = await webSocketTransport(`ws://127.0.0.1:${chrome.port}${chrome.path}`, { timeoutMs: remaining() });
-  const deadlineTimer = setTimeout(() => transport.close(), remaining());
+  const mounted = `location.href === ${JSON.stringify(url.href)} && document.readyState !== 'loading' && Boolean(document.querySelector('#root > *'))`;
+  const transport = await webSocketTransport(endpoint, { timeoutMs: remaining(), signal });
+  const closeTransport = () => transport.close();
+  const deadlineTimer = setTimeout(closeTransport, remaining());
+  signal.addEventListener("abort", closeTransport, { once: true });
   try {
+    signal.throwIfAborted();
     const browser = await CdpBrowser.connect(transport, { viewport: null, permissions: false, timeoutMs: remaining() });
-    const page = await browser.waitForPage((candidate) => candidate.url() === "about:blank", remaining());
-    await page.navigate(chrome.canaryUrl, { readiness: "domcontentloaded", timeoutMs: remaining() });
-    if (await page.evaluate("document.title") !== CANARY_TITLE) throw new ControlOmbError("the fixture Chrome did not read the loopback canary");
+    const page = await browser.waitForPage((candidate) => candidate.url() === "about:blank", remaining(), signal);
+    const waitFor = async (test: string, failure: string) => {
+      while (await page.evaluate(test).catch(() => false) !== true) {
+        signal.throwIfAborted();
+        if (Date.now() >= deadline) throw new ControlOmbError(failure);
+        await delay(50, undefined, { signal });
+      }
+      signal.throwIfAborted();
+    };
+    await page.navigate(canaryUrl, { readiness: "none", timeoutMs: remaining() });
+    await waitFor(`location.href === ${JSON.stringify(canaryUrl)} && document.title === ${JSON.stringify(CANARY_TITLE)}`, "the fixture Chrome did not read the loopback canary");
     phase("browser-cdp-ready");
-    await page.navigate(url.href, { readiness: "domcontentloaded", timeoutMs: remaining() });
-    await page.waitFor({ target: { selector: "#root > *" }, urlIncludes: url.href, timeoutMs: remaining() });
+    await page.navigate(url.href, { readiness: "none", timeoutMs: remaining() });
+    await waitFor(mounted, "the fixture preview did not mount within the browser-open deadline");
+  } catch (error) {
+    signal.throwIfAborted();
+    throw error;
   } finally {
+    signal.removeEventListener("abort", closeTransport);
     clearTimeout(deadlineTimer);
-    transport.close();
+    closeTransport();
   }
-  const checked = await agentBrowser(binary, env, ["eval", `location.href === ${JSON.stringify(url.href)} && Boolean(document.querySelector('#root > *'))`], remaining());
+  signal.throwIfAborted();
+  const checked = await agentBrowser(binary, env, ["eval", mounted], remaining(), signal).catch((error: unknown) => {
+    signal.throwIfAborted();
+    throw error;
+  });
+  signal.throwIfAborted();
   if (checked.result !== true) throw new ControlOmbError("the mounted preview is not on the owned browser session");
   phase("preview-mounted");
 }
@@ -593,7 +643,7 @@ export async function launchUi(
   // still runs the cleanup below for whatever already started.
   let stopRequested = false;
   const startup = new AbortController();
-  const requestStop = () => { stopRequested = true; startup.abort(); };
+  const requestStop = () => { stopRequested = true; startup.abort(new ControlOmbError("ui launch cancelled")); };
   process.once("SIGINT", requestStop);
   process.once("SIGTERM", requestStop);
   const checkpoint = () => { if (stopRequested) throw new ControlOmbError("ui launch cancelled"); };
@@ -602,6 +652,7 @@ export async function launchUi(
   let preview: MountedPreview | undefined;
   let opened: { binary: string; env: NodeJS.ProcessEnv } | undefined;
   let ownedChrome: Awaited<ReturnType<typeof launchLoopbackChrome>> | undefined;
+  let handlePath: string | undefined;
   try {
     phase("browser-ensure");
     const { binary, chrome } = await ensureUiBrowser(parentEnv, note);
@@ -631,15 +682,17 @@ export async function launchUi(
     const deadline = Date.now() + 120_000;
     if (process.platform === "darwin" && chrome) {
       phase("chrome-start");
-      ownedChrome = await launchLoopbackChrome(chrome, session.home, sessionEnv(session, parentEnv), deadline, startup.signal);
-      session.cdpPort = ownedChrome.port;
+      ownedChrome = await launchLoopbackChrome(chrome, session.home, sessionEnv(session, parentEnv), startup.signal);
+      session.ownedChrome = await ownedChrome.ready(deadline);
       phase("chrome-ready");
     }
     const env = sessionEnv(session, parentEnv);
     opened = { binary, env };
     phase("browser-open-start");
-    if (ownedChrome) await openLoopbackPreview(binary, env, ownedChrome, previewUrl, deadline, phase);
-    else await agentBrowser(binary, env, ["open", previewUrl.href], 120_000);
+    if (ownedChrome && session.ownedChrome) {
+      await openLoopbackPreview(binary, env, session.ownedChrome.endpoint, ownedChrome.canaryUrl, previewUrl, deadline, startup.signal, phase);
+      requireOwnedChrome(session.home, session.ownedChrome);
+    } else await agentBrowser(binary, env, ["open", previewUrl.href], 120_000);
     checkpoint();
     phase("browser-opened");
     const handle: UiHandle = {
@@ -651,34 +704,48 @@ export async function launchUi(
       botId: created.bot.id,
       logPath: fixture.info.logPath,
       chrome,
-      ...(ownedChrome ? { cdpPort: ownedChrome.port } : {}),
+      ...(session.ownedChrome ? { ownedChrome: session.ownedChrome } : {}),
     };
-    const handlePath = join(fixture.info.dataDir, "ui.json");
+    handlePath = join(fixture.info.dataDir, "ui.json");
     writeFileSync(handlePath, `${JSON.stringify(handle, null, 2)}\n`, { mode: 0o600 });
     io.stdout.write(`${JSON.stringify({
       ok: true, ui: handlePath, url: handle.url, previewUrl: handle.previewUrl, botId: handle.botId, dataDir: handle.home, logPath: handle.logPath,
     }, null, 2)}\n`);
     process.off("SIGINT", requestStop);
     process.off("SIGTERM", requestStop);
-    const reason = await parkUntilSignalOrExit(fixture.child, () => stopRequested);
-    if (reason === "exit") {
+    const children = ownedChrome ? [fixture.child, ownedChrome.child] : [fixture.child];
+    const reason = await parkUntilSignalOrExit(children, () => stopRequested);
+    if (reason !== "signal") {
       process.exitCode = 1;
-      io.stderr.write(`${JSON.stringify({ ok: false, error: `verification server exited unexpectedly; see ${fixture.info.logPath}` }, null, 2)}\n`);
+      const processName = reason === ownedChrome?.child ? "owned Chrome" : "verification server";
+      io.stderr.write(`${JSON.stringify({ ok: false, error: `${processName} exited unexpectedly; see ${fixture.info.logPath}` }, null, 2)}\n`);
     }
   } finally {
     process.off("SIGINT", requestStop);
     process.off("SIGTERM", requestStop);
-    if (opened) {
-      // closeBrowserSession waits until the daemon is really gone; a plain
-      // `close` only acknowledges. Both are scoped to this fixture's HOME.
-      if (!await closeBrowserSession(opened.binary, opened.env) && !ownedChrome) {
+    const failures: string[] = [];
+    let keepDataDir = false;
+    const report = (error: unknown) => failures.push(error instanceof Error ? error.message : String(error));
+    try { if (handlePath) rmSync(handlePath, { force: true }); }
+    catch (error) { report(error); }
+    try {
+      if (opened && !await closeBrowserSession(opened.binary, opened.env)) {
+        if (ownedChrome) throw new ControlOmbError("the owned browser daemon shutdown could not be confirmed");
         await agentBrowser(opened.binary, opened.env, ["close"], 15_000).catch(() => {});
       }
+    } catch (error) {
+      keepDataDir = Boolean(ownedChrome);
+      report(error);
     }
     try { await ownedChrome?.close(); }
-    finally {
-      try { await preview?.close(); }
-      finally { await fixture?.close(); }
+    catch (error) { keepDataDir = true; report(error); }
+    try { await preview?.close(); }
+    catch (error) { report(error); }
+    try { await fixture?.close({ keepDataDir }); }
+    catch (error) { report(error); }
+    if (ownedChrome && fixture && !keepDataDir && existsSync(fixture.info.dataDir)) failures.push("the owned fixture directory was not removed");
+    if (failures.length) {
+      throw new ControlOmbError(`UI fixture teardown failed: ${failures.join("; ")}`, keepDataDir && fixture ? `inspect the isolated fixture at ${fixture.info.dataDir}` : undefined);
     }
   }
 }

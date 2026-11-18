@@ -282,7 +282,8 @@ export class CdpBrowser implements PageHost {
   }
 
   /** The first running tab `match` accepts, now or when it opens; rejects if that tab cannot be set up. */
-  waitForPage(match: (page: CdpPage) => boolean = () => true, timeoutMs = 15_000): Promise<CdpPage> {
+  waitForPage(match: (page: CdpPage) => boolean = () => true, timeoutMs = 15_000, signal?: AbortSignal): Promise<CdpPage> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = (page: CdpPage | null, error?: unknown) => {
@@ -290,6 +291,7 @@ export class CdpBrowser implements PageHost {
         settled = true;
         off();
         offFailure();
+        signal?.removeEventListener("abort", abort);
         clearTimeout(timer);
         if (page) resolve(page);
         else reject(error);
@@ -303,6 +305,8 @@ export class CdpBrowser implements PageHost {
       this.#failureListeners.add(failed);
       const offFailure = () => this.#failureListeners.delete(failed);
       const timer = setTimeout(() => finish(null, new DriverError("timeout", `No matching tab opened within ${timeoutMs} ms.`)), timeoutMs);
+      const abort = () => finish(null, signal?.reason);
+      signal?.addEventListener("abort", abort, { once: true });
       for (const page of this.#pages.values()) {
         void (this.#running.get(page) ?? page.ready).then(() => {
           if (!page.closed && match(page)) finish(page);

@@ -125,7 +125,7 @@ export interface VerificationServer {
   info: { url: string; pid: number; dataDir: string; logPath: string };
   fixtureDumpPath: string;
   child: ChildProcess;
-  close(): Promise<void>;
+  close(options?: { keepDataDir?: boolean }): Promise<void>;
 }
 
 /** A temporary home in `dataDir`, the fake engine's knobs from `parentEnv`, node
@@ -467,11 +467,11 @@ export async function launchVerificationServer(
     info: { url, pid: child.pid!, dataDir, logPath },
     fixtureDumpPath,
     child,
-    async close() {
+    async close({ keepDataDir = false } = {}) {
       if (closed) return;
       closed = true;
       await waitForExit(child, { signal: "SIGTERM" });
-      await removeTempDir(dataDir);
+      if (!keepDataDir) await removeTempDir(dataDir);
     },
   };
 }
