@@ -55,7 +55,8 @@ export interface HongguoSeries extends HongguoSeriesCard {
   episodes: HongguoEpisode[];
 }
 export interface HongguoSeriesResponse { appId: string; revision: number; series: HongguoSeries }
-export interface HongguoPlaybackRequest { expectedRevision: number; seriesId: string; episodeId: string; qualityId?: string }
+export interface HongguoPlaybackRequest { expectedRevision: number; seriesId: string; episodeId: string;
+  qualityId?: string; intent?: "prefetch" }
 
 /** An unavailable result has no media URL; the native player must not invent one. */
 export type HongguoPlaybackResponse =
