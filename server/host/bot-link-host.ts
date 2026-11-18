@@ -154,8 +154,35 @@ export function createBotLinkHost(deps: BotLinkHostDeps) {
       return { token: issued.token, sessionId: issued.session.id };
     },
     revoke: (sessionId) => { deps.sessions.revoke(sessionId); } });
+  function prepareLocalBatch<T extends { botId: string }, P>(address: CoordinateContext["address"], targets: readonly T[],
+    approvalMissing: boolean, plan: (target: T, sender: BotRecord, recipient: BotRecord) => P):
+    { sender: BotRecord; plans: Map<string, P> } | { error: string } {
+    const sender = store.bot(address.botId);
+    if (!sender || sender.hidden) return { error: "Source membership or task was removed" };
+    const problem = sourceProblem(address);
+    if (problem) return { error: problem };
+    if (approvalMissing && deps.peerReviewRequired(sender, address.threadId)) {
+      return { error: "Sender now requires peer approval; submit a new approved request" };
+    }
+    const plans = new Map<string, P>();
+    for (const target of targets) {
+      const recipient = store.bot(target.botId);
+      if (!recipient || recipient.hidden) return { error: "The recipient is no longer available" };
+      try { plans.set(target.botId, plan(target, sender, recipient)); }
+      catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
+    }
+    return { sender, plans };
+  }
+  async function reviewLocalBatch(sender: BotRecord, threadId: string, targets: readonly { botId: string }[], call: CoordinateBotsCall, requireActive: () => void) {
+    const verdicts = await Promise.all(targets.map(({ botId }) => requestPeerApproval(deps.approvalBus(), sender,
+      store.bot(botId)!, call.message, call.consult ? "ask_bot" : "delegate_bot", threadId)));
+    requireActive();
+    const blocked = verdicts.flatMap((verdict, index) => verdict === "allow" ? [] : [{ botId: targets[index]!.botId, ...peerApprovalFailure(verdict) }]);
+    if (blocked.length) return { error: blocked.every((failure) => failure.approvalOutcome === "deny")
+      ? "Denied by user; no work sent." : `${blocked.map((failure) => failure.error).join("; ")}; no work sent.`, approvals: blocked };
+  }
   return {
-    link, routes, rooms, sourceProblem,
+    link, routes, rooms, sourceProblem, prepareLocalBatch, reviewLocalBatch,
     coordinate(call: CoordinateBotsCall, context: Omit<CoordinateContext, "problem" | "approveLinked">,
       requireActive: () => void, local: Parameters<typeof link.coordinate>[2]) {
       const { botId, threadId } = context.address;

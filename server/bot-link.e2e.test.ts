@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.ts";
 import { linkedAddress } from "../electron/bot-link-address.mjs";
+import { readHandoffs } from "./testing/handoff-rows.ts";
 
 type Fixture = Awaited<ReturnType<typeof launchVerificationServer>>;
 
@@ -223,3 +224,55 @@ it("a bot on the computer and a bot on the person's own server hand each other w
     await Promise.all(fixtures.map((fixture) => fixture.close()));
   }
 }, 180_000);
+
+it("mixed final admission refuses an unowned local thread and local reach revoked during approval", async () => {
+  const local = await launchVerificationServer({ FAKE_CLAUDE_MODE: "slow", FAKE_CLAUDE_SLOW_FINISH_GATE: join(import.meta.dirname, "no-mixed-admission-finish-gate") });
+  let remote: Fixture | undefined;
+  try {
+    remote = await launchVerificationServer({}, undefined, undefined, undefined, undefined, { scripted: true });
+    const computer = place(local), home = place(remote);
+    const writer = (await computer.cli("new-bot", "--name", "Writer")).bot;
+    const editor = (await computer.cli("new-bot", "--name", "Editor")).bot;
+    const atlas = (await home.cli("new-bot", "--name", "Atlas")).bot;
+    const pairing = await home.api("POST", "/api/auth/pairing", { label: "Fixture app", scopes: ["admin", "client"] });
+    const owner = (await home.api("POST", "/api/auth/pair", { code: pairing.code })).token as string;
+    const id = (await computer.api("GET", "/.well-known/openmausbot/environment")).environmentId as string;
+    const paired = await home.api("POST", "/api/bot-link/pair", { computer: { id, name: "Fixture computer" }, name: "Fixture home" }, { token: owner });
+    await computer.api("PUT", "/api/bot-link", { on: true, origin: home.url, token: paired.token, name: "Fixture computer", cloud: paired.place });
+    const linked = linkedAddress(paired.place.id, atlas.id);
+    await expect.poll(async () => (await computer.api("GET", "/api/bot-link/bots")).bots.map((bot: { id: string }) => bot.id), { timeout: 15_000 }).toContain(linked);
+    await computer.api("PATCH", `/api/bots/${writer.id}`, { approvePeerComms: true, approvalMode: "ask", peers: [editor.id, linked] });
+    const threadId = writer.activeTaskId as string;
+    await computer.cli("send", "--bot", writer.id, "--task", threadId, "--text", "Hold open this synthetic coordination turn.");
+    const token = () => {
+      try { return JSON.parse(readFileSync(local.fixtureDumpPath, "utf8")).mcpConfig.mcpServers.agents.env.OMB_COMMS_TOKEN as string; }
+      catch { return ""; }
+    };
+    await expect.poll(token, { timeout: 15_000 }).toMatch(/^[a-f0-9]{48}$/);
+    const allow = async (target: string, message: string, beforeAllow?: () => Promise<unknown>) => {
+      const card = async () => (await computer.messages(threadId)).find((row) => row.card?.allowKey?.endsWith(`:${target}`) && row.card.subtitle === message && !row.card.answered)?.card;
+      await expect.poll(async () => (await card())?.requestId, { timeout: 10_000 }).toBeTruthy();
+      const requestId = (await card()).requestId;
+      await beforeAllow?.();
+      await computer.api("POST", `/api/threads/${threadId}/respond`, { requestId, behavior: "allow" });
+    };
+    const outcomes = [];
+    for (const [thread, message, revoke] of [[editor.activeTaskId, "Use the unowned local thread", false], ["standing", "Recheck the local peer scope", true]] as const) {
+      const previous = new Set(readHandoffs(computer.dataDir).map((node) => node.id));
+      const pending = fetch(`${computer.url}/api/internal/coordinate-bots`, { method: "POST",
+        headers: { "content-type": "application/json", origin: computer.url, authorization: `Bearer ${token()}` },
+        body: JSON.stringify({ botIds: [editor.id, linked], message, thread }), signal: AbortSignal.timeout(25_000) });
+      void pending.catch(() => {});
+      await allow(linked, message);
+      await allow(editor.id, message, revoke ? () => computer.api("PATCH", `/api/bots/${writer.id}`, { peers: [linked] }) : undefined);
+      const response = await pending;
+      outcomes.push({ status: response.status, body: await response.json(), enqueues: readHandoffs(computer.dataDir).filter((node) => node.parentId && !previous.has(node.id)).map((node) => node.botId) });
+    }
+    expect(outcomes).toEqual([
+      { status: 403, body: { error: expect.stringContaining("is not a thread you opened") }, enqueues: [] },
+      { status: 403, body: { error: expect.stringContaining("is not one of the bots Writer is set to talk to") }, enqueues: [] },
+    ]);
+  } finally {
+    await Promise.all([local.close(), remote?.close()]);
+  }
+}, 90_000);

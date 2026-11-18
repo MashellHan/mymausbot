@@ -106,40 +106,56 @@ export function agentBrowser(
   return new Promise((done, fail) => {
     let child: ChildProcess;
     try {
-      child = spawn(binary, [...args, "--json"], { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      child = spawn(binary, [...args, "--json"], { env, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
     } catch (error) {
       fail(new ControlOmbError(`could not start agent-browser: ${error instanceof Error ? error.message : String(error)}`));
       return;
     }
     let output = "";
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
-    timer.unref?.();
-    child.stdout?.on("data", (chunk: Buffer) => {
-      output += String(chunk);
-      if (output.length > OUTPUT_LIMIT) { clearTimeout(timer); child.kill("SIGKILL"); }
-    });
-    child.stderr?.resume();
-    child.on("error", (error) => { clearTimeout(timer); fail(new ControlOmbError(`could not start agent-browser: ${error.message}`)); });
-    child.on("close", (code) => {
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
       clearTimeout(timer);
-      if (timedOut) {
-        fail(new ControlOmbError(`agent-browser ${args[0]} did not finish within ${timeoutMs}ms`, "check the page with `ui screenshot` or `ui console`"));
-        return;
-      }
+      child.stdout?.destroy();
+    };
+    const reject = (error: ControlOmbError) => {
+      if (settled) return;
+      cleanup();
+      fail(error);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new ControlOmbError(`agent-browser ${args[0]} did not finish within ${timeoutMs}ms`, "check the page with `ui screenshot` or `ui console`"));
+    }, timeoutMs);
+    timer.unref?.();
+    const readResult = (code: number | null, closed: boolean) => {
+      if (settled) return;
       let result: { success?: unknown; data?: unknown; error?: unknown } | null = null;
       try { result = JSON.parse(output); } catch { /* not JSON: reported below */ }
       const data = result?.data;
       if (code === 0 && result?.success === true && data && typeof data === "object" && !Array.isArray(data)) {
+        cleanup();
         done(data as Record<string, unknown>);
         return;
       }
+      if (!closed) return;
       const reason = typeof result?.error === "string" ? result.error
         : result?.error && typeof result.error === "object" && typeof (result.error as { message?: unknown }).message === "string"
           ? (result.error as { message: string }).message
           : `exit ${code ?? "by signal"}`;
-      fail(new ControlOmbError(`agent-browser ${args[0]} failed: ${reason.slice(0, 300)}`, "take a fresh `ui snapshot`; refs change after the page updates"));
+      reject(new ControlOmbError(`agent-browser ${args[0]} failed: ${reason.slice(0, 300)}`, "take a fresh `ui snapshot`; refs change after the page updates"));
+    };
+    child.stdout?.on("data", (chunk: Buffer) => {
+      output += String(chunk);
+      if (output.length > OUTPUT_LIMIT) {
+        child.kill("SIGKILL");
+        reject(new ControlOmbError(`agent-browser ${args[0]} exceeded its output limit`));
+      } else if (child.exitCode === 0) readResult(0, false);
     });
+    child.on("error", (error) => reject(new ControlOmbError(`could not start agent-browser: ${error.message}`)));
+    // Node's close event can outlive the CLI when its daemon inherits stdout.
+    child.on("exit", (code) => { if (code === 0) readResult(code, false); });
+    child.on("close", (code) => readResult(code, true));
   });
 }
 

@@ -100,6 +100,27 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
     return requester?.botId === senderId && !requester.groupId && !ENDED.has(requester.status);
   };
 
+  type RelayTarget = { sender: BotRecord; senderThreadId: string; senderNode?: HandoffView; target: BotRecord; answers?: string;
+    threadId?: string; selected?: boolean; sentThisTurn?: ReadonlySet<string>; sourceLevel: ApprovalMode };
+  function selectRelay(input: RelayTarget) {
+    const { sender, target } = input;
+    const waiting = waitingOn(target).filter((one) => deps.mayReach(input.senderThreadId, one.threadId));
+    const ownWork = (node: HandoffView | undefined): node is HandoffView => node !== undefined && node.threadId === input.threadId
+      && !input.sentThisTurn?.has(node.id) && handedOnBy(node, sender.id) && deps.mayReach(input.senderThreadId, node.threadId);
+    const pick = input.answers !== undefined ? waiting.find((one) => one.node?.id === input.answers)
+      : waiting.find((one) => one.node !== undefined && input.senderNode?.carrying?.includes(one.node.id) === true && (!input.selected || one.threadId === input.threadId))
+        ?? waiting.find((one) => ownWork(one.node) && (one.card !== undefined || !one.node.cards?.length));
+    return { pick, running: pick ? undefined : deps.active().find((node) => node.botId === target.id && node.status === "running" && ownWork(node)) };
+  }
+
+  function relayProblem(input: RelayTarget, checkThread: (threadId: string) => string | undefined): string | undefined {
+    const { pick, running } = selectRelay(input);
+    if (pick && personOnly(pick.question) && !pick.node?.cards?.length) return "Only the person can answer that question; nothing was sent.";
+    if (pick && !pick.node) return undefined;
+    const threadId = pick?.threadId ?? running?.threadId;
+    return threadId === undefined ? undefined : checkThread(threadId) ?? permissionRefusal(input.target, threadId, input.sourceLevel, pick?.node?.id ?? running?.id)?.detail;
+  }
+
   /** A bot's message goes into work the target already has instead of becoming new work. It answers a teammate's question
    * when it says so (`answers`: the assignment id the question's note names), when the sender's own turn was resumed with
    * that question, or when it goes to the thread (`threadId`) where work the sender handed on in an earlier turn waits on
@@ -107,15 +128,9 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
    * handed to that running turn. Work handed out in this very turn (`sentThisTurn`) stays apart: a second assignment is its
    * own. When the sender chose `threadId` itself (`selected`: a report-back thread it steers), a question it carries from another
    * thread does not take the message. Undefined when it goes into no work; a failed receipt when `answers` names work that no longer asks. */
-  async function relay(input: { sender: BotRecord; senderThreadId: string; senderNode?: HandoffView; target: BotRecord; message: string; answers?: string;
-    threadId?: string; selected?: boolean; sentThisTurn?: ReadonlySet<string>; lends?: boolean; sourceLevel: ApprovalMode }): Promise<PeerDeliveryReceipt | undefined> {
+  async function relay(input: RelayTarget & { message: string; lends?: boolean }): Promise<PeerDeliveryReceipt | undefined> {
     const { sender, target, message } = input;
-    const waiting = waitingOn(target).filter((one) => deps.mayReach(input.senderThreadId, one.threadId));
-    const ownWork = (node: HandoffView | undefined): node is HandoffView => node !== undefined && node.threadId === input.threadId
-      && !input.sentThisTurn?.has(node.id) && handedOnBy(node, sender.id) && deps.mayReach(input.senderThreadId, node.threadId);
-    const pick = input.answers !== undefined ? waiting.find((one) => one.node?.id === input.answers)
-      : waiting.find((one) => one.node !== undefined && input.senderNode?.carrying?.includes(one.node.id) === true && (!input.selected || one.threadId === input.threadId))
-        ?? waiting.find((one) => ownWork(one.node) && (one.card !== undefined || !one.node.cards?.length));
+    const { pick, running } = selectRelay(input);
     const refused = () => input.answers === undefined ? undefined : peerDeliveryReceipt({ botId: target.id, botName: target.name, outcome: "failed",
       detail: `nothing of ${target.name}'s waits on an answer as ${input.answers}: it was answered or its work ended. Send it without answers if it still needs doing` });
     // A question in words only the person can answer; a wait on a card (a sign-in) is still settled from elsewhere.
@@ -123,7 +138,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
       return peerDeliveryReceipt({ botId: target.id, botName: target.name, outcome: "failed",
         detail: `only the person can answer "${pick.question}": it waits on them where it was asked, and a teammate's answer doesn't settle it. Tell them where it is if they ask` });
     }
-    if (!pick) return refused() ?? await handOn(input, deps.active().find((node) => node.botId === target.id && node.status === "running" && ownWork(node)));
+    if (!pick) return refused() ?? await handOn(input, running);
     if (!pick.node) return peerDeliveryReceipt({ botId: target.id, botName: target.name, outcome: "failed", threadId: pick.threadId,
       detail: "that receiving turn is no longer available; nothing was sent" });
     const denied = permissionRefusal(target, pick.threadId, input.sourceLevel, pick.node.id);
@@ -192,15 +207,21 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
    * Undefined when the thread waits on no question the Chief may answer, so the usual thread rules apply: a sign-in, an
    * approval or a question only the person can answer stays theirs. The card shows the Chief's answer, and the person's own
    * answer still replaces it. */
-  async function answerForPerson(input: { sender: BotRecord; senderThreadId: string; target: BotRecord; threadId: string; message: string; lends?: boolean; sourceLevel: ApprovalMode }): Promise<PeerDeliveryReceipt | undefined> {
-    const { sender, target, threadId, message } = input;
+  type PersonAnswerTarget = { sender: BotRecord; target: BotRecord; threadId: string; sourceLevel: ApprovalMode };
+  function personAnswer(input: PersonAnswerTarget) {
+    const { sender, target, threadId, sourceLevel } = input;
     const task = store.taskByThread(target.id, threadId);
     if (!task || task.archivedAt !== undefined || task.openedBy?.botId === sender.id) return undefined;
     const asked = forPerson(target.id, threadId);
     if (!asked) return undefined;
-    const { row, question } = asked, card = row.card!;
     const running = deps.active().find((node) => node.botId === target.id && node.threadId === threadId && node.status === "running");
-    const denied = permissionRefusal(target, threadId, input.sourceLevel, running?.id);
+    return { ...asked, task, denied: permissionRefusal(target, threadId, sourceLevel, running?.id) };
+  }
+  async function answerForPerson(input: PersonAnswerTarget & { senderThreadId: string; message: string; lends?: boolean }): Promise<PeerDeliveryReceipt | undefined> {
+    const { sender, target, threadId, message } = input;
+    const plan = personAnswer(input);
+    if (!plan) return undefined;
+    const { row, question, task, denied } = plan, card = row.card!;
     if (denied) return denied;
     if (!input.lends) deps.handedInUnproven(threadId);
     if (!(await deps.answerLive(threadId, card.requestId!, `@${sender.name} answered for the person: ${message}`))) {
@@ -216,5 +237,5 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
       detail: `answered its question "${question}" for the person; it carries on with your answer, and the person can still give their own in that thread` });
   }
 
-  return { notAsked, relay, answerForPerson, waitingForPerson };
+  return { notAsked, relay, relayProblem, personAnswer, answerForPerson, waitingForPerson };
 }

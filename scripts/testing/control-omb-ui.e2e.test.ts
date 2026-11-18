@@ -3,7 +3,7 @@
 // resolves (tools directory, OMB_AGENT_BROWSER_PATH or PATH) or OMB_UI_E2E=1
 // asks for the verified download; otherwise skipped.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentBrowserBinary } from "../../server/browser-engine.ts";
 import { removeTempDir, waitForExit } from "../../server/testing/cleanup.ts";
 import { runControlOmb } from "../control-omb.ts";
-import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
+import { agentBrowser, UI_TOOLS_DIR } from "./control-omb-ui.ts";
 import { fixtureApi } from "./preview-fixture.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -38,6 +38,31 @@ const REPLY = "hello from fake claude"; // the fake engine's default reply text
 // OMB_UI_EVIDENCE_DIR keeps the screenshot (CI uploads it); otherwise it is temporary.
 const evidenceDir = process.env.OMB_UI_EVIDENCE_DIR ? resolve(ROOT, process.env.OMB_UI_EVIDENCE_DIR) : mkdtempSync(join(tmpdir(), "omb-ui-evidence-"));
 const ownsEvidenceDir = !process.env.OMB_UI_EVIDENCE_DIR;
+
+it.each(["success", "timeout"] as const)("settles agent-browser %s while its child still holds stdout", async (outcome) => {
+  const home = mkdtempSync(join(tmpdir(), "omb-agent-browser-pipe-"));
+  const entry = join(home, "browser.cjs");
+  const started = join(home, "holder-started"), closed = join(home, "holder-closed");
+  const hold = `const fs = require('node:fs');
+    setTimeout(() => { if (fs.existsSync(process.argv[1])) fs.writeFileSync(process.argv[2], ''); }, 6000);`;
+  writeFileSync(entry, `const fs = require('node:fs');
+    const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(hold)}, ${JSON.stringify(started)}, ${JSON.stringify(closed)}], { stdio: ['ignore', 1, 'ignore'] });
+    child.unref();
+    child.once('spawn', () => {
+      fs.writeFileSync(${JSON.stringify(started)}, '');
+      if (process.argv[2] === 'success') process.stdout.write(JSON.stringify({ success: true, data: { ready: true } }));
+      else setInterval(() => {}, 1000);
+    });`);
+  try {
+    const result = agentBrowser(process.execPath, { HOME: home }, [entry, outcome], 2_500);
+    if (outcome === "success") await expect(result).resolves.toEqual({ ready: true });
+    else await expect(result).rejects.toThrow("did not finish within 2500ms");
+    expect(existsSync(started)).toBe(true);
+    expect(existsSync(closed)).toBe(false);
+  } finally {
+    await removeTempDir(home);
+  }
+});
 
 interface Launched {
   child: ReturnType<typeof spawn>;
