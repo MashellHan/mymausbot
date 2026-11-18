@@ -8,9 +8,15 @@ import { setShowThreads } from "./thread-preferences";
 import { setColorUserBubbles } from "./user-bubble-preference";
 
 const values = new Map<string, string>();
+const browser = new EventTarget();
+
+function dispatchStorageChange(key: string) {
+  browser.dispatchEvent(Object.assign(new Event("storage"), { key, storageArea: null }));
+}
+
 beforeEach(() => {
   values.clear();
-  vi.stubGlobal("window", {});
+  vi.stubGlobal("window", browser);
   vi.stubGlobal("localStorage", { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } });
 });
 afterEach(() => {
@@ -61,11 +67,6 @@ describe("window preferences", () => {
     vi.useFakeTimers();
     const fetched = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetched);
-    let storageListener: ((event: StorageEvent) => void) | undefined;
-    vi.stubGlobal("window", {
-      addEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage") storageListener = listener; },
-      removeEventListener: () => undefined,
-    });
     reportWindowPrefs();
     await vi.advanceTimersByTimeAsync(250);
     applyWindowPref({ kind: "window-pref", id: "appearance.toolsLayout", value: "toolbar" });
@@ -73,7 +74,7 @@ describe("window preferences", () => {
     await vi.advanceTimersByTimeAsync(250);
     fetched.mockClear();
     values.set(SIDEBAR_TOOLS_LAYOUT_KEY, "rows");
-    storageListener?.({ key: SIDEBAR_TOOLS_LAYOUT_KEY, storageArea: null } as StorageEvent);
+    dispatchStorageChange(SIDEBAR_TOOLS_LAYOUT_KEY);
     expect(readSidebarToolsLayout()).toBe("rows");
     await vi.advanceTimersByTimeAsync(250);
     expect(fetched).toHaveBeenCalledOnce();
@@ -106,11 +107,6 @@ describe("window preferences", () => {
     vi.useFakeTimers();
     const fetched = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetched);
-    let storageListener: ((event: StorageEvent) => void) | undefined;
-    vi.stubGlobal("window", {
-      addEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage") storageListener = listener; },
-      removeEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage" && storageListener === listener) storageListener = undefined; },
-    });
     const unsubscribeUi = subscribePinnedCircles(() => undefined);
     reportWindowPrefs();
     await vi.advanceTimersByTimeAsync(250);
@@ -120,7 +116,7 @@ describe("window preferences", () => {
     unsubscribeUi();
     fetched.mockClear();
     values.set(PINNED_CIRCLES_KEY, "false");
-    storageListener?.({ key: PINNED_CIRCLES_KEY, storageArea: null } as StorageEvent);
+    dispatchStorageChange(PINNED_CIRCLES_KEY);
     expect(loadPinnedCircles()).toBe(false);
     await vi.advanceTimersByTimeAsync(250);
     expect(fetched).toHaveBeenCalledOnce();
@@ -156,11 +152,6 @@ describe("window preferences", () => {
     vi.useFakeTimers();
     const fetched = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetched);
-    let storageListener: ((event: StorageEvent) => void) | undefined;
-    vi.stubGlobal("window", {
-      addEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage") storageListener = listener; },
-      removeEventListener: () => undefined,
-    });
     reportWindowPrefs();
     await vi.advanceTimersByTimeAsync(250);
     applyWindowPref({ kind: "window-pref", id: "appearance.universalPins", value: true });
@@ -168,7 +159,7 @@ describe("window preferences", () => {
     await vi.advanceTimersByTimeAsync(250);
     fetched.mockClear();
     values.set(UNIVERSAL_PINS_KEY, "false");
-    storageListener?.({ key: UNIVERSAL_PINS_KEY, storageArea: null } as StorageEvent);
+    dispatchStorageChange(UNIVERSAL_PINS_KEY);
     expect(loadUniversalPins()).toBe(false);
     await vi.advanceTimersByTimeAsync(250);
     expect(fetched).toHaveBeenCalledOnce();
@@ -201,11 +192,6 @@ describe("window preferences", () => {
     vi.useFakeTimers();
     const fetched = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetched);
-    let storageListener: ((event: StorageEvent) => void) | undefined;
-    vi.stubGlobal("window", {
-      addEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage") storageListener = listener; },
-      removeEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage" && storageListener === listener) storageListener = undefined; },
-    });
     const unsubscribeUi = subscribeFollowUpDefault(() => undefined);
     reportWindowPrefs();
     await vi.advanceTimersByTimeAsync(250);
@@ -215,7 +201,7 @@ describe("window preferences", () => {
     unsubscribeUi();
     fetched.mockClear();
     values.set(FOLLOW_UP_KEY, "steer");
-    storageListener?.({ key: FOLLOW_UP_KEY, storageArea: null } as StorageEvent);
+    dispatchStorageChange(FOLLOW_UP_KEY);
     expect(readFollowUpDefault()).toBe("steer");
     await vi.advanceTimersByTimeAsync(250);
     expect(fetched).toHaveBeenCalledOnce();
