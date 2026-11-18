@@ -286,7 +286,7 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.vitest.needs).toBe("static");
   });
 
-  it("checks both FOSS projects fresh and sequentially within one bounded macOS heap", () => {
+  it("checks all FOSS projects fresh and sequentially within one bounded macOS heap", () => {
     const foss = workflow.jobs.foss;
     const steps = foss.steps as Step[];
     const removed = steps.findIndex((step) => step.name === "Delete the enterprise folder");
@@ -298,7 +298,9 @@ describe("CI concurrency", () => {
     expect(tested).toBeGreaterThan(checked);
     expect(steps[checked]!.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=4096" });
     expect(steps[checked]!.run!.trim().split("\n")).toEqual([
-      "pnpm typecheck --project ui --fresh", "pnpm typecheck --project server --fresh",
+      "pnpm typecheck --project ui --fresh",
+      "pnpm typecheck --project server --fresh",
+      "pnpm typecheck --project phone-protocol --fresh",
     ]);
     expect(steps[checked]).not.toHaveProperty("continue-on-error");
     expect(workflow.jobs.static.steps.some((step: Step) => step.run === "pnpm typecheck")).toBe(true);
