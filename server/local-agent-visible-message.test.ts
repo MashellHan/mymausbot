@@ -99,4 +99,17 @@ describe("bounded tool details", () => {
     expect(redactedAgentToolResult('{"status":"finished","count":2}').text).toBe('{"status":"finished","count":2}');
     expect(redactedAgentToolArguments("Inspect fixture status: finished").text).toBe("Inspect fixture status: finished");
   });
+
+  it("withholds structured tool text that declares encoded content or a private named header", () => {
+    for (const text of [
+      '{"encoding":"base64","content":"c3ludGhldGlj"}',
+      'encoding=base64url; content=c3ludGhldGlj',
+      '[{"value":"fixture-opaque-cookie","name":"Cookie"}]',
+      String.raw`response: {\"name\":\"Set-Coo\u006bie\",\"value\":\"opaque\"}`,
+    ]) {
+      expect(redactedAgentToolResult(text).text).toBeNull();
+    }
+    const ordinary = '{"encoding":"utf-8","name":"Content-Language","value":"en"}';
+    expect(redactedAgentToolResult(ordinary).text).toBe(ordinary);
+  });
 });

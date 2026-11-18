@@ -8,6 +8,9 @@ const INTERNAL_ENVELOPE = /<\/?(?:SYSTEM_(?:MESSAGE|NOTIFICATION)|(?:teammate|ag
 const TOOL_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
 const PRIVATE_TOOL_KEY = /(?:auth|base64|binary|body|cookie|credential|data|env|header|image|key|passwd|password|private|secret|session|token)|^sid$/i;
 const TOOL_ASSIGNMENT = /"([^"\n]{1,128})"\s*[:=]|\b([A-Za-z][A-Za-z0-9_.-]*(?:[ \t]+(?:id|key|token|data|value))?)['"]?\s*[:=]/gi;
+const TOOL_FIELD_VALUE = /^\s*(?:"([^"\n]{1,128})"|'([^'\n]{1,128})'|([A-Za-z0-9_-]+))/;
+const PRIVATE_HEADER_NAME = /^(?:(?:set-)?cookie|(?:proxy-)?authorization|x-(?:api-key|auth-token|access-token|session-id))$/i;
+const BASE64_ENCODING = /^base64(?:-?url)?$/i;
 const ENCODED_TOOL_TEXT = /data:[^\s,]{0,100};base64,|[A-Za-z0-9+/_-]{64,}={0,2}/i;
 const MAX_TOOL_SOURCE = 16 * 1024;
 const MAX_TOOL_FIELDS = 8;
@@ -35,8 +38,15 @@ function safeToolText(value: unknown): { text: string | null; clipped: boolean }
   }
   const labels = value.replace(/\\u([\da-f]{4})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
     .replace(/\\+(?=["'])/g, "");
-  for (const [, quoted, bare] of labels.matchAll(TOOL_ASSIGNMENT)) {
-    if (PRIVATE_TOOL_KEY.test(quoted ?? bare ?? "")) return { text: null, clipped: false };
+  for (const match of labels.matchAll(TOOL_ASSIGNMENT)) {
+    const key = (match[1] ?? match[2] ?? "").trim().toLowerCase();
+    if (PRIVATE_TOOL_KEY.test(key)) return { text: null, clipped: false };
+    if (key !== "encoding" && key !== "name") continue;
+    const field = TOOL_FIELD_VALUE.exec(labels.slice(match.index! + match[0].length));
+    const labelValue = (field?.[1] ?? field?.[2] ?? field?.[3] ?? "").trim();
+    if (key === "encoding" ? BASE64_ENCODING.test(labelValue) : PRIVATE_HEADER_NAME.test(labelValue)) {
+      return { text: null, clipped: false };
+    }
   }
   if (/\bBearer\s+\S+/i.test(labels)) return { text: null, clipped: false };
   return redactedAgentText(value);

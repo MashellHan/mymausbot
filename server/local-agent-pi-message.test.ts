@@ -312,7 +312,10 @@ describe("verified Pi visible assistant preview", () => {
     const outputs = [
       '{"cookie":"SID=fixture-cookie"}', 'Set-Cookie: SID=fixture-cookie',
       '{"sessionId":"fixture-session"}', 'Request-Header: fixture-header',
-      '{"base64":"c3ludGhldGlj"}', "Two matching rows",
+      '{"base64":"c3ludGhldGlj"}',
+      '{"encoding":"base64","content":"c3ludGhldGlj"}',
+      '[{"value":"fixture-opaque-cookie","name":"Cookie"}]',
+      "Two matching rows",
     ];
     const messages = outputs.flatMap((text, index) => [
       { role: "assistant", content: [{ type: "toolCall", id: `read-${index}`, name: "fixture.read", arguments: { count: 2 } }] },
@@ -326,7 +329,7 @@ describe("verified Pi visible assistant preview", () => {
     expect(result.events.filter((event) => event.kind === "tool-result").map(({ tool, text }) => [tool, text])).toEqual(
       outputs.map((output, index) => ["fixture.read", index < outputs.length - 1 ? "[Result details unavailable]" : output]),
     );
-    expect(JSON.stringify(result)).not.toMatch(/fixture-cookie|fixture-session|fixture-header|c3ludGhldGlj/);
+    expect(JSON.stringify(result)).not.toMatch(/fixture-cookie|fixture-session|fixture-header|fixture-opaque-cookie|c3ludGhldGlj/);
   });
 
   it("keeps reused and rejected Pi call IDs ineligible throughout the selected branch", async () => {
