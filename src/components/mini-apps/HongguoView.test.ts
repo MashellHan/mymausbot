@@ -6,7 +6,7 @@ import { activeLocale, setLocale, t as hostText } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 import { hongguoText } from "./hongguo-copy";
 import type { MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
-import type { HongguoHistoryEntry, HongguoPlaybackResponse, HongguoSeriesCard } from "../../../shared/hongguo-mini-app";
+import type { HongguoEpisode, HongguoHistoryEntry, HongguoPlaybackResponse, HongguoSeriesCard } from "../../../shared/hongguo-mini-app";
 
 const fixture = vi.hoisted(() => ({ api: vi.fn(), visible: true, fullscreen: null as Element | null }));
 vi.mock("@/state/store", () => ({
@@ -44,7 +44,7 @@ let playbackHold: Promise<void> | null;
 let paginationHold: Promise<void> | null;
 let pageable: boolean;
 let failMore: boolean;
-let episodes: Array<typeof episode | typeof laterEpisode>;
+let episodes: HongguoEpisode[];
 let historyActions: string[];
 let catalogCard: HongguoSeriesCard;
 let refreshKey = 0;
@@ -78,7 +78,9 @@ const openPlayer = async () => {
 
 beforeEach(() => {
   app.id = `hongguo_fixture_${++fixtureId}`;
+  app.revision = 3;
   state.appId = app.id;
+  state.revision = 3;
   storageKey = "fixture-environment";
   refreshKey++;
   fixture.visible = true;
@@ -689,6 +691,202 @@ it("discards a late quality response after selecting a different episode", async
   expect(host.querySelector("video")).toBe(video);
   expect(video?.src).toContain("/1080p?");
   expect(host.querySelector('[aria-label="第 2 集"]')?.getAttribute("aria-current")).toBe("true");
+});
+
+const nextResponse = (id: string, qualityId = "720p"): HongguoPlaybackResponse => ({ appId: app.id, revision: 3,
+  status: "ready", mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/${id}-${qualityId}?expectedRevision=3`, durationSeconds: 100,
+  selectedQualityId: qualityId, availableQualityIds: ["1080p", "720p", "480p"] });
+
+function sharedNextFixture(holdNext = false) {
+  const original = fixture.api.getMockImplementation()!;
+  const jobs = new Map<string, Promise<HongguoPlaybackResponse>>();
+  let release!: () => void;
+  const requests: Array<{ body: { episodeId: string; qualityId?: string; intent?: string }; signal: AbortSignal }> = [];
+  fixture.api.mockImplementation(async (path, init) => {
+    if (!path.endsWith("/playback")) return original(path, init);
+    const body = JSON.parse(init.body);
+    requests.push({ body, signal: init.signal });
+    const key = `${body.expectedRevision}:${body.seriesId}:${body.episodeId}:${body.qualityId ?? "auto"}`;
+    if (!jobs.has(key)) {
+      const value = nextResponse(body.episodeId, body.qualityId ?? (body.episodeId === episode.id ? "1080p" : "720p"));
+      jobs.set(key, holdNext && body.episodeId === laterEpisode.id
+        ? new Promise((resolve) => { release = () => resolve(value); }) : Promise.resolve(value));
+    }
+    return jobs.get(key)!;
+  });
+  return { jobs, requests, release: () => release() };
+}
+
+it("prepares one next only after actual playing and naturally advances using the completed shared auto-quality work", async () => {
+  episodes = [episode, laterEpisode];
+  const backend = sharedNextFixture();
+  await render();
+  const first = await openPlayer();
+  first.currentTime = 1;
+  await act(async () => { first.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+  expect(backend.requests).toHaveLength(1);
+  await act(async () => {
+    first.dispatchEvent(new Event("playing", { bubbles: true }));
+    first.dispatchEvent(new Event("playing", { bubbles: true }));
+  });
+  expect(backend.requests).toHaveLength(2);
+  expect(backend.requests[1]!.body).toMatchObject({ episodeId: laterEpisode.id, intent: "prefetch" });
+  expect(backend.requests[1]!.body.qualityId).toBeUndefined();
+  expect(host.querySelectorAll("video")).toHaveLength(1);
+  await act(async () => { first.currentTime = 100; first.dispatchEvent(new Event("ended", { bubbles: true })); });
+  await vi.waitFor(() => expect(host.querySelector("video")?.getAttribute("src")).toContain("episode_2-720p"));
+  const next = host.querySelector("video")!;
+  expect(next.autoplay).toBe(true);
+  expect(host.querySelector('[aria-label="第 2 集"]')?.getAttribute("aria-current")).toBe("true");
+  expect(backend.requests[2]!.body).toMatchObject({ episodeId: laterEpisode.id });
+  expect(backend.requests[2]!.body.intent).toBeUndefined();
+  expect(backend.requests[2]!.body.qualityId).toBeUndefined();
+  expect(backend.jobs.size).toBe(2);
+  expect(host.querySelectorAll("video")).toHaveLength(1);
+});
+
+it("joins an in-flight same-next preparation before detaching its speculative consumer", async () => {
+  episodes = [episode, laterEpisode];
+  const backend = sharedNextFixture(true);
+  await render();
+  const first = await openPlayer();
+  await act(async () => { first.dispatchEvent(new Event("playing", { bubbles: true })); });
+  const speculative = backend.requests[1]!.signal;
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="第 2 集"]')!.click(); });
+  expect(backend.requests[2]!.body.intent).toBeUndefined();
+  expect(speculative.aborted).toBe(false);
+  expect(backend.jobs.size).toBe(2);
+  await act(async () => { backend.release(); });
+  await vi.waitFor(() => expect(host.querySelector("video")?.getAttribute("src")).toContain("episode_2-720p"));
+  expect(speculative.aborted).toBe(true);
+});
+
+it("lets an explicit different foreground episode win over a late speculative result", async () => {
+  const third = { ...laterEpisode, id: "episode_3", number: 3, title: "Third" };
+  episodes = [episode, laterEpisode, third];
+  const backend = sharedNextFixture(true);
+  await render();
+  const first = await openPlayer();
+  await act(async () => { first.dispatchEvent(new Event("playing", { bubbles: true })); });
+  const speculative = backend.requests[1]!.signal;
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="第 3 集"]')!.click(); });
+  await vi.waitFor(() => expect(host.querySelector("video")?.getAttribute("src")).toContain("episode_3-720p"));
+  expect(speculative.aborted).toBe(true);
+  const foreground = host.querySelector("video");
+  await act(async () => { backend.release(); });
+  expect(host.querySelector("video")).toBe(foreground);
+  expect(host.querySelector('[aria-label="第 3 集"]')?.getAttribute("aria-current")).toBe("true");
+});
+
+it("abandons old-quality speculation and carries an explicit quality through the same next episode", async () => {
+  episodes = [episode, laterEpisode];
+  const backend = sharedNextFixture();
+  await render();
+  const first = await openPlayer();
+  Object.defineProperty(first, "paused", { configurable: true, value: false });
+  await act(async () => { first.dispatchEvent(new Event("playing", { bubbles: true })); });
+  const old = backend.requests[1]!.signal;
+  await selectQuality("720p");
+  expect(old.aborted).toBe(true);
+  const changed = host.querySelector("video")!;
+  Object.defineProperty(changed, "duration", { configurable: true, value: 100 });
+  await act(async () => { changed.dispatchEvent(new Event("loadedmetadata", { bubbles: true })); changed.dispatchEvent(new Event("playing", { bubbles: true })); });
+  const prefetched = backend.requests.find(({ body }) => body.intent === "prefetch" && body.qualityId === "720p");
+  expect(prefetched?.body.episodeId).toBe(laterEpisode.id);
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="第 2 集"]')!.click(); });
+  await vi.waitFor(() => expect(host.querySelector("video")?.getAttribute("src")).toContain("episode_2-720p"));
+  expect(backend.requests.at(-1)!.body).toMatchObject({ episodeId: laterEpisode.id, qualityId: "720p" });
+  expect(backend.requests.at(-1)!.body.intent).toBeUndefined();
+});
+
+it.each(["unavailable", "unknown"] as const)("does not speculate across the immediate %s episode", async (availability) => {
+  episodes = [episode, { ...laterEpisode, availability }, { ...laterEpisode, id: "episode_3", number: 3 }];
+  const backend = sharedNextFixture();
+  await render();
+  const first = await openPlayer();
+  await act(async () => { first.dispatchEvent(new Event("playing", { bubbles: true })); });
+  expect(backend.requests).toHaveLength(1);
+});
+
+it.each(["failure", "unavailable"] as const)("keeps speculative %s nonblocking without retrying buffering or repeated playing events", async (outcome) => {
+  episodes = [episode, laterEpisode];
+  const original = fixture.api.getMockImplementation()!;
+  const requests: string[] = [];
+  fixture.api.mockImplementation(async (path, init) => {
+    if (!path.endsWith("/playback")) return original(path, init);
+    const body = JSON.parse(init.body);
+    requests.push(body.intent ?? "foreground");
+    if (body.intent) {
+      if (outcome === "failure") throw new Error("Synthetic optional preparation failure");
+      return { appId: app.id, revision: 3, status: "unavailable", reason: "provider-unavailable" };
+    }
+    return nextResponse(body.episodeId, "1080p");
+  });
+  await render();
+  const first = await openPlayer();
+  await act(async () => { first.dispatchEvent(new Event("playing", { bubbles: true })); });
+  await act(async () => { first.dispatchEvent(new Event("playing", { bubbles: true })); });
+  expect(requests).toEqual(["foreground", "prefetch"]);
+  expect(host.querySelector("video")).toBe(first);
+  expect(host.querySelector('[aria-labelledby="hongguo-watch-title"] [role="alert"]')).toBeNull();
+});
+
+it("cancels old-revision speculation and rejects its late result after the current app scope changes", async () => {
+  episodes = [episode, laterEpisode];
+  const backend = sharedNextFixture(true);
+  const sharing = fixture.api.getMockImplementation()!;
+  fixture.api.mockImplementation(async (path, init) => {
+    const body = JSON.parse(init.body);
+    const result = await sharing(path, init);
+    return { ...result, revision: body.expectedRevision,
+      ...(result.status === "ready" ? { mediaUrl: result.mediaUrl.replace("expectedRevision=3", `expectedRevision=${body.expectedRevision}`) } : {}) };
+  });
+  await render();
+  const first = await openPlayer();
+  await act(async () => { first.dispatchEvent(new Event("playing", { bubbles: true })); });
+  const speculative = backend.requests[1]!.signal;
+  app.revision = 4; state.revision = 4;
+  await render();
+  await vi.waitFor(() => expect(host.querySelector("video")?.getAttribute("src")).toContain("expectedRevision=4"));
+  expect(speculative.aborted).toBe(true);
+  const current = host.querySelector("video");
+  await act(async () => { backend.release(); });
+  expect(host.querySelector("video")).toBe(current);
+  expect(current?.getAttribute("src")).toContain("episode_1");
+});
+
+it("restores a paused quality seek after growing duration becomes known only once and never overwrites a later user seek", async () => {
+  playback = qualityPlayback("1080p");
+  const original = fixture.api.getMockImplementation()!;
+  fixture.api.mockImplementation(async (path, init) => path.endsWith("/playback") && JSON.parse(init.body).qualityId
+    ? { ...qualityPlayback("720p"), durationSeconds: 108 } : original(path, init));
+  await render();
+  const first = await openPlayer();
+  first.currentTime = 60;
+  Object.defineProperty(first, "paused", { configurable: true, value: true });
+  await selectQuality("720p");
+  const next = host.querySelector("video")!;
+  let duration = Infinity, position = 0;
+  const seek = vi.fn((value: number) => { position = value; });
+  Object.defineProperty(next, "duration", { configurable: true, get: () => duration });
+  Object.defineProperty(next, "networkState", { configurable: true, value: next.NETWORK_IDLE });
+  Object.defineProperty(next, "currentTime", { configurable: true, get: () => position, set: seek });
+  await act(async () => { next.dispatchEvent(new Event("loadedmetadata", { bubbles: true })); });
+  expect(next.autoplay).toBe(false);
+  expect(seek).not.toHaveBeenCalled();
+  duration = 2; position = 2;
+  await act(async () => { next.dispatchEvent(new Event("durationchange", { bubbles: true })); next.dispatchEvent(new Event("timeupdate", { bubbles: true })); });
+  expect(seek).not.toHaveBeenCalled();
+  expect(savePositions).not.toContain(2);
+  duration = 108;
+  await act(async () => { next.dispatchEvent(new Event("durationchange", { bubbles: true })); });
+  expect(seek).toHaveBeenCalledExactlyOnceWith(60);
+  position = 45;
+  await act(async () => { next.dispatchEvent(new Event("seeking", { bubbles: true })); next.dispatchEvent(new Event("seeked", { bubbles: true })); });
+  duration = 120;
+  await act(async () => { next.dispatchEvent(new Event("durationchange", { bubbles: true })); next.dispatchEvent(new Event("loadedmetadata", { bubbles: true })); });
+  expect(seek).toHaveBeenCalledTimes(1);
+  expect(next.currentTime).toBe(45);
 });
 
 it.each([

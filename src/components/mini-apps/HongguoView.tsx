@@ -14,6 +14,9 @@ import type { HongguoCatalogRequest, HongguoCatalogResponse, HongguoCategory, Ho
   HongguoHistoryEntry, HongguoHistoryResponse, HongguoPlaybackResponse, HongguoPreferencesResponse,
   HongguoSeries, HongguoSeriesCard, HongguoSeriesResponse } from "../../../shared/hongguo-mini-app";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
+import { scopedMediaUrl } from "./hongguo-playback";
+import { createPlaybackRestoration, type PlaybackRestore } from "./hongguo-resume";
+import { useHongguoPlayback } from "./useHongguoPlayback";
 
 type Page = "home" | "history" | "watch";
 type BrowseMode = "popular" | "new" | "search" | "category";
@@ -26,18 +29,6 @@ function enqueueHistoryMutation<T>(appId: string, operation: () => Promise<T>): 
   void tail.then(() => { if (historyMutationTailByApp.get(appId) === tail) historyMutationTailByApp.delete(appId); });
   return result;
 }
-
-function scopedMediaUrl(value: string, appId: string, revision: number): string {
-  const url = new URL(value, window.location.origin);
-  const prefix = `/api/mini-apps/${encodeURIComponent(appId)}/hongguo/media/`;
-  if (url.origin !== window.location.origin || url.username || url.password || !url.pathname.startsWith(prefix)
-    || url.pathname.length === prefix.length || url.searchParams.getAll("expectedRevision").length !== 1
-    || url.searchParams.get("expectedRevision") !== String(revision) || url.hash) {
-    throw new Error(t("computer.miniApps.hongguo.playbackFailed"));
-  }
-  return url.pathname + url.search;
-}
-
 export function HongguoView({ document, state, storageKey, refreshKey, onRevoked, onChanged }: {
   document: MiniAppDocument; state: MiniAppState; storageKey: string | null; refreshKey: number; onRevoked(): void; onChanged(): void;
 }) {
@@ -93,12 +84,8 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
   const [seriesError, setSeriesError] = useState("");
   const [episodeId, setEpisodeId] = useState<string | null>(null);
   const [episodeGroup, setEpisodeGroup] = useState(0);
-  const [playback, setPlayback] = useState<HongguoPlaybackResponse | null>(null);
-  const [playbackError, setPlaybackError] = useState("");
   const [saveError, setSaveError] = useState("");
-  const [pendingQuality, setPendingQuality] = useState<string | null>(null);
-  const qualityController = useRef<AbortController | null>(null);
-  const qualityResume = useRef<{ position: number; paused: boolean } | null>(null);
+  const [restoration] = useState(createPlaybackRestoration);
   const episodes = series?.episodes ?? [];
   const episode = episodes.find((entry) => entry.id === episodeId) ?? null;
 
@@ -120,6 +107,18 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
     if (cause instanceof ApiError && cause.status === 409) { forgetHongguoHome(storageKey, appId); callbacks.current.onChanged(); return; }
     setError(t("computer.miniApps.hongguo.requestFailed"));
   }, [storageKey, appId]);
+
+  const requestPlayback = useCallback((body: unknown, signal: AbortSignal) => post<HongguoPlaybackResponse>("playback", body, signal), [post]);
+  const { playback, playbackError, setPlaybackError, pendingQuality, qualityResume, changeQuality, onPlaying,
+    abortCurrent, resetSpeculation } = useHongguoPlayback({ active: valid && page === "watch", environment: storageKey,
+    appId, revision, seriesId, series, episode, videoRef, request: requestPlayback, showError,
+    qualitySnapshot: (video) => {
+      const pending = restoration.pending(video);
+      if (pending) return { position: pending.position, paused: pending.paused ?? video.paused };
+      recordPosition(video);
+      return { position: Number.isFinite(video.currentTime) ? video.currentTime : 0, paused: video.paused };
+    },
+  });
 
   useEffect(() => {
     if (!valid) forgetHongguoHome(storageKey, appId);
@@ -150,12 +149,12 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
     const video = videoRef.current;
     if (video) {
       video.pause();
-      if (progress.current && Number.isFinite(video.currentTime)) {
+      if (restoration.canRecord(video) && progress.current && Number.isFinite(video.currentTime)) {
         progress.current = { ...progress.current, positionSeconds: Math.max(0, video.currentTime) };
       }
     }
     savePosition();
-  }, [savePosition]);
+  }, [savePosition, restoration]);
 
   useEffect(() => {
     mounted.current = true;
@@ -297,7 +296,7 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
   useEffect(() => {
     if (!valid || !seriesId) return;
     const controller = new AbortController();
-    setSeries(null); setSeriesError(""); setPlayback(null); setEpisodeId(null);
+    setSeries(null); setSeriesError(""); setEpisodeId(null);
     void post<HongguoSeriesResponse>("series", { expectedRevision: revision, seriesId }, controller.signal)
       .then((result) => {
         if (controller.signal.aborted) return;
@@ -314,67 +313,36 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
     setEpisodeGroup(selected ? Math.floor(series.episodes.indexOf(selected) / 30) : 0);
   }, [series, seriesId, history, requestedEpisodeId, episodeId]);
 
-  useEffect(() => {
-    qualityController.current?.abort();
-    qualityResume.current = null;
-    setPendingQuality(null);
-    if (!valid || page !== "watch" || !series || !episode) return;
-    const controller = new AbortController();
-    setPlayback(null); setPlaybackError("");
-    if (episode.availability === "unavailable") {
-      setPlayback({ appId, revision, status: "unavailable", reason: "episode-unavailable" });
-      return () => controller.abort();
-    }
-    void post<HongguoPlaybackResponse>("playback", { expectedRevision: revision, seriesId: series.id, episodeId: episode.id }, controller.signal)
-      .then((result) => {
-        if (controller.signal.aborted) return;
-        if (result.status === "ready") scopedMediaUrl(result.mediaUrl, appId, revision);
-        setPlayback(result);
-      }).catch((cause: unknown) => { if (!controller.signal.aborted) showError(cause, setPlaybackError); });
-    return () => { controller.abort(); qualityController.current?.abort(); };
-  }, [valid, page, series, episode, appId, revision, post, showError]);
-
-  const changeQuality = async (qualityId: string) => {
-    if (!series || !episode || playback?.status !== "ready" || !playback.availableQualityIds?.includes(qualityId)) return;
-    qualityController.current?.abort();
-    setPendingQuality(null);
-    if (qualityId === playback.selectedQualityId) return;
-    const controller = new AbortController();
-    qualityController.current = controller;
-    setPendingQuality(qualityId);
-    setPlaybackError("");
-    try {
-      const result = await post<HongguoPlaybackResponse>("playback", {
-        expectedRevision: revision, seriesId: series.id, episodeId: episode.id, qualityId,
-      }, controller.signal);
-      if (controller.signal.aborted) return;
-      if (result.status !== "ready") { setPlaybackError(t("computer.miniApps.hongguo.qualityUnavailable")); return; }
-      scopedMediaUrl(result.mediaUrl, appId, revision);
-      const video = videoRef.current;
-      if (video) qualityResume.current = { position: Number.isFinite(video.currentTime) ? video.currentTime : 0, paused: video.paused };
-      setPlayback(result);
-    } catch (cause) { if (!controller.signal.aborted) showError(cause, setPlaybackError); }
-    finally { if (qualityController.current === controller) { qualityController.current = null; if (!controller.signal.aborted) setPendingQuality(null); } }
-  };
-
   const openSeries = (id: string, resumeEpisodeId: string | null = null) => {
-    pauseAndSave(); progress.current = null; lastQueuedPosition.current = -Infinity;
+    pauseAndSave(); abortCurrent(); resetSpeculation(); progress.current = null; lastQueuedPosition.current = -Infinity;
     setRequestedEpisodeId(resumeEpisodeId); setSeriesId(id); setPage("watch");
   };
-  const leaveWatch = (to: Page) => { pauseAndSave(); setPage(to); };
+  const leaveWatch = (to: Page) => { pauseAndSave(); abortCurrent(); resetSpeculation(); setPage(to); };
   const chooseEpisode = (next: HongguoEpisode) => {
     if (history === null || next.id === episodeId) return;
-    pauseAndSave(); progress.current = null; lastQueuedPosition.current = -Infinity;
+    pauseAndSave(); abortCurrent(); progress.current = null; lastQueuedPosition.current = -Infinity;
     setEpisodeId(next.id); setEpisodeGroup(Math.floor(episodes.indexOf(next) / 30));
   };
   const recordPosition = (video: HTMLVideoElement) => {
-    if (!series || !episode || !Number.isFinite(video.currentTime)) return;
+    if (!series || !episode || !Number.isFinite(video.currentTime) || !restoration.canRecord(video)) return false;
     progress.current = { seriesId: series.id, seriesTitle: series.title, coverUrl: series.coverUrl,
       episodeId: episode.id, episodeNumber: episode.number, episodeTitle: episode.title,
       positionSeconds: Math.max(0, video.currentTime), durationSeconds: Number.isFinite(video.duration) ? video.duration : null };
+    return true;
+  };
+  const restoreRequest = (): PlaybackRestore | null => {
+    const saved = history?.find((entry) => entry.seriesId === series?.id && entry.episodeId === episodeId);
+    const expectedDuration = playback?.status === "ready" ? playback.durationSeconds : null;
+    return qualityResume.current ? { ...qualityResume.current, kind: "quality", expectedDuration }
+      : saved ? { position: saved.positionSeconds, kind: "history", expectedDuration: expectedDuration ?? saved.durationSeconds } : null;
+  };
+  const restorePosition = (video: HTMLVideoElement, metadata: boolean) => {
+    if (metadata) restoration.metadata(video, restoreRequest());
+    else restoration.duration(video);
+    recordPosition(video);
   };
   const updatePosition = (video: HTMLVideoElement) => {
-    recordPosition(video);
+    if (!recordPosition(video)) return;
     if (progress.current && Math.abs(progress.current.positionSeconds - lastQueuedPosition.current) >= 5) {
       lastQueuedPosition.current = progress.current.positionSeconds;
       savePosition();
@@ -522,17 +490,16 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
       {series && <div className="grid gap-6">
         <div className="min-w-0">
           <div className="flex min-h-[260px] aspect-video w-full items-center justify-center overflow-hidden rounded-xl bg-[#181818] text-center text-white">
-            {playback?.status === "ready" ? <video key={`${episodeId}:${playback.mediaUrl}`} ref={videoRef} controls autoPlay={!qualityResume.current?.paused && (visible || !!window.document.fullscreenElement)} playsInline
+            {playback?.status === "ready" ? <video key={`${episodeId}:${playback.mediaUrl}`} ref={(video) => { videoRef.current = video; if (video) restoration.prepare(video, restoreRequest()); }} controls autoPlay={!qualityResume.current?.paused && (visible || !!window.document.fullscreenElement)} playsInline
               src={scopedMediaUrl(playback.mediaUrl, appId, revision)} className="h-full min-w-0 w-full object-contain"
-              onLoadedMetadata={(event) => { const video = event.currentTarget; const saved = history?.find((entry) => entry.seriesId === series.id && entry.episodeId === episodeId);
-                if (qualityResume.current && Number.isFinite(video.duration)) video.currentTime = Math.min(Math.max(0, qualityResume.current.position), video.duration);
-                else if (saved && Number.isFinite(video.duration) && saved.positionSeconds < video.duration - 1) video.currentTime = saved.positionSeconds;
-                if (qualityResume.current?.paused) video.pause();
-                recordPosition(video); }}
+              onLoadedMetadata={(event) => restorePosition(event.currentTarget, true)}
+              onDurationChange={(event) => restorePosition(event.currentTarget, false)}
+              onSeeking={(event) => restoration.userSeek(event.currentTarget)}
+              onPlaying={(event) => { if (event.currentTarget === videoRef.current && (visible || !!window.document.fullscreenElement)) onPlaying(); }}
               onTimeUpdate={(event) => updatePosition(event.currentTarget)}
-              onPause={(event) => { recordPosition(event.currentTarget); savePosition(); }}
-              onSeeked={(event) => { recordPosition(event.currentTarget); savePosition(); }}
-              onEnded={(event) => { recordPosition(event.currentTarget); savePosition();
+              onPause={(event) => { if (recordPosition(event.currentTarget)) savePosition(); }}
+              onSeeked={(event) => { if (recordPosition(event.currentTarget)) savePosition(); }}
+              onEnded={(event) => { restoration.duration(event.currentTarget); if (recordPosition(event.currentTarget)) savePosition();
                 const next = episodes[episodes.findIndex((entry) => entry.id === episodeId) + 1];
                 if (autoplayNext && next) chooseEpisode(next); }}
               onError={() => setPlaybackError(t("computer.miniApps.hongguo.playbackFailed"))} />
