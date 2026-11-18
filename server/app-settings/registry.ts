@@ -7,10 +7,11 @@ import { defaultBotPerson } from "../../shared/default-bot.ts";
 import { EFFORT_LEVELS, MAUS_COLOR_NAMES, type EffortLevel, type MausColor } from "../../shared/wire.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "../bot-thread-limits.ts";
 import { parseSocks5Proxy } from "../browser/egress/policy.ts";
+import { MAX_WINDOW_MINUTES } from "../cache-keepwarm.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
 import { isClaudeEndpoint } from "../claude-endpoints.ts";
 import { isCodexEndpoint } from "../codex-endpoints.ts";
-import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, showToolCallsEnabled, skillAuthoringEnabled, type AppConfig } from "../config.ts";
+import { cacheKeepWarmSettings, MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, showToolCallsEnabled, skillAuthoringEnabled, type AppConfig } from "../config.ts";
 import type { InstanceConfig } from "../contracts.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
@@ -113,6 +114,8 @@ const botColor = z.object({ botId, color: z.enum(MAUS_COLOR_NAMES) }).strict();
 type BotColor = z.infer<typeof botColor>;
 const botArchive = z.object({ botId, archived: z.boolean() }).strict();
 type BotArchive = z.infer<typeof botArchive>;
+const keepWarmChange = z.object({ enabled: z.boolean(), windowMinutes: z.number().int().min(15).max(MAX_WINDOW_MINUTES).optional() }).strict();
+type KeepWarmChange = z.infer<typeof keepWarmChange>;
 const removableKind = (instanceId: string, entry: InstanceConfig | undefined) => isAddedEndpoint(instanceId, entry) ? "OpenAI-compatible server"
   : isClaudeBedrock(entry) ? "Claude on Amazon Bedrock" : isClaudeEndpoint(entry) ? "Claude endpoint" : isCodexEndpoint(entry) ? "Codex endpoint" : null;
 
@@ -271,6 +274,17 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
         return { change: `${enabled ? "Let bots draft skills for your review" : "Stop bots drafting skills"}${review}; currently ${skillAuthoringEnabled(cfg()) ? "on" : "off"}` };
       },
       write: config((skillAuthoring: boolean) => ({ features: { skillAuthoring } })),
+    }),
+    writable({
+      id: "bots.keepWarm", label: "Keep caches warm", help: "The place's on/off setting is the default for bots without an override. All eligible enabled bots, including bots explicitly set to On, use its shared window after a successful turn; each ping spends a few tokens.", where: "Settings → You and your bots",
+      synonyms: ["keep warm", "cache", "prompt cache"], tier: "confirm", value: keepWarmChange, allowed: '{"enabled":true|false,"windowMinutes"?:15-1440}',
+      current: () => cacheKeepWarmSettings(cfg()), read: () => display(cacheKeepWarmSettings(cfg())),
+      describe: (change: KeepWarmChange) => {
+        const before = cacheKeepWarmSettings(cfg());
+        const after = { ...before, ...change };
+        return { change: `Set the prompt-cache keep-warm place default from ${before.enabled ? "on" : "off"} to ${after.enabled ? "on" : "off"} and shared window from ${before.windowMinutes} to ${after.windowMinutes} minutes; all eligible enabled bots, including bots explicitly set to On, use that window after a successful turn. Each ping spends a few tokens; per-bot on/off choices stay unchanged` };
+      },
+      write: config((change: KeepWarmChange) => ({ cacheKeepWarm: { ...cacheKeepWarmSettings(cfg()), ...change } })),
     }),
     writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",

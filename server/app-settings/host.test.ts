@@ -522,6 +522,71 @@ describe("confirm tier", () => {
     expect(nonOwner.saved).toEqual([]);
   });
 
+  it("keeps the approved cache window and bot overrides while refusing stale keep-warm cards", async () => {
+    const fx = fixture();
+    const get = () => fx.host.handle({ action: "get", id: "bots.keepWarm" }, fx.turn);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ tier: "confirm", value: '{"enabled":false,"windowMinutes":180}', help: expect.stringContaining("including bots explicitly set to On") });
+    fx.cfg.cacheKeepWarm = { enabled: false, windowMinutes: 120 };
+    fx.bots[1]!.cacheKeepWarm = false;
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "keep warm" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("bots.keepWarm");
+    expect((await fx.set("bots.keepWarm", { enabled: "true" })).status).toBe(400);
+    expect((await fx.set("bots.keepWarm", { enabled: true, windowMinutes: 14 })).status).toBe(400);
+
+    const cancelled = fx.set("bots.keepWarm", { enabled: true });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("place default from off to on and shared window from 120 to 120 minutes") } });
+    expect(first.appSettingRequest.after).toContain("Each ping spends a few tokens");
+    expect(first.appSettingRequest.after).toContain("per-bot on/off choices stay unchanged");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("bots.keepWarm", { enabled: true });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.cacheKeepWarm = { enabled: false, windowMinutes: 360 };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.cacheKeepWarm = { enabled: false, windowMinutes: 120 };
+
+    const approved = fx.set("bots.keepWarm", '{"enabled":true}');
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ cacheKeepWarm: { enabled: true, windowMinutes: 120 } }]);
+    expect(fx.bots[1]!.cacheKeepWarm).toBe(false);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+
+    const disabled = fx.set("bots.keepWarm", { enabled: false, windowMinutes: 60 });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fourth.appSettingRequest.after).toContain("place default from on to off and shared window from 120 to 60 minutes");
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await disabled).status).toBe(200);
+    expect(fx.saved.at(-1)).toEqual({ cacheKeepWarm: { enabled: false, windowMinutes: 60 } });
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: '{"enabled":false,"windowMinutes":60}' });
+
+    fx.bots[1]!.cacheKeepWarm = true;
+    const sharedWindow = fx.set("bots.keepWarm", { enabled: false, windowMinutes: 1440 });
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    const fifth = fx.cards()[4]!.card;
+    expect(fifth.appSettingRequest.after).toContain("place default from off to off and shared window from 60 to 1440 minutes");
+    expect(fifth.appSettingRequest.after).toContain("including bots explicitly set to On, use that window after a successful turn");
+    fx.answer(String(fifth.requestId), "allow");
+    expect((await sharedWindow).status).toBe(200);
+    expect(fx.saved.at(-1)).toEqual({ cacheKeepWarm: { enabled: false, windowMinutes: 1440 } });
+    expect(fx.bots[1]!.cacheKeepWarm).toBe(true);
+
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("bots.keepWarm", { enabled: true })).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };
