@@ -16,17 +16,19 @@ const job = { run_id: run.id, run_attempt: run.run_attempt, status: "completed",
 const gate = { ...job, id: 10, name: "CI", runner_id: 19, runner_name: "GitHub Actions", conclusion: "failure",
   steps: [{ name: "Enforce current PR controls, QA holds and required validation", conclusion: "failure" }] };
 const annotation = { path: ".github", message: "The job was not acquired by Runner of type hosted even after multiple attempts", annotation_level: "failure" };
-const issue = { number: 7, labels: ["qa", "qa:p1", "qa:scope:global"] };
+const issue = { number: 7, state: "open", labels: ["qa", "qa:p1", "qa:scope:global"] };
 
 function fixture() {
   const data = { jobs: [job, gate, { ...job, id: 11, name: "typecheck + lint", conclusion: "success" }],
     annotations: [annotation], log: `2026-11-18T00:00:00Z Error: Required validation failed: ${shard}\n`,
-    prs: [repair], currentPr: repair, latest: run, newerRuns: [] as typeof run[], newerJobs: [] as typeof job[], issues: [issue] };
+    prs: [repair], currentPr: repair, latest: run, currentRun: run, activeHold: issue, newerRuns: [] as typeof run[], newerJobs: [] as typeof job[], issues: [issue] };
   const writes: string[] = [];
   const api = vi.fn(async (path: string, options?: { method?: string; raw?: boolean }) => {
     if (path === "/actions/runs/100/rerun-failed-jobs" && options?.method === "POST") { writes.push(path); return Buffer.alloc(0); }
     if (options?.method) throw new Error(`Unexpected write: ${path}`);
     if (path === "/pulls?state=open&base=main&head=example:fix%2Fpreview") return data.prs;
+    if (path === "/actions/runs/100") return data.currentRun;
+    if (path === "/issues/7") return data.activeHold;
     if (path === "/pulls/12") return data.currentPr;
     if (path === "/actions/runs/100/attempts/3/jobs?per_page=100&page=1") return { jobs: data.jobs };
     if (/^\/actions\/runs\/\d+\/attempts\/\d+\/jobs\?/.test(path)) return { jobs: data.newerJobs };
@@ -111,6 +113,25 @@ describe("hosted runner recovery for global repairs", () => {
     expect(writes).toEqual([]);
     expect(api.mock.calls.findIndex(([path]) => path === "/pulls/12"))
       .toBeGreaterThan(api.mock.calls.findIndex(([path]) => path.startsWith("/issues?")));
+  });
+
+  it.each(["new source", "advanced attempt", "closed hold", "demoted hold"])("declines %s during source-job inspection", async (change) => {
+    const { data, api, writes } = fixture();
+    const read = api.getMockImplementation()!;
+    let listed = false;
+    api.mockImplementation(async (path, options) => {
+      const result = await read(path, options);
+      if (path.startsWith("/actions/workflows/")) listed = true;
+      if (listed && path.includes("/attempts/3/jobs")) {
+        if (change === "new source") data.newerRuns = [{ ...run, id: 101, run_attempt: 1 }];
+        if (change === "advanced attempt") data.currentRun = { ...run, run_attempt: 4 };
+        if (change === "closed hold") data.activeHold = { ...issue, state: "closed" };
+        if (change === "demoted hold") data.activeHold = { ...issue, labels: ["qa", "qa:p2"] };
+      }
+      return result;
+    });
+    await recoverRepair(run, repository, api);
+    expect(writes).toEqual([]);
   });
 
   it("executes default-branch code on completed CI events with a per-run lock", () => {

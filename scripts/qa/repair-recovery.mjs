@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { holdsFor, issueLabels } from "./contracts.mjs";
 import { github, pages } from "./github.mjs";
-import { associatedWithPr, latestPrSource } from "./pr-source.mjs";
+import { associatedWithPr, latestPrSource, sourceStillCurrent } from "./pr-source.mjs";
 
 const acquisitionFailure = "The job was not acquired by Runner of type hosted even after multiple attempts";
 
@@ -50,15 +50,20 @@ export async function recoverRepair(run, repository, api = github) {
   if (prs.length !== 1 || !isRepair(prs[0])) return "No associated current repair PR";
   const losses = await runnerLosses(run, api);
   if (!losses.length) return "Failure is not attributable solely to hosted runner acquisition";
-  const issues = await pages("/issues?state=open&labels=qa", null, api);
   const latest = await latestPrSource(prs[0], repository, api);
   const current = latest?.run;
   if (current?.id !== run.id || current.run_attempt !== run.run_attempt
     || current.status !== "completed" || current.conclusion !== "failure") return "Source CI attempt superseded or unproved";
-  const pr = await api(`/pulls/${prs[0].number}`);
-  if (!isRepair(pr)) return "Repair changed";
-  const repairs = [...String(pr.body ?? "").matchAll(/^QA-Repair:[ \t]*#(\d+)[ \t]*\r?$/gm)].map((hit) => Number(hit[1]));
-  if (!holdsFor(issues.filter((issue) => !issue.pull_request && repairs.includes(issue.number)), []).length) return "No linked global hold";
+  const repairs = (pr) => [...String(pr.body ?? "").matchAll(/^QA-Repair:[ \t]*#(\d+)[ \t]*\r?$/gm)].map((hit) => Number(hit[1]));
+  const ids = repairs(prs[0]);
+  const issues = await pages("/issues?state=open&labels=qa", null, api);
+  const hold = holdsFor(issues.filter((issue) => !issue.pull_request && ids.includes(issue.number)), [])[0];
+  if (!hold) return "No linked global hold";
+  const [fresh, pr, active] = await Promise.all([sourceStillCurrent(latest, prs[0], repository, api),
+    api(`/pulls/${prs[0].number}`), api(`/issues/${hold.number}`)]);
+  if (!fresh || !isRepair(pr) || !repairs(pr).includes(hold.number)) return "Repair or source attempt changed";
+  if (active.number !== hold.number || active.state !== "open" || active.pull_request || !issueLabels(active).includes("qa")
+    || !holdsFor([active], []).length) return "Linked global hold released";
   await api(`/actions/runs/${run.id}/rerun-failed-jobs`, { method: "POST", raw: true });
   return `Requested failed jobs of run ${run.id}, attempt ${run.run_attempt} (PR #${pr.number}): ${losses.join(", ")}`;
 }
