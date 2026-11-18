@@ -85,6 +85,53 @@ it("keeps app-scoped dashboard reads behind the existing local owner gate", asyn
     "11111111-1111-4111-8111-111111111111", { resource: "teams", expectedRevision: 1 });
 });
 
+it("routes only the canonical completed Hongguo media query to the scoped token", async () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const path = `/api/mini-apps/${id}/hongguo/media/token`;
+  const requireHongguo = vi.fn(() => ({ revision: 3, nativeKind: "hongguo", nativeIdentity: "hongguo" }));
+  const serveMedia = vi.fn(async () => new Response(null, { status: 404 }));
+  const route = createMiniAppRoutes({ localEnabled: () => true, apps: { requireHongguo },
+    hongguoProvider: { serveMedia } } as unknown as Parameters<typeof createMiniAppRoutes>[0]);
+  const json = vi.fn();
+  const call = async (query: string, scopes = ["admin"]) => {
+    const req = new IncomingMessage(new Socket());
+    Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+    req.headers.range = "bytes=0-1";
+    const res = new ServerResponse(req);
+    await route({ method: "GET", path, url: new URL(`http://127.0.0.1${path}?${query}`), req, res,
+      auth: { kind: "loopback", scopes } as RequestAuth, json, readBody: async () => null });
+    return res;
+  };
+  const complete = "expectedRevision=3&completed=1";
+  for (const query of [
+    "completed=1", "completed=1&expectedRevision=3", "expectedRevision=3&completed=0",
+    `${complete}&completed=1`, `${complete}&expectedRevision=3`, `${complete}&extra=1`, `${complete}&`,
+    "expectedRevision=3&%63ompleted=1", "expectedRevision=3&completed=%31",
+    "expectedRevision=%33&completed=1", "expectedRevision=9007199254740992&completed=1",
+  ]) {
+    await call(query);
+    expect(json.mock.lastCall?.[1], query).toBe(400);
+  }
+  await call(complete, []);
+  expect(json.mock.lastCall?.[1]).toBe(403);
+  expect(requireHongguo).not.toHaveBeenCalled();
+  expect(serveMedia).not.toHaveBeenCalled();
+
+  await call(complete);
+  expect(json.mock.lastCall?.[1]).toBe(404);
+  expect(serveMedia).toHaveBeenLastCalledWith("token", "bytes=0-1", expect.any(AbortSignal), { appId: id, revision: 3 }, true);
+  expect(requireHongguo.mock.calls).toEqual([[expect.anything(), id, 3], [expect.anything(), id, 3]]);
+
+  serveMedia.mockResolvedValueOnce(new Response(null, { status: 206, headers: {
+    "content-length": "2", "content-range": "bytes 0-1/10", "accept-ranges": "bytes",
+  } }));
+  const response = await call(complete);
+  expect(response.statusCode).toBe(206);
+  expect(response.getHeader("content-length")).toBe("2");
+  expect(response.getHeader("content-range")).toBe("bytes 0-1/10");
+  expect(response.getHeader("cache-control")).toBe("private, no-store");
+});
+
 it("keeps Hongguo provider and scoped media behind the owner and revision gates", async () => {
   const requireHongguo = vi.fn(() => ({ revision: 3, nativeKind: "hongguo", nativeIdentity: "hongguo" }));
   const catalog = vi.fn(async () => ({ items: [], categories: [], nextCursor: null }));
@@ -150,7 +197,7 @@ it("keeps Hongguo provider and scoped media behind the owner and revision gates"
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 503, expect.objectContaining({ error: expect.any(String) }));
   expect(JSON.stringify(json.mock.calls.at(-1))).not.toContain("private.example");
   await call("GET", "media/token?expectedRevision=3", ownerAuth);
-  expect(serveMedia).toHaveBeenCalledWith("token", undefined, expect.any(AbortSignal), { appId: id, revision: 3 });
+  expect(serveMedia).toHaveBeenCalledWith("token", undefined, expect.any(AbortSignal), { appId: id, revision: 3 }, false);
   await call("GET", "media/token?expectedRevision=3&extra=1", ownerAuth);
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 400, expect.objectContaining({ error: expect.any(String) }));
   expect(serveMedia).toHaveBeenCalledTimes(1);
