@@ -1525,6 +1525,22 @@ describe("stale pre-fix QA report handling", () => {
     expect(api.mock.calls.every(([, options]) => !options?.method)).toBe(true);
   });
 
+  it("keeps a positive-only report pending when two issues own the same record", async () => {
+    const first = makeClosedIssue(), second = { ...makeClosedIssue(), number: 1007 };
+    const issues = [first, second];
+    for (const issue of issues) issue.labels = issue.labels.filter((label) => label.name !== "qa:verified");
+    const before = structuredClone(issues);
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return issues;
+      throw new Error(`Unexpected ${options.method ?? "GET"} ${path}`);
+    });
+    const positive = { ...makeLateReport(newSha), findings: [], passed: [findingKey] };
+    await expect(deliverReport(positive, { api, policy: { areas: [] } })).rejects.toThrow("Multiple QA issues claim contract");
+    expect(issues).toEqual(before);
+    expect(positive.deliveryComplete).toBe(false);
+    expect(api.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  });
+
   it("keeps all jobs from competing records until one report verifies their union", async () => {
     const issue = makeClosedIssue({ verificationJobs: ["A"] });
     issue.body += "\n\n" + makeClosedIssue({ verificationJobs: ["B"] }).body;

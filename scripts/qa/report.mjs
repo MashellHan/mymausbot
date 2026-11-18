@@ -250,11 +250,6 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
   const issues = (await pages("/issues?state=all&labels=qa", null, api)).filter((issue) => !issue.pull_request);
   const { groups, byKey } = qaGroups(issues), changedKeys = new Set();
   const staleCasesByIssue = new Map();
-  const update = async (issue, key, patch) => {
-    await api(`/issues/${issue.number}`, { method: "PATCH", body: patch });
-    Object.assign(issue, patch);
-    changedKeys.add(key);
-  };
   const groupParents = new Set(groups.map((group) => group.parent));
   const issuesByKey = new Map(), groupFallbacks = new Map();
   for (const issue of issues) {
@@ -265,10 +260,20 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     claims.set(key, claims.has(key) ? null : issue);
   }
   for (const [key, owner] of groupFallbacks) if (!issuesByKey.has(key)) issuesByKey.set(key, owner);
+  const ownerFor = (key) => {
+    const owner = issuesByKey.get(key);
+    if (owner === null) throw new Error(`Multiple QA issues claim contract ${key}`);
+    return owner;
+  };
+  const update = async (issue, key, patch) => {
+    if (ownerFor(key) !== issue) return;
+    await api(`/issues/${issue.number}`, { method: "PATCH", body: patch });
+    Object.assign(issue, patch);
+    changedKeys.add(key);
+  };
   const findings = combineTextFindings(report.findings, issuesByKey, byKey, signature);
   for (const finding of findings) {
-    const issue = issuesByKey.get(finding.key);
-    if (issue === null) throw new Error(`Multiple QA issues claim contract ${finding.key}`);
+    const issue = ownerFor(finding.key);
     const grouped = byKey.has(finding.key);
     const record = issue && stateRecord(issue.body, finding.key);
     const previous = record?.state;
@@ -387,7 +392,7 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       if (stateRecord(members[i].body, keys[i])?.state.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(keys[i]);
     }
   }
-  await refreshQaGroups(groups, changedKeys, report, api);
+  await refreshQaGroups(groups, changedKeys, report, api, ownerFor);
   report.deliveryComplete = true;
   return report;
 }

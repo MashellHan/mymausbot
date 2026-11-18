@@ -39,6 +39,19 @@ function report(id: number, passed: string[] = [], failed: string[] = [], execut
 }
 
 describe("confirmed QA root-cause groups", () => {
+  it("retains a pending group when its direct record and another issue both claim the same key", async () => {
+    const { issues, parent, api } = fixture();
+    const key = signature("competing direct", "linux");
+    const direct = issues[0].body.replaceAll(keys[0], key);
+    parent.body += "\n\n" + direct;
+    const other = { ...structuredClone(issues[0]), number: 4, body: direct };
+    issues.push(other);
+    const before = structuredClone([parent, other]);
+    await expect(deliverReport(report(2, keys), { api, policy })).rejects.toThrow("Multiple QA issues claim contract");
+    expect([parent, other]).toEqual(before);
+    expect(api.mock.calls.filter(([path, options]) => options?.method && ["/issues/3", "/issues/4"].includes(path))).toHaveLength(0);
+  });
+
   it.each([true, false])("prefers an owned issue to a marker quoted on a confirmed parent, parent first %s", async (parentFirst) => {
     const { issues, parent, api } = fixture();
     const key = signature("separate contract", "linux");

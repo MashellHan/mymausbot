@@ -34,10 +34,12 @@ export function qaGroups(issues) {
   return { groups, byKey };
 }
 
-export async function refreshQaGroups(groups, changedKeys, report, api) {
+export async function refreshQaGroups(groups, changedKeys, report, api, ownerFor) {
   for (const { parent, keys, members } of groups) {
     const direct = stateRecord(parent.body)?.state;
     if (!keys.some((key) => changedKeys.has(key)) && !changedKeys.has(direct?.key)) continue;
+    const directKey = issueKey(parent.body);
+    if (directKey && ownerFor(directKey) !== parent) continue;
     const verified = members.filter((issue) => issueLabels(issue).includes("qa:verified"));
     const hasDirect = parent.body.includes("<!-- mausbot-qa-state ") || parent.body.includes("<!-- mausbot-qa:start -->");
     const complete = verified.length === members.length && (!hasDirect || direct?.verified === true && !direct.coverageUnknown);
