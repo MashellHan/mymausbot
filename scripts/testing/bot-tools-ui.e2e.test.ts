@@ -1,10 +1,12 @@
 // Full-app regression through the existing disposable browser harness. No
 // real provider, OAuth account, MCP package, or user data is used.
 import { spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentBrowserBinary } from "../../server/browser-engine.ts";
 import { waitForExit } from "../../server/testing/cleanup.ts";
 import { BOT_ROLES } from "../../src/lib/bot-roles.ts";
@@ -94,6 +96,84 @@ interface SavedBot { id: string; name: string; soul?: string; mcpServers?: strin
 
 const DIAGNOSTIC_LIMIT = 64 * 1024;
 
+function launcherExitKind(stderr: string): string {
+  if (/agent-browser open did not finish within \d{1,6}ms\b/.test(stderr)) return "browser-open-deadline";
+  if (stderr.includes("agent-browser open failed: Operation timed out.")) return "browser-open-timeout";
+  if (stderr.includes("agent-browser open failed:")) return "browser-open-failed";
+  return "launcher-exit";
+}
+
+function waitForUiLauncher(child: Pick<ChildProcess, "stdout" | "stderr" | "once" | "off">,
+  deadlineMs: number, onPhase: (phase: string) => void): Promise<FixtureInfo> {
+  return new Promise((resolve, reject) => {
+    let stdout = "", stderr = "", phase = "launcher-spawned";
+    const readPhases = readLaunchPhases((name) => { phase = name; onPhase(name); });
+    const cleanup = () => {
+      clearTimeout(deadline);
+      child.stdout?.off("data", onStdout);
+      child.stderr?.off("data", onStderr);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const fail = (kind: string, exit?: number | NodeJS.Signals | null) => {
+      cleanup();
+      reject(new Error(`UI launcher ${kind} at ${phase}${exit == null ? "" : ` (${exit})`}`));
+    };
+    const onStdout = (chunk: Buffer | string) => {
+      stdout += String(chunk);
+      if (stdout.length > DIAGNOSTIC_LIMIT) { fail("invalid-handle"); return; }
+      let info: Partial<FixtureInfo> | null;
+      try { info = JSON.parse(stdout); } catch { return; }
+      if (!info || typeof info.ui !== "string" || typeof info.url !== "string"
+        || typeof info.dataDir !== "string" || typeof info.logPath !== "string") { fail("invalid-handle"); return; }
+      cleanup();
+      resolve({ ui: info.ui, url: info.url, dataDir: info.dataDir, logPath: info.logPath });
+    };
+    const onStderr = (chunk: Buffer | string) => {
+      const text = String(chunk);
+      readPhases(text);
+      stderr = (stderr + text).slice(-4_096);
+    };
+    const onError = () => fail("launcher-spawn-failed");
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => fail(launcherExitKind(stderr), signal ?? code);
+    const deadline = setTimeout(() => fail("readiness-deadline"), deadlineMs);
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+}
+
+it.each(["handle", "exit", "spawn", "deadline"] as const)("releases renderer readiness resources on %s", async (end) => {
+  vi.useFakeTimers();
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
+  try {
+    const pending = waitForUiLauncher(child, 100, () => {});
+    const handle = { ui: "fixture.json", url: "http://127.0.0.1:1", dataDir: "fixture-data", logPath: "fixture.log" };
+    const expected = { handle: "", exit: "browser-open-failed at browser-open-start (1)", spawn: "launcher-spawn-failed at browser-open-start", deadline: "readiness-deadline at browser-open-start" };
+    const result = end === "handle" ? expect(pending).resolves.toEqual(handle)
+      : expect(pending).rejects.toThrow(new Error(`UI launcher ${expected[end]}`));
+    child.stderr.write("QA507_PHASE:browser-open-start\nagent-browser open failed: private fixture text\n");
+    if (end === "handle") {
+      child.stdout.write("{");
+      child.stdout.write(JSON.stringify(handle).slice(1));
+    } else if (end === "exit") child.emit("exit", 1, null);
+    else if (end === "spawn") child.emit("error", new Error("private fixture text"));
+    else await vi.advanceTimersByTimeAsync(100);
+    await result;
+    expect(child.stdout.listenerCount("data")).toBe(0);
+    expect(child.stderr.listenerCount("data")).toBe(0);
+    expect(child.listenerCount("error")).toBe(0);
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(launcherExitKind("agent-browser open failed: Operation timed out. Private suffix")).toBe("browser-open-timeout");
+    expect(launcherExitKind("agent-browser open did not finish within 120000ms; private suffix")).toBe("browser-open-deadline");
+    expect(launcherExitKind("private launcher text")).toBe("launcher-exit");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 async function boundedFixtureJson(url: string): Promise<unknown> {
   const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
   if (!response.ok || !response.body) return { status: response.status };
@@ -152,10 +232,7 @@ describe("bot setup and tools in the real renderer", () => {
           binaryResolvedAtStart: Boolean(binary) }));
       } catch {}
     };
-    const readPhases = readLaunchPhases(phase);
     try {
-    let stdout = "";
-    let launchStderr = "";
     // Windows kill("SIGINT") terminates immediately instead of delivering a
     // catchable signal. Ask the disposable launcher to run its normal cleanup.
     const launcher = new URL("./control-omb-ui.ts", import.meta.url).href;
@@ -167,21 +244,7 @@ describe("bot setup and tools in the real renderer", () => {
       cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
     phase("launcher-spawned");
-    child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
-    child.stderr!.on("data", (chunk: Buffer) => {
-      readPhases(String(chunk));
-      launchStderr = (launchStderr + String(chunk)).slice(-4_096);
-    });
-    const exitedBeforeReady = new Promise<never>((_resolve, reject) => {
-      child!.once("error", () => reject(new Error("UI launcher could not start")));
-      child!.once("exit", (code, signal) => {
-        const failure = launchStderr.match(/agent-browser open (did not finish within \d+ms|failed: [^\r\n]{1,160})/)?.[0];
-        reject(new Error(`UI launcher stopped at ${lastPhase} (${signal ?? code})${failure ? ": " + failure : ""}`));
-      });
-    });
-    await Promise.race([exitedBeforeReady, expect.poll(() => {
-      try { info = JSON.parse(stdout); return Boolean(info.ui); } catch { return false; }
-    }, { timeout: LAUNCH_TIMEOUT_MS + 120_000, interval: 250 }).toBe(true)]);
+    info = await waitForUiLauncher(child, LAUNCH_TIMEOUT_MS + 120_000, phase);
     phase("handle-ready");
     const ui = (verb: string, ...args: string[]) => runControlOmb(["ui", verb, "--ui", info.ui, ...args]) as Promise<Record<string, any>>;
     const evaluate = async (js: string) => (await ui("eval", "--js", js)).result;
