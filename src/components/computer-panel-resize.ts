@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 
 export const PANEL_MIN_WIDTH = 360;
 export const PANEL_DEFAULT_WIDTH = 960;
+export const COMPUTER_PANEL_DEFAULT_WIDTH = 1152;
 export const PANEL_MAX_WIDTH = 1440;
 const PANEL_INLINE_BREAKPOINT = 1536;
 const PANEL_INLINE_GUTTER = PANEL_INLINE_BREAKPOINT - PANEL_DEFAULT_WIDTH;
@@ -12,8 +13,34 @@ export function computerPanelMaxWidth(viewportWidth: number): number {
     viewportWidth >= PANEL_INLINE_BREAKPOINT ? viewportWidth - PANEL_INLINE_GUTTER : viewportWidth));
 }
 
-export function useComputerPanelResize() {
-  const [panelWidth, setPanelWidth] = useState(PANEL_DEFAULT_WIDTH);
+export function clampComputerPanelWidth(width: number, viewportWidth: number): number {
+  const maxWidth = computerPanelMaxWidth(viewportWidth);
+  return Math.min(maxWidth, Math.max(Math.min(PANEL_MIN_WIDTH, maxWidth), width));
+}
+
+type ComputerPanelResizeOptions = {
+  defaultWidth?: number;
+  width?: number;
+  onWidthChange?: (width: number) => void;
+};
+
+export function useComputerPanelResize(options: ComputerPanelResizeOptions = {}) {
+  const defaultWidth = options.defaultWidth ?? PANEL_DEFAULT_WIDTH;
+  const [uncontrolledWidth, setUncontrolledWidth] = useState(defaultWidth);
+  const controlled = options.width !== undefined;
+  const panelWidth = controlled ? options.width! : uncontrolledWidth;
+  const setPanelWidth = (next: number | ((current: number) => number)) => {
+    if (controlled) {
+      const resolved = typeof next === "function" ? next(panelWidth) : next;
+      options.onWidthChange?.(resolved);
+      return;
+    }
+    setUncontrolledWidth((current) => {
+      const resolved = typeof next === "function" ? next(current) : next;
+      options.onWidthChange?.(resolved);
+      return resolved;
+    });
+  };
   const [viewportWidth, setViewportWidth] = useState(() => typeof window === "undefined" ? PANEL_INLINE_BREAKPOINT : window.innerWidth);
   const panelMaxWidth = computerPanelMaxWidth(viewportWidth);
   const separatorRef = useRef<HTMLDivElement>(null);
