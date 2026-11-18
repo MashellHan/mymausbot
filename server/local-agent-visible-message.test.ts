@@ -160,6 +160,11 @@ describe("bounded tool details", () => {
     const show = (source: string) => visibleToolDetail("tool-call", source, "codex", "exec");
     const safe = 'text({ encoding: `utf-8`, name: "fixture" });';
     expect(show(safe)).toMatchObject({ text: safe, detailStatus: "available" });
+    const members = 'options.encoding = "utf-8"; options["name"] = `fixture`;';
+    expect(show(members)).toMatchObject({ text: members, detailStatus: "available" });
+    for (const assignment of ['options.encoding = `base64`;', 'options.name = value;', 'options["name"] = "Cookie";', 'options[field] = "fixture";']) {
+      expect(show(assignment)).toMatchObject({ detailStatus: "withheld" });
+    }
     for (const source of ['text({ encoding: `base64` });', 'text({ name: `Cookie` });', 'text({ name: fixtureName });']) {
       expect(show(source)).toMatchObject({ detailStatus: "withheld" });
     }

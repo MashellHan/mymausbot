@@ -44,8 +44,10 @@ function safeToolText(value: unknown, customExec = false): { text: string | null
     const code = value.charCodeAt(index);
     if (code < 9 || (code > 13 && code < 32)) return { text: null, clipped: true };
   }
-  const labels = value.replace(/\\u([\da-f]{4})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+  const decoded = value.replace(/\\u([\da-f]{4})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
     .replace(/\\+(?=["'])/g, "");
+  const labels = customExec ? decoded.replace(/\[\s*(["'`])([A-Za-z][\w-]{0,127})\1\s*\](?=\s*[:=])/g, ".$2") : decoded;
+  if (customExec && /\]\s*(?::|=(?![=>]))/.test(labels)) return { text: null, clipped: false };
   for (const match of labels.matchAll(TOOL_ASSIGNMENT)) {
     const key = (match[1] ?? match[2] ?? "").trim().toLowerCase();
     if (PRIVATE_TOOL_KEY.test(key)) {
@@ -54,11 +56,12 @@ function safeToolText(value: unknown, customExec = false): { text: string | null
         : null;
       if (!option || !Number.isSafeInteger(Number(option[1]))) return { text: null, clipped: false };
     }
-    if (key !== "encoding" && key !== "name") continue;
+    const declarationKey = customExec ? key.slice(key.lastIndexOf(".") + 1) : key;
+    if (declarationKey !== "encoding" && declarationKey !== "name") continue;
     const rest = labels.slice(match.index! + match[0].length);
     if (customExec) {
       const literal = EXEC_DECLARATION_LITERAL.exec(rest);
-      if (!literal || privateToolDeclaration(key, literal[2])) return { text: null, clipped: false };
+      if (!literal || privateToolDeclaration(declarationKey, literal[2])) return { text: null, clipped: false };
       continue;
     }
     const field = TOOL_FIELD_VALUE.exec(rest);
