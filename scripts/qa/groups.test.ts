@@ -39,6 +39,24 @@ function report(id: number, passed: string[] = [], failed: string[] = [], execut
 }
 
 describe("confirmed QA root-cause groups", () => {
+  it("keeps a closed parent and both verified members intact for an older revision only", async () => {
+    const { issues, parent, api } = fixture();
+    issues[0].user = { login: "github-actions[bot]", type: "Bot", id: 41898282 };
+    const verified = report(2, keys), ancestor = "b".repeat(40);
+    await deliverReport(verified, { api, policy });
+    parent.state = "closed";
+    const previous = structuredClone(parent);
+    const withHistory = (path: string, options?: any) => path === `/compare/${ancestor}...${verified.sha}`
+      ? Promise.resolve({ status: "ahead", ahead_by: 1, behind_by: 0 }) : api(path, options);
+    await deliverReport({ ...report(3, [], [keys[0]]), sha: ancestor }, { api: withHistory, policy });
+    expect(issues[0].body).toContain("Recorded stale pre-fix report");
+    expect(issues.slice(0, 2).every((issue) => issue.labels.includes("qa:verified"))).toBe(true);
+    expect(parent).toEqual(previous);
+    await deliverReport(report(4, [], [keys[0]]), { api: withHistory, policy });
+    expect(parent.state).toBe("open");
+    expect(parent.labels).toContain("qa:untriaged");
+  });
+
   it("reopens one parent while preserving closed records, quality holds and unrelated findings", async () => {
     const { issues, parent, api } = fixture();
     parent.state = "closed";

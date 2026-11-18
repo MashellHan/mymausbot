@@ -145,8 +145,12 @@ export function makeReport({ run, jobs, results = [], expected = expectedJobs(),
 }
 
 const marker = (key) => `<!-- mausbot-qa:${key} -->`;
+const generatedState = /^<!-- mausbot-qa:([a-f\d]{24}) -->\s+<!-- mausbot-qa:start -->\s+<!-- mausbot-qa-state ([^\r\n]+) -->\r?$[\s\S]*?^<!-- mausbot-qa:end -->\r?$/m;
 const stateOf = (issue) => {
-  try { return JSON.parse(issue.body.match(/<!-- mausbot-qa-state (.+) -->/)?.[1] ?? "null"); } catch { return null; }
+  try {
+    const raw = issue.body.match(generatedState)?.[2] ?? issue.body.match(/<!-- mausbot-qa-state (.+) -->/)?.[1];
+    return JSON.parse(raw ?? "null");
+  } catch { return null; }
 };
 
 const SHA = /^[a-f\d]{40}$/i;
@@ -166,10 +170,10 @@ function authorizedVerifier(entry) {
   return ["OWNER", "MEMBER", "COLLABORATOR"].includes(assoc);
 }
 
-function hasExactCaseCoverage(finding, state) {
-  if (!finding?.cases?.length) return true;
-  const covered = new Set(Array.isArray(state?.caseKeys) ? state.caseKeys : []);
-  return state?.verified === true && finding.cases.every((entry) => covered.has(entry.key));
+function hasCanonicalState(body, key) {
+  const controls = body.match(/<!-- mausbot-qa:(?:[a-f\d]{24}|start|end) -->|<!-- mausbot-qa-state /g);
+  if (controls?.length !== 4) return false;
+  return generatedState.exec(body)?.[1] === key;
 }
 
 async function isStrictAncestor(ancestorSha, descendantSha, api) {
@@ -190,16 +194,19 @@ async function isStalePreFixReport(finding, issue, state, report, api) {
   const labels = issueLabels(issue);
   if (issue.state !== "closed" && !labels.includes("qa:verified")) return false;
   if (!SHA.test(report?.sha ?? "")) return false;
-  if (!hasExactCaseCoverage(finding, state)) return false;
+  if (finding.cases?.length && (state.verified !== true || !Array.isArray(state.caseKeys)
+    || !finding.cases.every((entry) => state.caseKeys.includes(entry.key)))) return false;
+  if (finding.jobs?.length && (!Array.isArray(state.verificationJobs)
+    || !finding.jobs.every((job) => state.verificationJobs.includes(job)))) return false;
 
   const candidates = new Set();
   const author = issue.user;
-  if (author?.id === 41898282 && author.type === "Bot" && author.login === "github-actions[bot]") {
+  if (author?.id === 41898282 && author.type === "Bot" && author.login === "github-actions[bot]" && hasCanonicalState(issue.body, finding.key)) {
     const revision = state.verifiedSha ?? (labels.includes("qa:verified") ? state.lastExecutionSha : null);
     if (typeof revision === "string" && SHA.test(revision)) candidates.add(revision.toLowerCase());
   }
 
-  if (candidates.size === 0 && issue.state === "closed" && !finding?.cases?.length) {
+  if (candidates.size === 0 && issue.state === "closed" && !finding.cases?.length && !finding.jobs?.length) {
     // Only trust an authorized closure comment on the same issue (outside the generated QA block).
     try {
       const comments = await pages(`/issues/${issue.number}/comments`, null, api);
@@ -274,18 +281,23 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     const scopeBasis = finding.cases ? "grouped-case policy"
       : mapped ? "test listed in check-policy.json"
       : "conservative fallback: no test-to-area mapping in check-policy.json";
-    const staleVerifiedSha = recurrence ? await isStalePreFixReport(finding, issue, previous, report, api) : false;
+    const verifiedMember = grouped && issueLabels(issue).includes("qa:verified");
+    const staleVerifiedSha = recurrence || verifiedMember ? await isStalePreFixReport(finding, issue, previous, report, api) : false;
     if (staleVerifiedSha) {
       staleCasesByIssue.set(issue.number, new Set(finding.cases?.map((entry) => entry.key)));
-      const stalePreFixRuns = [...new Set([...(previous?.stalePreFixRuns ?? []), `${runKey}@${report.sha.toLowerCase()}`])].slice(-10);
-      const staleState = { ...previous, stalePreFixRuns };
-      const note = `\n\nRecorded stale pre-fix report ${report.url} (tested \`${report.sha}\`, strict ancestor of verified \`${staleVerifiedSha}\`); keeping prior closure/verification intact.`;
-      const nextBody = issue.body.includes(note.trim()) ? issue.body
-        : issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(staleState)} -->`) + note;
-      if (nextBody !== issue.body) {
-        await api(`/issues/${issue.number}`, { method: "PATCH", body: { body: nextBody } });
-        issue.body = nextBody;
+      const entry = `${runKey}@${report.sha.toLowerCase()}`;
+      const note = `Recorded stale pre-fix report ${report.url} (attempt ${report.attempt}, tested \`${report.sha}\`, strict ancestor of verified \`${staleVerifiedSha}\`).`;
+      if (issue.body.includes(note)) continue;
+      let body = issue.body;
+      if (hasCanonicalState(body, finding.key)) {
+        const history = Array.isArray(previous.stalePreFixRuns) ? previous.stalePreFixRuns : [];
+        if (history.includes(entry)) continue;
+        const staleState = { ...previous, stalePreFixRuns: [...history, entry].slice(-10) };
+        body = body.replace(/<!-- mausbot-qa-state (.+) -->/, () => `<!-- mausbot-qa-state ${JSON.stringify(staleState)} -->`);
       }
+      body += `\n\n${note}`;
+      await api(`/issues/${issue.number}`, { method: "PATCH", body: { body } });
+      issue.body = body;
       continue;
     }
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,

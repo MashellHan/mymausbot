@@ -1457,6 +1457,49 @@ describe("stale pre-fix QA report handling", () => {
     expect(savedState.firstSeen).toBe("2026-11-17T14:00:46Z");
     expect(savedState.triageEpoch).toBe("2026-11-17T14:00:46Z");
     expect(savedState.stalePreFixRuns).toEqual([`44225458164:1@${preFixSha}`]);
+    const retry = { ...makeLateReport(preFixSha), attempt: 2 };
+    await deliverReport(retry, { api, policy: { areas: [] } });
+    await deliverReport(retry, { api, policy: { areas: [] } });
+    expect(patches).toHaveLength(2);
+    expect(JSON.parse(issue.body.match(/<!-- mausbot-qa-state (.+) -->/)![1]).stalePreFixRuns)
+      .toEqual([`44225458164:1@${preFixSha}`, `44225458164:2@${preFixSha}`]);
+  });
+
+  it.each(["verifiedSha", "lastExecutionSha"])("ignores an ambiguous body with two different %s records", async (field) => {
+    const issue = makeClosedIssue({ [field]: newSha });
+    const old = issue.body.match(/<!-- mausbot-qa-state .+ -->/)![0]
+      .replace(newSha, verifiedSha).replace('"lastExecution":"44081735629:1"', '"lastExecution":"99999999999:1"');
+    issue.body = `Archived state\n${old}\n\n${issue.body}`;
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [issue];
+      if (path.startsWith("/issues/1006/comments?")) return [];
+      if (path === "/issues/1006" && options.method === "PATCH") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await deliverReport(makeLateReport(preFixSha), { api, policy: { areas: [] } });
+    expect(api.mock.calls.some(([path]) => path.startsWith("/compare/"))).toBe(false);
+    expect(issue.state).toBe("open");
+  });
+
+  it.each([
+    { jobs: ["A"], machineProof: true, historical: true },
+    { jobs: ["A", "B"], machineProof: true, historical: false },
+    { jobs: ["A", "B"], machineProof: false, historical: false },
+  ])("retains verified job coverage for $jobs with machine proof $machineProof", async ({ jobs, historical, machineProof }) => {
+    const issue = makeClosedIssue({ verifiedSha: machineProof ? verifiedSha : undefined, verificationJobs: ["A"] });
+    const api = vi.fn(async (path: string, options: any = {}) => {
+      if (path.startsWith("/issues?")) return [issue];
+      if (path.startsWith("/issues/1006/comments?")) return [{
+        author_association: "OWNER", body: `<!-- lead-qa1006-test-closure-v1 -->\nmerged at [\`${verifiedSha}\`]`,
+      }];
+      if (path === `/compare/${preFixSha}...${verifiedSha}`) return { status: "ahead", ahead_by: 1, behind_by: 0 };
+      if (path === "/issues/1006" && options.method === "PATCH") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const late = makeLateReport(preFixSha);
+    await deliverReport({ ...late, findings: [{ ...late.findings[0], jobs }] }, { api, policy: { areas: [] } });
+    expect(issue.state).toBe(historical ? "closed" : "open");
+    expect(JSON.parse(issue.body.match(/<!-- mausbot-qa-state (.+) -->/)![1]).verificationJobs).toEqual(jobs);
   });
 
   it.each(["verifiedSha", "lastExecutionSha"])("requires reporter ownership for %s on a closed, verified issue", async (field) => {
