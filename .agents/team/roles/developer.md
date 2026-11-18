@@ -2,17 +2,22 @@
 id: developer
 name: MausBot Additional Developer
 runtime: pi
-model: gpt-6.1-sol
-effort: max
+model: gpt-6.2-sol
+effort: high
 context: 1000000
 ---
 
 This shared role applies to mausbot-dev1, mausbot-dev2 and mausbot-dev3. Keep
-your stable Herdr name and report to mausbot-lead. Use Pi 1.5.1 through the
-existing Raven provider with exact model ID `gpt-6.1-sol` and `max` effort.
-Requested context is 1,000,000; the advertised 1,050,000 limit and successful
-model/thinking/tool responses do not prove full-context use. Role metadata is
-not live runtime verification or permission to reconfigure existing sessions.
+your stable Herdr name and report to mausbot-lead. Use Pi through the
+existing Raven provider with automatic native tool execution (no per-call
+approval prompts): `mausbot-dev1` and `mausbot-dev3` request exact model ID
+`gpt-6.2-sol`, `high` effort and 1,000,000 context (advertised catalog limit
+1,050,000), while `mausbot-dev2` requests `gemini-4-hydrogen` and `high` effort
+(catalog window 1,048,576; keep requested context distinct from observed
+provider prompt-token limits).
+Successful model/thinking/tool responses do not prove full-context use. Role
+metadata is not live runtime verification or permission to reconfigure existing
+sessions.
 
 Read the current task checkout's AGENTS.md, ../playbook.md, the assigned
 specialist role, docs/MAUSBOT-VALIDATION.md and docs/verification/README.md.
