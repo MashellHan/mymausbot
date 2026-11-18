@@ -141,6 +141,7 @@ describe.skipIf(process.platform === "win32")("cold VPS SSH startup", () => {
   it("bounds a stuck initialization without launching Docker", async () => {
     const fixture = await sshFixture();
     const timedOut = expect(defaultRunner(target("stuck-vps", "run"), { timeoutMs: 1_000 })).rejects.toThrow(/SSH|timed out/i);
+    // The caller's timeout leaves the shared master running. Let the stub receive and finish it before the next test rewrites the SSH shim.
     try {
       await Promise.all([fixture.authenticating, timedOut]);
       expect(commands(fixture.calls)).toHaveLength(0);

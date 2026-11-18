@@ -77,6 +77,7 @@ export const VITEST_SUBSETS = {
       "server/cloud-lending-memory.e2e.test.ts",
       "server/cloud-lending.e2e.test.ts",
       "server/cloud-lent-mcp.e2e.test.ts",
+      "server/cloud-personal-slack.e2e.test.ts",
       "server/cloud-send-kinds.e2e.test.ts",
       "server/cloud-send-move.e2e.test.ts",
       "server/cloud-send-rooms.e2e.test.ts",
@@ -86,16 +87,20 @@ export const VITEST_SUBSETS = {
       "server/cloud-sync.e2e.test.ts",
       "server/cloud-team-asker-owns.e2e.test.ts",
       "server/cloud-team-away.e2e.test.ts",
+      "server/cloud-team-bitwarden.e2e.test.ts",
+      "server/cloud-team-box-audience.e2e.test.ts",
       "server/cloud-team-browser.e2e.test.ts",
       "server/cloud-team-connections.e2e.test.ts",
       "server/cloud-team-conversation-share.e2e.test.ts",
       "server/cloud-team-engine-homes.e2e.test.ts",
+      "server/cloud-team-files.e2e.test.ts",
       "server/cloud-team-gateway-mcp.e2e.test.ts",
       "server/cloud-team-inbox.e2e.test.ts",
       "server/cloud-team-included-hosting.e2e.test.ts",
       "server/cloud-team-mausbot-reach.e2e.test.ts",
       "server/cloud-team-member-secrets.e2e.test.ts",
       "server/cloud-team-new-chat-private.e2e.test.ts",
+      "server/cloud-team-onepassword.e2e.test.ts",
       "server/cloud-team-open-reach.e2e.test.ts",
       "server/cloud-team-own-key-apps.e2e.test.ts",
       "server/cloud-team-owners.e2e.test.ts",
@@ -108,10 +113,12 @@ export const VITEST_SUBSETS = {
       "server/cloud-team-private-default.e2e.test.ts",
       "server/cloud-team-private.e2e.test.ts",
       "server/cloud-team-profile.e2e.test.ts",
+      "server/cloud-team-slack.e2e.test.ts",
       "server/cloud-team-published-apps.e2e.test.ts",
       "server/cloud-team-requests.e2e.test.ts",
       "server/cloud-team-routines.e2e.test.ts",
       "server/cloud-team-setup-request.e2e.test.ts",
+      "server/cloud-team-templates.e2e.test.ts",
       "server/cloud-team.e2e.test.ts",
       "server/host/brief-words.test.ts",
       "server/host/lending-lifts.test.ts",
@@ -221,7 +228,7 @@ const AREAS = [
   [/^(?:src|public)\/|^[^/]+-preview\.html$/, "web"],
   [/^companion\/src\/e2e\/vectors\//, "e2e-vectors"],
   [/^cloudflare\/composio-broker\//, "broker"],
-  [/^(?:server|shared|enterprise|companion|evals|skills|deploy)\/|^(?:Dockerfile|\.dockerignore|compose\.yaml)$/, "server"],
+  [/^(?:server|shared|packages\/phone-protocol|enterprise|companion|evals|skills|deploy)\/|^(?:Dockerfile|\.dockerignore|compose\.yaml)$/, "server"],
   [/^electron\/(?:cua|cua-failure|cua-connection|capabilities|screen-status|shared-cua-connection|shared-computer-access|lent-screen-tools|lent-screen-failures|paced-typing)\.[cm]js$/, "windows-computer-control"],
   [/^(?:electron|build)\/|^(?:electron-builder\.yml|index\.html|rail\.html)$/, "desktop"],
   [/^cloudflare\/control-plane\//, "control-plane"],
@@ -259,7 +266,7 @@ export function selectCiScope(files) {
 
 export const POLICY_PATH = "scripts/testing/check-policy.json";
 export const POLICY_CHANGE = /^(?:\.github\/|scripts\/(?:ci-|check\.|qa\/|testing\/(?:check-policy|ci-retry|host-e2e|duration-sequencer|vitest-shard))|(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|vite\.config\.ts|tsconfig[^/]*|\.npmrc|\.node-version)$)/;
-export const SENSITIVE_PATH = /^(?:shared\/|server\/(?:drivers?\/|host\/|routes\/|local-|request-auth|guarded|store|message-db|turn-|safety|pairing|secret)|electron\/|companion\/|enterprise\/)/;
+export const SENSITIVE_PATH = /^(?:shared\/|packages\/phone-protocol\/|server\/(?:drivers?\/|host\/|routes\/|local-|request-auth|guarded|store|message-db|turn-|safety|pairing|secret)|electron\/|companion\/|enterprise\/)/;
 const SENSITIVE_LINE = /\b(?:auth|authorization|permission|credential|secret|redact|token|password|localStorage|sessionStorage|fetch|WebSocket|postMessage|ipcRenderer|persist|migration|dispatch|cancel|spawn|exec)\b/i;
 export const SAFE_TEST_PATH = /^(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.test\.[cm]?[jt]sx?$/;
 export const FAST_AFFECTED_LIMIT = 4;

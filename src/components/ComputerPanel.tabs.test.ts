@@ -248,15 +248,15 @@ describe("Computer panel tab", () => {
     expect(tabLabels()).toEqual(["Bot", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
     press("Routines", "ArrowRight");
     await settle();
-    expect(selected()).toBe("Android");
+    expect(selected()).toBe("Phone");
   });
 
   it("keeps one selected tab when Android disconnects", async () => {
     fixture.android = true;
     await open(makeBot());
-    flushSync(() => tab("Android").click());
+    flushSync(() => tab("Phone").click());
     await settle();
-    expect(selected()).toBe("Android");
+    expect(selected()).toBe("Phone");
 
     fixture.android = false;
     await open(makeBot());

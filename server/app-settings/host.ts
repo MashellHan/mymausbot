@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 
-import type { AppSettingRequest } from "../../shared/app-settings.ts";
+import { isSettingsCardId, SETTINGS_CARD_IDS, type AppSettingRequest, type SettingsCardId } from "../../shared/app-settings.ts";
 import type { Notification } from "../../shared/notification.ts";
 import type { OptionCardData } from "../../shared/wire.ts";
 import { appendDecision } from "../decision-log.ts";
@@ -15,12 +15,17 @@ import { buildNotification } from "../notify.ts";
 import { serverLine } from "../server-lines.ts";
 import type { BotRecord, GroupRecord, Store } from "../store.ts";
 import { turnWaitedOnPerson } from "../waiting-on-person.ts";
-import { display, findSettings, type SettingEntry, type WritableEntry } from "./registry.ts";
+import { display, findSettings, personOnly, settingLocation, type SettingEntry, type WritableEntry } from "./registry.ts";
+import type { ThemeTool } from "../themes/tool.ts";
+import { cardElsewhere, cardNotInRoom, cardShownStatus, SETTINGS_CARDS } from "./cards.ts";
+import type { TakenPicture } from "./picture-file.ts";
+import { findPlaces, placesList } from "./places.ts";
 
 export const TOOL = "app_settings";
 export const APP_SETTINGS_HOLD_MS = 9 * 60_000;
 export const WRITE_BUDGET = 10;
 const FIND_LIMIT = 8;
+const THEME_ACTIONS: readonly string[] = ["theme", "set_theme", "add_theme_asset", "theme_history", "undo_theme"];
 const NOT_RETRY = "Do not retry it; ask the user what they would like instead.";
 const NOT_SET = "not set";
 const text = (value: string) => value || NOT_SET;
@@ -63,6 +68,7 @@ interface Undoable {
   entry: WritableEntry;
   before: unknown;
   after: unknown;
+  target: unknown;
 }
 
 export type UndoResult =
@@ -84,6 +90,13 @@ export interface AppSettingsDeps {
   activeGroupTurnForBot(botId: string): { threadId: string } | null;
   notify(notification: Notification | null): void;
   language(threadId: string): string | undefined;
+  automated?(turn: Turn): boolean;
+  /** The person's own themes; absent where the server offers none. */
+  themes?: ThemeTool;
+  /** For a setting that takes a picture file: stores the file the bot names, or says why not. */
+  pictures?: { take(turn: Turn, path: string): Promise<TakenPicture>; discard(avatarUrl: string): void };
+  /** Settings cards: whether a card's control exists on this server's own computer, and whether its setting is known to be on (null when the server cannot tell). Absent: no cards here. */
+  cards?: { here(id: SettingsCardId): boolean; on(id: SettingsCardId): true | null };
 }
 
 export function createAppSettings(deps: AppSettingsDeps) {
@@ -97,7 +110,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
 
   const reply = (status: number, body: Record<string, unknown>) => ({ status, body });
   const refuse = (status: number, error: string) => reply(status, { error });
-  const describe = (entry: SettingEntry) => ({ id: entry.id, label: entry.label, tier: entry.tier, value: text(entry.read()), where: entry.where });
+  const describe = (entry: SettingEntry) => ({ id: entry.id, label: entry.label, tier: entry.tier, value: text(entry.read()), where: settingLocation(entry.where) });
   const decide = (turn: Turn, bot: BotRecord | undefined, entry: SettingEntry, summary: string, decision: "auto-approved" | "card-shown", requestId?: string) =>
     appendDecision(deps.dataDir, { threadId: turn.threadId, ...(requestId ? { requestId } : {}), botId: turn.botId, botName: bot?.name, tool: TOOL, summary: `${entry.id}: ${summary}`, decision, source: "app-settings" });
   const from = (bot: BotRecord, threadId: string) => (deps.connectorThread(bot.id, threadId)?.group ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {});
@@ -118,7 +131,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
     return null;
   };
 
-  async function apply(entry: WritableEntry, value: unknown, shown: Shown): Promise<Outcome> {
+  async function applyConfirmed(entry: WritableEntry, value: unknown, shown: Shown): Promise<Outcome> {
     if (entry.describe) {
       const current = entry.describe(value);
       if ("refusal" in current) return { kind: "failed", error: current.refusal };
@@ -128,18 +141,6 @@ export function createAppSettings(deps: AppSettingsDeps) {
     if (refusal) return { kind: "failed", error: refusal };
     const after = entry.read();
     return { kind: "applied", text: shown.before === undefined ? `Done: ${shown.after}. ${entry.label} now: ${text(after)}.` : `Changed ${entry.label} from ${text(shown.before)} to ${text(after)}.`, after };
-  }
-
-  async function setSafe(turn: Turn, bot: BotRecord, entry: WritableEntry, value: unknown, before: string) {
-    const earlier = structuredClone(entry.current());
-    const outcome = await apply(entry, value, { before, after: display(value) });
-    if (outcome.kind !== "applied") return refuse(409, outcome.kind === "failed" ? outcome.error : "The change was not applied.");
-    const after = outcome.after;
-    const requestId = randomUUID();
-    card(bot, turn.threadId, entry, { before, after }, requestId, [], { answered: "allow", dismissed: true, autoApplied: true });
-    undoable.set(requestId, { entry, before: earlier, after: structuredClone(entry.current()) });
-    decide(turn, bot, entry, `${text(before)} → ${text(after)}`, "auto-approved", requestId);
-    return reply(200, { text: `${outcome.text} The user can undo it from the card in the conversation.` });
   }
 
   async function setConfirm(turn: Turn, bot: BotRecord, entry: WritableEntry, value: unknown, shown: Shown, ended?: AbortSignal) {
@@ -191,49 +192,136 @@ export function createAppSettings(deps: AppSettingsDeps) {
     entry.settle(outcome);
   }
 
+  /** Applies the change, posts its applied card with Undo, and logs it in the decision log. */
+  async function apply(turn: Turn, bot: BotRecord, entry: WritableEntry, value: unknown, change?: string) {
+    const before = structuredClone(await entry.current(value));
+    const was = entry.read();
+    const refusal = await entry.write(value);
+    if (refusal) return refuse(409, refusal);
+    const after = entry.read();
+    const shown: Shown = change === undefined ? { before: was, after } : { after: change };
+    const requestId = randomUUID();
+    const language = deps.language(turn.threadId);
+    const notSet = (value: string) => value || serverLine(language, "server.appSettings.notSet");
+    const appSettingRequest: AppSettingRequest = { settingId: entry.id, label: entry.label, ...(shown.before === undefined ? {} : { before: shown.before }), after: shown.after, tier: entry.tier };
+    store.appendMessage(turn.threadId, {
+      role: "bot", kind: "options", ...from(bot, turn.threadId),
+      card: { title: serverLine(language, "server.appSettings.changed", { label: entry.label }), subtitle: shown.before === undefined ? shown.after : `${notSet(shown.before)} → ${notSet(shown.after)}`,
+        options: [], requestId, tool: TOOL, fixedOptions: true, appSettingRequest, answered: "allow", dismissed: true, autoApplied: true },
+    });
+    undoable.set(requestId, { entry, before, after: structuredClone(await entry.current(value)), target: value });
+    appendDecision(deps.dataDir, { threadId: turn.threadId, requestId, botId: turn.botId, botName: bot.name, tool: TOOL, summary: `${entry.id}: ${said(shown)}`, decision: "auto-approved", source: "app-settings" });
+    const done = change === undefined ? `Changed ${entry.label} from ${text(was)} to ${text(after)}.` : `Done: ${change}. ${entry.label} now: ${text(after)}.`;
+    return reply(200, { text: `${done} The user can undo it from the card in the conversation.` });
+  }
+
   async function set(turn: Turn, body: Record<string, unknown>, ended?: AbortSignal) {
     const entry = typeof body.id === "string" ? byId.get(body.id) : undefined;
     if (!entry) return refuse(404, `No setting with id ${JSON.stringify(body.id ?? null)}. Use action find first.`);
     const bot = store.bot(turn.botId);
     if (!bot) return refuse(404, "This bot no longer exists.");
-    if (entry.tier === "owner-only") return refuse(403, `${entry.label} is changed only by the owner, in ${entry.where}. Tell the user where to find it; do not try another way.`);
+    if (entry.tier === "owner-only") {
+      const knownPlace = settingLocation(entry.where) !== entry.where;
+      return refuse(403, knownPlace ? personOnly(entry.label, entry.where)
+        : `${entry.label} is changed only by the owner, in ${entry.where}. Tell the user where to find it; do not try another way.`);
+    }
+    if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings change only in the owner's own conversation. This turn was not started by the owner here, so nothing changed; you may still read settings.");
     if (entry.tier === "secret") {
       if (body.value !== undefined) return refuse(400, `Never send a key or token as a value. Call set on ${entry.id} with no value: a secure card asks the user for it, and you never see it.`);
       const budget = spendWrite(turn);
       if (budget) return refuse(429, budget);
       const posted = await deps.requestCredential(bot, turn.threadId, { credentialId: entry.credentialId, reason: typeof body.reason === "string" ? body.reason : undefined });
-      if (!posted.body.error && posted.body.alreadyConfigured === true) return reply(200, { text: `${entry.label} is already set. To replace it, the user changes it in ${entry.where}.` });
+      if (!posted.body.error && posted.body.alreadyConfigured === true) return reply(200, { text: `${entry.label} is already set. To replace it, the user changes it in ${settingLocation(entry.where)}.` });
       if (posted.status >= 300) return refuse(posted.status, String(posted.body.error ?? "The secure card could not be shown."));
       return reply(200, { text: `A secure card for ${entry.label} is ready in mymausbot. End this turn now and say in one line that you are waiting for it; mymausbot resumes you when the user saves it or declines. You never see the key.` });
     }
     const parsed = parseValue(entry, body.value);
     if (!parsed.success) return refuse(400, `${entry.label} takes ${entry.allowed}. ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+    if (entry.id === "bots.settings" && (parsed.data as { computer?: unknown }).computer === "local" && deps.automated?.(turn)) {
+      return refuse(403, `A routine or automation can't keep a bot on this computer. Nothing changed: say in one line that the person can choose This computer under “Where ${bot.name} works” in Bot's screen, or ask you in their own chat.`);
+    }
     const described = entry.describe?.(parsed.data);
     if (described && "refusal" in described) return refuse(409, described.refusal);
     const budget = spendWrite(turn);
     if (budget) return refuse(429, budget);
-    const before = entry.read();
-    return entry.tier === "safe" ? setSafe(turn, bot, entry, parsed.data, before) : setConfirm(turn, bot, entry, parsed.data,
-      described ? { after: described.change } : { before, after: entry.preview?.(parsed.data) ?? display(parsed.data) }, ended);
+    if (entry.tier === "confirm") {
+      const shown = described ? { after: described.change } : { before: entry.read(), after: entry.preview?.(parsed.data) ?? display(parsed.data) };
+      return setConfirm(turn, bot, entry, parsed.data, shown, ended);
+    }
+    const picture = entry.fromFile ? await takePicture(turn, parsed.data) : { value: parsed.data };
+    if ("refusal" in picture) return refuse(400, picture.refusal);
+    const applied = await apply(turn, bot, entry, picture.value, described?.change);
+    if (picture.stored && applied.status >= 300) deps.pictures?.discard(picture.stored);
+    return applied;
+  }
+
+  /** A value naming a picture file by `path` goes on as the stored picture's `avatarUrl`; an empty path stays, to remove it. */
+  async function takePicture(turn: Turn, value: unknown): Promise<{ value: unknown; stored?: string } | { refusal: string }> {
+    const { path, ...rest } = value as { path?: unknown };
+    if (typeof path !== "string" || !path) return { value };
+    if (!deps.pictures) return { refusal: "Pictures can't be set from a file here." };
+    const taken = await deps.pictures.take(turn, path);
+    return "refusal" in taken ? taken : { value: { ...rest, avatarUrl: taken.avatarUrl }, stored: taken.avatarUrl };
+  }
+
+  /** A theme is the person's whose own message began the work, never a teammate's or a guest's. */
+  async function theme(turn: Turn, body: Record<string, unknown>) {
+    const themes = deps.themes;
+    if (!themes) return refuse(404, "Themes are not available on this server.");
+    const bot = store.bot(turn.botId);
+    if (!bot) return refuse(404, "This bot no longer exists.");
+    const person = deps.guestDriven(turn.threadId) ? null : themes.person(turn);
+    if (!person) return refuse(403, "A theme changes only for the person who asked, in their own conversation. This turn was not started by them here, so nothing changed.");
+    if (body.action === "theme") return themes.overview(person, body.id);
+    if (body.action === "theme_history") return themes.history(person);
+    const asked = body.action === "set_theme" ? themes.wanted(person, body) : body.action === "undo_theme" ? themes.undo(person, body) : null;
+    if (asked && "error" in asked) return refuse(400, asked.error);
+    const budget = spendWrite(turn);
+    if (budget) return refuse(429, budget);
+    return asked ? apply(turn, bot, themes.entry(person), asked.wear, asked.change) : themes.addAsset(turn, person, body);
+  }
+
+  /** Shows a setting's own control in the conversation. Security invariant: the reply and the row carry fixed words and
+   * the card's id only; the control's code, link and address never pass through here. */
+  function showCard(turn: Turn, body: Record<string, unknown>) {
+    if (!isSettingsCardId(body.card)) return refuse(404, `No settings card ${JSON.stringify(body.card ?? null)}. Cards: ${SETTINGS_CARD_IDS.join(", ")}.`);
+    const card = SETTINGS_CARDS[body.card];
+    const bot = store.bot(turn.botId);
+    if (!bot) return refuse(404, "This bot no longer exists.");
+    if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "A settings card shows only in the owner's own conversation, when they asked. This turn was not started by the owner here, so nothing was shown.");
+    if (!deps.cards?.here(body.card)) return reply(200, { text: cardElsewhere(card) });
+    if (deps.connectorThread(bot.id, turn.threadId)?.group) return reply(200, { text: cardNotInRoom(card) });
+    const budget = spendWrite(turn);
+    if (budget) return refuse(429, budget);
+    store.appendMessage(turn.threadId, { role: "bot", kind: "text", text: card.text, settingsCard: { id: body.card } });
+    return reply(200, { text: cardShownStatus(card, deps.cards.on(body.card)) });
   }
 
   return {
-    /** `ended` aborts once the turn is stopped or revoked, or its call is gone: a waiting card then closes at once. */
     async handle(body: Record<string, unknown>, turn: Turn, ended?: AbortSignal): Promise<{ status: number; body: Record<string, unknown> }> {
       if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings are available only in the owner's own conversation.");
       if (body.action === "find") {
         const query = typeof body.query === "string" ? body.query : "";
         const hits = findSettings(entries, query, FIND_LIMIT).map(describe);
-        return reply(200, { text: hits.length ? JSON.stringify(hits) : `No setting matches ${JSON.stringify(query)}. Try other words, or tell the user it is not something bots can change.` });
+        if (hits.length) return reply(200, { text: JSON.stringify(hits) });
+        const places = findPlaces(query);
+        return reply(200, { text: `No setting you can change matches ${JSON.stringify(query)}.${places.length ? ` Where the person finds it in the app: ${places.join("; ")}.` : " Try other words, or use action places."}` });
+      }
+      if (body.action === "places") {
+        const query = typeof body.query === "string" ? body.query.trim() : "";
+        const places = query ? findPlaces(query) : [];
+        return reply(200, { text: query ? (places.length ? places.join("\n") : `No place in the app matches ${JSON.stringify(query)}. Here is every place:\n${placesList()}`) : placesList() });
       }
       if (body.action === "get") {
         const entry = typeof body.id === "string" ? byId.get(body.id) : undefined;
         if (!entry) return refuse(404, `No setting with id ${JSON.stringify(body.id ?? null)}. Use action find first.`);
         return reply(200, { text: JSON.stringify({ ...describe(entry), help: entry.help, ...("allowed" in entry ? { allowed: entry.allowed } : {}),
-          change: entry.tier === "owner-only" ? `only the owner, in ${entry.where}` : entry.tier === "secret" ? "set with no value opens a secure card" : entry.tier === "confirm" ? "set shows the user a Change/Cancel card and waits" : "set applies at once, with Undo on the card" }) });
+          change: entry.tier === "owner-only" ? `only the ${entry.where === settingLocation(entry.where) ? "owner" : "person"}, in ${settingLocation(entry.where)}` : entry.tier === "secret" ? "set with no value opens a secure card" : entry.tier === "confirm" ? "set shows the user a Change/Cancel card and waits" : "set applies at once, with Undo on the card" }) });
       }
       if (body.action === "set") return set(turn, body, ended);
-      return refuse(400, "action must be find, get or set.");
+      if (body.action === "show_card") return showCard(turn, body);
+      if (typeof body.action === "string" && THEME_ACTIONS.includes(body.action)) return theme(turn, body);
+      return refuse(400, `action must be find, get, set, show_card, places, ${THEME_ACTIONS.join(", ")}.`);
     },
 
     /** The person's answer to a "Change X?" card; Allow counts only from an owner's review. */
@@ -266,7 +354,7 @@ export function createAppSettings(deps: AppSettingsDeps) {
       }
       hold.applying = true;
       clearTimeout(hold.timer);
-      void apply(hold.entry, hold.value, hold.shown).then((outcome) => {
+      void applyConfirmed(hold.entry, hold.value, hold.shown).then((outcome) => {
         settleHold(args.requestId, outcome);
       }, () => settleHold(args.requestId, { kind: "failed", error: "The setting change failed." }));
       json(res, 200, { ok: true, outcome: "allowed-once" });
@@ -281,8 +369,9 @@ export function createAppSettings(deps: AppSettingsDeps) {
       if (current.undone) return { claimed: true, state: "already_undone" };
       const change = undoable.get(args.requestId);
       if (!change || current.answered !== "allow" || current.appSettingRequest?.tier !== "safe" || change.entry.tier !== "safe") return { claimed: true, state: "invalid", error: "This change can't be undone here.", status: 409 };
-      if (!isDeepStrictEqual(change.entry.current(), change.after)) return { claimed: true, state: "invalid", error: UNDO_STALE, status: 409, stale: true };
-      const refusal = await change.entry.write(change.before);
+      if (!isDeepStrictEqual(await change.entry.current(change.target), change.after)) return { claimed: true, state: "invalid", error: UNDO_STALE, status: 409, stale: true };
+      const refusal = change.before === undefined && change.entry.id !== "bots.defaultModel"
+        ? "The earlier value is not one that can be set back." : await change.entry.write(change.before);
       if (refusal) return { claimed: true, state: "invalid", error: refusal, status: 409 };
       undoable.delete(args.requestId);
       store.patchMessage(args.threadId, message.id, { card: { ...current, undone: true } });

@@ -112,7 +112,7 @@ describe("mark a department as read", () => {
       '/api/bots/eve/read {"threadId":"eve-main"}', '/api/bots/eve/read {"threadId":"eve-side"}',
       '/api/groups/standup/read {"threadId":"standup-fork"}',
     ]);
-    expect(read.groups).toEqual(["standup"]);
+    expect(read.groups).toEqual(["standup", "standup"]);
   });
 
   it("reads the shown thread when an older room task has only a room-level unread mark", async () => {

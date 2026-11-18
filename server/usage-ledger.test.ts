@@ -167,18 +167,6 @@ describe("usage summaries", () => {
     ]);
   });
 
-  it("keeps bar totals additive when one row has more cached than input tokens", () => {
-    const uneven: UsageRow[] = [
-      { ...rows[0]!, input: 100, output: 10, cachedInput: 150 },
-      { ...rows[0]!, model: "gpt-6.1-sol", driverKind: "codex", instanceId: "codex", input: 500, output: 50, cachedInput: 100 },
-    ];
-    const [scout] = summarizeUsage(uneven, "bot", null, "model").groups;
-    expect(scout!.barTokens).toBe(460);
-    expect(scout!.segments!.map((piece) => piece.barTokens)).toEqual([450, 10]);
-    expect(scout!.segments!.reduce((sum, piece) => sum + (piece.barTokens ?? 0), 0)).toBe(scout!.barTokens);
-    expect(scout!.input - Math.min(scout!.cachedInput, scout!.input) + scout!.output).toBe(410);
-  });
-
   it("orders a group's segments by the fresh tokens its bar draws, not by cached input", () => {
     const cached: UsageRow = {
       ...rows[0]!,
@@ -200,6 +188,21 @@ describe("usage summaries", () => {
       "model:codex/gpt-6.1-sol",
       "model:claudeAgent/claude-sonnet-5",
     ]);
+  });
+
+  it("keeps the bar total additive when one row's cached input exceeds its input", () => {
+    const uneven: UsageRow[] = [
+      { ...row({ model: "claude-sonnet-5", input: 100, output: 10, cachedInput: 150 }), at: "2026-09-01T10:00:00.000Z" } as UsageRow,
+      { ...row({ model: "gpt-6.1-sol", driverKind: "codex", instanceId: "codex", input: 500, output: 50, cachedInput: 100 }), at: "2026-09-01T11:00:00.000Z" } as UsageRow,
+    ];
+    const [scout] = summarizeUsage(uneven, "bot", null, "model").groups;
+    const fresh = (entry: UsageRow) =>
+      Math.max(0, entry.input - Math.min(entry.cachedInput ?? 0, entry.input)) + entry.output;
+    const expected = uneven.reduce((sum, entry) => sum + fresh(entry), 0);
+    expect(scout!.barTokens).toBe(expected);
+    expect(scout!.segments!.reduce((sum, piece) => sum + (piece.barTokens ?? 0), 0)).toBe(expected);
+    expect(scout!.barTokens).toBe(460);
+    expect(scout!.input - Math.min(scout!.cachedInput, scout!.input) + scout!.output).toBe(410);
   });
 
   it("groups by routine, with every non-routine turn in one manual bucket", () => {

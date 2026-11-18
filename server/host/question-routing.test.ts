@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ApprovalMode } from "../../shared/approval-mode.ts";
 import type { HandoffView } from "../coordinator.ts";
@@ -72,6 +72,7 @@ function world(options: { live?: string[]; privateTo?: string; steers?: boolean;
       return true;
     },
     live: (_threadId, requestId) => (options.live ?? []).includes(requestId),
+    hasLive: () => (options.live ?? []).length > 0,
     unattended: (_botId, threadId) => (options.unattended ?? []).includes(threadId),
     answerLive: async (threadId, requestId, text) => { if (options.takesAnswers === false) return false; answeredLive.push({ threadId, requestId, text }); return true; },
     settleSignIns: (parked) => { settled.push(parked.id); },
@@ -310,6 +311,21 @@ describe("a Chief's answer, for the person, to a question a teammate asks them",
     expect(await w.routing.answerForPerson({ sourceLevel: "auto", sender: FUCHS, senderThreadId: "inbox", target: DACHS,
       threadId: "chat", message: "Ja, behalten" })).toMatchObject({ outcome: "failed" });
     expect(w.answeredLive).toEqual([]);
+  });
+
+  it("reads no thread of the target's for a question no turn is waiting on, so a send does not parse every conversation it has", async () => {
+    const idle = world();
+    asks(idle, "work");
+    asks(idle, "other-work");
+    const read = vi.spyOn(idle.store, "messagesFor");
+    await idle.routing.relay({ sourceLevel: "full", sender: FUCHS, senderThreadId: "inbox", target: DACHS, message: "Ja" });
+    expect(read).not.toHaveBeenCalled();
+
+    const waiting = world({ live: ["req-p"] });
+    asks(waiting, "work");
+    const readWaiting = vi.spyOn(waiting.store, "messagesFor");
+    await waiting.routing.relay({ sourceLevel: "full", sender: FUCHS, senderThreadId: "inbox", target: DACHS, message: "Ja" });
+    expect(readWaiting).toHaveBeenCalledWith("work");
   });
 
   it("answers the card in the person's own chat with the teammate, and the card and the Chief's chat say who answered", async () => {

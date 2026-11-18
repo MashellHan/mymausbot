@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { openExternalLink } from "@/lib/app-links";
 import { t } from "@/lib/i18n";
 import { showable, SITE_FRAME_ALLOW, SITE_FRAME_SANDBOX, SITE_THUMB_SANDBOX } from "@/lib/published-apps";
-import { useFramingRefused } from "./use-framing";
+import { useFramingBlock } from "./use-framing";
 
 const LOAD_TIMEOUT_MS = 10_000;
 
@@ -13,7 +13,7 @@ export function SiteFrame({ url, title, loginOnly = false, attempt, sandbox, fra
   url: string; title: string; loginOnly?: boolean; attempt: number; sandbox?: typeof SITE_THUMB_SANDBOX; frameName?: string;
 }) {
   const canFrame = showable(url, window.location.origin) && !loginOnly;
-  const refused = useFramingRefused(canFrame ? url : null, attempt);
+  const block = useFramingBlock(canFrame ? url : null, attempt);
   const [timedOut, setTimedOut] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -24,11 +24,11 @@ export function SiteFrame({ url, title, loginOnly = false, attempt, sandbox, fra
     return () => clearTimeout(timer);
   }, [url, attempt]);
 
-  if (!canFrame || refused || (timedOut && !loaded)) {
+  if (!canFrame || block || (timedOut && !loaded)) {
     return (
       <div data-app-preview-fallback="" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
         <p className="text-[14px] font-medium text-ink">{t("publishedApps.preview.cantShow")}</p>
-        <p className="max-w-sm text-[13px] text-ink-secondary">{t(loginOnly ? "publishedApps.preview.loginBody" : "publishedApps.preview.cantShowBody")}</p>
+        <p className="max-w-sm text-[13px] text-ink-secondary">{t(loginOnly || block === "login" ? "publishedApps.preview.loginBody" : "publishedApps.preview.cantShowBody")}</p>
         <button type="button" className="ui-button ui-button-primary" onClick={() => void openExternalLink(url).catch(() => undefined)}>{t("webPanels.page.openInBrowser")}</button>
       </div>
     );

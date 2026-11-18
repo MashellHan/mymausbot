@@ -1,4 +1,4 @@
-import { BookmarkPlus, Code, Copy, Eye, Pencil, Pin, PinOff, RefreshCw, Square, Volume2 } from "lucide-react";
+import { BookmarkPlus, Code, Copy, Eye, Pencil, Pin, PinOff, RefreshCw, Reply, Square, Volume2 } from "lucide-react";
 import { copyText } from "@/lib/copy-text";
 import { t } from "@/lib/i18n";
 import { useContext } from "react";
@@ -8,6 +8,13 @@ import { useSpeakAction } from "@/components/SpeakButton";
 import { openConversationDialog, TEAM_MEMORY_ITEM, TeamMemorySavesContext } from "@/components/conversation-share/conversation-share";
 
 export type PinAction = { pinned: boolean; onToggle: () => void; hint?: string };
+
+export function replyAndCopy(onReply: () => void, text: string): MessageMenuItem[] {
+  return [
+    { key: "reply", icon: <Reply {...ACTION_ICON} />, label: t("chat.reply"), onSelect: onReply },
+    ...(text.trim() ? [{ key: "copy", icon: <Copy {...ACTION_ICON} />, label: t("chat.copyMessage"), onSelect: () => { void copyText(text); } }] : []),
+  ];
+}
 
 export function roomPin(group: Group, message: Message, dispatch: ReturnType<typeof useStore>["dispatch"]): PinAction | undefined {
   if (window.ogb?.remoteClient?.active) return undefined;
@@ -73,7 +80,8 @@ export function useBotMessageMenu({
   const speak = useSpeakAction({ text, botId, messageId, voiceId, tts, localVoice });
   const teamMemory = useTeamMemoryItem(text, messageId, botId, threadId);
   const items: MessageMenuItem[] = [];
-  if (canSpeak && text) {
+  // Once a voice is set up, Read this aloud is its own button in the hover bar; the menu keeps only the setup hint.
+  if (canSpeak && text && !speak.ready) {
     items.push({
       key: "speak",
       icon: speak.mine ? <Square {...ACTION_ICON} /> : <Volume2 {...ACTION_ICON} />,
