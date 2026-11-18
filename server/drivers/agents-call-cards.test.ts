@@ -158,7 +158,7 @@ describe("the chat-app tools", () => {
     // It points a dashboard at the bundled data-dashboards skill.
     expect(tools.get("show_html")!.description).toMatch(/At most 256 KB\. Call again with its app_id to replace it; it reloads\. Never put secrets in it\. In rooms everyone sees it, view-only: send and setContext do nothing\. For a data dashboard, follow the data-dashboards skill\. /);
     // A claude.ai Artifact needs Claude's own claude.ai sign-in: the bot says so and offers our own pages instead.
-    expect(tools.get("show_html")!.description).toMatch(/Asked for a claude\.ai Artifact\? Those need Claude's own claude\.ai sign-in and are not available to bots here: say so in one line, then make it with this tool; use publish_page only when the person explicitly asks for a public link\.$/);
+    expect(tools.get("show_html")!.description).toMatch(/Asked for a claude\.ai Artifact\? Those need Claude's own claude\.ai sign-in and are not available to bots here: say so in one line, then make it with this tool, use publish_page only when the person explicitly asks for a public link\.$/);
     expect(tools.get("show_html")!.inputSchema).not.toHaveProperty("required");
     expect(Object.keys((tools.get("show_html")!.inputSchema as unknown as { properties: object }).properties)).toEqual(expect.arrayContaining(["html", "jsx", "path", "title", "app_id"]));
     expect(Buffer.byteLength(JSON.stringify(tools.get("show_html")))).toBeLessThan(12 * 1024);
