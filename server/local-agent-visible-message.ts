@@ -28,6 +28,11 @@ export function redactedAgentText(value: unknown, limit = 600): { text: string |
   return { text: chars.length ? chars.slice(0, limit).join("") : null, clipped: chars.length > limit };
 }
 
+function privateToolDeclaration(key: string, value: string): boolean {
+  if (key === "encoding") return BASE64_ENCODING.test(value.trim());
+  return key === "name" && PRIVATE_HEADER_NAME.test(value.trim());
+}
+
 function safeToolText(value: unknown): { text: string | null; clipped: boolean } {
   if (typeof value !== "string") return { text: null, clipped: false };
   if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
@@ -43,8 +48,7 @@ function safeToolText(value: unknown): { text: string | null; clipped: boolean }
     if (PRIVATE_TOOL_KEY.test(key)) return { text: null, clipped: false };
     if (key !== "encoding" && key !== "name") continue;
     const field = TOOL_FIELD_VALUE.exec(labels.slice(match.index! + match[0].length));
-    const labelValue = (field?.[1] ?? field?.[2] ?? field?.[3] ?? "").trim();
-    if (key === "encoding" ? BASE64_ENCODING.test(labelValue) : PRIVATE_HEADER_NAME.test(labelValue)) {
+    if (privateToolDeclaration(key, field?.[1] ?? field?.[2] ?? field?.[3] ?? "")) {
       return { text: null, clipped: false };
     }
   }
@@ -78,6 +82,30 @@ export function trackAgentToolCalls() {
   };
 }
 
+function rejectToolArgumentContext(args: object): { text: null; clipped: boolean } | null {
+  let fields = 0;
+  let sourceLength = 0;
+  function inspect(value: object): { text: null; clipped: boolean } | null {
+    const node = value as Record<string, unknown>;
+    for (const key in node) {
+      if (!Object.hasOwn(node, key)) continue;
+      if (++fields > MAX_TOOL_FIELDS) return { text: null, clipped: true };
+      const field = node[key];
+      sourceLength += key.length + (typeof field === "string" ? field.length : 0);
+      if (sourceLength > MAX_TOOL_SOURCE) return { text: null, clipped: true };
+      if (typeof field === "string" && privateToolDeclaration(key.trim().toLowerCase(), field)) {
+        return { text: null, clipped: false };
+      }
+      if (field && typeof field === "object") {
+        const rejected = inspect(field);
+        if (rejected) return rejected;
+      }
+    }
+    return null;
+  }
+  return inspect(args);
+}
+
 export function redactedAgentToolArguments(value: unknown): { text: string | null; clipped: boolean } {
   if (typeof value === "string" && (value.trimStart().startsWith("{") || value.trimStart().startsWith("["))) {
     if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
@@ -85,11 +113,11 @@ export function redactedAgentToolArguments(value: unknown): { text: string | nul
   }
   if (typeof value === "string") return safeToolText(value);
   if (!value || typeof value !== "object" || Array.isArray(value)) return { text: null, clipped: false };
+  const rejected = rejectToolArgumentContext(value);
+  if (rejected) return rejected;
   const fields: string[] = [];
-  const keys = Object.keys(value);
-  let clipped = keys.length > MAX_TOOL_FIELDS;
-  for (const key of keys.slice(0, MAX_TOOL_FIELDS)) {
-    const raw = (value as Record<string, unknown>)[key];
+  let clipped = false;
+  for (const [key, raw] of Object.entries(value)) {
     if (!TOOL_KEY.test(key) || PRIVATE_TOOL_KEY.test(key) || redactedAgentText(key).text !== key) continue;
     const scalar = typeof raw === "string" ? raw : typeof raw === "number" || typeof raw === "boolean" ? String(raw) : null;
     const safe = safeToolText(scalar);
@@ -103,12 +131,16 @@ export function redactedAgentToolArguments(value: unknown): { text: string | nul
 export function redactedAgentToolResult(value: unknown): { text: string | null; clipped: boolean } {
   if (typeof value === "string") return safeToolText(value);
   if (!Array.isArray(value)) return { text: null, clipped: false };
+  if (value.length > MAX_TOOL_FIELDS) return { text: null, clipped: true };
   const parts: string[] = [];
-  let clipped = value.length > MAX_TOOL_FIELDS;
-  for (const item of value.slice(0, MAX_TOOL_FIELDS)) {
+  let clipped = false;
+  let sourceLength = 0;
+  for (const item of value) {
     const block = record(item);
-    if ((block.type !== "text" && block.type !== "output_text") || typeof block.text !== "string") { clipped = true; continue; }
-    if (parts.join(" ").length + block.text.length > MAX_TOOL_SOURCE) { clipped = true; break; }
+    if (typeof block.text !== "string") { clipped = true; continue; }
+    if (block.type !== "text" && block.type !== "output_text") return { text: null, clipped: true };
+    sourceLength += block.text.length + (parts.length ? 1 : 0);
+    if (sourceLength > MAX_TOOL_SOURCE) return { text: null, clipped: true };
     parts.push(block.text);
   }
   const safe = safeToolText(parts.join(" "));

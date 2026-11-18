@@ -210,6 +210,30 @@ describe("bounded per-agent Codex activity", () => {
     expect(JSON.stringify(result)).not.toMatch(/ghp_|OLD_ID_RESULT|FIRST_RESULT|REUSED_RESULT|REJECTED_NAME_RESULT/);
   });
 
+  it("withholds declaration-dependent Codex arguments and incompletely inspected results", async () => {
+    const details = [
+      { args: { content: "c3ludGhldGlj", encoding: "base64" },
+        output: ['{"content":"c3ludGhldGlj",', ...Array<string>(7).fill(" "), '"encoding":"base64"}'] },
+      { args: { value: "fixture-opaque-cookie", name: "Cookie" },
+        output: ['[{"value":"fixture-opaque-cookie",', " ".repeat(16 * 1024) + '"name":"Cookie"}]'] },
+      { args: { count: 2 }, output: ["Two", "matching rows"] },
+    ];
+    const home = await fixture(details.flatMap(({ args, output }, index) => [
+      row("response_item", { type: "function_call", name: "fixture.read", call_id: `read-${index}`, arguments: JSON.stringify(args) }),
+      row("response_item", { type: "function_call_output", call_id: `read-${index}`,
+        output: output.map((text) => ({ type: "output_text", text })) }),
+    ]));
+    const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent()]) });
+    const result = await provider.get(pane);
+    expect(result).toMatchObject({ status: "ready", truncated: true });
+    expect(result.events.map(({ kind, tool, text }) => [kind, tool, text])).toEqual([
+      ["tool-call", "fixture.read", "[Arguments unavailable]"], ["tool-result", "fixture.read", "[Result details unavailable]"],
+      ["tool-call", "fixture.read", "[Arguments unavailable]"], ["tool-result", "fixture.read", "[Result details unavailable]"],
+      ["tool-call", "fixture.read", "count: 2"], ["tool-result", "fixture.read", "Two matching rows"],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/fixture-opaque-cookie|c3ludGhldGlj/);
+  });
+
   it("reads only the bounded tail and ignores an incomplete or oversized record", async () => {
     const home = await fixture([
       row("event_msg", { type: "user_message", message: "PRIVATE_OLD " + "x".repeat(600_000) }),

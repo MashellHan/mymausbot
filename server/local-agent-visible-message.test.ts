@@ -112,4 +112,32 @@ describe("bounded tool details", () => {
     const ordinary = '{"encoding":"utf-8","name":"Content-Language","value":"en"}';
     expect(redactedAgentToolResult(ordinary).text).toBe(ordinary);
   });
+
+  it("checks argument declarations before flattening and withholds arguments past the inspection budget", () => {
+    const encoded = { content: "c3ludGhldGlj", encoding: "base64" };
+    const cookie = { value: "fixture-opaque-cookie", name: "Cookie" };
+    for (const args of [encoded, cookie]) {
+      expect(redactedAgentToolArguments(args).text).toBeNull();
+      expect(redactedAgentToolArguments(JSON.stringify(args)).text).toBeNull();
+    }
+    const fields = Object.fromEntries(Array.from({ length: 7 }, (_, index) => [`field${index}`, index]));
+    expect(redactedAgentToolArguments({ content: encoded.content, ...fields, encoding: encoded.encoding }))
+      .toEqual({ text: null, clipped: true });
+    expect(redactedAgentToolArguments({ value: cookie.value, note: " ".repeat(16 * 1024), name: cookie.name }))
+      .toEqual({ text: null, clipped: true });
+    expect(redactedAgentToolArguments({ encoding: "utf-8", content: "Two matching rows" }).text)
+      .toBe("encoding: utf-8; content: Two matching rows");
+  });
+
+  it("withholds result prefixes when block or source limits omit declaration text", () => {
+    const blocks = (texts: string[]) => texts.map((text) => ({ type: "text", text }));
+    expect(redactedAgentToolResult(blocks([
+      '{"content":"c3ludGhldGlj",', ...Array<string>(7).fill(" "), '"encoding":"base64"}',
+    ]))).toEqual({ text: null, clipped: true });
+    expect(redactedAgentToolResult(blocks([
+      '[{"value":"fixture-opaque-cookie",', " ".repeat(16 * 1024) + '"name":"Cookie"}]',
+    ]))).toEqual({ text: null, clipped: true });
+    const full = redactedAgentToolResult(blocks(["rows ".repeat(140), "complete"]));
+    expect(full).toEqual({ text: "rows ".repeat(120), clipped: true });
+  });
 });

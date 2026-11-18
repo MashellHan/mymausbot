@@ -359,6 +359,32 @@ describe("verified Pi visible assistant preview", () => {
     expect(JSON.stringify(result)).not.toMatch(/ghp_|OLD_ID_RESULT|FIRST_RESULT|REUSED_RESULT|REJECTED_NAME_RESULT/);
   });
 
+  it("withholds declaration-dependent Pi arguments and incompletely inspected results", async () => {
+    const details = [
+      { args: { content: "c3ludGhldGlj", encoding: "base64" },
+        output: ['{"content":"c3ludGhldGlj",', ...Array<string>(7).fill(" "), '"encoding":"base64"}'] },
+      { args: { value: "fixture-opaque-cookie", name: "Cookie" },
+        output: ['[{"value":"fixture-opaque-cookie",', " ".repeat(16 * 1024) + '"name":"Cookie"}]'] },
+      { args: { count: 2 }, output: ["Two", "matching rows"] },
+    ];
+    const messages = details.flatMap(({ args, output }, index) => [
+      { role: "assistant", content: [{ type: "toolCall", id: `read-${index}`, name: "fixture.read", arguments: args }] },
+      { role: "toolResult", toolCallId: `read-${index}`, content: output.map((text) => ({ type: "text", text })) },
+    ]);
+    const id = (index: number) => index.toString(16).padStart(8, "0");
+    const data = await fixture(messages.map((message, index) => entry(id(index), index ? id(index - 1) : null, message)));
+    const activity = createLocalAgentActivityProvider({ home: data.home,
+      run: async () => JSON.stringify({ result: { agents: [data.agent()] } }) });
+    const result = await activity.get("w6:p1");
+    expect(result).toMatchObject({ status: "ready", truncated: true });
+    expect(result.events.map(({ kind, tool, text }) => [kind, tool, text])).toEqual([
+      ["tool-call", "fixture.read", "[Arguments unavailable]"], ["tool-result", "fixture.read", "[Result details unavailable]"],
+      ["tool-call", "fixture.read", "[Arguments unavailable]"], ["tool-result", "fixture.read", "[Result details unavailable]"],
+      ["tool-call", "fixture.read", "count: 2"], ["tool-result", "fixture.read", "Two matching rows"],
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(/fixture-opaque-cookie|c3ludGhldGlj/);
+  });
+
   it("revalidates header cwd on a warm same-file cache hit when Pi path encoding collides", async () => {
     const data = await fixture([assistant("First occupant text")], "workspace/a/b");
     const collidingCwd = join(data.home, "workspace/a-b");
