@@ -204,6 +204,12 @@ not zero. Record remaining coverage, owner and completion condition. An explicit
 request for complete history remains pending until verified. Do not add a
 collector or schedule just to separate backfill from source acceptance.
 
+When several independent changes need the same registry or host-test edits,
+Lead assigns those shared files to one integration owner. Feature owners can
+implement and review their distinct behavior in parallel. The integration
+owner preserves the original heads and runs the shared contract checks on
+the combined tree.
+
 Coherent source, atomic commits and focused PRs come before batch-wide
 acceptance. Start mandatory current-head CI and independent source review
 alongside independent development. At Lead's chosen batch boundary, consolidate
