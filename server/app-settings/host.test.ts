@@ -1047,6 +1047,70 @@ describe("confirm tier", () => {
     expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
   });
 
+  it("changes saved sidebar tools layout only after owner approval for a live window", async () => {
+    const fx = fixture();
+    fx.windowValues.set("appearance.toolsLayout", "rows");
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "tools layout" }, fx.turn)).body.text));
+    expect(found).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance.toolsLayout", tier: "confirm", value: expect.stringContaining("saved rows") })]));
+    const got = JSON.parse(String((await fx.host.handle({ action: "get", id: "appearance.toolsLayout" }, fx.turn)).body.text));
+    expect(got).toMatchObject({ allowed: "rows or toolbar", help: expect.stringContaining("Advanced mode with the sidebar expanded"), value: expect.stringContaining("Simple, Raw, and icon-only") });
+    expect((await fx.set("appearance.toolsLayout", "icons")).status).toBe(400);
+    const same = await fx.set("appearance.toolsLayout", "rows");
+    expect(same.body.error).toContain("already rows");
+    expect(same.body.error).toContain("Simple, Raw, and icon-only");
+    expect(fx.windowWrites).toEqual([]);
+
+    const cancelled = fx.set("appearance.toolsLayout", "toolbar");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: expect.stringContaining("toolbar icons for sidebar tools in Advanced with expanded sidebar") } });
+    expect(first.appSettingRequest.after).toContain("Simple, Raw, and icon-only");
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.windowWrites).toEqual([]);
+
+    const stale = fx.set("appearance.toolsLayout", "toolbar");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.windowValues.set("appearance.toolsLayout", "toolbar");
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("already toolbar");
+    expect(fx.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.toolsLayout", "rows");
+    const disconnected = fx.set("appearance.toolsLayout", "toolbar");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    fx.windowValues.delete("appearance.toolsLayout");
+    fx.answer(String(fx.cards()[2]!.card.requestId), "allow");
+    expect((await disconnected).body.error).toContain("Open mymausbot");
+    expect(fx.windowWrites).toEqual([]);
+
+    const closed = fixture({ window: false });
+    expect((await closed.set("appearance.toolsLayout", "toolbar")).status).toBe(409);
+    expect(closed.cards()).toEqual([]);
+    const guest = fixture({ owner: false });
+    guest.windowValues.set("appearance.toolsLayout", "rows");
+    expect((await guest.set("appearance.toolsLayout", "toolbar")).status).toBe(403);
+    expect(guest.windowWrites).toEqual([]);
+
+    fx.windowValues.set("appearance.toolsLayout", "rows");
+    const approved = fx.set("appearance.toolsLayout", "toolbar");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fx.answer(String(fourth.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.windowWrites).toEqual([]);
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.toolsLayout", value: "toolbar" }]);
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(fourth.requestId) })).toMatchObject({ state: "invalid" });
+
+    const back = fx.set("appearance.toolsLayout", "rows");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(5));
+    expect(fx.cards()[4]!.card.appSettingRequest.after).toContain("Save rows for sidebar tools in Advanced with expanded sidebar");
+    fx.answer(String(fx.cards()[4]!.card.requestId), "deny");
+    expect((await back).status).toBe(409);
+    expect(fx.windowWrites).toEqual([{ id: "appearance.toolsLayout", value: "toolbar" }]);
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };

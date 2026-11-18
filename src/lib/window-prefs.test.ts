@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { readSidebarToolsLayout, SIDEBAR_TOOLS_LAYOUT_KEY } from "./sidebar-preferences";
 import { applyWindowPref, reportWindowPrefs, windowPrefValues } from "./window-prefs";
 import { setShowRunCard } from "./run-card-preferences";
 import { setShowThreads } from "./thread-preferences";
@@ -35,6 +36,51 @@ describe("window preferences", () => {
     expect(values.get("omb-send-key")).toBe("mod-enter");
     applyWindowPref({ kind: "window-pref", id: "general.notificationSounds", value: false });
     expect(windowPrefValues()).toMatchObject({ "general.sendKey": "mod-enter", "general.notificationSounds": false });
+  });
+
+  it("applies only valid sidebar tools frames and reports the in-session choice when storage is blocked", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    applyWindowPref({ kind: "window-pref", id: "appearance.toolsLayout", value: "toolbar" });
+    expect(values.get(SIDEBAR_TOOLS_LAYOUT_KEY)).toBe("toolbar");
+    applyWindowPref({ kind: "window-pref", id: "appearance.toolsLayout", value: "icons" });
+    expect(readSidebarToolsLayout()).toBe("toolbar");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.toolsLayout"]).toBe("toolbar");
+
+    vi.stubGlobal("localStorage", { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } });
+    applyWindowPref({ kind: "window-pref", id: "appearance.toolsLayout", value: "rows" });
+    expect(readSidebarToolsLayout()).toBe("rows");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[1] as unknown as [string, RequestInit])[1].body)).values["appearance.toolsLayout"]).toBe("rows");
+  });
+
+  it("keeps bridge reports fresh after another window changes tools layout without a layout UI subscriber", async () => {
+    vi.useFakeTimers();
+    const fetched = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetched);
+    let storageListener: ((event: StorageEvent) => void) | undefined;
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: (event: StorageEvent) => void) => { if (type === "storage") storageListener = listener; },
+      removeEventListener: () => undefined,
+    });
+    reportWindowPrefs();
+    await vi.advanceTimersByTimeAsync(250);
+    applyWindowPref({ kind: "window-pref", id: "appearance.toolsLayout", value: "toolbar" });
+    expect(readSidebarToolsLayout()).toBe("toolbar");
+    await vi.advanceTimersByTimeAsync(250);
+    fetched.mockClear();
+    values.set(SIDEBAR_TOOLS_LAYOUT_KEY, "rows");
+    storageListener?.({ key: SIDEBAR_TOOLS_LAYOUT_KEY, storageArea: null } as StorageEvent);
+    expect(readSidebarToolsLayout()).toBe("rows");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetched).toHaveBeenCalledOnce();
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.toolsLayout"]).toBe("rows");
+    fetched.mockClear();
+    reportWindowPrefs();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(JSON.parse(String((fetched.mock.calls[0] as unknown as [string, RequestInit])[1].body)).values["appearance.toolsLayout"]).toBe("rows");
   });
 
   it("reports the window's values once after a burst of setters", async () => {

@@ -7,6 +7,7 @@ import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
 import { notificationFeedEnabled, notificationSoundsEnabled, setNotificationFeed, setNotificationSounds } from "./notification-preferences";
 import { setShowRunCard, showRunCard } from "./run-card-preferences";
 import { readSendKey, setSendKey } from "./send-key";
+import { readSidebarToolsLayout, setSidebarToolsLayout, subscribeSidebarToolsLayout } from "./sidebar-preferences";
 import { applySkinChoice, readSkinChoice } from "./skins";
 import { readShowThreadsChoice, setShowThreads } from "./thread-preferences";
 import { readColorUserBubbles, setColorUserBubbles } from "./user-bubble-preference";
@@ -20,6 +21,7 @@ const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }
   "appearance.runCard": { read: () => showRunCard(), write: (on) => setShowRunCard(on) },
   "appearance.showThreads": { read: () => readShowThreadsChoice(), write: (shown) => setShowThreads(shown) },
   "appearance.userBubbles": { read: () => readColorUserBubbles(), write: (on) => setColorUserBubbles(on) },
+  "appearance.toolsLayout": { read: () => readSidebarToolsLayout(), write: (layout) => setSidebarToolsLayout(layout) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
   "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
   "general.notificationFeed": { read: () => notificationFeedEnabled(), write: (on) => setNotificationFeed(on) },
@@ -37,9 +39,14 @@ export function windowPrefValues(): Record<WindowPrefId, unknown> {
 }
 
 let report: ReturnType<typeof setTimeout> | null = null;
+let toolsLayoutObserved = false;
 /** Tells the server the window's values, once the burst of setters at start-up has settled. */
 export function reportWindowPrefs(): void {
   if (typeof fetch !== "function" || typeof window === "undefined") return;
+  if (!toolsLayoutObserved && typeof window.addEventListener === "function") {
+    subscribeSidebarToolsLayout(() => undefined);
+    toolsLayoutObserved = true;
+  }
   if (report) clearTimeout(report);
   report = setTimeout(() => {
     report = null;
