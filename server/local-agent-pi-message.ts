@@ -4,6 +4,7 @@ import type { FileHandle } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
 import type { LocalAgentActivityEvent } from "../shared/local-dashboard.ts";
+import type { PiContextBinding } from "./local-agent-pi-context.ts";
 import { piVisibleMessageText, redactedAgentText, redactedAgentToolArguments,
   redactedAgentToolResult, trackAgentToolCalls } from "./local-agent-visible-message.ts";
 
@@ -22,11 +23,12 @@ const MAX_TOOL_EVENTS = 30;
 
 type PiIdentity = { pane: string; file: string; directory: string; id: string; cwd: string };
 export type PiSessionView = { preview: string | null; model: string | null; reasoningEffort: string | null;
-  contextWindow: null; events: LocalAgentActivityEvent[]; truncated: boolean };
+  contextWindow: null; events: LocalAgentActivityEvent[]; truncated: boolean;
+  contextBinding?: Omit<PiContextBinding, "pane"> };
 type Cached = { signature: string; cwd: string; id: string; view: PiSessionView };
 type EntryEvent = { event: LocalAgentActivityEvent; callId?: string; clipped?: boolean };
 type Entry = { parent: string | null; preview: string | null; events: EntryEvent[]; clipped: boolean;
-  model?: string | null; reasoningEffort?: string | null };
+  model?: string | null; provider?: string; reasoningEffort?: string | null };
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const modelId = (provider: unknown, model: unknown): string | null =>
   typeof provider === "string" && MODEL.test(provider) && redactedAgentText(provider).text === provider &&
@@ -95,7 +97,7 @@ function visibleEvents(row: Record<string, unknown>, offset: number, user: strin
   return events;
 }
 
-function sessionView(bytes: Buffer, start: number, headerEnd: number): PiSessionView | null {
+function sessionView(bytes: Buffer, start: number, headerEnd: number, identity: PiIdentity, file: string): PiSessionView | null {
   const first = start === 0 ? headerEnd + 1 : bytes.indexOf(10) + 1;
   const end = bytes.lastIndexOf(10);
   if (first <= 0 || end < first || end !== bytes.length - 1) return null;
@@ -113,16 +115,18 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number): PiSession
     const user = piVisibleMessageText(row, "user");
     const assistant = piVisibleMessageText(row, "assistant");
     const message = record(row.message);
-    const metadata = row.type === "model_change" ? { model: modelId(row.provider, row.modelId) }
+    const metadata = row.type === "model_change" ? { model: modelId(row.provider, row.modelId), provider: row.provider }
       : row.type === "thinking_level_change" ? { reasoningEffort: thinkingLevel(row.thinkingLevel) }
         : row.type === "message" && message.role === "assistant" ? {
           ...(message.model !== undefined || message.provider !== undefined
-            ? { model: modelId(message.provider, message.model) } : {}),
+            ? { model: modelId(message.provider, message.model), provider: message.provider } : {}),
           ...(message.thinkingLevel !== undefined ? { reasoningEffort: thinkingLevel(message.thinkingLevel) } : {}),
         } : {};
     entries.set(id, { parent, preview: assistant?.text ?? null,
       events: visibleEvents(row, start + cursor, user?.text ?? null, assistant?.text ?? null),
-      clipped: Boolean(user?.clipped || assistant?.clipped), ...metadata });
+      clipped: Boolean(user?.clipped || assistant?.clipped), model: metadata.model,
+      provider: typeof metadata.provider === "string" && metadata.model ? metadata.provider : undefined,
+      reasoningEffort: metadata.reasoningEffort });
     if (entries.size > MAX_ENTRIES) return null;
     leaf = id;
     cursor = next + 1;
@@ -146,9 +150,13 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number): PiSession
   const toolCalls = trackAgentToolCalls();
   let truncated = start > 0;
   let model: string | null = null;
+  let provider: string | undefined;
   let reasoningEffort: string | null = null;
   for (const entry of branch.reverse()) {
-    if (entry.model !== undefined) model = entry.model;
+    if (entry.model !== undefined) {
+      model = entry.model;
+      provider = entry.provider;
+    }
     if (entry.reasoningEffort !== undefined) reasoningEffort = entry.reasoningEffort;
     if (entry.clipped) truncated = true;
     for (const { event, callId, clipped } of entry.events) {
@@ -167,7 +175,8 @@ function sessionView(bytes: Buffer, start: number, headerEnd: number): PiSession
       if (events.length > MAX_EVENTS) { events.shift(); truncated = true; }
     }
   }
-  return { preview, model, reasoningEffort, contextWindow: null, events, truncated };
+  return { preview, model, reasoningEffort, contextWindow: null, events, truncated,
+    ...(leaf && model && provider ? { contextBinding: { sessionId: identity.id, file, cwd: identity.cwd, leaf, provider, model } } : {}) };
 }
 
 async function readSession(identity: PiIdentity, root: string, cached: Cached | undefined): Promise<Cached | null> {
@@ -197,7 +206,7 @@ async function readSession(identity: PiIdentity, root: string, cached: Cached | 
       const tail = await readRange(handle, size - start, start);
       if (!tail || revision(await handle.stat({ bigint: true })) !== signature ||
           revision(await lstat(identity.file, { bigint: true })) !== signature) return null;
-      const view = sessionView(tail, start, headerEnd);
+      const view = sessionView(tail, start, headerEnd, identity, join(canonicalDirectory, basename(identity.file)));
       return view ? { signature, cwd: identity.cwd, id: identity.id, view } : null;
     } finally { await handle.close(); }
   } catch { return null; }

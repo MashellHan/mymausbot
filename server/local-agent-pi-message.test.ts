@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createPiSessionReader } from "./local-agent-pi-message.ts";
+import { PI_CONTEXT_KEY, piContextToken, type PiContextBinding } from "./local-agent-pi-context.ts";
 import { createLocalAgentActivityProvider } from "./local-agent-activity.ts";
 import { createLocalAgentTeamsProvider } from "./local-agent-teams.ts";
 import { createLocalDashboardRoutes } from "./routes/local-dashboard.ts";
@@ -43,6 +44,69 @@ async function fixture(rows: object[] = [assistant("Visible Pi progress")], proj
 }
 
 describe("verified Pi visible assistant preview", () => {
+  it("joins a Pi ceiling only to the same foreground process and verified session, branch and model", async () => {
+    const change = (id: string, parentId: string | null, provider: string, modelId: string) =>
+      ({ type: "model_change", id, parentId, timestamp: "2026-11-17T01:00:00.000Z", provider, modelId });
+    const original = change("11111111", null, "fixture", "model");
+    const latest = change("22222222", "11111111", "fixture", "model");
+    const data = await fixture([original, latest]);
+    const pane = "w6:p1";
+    const base = data.agent();
+    const view = (await data.reader([base])).get(pane)!;
+    const binding = { ...view.contextBinding!, pane };
+    const validStart = "1790000000:123456";
+    let now = 100_000;
+    let pid = 123;
+    let start: string | null = validStart;
+    const token = (override: Partial<PiContextBinding> = {}) => piContextToken({ ...binding, ...override }, 123, validStart, 54_321, now);
+    let roster: Record<string, unknown>[] = [];
+    const set = (raw: unknown, agent = base) => { roster = [{ ...agent, tokens: { [PI_CONTEXT_KEY]: raw } }]; };
+    let replaceDuringRead = false;
+    const run = vi.fn(async (args: readonly string[]) => {
+      if (args.includes("process-info")) return JSON.stringify({ result: { process_info: {
+        pane_id: pane, foreground_processes: [{ pid, name: "node" }],
+      } } });
+      if (args.at(-2) === "workspace") return JSON.stringify({ result: { workspaces: [{ workspace_id: "w6", label: "Fixture" }] } });
+      const current = roster;
+      if (replaceDuringRead) { replaceDuringRead = false; roster = []; }
+      return JSON.stringify({ result: { agents: current } });
+    });
+    const teams = createLocalAgentTeamsProvider({ home: data.home, codexHome: join(data.home, ".codex"), run,
+      readProcessStart: async () => start, now: () => now });
+    const read = async () => (await teams.get(true)).teams[0]!.agents[0]!;
+    set(token());
+    expect(await read()).toMatchObject({ model: "model", contextWindow: 54_321, contextUsed: null });
+    replaceDuringRead = true;
+    expect((await read()).contextWindow).toBeNull();
+    set(token());
+    pid = 456;
+    expect((await read()).contextWindow).toBeNull();
+    pid = 123;
+    start = "1790000000:123457";
+    expect((await read()).contextWindow).toBeNull();
+    start = null;
+    expect((await read()).contextWindow).toBeNull();
+    start = validStart;
+    for (const raw of [undefined, "invalid", "x".repeat(81), token({ leaf: original.id }),
+      token({ provider: "different-provider" }), token({ model: "different-model" }), token({ sessionId: OTHER }),
+      token({ pane: "w6:p2" }), token({ cwd: join(data.home, "another") })]) {
+      set(raw);
+      expect((await read()).contextWindow).toBeNull();
+    }
+    set(token());
+    now += 4_001;
+    expect((await read()).contextWindow).toBeNull();
+    set(token());
+    await data.save([original, latest, change("33333333", latest.id, "different-provider", "model")]);
+    expect((await read()).contextWindow).toBeNull();
+    set(token({ provider: "different-provider", leaf: "33333333" }));
+    expect((await read()).contextWindow).toBe(54_321);
+    const other = join(data.directory, `2026-11-17T01-00-00-000Z_${OTHER}.jsonl`);
+    await writeFile(other, [data.header(OTHER), original, latest].map(line).join(""));
+    set(token(), data.agent(other));
+    expect((await read()).contextWindow).toBeNull();
+  });
+
   it("returns only shared-redacted text blocks with a 400-codepoint limit", async () => {
     const secret = "ghp_" + "x".repeat(36);
     const data = await fixture([entry("a1b2c3d4", null, {
