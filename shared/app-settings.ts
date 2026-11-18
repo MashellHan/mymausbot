@@ -42,6 +42,7 @@ export const WINDOW_PREFS = {
   "appearance.chatWidth": z.enum(CHAT_WIDTH_IDS),
   "appearance.runCard": z.boolean(),
   "appearance.showThreads": z.boolean(),
+  "appearance.userBubbles": z.boolean(),
   "general.sendKey": z.enum(SEND_KEYS),
   "general.notificationSounds": z.boolean(),
 } as const;

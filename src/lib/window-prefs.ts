@@ -9,6 +9,7 @@ import { setShowRunCard, showRunCard } from "./run-card-preferences";
 import { readSendKey, setSendKey } from "./send-key";
 import { applySkinChoice, readSkinChoice } from "./skins";
 import { readShowThreadsChoice, setShowThreads } from "./thread-preferences";
+import { readColorUserBubbles, setColorUserBubbles } from "./user-bubble-preference";
 import { onWindowPrefChanged } from "./window-pref-changes";
 
 const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }> = {
@@ -18,6 +19,7 @@ const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }
   "appearance.chatWidth": { read: () => readChatWidth(), write: (width) => applyChatWidth(width) },
   "appearance.runCard": { read: () => showRunCard(), write: (on) => setShowRunCard(on) },
   "appearance.showThreads": { read: () => readShowThreadsChoice(), write: (shown) => setShowThreads(shown) },
+  "appearance.userBubbles": { read: () => readColorUserBubbles(), write: (on) => setColorUserBubbles(on) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
   "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
 };
