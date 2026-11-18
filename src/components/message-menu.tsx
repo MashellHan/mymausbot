@@ -16,6 +16,14 @@ export function replyAndCopy(onReply: () => void, text: string): MessageMenuItem
   ];
 }
 
+export function bubbleReplyMenus(onReply: () => void, text: string, { simple, replyAllowed }: { simple?: boolean; replyAllowed: boolean }) {
+  const items = replyAndCopy(onReply, text);
+  return {
+    contextItems: items.filter((item) => item.key === "reply" ? replyAllowed : !simple),
+    moreItems: simple ? items.filter((item) => item.key === "copy") : [],
+  };
+}
+
 export function roomPin(group: Group, message: Message, dispatch: ReturnType<typeof useStore>["dispatch"]): PinAction | undefined {
   if (window.ogb?.remoteClient?.active) return undefined;
   const pinned = group.pinnedMessageId === message.id;

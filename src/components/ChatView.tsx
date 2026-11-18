@@ -8,7 +8,7 @@ import { AlertTriangle, ChevronLeft, ChevronRight, RefreshCw, Webhook } from "lu
 import { WorkingDots } from "@/components/WorkingIndicator";
 import { ChatBusyContext, CopyButton, MESSAGE_ROW, MessageActions, messageActionClass, ReplyAction } from "@/components/MessageActions";
 import { ReactAction, ReactionChips } from "@/components/Reactions";
-import { replyAndCopy, useBotMessageMenu, userMessageMenu } from "@/components/message-menu";
+import { bubbleReplyMenus, useBotMessageMenu, userMessageMenu } from "@/components/message-menu";
 import { forkMessageItem, ForkLinks } from "@/components/ForkMessage";
 import { savesToTeamMemory, TEAM_MEMORY_ITEM, TeamMemorySavesContext } from "@/components/conversation-share/conversation-share";
 import { useSpeech } from "@/lib/tts/useSpeech";
@@ -411,9 +411,7 @@ const Bubble = memo(function Bubble({
   const togglePin = () =>
     dispatch({ type: "updateTask", botId, threadId, patch: { pinnedMessageId: pinned ? "" : message.id } });
   const replyAllowed = canReplyToMessage(message);
-  const replyCopyItems = replyAndCopy(() => onReply(message), user ? visibleText : text);
-  const contextItems = replyCopyItems.filter((item) => item.key === "reply" ? replyAllowed : !simple);
-  const moreItems = simple ? replyCopyItems.filter((item) => item.key === "copy") : [];
+  const { contextItems, moreItems } = bubbleReplyMenus(() => onReply(message), user ? visibleText : text, { simple, replyAllowed });
   const botActions = !user && (
     <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={[...moreItems, ...botMenu, ...forkAction]} contextItems={contextItems}>
       {replyAllowed && <ReplyAction onReply={() => onReply(message)} />}
