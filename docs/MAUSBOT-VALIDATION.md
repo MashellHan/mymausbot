@@ -160,6 +160,25 @@ attempt of each job taking precedence. A pass after an actual failed validation 
 remains a finding for Lead to classify and cannot verify the incident until a
 later clean execution covers it.
 
+For an open same-repository `qa:repair` PR linked to an active global hold,
+a trusted `workflow_run` handler inspects completed failed PR CI. It requests
+GitHub's failed-job rerun only when every failed/cancelled worker had no runner
+or steps, has GitHub's hosted acquisition failure annotation, and the gate log
+attributes its failure to those workers. It rechecks the live repair and latest
+attempt. Successful jobs remain available to the same run's normal gate.
+After three automatic retry opportunities (four total attempts), or when
+evidence is mixed or missing, Lead owns diagnosis on the original run.
+Closing or reclassifying a QA hold wakes a trusted default-branch workflow.
+A failed PR CI completion also wakes it if the hold changed while workers
+were finishing. Each wake checks the current open PRs, so overlapping events
+can coalesce. It requests a rerun of the individual `CI` job only when the
+failed gate named a changed QA hold, other jobs succeeded or were skipped
+by the plan, and current controls and required jobs pass the normal gate
+precheck. The handler rereads the source run list and target attempt near
+the request. The source run must be bound to the open same-repository PR and
+its tested head, base and merge tree. Missing evidence leaves recovery with
+Lead. The rerun checks controls and holds again with the ordinary CI token.
+
 ## Advisory process scan and PR recovery
 
 `scripts/qa/scan.mjs` records process cases separately from quality results.
