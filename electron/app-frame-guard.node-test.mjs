@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
 
-import { appFrameBlinkSettings, appFrameNavigationAllowed } from "./app-frame-guard.mjs";
+import { appFrameBlinkSettings, appFrameNavigationAllowed, createAppFrameFallback } from "./app-frame-guard.mjs";
+import { installDailyXFrameGuards } from "./daily-x-frame.mjs";
+import environments from "./environments.cjs";
+import { MOJO_POETRY_FRAME_NAME, MOJO_POETRY_URL } from "./mojo-poetry-frame.mjs";
 
 const appFrame = (url) => ({ isMainFrame: false, url, frame: { origin: "null", url: "" } });
 
@@ -47,4 +52,50 @@ test("leaves main frames and frames with a real origin alone", () => {
   assert.equal(appFrameNavigationAllowed({ isMainFrame: false, url: "https://example.com/", frame: null }), true);
   assert.equal(appFrameNavigationAllowed(null), true);
   assert.equal(appFrameNavigationAllowed(undefined), true);
+});
+
+test("the main window's actual listeners block local and saved server frames on navigation and redirect", () => {
+  const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("  const guardNavigation = (event, url) => {");
+  const end = source.indexOf('  win.webContents.on("did-fail-load",', start);
+  assert.ok(start >= 0 && end > start);
+  const local = "http://127.0.0.1:8799";
+  const saved = "https://saved.example.test";
+  const mainFrame = { origin: local, url: `${local}/` };
+  const handlers = new Map();
+  const win = { webContents: { mainFrame, on: (name, listener) => handlers.set(name, listener) } };
+  const environmentsState = { activeId: "local", environments: [{ id: "saved", origin: saved }] };
+  vm.runInNewContext(source.slice(start, end), { win, environmentsState, URL, createAppFrameFallback, installDailyXFrameGuards,
+    rendererOrigin: () => local, workspaceNavigationAllowed: environments.workspaceNavigationAllowed,
+    allowedOrigins: environments.allowedOrigins, slog: () => {} });
+  const emit = (event, url, change = {}) => {
+    const details = { isMainFrame: false, url, frame: { origin: "https://external.example" }, prevented: false,
+      preventDefault() { this.prevented = true; }, ...change };
+    handlers.get(event)(details, url);
+    return details.prevented;
+  };
+  for (const event of ["will-frame-navigate", "will-redirect"]) {
+    assert.equal(emit(event, `${local}/api/private`, { frame: { origin: local } }), true, `${event}: own local origin`);
+    assert.equal(emit(event, `${saved}/api/private`), true, `${event}: saved origin`);
+  }
+  assert.equal(emit("will-redirect", `${local}/api/private`, { url: "https://external.example/previous" }), true,
+    "the redirect target is checked even when the event retains the previous URL");
+  environmentsState.activeId = "saved";
+  mainFrame.origin = saved;
+  assert.equal(emit("will-frame-navigate", `${saved}/api/private`, { frame: { origin: saved } }), true,
+    "the active saved page cannot frame its own server");
+  assert.equal(emit("will-redirect", `${saved}/api/private`, { frame: { origin: saved } }), true);
+  environmentsState.activeId = "local";
+  mainFrame.origin = local;
+  assert.equal(emit("will-frame-navigate", "https://external.example/page"), false);
+  assert.equal(emit("will-redirect", "https://external.example/page"), true,
+    "the existing workspace redirect policy still applies");
+  assert.equal(emit("will-frame-navigate", MOJO_POETRY_URL, { frame: {
+    origin: "null", url: "", name: MOJO_POETRY_FRAME_NAME, parent: mainFrame }, initiator: mainFrame }), false);
+  assert.equal(emit("will-frame-navigate", `${local}/api/private`, { frame: { origin: "null" } }), true);
+  assert.equal(emit("will-frame-navigate", `${local}/`, { isMainFrame: true }), false);
+  assert.equal(emit("will-navigate", `${local}/`, { isMainFrame: true }), false);
+  assert.equal(emit("will-redirect", `${local}/`, { isMainFrame: true }), false);
+  assert.equal(emit("will-redirect", `${saved}/`, { isMainFrame: true }), true,
+    "the existing main-frame workspace policy still applies");
 });

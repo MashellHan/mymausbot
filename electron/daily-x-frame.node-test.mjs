@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { appFrameNavigationAllowed } from "./app-frame-guard.mjs";
+import { appFrameNavigationAllowed, createAppFrameFallback } from "./app-frame-guard.mjs";
 import environments from "./environments.cjs";
 import { DAILY_X_FRAME_NAME, DAILY_X_URL, createDailyXFrameNavigation, dailyXPageAllowed,
   installDailyXFrameGuards } from "./daily-x-frame.mjs";
+import { MOJO_POETRY_FRAME_NAME, MOJO_POETRY_URL } from "./mojo-poetry-frame.mjs";
 
 const LOCAL = "http://127.0.0.1:8799";
+const CLOUD = "https://saved.example.test";
 const { workspaceNavigationAllowed } = environments;
 
 function fixture() {
@@ -15,14 +17,15 @@ function fixture() {
   main.frames.push(frame);
   const handlers = new Map();
   const webContents = { mainFrame: main, on: (name, listener) => handlers.set(name, listener) };
+  const frameFallback = createAppFrameFallback({ webContents, localOrigin: () => LOCAL,
+    serverOrigins: () => new Set([LOCAL, CLOUD]), log: () => {} });
   let redirectFallbacks = 0;
   let frameFallbacks = 0;
   installDailyXFrameGuards(webContents, {
     localOrigin: () => LOCAL,
     redirectFallback: (details, url) => { redirectFallbacks++;
       if (!workspaceNavigationAllowed(url, { activeId: "local", environments: [] }, LOCAL)) details.preventDefault(); },
-    frameFallback: (details) => { frameFallbacks++;
-      if (!appFrameNavigationAllowed(details)) details.preventDefault(); },
+    frameFallback: (details, url) => { frameFallbacks++; frameFallback(details, url); },
   });
   const emit = (event, url, change = {}) => {
     const details = { isMainFrame: false, url, frame, initiator: main, prevented: false,
@@ -65,6 +68,35 @@ test("the actual combined handlers allow the latest redirect and retain the fram
   assert.deepEqual(getFallbacks(), [0, 0]);
   main.frames = [];
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/x/20261116/", { initiator: frame }), true);
+});
+
+test("ordinary frames cannot navigate or redirect into the local or a saved server", () => {
+  const { main, frame, emit } = fixture();
+  frame.name = "ordinary";
+  frame.origin = "https://untrusted.example.test";
+  frame.url = "https://untrusted.example.test/";
+  for (const event of ["will-frame-navigate", "will-redirect"]) {
+    assert.equal(emit(event, `${LOCAL}/api/private`, { initiator: frame }), true, `${event}: own server`);
+    assert.equal(emit(event, `${CLOUD}/api/private`, { initiator: frame }), true, `${event}: saved server`);
+  }
+  main.origin = CLOUD;
+  assert.equal(emit("will-frame-navigate", `${CLOUD}/api/private`, { initiator: frame }), true, "saved page cannot frame itself");
+  main.origin = LOCAL;
+  assert.equal(emit("will-frame-navigate", "https://external.example/page", { initiator: frame }), false);
+  assert.equal(emit("will-redirect", "https://external.example/page", { initiator: frame }), true, "existing redirect policy remains");
+  assert.equal(emit("will-frame-navigate", "not a url", { initiator: frame }), true);
+  frame.origin = "null";
+  assert.equal(emit("will-frame-navigate", `${LOCAL}/api/private`, { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "about:srcdoc", { initiator: frame }), false);
+  assert.equal(emit("will-frame-navigate", `${LOCAL}/`, { isMainFrame: true }), false);
+  assert.equal(emit("will-redirect", `${LOCAL}/`, { isMainFrame: true }), false);
+});
+
+test("the named Mojo frame keeps its exact host-initiated entry", () => {
+  const { main, frame, emit } = fixture();
+  frame.name = MOJO_POETRY_FRAME_NAME;
+  assert.equal(emit("will-frame-navigate", MOJO_POETRY_URL, { initiator: main }), false);
+  assert.equal(emit("will-frame-navigate", "https://mao.hexly.ai/other", { initiator: main }), true);
 });
 
 test("unrelated frames keep the ordinary fallback and only canonical XReport pages qualify", () => {

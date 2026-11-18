@@ -14,6 +14,7 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
   default-head commits use author instants on the same dates, including merges.
   A source day can be complete through its cutoff while the calendar day is
   still open. Tokens use the same calendar dates with an independent capture time.
+- The 1-, 7- and 30-day cards also show observed non-merge commits across local branches and synced origin refs from the matching repository-observation window. This count includes work on branches before merge and can overlap the default-branch count. Its coverage and capture time are independent. Missing or misaligned observations stay unavailable.
 - The canonical 60-day snapshot atomically replaces verified GitHub and ADO
   envelopes. Cards, charts, categories, repositories and account details use
   that one version. A missing account, date, pagination, visibility or attribution
