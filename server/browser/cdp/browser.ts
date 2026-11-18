@@ -309,7 +309,7 @@ export class CdpBrowser implements PageHost {
       signal?.addEventListener("abort", abort, { once: true });
       for (const page of this.#pages.values()) {
         void (this.#running.get(page) ?? page.ready).then(() => {
-          if (!page.closed && match(page)) finish(page);
+          if (!settled && !page.closed && match(page)) finish(page);
         }, () => {});
       }
       const earlier = this.#failures.find(({ page }) => match(page));
