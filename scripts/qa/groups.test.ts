@@ -39,6 +39,78 @@ function report(id: number, passed: string[] = [], failed: string[] = [], execut
 }
 
 describe("confirmed QA root-cause groups", () => {
+  it("retains a pending group when its direct record and another issue both claim the same key", async () => {
+    const { issues, parent, api } = fixture();
+    const key = signature("competing direct", "linux");
+    const direct = issues[0].body.replaceAll(keys[0], key);
+    parent.body += "\n\n" + direct;
+    const other = { ...structuredClone(issues[0]), number: 4, body: direct };
+    issues.push(other);
+    const before = structuredClone([parent, other]);
+    await expect(deliverReport(report(2, keys), { api, policy })).rejects.toThrow("Multiple QA issues claim contract");
+    expect([parent, other]).toEqual(before);
+    expect(api.mock.calls.filter(([path, options]) => options?.method && ["/issues/3", "/issues/4"].includes(path))).toHaveLength(0);
+  });
+
+  it.each([true, false])("prefers an owned issue to a marker quoted on a confirmed parent, parent first %s", async (parentFirst) => {
+    const { issues, parent, api } = fixture();
+    const key = signature("separate contract", "linux");
+    parent.body += `\n\n<!-- mausbot-qa:${key} -->`;
+    const originalParent = structuredClone(parent);
+    const owner = { ...structuredClone(issues[0]), number: 4, body: issues[0].body.replaceAll(keys[0], key) };
+    if (parentFirst) issues.push(owner);
+    else issues.unshift(owner);
+    await deliverReport(report(2, [], [key]), { api, policy });
+    expect(owner.state).toBe("open");
+    expect(owner.body).toContain("new failure");
+    expect(parent).toEqual(originalParent);
+  });
+
+  it("preserves confirmed membership after reconciling an unfinished direct record on the parent", async () => {
+    const { issues, parent, api } = fixture();
+    await deliverReport(report(2, keys), { api, policy });
+    const key = signature("direct parent", "linux");
+    const partial = `<!-- mausbot-qa:${key} -->\n<!-- mausbot-qa:start -->\n<!-- mausbot-qa-state ${JSON.stringify({ key, lastExecution: "1:1" })} -->`;
+    parent.state = "closed";
+    parent.body = partial + "\n\n" + parent.body;
+    await deliverReport(report(3, [], [key]), { api, policy });
+    expect(qaGroups(issues).byKey.get(keys[0])).toBe(parent);
+    expect(parent.body).toContain(`<!-- mausbot-qa-group ${JSON.stringify(keys)} -->`);
+    await deliverReport(report(4, [], [keys[0]]), { api, policy });
+    expect(issues[0].state).toBe("closed");
+    expect(parent.state).toBe("open");
+    expect(parent.body).toContain("Verified member cases: 1/2");
+  });
+
+  it("retains pending direct coverage on a parent even when all consolidated members pass", async () => {
+    const { parent, api } = fixture();
+    const directKey = signature("direct parent", "shared");
+    const direct = (caseKey: string) => `<!-- mausbot-qa:${directKey} -->\n<!-- mausbot-qa:start -->\n<!-- mausbot-qa-state ${JSON.stringify({ key: directKey, caseKeys: [caseKey], verified: false, lastExecution: "1:1" })} -->\n<!-- mausbot-qa:end -->`;
+    parent.body += "\n\n" + direct("a".repeat(24)) + "\n\n" + direct("b".repeat(24));
+    await deliverReport(report(2, keys), { api, policy });
+    expect(parent.body).toContain("Verified member cases: 2/2");
+    expect(parent.state).toBe("open");
+    expect(parent.labels).not.toContain("qa:verified");
+  });
+
+  it("keeps a closed parent and both verified members intact for an older revision only", async () => {
+    const { issues, parent, api } = fixture();
+    issues[0].user = { login: "github-actions[bot]", type: "Bot", id: 41898282 };
+    const verified = report(2, keys), ancestor = "b".repeat(40);
+    await deliverReport(verified, { api, policy });
+    parent.state = "closed";
+    const previous = structuredClone(parent);
+    const withHistory = (path: string, options?: any) => path === `/compare/${ancestor}...${verified.sha}`
+      ? Promise.resolve({ status: "ahead", ahead_by: 1, behind_by: 0 }) : api(path, options);
+    await deliverReport({ ...report(3, [], [keys[0]]), sha: ancestor }, { api: withHistory, policy });
+    expect(issues[0].body).toContain("Recorded stale pre-fix report");
+    expect(issues.slice(0, 2).every((issue) => issue.labels.includes("qa:verified"))).toBe(true);
+    expect(parent).toEqual(previous);
+    await deliverReport(report(4, [], [keys[0]]), { api: withHistory, policy });
+    expect(parent.state).toBe("open");
+    expect(parent.labels).toContain("qa:untriaged");
+  });
+
   it("reopens one parent while preserving closed records, quality holds and unrelated findings", async () => {
     const { issues, parent, api } = fixture();
     parent.state = "closed";

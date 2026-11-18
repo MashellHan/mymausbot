@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
 import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels, preflightJob } from "./contracts.mjs";
+import { generatedSections, issueKey, previousCoverage, stateRecord, withState } from "./issue-state.mjs";
 import { qaGroups, refreshQaGroups } from "./groups.mjs";
 import { combineTextFindings, textCaseEvidence } from "./text-cases.mjs";
 
@@ -145,14 +146,77 @@ export function makeReport({ run, jobs, results = [], expected = expectedJobs(),
 }
 
 const marker = (key) => `<!-- mausbot-qa:${key} -->`;
-const stateOf = (issue) => {
-  try { return JSON.parse(issue.body.match(/<!-- mausbot-qa-state (.+) -->/)?.[1] ?? "null"); } catch { return null; }
-};
+const SHA = /^[a-f\d]{40}$/i;
 
 function newerThan(report, state) {
   if (!state) return true;
   const [id, attempt] = String(state.lastExecution ?? state.lastRun).split(":").map(Number);
   return report.runId > id || report.runId === id && report.attempt > attempt;
+}
+
+function stripGeneratedBlock(body) {
+  return String(body ?? "").replace(/<!-- mausbot-qa:[a-f\d]+ -->\s*<!-- mausbot-qa:start -->[\s\S]*?<!-- mausbot-qa:end -->/g, "");
+}
+
+function authorizedVerifier(entry) {
+  const assoc = String(entry?.author_association ?? "").toUpperCase();
+  return ["OWNER", "MEMBER", "COLLABORATOR"].includes(assoc);
+}
+
+async function isStrictAncestor(ancestorSha, descendantSha, api) {
+  if (!SHA.test(ancestorSha ?? "") || !SHA.test(descendantSha ?? "")) return false;
+  if (ancestorSha.toLowerCase() === descendantSha.toLowerCase()) return false;
+  try {
+    const comparison = await api(`/compare/${ancestorSha}...${descendantSha}`);
+    return comparison?.status === "ahead"
+      && Number.isSafeInteger(comparison.ahead_by) && comparison.ahead_by > 0
+      && comparison.behind_by === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function isStalePreFixReport(finding, issue, record, report, api) {
+  if (!issue) return false;
+  const state = record?.state;
+  if (state?.coverageUnknown) return false;
+  const labels = issueLabels(issue);
+  if (issue.state !== "closed" && !labels.includes("qa:verified")) return false;
+  if (!SHA.test(report?.sha ?? "")) return false;
+  if (finding.cases?.length && (state?.verified !== true || !Array.isArray(state.caseKeys)
+    || !finding.cases.every((entry) => state.caseKeys.includes(entry.key)))) return false;
+  if (finding.jobs?.length && (!Array.isArray(state?.verificationJobs)
+    || !finding.jobs.every((job) => state.verificationJobs.includes(job)))) return false;
+
+  const candidates = new Set();
+  const author = issue.user;
+  if (author?.id === 41898282 && author.type === "Bot" && author.login === "github-actions[bot]" && record?.canonical) {
+    const revision = state.verifiedSha ?? (labels.includes("qa:verified") ? state.lastExecutionSha : null);
+    if (typeof revision === "string" && SHA.test(revision)) candidates.add(revision.toLowerCase());
+  }
+
+  if (candidates.size === 0 && issue.state === "closed" && !finding.cases?.length && !finding.jobs?.length) {
+    const coverage = state ?? previousCoverage(issue.body, finding.key);
+    if ((!state && !coverage.hasRecords) || coverage.coverageUnknown || coverage.caseKeys?.length || coverage.verificationJobs?.length) return false;
+    // Only trust an authorized closure comment on the same issue (outside the generated QA block).
+    try {
+      const comments = await pages(`/issues/${issue.number}/comments`, null, api);
+      for (const comment of comments) {
+        if (!authorizedVerifier(comment)) continue;
+        const text = stripGeneratedBlock(comment?.body);
+        if (!new RegExp(`<!--\\s*lead-qa${issue.number}-[^>]+closure[^>]*-->`, "i").test(text)) continue;
+        for (const match of text.matchAll(/\bmerged at \[`([a-f\d]{40})`\]/gi)) {
+          candidates.add(match[1].toLowerCase());
+        }
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  if (candidates.size !== 1) return false;
+  const [verifiedSha] = candidates;
+  return (await isStrictAncestor(report.sha, verifiedSha, api)) ? verifiedSha : false;
 }
 
 function findingBody(finding, report, state, scopeBasis, previous = "") {
@@ -166,23 +230,53 @@ function findingBody(finding, report, state, scopeBasis, previous = "") {
     finding.jobs ? `Affected jobs: ${finding.jobs.map(sanitize).join(", ")}` : "",
     finding.file && finding.file !== "unknown test file" ? `Reproduce on an isolated fixture: checkout the tested revision, install the locked dependencies, then run \`pnpm exec vitest run ${finding.file}\` on ${sanitize(finding.platform)}. Match the job's OMB_VITEST_E2E and opt-in flags; never use live app data.` : "Reproducer and environment: use the linked job's exact command on the tested revision.",
     `\nAssertion:\n\`\`\`text\n${finding.assertion}\n\`\`\``, textCaseEvidence(finding, report, previous, sanitize), "<!-- mausbot-qa:end -->"].filter(Boolean).join("\n\n");
-  if (previous.includes("<!-- mausbot-qa:start -->")) return previous.replace(/<!-- mausbot-qa:[a-f\d]+ -->\s*<!-- mausbot-qa:start -->[\s\S]*?<!-- mausbot-qa:end -->/, text);
+  const blocks = generatedSections(previous).filter((block) => block.key === finding.key);
+  if (blocks.length === 1 && blocks[0].complete) {
+    const [block] = blocks;
+    return previous.slice(0, block.start) + text + previous.slice(block.start + block.text.length);
+  }
+  for (const block of blocks.reverse()) {
+    const controls = /<!-- mausbot-qa:(?:[a-f\d]{24}|start|end) -->|<!-- mausbot-qa-state [^\r\n]+ -->|<!-- mausbot-qa-cases:(?:start|end) -->/g;
+    const archived = block.text.replace(controls, (control) => {
+      const pointedKey = /^<!-- mausbot-qa:([a-f\d]{24}) -->$/.exec(control)?.[1];
+      return pointedKey && pointedKey !== finding.key ? control : control.replace("<!-- mausbot-qa", "<!-- archived-mausbot-qa");
+    });
+    previous = previous.slice(0, block.start) + archived + previous.slice(block.start + block.text.length);
+  }
   return `${previous ? `${previous.replace(marker(finding.key), "")}\n\n` : ""}${text}\n\nLead triage due within 30 minutes: priority (P0/P1/P2), classification, scope, owner role, next action, due date. Use role labels, not invented GitHub assignees. Close only after Reviewer and post-integration verification evidence.\n`;
 }
 
 export async function deliverReport(report, { api = github, policy = JSON.parse(readFileSync("scripts/testing/check-policy.json", "utf8")) } = {}) {
   const issues = (await pages("/issues?state=all&labels=qa", null, api)).filter((issue) => !issue.pull_request);
   const { groups, byKey } = qaGroups(issues), changedKeys = new Set();
-  const update = async (issue, patch) => {
+  const staleCasesByIssue = new Map();
+  const groupParents = new Set(groups.map((group) => group.parent));
+  const issuesByKey = new Map(), groupFallbacks = new Map();
+  for (const issue of issues) {
+    const directKey = issueKey(issue.body);
+    const key = directKey ?? (groupParents.has(issue) ? issueKey(issue.body, true) : null);
+    if (!key) continue;
+    const claims = directKey ? issuesByKey : groupFallbacks;
+    claims.set(key, claims.has(key) ? null : issue);
+  }
+  for (const [key, owner] of groupFallbacks) if (!issuesByKey.has(key)) issuesByKey.set(key, owner);
+  const ownerFor = (key) => {
+    const owner = issuesByKey.get(key);
+    if (owner === null) throw new Error(`Multiple QA issues claim contract ${key}`);
+    return owner;
+  };
+  const update = async (issue, key, patch) => {
+    if (ownerFor(key) !== issue) return;
     await api(`/issues/${issue.number}`, { method: "PATCH", body: patch });
     Object.assign(issue, patch);
-    changedKeys.add(stateOf(issue).key);
+    changedKeys.add(key);
   };
-  const findings = combineTextFindings(report.findings, issues, byKey, signature);
+  const findings = combineTextFindings(report.findings, issuesByKey, byKey, signature);
   for (const finding of findings) {
-    const issue = issues.find((entry) => entry.body?.includes(marker(finding.key)));
+    const issue = ownerFor(finding.key);
     const grouped = byKey.has(finding.key);
-    const previous = issue ? stateOf(issue) : null;
+    const record = issue && stateRecord(issue.body, finding.key);
+    const previous = record?.state;
     const recurrence = issue && !grouped && (issue.state === "closed" || issueLabels(issue).includes("qa:verified"));
     const runKey = `${report.runId}:${report.attempt}`;
     if (!newerThan(report, previous)) {
@@ -194,8 +288,8 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
         caseKeys: [...new Set([...(previous.caseKeys ?? []), ...finding.cases.map((entry) => entry.key)])],
         ...(recurrence ? { triageEpoch: new Date().toISOString() } : {}) };
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified" && (!recurrence || label !== "qa:triaged"));
-      await update(issue, {
-        body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(state)} -->`)
+      await update(issue, state.key, {
+        body: withState(issue.body, record, state)
           .replace(evidence, textCaseEvidence(finding, report, issue.body, sanitize))
           + `\n\nLate report ${report.url} added ${added.length} previously untracked cases. Newer execution evidence is retained; the added cases still need positive verification.`,
         state: "open", labels: recurrence ? [...new Set([...labels, "qa:untriaged"])] : labels,
@@ -207,58 +301,98 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
     const scopeBasis = finding.cases ? "grouped-case policy"
       : mapped ? "test listed in check-policy.json"
       : "conservative fallback: no test-to-area mapping in check-policy.json";
+    const verifiedMember = grouped && issueLabels(issue).includes("qa:verified");
+    const staleVerifiedSha = recurrence || verifiedMember ? await isStalePreFixReport(finding, issue, record, report, api) : false;
+    if (staleVerifiedSha) {
+      staleCasesByIssue.set(issue.number, new Set(finding.cases?.map((entry) => entry.key)));
+      const entry = `${runKey}@${report.sha.toLowerCase()}`;
+      const note = `Recorded stale pre-fix report ${report.url} (attempt ${report.attempt}, tested \`${report.sha}\`, strict ancestor of verified \`${staleVerifiedSha}\`).`;
+      if (issue.body.includes(note)) continue;
+      let body = issue.body;
+      if (record?.canonical) {
+        const history = Array.isArray(previous.stalePreFixRuns) ? previous.stalePreFixRuns : [];
+        if (history.includes(entry)) continue;
+        const staleState = { ...previous, stalePreFixRuns: [...history, entry].slice(-10) };
+        body = withState(body, record, staleState);
+      }
+      body += `\n\n${note}`;
+      await api(`/issues/${issue.number}`, { method: "PATCH", body: { body } });
+      issue.body = body;
+      continue;
+    }
+    const coverage = previous ?? (issue && previousCoverage(issue.body, finding.key));
+    const parentKeys = finding.cases ? groups.find((group) => group.parent === issue)?.keys : [];
+    const caseKeys = new Set([...(coverage?.caseKeys ?? []), ...(parentKeys ?? []), ...(finding.cases ?? []).map((entry) => entry.key)]);
+    const verificationJobs = new Set([...(coverage?.verificationJobs ?? []), ...(finding.jobs ?? [])]);
     const state = { key: finding.key, area, firstSeen: previous?.firstSeen ?? report.finishedAt, lastSeen: report.finishedAt, count: (previous?.count ?? 0) + 1, lastRun: runKey,
       triageEpoch: !issue || recurrence ? report.finishedAt : previous?.triageEpoch ?? previous?.firstSeen ?? report.finishedAt,
       lastExecution: runKey, lastExecutionAt: report.finishedAt,
-      ...(finding.cases ? { textChange: finding.textChange, verified: false,
-        caseKeys: [...new Set([...(previous?.caseKeys ?? []), ...(groups.find((group) => group.parent === issue)?.keys ?? []), ...finding.cases.map((entry) => entry.key)])] } : {}),
-      ...(finding.jobs?.length ? { verificationJobs: [...new Set([...(previous?.verificationJobs ?? []), ...finding.jobs])] } : {}) };
+      ...(finding.cases ? { textChange: finding.textChange, verified: false } : {}),
+      ...(caseKeys.size ? { caseKeys: [...caseKeys] } : {}), ...(verificationJobs.size ? { verificationJobs: [...verificationJobs] } : {}),
+      ...(coverage?.coverageUnknown ? { coverageUnknown: true } : {}) };
     const body = findingBody(finding, report, state, scopeBasis, issue?.body);
     const defaults = ["qa", "qa:untriaged", `qa:kind:${finding.kind}`, `qa:scope:${area}`, "owner:lead"];
     if (issue) {
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified");
-      await update(issue, { body, ...(!grouped ? { state: "open" } : {}), labels: recurrence ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
+      await update(issue, state.key, { body, ...(!grouped ? { state: "open" } : {}), labels: recurrence ? [...new Set([...labels.filter((label) => label !== "qa:triaged"), "qa:untriaged"])] : labels });
     } else {
       const created = await api("/issues", { method: "POST", body: { title: `[QA] ${sanitize(finding.contract).slice(0, 150)} (${sanitize(finding.platform).slice(0, 35)})`, body, labels: defaults } });
       issues.push(created);
+      issuesByKey.set(finding.key, created);
     }
   }
   for (const issue of issues) {
-    const state = stateOf(issue);
-    if (!state || !newerThan(report, state)) continue;
-    const failedCase = state.caseKeys?.some((key) => report.findings.some((finding) => finding.key === key));
+    const record = stateRecord(issue.body);
+    const state = record?.state;
+    if (!newerThan(report, state)) continue;
+    const staleCases = staleCasesByIssue.get(issue.number);
+    if (!state) {
+      const key = issueKey(issue.body, groupParents.has(issue));
+      if (!key) continue;
+      const coverage = previousCoverage(issue.body, key);
+      if (!coverage.caseKeys.some((item) => !staleCases?.has(item) && report.findings.some((finding) => finding.key === item))) continue;
+      const note = `A tracked case failed in ${report.url} (attempt ${report.attempt}). Its historical coverage records require reconciliation.`;
+      const labels = issueLabels(issue);
+      if (issue.state === "open" && !labels.includes("qa:verified") && issue.body.includes(note)) continue;
+      await update(issue, key, {
+        body: issue.body.includes(note) ? issue.body : issue.body + "\n\n" + note,
+        labels: [...new Set([...labels.filter((label) => !["qa:verified", "qa:triaged"].includes(label)), "qa:untriaged"])], state: "open",
+      });
+      continue;
+    }
+    const failedCase = state.caseKeys?.some((key) => !staleCases?.has(key) && report.findings.some((finding) => finding.key === key));
     if (failedCase) {
       const recurrence = issue.state === "closed" || issueLabels(issue).includes("qa:verified");
       const failed = { ...state, verified: false, lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt,
         ...(recurrence ? { triageEpoch: report.finishedAt } : {}) };
       const labels = issueLabels(issue).filter((label) => label !== "qa:verified" && (!recurrence || label !== "qa:triaged"));
-      await update(issue, {
-        body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(failed)} -->`)
+      await update(issue, state.key, {
+        body: withState(issue.body, record, failed)
           + (recurrence ? `\n\nA tracked case failed or retried in ${report.url}. Aggregate verification is withdrawn; each failure retains its own current classification and evidence.` : ""),
         state: "open", labels: recurrence ? [...new Set([...labels, "qa:untriaged"])] : labels,
       });
       continue;
     }
-    if (!report.executionComplete) continue;
-    const contractPassed = state.caseKeys?.length ? state.caseKeys.every((key) => report.passed.includes(key)) : state.verificationJobs?.length
-      ? state.verificationJobs.every((name) => report.passed.includes(signature(`job:${name} > execution`, "job"))) : report.passed.includes(state.key);
+    if (staleCases || state.coverageUnknown || !report.executionComplete) continue;
+    const required = [...(state.caseKeys ?? []), ...(state.verificationJobs ?? []).map((name) => signature(`job:${name} > execution`, "job"))];
+    const contractPassed = required.length ? required.every((key) => report.passed.includes(key)) : report.passed.includes(state.key);
     if (!contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
-    const verified = { ...state, ...(state.caseKeys ? { verified: true } : {}), lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
+    const verified = { ...state, verified: true, ...(SHA.test(report.sha ?? "") ? { verifiedSha: report.sha.toLowerCase() } : {}), lastExecution: `${report.runId}:${report.attempt}`, lastExecutionAt: report.finishedAt };
     const alreadyVerified = issueLabels(issue).includes("qa:verified");
-    await update(issue, {
-      body: issue.body.replace(/<!-- mausbot-qa-state (.+) -->/, `<!-- mausbot-qa-state ${JSON.stringify(verified)} -->`)
+    await update(issue, state.key, {
+      body: withState(issue.body, record, verified)
         + (alreadyVerified ? "" : `\n\nQA verified this contract without retries on \`${report.sha}\`: ${report.url}. Lead: check the integrated fix and Reviewer evidence before closing.`),
       ...(!alreadyVerified ? { labels: [...issueLabels(issue), "qa:verified"] } : {}),
     });
   }
   for (const { parent, keys, members } of groups) {
-    const direct = stateOf(parent);
+    const direct = stateRecord(parent.body)?.state;
     if (direct?.lastExecution === `${report.runId}:${report.attempt}` || direct?.lastMembershipRun === `${report.runId}:${report.attempt}`) changedKeys.add(direct.key);
     for (let i = 0; i < keys.length; i++) {
-      if (stateOf(members[i])?.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(keys[i]);
+      if (stateRecord(members[i].body, keys[i])?.state.lastExecution === `${report.runId}:${report.attempt}`) changedKeys.add(keys[i]);
     }
   }
-  await refreshQaGroups(groups, changedKeys, report, api);
+  await refreshQaGroups(groups, changedKeys, report, api, ownerFor);
   report.deliveryComplete = true;
   return report;
 }
