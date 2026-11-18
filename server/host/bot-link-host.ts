@@ -154,24 +154,26 @@ export function createBotLinkHost(deps: BotLinkHostDeps) {
       return { token: issued.token, sessionId: issued.session.id };
     },
     revoke: (sessionId) => { deps.sessions.revoke(sessionId); } });
-  function prepareLocalBatch<T extends { botId: string }, P>(address: CoordinateContext["address"], targets: readonly T[],
-    approvalMissing: boolean, plan: (target: T, sender: BotRecord, recipient: BotRecord) => P):
-    { sender: BotRecord; plans: Map<string, P> } | { error: string } {
+  function requireLocalSender(address: CoordinateContext["address"], approvalMissing: boolean): BotRecord {
     const sender = store.bot(address.botId);
-    if (!sender || sender.hidden) return { error: "Source membership or task was removed" };
+    if (!sender || sender.hidden) throw new Error("Source membership or task was removed");
     const problem = sourceProblem(address);
-    if (problem) return { error: problem };
+    if (problem) throw new Error(problem);
     if (approvalMissing && deps.peerReviewRequired(sender, address.threadId)) {
-      return { error: "Sender now requires peer approval; submit a new approved request" };
+      throw new Error("Sender now requires peer approval; submit a new approved request");
     }
-    const plans = new Map<string, P>();
-    for (const target of targets) {
-      const recipient = store.bot(target.botId);
-      if (!recipient || recipient.hidden) return { error: "The recipient is no longer available" };
-      try { plans.set(target.botId, plan(target, sender, recipient)); }
-      catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
+    return sender;
+  }
+
+  function localBatchProblem<T>(targets: readonly T[], check: (target: T) => string | undefined): string | undefined {
+    try {
+      for (const target of targets) {
+        const problem = check(target);
+        if (problem) return problem;
+      }
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
     }
-    return { sender, plans };
   }
   async function reviewLocalBatch(sender: BotRecord, threadId: string, targets: readonly { botId: string }[], call: CoordinateBotsCall, requireActive: () => void) {
     const verdicts = await Promise.all(targets.map(({ botId }) => requestPeerApproval(deps.approvalBus(), sender,
@@ -182,7 +184,7 @@ export function createBotLinkHost(deps: BotLinkHostDeps) {
       ? "Denied by user; no work sent." : `${blocked.map((failure) => failure.error).join("; ")}; no work sent.`, approvals: blocked };
   }
   return {
-    link, routes, rooms, sourceProblem, prepareLocalBatch, reviewLocalBatch,
+    link, routes, rooms, sourceProblem, requireLocalSender, localBatchProblem, reviewLocalBatch,
     coordinate(call: CoordinateBotsCall, context: Omit<CoordinateContext, "problem" | "approveLinked">,
       requireActive: () => void, local: Parameters<typeof link.coordinate>[2]) {
       const { botId, threadId } = context.address;

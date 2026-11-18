@@ -397,6 +397,29 @@ describe("a message to the thread where work the sender handed on is running", (
     expect(w.answeredNodes).toEqual([]);
   });
 
+  it.each(["running", "carried"] as const)("checks the actual %s relay thread again before writing", async (kind) => {
+    const w = world();
+    const first = w.node({ id: "first", threadId: "work", status: "running" });
+    const senderNode = { id: "turn", carrying: [] as string[] } as HandoffView;
+    const checkThread = vi.fn<(threadId: string) => string | undefined>(() => undefined);
+    const input = { sourceLevel: "full" as const, sender: FUCHS, senderThreadId: "inbox", senderNode, target: DACHS,
+      message: "Check the report", threadId: first.threadId, checkThread };
+    expect(w.routing.relayProblem(input)).toBeUndefined();
+    expect(checkThread).toHaveBeenLastCalledWith("work");
+    if (kind === "carried") {
+      const next = w.node({ id: "next", threadId: "other-work", question: "Which report?" });
+      senderNode.carrying = [next.id];
+    }
+    const actual = kind === "carried" ? "other-work" : "work";
+    checkThread.mockImplementation((threadId) => threadId === actual ? "The selected thread is no longer reachable" : undefined);
+    expect(await w.routing.relay(input)).toMatchObject({ outcome: "failed", threadId: actual, detail: "The selected thread is no longer reachable" });
+    expect(checkThread).toHaveBeenLastCalledWith(actual);
+    expect(w.steered).toEqual([]);
+    expect(w.answeredNodes).toEqual([]);
+    expect(w.revoked).toEqual([]);
+    expect(w.rows(actual)).toEqual([]);
+  });
+
   it("is left to become new work when the engine cannot take it now, or the work there is someone else's or handed out this turn", async () => {
     const send = (w: ReturnType<typeof world>, sender: BotRecord, sentThisTurn?: ReadonlySet<string>) =>
       w.routing.relay({ sourceLevel: "full", sender, senderThreadId: "inbox", target: DACHS, message: "Nimm auch die Steuerspalte mit", threadId: "work", ...(sentThisTurn ? { sentThisTurn } : {}) });

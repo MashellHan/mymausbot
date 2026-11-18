@@ -155,7 +155,7 @@ describe("bot setup and tools in the real renderer", () => {
     const readPhases = readLaunchPhases(phase);
     try {
     let stdout = "";
-    let launchError = false;
+    let launchStderr = "";
     // Windows kill("SIGINT") terminates immediately instead of delivering a
     // catchable signal. Ask the disposable launcher to run its normal cleanup.
     const launcher = new URL("./control-omb-ui.ts", import.meta.url).href;
@@ -168,12 +168,20 @@ describe("bot setup and tools in the real renderer", () => {
     });
     phase("launcher-spawned");
     child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
-    child.stderr!.on("data", (chunk: Buffer) => { readPhases(String(chunk)); });
-    child.on("error", () => { launchError = true; });
-    await expect.poll(() => {
-      if (launchError || child!.exitCode !== null || child!.signalCode !== null) throw new Error("UI launcher exited before readiness");
+    child.stderr!.on("data", (chunk: Buffer) => {
+      readPhases(String(chunk));
+      launchStderr = (launchStderr + String(chunk)).slice(-4_096);
+    });
+    const exitedBeforeReady = new Promise<never>((_resolve, reject) => {
+      child!.once("error", () => reject(new Error("UI launcher could not start")));
+      child!.once("exit", (code, signal) => {
+        const failure = launchStderr.match(/agent-browser open (did not finish within \d+ms|failed: [^\r\n]{1,160})/)?.[0];
+        reject(new Error(`UI launcher stopped at ${lastPhase} (${signal ?? code})${failure ? ": " + failure : ""}`));
+      });
+    });
+    await Promise.race([exitedBeforeReady, expect.poll(() => {
       try { info = JSON.parse(stdout); return Boolean(info.ui); } catch { return false; }
-    }, { timeout: LAUNCH_TIMEOUT_MS + 120_000, interval: 250 }).toBe(true);
+    }, { timeout: LAUNCH_TIMEOUT_MS + 120_000, interval: 250 }).toBe(true)]);
     phase("handle-ready");
     const ui = (verb: string, ...args: string[]) => runControlOmb(["ui", verb, "--ui", info.ui, ...args]) as Promise<Record<string, any>>;
     const evaluate = async (js: string) => (await ui("eval", "--js", js)).result;
@@ -342,10 +350,13 @@ describe("bot setup and tools in the real renderer", () => {
     };
     // The bot panel's close button has the same name, so press the one in the Settings dialog.
     const closeSettings = async () => {
-      // Spending is an Advanced page, so opening it turned Advanced mode on; Simple's chat head comes back with it off.
-      await evaluate("(() => { const mode = document.querySelector('select[aria-labelledby=\"settings-interface-mode\"]'); if (mode && mode.value !== \"simple\") { mode.value = \"simple\"; mode.dispatchEvent(new Event('change', { bubbles: true })); } })(); true");
       await evaluate("document.querySelector('[data-settings-search]').closest('[role=dialog]').querySelector('button[aria-label=\"Close settings\"]').click(); true");
       await expect.poll(() => evaluate("Boolean(document.querySelector('[data-settings-search]'))"), { timeout: 10_000 }).toBe(false);
+      await evaluate(`(async () => {
+        const { setInterfaceMode } = await import('/src/lib/interface-mode.ts');
+        setInterfaceMode('simple');
+        return true;
+      })()`);
     };
     await openPanelUsage();
     await ui("screenshot", "--out", `${info.logPath}.settings.png`);

@@ -516,7 +516,7 @@ export function Composer({
   const mayAct = useMayAct(), mayStop = !sharedChat || mayAct(profile?.tasks?.find((task) => task.threadId === threadId)?.askedBy);
   const stoppable = (busy || Boolean(!group && bot?.waitingForTeammates) || needsInputStop) && mayStop;
   const stopInSlot = simpleDock && stoppable && !locked && !hasContent && !calling;
-  const callShown = !simpleDock || (!stopInSlot && (!hasContent || busy || Boolean(!group && bot?.waitingForTeammates) || calling));
+  const callShown = !simpleDock || busy || Boolean(!group && bot?.waitingForTeammates) || calling || (!hasContent && !stopInSlot);
   const slot = raw && bot?.defaultBot && !group
     ? { fill: "#1c1c1c", ink: "#ffffff", button: { className: "hover:brightness-110 disabled:opacity-40", style: { backgroundColor: "#1c1c1c", color: "#ffffff" } } }
     : slotColors(bot?.color, Boolean(group));

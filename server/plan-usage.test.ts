@@ -482,22 +482,28 @@ describe("plan usage fetcher", () => {
 
   it("serves a caller that asks for some of a report's accounts from that read, and reads again for one it does not hold", async () => {
     const fetchImpl = vi.fn<PlanFetch>(async () => jsonResponse({
-      five_hour: { utilization: 25, resets_at: "2026-09-26T12:00:00.000Z" },
-      seven_day: { utilization: 40, resets_at: "2026-10-03T00:00:00.000Z" },
+      rate_limit: { primary_window: { used_percent: 25, limit_window_seconds: 18000 } },
     }));
-    const both = [account("claude"), account("claude", { id: "second", name: "Second" })];
-    const credentials = { read: () => ({ token: SECRET, accountId: null, expired: false }) };
-    await loadPlanUsage({ accounts: both, now: NOW, fetch: fetchImpl, credentials });
+    const first = account("codex", { environment: { CODEX_HOME: "/fixture/first" } });
+    const second = account("codex", { id: "second", name: "Second", environment: { CODEX_HOME: "/fixture/second" } });
+    const third = account("codex", { id: "third", name: "Third", environment: { CODEX_HOME: "/fixture/third" } });
+    const read = vi.fn((entry: PlanAccount) => ({ token: SECRET, accountId: entry.id, expired: false }));
+    const load = (accounts: PlanAccount[], offset: number) => loadPlanUsage({ accounts, now: NOW + offset, fetch: fetchImpl, credentials: { read } });
+    const both = [first, second];
+    const full = await load(both, 0);
+    expect(full.providers.map(({ id, ok }) => ({ id, ok }))).toEqual([{ id: first.id, ok: true }, { id: second.id, ok: true }]);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    const some = await loadPlanUsage({ accounts: [both[1]!], now: NOW + 1_000, fetch: fetchImpl, credentials });
-    expect(some.providers.map((row) => row.id)).toEqual(["second"]);
+    expect(await load([second], 1_000)).toEqual({ ...full, providers: [full.providers[1]] });
+    expect(await load(both, 2_000)).toEqual(full);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect((await loadPlanUsage({ accounts: both, now: NOW + 2_000, fetch: fetchImpl, credentials })).providers).toHaveLength(2);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    await loadPlanUsage({ accounts: [account("claude", { id: "third", name: "Third" })], now: NOW + 3_000, fetch: fetchImpl, credentials });
+    expect(read.mock.calls.map(([entry]) => entry)).toEqual(both);
+    const missing = await load([third], 3_000);
+    expect(missing.providers).toMatchObject([{ id: third.id, ok: true }]);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
-    await loadPlanUsage({ accounts: [{ ...both[1]!, configDir: "/elsewhere" }], now: NOW + 4_000, fetch: fetchImpl, credentials });
+    const moved = { ...third, environment: { CODEX_HOME: "/fixture/moved" } };
+    await load([moved], 4_000);
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(read.mock.calls.map(([entry]) => entry)).toEqual([...both, third, moved]);
   });
 
   it("does not share the cache when GROK_HOME changes", async () => {

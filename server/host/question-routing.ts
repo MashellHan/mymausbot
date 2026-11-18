@@ -101,7 +101,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
   };
 
   type RelayTarget = { sender: BotRecord; senderThreadId: string; senderNode?: HandoffView; target: BotRecord; answers?: string;
-    threadId?: string; selected?: boolean; sentThisTurn?: ReadonlySet<string>; sourceLevel: ApprovalMode };
+    threadId?: string; selected?: boolean; sentThisTurn?: ReadonlySet<string>; sourceLevel: ApprovalMode; checkThread?: (threadId: string) => string | undefined };
   function selectRelay(input: RelayTarget) {
     const { sender, target } = input;
     const waiting = waitingOn(target).filter((one) => deps.mayReach(input.senderThreadId, one.threadId));
@@ -113,12 +113,18 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
     return { pick, running: pick ? undefined : deps.active().find((node) => node.botId === target.id && node.status === "running" && ownWork(node)) };
   }
 
-  function relayProblem(input: RelayTarget, checkThread: (threadId: string) => string | undefined): string | undefined {
+  function relayRefusal(input: RelayTarget, threadId: string, nodeId?: string): PeerDeliveryReceipt | undefined {
+    const detail = input.checkThread?.(threadId);
+    if (detail) return peerDeliveryReceipt({ botId: input.target.id, botName: input.target.name, outcome: "failed", threadId, detail });
+    return permissionRefusal(input.target, threadId, input.sourceLevel, nodeId) ?? undefined;
+  }
+
+  function relayProblem(input: RelayTarget): string | undefined {
     const { pick, running } = selectRelay(input);
     if (pick && personOnly(pick.question) && !pick.node?.cards?.length) return "Only the person can answer that question; nothing was sent.";
     if (pick && !pick.node) return undefined;
     const threadId = pick?.threadId ?? running?.threadId;
-    return threadId === undefined ? undefined : checkThread(threadId) ?? permissionRefusal(input.target, threadId, input.sourceLevel, pick?.node?.id ?? running?.id)?.detail;
+    return threadId === undefined ? undefined : relayRefusal(input, threadId, pick?.node?.id ?? running?.id)?.detail;
   }
 
   /** A bot's message goes into work the target already has instead of becoming new work. It answers a teammate's question
@@ -141,7 +147,7 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
     if (!pick) return refused() ?? await handOn(input, running);
     if (!pick.node) return peerDeliveryReceipt({ botId: target.id, botName: target.name, outcome: "failed", threadId: pick.threadId,
       detail: "that receiving turn is no longer available; nothing was sent" });
-    const denied = permissionRefusal(target, pick.threadId, input.sourceLevel, pick.node.id);
+    const denied = relayRefusal(input, pick.threadId, pick.node.id);
     if (denied) return denied;
     const by: Answerer = { kind: "bot", botId: sender.id };
     // Security invariant: first, so what this sender says can never reach a turn still holding the lent computer.
@@ -167,10 +173,10 @@ export function createQuestionRouting(deps: QuestionRoutingDeps) {
 
   /** The sender's message, to the turn running the work it handed on: the turn reads it at its next step, and that work's one
    * result still returns once. Undefined when no such turn runs or its engine cannot take it now. */
-  async function handOn(input: { sender: BotRecord; senderThreadId: string; target: BotRecord; message: string; lends?: boolean; sourceLevel: ApprovalMode }, running: HandoffView | undefined): Promise<PeerDeliveryReceipt | undefined> {
+  async function handOn(input: RelayTarget & { message: string; lends?: boolean }, running: HandoffView | undefined): Promise<PeerDeliveryReceipt | undefined> {
     const { sender, target, message } = input;
     if (!running) return undefined;
-    const denied = permissionRefusal(target, running.threadId, input.sourceLevel, running.id);
+    const denied = relayRefusal(input, running.threadId, running.id);
     if (denied) return denied;
     if (!input.lends) deps.handedInUnproven(running.threadId);
     if (!(await deps.steer(running.threadId, composeAddition(running.id, sender.name, message, running.origin?.kind === "outside" ? AUTHORITY.info : AUTHORITY.behalf)))) return undefined;
