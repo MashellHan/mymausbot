@@ -149,6 +149,7 @@ export type MiniAppSuggestionReason =
   | { kind: "developed" }
   /** Current publisher permission for this Bot; no publication or development is implied. */
   | { kind: "publisher-grant" }
+  | { kind: "activities-task" }
   | { kind: "task"; capability: string; taskPhrase: string };
 export interface MiniAppSuggestion { app: MiniAppSummary; reason: MiniAppSuggestionReason }
 export interface MiniAppSuggestionsResult {
@@ -156,6 +157,8 @@ export interface MiniAppSuggestionsResult {
   threadId: string;
   suggestions: MiniAppSuggestion[];
   refreshPending: boolean;
+  status?: "ready" | "pending" | "unavailable";
+  retryAfterMs?: number;
 }
 
 /** The host supplies the installed revision; an iframe can select only a declared query and parameters. */

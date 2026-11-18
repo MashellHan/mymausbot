@@ -26,8 +26,8 @@ const suggestion = (id: string, reason: MiniAppSuggestion["reason"] = { kind: "r
     templateVersion: 1, publisherBotIds: [], createdAt: 1, updatedAt: 1 },
   reason,
 });
-const response = (selected: Bot, suggestions: MiniAppSuggestion[] = [], refreshPending = false): MiniAppSuggestionsResult => ({
-  botId: selected.id, threadId: selected.threadId, suggestions, refreshPending,
+const response = (selected: Bot, suggestions: MiniAppSuggestion[] = [], status: MiniAppSuggestionsResult["status"] = "ready"): MiniAppSuggestionsResult => ({
+  botId: selected.id, threadId: selected.threadId, suggestions, refreshPending: status === "pending", status,
 });
 
 let root: Root;
@@ -117,13 +117,30 @@ describe("Bot overview suggestions", () => {
 
   it("makes only one delayed follow-up while a semantic refresh is pending", async () => {
     vi.useFakeTimers();
-    fixture.api.mockResolvedValueOnce(response(bot(), [], true))
-      .mockResolvedValue(response(bot(), [suggestion("Relevant app")], true));
+    fixture.api.mockResolvedValueOnce(response(bot(), [], "pending"))
+      .mockResolvedValue(response(bot(), [suggestion("Relevant app")], "pending"));
     await render();
     expect(host.querySelector('[role="status"]')).not.toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(9_000); });
     expect(card("Relevant app")).not.toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors legacy refreshPending and shows a completed legacy empty result", async () => {
+    vi.useFakeTimers();
+    const selected = bot();
+    const legacy = { botId: selected.id, threadId: selected.threadId, suggestions: [] };
+    fixture.api.mockResolvedValueOnce({ ...legacy, refreshPending: true })
+      .mockResolvedValue({ ...legacy, refreshPending: false });
+    await render(selected);
+    expect(host.querySelector('[role="status"]')).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_999); });
+    expect(fixture.api).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(host.textContent).toContain("No related Mini Apps.");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(fixture.api).toHaveBeenCalledTimes(2);
   });
 
@@ -139,7 +156,7 @@ describe("Bot overview suggestions", () => {
 
   it("ends loading when the sole follow-up is still pending without usable suggestions", async () => {
     vi.useFakeTimers();
-    fixture.api.mockResolvedValue(response(bot(), [], true));
+    fixture.api.mockResolvedValue(response(bot(), [], "pending"));
     await render();
     await act(async () => { await vi.advanceTimersByTimeAsync(9_000); });
     expect(host.querySelector('[role="status"]')).toBeNull();
@@ -151,7 +168,7 @@ describe("Bot overview suggestions", () => {
 
   it("removes suggestions and cancels pending refresh when owner access ends", async () => {
     vi.useFakeTimers();
-    fixture.api.mockResolvedValue(response(bot(), [suggestion("Private app")], true));
+    fixture.api.mockResolvedValue(response(bot(), [suggestion("Private app")], "pending"));
     await render();
     expect(card("Private app")).not.toBeNull();
     fixture.owner = false;
@@ -167,5 +184,28 @@ describe("Bot overview suggestions", () => {
     await render();
     expect(fixture.api).not.toHaveBeenCalled();
     expect(more()).toBeNull();
+  });
+
+  it("shows Activities from its trusted task reason and opens its existing app", async () => {
+    fixture.api.mockResolvedValue(response(bot(), [suggestion("Activities", { kind: "activities-task" })], "unavailable"));
+    await render();
+    expect(card("Activities")?.textContent).toContain("Contribution and token usage reports");
+    await act(async () => { card("Activities")!.click(); });
+    expect(onOpenApps).toHaveBeenCalledWith("Activities");
+  });
+
+  it("keeps unavailable distinct from empty and retries only once after backoff", async () => {
+    vi.useFakeTimers();
+    fixture.api.mockResolvedValue({ ...response(bot(), [], "unavailable"), retryAfterMs: 60_000 });
+    await render();
+    expect(host.textContent).toContain("Suggestions are temporarily unavailable.");
+    expect(host.textContent).not.toContain("No related Mini Apps.");
+    expect(more()).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(59_999); });
+    expect(fixture.api).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(fixture.api).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(fixture.api).toHaveBeenCalledTimes(2);
   });
 });

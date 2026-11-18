@@ -265,7 +265,7 @@ it("does not start a catalog action for an already closed response", async () =>
 });
 
 it("keeps suggestions behind the local owner gate and passes only the selected Bot task", async () => {
-  const read = vi.fn(() => ({ botId: "bot", threadId: "current", suggestions: [], refreshPending: false }));
+  const read = vi.fn(() => ({ botId: "bot", threadId: "current", suggestions: [], refreshPending: false, status: "ready" as const }));
   const deps = { localEnabled: () => true, suggestions: { read } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
   const route = createMiniAppRoutes(deps);
   const json = vi.fn();
@@ -283,5 +283,5 @@ it("keeps suggestions behind the local owner gate and passes only the selected B
   await call({ kind: "loopback", scopes: ["admin"] });
   expect(read).toHaveBeenCalledWith(expect.objectContaining({ writeAllowed: true }), { botId: "bot", threadId: "current" });
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200,
-    { botId: "bot", threadId: "current", suggestions: [], refreshPending: false });
+    { botId: "bot", threadId: "current", suggestions: [], refreshPending: false, status: "ready" });
 });

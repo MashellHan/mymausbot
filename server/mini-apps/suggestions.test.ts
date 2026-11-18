@@ -11,6 +11,11 @@ const app = (id: string, extra: Partial<MiniAppSummary> = {}): MiniAppSummary =>
   revision: 1, templateVersion: 1, publisherBotIds: [], responsibleBotId: null, capabilities: [],
   createdAt: 1, updatedAt: 1, ...extra,
 });
+const usage = (extra: Partial<MiniAppSummary> = {}) => app("usage", {
+  title: "Activities", description: "", dashboardIdentity: "usage",
+  dashboard: { kind: "usage", renderer: "native", htmlRole: "fallback-only",
+    editableFields: ["title", "description"], resources: ["usage"] }, ...extra,
+});
 
 function fixture(writer: (botId: string) => SideJobText | null = () => null) {
   let apps = [app("a"), app("b"), app("c"), app("d")];
@@ -29,15 +34,100 @@ function fixture(writer: (botId: string) => SideJobText | null = () => null) {
 describe("Mini App suggestions", () => {
   it("abstains on unsupported relevance and never pads the catalog", () => {
     const f = fixture();
-    expect(f.read()).toEqual({ botId: "bot", threadId: "thread", suggestions: [], refreshPending: false });
+    expect(f.read()).toMatchObject({ botId: "bot", threadId: "thread", suggestions: [], refreshPending: false, status: "unavailable" });
     f.setApps([app("a", { responsibleBotId: "bot" }), app("b"), app("c")]);
     f.setDeveloped(["a", "c"]);
     expect(f.read().suggestions.map(({ app, reason }) => [app.id, reason.kind])).toEqual([["a", "responsible"], ["c", "developed"]]);
     expect(f.read().suggestions.some(({ app }) => app.id === "b")).toBe(false);
     f.task.title = "";
     expect(f.read().suggestions).toHaveLength(2);
+    expect(f.read().status).toBe("ready");
     expect(() => f.read()).not.toThrow();
   });
+
+  it.each([
+    "请汇总示例 PR、提交和模型 Token 用量，并区分不同用途",
+    "按工作和个人分别统计 PR 数、commit 数和模型消耗的 token 数",
+    "统计 PR数、commit数和模型消耗token数",
+    "本次任务为汇总我们的 PR commit 和模型 token 用量，希望每周跟踪；并区分个人与工作。",
+    "Track PRs, commits and model token usage each week",
+  ])("suggests the granted Activities dashboard for explicit reporting without a writer", (title) => {
+    const writer = vi.fn(() => null);
+    const f = fixture(writer);
+    f.task.title = title;
+    f.setApps([usage()]);
+    expect(f.read()).toMatchObject({ status: "ready", refreshPending: false,
+      suggestions: [{ app: { id: "usage", publisherBotIds: [] }, reason: { kind: "activities-task" } }] });
+    expect(writer).not.toHaveBeenCalled();
+    f.setApps([usage({ dashboard: null })]);
+    expect(f.read()).toMatchObject({ status: "ready", suggestions: [] });
+  });
+
+  it("abstains on ambiguous reporting and does not trust a copied name or slug", () => {
+    const f = fixture();
+    f.setApps([usage()]);
+    for (const title of ["Review PRs and commits", "Count PRs, commits and access token usage",
+      "Create a PR for commit hooks and token usage support",
+      "Fix the model token usage report that links a PR to its commit",
+      "Fix the job to track PRs, commits and model token usage",
+      "Count PRs, commits and model token usage errors",
+      "Do not count PRs, commits and model token usage",
+      "Count PRs and commits, but do not report model tokens",
+      "不要统计 PR 数、commit 数和模型消耗 token 数",
+      "本次任务为修复监测 PR commit 和 token 用量的脚本",
+      "当前任务是不要汇总 PR commit 和 token 用量",
+      "本次任务为统计 PR commit 和 API token 用量",
+      "统计 PR 数、commit 数和访问 token 数"]) {
+      f.task.title = title;
+      expect(f.read().suggestions).toEqual([]);
+    }
+    f.task.title = "Count PRs, commits and model token usage";
+    f.setApps([app("usage", { title: "Activities", description: "" }), usage({ id: "archived-usage", status: "archived" })]);
+    expect(f.read().suggestions).toEqual([]);
+  });
+
+  it("reserves Usage task matching after grant revocation while retaining independent relationship cards", async () => {
+    const description = "Summarize contributions and model token usage";
+    const generateText = vi.fn(async (_prompt: string) => JSON.stringify({ matches: [
+      { appId: "usage", capability: description, taskPhrase: "model token usage" },
+      { appId: "other", capability: description, taskPhrase: "model token usage" },
+    ] }));
+    const f = fixture(() => ({ via: "engine", generateText }));
+    f.task.title = "Count PRs, commits and model token usage";
+    const granted = usage({ description, publisherBotIds: ["bot"] });
+    const other = app("other", { description });
+    f.setApps([granted, other]);
+    expect(f.read().suggestions[0]?.reason.kind).toBe("activities-task");
+    await new Promise(setImmediate);
+    f.setApps([{ ...granted, dashboard: null }, other]);
+    expect(f.read().status).toBe("pending");
+    await new Promise(setImmediate);
+    expect(f.read().suggestions.map(({ app, reason }) => [app.id, reason.kind])).toEqual([
+      ["other", "task"], ["usage", "publisher-grant"],
+    ]);
+    expect(JSON.parse(generateText.mock.calls[1]![0]).apps).toEqual([{ id: "other", capabilities: [description] }]);
+  });
+
+  it("puts the Activities match in the task tier with current grant and development ordering", () => {
+    const f = fixture();
+    f.task.title = "Count PRs, commits and model token usage";
+    f.setDeveloped(["developed"]);
+    f.setApps([usage({ publisherBotIds: ["bot"] }), app("publisher", { publisherBotIds: ["bot"] }),
+      app("developed"), app("responsible", { responsibleBotId: "bot" })]);
+    expect(f.read().suggestions.map(({ app, reason }) => [app.id, reason.kind])).toEqual([
+      ["responsible", "responsible"], ["developed", "developed"], ["usage", "activities-task"],
+    ]);
+  });
+
+  it.each([["empty", '{"matches":[]}', "ready"], ["malformed", '{"wrong":[]}', "unavailable"]] as const)(
+    "distinguishes a valid %s model answer from unavailable output",
+    async (_name, text, status) => {
+      const f = fixture(() => ({ via: "engine", generateText: async () => text }));
+      expect(f.read().status).toBe("pending");
+      await new Promise(setImmediate);
+      expect(f.read()).toMatchObject({ status, suggestions: [] });
+    },
+  );
 
   it("uses current publisher permission without claiming publication or development", () => {
     const f = fixture();
@@ -131,7 +221,8 @@ describe("Mini App suggestions", () => {
       expect(generateText).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(8_000);
       expect(signal?.aborted).toBe(true);
-      expect(f.read()).toMatchObject({ refreshPending: false, suggestions: [{ app: { id: "a" }, reason: { kind: "responsible" } }] });
+      expect(f.read()).toMatchObject({ status: "unavailable", refreshPending: false,
+        suggestions: [{ app: { id: "a" }, reason: { kind: "responsible" } }] });
       finish(JSON.stringify({ matches: [{ appId: "b", capability: "Analyze inventory and prepare stock reports", taskPhrase: "stock report" }] }));
       await vi.advanceTimersByTimeAsync(0);
       expect(f.read().suggestions.map(({ app }) => app.id)).toEqual(["a"]);
