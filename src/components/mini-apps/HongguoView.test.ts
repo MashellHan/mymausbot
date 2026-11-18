@@ -8,11 +8,8 @@ import { hongguoText } from "./hongguo-copy";
 import type { MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
 import type { HongguoEpisode, HongguoHistoryEntry, HongguoPlaybackResponse, HongguoSeriesCard } from "../../../shared/hongguo-mini-app";
 
-const fixture = vi.hoisted(() => ({ api: vi.fn(), visible: true, fullscreen: null as Element | null }));
-vi.mock("@/state/store", () => ({
-  api: fixture.api,
-  ApiError: class ApiError extends Error { constructor(message: string, readonly status: number) { super(message); } },
-}));
+const fixture = vi.hoisted(() => ({ api: vi.fn(), completion: vi.fn(), visible: true, fullscreen: null as Element | null }));
+vi.mock("@/state/store", async () => ({ api: fixture.api, ApiError: (await import("@/state/api")).ApiError }));
 vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => fixture.visible }));
 
 import { HongguoView } from "./HongguoView";
@@ -89,6 +86,14 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ogb", { platform: "darwin", app: { version: "fixture", ownPage: true, blocksOpaqueFrameNavigation: true } });
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, "seekable", "get").mockImplementation(function (this: HTMLMediaElement) {
+    const duration = this.duration;
+    return { length: Number.isFinite(duration) && duration > 0 ? 1 : 0, start: () => 0, end: () => duration };
+  });
+  fixture.completion.mockReset().mockImplementation((_path: string, init?: RequestInit) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+  }));
+  vi.stubGlobal("fetch", fixture.completion);
   setLocale("en");
   history = [];
   playback = { appId: app.id, revision: 3, status: "unavailable", reason: "anonymous-limited" };
@@ -569,17 +574,19 @@ it("retains the same player and position across fullscreen visibility changes", 
   expect(reads()).toBe(before);
 });
 
-it("pauses an ordinary hidden page without reloading playback on return", async () => {
+it("keeps already-playing Hongguo media running when hidden without reloading playback on return", async () => {
   playback = { appId: app.id, revision: 3, status: "ready", selectedQualityId: null, availableQualityIds: [],
     mediaUrl: `/api/mini-apps/${app.id}/hongguo/media/synthetic?expectedRevision=3`, durationSeconds: 100 };
   await render();
   const video = await openPlayer();
   video.currentTime = 19;
+  Object.defineProperty(video, "paused", { configurable: true, value: false });
   const before = fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback")).length;
   vi.mocked(HTMLMediaElement.prototype.pause).mockClear();
   fixture.visible = false;
   await render();
-  expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
+  expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+  expect(video.paused).toBe(false);
   fixture.visible = true;
   await render();
   expect(host.querySelector("video")).toBe(video);
@@ -619,6 +626,187 @@ const qualitySelect = () => host.querySelector<HTMLSelectElement>('[aria-label="
 const selectQuality = (id: string) => act(async () => {
   qualitySelect().value = id;
   qualitySelect().dispatchEvent(new Event("change", { bubbles: true }));
+});
+
+function completionReply() {
+  return new Response(new Uint8Array([9]), { status: 206,
+    headers: { "content-length": "1", "content-range": "bytes 9-9/10", "accept-ranges": "bytes" } });
+}
+
+function controlledNativeVideo(video: HTMLVideoElement, initiallyPaused: boolean, initialPosition = 31) {
+  let duration = 65, position = initialPosition, paused = initiallyPaused, ready = 4, ended = false;
+  let ranges: [number, number][] = [];
+  const seeks: number[] = [];
+  const pause = vi.fn(() => { const changed = !paused; paused = true; if (changed) video.dispatchEvent(new Event("pause")); });
+  const play = vi.fn(async () => { paused = false; video.dispatchEvent(new Event("play")); });
+  const load = vi.fn(() => {
+    position = 0; duration = NaN; ready = 0; paused = true; ended = false; ranges = [];
+    for (const name of ["pause", "timeupdate", "durationchange"]) video.dispatchEvent(new Event(name));
+  });
+  Object.defineProperties(video, {
+    duration: { configurable: true, get: () => duration }, paused: { configurable: true, get: () => paused },
+    readyState: { configurable: true, get: () => ready }, ended: { configurable: true, get: () => ended },
+    networkState: { configurable: true, value: video.NETWORK_IDLE },
+    seekable: { configurable: true, get: () => ({ length: ranges.length, start: (index: number) => ranges[index]![0], end: (index: number) => ranges[index]![1] }) },
+    currentTime: { configurable: true, get: () => position, set: (value: number) => { position = value; seeks.push(value); video.dispatchEvent(new Event("seeking")); } },
+    load: { configurable: true, value: load }, play: { configurable: true, value: play }, pause: { configurable: true, value: pause },
+  });
+  return { load, play, pause, seeks,
+    metadata() { duration = 108; ready = 4; ranges = [[0, 108]]; video.dispatchEvent(new Event("loadedmetadata")); },
+    finish() { position = duration; ended = true; paused = true; video.dispatchEvent(new Event("ended")); },
+  };
+}
+
+it.each([true, false])("completion keeps latest same-video intent when hidden, user paused=%s", async (paused) => {
+  playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
+  let release!: () => void;
+  fixture.completion.mockImplementation(() => new Promise<Response>((resolve) => { release = () => resolve(completionReply()); }));
+  await render();
+  const video = await openPlayer(), source = video.getAttribute("src");
+  const native = controlledNativeVideo(video, false);
+  await act(async () => { video.dispatchEvent(new Event("play")); if (paused) video.pause(); });
+  const before = fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback")).length;
+  fixture.visible = false; await render();
+  expect(host.querySelector("video")).toBe(video); expect(video.paused).toBe(paused);
+  await act(async () => { release(); });
+  await vi.waitFor(() => expect(native.load).toHaveBeenCalledTimes(1));
+  expect(host.querySelector("video")).toBe(video); expect(video.getAttribute("src")).toBe(source);
+  expect(video.paused).toBe(paused); expect(native.play).toHaveBeenCalledTimes(paused ? 0 : 1);
+  expect(savePositions).not.toContain(0);
+  await act(async () => { native.metadata(); });
+  expect(video.currentTime).toBe(31); expect(video.paused).toBe(paused); expect(native.seeks).toEqual([31]);
+  await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); video.dispatchEvent(new Event("durationchange")); });
+  expect(native.load).toHaveBeenCalledTimes(1); expect(native.seeks).toEqual([31]);
+  expect(fixture.completion).toHaveBeenCalledTimes(1);
+  expect(fixture.completion.mock.calls[0]![0]).toBe(source);
+  expect(fixture.completion.mock.calls[0]![1]).toMatchObject({ headers: { Range: "bytes=-1" }, credentials: "same-origin" });
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(before);
+  expect(document.fullscreenElement).toBeNull();
+});
+
+it.each([null, 23])("completion carries pending108/paused60 across reset with later user target %s", async (target) => {
+  playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
+  let release!: () => void;
+  const raw = fixture.completion.getMockImplementation()!;
+  fixture.completion.mockImplementation((path, init) => String(path).includes("/720p?")
+    ? new Promise<Response>((resolve) => { release = () => resolve(completionReply()); }) : raw(path, init));
+  const original = fixture.api.getMockImplementation()!;
+  fixture.api.mockImplementation(async (path, init) => path.endsWith("/playback") && JSON.parse(init.body).qualityId
+    ? { ...qualityPlayback("720p"), durationSeconds: 108 } : original(path, init));
+  await render(); const first = await openPlayer();
+  first.currentTime = 60; Object.defineProperty(first, "paused", { configurable: true, value: true });
+  await selectQuality("720p");
+  const video = host.querySelector("video")!, native = controlledNativeVideo(video, true, 0);
+  await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); });
+  expect(native.seeks).toEqual([]); expect(native.load).not.toHaveBeenCalled();
+  await act(async () => { release(); });
+  await vi.waitFor(() => expect(native.load).toHaveBeenCalledTimes(1));
+  expect(video.currentTime).toBe(0); expect(savePositions).not.toContain(0); expect(native.play).not.toHaveBeenCalled();
+  if (target !== null) await act(async () => { video.currentTime = target; video.dispatchEvent(new Event("seeked")); });
+  await act(async () => { native.metadata(); });
+  expect(video.currentTime).toBe(target ?? 60); expect(video.paused).toBe(true); expect(native.seeks).toEqual([target ?? 60]);
+  await act(async () => { video.dispatchEvent(new Event("durationchange")); video.dispatchEvent(new Event("loadedmetadata")); });
+  expect(native.load).toHaveBeenCalledTimes(1); expect(native.seeks).toEqual([target ?? 60]); expect(savePositions).not.toContain(0);
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(2);
+});
+
+it("completion uses the pause selected after the observation and after reopen began", async () => {
+  playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
+  let release!: () => void;
+  fixture.completion.mockImplementation(() => new Promise<Response>((resolve) => { release = () => resolve(completionReply()); }));
+  await render(); const video = await openPlayer(), native = controlledNativeVideo(video, false);
+  await act(async () => { video.dispatchEvent(new Event("play")); release(); });
+  await vi.waitFor(() => expect(native.load).toHaveBeenCalledTimes(1));
+  expect(native.play).toHaveBeenCalledTimes(1);
+  await act(async () => { video.pause(); native.metadata(); });
+  expect(video.paused).toBe(true); expect(video.currentTime).toBe(31); expect(native.play).toHaveBeenCalledTimes(1);
+  expect(savePositions).not.toContain(0);
+});
+
+it("completion does not reopen a player already fully seekable", async () => {
+  playback = { ...qualityPlayback("1080p"), durationSeconds: 100 };
+  fixture.completion.mockResolvedValue(completionReply());
+  const loads = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  await render(); const video = await openPlayer();
+  await vi.waitFor(() => expect(fixture.completion).toHaveBeenCalledTimes(1));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(loads).not.toHaveBeenCalled(); expect(host.querySelector("video")).toBe(video);
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(1);
+});
+
+it("completion ignores an aborted old-quality response without touching the newer player", async () => {
+  playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
+  let release!: () => void, signal: AbortSignal | undefined;
+  const raw = fixture.completion.getMockImplementation()!;
+  fixture.completion.mockImplementation((path, init) => String(path).includes("/1080p?")
+    ? new Promise<Response>((resolve) => { signal = init.signal; release = () => resolve(completionReply()); }) : raw(path, init));
+  const original = fixture.api.getMockImplementation()!;
+  fixture.api.mockImplementation(async (path, init) => path.endsWith("/playback") && JSON.parse(init.body).qualityId
+    ? { ...qualityPlayback("720p"), durationSeconds: 108 } : original(path, init));
+  const loads = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  await render(); await openPlayer(); await selectQuality("720p");
+  const current = host.querySelector("video");
+  expect(signal?.aborted).toBe(true);
+  await act(async () => { release(); });
+  expect(host.querySelector("video")).toBe(current); expect(current?.getAttribute("src")).toContain("/720p?");
+  expect(loads).not.toHaveBeenCalled();
+});
+
+it("completion does not advance on an early EOF and retains natural next after full duration", async () => {
+  playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
+  episodes = [episode, laterEpisode];
+  let release!: () => void;
+  fixture.completion.mockImplementation(() => new Promise<Response>((resolve) => { release = () => resolve(completionReply()); }));
+  await render(); const video = await openPlayer(), native = controlledNativeVideo(video, false, 65);
+  await act(async () => { video.dispatchEvent(new Event("play")); native.finish(); });
+  expect(host.querySelector('[aria-label="第 1 集"]')?.getAttribute("aria-current")).toBe("true");
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(1);
+  await act(async () => { release(); });
+  await vi.waitFor(() => expect(native.load).toHaveBeenCalledTimes(1));
+  expect(native.play).toHaveBeenCalledTimes(1);
+  await act(async () => { native.metadata(); });
+  expect(video.currentTime).toBe(65);
+  await act(async () => { native.finish(); });
+  await vi.waitFor(() => expect(host.querySelector('[aria-label="第 2 集"]')?.getAttribute("aria-current")).toBe("true"));
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(2);
+});
+
+it.each(["environment", "revision"])("completion cannot act after the current %s scope changes", async (scope) => {
+  playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
+  let release!: () => void, signal: AbortSignal | undefined;
+  fixture.completion.mockImplementation((_path, init) => new Promise<Response>((resolve) => {
+    signal = init.signal; release = () => resolve(completionReply());
+  }));
+  const original = fixture.api.getMockImplementation()!;
+  fixture.api.mockImplementation(async (path, init) => {
+    const result = await original(path, init);
+    return { ...result, revision: app.revision, ...(result.status === "ready"
+      ? { mediaUrl: String(result.mediaUrl).replace("expectedRevision=3", `expectedRevision=${app.revision}`) } : {}) };
+  });
+  const loads = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  await render(); await openPlayer();
+  if (scope === "environment") storageKey = "another-completion-environment";
+  else { app.revision = 4; state.revision = 4; }
+  await render();
+  expect(signal?.aborted).toBe(true);
+  const current = host.querySelector("video");
+  await act(async () => { release(); });
+  expect(host.querySelector("video")).toBe(current); expect(loads).not.toHaveBeenCalled();
+});
+
+it("completion failure releases its body without a load or preparation retry", async () => {
+  playback = { ...qualityPlayback("1080p"), durationSeconds: 108 };
+  let release!: (value: unknown) => void;
+  fixture.completion.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+  await render(); const video = await openPlayer(), native = controlledNativeVideo(video, true);
+  const cancel = vi.fn(async () => {}), getReader = vi.fn();
+  await act(async () => { release({ status: 200, headers: new Headers(), body: { cancel, getReader } }); });
+  await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
+  await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); });
+  expect(getReader).not.toHaveBeenCalled(); expect(native.load).not.toHaveBeenCalled();
+  expect(fixture.completion).toHaveBeenCalledTimes(1);
+  expect(fixture.api.mock.calls.filter(([path]) => String(path).endsWith("/playback"))).toHaveLength(1);
+  expect(host.textContent).toContain(hongguoText("computer.miniApps.hongguo.playbackFailed"));
 });
 
 it.each([true, false])("keeps the old player during a quality change and restores current position with paused=%s", async (paused) => {

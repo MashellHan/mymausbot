@@ -110,8 +110,8 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
 
   const requestPlayback = useCallback((body: unknown, signal: AbortSignal) => post<HongguoPlaybackResponse>("playback", body, signal), [post]);
   const { playback, playbackError, setPlaybackError, pendingQuality, qualityResume, changeQuality, onPlaying,
-    abortCurrent, resetSpeculation } = useHongguoPlayback({ active: valid && page === "watch", environment: storageKey,
-    appId, revision, seriesId, series, episode, videoRef, request: requestPlayback, showError,
+    completionMetadata, canEnd, abortCurrent, resetSpeculation } = useHongguoPlayback({ active: valid && page === "watch", environment: storageKey,
+    appId, revision, seriesId, series, episode, videoRef, request: requestPlayback, showError, restoration,
     qualitySnapshot: (video) => {
       const pending = restoration.pending(video);
       if (pending) return { position: pending.position, paused: pending.paused ?? video.paused };
@@ -160,7 +160,6 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
     mounted.current = true;
     return () => { pauseAndSave(); mounted.current = false; };
   }, [pauseAndSave]);
-  useEffect(() => { if (!visible && !window.document.fullscreenElement) pauseAndSave(); }, [visible, pauseAndSave]);
 
   useEffect(() => {
     if (!valid || !visible) return;
@@ -492,14 +491,17 @@ export function HongguoView({ document, state, storageKey, refreshKey, onRevoked
           <div className="flex min-h-[260px] aspect-video w-full items-center justify-center overflow-hidden rounded-xl bg-[#181818] text-center text-white">
             {playback?.status === "ready" ? <video key={`${episodeId}:${playback.mediaUrl}`} ref={(video) => { videoRef.current = video; if (video) restoration.prepare(video, restoreRequest()); }} controls autoPlay={!qualityResume.current?.paused && (visible || !!window.document.fullscreenElement)} playsInline
               src={scopedMediaUrl(playback.mediaUrl, appId, revision)} className="h-full min-w-0 w-full object-contain"
-              onLoadedMetadata={(event) => restorePosition(event.currentTarget, true)}
+              onLoadedMetadata={(event) => { restorePosition(event.currentTarget, true); completionMetadata(event.currentTarget); }}
               onDurationChange={(event) => restorePosition(event.currentTarget, false)}
+              onCanPlay={(event) => restorePosition(event.currentTarget, false)}
+              onPlay={(event) => restoration.intent(event.currentTarget)}
               onSeeking={(event) => restoration.userSeek(event.currentTarget)}
               onPlaying={(event) => { if (event.currentTarget === videoRef.current && (visible || !!window.document.fullscreenElement)) onPlaying(); }}
               onTimeUpdate={(event) => updatePosition(event.currentTarget)}
-              onPause={(event) => { if (recordPosition(event.currentTarget)) savePosition(); }}
+              onPause={(event) => { restoration.intent(event.currentTarget); if (recordPosition(event.currentTarget)) savePosition(); }}
               onSeeked={(event) => { if (recordPosition(event.currentTarget)) savePosition(); }}
-              onEnded={(event) => { restoration.duration(event.currentTarget); if (recordPosition(event.currentTarget)) savePosition();
+              onEnded={(event) => { if (!canEnd(event.currentTarget)) return;
+                restoration.duration(event.currentTarget); if (recordPosition(event.currentTarget)) savePosition();
                 const next = episodes[episodes.findIndex((entry) => entry.id === episodeId) + 1];
                 if (autoplayNext && next) chooseEpisode(next); }}
               onError={() => setPlaybackError(t("computer.miniApps.hongguo.playbackFailed"))} />
