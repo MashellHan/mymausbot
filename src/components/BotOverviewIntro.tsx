@@ -42,6 +42,7 @@ function OverviewModel({ bot }: { bot: Bot }) {
 function suggestionReason(reason: MiniAppSuggestionReason): string {
   switch (reason.kind) {
     case "task": return reason.capability;
+    case "activities-task": return t("computer.miniApps.suggested.activitiesTask");
     case "responsible": return t("computer.miniApps.suggested.responsible");
     case "developed": return t("computer.miniApps.suggested.developed");
     case "publisher-grant": return t("computer.miniApps.suggested.publisherGrant");
@@ -70,7 +71,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
     const controller = new AbortController();
     let followUp: ReturnType<typeof setTimeout> | undefined;
     setResponse({ context, data: null, error: false });
-    const load = async (mayFollowUp: boolean) => {
+    const load = async (mayFollowUp: boolean, mayRetryUnavailable: boolean) => {
       try {
         const data = await api<MiniAppSuggestionsResult>("/api/mini-apps/suggestions", {
           method: "POST", body: JSON.stringify({ botId: bot.id, threadId: bot.threadId } satisfies MiniAppSuggestionsRequest),
@@ -78,13 +79,20 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
         });
         if (controller.signal.aborted) return;
         if (data.botId !== bot.id || data.threadId !== bot.threadId) throw new Error("Suggestion context changed");
-        setResponse({ context, data, error: !mayFollowUp && data.refreshPending && !data.suggestions.some(({ app }) => app.status === "active") });
-        if (mayFollowUp && data.refreshPending) followUp = setTimeout(() => void load(false), 9_000);
+        const pending = data.status === "pending";
+        setResponse({ context, data, error: !mayFollowUp && pending && !data.suggestions.some(({ app }) => app.status === "active") });
+        if (mayFollowUp && pending) {
+          followUp = setTimeout(() => void load(false, mayRetryUnavailable), 9_000);
+        } else if (mayRetryUnavailable && data.status === "unavailable") {
+          const hint = data.retryAfterMs ?? 60_000;
+          const delay = Number.isFinite(hint) ? Math.min(60_000, Math.max(1, hint)) : 60_000;
+          followUp = setTimeout(() => void load(true, false), delay);
+        }
       } catch {
         if (!controller.signal.aborted) setResponse({ context, data: null, error: true });
       }
     };
-    void load(true);
+    void load(true, true);
     return () => { controller.abort(); clearTimeout(followUp); };
   }, [visible, owner, nativeGuard, waitingForTask, bot.id, bot.threadId, context]);
 
@@ -104,8 +112,8 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
       </div>
       {owner !== true || !nativeGuard ? <p className="text-[12px] text-ink-secondary">{t(owner === null ? "computer.miniApps.loading" : owner === false ? "computer.miniApps.accessEnded" : "computer.miniApps.desktopRequired")}</p>
         : current?.error ? <p role="alert" className="text-[12px] text-danger">{t("computer.miniApps.loadFailed")}</p>
-        : !current?.data || current.data.refreshPending && suggestions.length === 0 ? <p role="status" className="flex items-center gap-2 text-[12px] text-ink-secondary"><Loader2 size={14} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>
-        : suggestions.length === 0 ? <p className="text-[12px] text-ink-secondary">{t("computer.miniApps.suggested.empty")}</p>
+        : !current?.data || current.data.status === "pending" && suggestions.length === 0 ? <p role="status" className="flex items-center gap-2 text-[12px] text-ink-secondary"><Loader2 size={14} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>
+        : suggestions.length === 0 ? <p className="text-[12px] text-ink-secondary">{t(current.data.status === "ready" ? "computer.miniApps.suggested.empty" : "computer.miniApps.suggested.unavailable")}</p>
         : <div className="grid grid-cols-2 gap-2 @min-[34rem]/botoverview:grid-cols-3">
           {suggestions.map(({ app, reason }) => <button key={app.id} type="button" title={miniAppDisplayName(app)} onClick={() => onOpenApps(app.id)}
             className="flex min-w-0 items-center gap-2.5 rounded-lg border border-hairline/50 bg-card px-3 py-2 text-left text-[13px] text-ink hover:bg-inset focus-visible:outline-2 focus-visible:outline-accent">
