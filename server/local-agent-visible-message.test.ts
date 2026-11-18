@@ -165,6 +165,10 @@ describe("bounded tool details", () => {
     for (const assignment of ['options.encoding = `base64`;', 'options.name = value;', 'options["name"] = "Cookie";', 'options[field] = "fixture";']) {
       expect(show(assignment)).toMatchObject({ detailStatus: "withheld" });
     }
+    for (const assignment of ['options[field] ??= "fixture";', 'options.encoding += "fixture";',
+      'options.name /* recorded */ = value;', 'options[field] // recorded\n = "fixture";']) {
+      expect(show(assignment)).toMatchObject({ detailStatus: "withheld" });
+    }
     for (const source of ['text({ encoding: `base64` });', 'text({ name: `Cookie` });', 'text({ name: fixtureName });']) {
       expect(show(source)).toMatchObject({ detailStatus: "withheld" });
     }
