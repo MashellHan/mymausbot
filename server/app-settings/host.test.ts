@@ -414,6 +414,55 @@ describe("confirm tier", () => {
     expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
   });
 
+  it("changes tool-call visibility only after owner Change and rejects a stale card", async () => {
+    const fx = fixture();
+    const found = JSON.parse(String((await fx.host.handle({ action: "find", query: "show tool calls" }, fx.turn)).body.text));
+    expect(found.map((entry: { id: string }) => entry.id)).toContain("appearance.toolCalls");
+    const get = () => fx.host.handle({ action: "get", id: "appearance.toolCalls" }, fx.turn);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ tier: "confirm", value: "hidden", change: "set shows the user a Change/Cancel card and waits" });
+    expect((await fx.set("appearance.toolCalls", "yes")).status).toBe(400);
+
+    const cancelled = fx.set("appearance.toolCalls", "true");
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(1));
+    const first = fx.cards()[0]!.card;
+    expect(first).toMatchObject({ options: ["Change", "Cancel"], appSettingRequest: { tier: "confirm", after: "Show tool calls in conversations; currently hidden" } });
+    fx.answer(String(first.requestId), "deny");
+    expect((await cancelled).status).toBe(409);
+    expect(fx.saved).toEqual([]);
+
+    const stale = fx.set("appearance.toolCalls", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(2));
+    fx.cfg.features = { showToolCalls: true };
+    fx.answer(String(fx.cards()[1]!.card.requestId), "allow");
+    expect((await stale).body.error).toContain("changed while the card was waiting");
+    expect(fx.saved).toEqual([]);
+    fx.cfg.features = { showToolCalls: false };
+
+    const approved = fx.set("appearance.toolCalls", true);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(3));
+    const third = fx.cards()[2]!.card;
+    expect(fx.answer(String(third.requestId), "allow", false).sent).toMatchObject({ status: 403 });
+    expect(fx.saved).toEqual([]);
+    fx.answer(String(third.requestId), "allow");
+    expect((await approved).status).toBe(200);
+    expect(fx.saved).toEqual([{ features: { showToolCalls: true } }]);
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "shown" });
+    expect(await fx.host.undo({ threadId: fx.turn.threadId, requestId: String(third.requestId) })).toMatchObject({ state: "invalid" });
+
+    const hidden = fx.set("appearance.toolCalls", false);
+    await vi.waitFor(() => expect(fx.cards()).toHaveLength(4));
+    const fourth = fx.cards()[3]!.card;
+    expect(fourth.appSettingRequest.after).toBe("Hide tool calls in conversations; currently shown");
+    fx.answer(String(fourth.requestId), "allow");
+    expect((await hidden).status).toBe(200);
+    expect(fx.saved.at(-1)).toEqual({ features: { showToolCalls: false } });
+    expect(JSON.parse(String((await get()).body.text))).toMatchObject({ value: "hidden" });
+
+    const nonOwner = fixture({ owner: false });
+    expect((await nonOwner.set("appearance.toolCalls", false)).status).toBe(403);
+    expect(nonOwner.saved).toEqual([]);
+  });
+
   it("shows only the place's helper after owner Change and rejects a stale or ambiguous target", async () => {
     const fx = fixture();
     fx.bots[0]!.defaultBot = { person: "other@example.test" };

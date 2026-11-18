@@ -10,7 +10,7 @@ import { parseSocks5Proxy } from "../browser/egress/policy.ts";
 import { isClaudeBedrock } from "../claude-bedrock.ts";
 import { isClaudeEndpoint } from "../claude-endpoints.ts";
 import { isCodexEndpoint } from "../codex-endpoints.ts";
-import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, type AppConfig } from "../config.ts";
+import { MAX_MCP_CALL_TIMEOUT_MINUTES, MAX_ROOM_TURN_TIMEOUT_MINUTES, mcpCallTimeoutMinutes, MIN_MCP_CALL_TIMEOUT_MINUTES, MIN_ROOM_TURN_TIMEOUT_MINUTES, persistableInstanceConfigs, roomTurnTimeoutMinutes, showToolCallsEnabled, type AppConfig } from "../config.ts";
 import type { InstanceConfig } from "../contracts.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
@@ -252,6 +252,13 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
           : { refusal: "Open mymausbot on this computer first; this setting lives in the app window." };
       },
       write: async (shown: boolean) => deps.window.write("appearance.runCard", shown),
+    }),
+    writable({
+      id: "appearance.toolCalls", label: "Show tool calls", help: "Show each tool a bot runs in the conversation.", where: "Settings → Appearance",
+      synonyms: ["tool calls", "tools", "show tools"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => showToolCallsEnabled(cfg()), read: () => showToolCallsEnabled(cfg()) ? "shown" : "hidden",
+      describe: (shown: boolean) => ({ change: `${shown ? "Show" : "Hide"} tool calls in conversations; currently ${showToolCallsEnabled(cfg()) ? "shown" : "hidden"}` }),
+      write: config((showToolCalls: boolean) => ({ features: { showToolCalls } })),
     }),
     writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
