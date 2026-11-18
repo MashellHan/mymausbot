@@ -75,15 +75,16 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         seen.add(id);
         const sessionId = codexSessionId(agent);
         const observation = sessionId ? observations.get(sessionId) : null;
+        const pi = verifiedIds.has(id) ? piSessions.get(id) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
         const occupantId = localAgentOccupantId(agent, id);
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
-          role: dashboardText(roles.get(id), 40), model: observation?.model ?? null,
-          reasoningEffort: observation?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
-          contextWindow: observation?.contextWindow ?? null, state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
-          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? piSessions.get(id)?.preview ?? null : null,
+          role: dashboardText(roles.get(id), 40), model: observation?.model ?? pi?.model ?? null,
+          reasoningEffort: observation?.reasoningEffort ?? pi?.reasoningEffort ?? null, contextUsed: observation?.contextUsed ?? null,
+          contextWindow: observation?.contextWindow ?? pi?.contextWindow ?? null, state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
+          messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? null : null,
         };
         team.agents.push(member);
       }
