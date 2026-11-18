@@ -49,6 +49,7 @@ describe("Mini App suggestions", () => {
     "请汇总示例 PR、提交和模型 Token 用量，并区分不同用途",
     "按工作和个人分别统计 PR 数、commit 数和模型消耗的 token 数",
     "统计 PR数、commit数和模型消耗token数",
+    "本次任务为汇总我们的 PR commit 和模型 token 用量，希望每周跟踪；并区分个人与工作。",
     "Track PRs, commits and model token usage each week",
   ])("suggests the granted Activities dashboard for explicit reporting without a writer", (title) => {
     const writer = vi.fn(() => null);
@@ -73,6 +74,9 @@ describe("Mini App suggestions", () => {
       "Do not count PRs, commits and model token usage",
       "Count PRs and commits, but do not report model tokens",
       "不要统计 PR 数、commit 数和模型消耗 token 数",
+      "本次任务为修复监测 PR commit 和 token 用量的脚本",
+      "当前任务是不要汇总 PR commit 和 token 用量",
+      "本次任务为统计 PR commit 和 API token 用量",
       "统计 PR 数、commit 数和访问 token 数"]) {
       f.task.title = title;
       expect(f.read().suggestions).toEqual([]);

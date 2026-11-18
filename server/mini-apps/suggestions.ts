@@ -18,14 +18,18 @@ function capabilities(app: MiniAppSummary): string[] {
 function reportsActivities(title: string): boolean {
   const task = title.trim();
   if (task.length > 160) return false;
-  const operation = task.match(/^(?:please\s+)?(?:track|monitor|count|measure|compare|report|summarize)\s+/iu)
-    ?? task.match(/^(?:请\s*)?(?:按(?:工作[和与及]个人|个人[和与及]工作)\s*)?(?:分别\s*)?(?:统计|汇总|监测|跟踪)\s*/u);
+  const instruction = task.replace(/^(?:你的|本次|当前)?任务(?:是|为)\s*[:：]?\s*/u, "");
+  const operation = instruction.match(/^(?:please\s+)?(?:track|monitor|count|measure|compare|report|summarize)\s+/iu)
+    ?? instruction.match(/^(?:请\s*)?(?:按(?:工作[和与及]个人|个人[和与及]工作)\s*)?(?:分别\s*)?(?:统计|汇总|监测|跟踪)\s*/u);
   if (!operation) return false;
-  const metrics = task.slice(operation[0].length)
-    .replace(/(?:\s+(?:each|every)\s+(?:day|week|month)|[,，]\s*并区分(?:不同用途|工作和个人))?[.!。！]?$/iu, "")
+  const metrics = instruction.slice(operation[0].length)
+    .replace(/[.!。！]$/u, "")
+    .replace(/[,，。;；]\s*(?:并)?区分(?:不同用途|工作[和与及]个人|个人[和与及]工作)的?$/u, "")
+    .replace(/(?:\s+(?:each|every)\s+(?:day|week|month)|[,，]\s*(?:(?:我|我们)?(?:需要|希望)\s*)?(?:每天|每日|每周|每月)\s*(?:监测|跟踪|统计|汇总))$/iu, "")
+    .replace(/(\bprs?(?:\s*(?:数(?:量)?|counts?))?)\s+(?=commits?\b)/iu, "$1、")
     .split(/\s*(?:[,，、](?:\s*\band\b)?|\band\b|以及|和|与|及)\s*/iu);
   const required = [
-    /^(?:示例\s*)?(?:prs?|pull requests?|拉取请求|合并请求)(?:\s*(?:数(?:量)?|counts?))?$/iu,
+    /^(?:(?:示例|我的|我们的)\s*)?(?:prs?|pull requests?|拉取请求|合并请求)(?:\s*(?:数(?:量)?|counts?))?$/iu,
     /^(?:commits?|提交)(?:\s*(?:数(?:量)?|counts?))?$/iu,
     /^(?:(?:(?:agent|model|llm)\s+|模型\s*(?:消耗(?:的)?\s*)?)?(?:tokens?|词元|令牌)\s*(?:usage|consumption|counts?|用量|消耗|数(?:量)?)|(?:agent|model|llm)\s+tokens?)$/iu,
   ];
