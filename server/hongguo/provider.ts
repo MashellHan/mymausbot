@@ -18,7 +18,8 @@ export interface HongguoProvider {
   catalog(input: HongguoCatalogRequest, signal?: AbortSignal): Promise<Omit<HongguoCatalogResponse, "appId" | "revision">>;
   series(id: string, signal?: AbortSignal): Promise<HongguoSeries>;
   preparePlayback(seriesId: string, episodeId: string, scope: HongguoMediaScope, qualityId?: string): Promise<PreparedPlayback>;
-  serveMedia(token: string, range: string | undefined, signal: AbortSignal, scope: HongguoMediaScope): Promise<Response>;
+  /** A completed-only request can serve only an already finalized token. */
+  serveMedia(token: string, range: string | undefined, signal: AbortSignal, scope: HongguoMediaScope, completedOnly?: boolean): Promise<Response>;
 }
 
 type CatalogClient = Pick<Client, "search" | "shortRank" | "shortFilterPanel" | "shortFilter" | "newReleases"
