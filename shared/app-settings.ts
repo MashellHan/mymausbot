@@ -45,6 +45,7 @@ export const WINDOW_PREFS = {
   "appearance.userBubbles": z.boolean(),
   "general.sendKey": z.enum(SEND_KEYS),
   "general.notificationSounds": z.boolean(),
+  "general.notificationFeed": z.boolean(),
 } as const;
 export type WindowPrefId = keyof typeof WINDOW_PREFS;
 export type WindowPrefValue<I extends WindowPrefId> = z.infer<(typeof WINDOW_PREFS)[I]>;

@@ -4,7 +4,7 @@ import { WINDOW_PREFS, type WindowPrefFrame, type WindowPrefId } from "../../sha
 import { applyChatWidth, readChatWidth } from "./chat-width";
 import { applyFont, readFont } from "./fonts";
 import { readInterfaceMode, setInterfaceMode } from "./interface-mode";
-import { notificationSoundsEnabled, setNotificationSounds } from "./notification-preferences";
+import { notificationFeedEnabled, notificationSoundsEnabled, setNotificationFeed, setNotificationSounds } from "./notification-preferences";
 import { setShowRunCard, showRunCard } from "./run-card-preferences";
 import { readSendKey, setSendKey } from "./send-key";
 import { applySkinChoice, readSkinChoice } from "./skins";
@@ -22,6 +22,7 @@ const PREFS: Record<WindowPrefId, { read(): unknown; write(value: never): void }
   "appearance.userBubbles": { read: () => readColorUserBubbles(), write: (on) => setColorUserBubbles(on) },
   "general.sendKey": { read: () => readSendKey(), write: (key) => setSendKey(key) },
   "general.notificationSounds": { read: () => notificationSoundsEnabled(), write: (on) => setNotificationSounds(on) },
+  "general.notificationFeed": { read: () => notificationFeedEnabled(), write: (on) => setNotificationFeed(on) },
 };
 
 export function applyWindowPref(frame: WindowPrefFrame): void {

@@ -339,6 +339,19 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
       write: async (coloured: boolean) => deps.window.write("appearance.userBubbles", coloured),
     }),
     writable({
+      id: "general.notificationFeed", label: "Notification feed", help: "Keep a feed of bot updates in the notifications panel on this device. Remote clients do not display the feed.", where: "Settings → General",
+      synonyms: ["notification feed", "updates feed", "notification history", "inbox"], tier: "confirm", value: z.boolean(), allowed: "true or false",
+      current: () => deps.window.read("general.notificationFeed"),
+      read: () => { const choice = deps.window.read("general.notificationFeed"); return typeof choice === "boolean" ? display(choice) : "unavailable until mymausbot is open on this computer"; },
+      describe: (enabled: boolean) => {
+        const choice = deps.window.read("general.notificationFeed");
+        if (typeof choice !== "boolean") return { refusal: "Open mymausbot on this computer before changing the notification feed." };
+        if (choice === enabled) return { refusal: `The notification feed is already ${enabled ? "on" : "off"}.` };
+        return { change: `${enabled ? "Keep a feed of bot updates" : "Turn off the feed of bot updates"}; currently ${choice ? "on" : "off"}` };
+      },
+      write: async (enabled: boolean) => deps.window.write("general.notificationFeed", enabled),
+    }),
+    writable({
       id: "sidebar.showHelper", label: "Show helper in the sidebar", help: "Show or hide this place's own helper in the sidebar; the helper keeps working either way.", where: "Settings → General",
       synonyms: ["helper", "mausbot", "default bot", "sidebar", "show helper"], tier: "confirm", value: z.boolean(), allowed: "true or false",
       current: () => { const helper = placeHelper(); return helper ? !helper.sidebarHidden : undefined; },
