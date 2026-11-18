@@ -160,6 +160,15 @@ attempt of each job taking precedence. A pass after an actual failed validation 
 remains a finding for Lead to classify and cannot verify the incident until a
 later clean execution covers it.
 
+For an open same-repository `qa:repair` PR linked to an active global hold,
+a trusted `workflow_run` handler inspects completed failed PR CI. It requests
+GitHub's failed-job rerun only when every failed/cancelled worker had no runner
+or steps, has GitHub's hosted acquisition failure annotation, and the gate log
+attributes its failure to those workers. It rechecks the live repair and latest
+attempt. Successful jobs remain available to the same run's normal gate.
+After three automatic retry opportunities (four total attempts), or when
+evidence is mixed or missing, Lead owns diagnosis on the original run.
+
 ## Advisory process scan and PR recovery
 
 `scripts/qa/scan.mjs` records process cases separately from quality results.
