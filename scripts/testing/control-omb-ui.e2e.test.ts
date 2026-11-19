@@ -165,6 +165,13 @@ describe("control-omb ui drives the real renderer", () => {
     await ui("click", info.ui, "--name", "Bot settings");
     await ui("click", info.ui, "--name", "Details");
     await ui("click", info.ui, "--name", "Find in conversation");
+    await clickUiControl(info.ui, '#bot-panel button[aria-label="Close settings"]');
+    await expect.poll(async () => (await ui("eval", info.ui, "--js", `(() => {
+      const field = document.querySelector('input[aria-label="Find in this conversation"]');
+      if (!field) return false;
+      const { x, y, width, height } = field.getBoundingClientRect();
+      return field === document.elementFromPoint(x + width / 2, y + height / 2);
+    })()`)).result, { timeout: 10_000 }).toBe(true);
     await ui("type", info.ui, "--name", "Find in this conversation", "--text", "zebra");
     const highlighted = async () => (await ui("eval", info.ui, "--js", "[...CSS.highlights.get('search-result-text') ?? []][0]?.toString() ?? null")).result;
     await expect.poll(async () => (await ui("snapshot", info.ui)).snapshot, { timeout: 10_000 }).toContain("1 of 1");

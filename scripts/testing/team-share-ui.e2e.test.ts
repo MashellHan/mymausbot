@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
@@ -6,7 +7,7 @@ import { resolveAgentBrowserBinary } from "../../server/browser-engine.ts";
 import { waitForExit } from "../../server/testing/cleanup.ts";
 import { runControlOmb } from "../control-omb.ts";
 import { request } from "../mcp-server.ts";
-import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
+import { agentBrowser, sessionEnv, UI_TOOLS_DIR, type UiHandle } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const binary = resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env });
@@ -51,6 +52,9 @@ describe("Share a department in the real renderer", () => {
       return true;
     })()`);
 
+    const handle = JSON.parse(readFileSync(info!.ui, "utf8")) as UiHandle;
+    await agentBrowser(handle.binary, sessionEnv(handle), ["set", "viewport", "1280", "900"]);
+    await expect.poll(() => evaluate("innerWidth"), { timeout: 10_000 }).toBe(1280);
     await click("Actions for Sales desk department");
     await click("Share");
     await expect.poll(snapshot, { timeout: 20_000 }).toContain("Chats, memory and keys are never shared");
