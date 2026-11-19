@@ -15,6 +15,15 @@ const ENCODED_TOOL_TEXT = /data:[^\s,]{0,100};base64,|[A-Za-z0-9+/_-]{64,}={0,2}
 const MAX_TOOL_SOURCE = 16 * 1024;
 const MAX_TOOL_FIELDS = 8;
 const TOOL_RESULT_UNAVAILABLE = "[Result details unavailable]";
+const SHELL_COMMAND_TOOLS = new Map<string, string>([
+  ["codex:exec_command", "cmd"],
+  ["codex:functions.exec_command", "cmd"],
+  ["pi:bash", "command"],
+]);
+const SHELL_COMMAND_LIMIT = 600;
+const SHELL_HEADER_VALUE = /((?:^|[\s"'`])(?:authorization|proxy-authorization|(?:set-)?cookie|x-(?:api-key|auth-token|access-token|session-id))\s*[:=]\s*)([^\r\n;]+)/gi;
+const SHELL_SECRET_ASSIGNMENT = /\b((?:[A-Za-z0-9_.-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key|cookie|session(?:_?id)?|credential)s?)(\s*=\s*)((?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s;&|]+))/gi;
+const SHELL_LONG_BEARER = /(\bBearer\s+)([^\s"'`;&|]+)/gi;
 
 export function redactedAgentText(value: unknown, limit = 600): { text: string | null; clipped: boolean } {
   if (typeof value !== "string") return { text: null, clipped: false };
@@ -107,6 +116,61 @@ function rejectToolArgumentContext(args: object): { text: null; clipped: boolean
   return inspect(args);
 }
 
+function safeShellCommandText(value: string): { text: string | null; clipped: boolean } {
+  if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
+  if (ENCODED_TOOL_TEXT.test(value) || INTERNAL_ENVELOPE.test(value.replace(/[\p{Cc}\p{Cf}]/gu, ""))) {
+    return { text: null, clipped: true };
+  }
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 9 || (code > 13 && code < 32)) return { text: null, clipped: true };
+  }
+  const normalized = value
+    .replace(SHELL_LONG_BEARER, (_m, lead: string, token: string) => `${lead}«redacted ${token.length} chars»`)
+    .replace(SHELL_HEADER_VALUE, (_m, lead: string, val: string) => `${lead}«redacted ${val.trim().length} chars»`)
+    .replace(SHELL_SECRET_ASSIGNMENT, (_m, key: string, eq: string, rawVal: string) => {
+      const inner = (rawVal.startsWith('"') && rawVal.endsWith('"')) || (rawVal.startsWith("'") && rawVal.endsWith("'"))
+        ? rawVal.slice(1, -1) : rawVal;
+      const quote = inner.length < rawVal.length ? rawVal[0]! : "";
+      return `${key}${eq}${quote}«redacted ${inner.length} chars»${quote}`;
+    });
+  return redactedAgentText(normalized, SHELL_COMMAND_LIMIT);
+}
+
+function shellCommandDetail(value: unknown, runtime: "codex" | "pi", tool: string): { text: string | null; clipped: boolean } | null {
+  const field = SHELL_COMMAND_TOOLS.get(`${runtime}:${tool}`);
+  if (!field) return null;
+  let parsed = value;
+  if (typeof parsed === "string") {
+    const trimmed = parsed.trimStart();
+    if (!trimmed.startsWith("{")) return null;
+    if (parsed.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
+    try { parsed = JSON.parse(parsed); } catch { return { text: null, clipped: false }; }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const rejected = rejectToolArgumentContext(parsed);
+  if (rejected) return rejected;
+  const obj = parsed as Record<string, unknown>;
+  const command = obj[field];
+  if (typeof command !== "string") return null;
+  const safeCommand = safeShellCommandText(command);
+  if (safeCommand.text === null) return { text: null, clipped: safeCommand.clipped };
+  const extras: string[] = [];
+  let clipped = safeCommand.clipped;
+  for (const [key, raw] of Object.entries(obj)) {
+    if (key === field) continue;
+    const outputLimit = key === "max_output_tokens" && typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0;
+    if (!TOOL_KEY.test(key) || (!outputLimit && PRIVATE_TOOL_KEY.test(key)) || redactedAgentText(key).text !== key) continue;
+    const scalar = typeof raw === "string" ? raw : typeof raw === "number" || typeof raw === "boolean" ? String(raw) : null;
+    const safe = safeToolText(scalar);
+    if (safe.text) extras.push(`${key}: ${safe.text}`);
+    if (safe.clipped || scalar === null) clipped = true;
+  }
+  const combined = extras.length ? `${field}: ${safeCommand.text}; ${extras.join("; ")}` : `${field}: ${safeCommand.text}`;
+  const chars = Array.from(combined);
+  return { text: chars.slice(0, SHELL_COMMAND_LIMIT).join(""), clipped: clipped || chars.length > SHELL_COMMAND_LIMIT };
+}
+
 export function redactedAgentToolArguments(value: unknown): { text: string | null; clipped: boolean } {
   if (typeof value === "string" && (value.trimStart().startsWith("{") || value.trimStart().startsWith("["))) {
     if (value.length > MAX_TOOL_SOURCE) return { text: null, clipped: true };
@@ -155,11 +219,12 @@ export function redactedAgentToolResult(value: unknown, runtime?: "codex"): { te
   return { text: safe.text, clipped: clipped || safe.clipped };
 }
 
-export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unknown, runtime?: "codex"): {
+export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unknown, runtime?: "codex" | "pi", tool?: string | null): {
   text: string; clipped: boolean; detailStatus: LocalAgentToolDetailStatus;
 } {
   const result = kind === "tool-result";
-  const detail = result ? redactedAgentToolResult(value, runtime) : redactedAgentToolArguments(value);
+  const shellDetail = !result && runtime && tool ? shellCommandDetail(value, runtime, tool) : null;
+  const detail = shellDetail ?? (result ? redactedAgentToolResult(value, runtime === "codex" ? "codex" : undefined) : redactedAgentToolArguments(value));
   const emptyText = typeof value === "string" && (!value.trim() || (!result && /^\s*\{\s*\}\s*$/.test(value)));
   const emptyArguments = !result && value !== null && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length;
   const emptyBlocks = Array.isArray(value) && (value.length === 0 || result && !detail.clipped &&

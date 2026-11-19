@@ -36,7 +36,7 @@ function visibleEvent(line: string, offset: number): { event: LocalAgentActivity
       || safeText(name).text !== name)) return { event: null, clipped: false, callId };
     const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
     const kind = result ? "tool-result" : "tool-call";
-    const detail = visibleToolDetail(kind, result ? payload.output : payload.type === "custom_tool_call" ? payload.input : payload.arguments, "codex");
+    const detail = visibleToolDetail(kind, result ? payload.output : payload.type === "custom_tool_call" ? payload.input : payload.arguments, "codex", result ? null : name as string);
     return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null,
       kind, tool: result ? null : name as string, text: detail.text, detailStatus: detail.detailStatus }, clipped: detail.clipped,
       format: "canonical", raw: "", callId };

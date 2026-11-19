@@ -90,7 +90,7 @@ describe("bounded per-agent Codex activity", () => {
   });
 
   it("pages a bounded Codex tail in source order without moving an older cursor after append", async () => {
-    const pairs = Array.from({ length: 42 }, (_, index) => [
+    const pairs = Array.from({ length: 65 }, (_, index) => [
       row("response_item", { type: "function_call", call_id: `call-${index}`, name: "functions.exec", arguments: '{"cmd":"fixture"}' }),
       row("response_item", { type: "function_call_output", call_id: `call-${index}`,
         output: index === 0 ? [{ type: "input_text", text: "Large result " + "x".repeat(300_000) }] : `Result ${index}` }),
@@ -105,18 +105,16 @@ describe("bounded per-agent Codex activity", () => {
     const activity = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([active]) });
     const first = await activity.get(pane, { occupantId });
     expect(first).toMatchObject({ status: "ready", truncated: true, history: { version: 1, streamId: expect.any(String) } });
-    expect(first.events).toHaveLength(30);
+    expect(first.events).toHaveLength(100);
     const before = first.history!.nextBefore!;
     const older = await activity.get(pane, { occupantId, before });
-    expect(older.events).toHaveLength(30);
-    expect(older.events.at(-1)?.text).toBe("Result 26");
-    const oldest = await activity.get(pane, { occupantId, before: older.history!.nextBefore! });
-    expect(oldest.history!.nextBefore).toBeNull();
-    expect(oldest.events[0]?.text).toBe("Oldest retained");
-    expect(oldest.events[2]).toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
-    const ids = [...oldest.events, ...older.events, ...first.events].map((event) => event.id);
-    expect(new Set(ids).size).toBe(85);
-    expect(JSON.stringify(oldest)).not.toMatch(/Below scan budget|Large result/);
+    expect(older.events).toHaveLength(31);
+    expect(older.events[0]?.text).toBe("Oldest retained");
+    expect(older.events[2]).toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
+    expect(older.history!.nextBefore).toBeNull();
+    const ids = [...older.events, ...first.events].map((event) => event.id);
+    expect(new Set(ids).size).toBe(131);
+    expect(JSON.stringify(older)).not.toMatch(/Below scan budget|Large result/);
     const file = join(home, "sessions", "2026", "11", "05", `rollout-2026-11-05-${SESSION}.jsonl`);
     await appendFile(file, JSON.stringify(row("event_msg", { type: "agent_message", message: "Latest reply" })) + "\n");
     const latest = await activity.get(pane, { occupantId });
@@ -129,7 +127,7 @@ describe("bounded per-agent Codex activity", () => {
 
   it("retires the stream if an issued earlier anchor rolls out while a newer anchor is still retained", async () => {
     const line = (index: number) => row("event_msg", { type: "user_message", message: `Message ${index}` });
-    const home = await fixture(Array.from({ length: 360 }, (_, index) => line(index)));
+    const home = await fixture(Array.from({ length: 500 }, (_, index) => line(index)));
     const member = { ...agent(), name: "fixture-codex", agent_session: { ...agent().agent_session, source: "herdr:codex" } };
     const occupantId = localAgentOccupantId(member, pane)!;
     const observe = () => createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([member]) });
@@ -144,7 +142,7 @@ describe("bounded per-agent Codex activity", () => {
     const prior = await cursors(first);
     const other = await cursors(second);
     const file = join(home, "sessions", "2026", "11", "05", `rollout-2026-11-05-${SESSION}.jsonl`);
-    await appendFile(file, Array.from({ length: 251 }, (_, index) => JSON.stringify(line(360 + index))).join("\n") + "\n");
+    await appendFile(file, Array.from({ length: 301 }, (_, index) => JSON.stringify(line(500 + index))).join("\n") + "\n");
     expect(await first.get(pane, { occupantId, before: prior.older.nextBefore! })).toMatchObject({
       status: "unavailable", events: [], history: { streamId: null },
     });

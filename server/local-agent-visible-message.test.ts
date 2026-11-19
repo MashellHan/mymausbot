@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assistantMessagePreview, redactedAgentToolArguments, redactedAgentToolResult } from "./local-agent-visible-message.ts";
+import { assistantMessagePreview, redactedAgentToolArguments, redactedAgentToolResult, visibleToolDetail } from "./local-agent-visible-message.ts";
 
 const assistant = (text: string, phase = "commentary") => ({ type: "response_item", payload: {
   type: "message", role: "assistant", phase, content: [{ type: "output_text", text }],
@@ -139,5 +139,64 @@ describe("bounded tool details", () => {
     ]))).toEqual({ text: null, clipped: true });
     const full = redactedAgentToolResult(blocks(["rows ".repeat(140), "complete"]));
     expect(full).toEqual({ text: "rows ".repeat(120), clipped: true });
+  });
+
+  it("summarizes known shell command arguments while keeping secret, encoded and generic privacy bounds", () => {
+    const codexSafe = { cmd: "herdr --session default agent list && rg --line-number data key src", workdir: "/Users/fixture/workspace" };
+    expect(visibleToolDetail("tool-call", JSON.stringify(codexSafe), "codex", "exec_command")).toEqual({
+      text: "cmd: herdr --session default agent list && rg --line-number data key src; workdir: [path]",
+      clipped: false,
+      detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-call", { cmd: "printf 'one'\nprintf 'two' --key-info" }, "codex", "functions.exec_command")).toEqual({
+      text: "cmd: printf 'one' printf 'two' --key-info",
+      clipped: false,
+      detailStatus: "available",
+    });
+    const piSafe = { command: "git status --short && node scripts/check.mjs plan\n# multiline check", timeout: 30 };
+    expect(visibleToolDetail("tool-call", piSafe, "pi", "bash")).toEqual({
+      text: "command: git status --short && node [path] plan # multiline check; timeout: 30",
+      clipped: false,
+      detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-call", { command: "echo " + "word ".repeat(200) }, "pi", "bash")).toMatchObject({
+      clipped: true,
+      detailStatus: "available",
+    });
+
+    const bearer = visibleToolDetail("tool-call", { command: "curl -H 'Authorization: Bearer top-secret-token-value' https://private.test/api" }, "pi", "bash");
+    expect(bearer.detailStatus).toBe("available");
+    expect(bearer.text).not.toContain("top-secret-token-value");
+    expect(bearer.text).not.toContain("private.test");
+    expect(bearer.text).toContain("Authorization: «redacted");
+
+    const envSecret = visibleToolDetail("tool-call", { cmd: "API_KEY=sk-test-secret-1234567890abcdef password=my-secret-pass node app.js" }, "codex", "exec_command");
+    expect(envSecret.detailStatus).toBe("available");
+    expect(envSecret.text).not.toContain("sk-test-secret-1234567890abcdef");
+    expect(envSecret.text).not.toContain("my-secret-pass");
+
+    const headerSecret = visibleToolDetail("tool-call", { cmd: "curl -H 'X-API-Key: secret-header-value' http://localhost:3000" }, "codex", "exec_command");
+    expect(headerSecret.detailStatus).toBe("available");
+    expect(headerSecret.text).not.toContain("secret-header-value");
+
+    const clippedSecret = visibleToolDetail("tool-call", {
+      command: "echo " + "safe ".repeat(140) + " Bearer very-long-tail-secret-token-1234567890",
+    }, "pi", "bash");
+    expect(clippedSecret.clipped).toBe(true);
+    expect(clippedSecret.text).not.toContain("very-long-tail-secret-token-1234567890");
+
+    expect(visibleToolDetail("tool-call", { command: "echo data:image/png;base64," + "A".repeat(128) }, "pi", "bash"))
+      .toMatchObject({ detailStatus: "withheld", text: "[Arguments unavailable]" });
+    expect(visibleToolDetail("tool-call", { command: "echo <SYSTEM_NOTIFICATION>internal</SYSTEM_NOTIFICATION>" }, "pi", "bash"))
+      .toMatchObject({ detailStatus: "withheld", text: "[Arguments unavailable]" });
+    expect(visibleToolDetail("tool-call", { command: "echo ok", encoding: "base64" }, "pi", "bash"))
+      .toMatchObject({ detailStatus: "withheld", text: "[Arguments unavailable]" });
+
+    expect(visibleToolDetail("tool-call", { command: "echo session=1" }, "pi", "custom_other"))
+      .toMatchObject({ detailStatus: "withheld", text: "[Arguments unavailable]" });
+    expect(visibleToolDetail("tool-call", { other: "echo session=1" }, "pi", "bash"))
+      .toMatchObject({ detailStatus: "withheld", text: "[Arguments unavailable]" });
+    expect(visibleToolDetail("tool-result", "session=fixture-secret", "codex", "exec_command"))
+      .toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
   });
 });
