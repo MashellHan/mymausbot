@@ -9,7 +9,7 @@ import { metricText } from "./LocalUsageValues";
 
 type Cost = NonNullable<UsageWindow["tokenDetails"]>["estimatedCost"];
 
-function costText(estimate?: Cost) {
+export function costText(estimate?: Cost) {
   if (!estimate || estimate.usd === null || estimate.coverage === "unavailable") return t("computer.usage.unavailable");
   const { usd, coverage } = estimate;
   if (usd === 0) return coverage === "ready" ? usdText(0, 2) : t("computer.usage.costPartial", { cost: usdText(0, 2) });
