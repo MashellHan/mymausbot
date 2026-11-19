@@ -189,9 +189,31 @@ jobs:
         # bubblewrap box wherever bwrap works: here, once the step below drops the capability bwrap refuses to start
         # with, and never on a GitHub runner.
         run: sudo rm -f /usr/bin/bwrap /usr/local/bin/{agent,claude,codex,cua-driver,cursor-agent,hermes,hermes-acp,hermes-agent,kimi,openclaw,opencode,pi,prime-agent,vibe,vibe-acp}
+      - name: Resolve Electron archive cache
+        if: steps.scope.outputs.linux_lanes
+        id: electron-cache
+        run: node scripts/prepare-electron-ci.mjs --plan
+      - name: Restore Electron archive cache
+        if: steps.scope.outputs.linux_lanes && steps.electron-cache.outputs.eligible == 'true'
+        id: electron-cache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.electron-cache.outputs.path }}
+          key: ${{ steps.electron-cache.outputs.key }}
       - name: Prepare Electron test runtime
         if: steps.scope.outputs.linux_lanes
-        run: node scripts/ensure-electron.mjs
+        id: electron-cache-prepare
+        env:
+          OMB_ELECTRON_CACHE_ROOT: ${{ runner.temp }}/openmausbot-electron-cache
+        run: node scripts/prepare-electron-ci.mjs
+      - name: Save Electron archive cache
+        if: steps.scope.outputs.linux_lanes && steps.electron-cache.outputs.eligible == 'true' && steps.electron-cache-restore.outputs.cache-hit != 'true' && steps.electron-cache-prepare.outputs.cache-ready == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.electron-cache.outputs.path }}
+          key: ${{ steps.electron-cache.outputs.key }}
       - name: Linux tests (vitest shards, behavior evals, packaged server), side by side
         if: steps.scope.outputs.linux_lanes
         env:
@@ -249,11 +271,32 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Resolve Electron archive cache
+        id: electron-cache
+        run: node scripts/prepare-electron-ci.mjs --plan
+      - name: Restore Electron archive cache
+        if: steps.electron-cache.outputs.eligible == 'true'
+        id: electron-cache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.electron-cache.outputs.path }}
+          key: ${{ steps.electron-cache.outputs.key }}
       - name: Prepare Electron test runtime
+        id: electron-cache-prepare
         # Electron lazily downloads its runtime on first import. Resolve it
         # before Vitest starts so a cold download cannot consume the fixture
         # timeout.
-        run: node scripts/ensure-electron.mjs
+        env:
+          OMB_ELECTRON_CACHE_ROOT: ${{ runner.temp }}/openmausbot-electron-cache
+        run: node scripts/prepare-electron-ci.mjs
+      - name: Save Electron archive cache
+        if: steps.electron-cache.outputs.eligible == 'true' && steps.electron-cache-restore.outputs.cache-hit != 'true' && steps.electron-cache-prepare.outputs.cache-ready == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.electron-cache.outputs.path }}
+          key: ${{ steps.electron-cache.outputs.key }}
       - run: mkdir -p qa-results
         shell: bash
       - name: Electron unit tests
@@ -369,8 +412,29 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Resolve Electron archive cache
+        id: electron-cache
+        run: node scripts/prepare-electron-ci.mjs --plan
+      - name: Restore Electron archive cache
+        if: steps.electron-cache.outputs.eligible == 'true'
+        id: electron-cache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.electron-cache.outputs.path }}
+          key: ${{ steps.electron-cache.outputs.key }}
       - name: Prepare Electron test runtime
-        run: node scripts/ensure-electron.mjs
+        id: electron-cache-prepare
+        env:
+          OMB_ELECTRON_CACHE_ROOT: ${{ runner.temp }}/openmausbot-electron-cache
+        run: node scripts/prepare-electron-ci.mjs
+      - name: Save Electron archive cache
+        if: steps.electron-cache.outputs.eligible == 'true' && steps.electron-cache-restore.outputs.cache-hit != 'true' && steps.electron-cache-prepare.outputs.cache-ready == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.electron-cache.outputs.path }}
+          key: ${{ steps.electron-cache.outputs.key }}
       - name: Packaged server smoke (macOS)
         # Builds dist-server/ and runs a copy of it outside the repo; the
         # phone-relay smoke below forks the same dist-server/index.js.

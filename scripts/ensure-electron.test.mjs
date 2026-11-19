@@ -90,9 +90,34 @@ describe("original Electron runtime recovery", () => {
 
   it("prepares the same verified runtime in all three independent CI runners", () => {
     const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-    const steps = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
-      .filter((step) => step.name === "Prepare Electron test runtime");
-    expect(steps).toHaveLength(3);
-    expect(steps.map((step) => step.run)).toEqual(Array(3).fill("node scripts/ensure-electron.mjs"));
+    const jobs = Object.values(workflow.jobs);
+    const steps = jobs.flatMap((job) => job.steps ?? []);
+    const prepare = steps.filter((step) => step.name === "Prepare Electron test runtime");
+    expect(prepare).toHaveLength(3);
+    expect(prepare.map((step) => step.run)).toEqual(Array(3).fill("node scripts/prepare-electron-ci.mjs"));
+    for (const job of jobs.filter((candidate) => (candidate.steps ?? []).some((step) => step.name === "Prepare Electron test runtime"))) {
+      const names = job.steps.map((step) => step.name);
+      const resolveIndex = names.indexOf("Resolve Electron archive cache");
+      const restoreIndex = names.indexOf("Restore Electron archive cache");
+      const prepareIndex = names.indexOf("Prepare Electron test runtime");
+      const saveIndex = names.indexOf("Save Electron archive cache");
+      expect(resolveIndex).toBeGreaterThan(-1);
+      expect(restoreIndex).toBe(resolveIndex + 1);
+      expect(prepareIndex).toBe(restoreIndex + 1);
+      expect(saveIndex).toBe(prepareIndex + 1);
+      expect(job.steps[restoreIndex]).toMatchObject({
+        uses: "actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830",
+        "continue-on-error": true,
+        with: { path: "${{ steps.electron-cache.outputs.path }}", key: "${{ steps.electron-cache.outputs.key }}" },
+      });
+      expect(job.steps[restoreIndex].if).toContain("steps.electron-cache.outputs.eligible == 'true'");
+      expect(job.steps[prepareIndex].id).toBe("electron-cache-prepare");
+      expect(job.steps[saveIndex]).toMatchObject({
+        uses: "actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830",
+        "continue-on-error": true,
+        with: { path: "${{ steps.electron-cache.outputs.path }}", key: "${{ steps.electron-cache.outputs.key }}" },
+      });
+      expect(job.steps[saveIndex].if).toContain("steps.electron-cache-prepare.outputs.cache-ready == 'true'");
+    }
   });
 });
