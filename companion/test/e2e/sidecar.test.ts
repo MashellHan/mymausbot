@@ -38,7 +38,7 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
     const before = await rig.control("POST", "/pairing");
     expect(before.e2e.descriptor).toEqual({ v: 1, k: expect.any(String), h: rig.hid, r: ["relay1.openmausbot.com"] });
     await rig.control("DELETE", "/pairing");
-    const paired = await pairViaRelay(rig);
+    const paired = await pairViaRelay(rig, initialAdmission);
     deviceToken = paired.token;
     deviceId = paired.id;
     expect((await http(paired.session, "GET", "/api/threads/t1/messages", { token: "omb_other" })).status).toBe(401);
@@ -76,7 +76,7 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
   });
 
   it("refuses a direct upgrade beyond the pending handshake cap without ending an established session", async () => {
-    const paired = await pairViaRelay(rig);
+    const paired = await pairViaRelay(rig, initialAdmission);
     paired.session.shutdown();
     await paired.session.closed;
     const established = await rig.direct(await state(), paired.token);

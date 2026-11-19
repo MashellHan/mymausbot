@@ -267,18 +267,24 @@ export function events(session: E2ESession<never>, token: string, lastEventId?: 
 
 /** Pairs a phone through the relay with a fresh pairing window; returns its device token and id. */
 export async function pairViaRelay(rig: Rig, trace?: AdmissionTrace): Promise<{ token: string; id: string; session: E2ESession<never> }> {
-  const state = await rig.control("POST", "/pairing");
-  const pairingToken = state.token!;
-  const session = await waitFor(() => rig.viaRelay(state, pairingToken).catch(() => null), 5_000);
   const startedAt = trace?.begin() ?? 0;
+  const pairingAdmission = await trace?.admissionMarker();
+  const state = await rig.control("POST", "/pairing");
+  const pairingDeadline = Date.now() + 5_000;
+  if (trace && pairingAdmission) await waitFor(() => trace.admissionAcceptedSince(pairingAdmission), Math.max(0, pairingDeadline - Date.now()));
+  const pairingToken = state.token!;
+  const session = await waitFor(() => rig.viaRelay(state, pairingToken).catch(() => null), Math.max(0, pairingDeadline - Date.now()));
+  const pairedAdmission = await trace?.admissionMarker();
   const paired = await http(session, "POST", "/api/pair", { body: JSON.stringify({ credential: pairingToken, deviceName: "Test Phone" }), headers: { "content-type": "application/json" } });
   if (paired.status !== 201) throw new Error(`pairing failed: ${paired.status} ${paired.body}`);
   const http201At = trace ? Date.now() : 0;
+  const pairedDeadline = Date.now() + 5_000;
   const body = json(paired) as { token: string; device: { id: string } };
   // The relay admits the new device a moment after pairing.
   const dial = () => rig.viaRelay(state, body.token);
   try {
-    await waitFor(() => (trace ? trace.dial(dial) : dial()).then((check) => (check.shutdown(), true), () => null), 5_000);
+    if (trace && pairedAdmission) await waitFor(() => trace.admissionAcceptedSince(pairedAdmission), Math.max(0, pairedDeadline - Date.now()));
+    await waitFor(() => (trace ? trace.dial(dial) : dial()).then((check) => (check.shutdown(), true), () => null), Math.max(0, pairedDeadline - Date.now()));
   } catch (error) {
     try { trace?.report(startedAt, http201At); } catch {}
     throw error;

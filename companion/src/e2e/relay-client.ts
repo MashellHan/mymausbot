@@ -333,6 +333,7 @@ export class RelayClient {
     }
     if (socket !== this.#control) return;
     if (message.t === "open" && typeof message.sid === "string" && /^[A-Za-z0-9_-]{22}$/.test(message.sid)) {
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "host_open_received", socketState: socket.readyState });
       return this.#openData(nodeIndex, message.sid);
     }
     if (message.t === "restarting") {
@@ -402,18 +403,27 @@ export class RelayClient {
   }
 
   #openData(nodeIndex: number, sid: string): void {
+    if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "host_data_dial_started" });
     const socket = new WebSocket(this.#url(this.#nodes[nodeIndex], "/v1/host/data"), [RELAY_PROTOCOL]);
     socket.binaryType = "arraybuffer";
     let sink: SessionSink | null = null;
     socket.onopen = () => {
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "host_data_socket_opened", socketState: socket.readyState });
       socket.send(JSON.stringify({ t: "data", v: 1, sid, token: this.#token }));
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "host_data_auth_sent", socketState: socket.readyState });
       sink = this.#options.accept(webSocketTransport(socket));
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "host_data_session_attached" });
     };
     socket.onmessage = (event: MessageEvent) => {
       const binary = typeof event.data !== "string";
       sink?.receive(binary ? new Uint8Array(event.data as ArrayBuffer) : Buffer.from(event.data as string, "utf8"), binary);
     };
-    socket.onclose = (event: CloseEvent) => sink?.transportClosed(event.code);
-    socket.onerror = () => {};
+    socket.onclose = (event: CloseEvent) => {
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "host_data_socket_closed", code: event.code });
+      sink?.transportClosed(event.code);
+    };
+    socket.onerror = () => {
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "host_data_socket_error" });
+    };
   }
 }
