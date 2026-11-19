@@ -161,7 +161,7 @@ describe("local Usage panel", () => {
     expect(host.querySelector("[data-usage-latest-update]")?.textContent).toContain("Last successful capture");
   });
 
-  it("stacks daily and weekly token types and ranks the selected model range with separate unattributed tokens", async () => {
+  it("defaults to By model, supports Token types, and ranks models across the selected range", async () => {
     const snapshot = structuredClone(sample);
     const ranked = ["A", "B", "C", "D", "E", "F"];
     const day = snapshot.trend.at(-1)!;
@@ -175,24 +175,30 @@ describe("local Usage panel", () => {
     await renderRaw(snapshot);
     const chart = host.querySelector('[data-usage-trend="totalTokens"]')!;
     const bar = chart.querySelector<HTMLButtonElement>(`[data-usage-day="${day.day}"]`)!;
+    const [types, models] = chart.querySelectorAll<HTMLButtonElement>('[role="group"] button');
     const legend = () => chart.querySelector("[data-usage-token-legend]")?.textContent;
     const tooltip = () => chart.querySelector('[role="tooltip"]')?.textContent;
+    expect(types!.getAttribute("aria-pressed")).toBe("false");
+    expect(models!.getAttribute("aria-pressed")).toBe("true");
+    expect(legend()).toContain("ABCDEOther modelsUnattributed tokens");
     await act(async () => bar.focus());
     expect(tooltip()).toContain("2026-11-03 · Tue");
-    expect(tooltip()).toContain("Tokens110Cached input10Fresh input65Output35");
-    expect(chart.querySelectorAll('[role="tooltip"] dt').length).toBeGreaterThanOrEqual(4);
-    expect(chart.querySelector('[data-usage-token-segment="unknown"]')).not.toBeNull();
-    const models = chart.querySelector<HTMLButtonElement>('[role="group"] button:last-child')!;
-    await act(async () => models.click());
-    expect(legend()).toContain("ABCDEOther modelsUnattributed tokens");
     expect(tooltip()).toContain("Tokens110");
     expect(tooltip()).toContain("A10 · 9.1%");
     expect(tooltip()).toContain("Other models10 · 9.1%Unattributed tokens50");
     expect(bar.getAttribute("aria-describedby")).toBe(chart.querySelector('[role="tooltip"]')?.id);
+    await act(async () => types!.click());
+    expect(types!.getAttribute("aria-pressed")).toBe("true");
+    expect(models!.getAttribute("aria-pressed")).toBe("false");
+    expect(tooltip()).toContain("Tokens110Cached input10Fresh input65Output35");
+    expect(chart.querySelectorAll('[role="tooltip"] dt').length).toBeGreaterThanOrEqual(4);
+    expect(chart.querySelector('[data-usage-token-segment="unknown"]')).not.toBeNull();
     const range = host.querySelector<HTMLSelectElement>('select[aria-label="Trend range"]')!;
     await act(async () => { range.value = "60"; range.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(types!.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => models!.click());
+    expect(range.value).toBe("60");
     expect(legend()).toContain("PastABCDOther modelsUnattributed tokens");
-    expect(models.getAttribute("aria-pressed")).toBe("true");
     await act(async () => { range.value = "6m"; range.dispatchEvent(new Event("change", { bubbles: true })); });
     const first = chart.querySelector<HTMLButtonElement>('[data-usage-day]')!;
     await act(async () => { first.focus(); first.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })); });
