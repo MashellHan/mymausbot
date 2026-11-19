@@ -248,7 +248,24 @@ describe("control-omb ui drives the real renderer", () => {
       };
       return true;
     })()`);
+    await expect.poll(() => evaluate(`(() => {
+      const triggers = document.querySelectorAll('button[aria-label="You"]');
+      if (triggers.length !== 1) return false;
+      const trigger = triggers[0];
+      if (!(trigger instanceof HTMLButtonElement) || trigger.disabled || !trigger.checkVisibility()) return false;
+      const { left, top, width, height } = trigger.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return false;
+      const hit = document.elementFromPoint(left + width / 2, top + height / 2);
+      return hit === trigger || trigger.contains(hit);
+    })()`), { timeout: 10_000 }).toBe(true);
     await click("You");
+    await expect.poll(() => evaluate(`document.querySelector('button[aria-label="You"]')?.getAttribute('aria-expanded') ?? null`), { timeout: 10_000 }).toBe("true");
+    await expect.poll(() => evaluate(`(() => {
+      const menu = document.querySelector('[role="menu"][aria-label="You"]');
+      if (!menu || !menu.checkVisibility() || menu.closest('[inert], [aria-hidden="true"]')) return false;
+      const items = menu.querySelectorAll('[role="menuitem"][data-menu-key="settings"]');
+      return items.length === 1 && items[0].checkVisibility();
+    })()`), { timeout: 10_000 }).toBe(true);
     await clickUiControl(info.ui, '[role="menuitem"][data-menu-key="settings"]');
     // Settings is a lazy chunk: wait read-only for the AI page or key row, then open AI and Other services at most once each.
     const readinessDeadline = Date.now() + 10_000;
