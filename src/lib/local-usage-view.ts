@@ -154,6 +154,7 @@ export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRa
     return { day, coverage: raw?.coverage ?? "unavailable", ...repositoryCounts(activity), categories: repositoryCategories(activity?.categories), repositories: repositoryDetails(activity?.repositories),
       tokenStatus: token?.tokenStatus ?? "unavailable", newTokens: token?.newTokens ?? null,
       cacheRead: token?.cacheRead ?? null, totalTokens: token?.totalTokens ?? null,
+      ...(token?.tokenDetails && { tokenDetails: token.tokenDetails }),
       wow: { prs: activity?.wow.prs ?? null, commits: activity?.wow.commits ?? null,
         newTokens: token?.wow.newTokens ?? null, totalTokens: token?.wow.totalTokens ?? null } };
   }) : [];
