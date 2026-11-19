@@ -8,15 +8,19 @@ import { latestRoutineRun, routineDateTime, routineFinished, routineHeldNote, ro
 import type { Bot } from "@/state/store";
 import { Switch } from "../SettingsPrimitives";
 
-export function RoutineList({ routines, runs, bots, pausedBots, loading, error, compact = false, onOpen, onLogs, onToggle }: {
+export function RoutineList({ routines, runs, bots, pausedBots, heldBots, loading, error, unreadable, compact = false, onOpen, onLogs, onToggle }: {
   routines: Routine[];
   runs: RoutineRun[];
   bots?: Bot[];
   /** Bots a Starter Cloud has paused: a routine on one runs nothing until it is swapped in. */
   pausedBots?: readonly string[];
+  /** Bots the person paused, by themselves or with their department. */
+  heldBots?: readonly string[];
   loading?: boolean;
   error?: boolean;
   compact?: boolean;
+  /** The server cannot read its saved routines. */
+  unreadable?: boolean;
   onOpen: (routine: Routine) => void;
   onLogs: (routine: Routine) => void;
   onToggle?: (routine: Routine) => void;
@@ -25,8 +29,9 @@ export function RoutineList({ routines, runs, bots, pausedBots, loading, error, 
   const sorted = [...visible].sort((a, b) => Number(b.enabled) - Number(a.enabled) || (a.nextRunAt ?? Infinity) - (b.nextRunAt ?? Infinity) || a.name.localeCompare(b.name));
   return <div className={cn(!compact && "space-y-3", compact && sorted.length > 0 && "divide-y divide-hairline/30 overflow-hidden rounded-xl border border-hairline/40 bg-card")} aria-label={t("routines.list")}>
     {error && <div role="alert" className="rounded-lg bg-danger/10 p-3 text-[12px] text-danger">{t("routines.loadError")}</div>}
+    {unreadable && <div role="alert" className="rounded-lg bg-danger/10 p-3 text-[12px] leading-relaxed text-danger" data-routines-unreadable="">{t("routines.unreadable")}</div>}
     {loading && <p role="status" className="flex items-center gap-2 p-3 text-[12px] text-ink-secondary"><Loader2 size={14} className="animate-spin" />{t("routines.loading")}</p>}
-    {!loading && !error && routines.length === 0 && <div className="rounded-xl border border-dashed border-hairline/50 p-5 text-center text-[13px] text-ink-secondary"><Repeat2 size={20} className="mx-auto mb-2 opacity-60" />{t("routines.empty")}</div>}
+    {!loading && !error && !unreadable && routines.length === 0 && <div className="rounded-xl border border-dashed border-hairline/50 p-5 text-center text-[13px] text-ink-secondary"><Repeat2 size={20} className="mx-auto mb-2 opacity-60" />{t("routines.empty")}</div>}
     {sorted.map((routine) => {
       const latest = latestRoutineRun(routine.id, runs);
       const said = latest && (latest.attention ? "attention" : latest.error ? "error" : latest.output ? "output" : null);
@@ -57,6 +62,7 @@ export function RoutineList({ routines, runs, bots, pausedBots, loading, error, 
         </div>
         {latest && said && <p className={cn("mt-2 line-clamp-2 whitespace-pre-wrap text-[12px] leading-relaxed", latest.error ? "text-danger" : "text-ink-secondary")}>{routineRunText(latest, said)}</p>}
         {!!routine.failureStreak && <p className="mt-2 text-[12px] text-danger">{t("routines.failureStreak", { count: routine.failureStreak })}</p>}
+        {!!routine.noStartStreak && <p className="mt-2 text-[12px] leading-relaxed text-warning" data-routine-no-start="">{t("routines.noStartStreak", { count: routine.noStartStreak })}</p>}
         {routine.weekRuns && <p className="mt-2 text-[12px] text-ink-secondary">{t(routine.weekRuns.total === 1 ? "routines.weekRunsOne" : "routines.weekRuns", routine.weekRuns)}</p>}
         {routine.warning && <p className="mt-2 text-[12px] leading-relaxed text-warning">{routine.warning}</p>}
         {routine.heldFor && <p className="mt-2 text-[12px] leading-relaxed text-ink-secondary">{routineHeldNote(routine)}</p>}
@@ -69,6 +75,7 @@ export function RoutineList({ routines, runs, bots, pausedBots, loading, error, 
           {t("routines.botPaused")}{" "}
           <button type="button" className="cursor-pointer text-accent hover:underline" onClick={() => showBotLimit("paused")}>{t("routines.botPausedSwap")}</button>
         </p>}
+        {routine.enabled && heldBots?.includes(routine.botId) && <p className="mt-2 text-[12px] leading-relaxed text-warning" data-routine-bot-held="">{t("routines.botHeld")}</p>}
       </article>;
     })}
   </div>;

@@ -11,7 +11,7 @@ vi.mock("@/state/store", async (importOriginal) => {
     ...original,
     useStore: () => ({ state: { ...original.initialState,
       forkPanel: { kind: "bot", ownerId: "bot", threadId: "fork", messages: [], activeLeafId: null,
-        loading: false, loadingAppends: [], loadId: "load", loadFailed: false } }, dispatch: fixture.dispatch }),
+        loading: false, loadId: "load", loadFailed: false } }, dispatch: fixture.dispatch }),
     api: fixture.api,
   };
 });
@@ -35,10 +35,9 @@ it("focuses a fork search hit without selecting or switching the main conversati
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Matching");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
-  expect(fixture.dispatch).toHaveBeenCalledWith({
+  await vi.waitFor(() => expect(fixture.dispatch).toHaveBeenCalledWith({
     type: "focusMessage", threadId: "fork", messageId: "copied", matchText: "Matching",
-  });
+  }));
   expect(fixture.navigate).not.toHaveBeenCalled();
   await act(async () => root.unmount());
   host.remove();

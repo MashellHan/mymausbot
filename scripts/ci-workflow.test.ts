@@ -137,7 +137,18 @@ describe("CI concurrency", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.vitest.strategy.matrix).toBe("${{ fromJSON(needs.static.outputs.vitest_matrix) }}");
     expect(workflow.jobs.vitest.strategy["max-parallel"]).toBe(4);
-    expect(workflow.jobs.vitest["timeout-minutes"]).toBe("${{ matrix.os == 'ubuntu-latest' && 25 || 30 }}");
+    const timeout = workflow.jobs.vitest["timeout-minutes"];
+    const fullMac = { os: "macos-latest", files: "" };
+    const pr = { event_name: "pull_request" };
+    expect(interpolate(timeout, { matrix: fullMac, github: pr })).toBe(45);
+    for (const event_name of ["push", "merge_group", "schedule", "workflow_dispatch"]) {
+      expect(interpolate(timeout, { matrix: fullMac, github: { event_name } })).toBe(31);
+    }
+    expect(interpolate(timeout, { matrix: { ...fullMac, files: "server/a.test.ts" }, github: pr })).toBe(30);
+    expect(interpolate(timeout, { matrix: { os: "ubuntu-latest" }, github: pr })).toBe(25);
+    expect(workflow.jobs.gate["timeout-minutes"]).toBe(180);
+    // Ubuntu 26.04 (today's ubuntu-latest) lets bubblewrap box the Cloud e2e fixtures; the Linux shards keep 24.04.
+    expect(workflow.jobs.vitest["runs-on"]).toBe("${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}");
   });
 
   it("runs each selected platform's own shards, and its e2e files, from ci-scope's matrix", () => {
@@ -284,7 +295,7 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.vitest.needs).toBe("static");
   });
 
-  it("checks both FOSS projects fresh and sequentially within one bounded macOS heap", () => {
+  it("checks all FOSS projects fresh and sequentially within one bounded macOS heap", () => {
     const foss = workflow.jobs.foss;
     const steps = foss.steps as Step[];
     const removed = steps.findIndex((step) => step.name === "Delete the enterprise folder");
@@ -296,7 +307,9 @@ describe("CI concurrency", () => {
     expect(tested).toBeGreaterThan(checked);
     expect(steps[checked]!.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=4096" });
     expect(steps[checked]!.run!.trim().split("\n")).toEqual([
-      "pnpm typecheck --project ui --fresh", "pnpm typecheck --project server --fresh",
+      "pnpm typecheck --project ui --fresh",
+      "pnpm typecheck --project server --fresh",
+      "pnpm typecheck --project phone-protocol --fresh",
     ]);
     expect(steps[checked]).not.toHaveProperty("continue-on-error");
     expect(workflow.jobs.static.steps.some((step: Step) => step.run === "pnpm typecheck")).toBe(true);

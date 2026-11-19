@@ -391,14 +391,14 @@ describe("OpenCode catalog", () => {
       "opencode/deepseek-v4.1-flash-free", JSON.stringify({ cost: { input: 0, output: 0 } }),
       "opencode-go/glm-5.3", JSON.stringify({ cost: { input: 1, output: 2 } }),
       "opencode-go/minimax-m3", JSON.stringify({ cost: { input: 1, output: 2 } }),
-    ].join("\n"));
+    ].join("\n"))!;
     for (const said of ["OpenCode Go weekly usage limit reached", "Internal error: GoUsageLimitError: the Go allowance is used up"]) {
-      const facts = openCodeLimitFacts(said, "opencode-go/minimax-m3", catalog!);
+      const facts = openCodeLimitFacts(said, "opencode-go/minimax-m3", catalog);
       expect(facts.limit, said).toBe("model");
       expect(facts.limitModels).toEqual(expect.arrayContaining(["opencode-go/minimax-m3", "opencode-go/glm-5.3"]));
       expect(facts.limitModels).not.toContain("opencode/deepseek-v4.1-flash-free");
     }
-    expect(openCodeLimitFacts("OpenCode Go weekly usage limit reached", "opencode/big-pickle"), "a limit met by another model still holds the account")
+    expect(openCodeLimitFacts("OpenCode Go weekly usage limit reached", "opencode/big-pickle", catalog), "a limit met by another model still holds the account")
       .toEqual({ limit: "engine" });
   });
 
@@ -421,7 +421,7 @@ describe("OpenCode catalog", () => {
         expect(text.length, `${code} ${model}`).toBeLessThanOrEqual(160);
         if (model?.startsWith("openrouter/")) {
           expect(text).toContain("OpenRouter");
-          expect(text).not.toMatch(/Zen|OpenCode Go|Settings → API keys/u);
+          expect(text).not.toMatch(/Zen|OpenCode Go|Settings → AI/u);
         }
         if (model?.startsWith("anthropic/")) expect(text).toContain("Anthropic");
       }
@@ -429,7 +429,7 @@ describe("OpenCode catalog", () => {
   );
 
   it("points a rejected Zen key at the key OpenMaus saves", () => {
-    expect(describeOpenCodeAccountError("invalid_credentials", "opencode/big-pickle")).toContain("Settings → API keys");
+    expect(describeOpenCodeAccountError("invalid_credentials", "opencode/big-pickle")).toContain("Settings → AI → Providers");
     for (const model of [undefined, "opencode/big-pickle", "opencode-go/minimax-m3"]) {
       expect(describeOpenCodeAccountError("invalid_credentials", model)).not.toContain("opencode auth login");
     }
@@ -441,7 +441,7 @@ describe("OpenCode catalog", () => {
     for (const model of ["openrouter/openai/gpt-4o-mini", "venice/llama-3.3-70b", `${"very-long-provider-name".repeat(4)}/model`]) {
       const cloud = describeOpenCodeAccountError("invalid_credentials", model, { cloudHome: true });
       expect(cloud).not.toContain("opencode auth login");
-      expect(cloud).toContain("Save it under Keys for other OpenCode providers in Settings → API keys.");
+      expect(cloud).toContain("Save it under Keys for other OpenCode providers in Settings → AI.");
       expect(cloud.length, model).toBeLessThanOrEqual(160);
       expect(describeOpenCodeAccountError("invalid_credentials", model, { cloudHome: false })).toContain("opencode auth login");
     }
@@ -857,7 +857,7 @@ describe("OpenCode turns without a sign-in gate", () => {
       const { done, events } = await f.run("t-bad-key", "opencode/big-pickle");
       expect(done, `attempt ${attempt}`).toMatchObject({ ok: false, stopReason: "auth_required" });
       const error = events.find((event) => event.type === "runtime.error");
-      expect(error).toMatchObject({ setup: true, message: expect.stringContaining("Settings → API keys") });
+      expect(error).toMatchObject({ setup: true, message: expect.stringContaining("Settings → AI → Providers") });
       expect(error).not.toMatchObject({ message: expect.stringContaining("Internal error") });
     }
     expect(f.launches()).toBe(1);

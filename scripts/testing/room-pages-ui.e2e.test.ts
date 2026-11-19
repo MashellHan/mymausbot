@@ -29,7 +29,7 @@ const evidenceDir = process.env.OMB_UI_EVIDENCE_DIR ? resolve(ROOT, process.env.
 afterAll(async () => { if (!process.env.OMB_UI_EVIDENCE_DIR) await removeTempDir(evidenceDir); });
 
 /** The send button sits at a fixed place in the page, so a real mouse can find it inside the frame. What send() did
- * shows in the page and in its height, which the host's frame follows: 300px when it resolved, 240px when refused. */
+ * shows in the page. */
 const PAGE = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 body{margin:0;font:15px/1.4 var(--font-sans);color:var(--color-text-primary)}
 #mode{position:absolute;left:16px;top:12px;margin:0}
@@ -156,8 +156,7 @@ async function until<T>(probe: () => Promise<T> | T, what: string, timeoutMs = 3
 
     const live = (id: string) => `[data-app="${id}"][data-app-room][data-app-state="live"] iframe[data-app-frame]`;
     await until(() => evaluate(`Boolean(document.querySelector('${live(pageId)}') && document.querySelector('${live(boardRow.id)}'))`), "both frames to go live", 30_000);
-    expect(await evaluate(`[...document.querySelectorAll('[data-app="${pageId}"] button')].map((b) => b.textContent.trim()).filter((t) => t === "Point" || t === "Share")`)).toEqual(["Point"]);
-    expect(await evaluate(`Boolean([...document.querySelectorAll('[data-app="${pageId}"] button')].find((b) => b.getAttribute("aria-label") === "Full screen"))`)).toBe(true);
+    expect(await evaluate(`Boolean(document.querySelector('[data-app="${pageId}"] [data-page-tools]'))`)).toBe(false);
     mkdirSync(evidenceDir, { recursive: true });
 
     // Every request the renderer makes goes through fetch: from here on each one is kept.
@@ -179,18 +178,27 @@ async function until<T>(probe: () => Promise<T> | T, what: string, timeoutMs = 3
     };
 
     const sentBefore = (await transcript()).filter((message) => message.role === "user").length;
-    const page = await inView(pageId);
-    await ui("screenshot", "--out", join(evidenceDir, "room-pages-shown.png"));
-    await click(page, 146, 70);
-    // 300px: send() resolved in the page without asking the host; a refusal would leave it at 240px.
-    await until(async () => (await frameBox(pageId)).height === 300, "the page to show what its send did");
-    expect(await shows("Clicked: send() resolved and posted nothing")).toBe(true);
     await inView(pageId);
+    await ui("screenshot", "--out", join(evidenceDir, "room-pages-shown.png"));
+    // The card opens the page over the room, with Point (its pick goes to the page's bot) and no Share.
+    const opened = `[data-page-fullscreen="${pageId}"]`;
+    await evaluate(`document.querySelector('[data-app="${pageId}"] [data-page-open]').click(); true`);
+    await until(() => evaluate(`Boolean(document.querySelector('${opened} iframe'))`), "the page to open over the room");
+    expect(await evaluate(`[...document.querySelectorAll('${opened} button')].map((b) => b.textContent.trim()).filter((t) => t === "Point" || t === "Share")`)).toEqual(["Point"]);
+    await until(async () => {
+      const box = await evaluate(`(() => { const r = document.querySelector('${opened} iframe').getBoundingClientRect(); return { left: r.left, top: r.top }; })()`);
+      await click(box, 146, 70);
+      return shows("Clicked: send() resolved and posted nothing");
+    }, "the page to show what its send did");
     await ui("screenshot", "--out", join(evidenceDir, "room-pages-clicked-send.png"));
+    await evaluate(`document.querySelector('${opened} button[aria-label="Close full screen"]').click(); true`);
+    await until(async () => !(await evaluate(`Boolean(document.querySelector('${opened}'))`)), "the page to close");
 
-    const board = await inView(boardRow.id);
-    // The board's "Paint it red" button: under its heading and its result line, in the browser's default styles.
-    await click(board, 48, 124);
+    await inView(boardRow.id);
+    const boardRefs = (await ui("snapshot")).refs as Record<string, { role: string; name: string }>;
+    const paint = Object.entries(boardRefs).filter(([, ref]) => ref.role === "button" && ref.name === "Paint it red");
+    expect(paint).toHaveLength(1);
+    await ui("click", "--ref", paint[0]![0]);
     await until(() => shows(`Error -32000: ${ROOM_VIEW_ONLY}`), "the board to show the host's refusal");
     await inView(boardRow.id);
     await ui("screenshot", "--out", join(evidenceDir, "room-pages-clicked-app.png"));

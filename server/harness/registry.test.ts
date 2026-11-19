@@ -548,7 +548,6 @@ process.exit(0);
     originalPath = process.env.PATH;
     const binDir = join(scratch, "fake-path");
     mkdirSync(binDir);
-    // The fake npm uses /usr/bin/env node, so keep Node available on the isolated PATH.
     symlinkSync(process.execPath, join(binDir, "node"));
     if (present) addFakeNpm(binDir);
     process.env.PATH = binDir;

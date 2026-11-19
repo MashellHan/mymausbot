@@ -14,6 +14,7 @@ import { BotAvatar } from "./Avatar";
 import { PlanUsage } from "./PlanUsage";
 import { Select } from "./Select";
 import { UsageBudgetCards, type BudgetState } from "./UsageBudget";
+import { UsageCapsCard, type UsageCapView } from "./UsageCaps";
 import { TraceView } from "./usage/TraceView";
 import { LiveBadge, modelName } from "./usage/TraceWaterfall";
 import { UsageInsightsPanel, type InsightMetric } from "./usage/UsageInsights";
@@ -36,8 +37,25 @@ export interface UsageGroup {
 interface UsageSummary {
   groupBy: UsageGroupBy;
   groups: UsageGroup[];
+  /** The period as a whole; `unpriced` counts its turns whose model has no price, booked at $0. */
+  total?: { turns: number; unpriced: number; estimatedUsd?: number | null };
   budget?: BudgetState | null;
-  total?: { estimatedUsd: number | null };
+  caps?: UsageCapView | null;
+  /** Dollars booked on engines signed in with a subscription: an estimate nobody is billed. */
+  notBilled?: { usd: number; turns: number };
+}
+
+/** What the period's dollars leave out or overstate, one line each; nothing when the total is complete and billed. */
+export function CostCaveats({ summary }: { summary: Pick<UsageSummary, "total" | "notBilled"> | null }) {
+  const plan = summary?.notBilled?.usd ?? 0;
+  const unpriced = summary?.total?.unpriced ?? 0;
+  if (!(plan > 0) && !unpriced) return null;
+  return (
+    <div data-testid="usage-caveats" className="flex flex-col gap-0.5 px-1 text-[12px] leading-5 text-ink-secondary">
+      {plan > 0 && <p>{t("usage.page.notBilled", { cost: formatCost(plan) })}</p>}
+      {unpriced > 0 && <p>{t("usage.page.unpriced", { count: String(unpriced) })}</p>}
+    </div>
+  );
 }
 
 const GROUP_LABEL_KEYS: Record<UsageGroupBy, LocaleKey> = {
@@ -288,6 +306,10 @@ export function UsageSection() {
   );
   const insights = <UsageInsightsPanel range={range} version={version} metric={metric} groupLabel={usageGroupLabel}
     card={settings ? SIMPLE_CARD : "rounded-2xl border border-hairline/50 bg-card"} />;
+  const costNotes = metric === "cost" && <>
+    {estimated !== null && estimated > 0 && <p className="px-1 text-[12px] text-ink-secondary">{t("usage.page.estimated", { cost: formatCost(estimated) })}</p>}
+    <CostCaveats summary={summary} />
+  </>;
 
   if (settings) {
     return (
@@ -305,7 +327,7 @@ export function UsageSection() {
           </div>
           {error && <p role="alert" className="px-1 text-[12px] text-danger">{error}</p>}
           {insights}
-          {metric === "cost" && estimated !== null && estimated > 0 && <p className="px-1 text-[12px] text-ink-secondary">{t("usage.page.estimated", { cost: formatCost(estimated) })}</p>}
+          {costNotes}
           <SettingsGroup label={t("usage.page.runs")} block="runs" footnote={untimed ? t("usage.page.untimedNote") : undefined}>
             <SettingsRows>
               {list && !list.roots.length && <SettingsEmptyRow>{t("usage.page.runsEmpty")}</SettingsEmptyRow>}
@@ -315,6 +337,7 @@ export function UsageSection() {
           </SettingsGroup>
         </>}
         <PlanUsage />
+        <UsageCapsCard view={summary?.caps} onSaved={() => setVersion((value) => value + 1)} />
         <UsageBudgetCards budget={budget} />
       </div>
     );
@@ -339,7 +362,7 @@ export function UsageSection() {
       ) : (
         <>
           {insights}
-          {metric === "cost" && estimated !== null && estimated > 0 && <p className="px-1 text-[12px] text-ink-secondary">{t("usage.page.estimated", { cost: formatCost(estimated) })}</p>}
+          {costNotes}
           <WhereItWent range={range} version={version} />
           <section className="rounded-2xl border border-hairline/50 bg-card p-2" aria-label={t("usage.page.runs")}>
             <div className="px-3 pb-1 pt-3">
@@ -358,6 +381,7 @@ export function UsageSection() {
         </>
       )}
       <PlanUsage />
+      <UsageCapsCard view={summary?.caps} onSaved={() => setVersion((value) => value + 1)} />
       <UsageBudgetCards budget={budget} />
     </div>
   );

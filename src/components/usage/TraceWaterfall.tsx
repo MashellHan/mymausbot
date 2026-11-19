@@ -108,7 +108,7 @@ function RowName({ row, models }: { row: TraceRow; models: readonly InstanceInfo
       const bot = state.bots.find((entry) => entry.id === node.botId);
       icon = <TurnAvatar bot={bot} name={node.botName} />;
       name = (bot?.name ?? node.botName) || t("trace.unknownBot");
-      detail = modelName(node.model, models);
+      detail = modelName(node.model, models, node.driverKind);
       break;
     }
     case "step":
