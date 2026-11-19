@@ -26,9 +26,13 @@
 
 ## User path
 
-Settings → Usage (in Simple mode, on Account) shows the period's totals, where
-the money went by bot and by model (with a switch for person, day, provider and
-routine), and every run. Opening a run shows its trace waterfall. In a chat, each
+Settings → Spending, in Simple and Advanced mode, opens on the period's charts
+(`GET /api/usage/insights`, bucketed by the viewer's time zone): the total
+against the same number of days before, each provider's share and daily line,
+turns, cost per turn, cache hit rate and turn length, when work happens by
+weekday and hour, tokens by type, spend by person, and a breakdown by model,
+bot, person, provider, routine, department or day. Spend and Tokens switch the
+charts. Runs use the same local calendar and open a trace waterfall. In a chat, each
 turn's work line reads "Worked for …" with **View trace** beside it. **Export
 CSV** stays one line per turn.
 
@@ -44,7 +48,9 @@ and one as a paired device with a label, waits for both to settle, then checks
 the month file has exactly two rows with the right triggers and no message
 text, that `GET /api/usage` groups them by person and by bot with the fake
 engine's `0.01` per turn, that `GET /api/usage.csv` returns three lines, and
-that a client-scoped device is refused. It prints the fixture's server log
+that a client-scoped device is refused. A synthetic turn whose UTC and
+Shanghai dates differ checks the same viewer calendar across charts, traces
+and CSV. The test prints the fixture's server log
 path as evidence and removes its temporary home.
 
 `server/usage-attribution.e2e.test.ts` boots the server against the fake Claude, ACP
@@ -69,8 +75,8 @@ pnpm control:omb wait --bot BOT_ID --timeout 30 --url http://127.0.0.1:PORT
 cat DATA_DIR/usage/$(date -u +%Y-%m).jsonl
 ```
 
-Then open the printed preview, go to Settings → Usage, and confirm the run is
-listed with its bot, and that **Where it went** shows it under **Bot** and under
+Then open the printed preview, go to Settings → Spending, and confirm the run is
+listed with its bot, and that **Breakdown** shows it under **Bot** and under
 **Person** as "This computer".
 
 ## Traces
@@ -113,7 +119,7 @@ waits for settlement, and checks that the tooltip separates 10 uncached input,
 headline. Its JSON evidence sits next to the fixture log; no live account is used.
 
 ```sh
-pnpm exec vitest run server/usage-ledger.test.ts src/lib/usage-trace.test.ts server/request-auth.test.ts
+pnpm exec vitest run server/usage-ledger.test.ts server/usage-insights.test.ts src/lib/usage-trace.test.ts server/request-auth.test.ts
 ```
 
 These cover month files and 0600 modes, torn lines, clamped tokens, a blocked
@@ -137,6 +143,6 @@ scope on both routes.
   process it finds the restored state among the session's recent results in
   `<data>/claude-cost-history.json`; without one, that first turn keeps its
   whole figure.
-- A member's chat-only device cannot open traces: the routes are owner-only,
+- A member's chat-only device cannot open charts or traces: the routes are owner-only,
   like the rest of Usage, and a trace leaves out turns in threads its viewer
   cannot see.
