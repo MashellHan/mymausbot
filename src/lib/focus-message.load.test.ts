@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Action, AppState, Bot, Group, Message } from "@/state/store";
+import { initialState, reducer, type Action, type AppState, type Bot, type Group, type Message } from "@/state/store";
 
 const fixture = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", async (original) => ({
@@ -38,7 +38,7 @@ describe("landing on a search hit older than the loaded page", () => {
       "/api/threads/t/messages?limit=200&before=m200",
     ]);
     expect(actions.map((action) => action.type)).toEqual(["select", "olderMessages", "focusMessage"]);
-    expect(actions[1]).toEqual({ type: "olderMessages", threadId: "t", generation: 3, messages: range(0, 400), hasMore: false });
+    expect(actions[1]).toEqual({ type: "olderMessages", threadId: "t", generation: 3, before: "m400", messages: range(0, 400), hasMore: false });
   });
 
   it("does the same in the room's open thread", async () => {
@@ -50,12 +50,26 @@ describe("landing on a search hit older than the loaded page", () => {
   it("stops at the page that holds the hit", async () => {
     await landOnSearchHit({ ...hit, botId: "scout", threadId: "t", messageId: "m300" }, state, dispatch, true);
     expect(fixture.api).toHaveBeenCalledOnce();
-    expect(actions[1]).toEqual({ type: "olderMessages", threadId: "t", generation: 3, messages: range(200, 400), hasMore: true });
+    expect(actions[1]).toEqual({ type: "olderMessages", threadId: "t", generation: 3, before: "m400", messages: range(200, 400), hasMore: true });
   });
 
   it("asks for nothing when the hit is already loaded", async () => {
     await landOnSearchHit({ ...hit, botId: "scout", threadId: "t", messageId: "m450" }, state, dispatch, true);
     expect(fixture.api).not.toHaveBeenCalled();
     expect(actions.map((action) => action.type)).toEqual(["select", "focusMessage"]);
+  });
+
+  it("lands on a hit when scrollback loads the newer part of search history first", async () => {
+    let current: AppState = { ...initialState, bots: [bot], transcriptGeneration: { t: 3 } };
+    const apply = (action: Action) => { current = reducer(current, action); };
+    fixture.api.mockImplementationOnce(async () => {
+      apply({ type: "olderMessages", threadId: "t", generation: 3, before: "m400", ...pages.m400! });
+      return pages.m400;
+    });
+    await landOnSearchHit({ ...hit, botId: "scout", threadId: "t" }, current, apply, true);
+    expect(current.bots[0]?.messages).toHaveLength(600);
+    expect(current.bots[0]?.messages).toEqual(range(0, 600));
+    expect(current.bots[0]?.hasMore).toBe(false);
+    expect(current.focusMessage).toMatchObject({ messageId: "m50", threadId: "t" });
   });
 });
