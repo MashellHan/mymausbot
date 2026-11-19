@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { ImageGenerationConfig } from "../shared/image-generation.ts";
 import { imageGenConfigSchema, imageGenPatchSchema, keepKeysOutOfImageModels, type ImageGenCredentialPatch } from "./image-generation-config.ts";
 import { botAvatarUrlSchema } from "../shared/bot-avatar.ts";
+import { configBackupRefusal, configSaveRefusal, readConfigFile, writeConfigBackup } from "./config-backup.ts";
 import { defaultBotThreads, MAX_CONCURRENT_BOT_THREADS } from "./bot-thread-limits.ts";
 import { anthropicKeyEnv } from "./anthropic-key-env.ts";
 import { withoutComputerEngine } from "./computer-engine-removal.ts";
@@ -30,8 +31,8 @@ import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schem
 import { deciderConfigSchema, type DeciderConfig } from "./decider/config.ts";
 import { fishKeyFromLiveKey, liveConfigSchema, liveConfigWithEnv, liveSettingEnv, type LiveConfig } from "./live-config.ts";
 import { browserEngineConfigSchema, isValidCdpTarget, type BrowserEngineConfig } from "./browser/config.ts";
-import { roomContextSettings } from "./room-context-settings.ts";
-import { activeSessionConfig, assertSessionConfigWritable, readSessionConfigDisk, sessionCredentialsEnabled, withSessionSecrets, writeSessionConfig } from "./session-config.ts"; export { confirmSessionConfig, setSessionConfigPublisher, sessionCredentialsEnabled } from "./session-config.ts";
+import { roomContextSettings } from "./room-context-settings.ts"; import { usageCapsSchema, type UsageCapsConfig } from "./usage-caps-config.ts";
+import { activeSessionConfig, assertSessionConfigWritable, sessionCredentialsEnabled, withSessionSecrets, writeSessionConfig } from "./session-config.ts"; export { confirmSessionConfig, setSessionConfigPublisher, sessionCredentialsEnabled } from "./session-config.ts";
 import { localVmConfigSchema } from "./local-vm-settings.ts";
 export * from "./local-vm-settings.ts";
 
@@ -231,7 +232,7 @@ const featureConfigSchema = z.object({
   sharedComputers: z.boolean().optional(),
   claudeUserMcp: z.boolean().optional(), // Claude bots also load this machine's Claude Code MCP servers. Off unless true: tools cost tokens.
   claudeUserSkills: z.boolean().optional(), // Claude bots also load the skills in ~/.claude/skills, in place. Off unless true.
-  /** LLM-generated titles for new threads. Off unless true. */
+  /** Retired: generated thread titles are always on. Still accepted so older config files load. */
   llmThreadTitles: z.boolean().optional(),
   /** A new bot's setup card offers answers its engine writes for it, when there is something to go on. On unless false. */
   smartSetupChoices: z.boolean().optional(),
@@ -242,10 +243,10 @@ const featureConfigSchema = z.object({
   shareLearnedSkills: z.enum(["off", "ask", "auto"]).optional(),
   /** Memory upkeep also reads a member bot's room turns. Off unless true. */
   roomMemoryCapture: z.boolean().optional(),
-  /** Room jobs to several members run side by side, each in a thread of its own. Off unless true. */
+  /** Room jobs to several members run side by side, each in a thread of its own. On unless false. */
   parallelRoomJobs: z.boolean().optional(),
   acpPlanLines: z.boolean().optional(), // An ACP agent's plan as activity lines. Off unless true.
-}).extend({ agentsToolBridge: z.boolean().optional(), savedSteps: z.boolean().optional(), usbPhoneTakeover: z.boolean().optional(), cloudComputerAutoReplace: z.boolean().optional() }); // cloudComputerAutoReplace: delete and replace a dead cloud computer by itself, off unless true (OMB_CLOUD_COMPUTER_AUTO_REPLACE wins); agentsToolBridge: the find_tool / use_tool bridge, off unless true; savedSteps: repeat a computer task from its saved steps, on unless false; usbPhoneTakeover: watch and take over the bots' USB phone, off unless true
+}).extend({ agentsToolBridge: z.boolean().optional(), savedSteps: z.boolean().optional(), usbPhoneTakeover: z.boolean().optional(), cloudComputerAutoReplace: z.boolean().optional(), phonePush: z.boolean().optional() }); // cloudComputerAutoReplace: delete and replace a dead cloud computer by itself, off unless true (OMB_CLOUD_COMPUTER_AUTO_REPLACE wins); agentsToolBridge: the find_tool / use_tool bridge, off unless true; savedSteps: repeat a computer task from its saved steps, on unless false; usbPhoneTakeover: watch and take over the bots' USB phone, off unless true; phonePush: wake a paired phone whose app is closed through the hosted push relay, off unless true (OMB_PHONE_PUSH wins)
 const onboardingConfigSchema = z.object({
   completedAt: z.string().trim().max(40).optional(),
   version: z.number().int().min(0).max(1000).optional(),
@@ -332,7 +333,7 @@ const appConfigSchema = z.object({
       monthlyUsd: z.number().min(0).max(1_000_000).optional(),
       warnAtPercent: z.number().int().min(1).max(100).optional(),
     })
-    .optional(),
+    .optional(), /** Caps on a day's and a month's usage, for the server and for each bot; none by default (usage-caps.ts). */ usageCaps: usageCapsSchema.optional(),
   /** Operator sell prices per million tokens by model id, `driver/model` or `default`; read only with the `billing` entitlement. */
   billing: z
     .object({
@@ -359,13 +360,13 @@ const appConfigSchema = z.object({
   vps: vpsConfigSchema.optional(),
   /** OpenCode key, plus `providerKeys` for its other providers by the env name OpenCode reads; both write-only and only for its child. */
   opencodeGo: z.object({ apiKey: optionalText, providerKeys: z.record(z.string(), z.string()).optional() }).optional(),
-  /** `provider`: "elevenlabs" (default, `key`), "fish" (`fishKey`, `fishModel`), "system", "xai" (`xai.key`), "gemini" (`geminiKey`, `model`), "openai" (`openai.key`) or "chatterbox" (local; `baseUrl`, `model`). */
+  /** `provider`: "elevenlabs" (default, `key`), "fish" (`fishKey`, `fishModel`), "system", "xai" (`xai.key`), "gemini" (`geminiKey`, `model`), "openai" (`openai.key`), "deepseek" (`deepseek.key`; it also hears dictation) or "chatterbox" (local; `baseUrl`, `model`). */
   tts: z.object({
     key: optionalText,
     fishKey: optionalText,
     geminiKey: optionalText,
     voice: optionalText,
-    provider: z.enum(["elevenlabs", "fish", "system", "chatterbox", "xai", "gemini", "openai"]).optional(),
+    provider: z.enum(["elevenlabs", "fish", "system", "chatterbox", "xai", "gemini", "openai", "deepseek"]).optional(),
     baseUrl: z
       .string()
       .trim()
@@ -421,7 +422,7 @@ const storedAppConfigSchema = appConfigSchema.extend(helperStoredShape).extend({
   }).optional(),
 });
 const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers: true, cliStartup: true, customDomain: true })
-  .extend({ defaultModelSelection: defaultModelSelectionSchema.nullable().optional(), threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() });
+  .extend({ defaultModelSelection: defaultModelSelectionSchema.nullable().optional(), threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() }); export const CONFIG_PATCH_FIELDS = appConfigPatchSchema.shape;
 const jsonObjectSchema = z.record(z.string(), z.json());
 
 export interface AppConfig extends HelperConfig {
@@ -454,7 +455,7 @@ export interface AppConfig extends HelperConfig {
   anthropic?: { key?: string; url?: string; everyClaudeBot?: boolean };
   openai?: { key?: string };
   openrouter?: { key?: string };
-  budgets?: { monthlyUsd?: number; warnAtPercent?: number };
+  budgets?: { monthlyUsd?: number; warnAtPercent?: number }; usageCaps?: UsageCapsConfig;
   decisions?: { retentionDays?: number };
   loopGuard?: LoopGuardConfig;
   safetyFloor?: { enabled?: boolean };
@@ -466,7 +467,7 @@ export interface AppConfig extends HelperConfig {
   /** A named host from the user's SSH config. Authentication stays with SSH. */
   vps?: { sshAlias?: string };
   opencodeGo?: { apiKey?: string; providerKeys?: Record<string, string> };
-  tts?: { key?: string; fishKey?: string; geminiKey?: string; voice?: string; provider?: "elevenlabs" | "fish" | "system" | "chatterbox" | "xai" | "gemini" | "openai"; baseUrl?: string; model?: string; fishModel?: FishTtsModel; everyReply?: boolean };
+  tts?: { key?: string; fishKey?: string; geminiKey?: string; voice?: string; provider?: "elevenlabs" | "fish" | "system" | "chatterbox" | "xai" | "gemini" | "openai" | "deepseek"; baseUrl?: string; model?: string; fishModel?: FishTtsModel; everyReply?: boolean };
   decider?: DeciderConfig;
   imageGen?: ImageGenerationConfig;
   live?: LiveConfig;
@@ -477,7 +478,7 @@ export interface AppConfig extends HelperConfig {
   context?: { rebuildBytes?: number; compactAt?: number; autoCompact?: boolean; roomCompactAt?: number; roomSessions?: boolean; replayToolHistory?: boolean };
   memory?: { captureQuietMs?: number; tidyHour?: number };
   localVm?: { mode?: "shared" | "per-bot" | "pool"; maxInstances?: number; idleTimeoutMinutes?: number; preserveInstalledApps?: boolean; memoryGb?: number; cpus?: number };
-  features?: { skillAuthoring?: boolean; skillReview?: boolean; skillReviewSteps?: number; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; claudeUserSkills?: boolean; llmThreadTitles?: boolean; smartSetupChoices?: boolean; autoRecall?: boolean; skillsLibrary?: boolean; shareLearnedSkills?: "off" | "ask" | "auto"; roomMemoryCapture?: boolean; parallelRoomJobs?: boolean; acpPlanLines?: boolean; agentsToolBridge?: boolean; savedSteps?: boolean; usbPhoneTakeover?: boolean; cloudComputerAutoReplace?: boolean };
+  features?: { skillAuthoring?: boolean; skillReview?: boolean; skillReviewSteps?: number; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; claudeUserSkills?: boolean; llmThreadTitles?: boolean; smartSetupChoices?: boolean; autoRecall?: boolean; skillsLibrary?: boolean; shareLearnedSkills?: "off" | "ask" | "auto"; roomMemoryCapture?: boolean; parallelRoomJobs?: boolean; acpPlanLines?: boolean; agentsToolBridge?: boolean; savedSteps?: boolean; usbPhoneTakeover?: boolean; cloudComputerAutoReplace?: boolean; phonePush?: boolean };
   onboarding?: { completedAt?: string; version?: number; reelSeen?: boolean; hintsSeen?: string[]; firstTurnAt?: string };
   browserProfiles?: BrowserProfile[];
   browserEngine?: BrowserEngineConfig;
@@ -660,7 +661,6 @@ export function claudeUserMcpEnabled(cfg: Pick<AppConfig, "features">): boolean 
   return cfg.features?.claudeUserMcp === true;
 }
 
-
 export function engineLaunches(configs: InstanceConfigMap, env: Record<string, string | undefined> = process.env): Record<string, unknown> {
   return Object.fromEntries(Object.entries(configs).map(([id, entry]) =>
     [id, { ...entry, fallbackEnv: Object.fromEntries(fallbackEnv(entry).map((name) => [name, env[name]])) }]));
@@ -757,7 +757,7 @@ export function loadConfig(): AppConfig {
   if (process.env.OMB_FISH_AUDIO_API_KEY !== undefined) cfg.tts.fishKey = process.env.OMB_FISH_AUDIO_API_KEY;
   if (process.env.OMB_GEMINI_API_KEY !== undefined) cfg.tts.geminiKey = process.env.OMB_GEMINI_API_KEY;
   cfg.decider = { ...cfg.decider };
-  if (process.env.OMB_JEV_API_KEY !== undefined) cfg.decider.key = process.env.OMB_JEV_API_KEY;
+  if (process.env.OMB_JEV_API_KEY !== undefined) cfg.decider.key = process.env.OMB_JEV_API_KEY; if (process.env.OMB_CUSTOM_DECIDER_KEY !== undefined) cfg.decider.customKey = process.env.OMB_CUSTOM_DECIDER_KEY;
   if (process.env.OMB_OPENROUTER_DECIDER_KEY !== undefined) cfg.decider.openrouterKey = process.env.OMB_OPENROUTER_DECIDER_KEY; if (process.env.OMB_WORKERS_AI_TOKEN !== undefined) cfg.decider.workersAiToken = process.env.OMB_WORKERS_AI_TOKEN;
   cfg.live = liveConfigWithEnv(cfg.live); fishKeyFromLiveKey(cfg);
   cfg.imageGen = { ...cfg.imageGen };
@@ -801,7 +801,7 @@ export function syncCredentialEnv(patch: Omit<Partial<Omit<AppConfig, "threads" 
     [patch.tts?.key, "OMB_TTS_KEY"],
     [patch.tts?.fishKey, "OMB_FISH_AUDIO_API_KEY"],
     [patch.tts?.geminiKey, "OMB_GEMINI_API_KEY"],
-    [patch.decider?.key, "OMB_JEV_API_KEY"],
+    [patch.decider?.key, "OMB_JEV_API_KEY"], [patch.decider?.customKey, "OMB_CUSTOM_DECIDER_KEY"],
     [patch.decider?.openrouterKey, "OMB_OPENROUTER_DECIDER_KEY"], [patch.decider?.workersAiToken, "OMB_WORKERS_AI_TOKEN"],
     [patch.imageGen?.key, "OMB_OPENAI_IMAGE_KEY"],
     [patch.imageGen?.customApiKey, "OMB_CUSTOM_IMAGE_KEY"],
@@ -896,7 +896,10 @@ export function saveConfig(
 ): void {
   assertSessionConfigWritable();
   const p = join(DATA_DIR, "config.json");
-  const { previousDisk, previousBytes } = readSessionConfigDisk(p);
+  const read = readConfigFile(p);
+  if (read.state === "unreadable" || read.state === "invalid") throw configSaveRefusal(read, p);
+  const previousDisk = read.state === "ok" ? read.value : {};
+  const previousBytes = read.state === "ok" ? read.text : null;
   const previousSession = activeSessionConfig();
   let disk: JsonObject = previousSession ? withSessionSecrets(previousDisk, previousSession) : structuredClone(previousDisk);
   const checkedPatch = appConfigSchema.partial().extend({ defaultModelSelection: defaultModelSelectionSchema.nullable().optional(), threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() }).parse(patch);
@@ -918,12 +921,9 @@ export function saveConfig(
   }
   keepImageModels();
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
-  for (const key of ["language", "computerName", "everyBotRules"] as const) if (checkedPatch[key] !== undefined) disk[key] = checkedPatch[key];
-  if (checkedPatch.customDomain !== undefined) disk.customDomain = checkedPatch.customDomain;
-  if (checkedPatch.signIn !== undefined) disk.signIn = checkedPatch.signIn;
-  // Replace the section so clearing a backup cannot revive the old selection.
-  if (checkedPatch.automaticRecovery !== undefined) disk.automaticRecovery = checkedPatch.automaticRecovery;
-  if (checkedPatch.cacheKeepWarm !== undefined) disk.cacheKeepWarm = checkedPatch.cacheKeepWarm;
+  // Replace automatic recovery so clearing a backup cannot revive the old selection.
+  for (const key of ["language", "computerName", "everyBotRules", "customDomain", "signIn", "automaticRecovery", "cacheKeepWarm", "usageCaps"] as const)
+    if (checkedPatch[key] !== undefined) disk[key] = checkedPatch[key];
   if (checkedPatch.defaultModelSelection !== undefined) {
     if (checkedPatch.defaultModelSelection === null) delete disk.defaultModelSelection;
     else disk.defaultModelSelection = checkedPatch.defaultModelSelection;
@@ -1004,6 +1004,7 @@ export function saveConfig(
     }
   }
   mkdirSync(DATA_DIR, { recursive: true });
+  if (previousBytes !== null && !writeConfigBackup(p, previousBytes)) throw configBackupRefusal(p);
   const persisted = writeSessionConfig({ file: p, effective: disk, previousDisk, previousSession, previousBytes, patch: checkedPatch as JsonObject, forget: () => storedConfig.forget() });
   storedConfig.forget();
   for (const listener of configSaveListeners) {
@@ -1110,9 +1111,9 @@ export function instanceOwnsRouting(
     case "modelgo": return own(entry.environment?.MODELGO_API_KEY) || ownUrl("https://api.modelgo.ai/v1");
     case "meta":
       return own(entry.environment?.META_API_KEY) || ownUrl("https://api.meta.ai/v1", cfg.meta?.url);
-    case "deepseekAgent":
-      // A second DeepSeek Harness account brings its own key; the workspace key fills only an instance without one.
-      return own(entry.environment?.DEEPSEEK_API_KEY);
+    case "deepseekAgent": case "mistralVibeAgent":
+      // A second DeepSeek Harness or Vibe CLI account brings its own key; the workspace key fills only an instance without one.
+      return own(entry.environment?.[entry.driver === "deepseekAgent" ? "DEEPSEEK_API_KEY" : "MISTRAL_API_KEY"]);
     case "grok":
       return own(entry.environment?.XAI_API_KEY) || (own(config.apiKeyEnv) && config.apiKeyEnv !== "XAI_API_KEY")
         || ownUrl("https://api.x.ai/v1", cfg.xai?.url);
@@ -1124,7 +1125,7 @@ export function instanceOwnsRouting(
 /** Each secret goes only to the driver that reads it; the Boat token reaches no engine. */
 function injectedEnvironment(cfg: AppConfig, instanceId: string, driver: string): Map<string, string> {
   const environment = new Map<string, string>();
-  if (driver === "mistral" && cfg.mistral?.key) environment.set("MISTRAL_API_KEY", cfg.mistral.key);
+  if ((driver === "mistral" || driver === "mistralVibeAgent") && cfg.mistral?.key) environment.set("MISTRAL_API_KEY", cfg.mistral.key);
   if (driver === "cerebras" && cfg.cerebras?.key) environment.set("CEREBRAS_API_KEY", cfg.cerebras.key);
   if (driver === "groq" && cfg.groq?.key) environment.set("GROQ_API_KEY", cfg.groq.key);
   if (driver === "greenference" && cfg.greenference?.key) environment.set("GREENFERENCE_API_KEY", cfg.greenference.key); if (driver === "modelgo" && cfg.modelgo?.key) environment.set("MODELGO_API_KEY", cfg.modelgo.key);

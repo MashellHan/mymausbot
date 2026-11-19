@@ -34,6 +34,8 @@ it("reconciles a confirmed send but leaves off-path messages off the selected br
 it("ignores a stale failed load after retry and prefers live patches over fetched history", () => {
   const retry = reduceForkPanel(state(), { type: "openForkPanel", kind: "bot", ownerId: "bot", threadId: "fork", loadId: "load-2" });
   expect(reduceForkPanel(retry, { type: "forkPanelLoadFailed", threadId: "fork", loadId: "load-1" })).toBe(retry);
+  const failed = reduceForkPanel(retry, { type: "forkPanelLoadFailed", threadId: "fork", loadId: "load-2" });
+  expect(failed.forkPanel).toMatchObject({ loading: false, loadFailed: true });
   const patched = reduceForkPanel(retry, { type: "forkPanelMessage", threadId: "fork", message: { ...source, text: "Updated" }, patch: true });
   const loaded = reduceForkPanel(patched, { type: "forkPanelLoaded", threadId: "fork", loadId: "load-2",
     messages: [source], activeLeafId: source.id });

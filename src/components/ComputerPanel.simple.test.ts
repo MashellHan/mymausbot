@@ -233,16 +233,16 @@ describe("Computer panel tabs", () => {
     }
   });
 
-  it("shows Android when connected and keeps Mini Apps after Files in Simple mode", () => {
+  it("shows Phone when Android is connected and keeps Mini Apps after Files in Simple mode", () => {
     expect(tabs(render(makeBot()))).toEqual(["Bot", "Browser", "Data", "Files", "Mini Apps"]);
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Bot", "Android", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabs(render(makeBot()))).toEqual(["Bot", "Phone", "Browser", "Data", "Files", "Mini Apps"]);
   });
 
   it("shows Files and Mini Apps after the existing Advanced tabs", () => {
     fixture.advanced = true;
     fixture.android = true;
-    expect(tabs(render(makeBot()))).toEqual(["Bot", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabs(render(makeBot()))).toEqual(["Bot", "Routines", "Phone", "Browser", "Data", "Files", "Mini Apps"]);
     fixture.config = {};
     fixture.android = false;
     expect(tabs(render(makeBot()))).toEqual(["Bot", "Routines", "Browser", "Data", "Files", "Mini Apps"]);

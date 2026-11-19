@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { hostTimeout } from "../../testing/host-timeout.ts";
 import type { CdpPage } from "./page.ts";
@@ -170,6 +170,16 @@ suite("S4 pages, tabs and page state on real Chrome", () => {
     await page.navigate(next);
     expect(page.url()).toBe(next);
     expect(page.dialogs.pending).toBeNull();
+  });
+
+  it("cancels a ready-tab wait before it evaluates the predicate", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancel page wait");
+    const match = vi.fn(() => true);
+    const cancelled = expect(run.browser.waitForPage(match, 5_000, controller.signal)).rejects.toBe(reason);
+    controller.abort(reason);
+    await cancelled;
+    expect(match).not.toHaveBeenCalled();
   });
 
   it("keeps a popup in the same profile as a new tab, opener intact", async () => {

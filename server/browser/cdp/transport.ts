@@ -76,17 +76,29 @@ export function pipeTransport(writable: Writable, readable: Readable): CdpTransp
 }
 
 /** A browser's DevTools WebSocket, for a Chrome OMB did not launch (the person's own, or a cloud browser). */
-export function webSocketTransport(url: string, { timeoutMs = 15_000 }: { timeoutMs?: number } = {}): Promise<CdpTransport> {
+export function webSocketTransport(url: string, { timeoutMs = 15_000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CdpTransport> {
   if (!/^wss?:\/\//i.test(url)) return Promise.reject(new Error(`Not a DevTools WebSocket address: ${url}`));
+  if (signal?.aborted) return Promise.reject(signal.reason);
   const socket = new WebSocket(url);
   const listeners = new Listeners();
   return new Promise<CdpTransport>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    };
+    const abort = () => {
+      cleanup();
+      reject(signal?.reason);
+      socket.close();
+    };
     const timer = setTimeout(() => {
+      cleanup();
       reject(new Error(`The browser at ${new URL(url).host} did not accept a DevTools connection within ${timeoutMs} ms.`));
       socket.close();
     }, timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
     socket.addEventListener("open", () => {
-      clearTimeout(timer);
+      cleanup();
       resolve({
         send(message) {
           if (!listeners.closed && socket.readyState === WebSocket.OPEN) socket.send(message);
@@ -108,12 +120,13 @@ export function webSocketTransport(url: string, { timeoutMs = 15_000 }: { timeou
       listeners.message(typeof data === "string" ? data : Buffer.from(data as ArrayBuffer).toString("utf8"));
     });
     socket.addEventListener("error", () => {
-      clearTimeout(timer);
+      cleanup();
       reject(new Error(`Could not open a DevTools connection to ${new URL(url).host}.`));
       listeners.close("the DevTools connection failed");
     });
     socket.addEventListener("close", (event) => {
-      clearTimeout(timer);
+      cleanup();
+      reject(new Error(`The DevTools connection closed (${event.code}).`));
       listeners.close(`the DevTools connection closed (${event.code})`);
     });
   });

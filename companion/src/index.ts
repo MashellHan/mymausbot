@@ -5,6 +5,7 @@
 //   :8811  127.0.0.1  you         pairing and revocation, never off-machine
 //   :8799  127.0.0.1  the harness spoken to as this machine, unmodified
 //   UDS/pipe            one Electron-owned sidecar generation, never TCP
+import { channel } from "node:diagnostics_channel";
 import { createServer } from "node:http";
 
 import { createAddressWatcher } from "./advertise-watch.ts";
@@ -130,8 +131,9 @@ const relayBaseUrl = relayBaseUrlOverride(process.env.OMB_COMPANION_RELAY_URL);
 const watcher = createAddressWatcher({
   addresses: advertisableAddresses,
   name: machineName,
-  advertise: () => mdns.advertise(service()),
-  withdraw: () => mdns.stop(),
+  // Called when the address set (or the name) changes: a relay socket that crossed networks may be dead without knowing it.
+  advertise: () => (relay?.checkAlive(), mdns.advertise(service())),
+  withdraw: () => (relay?.checkAlive(), mdns.stop()),
   log: (line) => console.log(`bonjour: ${line}`),
   // On a Mac a failed join is not papered over by the default-route
   // membership, so a join that fails while an interface settles is retried.
@@ -153,8 +155,9 @@ const proxy = createProxyHandler({
     mutationToken: parentPort ? () => mutationToken : undefined,
     // Also stamps lastSeenAt.
     authenticate: (token) => devices.authenticate(token),
-    redeem: (code, deviceName, pairRequestId) => devices.redeem(code, deviceName, pairRequestId),
+    redeem: (code, deviceName, pairRequestId, replacesToken) => devices.redeem(code, deviceName, pairRequestId, replacesToken),
     serverName: machineName,
+    version: process.env.OMB_APP_VERSION,
     hosts: () => hostCandidates(),
     endpoints: () => companionEndpointCandidates(COMPANION_PORT, undefined, undefined, hostedUrl),
     connected: connectedDevices.open,
@@ -224,13 +227,39 @@ function configureE2E(message: Record<string, unknown>): void {
 
 /** A removal closes the device's sessions with an authenticated GoAway(3) first; the relay drops a session whose
  * admission leaves the set at once (4404), so the smaller set follows a moment later. */
+const admissionTrace = channel("openmausbot.relay.admission");
 const ADMISSION_SETTLE_MS = 300;
-devices.onChange(() => setTimeout(() => relay?.refreshAdmission(), ADMISSION_SETTLE_MS).unref());
+devices.onChange(() => {
+  setTimeout(() => {
+    if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "refresh_timer_fired", status: relay?.status ?? "off" });
+    relay?.refreshAdmission();
+  }, ADMISSION_SETTLE_MS).unref();
+  if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "refresh_timer_scheduled", status: relay?.status ?? "off", budgetMs: ADMISSION_SETTLE_MS });
+});
 e2e.onAdmissionChange(() => relay?.refreshAdmission());
 devices.onDropped((deviceId) => {
   e2e.closeDevice(deviceId);
   console.log("companion: dropped a paired device its phone never used");
 });
+
+function disconnectDevice(deviceId: string): void {
+  connectedDevices.disconnect(deviceId);
+  proxy.disconnectDevice(deviceId);
+}
+
+// The harness hears a phone as this computer, so only the sidecar can tell
+// it the phone lost access and end the Live call that phone holds.
+function deviceRevoked(deviceId: string): void {
+  e2e.closeDevice(deviceId);
+  if (parentPort && !mutationToken) return;
+  void notifyDeviceRevoked({ harnessPort: HARNESS_PORT, deviceId, mutationToken: mutationToken ?? undefined });
+}
+
+// After the pairing reply is written: until then the session carrying it may still belong to the replaced device.
+devices.onReplaced((deviceId) => setImmediate(() => {
+  disconnectDevice(deviceId);
+  deviceRevoked(deviceId);
+}));
 
 const control = createControlServer({
   devices,
@@ -243,17 +272,8 @@ const control = createControlServer({
   },
   discovery: () => ({ advertising: mdns.advertising, name: service().name }),
   connectedDeviceIds: connectedDevices.ids,
-  disconnectDevice: (deviceId) => {
-    connectedDevices.disconnect(deviceId);
-    proxy.disconnectDevice(deviceId);
-  },
-  // The harness hears a phone as this computer, so only the sidecar can tell
-  // it the phone lost access and end the Live call that phone holds.
-  revoked: (deviceId) => {
-    e2e.closeDevice(deviceId);
-    if (parentPort && !mutationToken) return;
-    void notifyDeviceRevoked({ harnessPort: HARNESS_PORT, deviceId, mutationToken: mutationToken ?? undefined });
-  },
+  disconnectDevice,
+  revoked: deviceRevoked,
   setDirectRoutes: (body) => {
     const next = body && typeof body === "object" ? (body as Record<string, unknown>) : null;
     if (!next || typeof next.wifi !== "boolean" || typeof next.tailscale !== "boolean") return false;
@@ -262,7 +282,7 @@ const control = createControlServer({
     void watcher.check();
     return true;
   },
-  e2e: () => ({ enabled: e2e.enabled, relay: relay?.status ?? "off", node: relay?.node ?? null, descriptor: e2e.descriptor(null) }),
+  e2e: () => ({ enabled: e2e.enabled, relay: relay?.status ?? "off", node: relay?.node ?? null, relayProblem: relay?.problem ?? null, descriptor: e2e.descriptor(null) }),
   liveRoutes: () => e2e.routes(),
   // The phone hears where it may connect from inside its session first. Narrowed, the relay keeps it a moment so that
   // lands, then refuses it (4404) and its relay sessions close; direct ones stay. Widened, it is admitted before it hears.

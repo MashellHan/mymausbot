@@ -6,10 +6,12 @@ import { WebSocket } from "ws";
 import { CLOSE } from "../../src/e2e/noise.ts";
 import { MAX_PENDING_HANDSHAKES } from "../../src/e2e/registry.ts";
 import { SessionClosed } from "../../src/e2e/session.ts";
+import { AdmissionTrace } from "./admission-trace.ts";
 import { attachmentByte } from "./fake-harness.ts";
 import { events, freePort, http, json, pairViaRelay, spawnRelay, startRig, waitFor, type RelayProcess, type Rig } from "./rig.ts";
 
 const LONG = process.env.OMB_E2E_LONG === "1";
+const initialAdmission = new AdmissionTrace();
 let rig: Rig;
 let relay: RelayProcess;
 let relayPort: number;
@@ -19,9 +21,9 @@ let deviceId = "";
 beforeAll(async () => {
   relayPort = await freePort();
   rig = await startRig(async (publicKey) => {
-    relay = await spawnRelay(publicKey, relayPort);
+    relay = await spawnRelay(publicKey, relayPort, initialAdmission);
     return relay.url;
-  });
+  }, initialAdmission);
 }, 30_000);
 
 afterAll(async () => {
@@ -36,7 +38,7 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
     const before = await rig.control("POST", "/pairing");
     expect(before.e2e.descriptor).toEqual({ v: 1, k: expect.any(String), h: rig.hid, r: ["relay1.openmausbot.com"] });
     await rig.control("DELETE", "/pairing");
-    const paired = await pairViaRelay(rig);
+    const paired = await pairViaRelay(rig, initialAdmission);
     deviceToken = paired.token;
     deviceId = paired.id;
     expect((await http(paired.session, "GET", "/api/threads/t1/messages", { token: "omb_other" })).status).toBe(401);
@@ -74,7 +76,7 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
   });
 
   it("refuses a direct upgrade beyond the pending handshake cap without ending an established session", async () => {
-    const paired = await pairViaRelay(rig);
+    const paired = await pairViaRelay(rig, initialAdmission);
     paired.session.shutdown();
     await paired.session.closed;
     const established = await rig.direct(await state(), paired.token);
@@ -117,6 +119,30 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
     const session = await rig.direct(pairing, deviceToken);
     expect((await http(session, "GET", "/api/health", { token: otherToken })).status).toBe(401);
     session.shutdown();
+  });
+
+  it("re-pairs a phone in place: the old device and its sessions go, the count stays", async () => {
+    const before = await pairViaRelay(rig, initialAdmission);
+    before.session.shutdown();
+    const count = (await state()).devices.length;
+    const oldSession = await rig.direct(await state(), before.token);
+    const pairing = await rig.control("POST", "/pairing");
+    const res = await fetch(`http://127.0.0.1:${rig.companionPort}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ credential: pairing.token, deviceName: "Test Phone", replacesToken: before.token }),
+    });
+    expect(res.status).toBe(201);
+    const after = (await res.json()) as { token: string; device: { id: string } };
+    expect(await oldSession.closed).toBe(4001);
+    const devices = (await state()).devices.map((device) => device.id);
+    expect(devices).toHaveLength(count);
+    expect(devices).toContain(after.device.id);
+    expect(devices).not.toContain(before.id);
+    expect((await fetch(`http://127.0.0.1:${rig.companionPort}/api/bots`, { headers: { authorization: `Bearer ${before.token}` } })).status).toBe(401);
+    const fresh = await rig.direct(await state(), after.token);
+    expect(json(await http(fresh, "GET", "/api/health", { token: after.token }))).toEqual({ app: "openmausbot" });
+    fresh.shutdown();
   });
 
   it(`waits ${LONG ? 105 : 35} s for headers without a deadline of its own`, async () => {

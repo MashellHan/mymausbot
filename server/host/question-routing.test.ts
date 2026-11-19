@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ApprovalMode } from "../../shared/approval-mode.ts";
 import type { HandoffView } from "../coordinator.ts";
@@ -72,6 +72,7 @@ function world(options: { live?: string[]; privateTo?: string; steers?: boolean;
       return true;
     },
     live: (_threadId, requestId) => (options.live ?? []).includes(requestId),
+    hasLive: () => (options.live ?? []).length > 0,
     unattended: (_botId, threadId) => (options.unattended ?? []).includes(threadId),
     answerLive: async (threadId, requestId, text) => { if (options.takesAnswers === false) return false; answeredLive.push({ threadId, requestId, text }); return true; },
     settleSignIns: (parked) => { settled.push(parked.id); },
@@ -312,6 +313,21 @@ describe("a Chief's answer, for the person, to a question a teammate asks them",
     expect(w.answeredLive).toEqual([]);
   });
 
+  it("reads no thread of the target's for a question no turn is waiting on, so a send does not parse every conversation it has", async () => {
+    const idle = world();
+    asks(idle, "work");
+    asks(idle, "other-work");
+    const read = vi.spyOn(idle.store, "messagesFor");
+    await idle.routing.relay({ sourceLevel: "full", sender: FUCHS, senderThreadId: "inbox", target: DACHS, message: "Ja" });
+    expect(read).not.toHaveBeenCalled();
+
+    const waiting = world({ live: ["req-p"] });
+    asks(waiting, "work");
+    const readWaiting = vi.spyOn(waiting.store, "messagesFor");
+    await waiting.routing.relay({ sourceLevel: "full", sender: FUCHS, senderThreadId: "inbox", target: DACHS, message: "Ja" });
+    expect(readWaiting).toHaveBeenCalledWith("work");
+  });
+
   it("answers the card in the person's own chat with the teammate, and the card and the Chief's chat say who answered", async () => {
     const w = world({ live: ["req-p"] });
     asks(w, "chat");
@@ -379,6 +395,29 @@ describe("a message to the thread where work the sender handed on is running", (
     expect(w.rows("work")).toEqual([expect.objectContaining({ role: "user", text: "Nimm auch die Steuerspalte mit", peerAsk: { botId: "fuchs", name: "Fuchs" }, aside: true, steered: true })]);
     expect(w.rows("inbox")).toEqual([expect.objectContaining({ kind: "activity", tool: expect.objectContaining({ name: "Sent to Dachs" }), threadRef: { botId: "dachs", threadId: "work", title: "Fix" } })]);
     expect(w.answeredNodes).toEqual([]);
+  });
+
+  it.each(["running", "carried"] as const)("checks the actual %s relay thread again before writing", async (kind) => {
+    const w = world();
+    const first = w.node({ id: "first", threadId: "work", status: "running" });
+    const senderNode = { id: "turn", carrying: [] as string[] } as HandoffView;
+    const checkThread = vi.fn<(threadId: string) => string | undefined>(() => undefined);
+    const input = { sourceLevel: "full" as const, sender: FUCHS, senderThreadId: "inbox", senderNode, target: DACHS,
+      message: "Check the report", threadId: first.threadId, checkThread };
+    expect(w.routing.relayProblem(input)).toBeUndefined();
+    expect(checkThread).toHaveBeenLastCalledWith("work");
+    if (kind === "carried") {
+      const next = w.node({ id: "next", threadId: "other-work", question: "Which report?" });
+      senderNode.carrying = [next.id];
+    }
+    const actual = kind === "carried" ? "other-work" : "work";
+    checkThread.mockImplementation((threadId) => threadId === actual ? "The selected thread is no longer reachable" : undefined);
+    expect(await w.routing.relay(input)).toMatchObject({ outcome: "failed", threadId: actual, detail: "The selected thread is no longer reachable" });
+    expect(checkThread).toHaveBeenLastCalledWith(actual);
+    expect(w.steered).toEqual([]);
+    expect(w.answeredNodes).toEqual([]);
+    expect(w.revoked).toEqual([]);
+    expect(w.rows(actual)).toEqual([]);
   });
 
   it("is left to become new work when the engine cannot take it now, or the work there is someone else's or handed out this turn", async () => {

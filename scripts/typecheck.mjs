@@ -4,7 +4,11 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 const compiler = join(dirname(createRequire(import.meta.url).resolve("typescript/package.json")), "bin", "tsc");
-const configs = { ui: "tsconfig.json", server: "tsconfig.server.json" };
+const configs = {
+  ui: "tsconfig.json",
+  server: "tsconfig.server.json",
+  "phone-protocol": "packages/phone-protocol/tsconfig.json",
+};
 const args = process.argv.slice(2);
 let projects = Object.keys(configs);
 const ci = Boolean(process.env.CI && process.env.CI !== "false");
@@ -12,7 +16,7 @@ let fresh = ci;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--fresh") fresh = true;
   else if (args[i] === "--project" && Object.hasOwn(configs, args[i + 1])) projects = [args[++i]];
-  else throw new Error("Use typecheck [--project ui|server] [--fresh]");
+  else throw new Error("Use typecheck [--project ui|server|phone-protocol] [--fresh]");
 }
 const directory = join(process.cwd(), ".omb-scratch", "typecheck");
 mkdirSync(directory, { recursive: true });

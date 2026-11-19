@@ -45,7 +45,7 @@ it("keeps a reusable local library through Data refresh, publication, restart, b
     expect(info.apps.map((app) => app.id)).toEqual(expect.arrayContaining([installed.app.id, stock.app.id]));
     const tool = async (name: string, args: Record<string, unknown>) => {
       const current = await fixture.mint("agents");
-      const result = await callTool(name, args, { botId: bot.id, threadId: bot.activeTaskId, depth: 0, externalRuntime: false,
+      const result = await callTool(name, args, { botId: bot.id, threadId: bot.activeTaskId, externalRuntime: false,
         sharedComputers: false, client: createHarnessClient(url, current.token) });
       expect(result.isError, result.text).not.toBe(true);
       return JSON.parse(result.text) as Record<string, any>;

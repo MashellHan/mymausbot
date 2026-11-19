@@ -26,7 +26,7 @@ afterEach(async () => {
     const child = children.get(dir);
     if (child) await waitForExit(child, { signal: "SIGTERM" });
     if (children.has(dir)) { runningChild = dir; continue; }
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
   }
   if (runningChild) throw new Error(`fixture child still owns ${runningChild}`);
 });
