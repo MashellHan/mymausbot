@@ -146,7 +146,8 @@ export class AdmissionTrace {
       .map(({ event }) => event.digest)
       .filter((digest): digest is string => typeof digest === "string"));
     return this.#events.relay.some(({ sequence, event }) => sequence > marker.sequence &&
-      event.phase === "relay_admit_result" && event.result === "accepted" && sent.has(event.digest));
+      event.phase === "relay_admit_result" && event.result === "accepted" &&
+      typeof event.digest === "string" && sent.has(event.digest));
   }
 
   async dial<T>(action: () => Promise<T>): Promise<T> {
