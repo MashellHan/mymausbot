@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalAgentTeamsResponse, LocalUsageCounts, LocalUsageRepositories, LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../../../shared/local-dashboard";
 import type { MiniAppDashboardDeclaration, MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, t } from "@/lib/i18n";
 import { withGithubUsageFixture } from "../../../scripts/testing/merged-usage-fixture";
 import { primaryUsageFixture } from "../../../scripts/testing/primary-usage-fixture";
 
@@ -181,10 +181,10 @@ describe("installed native Mini App dashboards", () => {
     const latestUpdate = host.querySelector('[data-usage-latest-update]');
     expect(latestUpdate?.textContent).toContain("Latest update:");
     expect(latestUpdate?.getAttribute("datetime")).toBe(`${endDay}T08:00:00.000Z`);
-    const metricHeaders = [...host.querySelectorAll("section:first-of-type dt")];
+    const metricHeaders = [...host.querySelectorAll("section:first-of-type > dl > div > dt")];
     expect(metricHeaders.map(value => value.textContent)).toEqual(["PRs", "Commits", "Tokens"]);
-    expect(metricHeaders[0]?.getAttribute("title")).toContain("PR creations from configured GitHub and ADO sources, dated in China time");
-    expect(metricHeaders[1]?.getAttribute("title")).toContain("non-merge Git commits across local branches");
+    expect(metricHeaders[0]?.getAttribute("title")).toBe(t("computer.usage.repositoryPrHint"));
+    expect(metricHeaders[1]?.getAttribute("title")).toBe(t("computer.usage.repositoryCommitHint"));
     expect(activityValues()).toEqual(["1", "2", "100"]);
     expect(host.querySelector(`[data-usage-trend="prs"] [data-usage-day="${endDay}"]`)?.getAttribute("aria-label")).toMatch(/: PRs 1$/);
     expect(host.querySelector(`[data-usage-trend="commits"] [data-usage-day="${endDay}"]`)?.getAttribute("aria-label")).toMatch(/: Commits 2$/);

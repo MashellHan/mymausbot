@@ -87,7 +87,7 @@ function visibleEvents(row: Record<string, unknown>, offset: number, user: strin
         add("tool-call", "[Arguments unavailable]", null, block.id);
         continue;
       }
-      const detail = visibleToolDetail("tool-call", block.arguments);
+      const detail = visibleToolDetail("tool-call", block.arguments, "pi", name);
       add("tool-call", detail.text, name, block.id, detail.clipped, detail.detailStatus);
     }
   } else if (message.role === "toolResult" && typeof message.toolCallId === "string" &&

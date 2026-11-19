@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { timingSafeEqual } from "node:crypto";
 import type { WebSocket } from "ws";
 import type { Context } from "./context.ts";
@@ -6,7 +7,9 @@ import { afterFirstMessage, closeWith, sendJson, type MessageHandler } from "./s
 import type { Session } from "./splice.ts";
 import { TokenBucket } from "./limits.ts";
 import { verifyToken, type TokenResult } from "./token.ts";
-import { Close, parseAdmit, parseAuth, parseData, parseObject } from "./wire.ts";
+import { Close, parseAdmit, parseAuth, parseData, parseObject, sha256 } from "./wire.ts";
+
+const admissionTrace = channel("openmausbot.relay.admission");
 
 const NO_MATCH = Buffer.alloc(32);
 
@@ -176,14 +179,19 @@ export function handleControl(ctx: Context, ws: WebSocket): void {
         ctx.hosts.connected -= 1;
       }
       ctx.hosts.release(entry);
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "relay_control_closed", code });
       ctx.log({ ev: "host", hid8: entry.hid8, dur_s: Math.round((ctx.now() - since) / 1000), close: code });
     });
     sendJson(ws, { t: "hello", v: 1, node: ctx.node, sessionsMax: ctx.limits.hostSessionsMax });
 
     const handler: MessageHandler = (data, isBinary) => {
       ctx.heartbeat.mark(ws);
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "relay_control_received", current: entry.control === ws, socketState: ws.readyState });
       if (entry.control !== ws) return;
-      if (!rate.take()) return closeWith(ctx, ws, Close.Limited);
+      if (!rate.take()) {
+        if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "relay_admit_result", result: "limited", code: Close.Limited });
+        return closeWith(ctx, ws, Close.Limited);
+      }
       const next = !isBinary && data.length <= ctx.limits.authMessageBytes ? parseObject(data.toString("utf8")) : undefined;
       if (next?.t === "auth") {
         const refresh = parseAuth(next);
@@ -195,8 +203,15 @@ export function handleControl(ctx: Context, ws: WebSocket): void {
         return sendJson(ws, { t: "hello", v: 1, node: ctx.node, sessionsMax: ctx.limits.hostSessionsMax });
       }
       const set = next ? parseAdmit(next, ctx.limits.admissionMax) : undefined;
-      if (!set) return closeWith(ctx, ws, Close.Malformed);
+      if (!set) {
+        if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "relay_admit_result", result: "malformed", code: Close.Malformed });
+        return closeWith(ctx, ws, Close.Malformed);
+      }
       entry.admission = set;
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({
+        phase: "relay_admit_result", result: "accepted", socketState: ws.readyState,
+        count: set.length, digest: sha256(JSON.stringify(set.map((item) => item.toString("base64url")).sort())).toString("hex"),
+      });
       admitted = true;
       clearTimeout(admitDeadline);
       enforceAdmission(ctx, entry);

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { activeLocale, t } from "@/lib/i18n";
 import { useShowThreads } from "@/lib/thread-preferences";
-import { Check, ChevronDown, FolderOpen, Loader2, Pin, Square, X } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, Loader2, Square } from "lucide-react";
 import {
   api,
   useStore,
@@ -57,22 +57,22 @@ import { ActivityRun } from "./ActivityRun";
 import { cn } from "@/lib/cn";
 import { useMenuMotion } from "./MenuMotion";
 import { useLiveToolIds } from "@/hooks/use-live-tool-ids";
-import { roomNeedsSetup } from "@/lib/room-setup";
+import { roomNeedsSetup, setupResponderMode, type RoomResponderMode } from "@/lib/room-setup";
 import { useComposerDockPad } from "@/lib/composer-dock";
 import { GlassBar, GlassScrollFrame } from "./GlassScrollFrame";
 import { awaitedMemberId, showWorkingDots } from "@/lib/turn-tail";
 import { turnNowPhrases } from "@/lib/live-activity"; import { useTurnLive } from "@/state/turn-status"; import { isLiveReply, StreamingReplyContext, useLiveTranscript } from "@/state/live-reply";
-import { useTranscriptViewport } from "@/hooks/use-transcript-viewport";
+import { useTranscriptViewport } from "@/hooks/use-transcript-viewport"; import { staysInView } from "../../shared/person-wait";
 import { useUnreadDivider } from "@/hooks/use-unread-divider";
 import { unreadMessageIds } from "@/lib/unread-divider";
 import { NewMessagesDivider } from "./NewMessagesDivider";
 import { appendDraftAttachments, replyDraft, useReplyDraft } from "@/lib/drafts";
 import { canReplyToMessage } from "@/lib/replies";
-import { citationPreviewText, type CitationAttachment } from "@/lib/citations";
+import { type CitationAttachment } from "@/lib/citations";
 import { highlightCitationSource } from "@/lib/citations-dom";
 import { latestFailure, latestReply, type TranscriptSnapshot } from "@/lib/transcript-announcer";
 import { pendingApprovals } from "./PendingApproval";
-import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard"; import { RoomRichRow } from "./RichMessageRow";
+import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard"; import { TemplateChatCard } from "./TemplateCard"; import { RoomRichRow } from "./RichMessageRow";
 import { TranscriptAnnouncer } from "./TranscriptAnnouncer";
 import { dayLabel, localDay } from "@/lib/transcript-derivations";
 import { roomThreadSpeakerId, roomThreadWorking } from "@/lib/room-threads";
@@ -82,7 +82,7 @@ import { useTeammates } from "@/state/team-people";
 import { RoomWorkingFolder } from "./RoomWorkingFolder";
 import { RoomBulletin } from "./RoomBulletin";
 import { RoomHeader } from "./RoomHeader";
-import { useChatFindRequests } from "@/lib/chat-find";
+import { useChatFindRequests, useChatFindShortcut } from "@/lib/chat-find";
 import { simpleRoomHeader } from "@/lib/room-panel";
 import { RoomToolChip } from "./RoomToolChip";
 export { RoomToolChip } from "./RoomToolChip";
@@ -260,7 +260,7 @@ export const Transcript = memo(function Transcript({
             <CompactionChip message={m} />
           ) : m.kind === "digest" ? (
             showToolCalls ? <DigestChip message={m} /> : null
-          ) : (m.kind === "app" || m.kind === "widget") && m.from ? <RoomRichRow message={m} from={m.from} threadId={group.threadId} /> : m.publishedPage ? <PublishedPageCard message={m} /> : m.kind === "text" && (m.text || m.attachments?.length) ? (
+          ) : (m.kind === "app" || m.kind === "widget") && m.from ? <RoomRichRow message={m} from={m.from} threadId={group.threadId} /> : m.template ? <TemplateChatCard message={m} /> : m.publishedPage ? <PublishedPageCard message={m} /> : m.kind === "text" && (m.text || m.attachments?.length) ? (
             !user && isPureLeakedSystemHarnessMessage(m.text) && !m.attachments?.length ? null : (
               textRow(m, m.id === emergingId, m.id === newestMessageId || m.id === newestUserMessageId)
             )
@@ -298,12 +298,6 @@ export const Transcript = memo(function Transcript({
     </>
   );
 });
-
-type RoomResponderMode = "lead" | "everyone" | "mentions" | "auto";
-
-function setupResponderMode(responder: GroupDefaultResponder): RoomResponderMode {
-  return responder.kind === "member" ? "lead" : responder.kind;
-}
 
 function RoomSetup({ group, members }: { group: Group; members: Bot[] }) {
   const { state, dispatch } = useStore();
@@ -673,16 +667,7 @@ export function GroupView({ group, inForkPanel = false }: { group: Group; inFork
   const closeMembers = useCallback(() => setMembersOpen(false), []);
   useEffect(() => setFindOpen(false), [group.threadId]);
   useChatFindRequests(group.threadId, findOpen, setFindOpen);
-  useEffect(() => {
-    const onFind = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && inForkPanel === Boolean(state.forkPanel)) {
-        event.preventDefault();
-        setFindOpen(true);
-      }
-    };
-    window.addEventListener("keydown", onFind);
-    return () => window.removeEventListener("keydown", onFind);
-  }, [inForkPanel, state.forkPanel]);
+  useChatFindShortcut(inForkPanel, Boolean(state.forkPanel), setFindOpen);
 
   const members = useMemo(
     () => group.memberIds.map((id) => state.bots.find((b) => b.id === id)).filter((b): b is Bot => Boolean(b)),
@@ -771,7 +756,7 @@ export function GroupView({ group, inForkPanel = false }: { group: Group; inFork
     messages: group.messages,
     pinOn: [group.busyBotId, group.working, composerDock.pad],
     transcriptShown: !setupPending,
-    hasMore: group.hasMore,
+    hasMore: group.hasMore, rests: staysInView,
   });
   const unreadDivider = useUnreadDivider({ threadId: group.threadId, messages: group.messages, following });
 
@@ -779,7 +764,7 @@ export function GroupView({ group, inForkPanel = false }: { group: Group; inFork
   useEffect(() => setMembersOpen(false), [group.id]);
 
   return (
-    <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main data-look="chat" className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <GroupCallOverlay group={group} members={members} />
       {membersOpen && !remoteClient && !group.dm && (
         <ManageMembersPanel group={group} onClose={closeMembers} triggerRef={membersTriggerRef} />
@@ -832,35 +817,6 @@ export function GroupView({ group, inForkPanel = false }: { group: Group; inFork
         </div>
       )}
 
-      {(() => {
-        const pinned = group.messages.find((m) => m.id === group.pinnedMessageId && m.kind === "text");
-        const text = pinned ? citationPreviewText(pinned.text ?? "").replace(/\s+/g, " ").trim() : "";
-        if (!pinned || !text) return null;
-        const sender = pinned.role === "user" ? t("chat.you") : (pinned.from?.name ?? t("room.aBot"));
-        return (
-          <div className="w-full px-5">
-            <div className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.07] px-3 py-1.5">
-              <Pin size={12} className="shrink-0 text-accent" />
-              <button
-                onClick={() => dispatch({ type: "focusMessage", threadId: group.threadId, messageId: pinned.id })}
-                className="flex min-w-0 flex-1 items-baseline gap-2 text-left"
-                title={t("chat.pinnedJump")}
-              >
-                <span className="shrink-0 text-[12px] font-medium text-accent">{sender}</span>
-                <span dir="auto" className="truncate text-[13px] text-ink-secondary">{text}</span>
-              </button>
-              <button
-                onClick={() => dispatch({ type: "patchGroup", groupId: group.id, patch: { pinnedMessageId: "" } })}
-                aria-label={t("chat.unpinMessage")}
-                title={t("chat.unpin")}
-                className={cn("shrink-0 rounded p-0.5 text-ink-secondary hover:bg-raised hover:text-ink", remoteClient && "hidden")}
-              >
-                <X size={13} />
-              </button>
-            </div>
-          </div>
-        );
-      })()}
       </GlassBar>
 
       <div
@@ -943,7 +899,7 @@ export function GroupView({ group, inForkPanel = false }: { group: Group; inFork
                   trackPointer={false}
                 />
               }
-              visible={presenceVisible}
+              visible={presenceVisible} threadId={group.threadId}
               phrases={activity?.phrases}
               phase={activity?.phase}
               size={activity?.size} hover={activity?.hover} quiet={live.status && "quiet" in live.status ? live.status.quiet : undefined}

@@ -5,6 +5,10 @@ import { PEER_ACCESS_HELP } from "./peer-roster.ts";
 import { parseCompleteJsonLines } from "./testing/complete-json-lines.ts";
 import { withRooms } from "./testing/room-coordination-fixture.ts";
 
+async function jobsTakeTurns(f: { api(path: string, body: unknown, method: string): Promise<any> }) {
+  expect((await f.api("/api/config", { features: { parallelRoomJobs: false } }, "PATCH")).features.parallelRoomJobs).toBe(false);
+}
+
 it("keeps a busy recipient queued and rejects revoked peer access before dispatch", () => withRooms(async f => {
   f.plan[f.target.id].delayMs = 2000;
   f.savePlan();
@@ -101,18 +105,21 @@ it("pins a busy destination's task even when its active task changes", () => wit
   expect(created.success).toBe(true);
 }), 45_000);
 it("consults multiple existing members and returns once, with no discussion prerequisite or new room settings", () => withRooms(async f => {
+  await jobsTakeTurns(f);
   const reviewer = (await f.cli("new-bot", "--name", "Reviewer", "--section", "A")).bot;
   await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id, reviewer.id] });
-  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id, reviewer.id], message: "Give one risk from your role" } }];
+  f.plan[f.sender.id].steps = [{ arguments: { bot_ids: [f.target.id, reviewer.id], consult: true, message: "Give one risk from your role" } }];
   f.plan[reviewer.id] = { reply: "Privacy risk" };
   await f.start(); expect((await f.wait()).status).toBe("settled");
   expect(f.provider().map((turn: any) => turn.botId)).toEqual([f.sender.id, f.target.id, reviewer.id, f.sender.id]);
+  const consult = { mode: "consult", status: "completed", groupId: f.source.id, threadId: f.source.activeTaskId };
+  expect(f.handoffs()).toMatchObject([{ ...consult, botId: f.target.id }, { ...consult, botId: reviewer.id }]);
   const source = await f.messages(f.source.activeTaskId);
   expect(source.filter((m: any) => m.comm).map((m: any) => m.comm.withBotId)).toEqual([f.target.id, reviewer.id]);
   expect(source.filter((m: any) => m.text === "Reviewed downstream outcome")).toHaveLength(1);
   const requests = source.filter((m: any) => m.roomRequest?.phase === "request");
   expect(requests).toHaveLength(1);
-  expect(requests[0].text).toBe("@Engineer @Reviewer Give one risk from your role");
+  expect(requests[0]).toMatchObject({ text: "@Engineer @Reviewer Give one risk from your role", from: { botId: f.sender.id } });
   for (const id of [f.target.id, reviewer.id]) {
     expect(JSON.stringify(f.provider().find((turn: any) => turn.botId === id).prompt).match(/Give one risk from your role/g)).toHaveLength(1);
   }
@@ -198,6 +205,7 @@ it("resolves a unique teammate name in a bot_ids slot, and refuses an ambiguous 
 }), 60_000);
 
 it("does not repeat a shared brief or rerun recipients on an identical tool retry", () => withRooms(async f => {
+  await jobsTakeTurns(f);
   const reviewer = (await f.cli("new-bot", "--name", "Reviewer", "--section", "A")).bot;
   await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id, reviewer.id] });
   const args = { bot_ids: [f.target.id, reviewer.id], message: "Review the release checklist" };
@@ -206,11 +214,12 @@ it("does not repeat a shared brief or rerun recipients on an identical tool retr
   await f.start(); expect((await f.wait()).status).toBe("settled");
   const requests = (await f.messages(f.source.activeTaskId)).filter((m: any) => m.roomRequest?.phase === "request");
   expect(requests).toHaveLength(1);
-  expect(requests[0].text).toBe("@Engineer @Reviewer Review the release checklist");
+  expect(requests[0]).toMatchObject({ text: "@Engineer @Reviewer Review the release checklist", from: { botId: f.sender.id } });
   expect(f.provider().map((turn: any) => turn.botId)).toEqual([f.sender.id, f.target.id, reviewer.id, f.sender.id]);
 }), 45_000);
 
 it("keeps genuinely different room briefs separate", () => withRooms(async f => {
+  await jobsTakeTurns(f);
   const reviewer = (await f.cli("new-bot", "--name", "Reviewer", "--section", "A")).bot;
   await f.tool("update_channel", { channel_id: f.source.id, member_ids: [f.sender.id, f.target.id, reviewer.id] });
   f.plan[f.sender.id].steps = [
@@ -221,6 +230,8 @@ it("keeps genuinely different room briefs separate", () => withRooms(async f => 
   await f.start(); expect((await f.wait()).status).toBe("settled");
   const requests = (await f.messages(f.source.activeTaskId)).filter((m: any) => m.roomRequest?.phase === "request");
   expect(requests.map((m: any) => m.text)).toEqual(["@Engineer Check the migration", "@Reviewer Check the documentation"]);
+  expect(requests.map((m: any) => m.from?.botId)).toEqual([f.sender.id, f.sender.id]);
+  expect(new Set(requests.map((m: any) => m.roomRequest.id)).size).toBe(2);
 }), 45_000);
 
 it("runs a room member's turn a restart cut again once, told so, and resumes the sender told so", () => withRooms(async f => {

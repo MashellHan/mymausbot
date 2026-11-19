@@ -24,10 +24,10 @@ import { shouldCollapseUserMessage, SIMPLE_BOT_BUBBLE, SIMPLE_BUBBLE_MAX, SIMPLE
 import { ReplyBlocks } from "./ReplyBlocks";
 import { CopyButton, MESSAGE_ROW, MessageActions, messageActionClass, ReplyAction } from "./MessageActions";
 import { ReactAction, ReactionChips } from "./Reactions";
-import { roomPin, useBotMessageMenu, userMessageMenu } from "./message-menu";
+import { replyAndCopy, roomPin, useBotMessageMenu, userMessageMenu } from "./message-menu";
 import { forkMessageItem, ForkLinks } from "./ForkMessage";
 import { RawMarkdownView, RawToggleAction } from "./RawMarkdownToggle";
-import { SpeakButton } from "./SpeakButton";
+import { SpeakButton, speakReady } from "./SpeakButton";
 import { SentCitations } from "./CitationUI";
 import { ReplyQuote } from "./ReplyQuote";
 import { AttachmentGallery, MessageAttachmentGallery, replyAttachmentGroup } from "./AttachmentGallery";
@@ -85,11 +85,10 @@ export const RoomTextMessage = memo(function RoomTextMessage({
   });
   const tts = useStoreSelector((state) => state.config?.tts);
   const profileName = useStoreSelector((state) => state.config?.profile?.name);
-  const team = useStoreSelector((state) => Boolean(state.config?.team));
   const mentionPerson = useMemo(() => ({ profileName }), [profileName]);
   const user = m.role === "user";
   const reactor = useReactor();
-  const speaker = otherSpeaker(m, team && reactor !== "user" ? reactor : null);
+  const speaker = otherSpeaker(m, reactor !== "user" ? reactor : null);
   const rawText = user ? (m.text ?? "") : stripLeakedSystemHarnessMessages(m.text ?? "");
   const cited = user && m.text ? splitTranscriptCitations(m.text) : null;
   const attachments = user && m.text ? splitTranscriptAttachments(cited?.display ?? m.text) : null;
@@ -123,27 +122,29 @@ export const RoomTextMessage = memo(function RoomTextMessage({
   const replyGroup = useMemo(() => !user && !isLiveReply(m) && botText.trim() ? replyAttachmentGroup(botText, m.attachments) : null, [user, m, botText]);
   const blocks = useMemo(() => simple && !user && !viewRaw && botText.trim() ? splitReplyBlocks(botText) : null, [simple, user, viewRaw, botText]);
   const tabled = Boolean(blocks?.some((block) => block.kind === "table"));
+  const replyAllowed = canReplyToMessage(m);
+  const replyMenu = (body: string) => replyAndCopy(() => onReply(m), body).filter((item) => replyAllowed || item.key !== "reply");
   const botActions = !user && (
-    <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={[...botMenu, ...forkAction]}>
-      {canReplyToMessage(m) && <ReplyAction onReply={() => onReply(m)} />}
+    <MessageActions side="bot" forceOpen={viewRaw || speaking} menu={[...botMenu, ...forkAction]} contextItems={replyMenu(botText)}>
+      {replyAllowed && <ReplyAction onReply={() => onReply(m)} />}
       {canReact && m.from && <ReactAction threadId={threadId} message={m} />}
       {botText && <CopyButton text={botText} className={messageActionClass} />}
       {botText && viewRaw && <RawToggleAction active onToggle={() => setViewRaw(false)} className={messageActionClass} />}
-      {botText && speaking && <SpeakButton text={botText} botId={speakerBot?.id} messageId={m.id} voiceId={speakerBot?.voice} tts={tts} localVoice={localVoice} className={cn(messageActionClass, "text-accent")} />}
+      {botText && (speaking || speakReady(tts, speakerBot?.voice, localVoice)) && <SpeakButton text={botText} botId={speakerBot?.id} messageId={m.id} voiceId={speakerBot?.voice} tts={tts} localVoice={localVoice} className={cn(messageActionClass, speaking && "text-accent")} />}
     </MessageActions>
   );
   return (
-    <div {...{ [MESSAGE_ROW]: "" }} className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
-      {speaker && <div className="mb-0.5 px-1 text-[12px] font-medium text-ink-secondary">{speaker}</div>}
+    <div {...{ [MESSAGE_ROW]: "" }} data-look={user ? "message-user" : "message-bot"} className={cn("group flex w-full flex-col", user ? "items-end" : "items-start")}>
+      {speaker && <div className="mb-0.5 px-1 text-right text-[13px] [overflow-wrap:anywhere] font-semibold text-ink-secondary">{speaker}</div>}
       <div className={cn("flex w-full items-end gap-1.5", user ? "justify-end" : "justify-start")}>
         {user && (
-          <MessageActions side="user" menu={[...userMessageMenu({ messageId: m.id, pin }), ...forkAction]}>
-            {canReplyToMessage(m) && <ReplyAction onReply={() => onReply(m)} />}
+          <MessageActions side="user" menu={[...userMessageMenu({ messageId: m.id, pin }), ...forkAction]} contextItems={replyMenu(display)}>
+            {replyAllowed && <ReplyAction onReply={() => onReply(m)} />}
             {Boolean(display.trim()) && <CopyButton text={display} className={messageActionClass} />}
           </MessageActions>
         )}
         <div
-          data-chat-bubble={simple ? "simple" : ""}
+          data-chat-bubble={simple ? "simple" : ""} data-look={user ? "user-bubble" : "bot-bubble"}
           className={cn(
             tabled ? "w-full" : "w-fit",
             simple ? cn(!tabled && SIMPLE_BUBBLE_MAX, SIMPLE_BUBBLE_TEXT) : "max-w-[min(var(--chat-bubble-max),var(--chat-bubble-pct))] rounded-2xl text-[15px] leading-relaxed",

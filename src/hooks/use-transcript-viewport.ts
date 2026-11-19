@@ -24,6 +24,7 @@ import {
   windowAfterPrepend,
   windowEarlier,
   windowLater,
+  withRestingCard,
   type TranscriptWindowBounds,
 } from "@/lib/transcript-window";
 import { reducedMotion } from "@/lib/onboarding";
@@ -92,6 +93,7 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
   pinOn,
   transcriptShown = true,
   hasMore = false,
+  rests,
 }: {
   ownerId: string;
   threadId: string;
@@ -99,6 +101,8 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
   pinOn: DependencyList;
   transcriptShown?: boolean;
   hasMore?: boolean;
+  /** A card work rests on until the person answers it; the newest one stays drawn when the window has left it behind. */
+  rests?: (row: T) => boolean;
 }) {
   const focusMessage = useStoreSelector((state) => state.focusMessage);
   const olderPending = useStoreSelector((state) => Boolean(state.loadingOlder[threadId]));
@@ -153,10 +157,10 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
     laterCount,
     startIndex,
     endIndex,
-  } = useMemo(
-    () => resolveTranscriptWindow(messages, transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end),
-    [messages, transcriptWindow.start, transcriptWindow.end],
-  );
+  } = useMemo(() => {
+    const range = resolveTranscriptWindow(messages, transcriptWindow.start, TRANSCRIPT_WINDOW_SIZE, transcriptWindow.end);
+    return { ...range, visible: withRestingCard(messages, range.visible, range.startIndex, rests) };
+  }, [messages, transcriptWindow.start, transcriptWindow.end, rests]);
   const windowRef = useRef(transcriptWindow);
   windowRef.current = transcriptWindow;
   const drawnBounds: TranscriptWindowBounds = { start: startIndex, end: laterCount > 0 ? endIndex : null };

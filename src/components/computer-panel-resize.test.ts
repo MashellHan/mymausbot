@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, computerPanelMaxWidth, useComputerPanelResize } from "./computer-panel-resize";
+import { CHAT_MIN_WIDTH, PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, computerPanelMaxWidth, useComputerPanelResize } from "./computer-panel-resize";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let host: HTMLDivElement;
@@ -62,7 +62,40 @@ describe("the computer panel's resize edge", () => {
     expect(computerPanelMaxWidth(320)).toBe(320);
   });
 
-  it("supports a 1152px controlled width while preserving pointer and keyboard resize", () => {
+  it("uses the measured chat row to clamp a controlled panel and recover the original choice", async () => {
+    let room = 1800;
+    let measure: (() => void) | null = null;
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(read: () => void) { measure = read; }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
+      const panel = this.tagName === "ASIDE" ? this : this.parentElement?.querySelector<HTMLElement>(":scope > aside");
+      const size = Number.parseFloat(panel?.style.width ?? "") || 0;
+      return this.tagName === "MAIN" ? Math.max(0, room - size) : size;
+    });
+    function Row() {
+      const { panelWidth, separatorRef } = useComputerPanelResize({ defaultWidth: 1152, width: 1152 });
+      width = panelWidth;
+      return createElement("div", null, createElement("main"), createElement("aside", { style: { width: panelWidth } },
+        createElement("div", { ref: separatorRef, role: "separator" })));
+    }
+    await act(async () => root.render(createElement(Row)));
+    expect(width).toBe(1152);
+    room = 1000;
+    // The browser reports both the row change and the resulting panel size change.
+    act(() => measure?.());
+    act(() => measure?.());
+    expect(width).toBe(1000 - CHAT_MIN_WIDTH);
+    room = 1800;
+    act(() => measure?.());
+    expect(width).toBe(1152);
+    vi.restoreAllMocks();
+  });
+
+  it("supports a 1152px default while preserving pointer and keyboard resize", () => {
     function ControlledPanel({ initialWidth }: { initialWidth: number }) {
       const { panelWidth, separatorRef, onSeparatorKeyDown } = useComputerPanelResize({ defaultWidth: initialWidth });
       width = panelWidth;

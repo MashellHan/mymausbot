@@ -30,7 +30,7 @@ it("keeps a legacy phone's direct route while retiring its hosted bearer and str
     harnessPort,
     authenticate: (token) => token === "legacy-token" ? { id: "legacy", routes, cloudDesktopAccess: true, browserControlAccess: false }
       : token === "other-token" ? { id: "other", routes: "any", cloudDesktopAccess: true, browserControlAccess: false } : null,
-    redeem: () => ({ error: "not used" }),
+    redeem: () => ({ error: "not used", code: "pairing_code_wrong" }),
     serverName: () => "Fixture",
     endpoints: () => [{ kind: "hosted", priority: 0, url: "https://retained.example.test" }],
   });

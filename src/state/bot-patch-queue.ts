@@ -26,9 +26,12 @@ export type BotUpdatePatch = Partial<
     | "speakReplies"
     | "replyStyle"
     | "voice"
+    | "liveVoice"
     | "voiceNotes"
     | "voiceNoteEveryReply"
     | "xResearch"
+    | "teamFilesEdit"
+    | "toolsOff"
     | "pinned"
     | "hidden"
     | "sidebarHidden"
@@ -74,6 +77,7 @@ export type BotStatePatch = Omit<
   connectorTools?: Bot["connectorTools"];
   connectorScopes?: Bot["connectorScopes"];
   phoneApps?: Bot["phoneApps"];
+  defaultBot?: Bot["defaultBot"];
 };
 
 interface BotPatchQueueEntry {

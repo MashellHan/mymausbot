@@ -32,11 +32,14 @@ it("keeps each person's line apart and across a restart", () => {
   const dir = mkdtempSync(join(tmpdir(), "room-reads-"));
   const reads = createRoomReads(dir);
   reads.read("room", "p_ada", "m2");
+  reads.read("room", "p_ada", "fork-reply", "fork");
   expect(reads.readUpTo("room", "p_ada")).toBe("m2");
   expect(reads.readUpTo("room", "p_ben")).toBeUndefined();
   expect(createRoomReads(dir).readUpTo("room", "p_ada")).toBe("m2");
+  expect(createRoomReads(dir).readUpTo("room", "p_ada", "fork")).toBe("fork-reply");
   reads.forgetRoom("room");
   expect(createRoomReads(dir).readUpTo("room", "p_ada")).toBeUndefined();
+  expect(createRoomReads(dir).readUpTo("room", "p_ada", "fork")).toBeUndefined();
 });
 
 it("keeps each person's room fork read line private and separate from the main conversation", () => {
@@ -77,6 +80,30 @@ it("forgets a person's lines in every room, and one person's line in one room", 
   reads.forgetPerson("p_ada");
   const reloaded = createRoomReads(dir);
   expect([reloaded.readUpTo("a", "p_ada"), reloaded.readUpTo("b", "p_ada")]).toEqual([undefined, undefined]);
+});
+
+it("keeps a person's background fork unread after they read the room's main conversation", () => {
+  const dir = mkdtempSync(join(tmpdir(), "room-fork-reads-"));
+  const reads = createRoomReads(dir);
+  const paths = new Map([
+    ["main", [{ id: "main-user", role: "user" }, { id: "main-reply", role: "bot" }]],
+    ["fork", [{ id: "fork-user", role: "user" }, { id: "fork-reply", role: "bot" }]],
+  ]);
+  const group = { id: "room", threadId: "main", unread: true, tasks: [
+    { threadId: "main", unread: true }, { threadId: "fork", unread: true },
+  ] } as WireGroup;
+  const rooms = createPersonRooms({ reads, store: () => ({
+    activePath: (threadId) => paths.get(threadId) ?? [], messagesFor: (threadId) => paths.get(threadId) ?? [], botByThread: () => null,
+  }), newestMessageId: (threadId) => paths.get(threadId)?.at(-1)?.id,
+  shared: () => false, wireBot: () => null, publicGroupState: () => group, broadcast: () => {},
+  });
+  reads.read("room", "ada", "main-reply", "main");
+  expect(rooms.groupForPerson(group, "ada")).toMatchObject({ unread: true, tasks: [
+    { threadId: "main", unread: false }, { threadId: "fork", unread: true },
+  ] });
+  reads.read("room", "ada", "fork-reply", "fork");
+  expect(rooms.groupForPerson(group, "ada").unread).toBe(false);
+  expect(rooms.groupForPerson(group, "ben").unread).toBe(true);
 });
 
 it("reads a bot's shared chat per person, leaves a private chat's one mark alone, and marks unread before the newest reply", () => {

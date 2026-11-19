@@ -56,6 +56,7 @@ Use only mapped, tested commands:
 - [MausBot, everyone's helper](mausbot.md)
 - [Profile proposal and credential-card lifecycle](proposal-cards.md)
 - [Full Access without duplicate approvals](full-access.md)
+- [Bots changing app settings, and the guards Full access cannot skip](app-settings.md)
 - [Gmail draft creation, send approval and revision](gmail-drafts.md)
 - [Exact command allowlist UI and saved rules](command-allowlist.md)
 - [The safety floor: a never-list no grant can allow](safety-floor.md)
@@ -89,6 +90,7 @@ Use only mapped, tested commands:
 - [Codex browser routing and native search](codex-browser-routing.md)
 - [Codex helper event isolation](codex-helpers.md)
 - [Qwen model route selection](qwen-models.md)
+- [Kimi subscription and Platform model selection](kimi-models.md)
 - [Team backups](team-backups.md)
 - [Sharing a whole team](team-sharing.md)
 - [The organization library](org-library.md)
@@ -239,6 +241,11 @@ The [hosted Slack management fixture](hosted-slack-management.md) checks the
 agent settings link to Admin: hosted-only availability, the member-readable
 route module, and stale-response isolation.
 
+The [Slack for Team Clouds fixture](team-slack.md) checks a Slack message handed over with a member's own session:
+a channel's shared conversation, a direct message's private chat, who may ask and stop, and the signed reports a
+stand-in Admin takes; and the same on a My Cloud, where both are the owner's ordinary conversations. It reaches no
+Slack workspace and no real Admin.
+
 The [chat and settings polish fixture](chat-polish.md) exercises attachment
 galleries, opt-in video playback, persisted tool details, and responsive settings
 through the real renderer in an isolated fake-engine workspace.
@@ -358,6 +365,9 @@ desktop routing, cancellation, and computer authority cleanup.
 The [Gemini speech fixture](gemini-speech.md) checks write-only credentials,
 voice selection and WAV synthesis against an offline provider in an isolated
 server, with manual steps for real Google access and playback.
+The [DeepSeek speech fixture](deepseek-speech.md) checks the shared DeepSeek
+key, the Stella/Tide choice, WAV synthesis and DeepSeek transcription against an
+offline provider in an isolated server.
 
 The [persistence responsiveness benchmark](persistence-performance.md) measures
 synthetic message/log bursts and history scans, with isolated chat, visibility
