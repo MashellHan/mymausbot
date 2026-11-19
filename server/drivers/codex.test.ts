@@ -3741,6 +3741,45 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
   });
 
+  it.each(["resume", "connection-input-refused"])("stops a connection's refusal in %s without setting up ChatGPT or replaying history", async (mode) => {
+    const dump = join(scratch, "connection-input-refused.json");
+    vi.stubEnv("FAKE_CODEX_DUMP", dump);
+    if (mode === "resume") {
+      vi.stubEnv("FAKE_CODEX_RESUME_ERROR", JSON.stringify({
+        code: -32603,
+        message: 'unexpected status 401 Unauthorized: {"error":{"message":"input item does not belong to this connection"}}',
+      }));
+    }
+    await create({ mode, environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex") } });
+    await instance.adapter.sendTurn({
+      threadId: "t-connection-refused", text: "Continue", resumeCursor: "native-thread",
+      recoveryText: "The previous conversation\nUser: Continue", model: "raven::gpt-6.2-sol",
+    });
+    await expect(recorder.until((event) => event.type === "turn.completed")).resolves.toMatchObject({ ok: false, stopReason: "refusal" });
+    const errors = recorder.events.filter((event) => event.type === "runtime.error");
+    expect(errors).toEqual([expect.objectContaining({ message: expect.stringContaining("input item does not belong to this connection"), terminal: true })]);
+    expect(errors[0]).not.toHaveProperty("setup");
+    expect(recorder.events.some((event) => event.type === "turn.retrying" || (event.type === "session.started" && event.rebuilt))).toBe(false);
+    const calls = JSON.parse(readFileSync(dump, "utf8")).calls as Array<{ method: string; params: unknown }>;
+    expect(calls.filter((call) => ["thread/resume", "thread/start", "turn/start"].includes(call.method)).map((call) => call.method))
+      .toEqual(mode === "resume" ? ["thread/resume"] : ["thread/resume", "turn/start"]);
+    if (mode !== "resume") expect(calls.find((call) => call.method === "turn/start")?.params)
+      .toMatchObject({ threadId: "native-thread", input: [{ type: "text", text: "Continue" }] });
+  });
+
+  it("marks only the model whose connection rejected Codex's tools", async () => {
+    const home = join(scratch, ".codex");
+    mkdirSync(join(home, "model-catalogs"), { recursive: true });
+    writeFileSync(join(home, "config.toml"), '[model_providers.raven]\nname = "Raven"\n');
+    writeFileSync(join(home, "model-catalogs", "raven.json"), JSON.stringify([{ id: "gemini" }, { id: "gpt" }]));
+    await create({ mode: "tool-conversion-refused", environment: { HOME: scratch, CODEX_HOME: home } });
+    await instance.adapter.sendTurn({ threadId: "t-namespace", text: "Hello", model: "raven::gemini" });
+    await expect(recorder.until((event) => event.type === "turn.completed")).resolves.toMatchObject({ ok: false, stopReason: "refusal" });
+    expect(recorder.events.find((event) => event.type === "runtime.error")).toMatchObject({ terminal: true, message: expect.stringContaining("another model type") });
+    expect(instance.models.options.find((option) => option.id === "raven::gemini")).toMatchObject({ protocolUnsupported: true });
+    expect(instance.models.options.find((option) => option.id === "raven::gpt")).not.toHaveProperty("protocolUnsupported");
+  });
+
   it.each(["safety-rpc", "safety-completion", "safety-notification"])("surfaces %s once without retrying or asking for login", async (mode) => {
     await create({ mode });
     const { turnId } = await instance.adapter.sendTurn({ threadId: "t-safety", text: "Deploy my site", approvalMode: "full" });

@@ -107,6 +107,7 @@ import { DataSheetRegistry } from "./data/sheet.ts";
 import { DataFailure } from "./data/types.ts";
 import { TeamComputers, teamComputerOwner, teamComputerPrompt, type TeamComputerRecord } from "./team-computers.ts";
 import { isEffortLevel, type AuthPairResponse, type CardAnswerer, type LoopbackSessionResponse, type SignedInSessionResponse, type PairResponse, type ResolvedSender, type ServerFrame, type SignInRequestCardData, type WireBot, type WireGroup, type WireTask } from "../shared/wire.ts";
+import { modelEffortLevels } from "../shared/model-selection.ts";
 import { isPersistentQuestionCard, shouldSettleRequestCard } from "../shared/ask-question.ts";
 import { parseToolScope } from "../shared/tool-scope.ts";
 import type { TeamComputersPayload } from "../shared/team-computer.ts";
@@ -2613,6 +2614,7 @@ function checkedModelSelection(
     return { ok: false, status: 409, ...userError("serverError.model.botBusy") };
   }
   const target = registry.get(selection.instanceId);
+  const option = target?.models.options.find((model) => model.id === selection.model);
   if (selection.contextWindowTokens !== undefined && target?.adapter.capabilities.configurableContextWindow !== true) {
     return { ok: false, status: 400, error: "this engine cannot configure its context window" };
   }
@@ -2624,9 +2626,7 @@ function checkedModelSelection(
     if (!target) {
       return { ok: false, status: 400, error: `model instance "${selection.instanceId}" is unavailable` };
     }
-    const offered =
-      selection.model === target.models.default ||
-      target.models.options.some((option) => option.id === selection.model);
+    const offered = selection.model === target.models.default || option !== undefined;
     if (!offered) {
       return {
         ok: false,
@@ -2635,7 +2635,7 @@ function checkedModelSelection(
       };
     }
   }
-  const allowed: readonly string[] = target?.adapter.capabilities.effortLevels ?? [];
+  const allowed = modelEffortLevels(target?.models.options, selection.model, target?.adapter.capabilities.effortLevels);
   if (target && selection.effort !== undefined && !allowed.includes(selection.effort)) {
     return { ok: false, status: 400, error: `effort "${selection.effort}" is not offered by this bot's engine` };
   }
@@ -7635,7 +7635,7 @@ async function beginTurn(
   const route = routeDirectTurn(bot, task, store.activePath(threadId), resolvedImages, instance, automated, quickFallback.refused(instance.instanceId));
   const { model, effort, variant, contextWindowTokens } = route;
   assertModelVariantSupported({ variant, effort }, instance.adapter.capabilities);
-  if (effort && !instance.adapter.capabilities.effortLevels?.includes(effort)) {
+  if (effort && !modelEffortLevels(instance.models.options, model, instance.adapter.capabilities.effortLevels).includes(effort)) {
     throw Object.assign(
       new Error(`effort "${effort}" is not offered by this bot's engine — choose another level in settings`),
       { status: 409 },

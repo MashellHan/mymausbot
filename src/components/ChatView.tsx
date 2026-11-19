@@ -39,7 +39,7 @@ import { CODEX_USAGE_URL, codexUsageLimitReached } from "../../shared/codex-usag
 import { ClaudeUpdatePrompt } from "./ClaudeUpdatePrompt";
 import { MacCuaRecoveryActions } from "./MacCuaRecoveryActions";
 import { macCuaPermissionMessage, missingMacCuaPermissions } from "@/lib/mac-cua-permissions";
-import { claudeUpdateTarget, failedTurnCause, failedTurnNotice, signedOutEngine } from "@/lib/failed-turn";
+import { claudeUpdateTarget, connectionFailureText, failedTurnCause, failedTurnNotice, signedOutEngine } from "@/lib/failed-turn";
 import { plainErrorLine } from "@/lib/plain-error";
 import { openPlaceAction, placeRowViewFor, usePlaceSeat, worksOnSimpleLabel } from "@/lib/place-view";
 import type { PlaceRow } from "../../shared/place-view";
@@ -274,6 +274,7 @@ export function FailedTurnRow({ tool, engine, onRetry, botId, threadId, messageA
   const credit = trialCreditKind(failedTurnCause(tool.name) ?? "");
   if (credit) return <TrialCreditFailedRow kind={credit} onRetry={onRetry} />;
   const { cause, notice } = failedTurnNotice(tool);
+  const connectionFailure = connectionFailureText(cause); if (connectionFailure) return <ErrorRow message={connectionFailure} />;
   if (tool.partial) return <PartlyDoneRow cause={notice ?? cause} onRetry={onRetry} />;
   if (past) return past;
   const signedOut = signedOutEngine(tool, engine);

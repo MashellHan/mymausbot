@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { withGithubUsageFixture } from "./testing/merged-usage-fixture.ts";
 import { primaryUsageFixture } from "./testing/primary-usage-fixture.ts";
 import type { AddressInfo } from "node:net";
-import type { LocalUsageResponse, LocalUsageTrendDay, LocalUsageWindow } from "../shared/local-dashboard.ts";
+import type { LocalUsageResponse, LocalUsageTokenDetails, LocalUsageTrendDay, LocalUsageWindow } from "../shared/local-dashboard.ts";
 import type { Bot } from "../src/state/store.tsx";
 import { mountPreview, parkUntilSignal, type MountedPreview } from "./testing/preview-fixture.ts";
 
@@ -28,6 +28,7 @@ function snapshot(scenario: string | null): LocalUsageResponse {
 
   const stale = scenario === "stale";
   const missing = scenario === "missing";
+  const modelCost = scenario === "model-cost";
   const pendingZero = scenario === "pending-zero";
   const partialPr = missing || pendingZero;
   const midnight = scenario === "midnight";
@@ -74,6 +75,35 @@ function snapshot(scenario: string | null): LocalUsageResponse {
       newTokens: missing ? null : change(row.newTokens, previous.newTokens),
       totalTokens: missing ? null : change(row.totalTokens, previous.totalTokens) };
   }
+  const tokenDetails = (newTokens: number, cacheRead: number, older = false): LocalUsageTokenDetails & { cacheRead: number } => {
+    const input = Math.floor(newTokens * 0.6), output = newTokens - input;
+    const names = [older ? "fixture-history-model" : "fixture-model-with-a-long-identifier-for-testing-wrapping",
+      "fixture-cobalt", "fixture-ember", "fixture-jade", "fixture-violet", "activities-unpriced-fixture"];
+    const rows = newTokens + cacheRead === 0 ? [] : [28, 22, 17, 12, 9, 6].map((share, index) => {
+      const rowInput = Math.floor(input * share / 100), rowOutput = Math.floor(output * share / 100);
+      const rowCached = Math.floor(cacheRead * share / 100);
+      return { model: names[index]!, input: rowInput, output: rowOutput, cacheRead: rowCached,
+        totalTokens: rowInput + rowOutput + rowCached,
+        estimatedCost: index === 0 ? { coverage: "ready" as const, usd: 0.003 }
+          : index === 1 ? { coverage: "partial" as const, usd: 0 }
+          : index === 2 ? { coverage: "ready" as const, usd: 0.0004 }
+          : { coverage: "unavailable" as const, usd: null } };
+    });
+    return { input, output, cacheRead, estimatedCost: rows.length ? { coverage: "partial", usd: 0.037 } : { coverage: "ready", usd: 0 },
+      models: { coverage: rows.length ? "partial" : "ready", rows } };
+  };
+  if (modelCost || zero) {
+    for (const day of trend) day.tokenDetails = tokenDetails(day.newTokens ?? 0, day.cacheRead ?? 0);
+  }
+  const history: LocalUsageTrendDay[] | undefined = modelCost ? [
+    ...Array.from({ length: 60 }, (_, index) => {
+      const day = shiftDay(trend[0]!.day, index - 60);
+      const base = { ...trend[0]!, day, newTokens: 300, cacheRead: 100, totalTokens: 400 };
+      if (index < 30) return { ...base, tokenDetails: undefined };
+      return { ...base, tokenDetails: tokenDetails(300, 100, true) };
+    }),
+    ...trend,
+  ] : undefined;
   const makeWindow = (count: 1 | 7 | 30): LocalUsageWindow => {
     const rows = trend.slice(-count);
     const sum = (field: "knownPrs" | "commits" | "newTokens" | "cacheRead" | "totalTokens") => rows.reduce((total, row) => total + (row[field] ?? 0), 0);
@@ -107,6 +137,7 @@ function snapshot(scenario: string | null): LocalUsageResponse {
       } };
     return { ...result, coverage: noMetrics ? "unavailable" : partialPr ? "partial" : "ready", tokenCoverage: noMetrics ? "unavailable" : missing ? "partial" : "ready",
       comparison,
+      ...(modelCost || zero ? { tokenDetails: tokenDetails(result.newTokens ?? 0, result.cacheRead ?? 0) } : {}),
       categories: { work, personal, unclassified: { prs: noMetrics ? null : 0, knownPrs: noMetrics ? null : 0, commits: result.commits === null ? null : unclassifiedCommits } },
       repositories: { sharedCommits: 0, coverage: noMetrics ? "unavailable" : missing ? "partial" : "ready", unattributedPrs: result.knownPrs === null ? null : 0, unattributedCommits: result.commits === null ? null : unclassifiedCommits,
         rows: noMetrics || zero ? [] : [
@@ -121,7 +152,7 @@ function snapshot(scenario: string | null): LocalUsageResponse {
       unavailable: noMetrics ? 4 : partialPr ? 1 : 0, missing: 0 },
     prCoverage: { work: partialPr || noMetrics ? "partial" : "ready", personal: noMetrics ? "partial" : "ready",
       unclassified: partialPr || noMetrics ? "partial" : "ready" },
-    windows: { "1": makeWindow(1), "7": makeWindow(7), "30": makeWindow(30) }, trend };
+    windows: { "1": makeWindow(1), "7": makeWindow(7), "30": makeWindow(30) }, trend, history };
 }
 
 const server = createServer((req, res) => {

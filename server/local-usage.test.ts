@@ -633,6 +633,21 @@ describe("local Usage projection", () => {
     expect(partial.windows?.["1"].categories.personal.prs).toBe(0);
   });
 
+  it("preserves stale observed PR zero as a lower bound in windows, trends, categories and repositories", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    snapshot.prSources[0]!.status = "stale";
+    snapshot.prCoverage.work = "partial";
+    for (const row of snapshot.localHistory.daily) Object.assign(row.categories.work, { prs: null, knownPrs: 0 });
+    for (const row of snapshot.localHistory.localRepositories.rows[0]!.daily) row.knownPrs = 0;
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const counts = { prs: null, knownPrs: 0, categories: { work: { prs: null, knownPrs: 0 }, personal: { prs: 0 } },
+      repositories: { coverage: "partial", rows: [{ prs: null, knownPrs: 0, commits: 8 }] } };
+    expect(response.windows?.["1"]).toMatchObject(counts);
+    expect(response.trend.at(-1)).toMatchObject(counts);
+  });
+
   it("compares all three metrics with the same date seven days earlier, including zero and missing baselines", async () => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file, snapshot } = await fixture(asOf);
@@ -753,4 +768,86 @@ it("keeps nested sixty-day shared repository appearances separate from global lo
   expect(view.sixtyDayRepositories!.repositories.rows.map(row => row.knownCommits)).toEqual([138, 2]);
   expect(view.trend.find(row => row.day === "2026-09-21")).toMatchObject({ commits: 2, repositories: { sharedCommits: 2 } });
   expect(response.windows!["1"].repositories.rows).toHaveLength(1);
+});
+
+describe("daily model attribution and Activities list estimates", () => {
+  const asOf = Date.parse("2026-11-18T16:01:00Z");
+  const endDay = "2026-11-19";
+  const model = (label = "gpt-6.2-sol", input = 10, output = 4, cacheRead = 50, provider = "codex") =>
+    ({ provider, model: label, input, output, cacheRead });
+  const retained = (date: string, rows = [model()]) => ({
+    day: date, tokenStatus: "ready", input: 10, output: 4, cacheRead: 50, newTokens: 14, totalTokens: 64, models: rows,
+  });
+
+  it("uses the same reconciled days in China-calendar windows and trends with coverage-qualified prices", async () => {
+    const { file, snapshot } = await fixture(asOf);
+    const priced = [model("gpt-6.2-sol", 2, 4, 45), model("gpt-6.2-sol", 1, 0, 1, "pi")];
+    const unknown = model("activities-unpriced-fixture", 7, 0, 4);
+    const older = day(endDay, -61), legacy = day(endDay, -62);
+    await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: { version: 1, daily: [
+      { day: legacy, tokenStatus: "ready", newTokens: 14, cacheRead: 50, totalTokens: 64 },
+      retained(older),
+      ...snapshot.daily.map(({ day }) => retained(day, day === endDay ? [...priced, unknown] : [model()])),
+    ] } }));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const windows = response.windows!;
+    expect(windows["1"]).toMatchObject({ startDay: endDay, endDay, newTokens: 14, cacheRead: 50, totalTokens: 64,
+      tokenDetails: { input: 10, output: 4, estimatedCost: { coverage: "partial" }, models: { coverage: "ready", rows: [
+        { model: "gpt-6.2-sol", input: 3, output: 4, cacheRead: 46, totalTokens: 53, estimatedCost: { coverage: "ready" } },
+        { model: "activities-unpriced-fixture", totalTokens: 11, estimatedCost: { coverage: "unavailable", usd: null } },
+      ] } } });
+    expect(windows["1"].tokenDetails!.estimatedCost.usd).toBeCloseTo(50.6 / 1e6, 12);
+    expect(response.trend.at(-1)?.tokenDetails).toEqual({ ...windows["1"].tokenDetails, cacheRead: 50 });
+    expect(response.history?.find((row) => row.day === endDay)?.tokenDetails).toEqual(response.trend.at(-1)?.tokenDetails);
+    expect(response.history?.find((row) => row.day === older)?.tokenDetails).toMatchObject({
+      input: 10, output: 4, cacheRead: 50, models: { coverage: "ready", rows: [{ totalTokens: 64 }] },
+    });
+    expect(response.history?.find((row) => row.day === legacy)).toMatchObject({ totalTokens: 64 });
+    expect(response.history?.find((row) => row.day === legacy)?.tokenDetails).toBeUndefined();
+    for (const key of ["7", "30"] as const) {
+      const window = windows[key];
+      expect(window.tokenDetails).toMatchObject({ input: window.days * 10, output: window.days * 4,
+        models: { rows: [{ totalTokens: window.days * 64 - 11 }, { totalTokens: 11 }] } });
+      expect(window.tokenDetails!.estimatedCost.usd).toBeCloseTo((50.6 + (window.days - 1) * 65) / 1e6, 12);
+    }
+  });
+
+  it("keeps activity and token totals when daily models conflict, and prices only the observed lower bound", async () => {
+    const { file, snapshot } = await fixture(asOf);
+    const unsafe = "sk-" + "x".repeat(25);
+    await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: { version: 1, daily: [
+      retained(endDay, [model("gpt-6.2-sol", 2, 0, 15)]),
+      retained(day(endDay, -1), [model("gpt-6.2-sol", 11, 3, 50)]),
+      { ...retained(day(endDay, -2)), input: 4, output: 10 },
+      retained(day(endDay, -3), [model(unsafe)]),
+      retained(day(endDay, -4), [model(), model()]),
+    ] } }));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows?.["1"]).toMatchObject({ prs: 1, commits: 2, totalTokens: 64, tokenDetails: {
+      input: 10, output: 4, models: { coverage: "partial", rows: [{ totalTokens: 17, estimatedCost: { coverage: "partial" } }] },
+      estimatedCost: { coverage: "partial" },
+    } });
+    expect(response.windows?.["1"].tokenDetails?.estimatedCost.usd).toBeCloseTo(5.5 / 1e6, 12);
+    for (const row of response.trend.slice(-5, -1)) {
+      expect(row.tokenDetails).toEqual({ input: 10, output: 4, cacheRead: 50,
+        estimatedCost: { coverage: "unavailable", usd: null }, models: { coverage: "unavailable", rows: [] } });
+    }
+    expect(JSON.stringify(response)).not.toContain(unsafe);
+  });
+
+  it("treats a complete measured zero separately from missing attribution and unknown rates", async () => {
+    const { file, snapshot } = await fixture(asOf);
+    const today = snapshot.daily.at(-1)!;
+    Object.assign(today.categories.work, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, newTokens: 0 });
+    const usage = createLocalUsageProvider({ file, now: () => asOf });
+    await writeFile(file, JSON.stringify(snapshot));
+    expect((await usage.get()).windows?.["1"].tokenDetails).toEqual({
+      input: 0, output: 0, estimatedCost: { coverage: "ready", usd: 0 }, models: { coverage: "ready", rows: [] },
+    });
+    today.tokenStatus = "unavailable";
+    await writeFile(file, JSON.stringify(snapshot));
+    expect((await usage.get()).windows?.["1"].tokenDetails).toEqual({
+      input: null, output: null, estimatedCost: { coverage: "unavailable", usd: null }, models: { coverage: "unavailable", rows: [] },
+    });
+  });
 });

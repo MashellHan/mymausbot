@@ -575,6 +575,7 @@ process.stdin.on("data", (chunk) => {
               data: [
                 { id: "gpt-hidden", displayName: "Hidden", hidden: true, isDefault: false },
                 { id: "gpt-page-two", displayName: "GPT Page Two", hidden: false, isDefault: false,
+                  ...(process.env.FAKE_CODEX_EFFORTS === "1" ? { supportedReasoningEfforts: [] } : {}),
                   ...(tiers ? { serviceTiers: FAST_TIERS, defaultServiceTier: "priority" } : {}) },
               ],
               nextCursor: null,
@@ -591,6 +592,9 @@ process.stdin.on("data", (chunk) => {
                   ? [{ id: "gpt-6-astra", displayName: "GPT-6 Astra", hidden: false, isDefault: true }]
                   : []),
                 { id: "gpt-fake-default", displayName: "GPT Fake Default", hidden: false, isDefault: !hasAstra,
+                  ...(process.env.FAKE_CODEX_EFFORTS === "1" ? {
+                    supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }],
+                  } : {}),
                   ...(tiers ? { serviceTiers: FAST_TIERS, defaultServiceTier: null } : {}) },
                 ...(process.env.FAKE_CODEX_LUNA === "1"
                   ? [{ id: "gpt-6-luna", displayName: "GPT-6 Luna", hidden: false, isDefault: false }]
@@ -656,7 +660,7 @@ process.stdin.on("data", (chunk) => {
           threadReply({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: msg.params?.threadId }, sandbox: resolvedSandbox(msg.params ?? {}) } });
         } else if (msg.params?.permissions && (!experimentalApi || mode === "config-profile-unsupported")) {
           out({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "experimental API required for permissions" } });
-        } else if (mode === "resume" || mode === "review-events" || mode === "helper-events" || mode === "instructions-unsupported" || mode === "config-profile" || mode === "config-profile-unsupported" || mode === "async-question" ||
+        } else if (mode === "resume" || mode === "connection-input-refused" || mode === "review-events" || mode === "helper-events" || mode === "instructions-unsupported" || mode === "config-profile" || mode === "config-profile-unsupported" || mode === "async-question" ||
             (mode === "resume-then-missing" && !existsSync(process.env.FAKE_CODEX_STATE ?? ""))) {
           threadReply({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: msg.params?.threadId, ...(process.env.FAKE_CODEX_ROLLOUT ? { path: process.env.FAKE_CODEX_ROLLOUT } : {}) }, sandbox: resolvedSandbox(msg.params ?? {}) } });
         } else {
@@ -797,6 +801,18 @@ process.stdin.on("data", (chunk) => {
           out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: nativeTurnId } } });
           notify("modelProvider/authRecoveryStarted", { provider: "openai", message: "Refreshing sign-in" });
           notify("turn/completed", { turn: { status: "failed", error: { message: "unexpected status 401 Unauthorized", codexErrorInfo: null } } });
+          break;
+        }
+        if (mode === "connection-input-refused") {
+          out({ jsonrpc: "2.0", id: msg.id, result: { turn: { id: nativeTurnId } } });
+          notify("error", { willRetry: true, error: {
+            message: "Reconnecting... 1/5", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } },
+            additionalDetails: 'unexpected status 401 Unauthorized: {"error":{"message":"input item does not belong to this connection"}}',
+          } });
+          break;
+        }
+        if (mode === "tool-conversion-refused") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -32603, message: "tool type namespace is not supported on this conversion" } });
           break;
         }
         if (mode === "key-401") {

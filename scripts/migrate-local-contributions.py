@@ -20,8 +20,9 @@ import urllib.parse
 
 import local_usage_contributions as contributions
 
-HELPERS = ("refresh-local-usage.py", "local_usage_contributions.py", "local_usage_profile.py", "local_usage_profile_private.py",
-           "local_usage_ado.py", "local_usage_merged.py", "local_usage_github.py")
+HELPERS = ("local_usage_models.py", "refresh-local-usage.py", "local_usage_contributions.py",
+           "local_usage_profile.py", "local_usage_profile_private.py", "local_usage_ado.py",
+           "local_usage_merged.py", "local_usage_github.py")
 
 
 def sha(path):

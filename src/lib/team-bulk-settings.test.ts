@@ -88,6 +88,18 @@ describe("team-wide settings", () => {
     ]);
   });
 
+  it("uses the destination model's supported effort while previewing and planning a batch", () => {
+    const available = [engine("claude", "claudeAgent", ["opus"], {
+      capabilities: { effortLevels: ["high", "xhigh"] },
+      models: { default: "opus", options: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet", effortLevels: ["high"] }] },
+    })];
+    const bots = [bot("a", { modelSelection: { instanceId: "claude", model: "opus", effort: "xhigh" } })];
+    expect(teamEffortChoices(bots, available, EFFORT_LEVELS, "sonnet")).toEqual(["high"]);
+    expect(planTeamChange(bots, available, { kind: "model", model: "sonnet", effort: "xhigh" })[0]?.status).toBe("skip");
+    expect(planTeamChange(bots, available, { kind: "model", model: "sonnet" })[0]).toMatchObject({ patch: { modelSelection: { instanceId: "claude", model: "sonnet" } } });
+    expect(planTeamChange(bots, available, { kind: "model", model: "sonnet" })[0]).not.toHaveProperty("patch.modelSelection.effort");
+  });
+
   it("calls a bot already set only when every one of its threads is, and sets one with a thread working too", () => {
     const tasks = (...modes: Array<"ask" | "auto" | undefined>) => modes.map((approvalMode, index) => ({ threadId: `t${index}`, title: "T", createdAt: index, approvalMode }));
     const plan = planTeamChange([

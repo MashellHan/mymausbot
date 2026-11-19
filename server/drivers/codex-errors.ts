@@ -2,6 +2,7 @@ import { cloudHomeConfigured } from "../cloud-home.ts";
 import { hostTimeZone } from "../turn-clock.ts";
 import { USAGE_LIMIT } from "./retry.ts";
 import { CODEX_USAGE_LIMIT_REACHED } from "../../shared/codex-usage-limit.ts";
+import { isConnectionInputRefusal } from "../../shared/failed-turn.ts";
 import type { ServerText } from "../../shared/server-text.ts";
 import { noticeFailure } from "../chat-notices.ts";
 import { plainRecord } from "./codex-app-approval.ts";
@@ -111,6 +112,11 @@ export const CODEX_SIGN_IN_EXPIRED = "Codex's ChatGPT sign-in has expired. Sign 
 
 export function codexSignInExpired(raw: string): string {
   return `${CODEX_SIGN_IN_EXPIRED} Codex said: ${raw.slice(0, 300)}`;
+}
+
+export function codexConnectionInputRefused(error: unknown): boolean {
+  const record = plainRecord(error);
+  return [record?.message, record?.additionalDetails].some(isConnectionInputRefusal);
 }
 
 export class CodexRpcError extends Error {

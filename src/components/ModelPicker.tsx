@@ -8,7 +8,7 @@ import type { EffortLevel } from "../../shared/wire";
 import { filterCustomModels, partitionCustomModels, suggestedModels } from "@/lib/custom-models";
 import { configuredModelInstances, isClaudeAccount, isCustomOnly, modelsAwaitEngine, SIGN_IN_FAMILY_LABEL, signInFamily } from "@/lib/engine-rail";
 import { modelName, simpleModelMenu, variantSuffix } from "@/lib/simple-model-menu";
-import { choiceIsSelected, modelChoices, modelSelectionForPick, takesTypedModels, withTypedModels, type ModelChoice } from "@/lib/model-choices";
+import { choiceIsSelected, modelChoices, modelSelectionForPick, pickerModelEffortLevels, takesTypedModels, withTypedModels, type ModelChoice } from "@/lib/model-choices";
 export { modelSelectionForPick } from "@/lib/model-choices";
 import { pickerPlacement, type PickerPlacement } from "@/lib/picker-placement";
 import type { Typeahead } from "@/lib/menu-keys";
@@ -325,6 +325,7 @@ export function ModelPicker({
     else refocusAfterPick();
   };
   const pick = (instance: InstanceInfo, model: string, variant?: string) => {
+    if (instance.models.options.find((option) => option.id === model)?.protocolUnsupported) return;
     const nextSelection = modelSelectionForPick(selection, instance, model);
     if (variant !== undefined) nextSelection.variant = variant;
     applySelection(instance, nextSelection, variant !== undefined);
@@ -363,7 +364,7 @@ export function ModelPicker({
   );
   const remote = window.ogb?.remoteClient?.active === true;
 
-  const levels = active?.capabilities?.effortLevels ?? [];
+  const levels = pickerModelEffortLevels(active, selection.model);
   const writeEffort = (effort: EffortLevel | undefined) => {
     const { effort: _effort, ...model } = selection;
     dispatch({ type: "setModel", botId: bot.id, threadId, ...(threadId && simpleUpdatesBotDefault ? { updateBotDefault: true } : {}),
@@ -376,7 +377,7 @@ export function ModelPicker({
           label={<span className="shrink-0 text-[12px] font-medium leading-4 text-ink-tertiary">{t("botSettings.simple.thinking")}</span>} />
       ),
     }
-    : levels.length > 0 && !shown.busy ? { levels, current: selection.effort, onPick: writeEffort, onReset: () => writeEffort(undefined) }
+    : levels.length > 0 && !shown.busy ? { levels, current: selection.effort && levels.includes(selection.effort) ? selection.effort : undefined, onPick: writeEffort, onReset: () => writeEffort(undefined) }
     : null;
   const contextWindow = (!contained || showReasoning) && active?.capabilities?.configurableContextWindow
     ? <ModelContextWindow key={JSON.stringify([bot.id, threadId ?? bot.threadId])} selection={selection} disabled={shown.busy || Boolean(active.policy)} inline={inlineSettings}
@@ -413,7 +414,8 @@ export function ModelPicker({
   const attention = !active ? undefined
     : active.policy ? t("policy.managedBy", { organization: active.policy.organizationName })
       : needsCli(active) ? t("model.setupRequired")
-        : needsSignIn(active) && !isCustomOnly(active) && !currentOption?.custom ? t("model.signInRequired") : currentOption?.orgBlocked ? t("model.orgBlocked") : currentOption?.needsCliUpdate ? t("engines.updateClaude") : undefined;
+        : needsSignIn(active) && !isCustomOnly(active) && !currentOption?.custom ? t("model.signInRequired") : currentOption?.orgBlocked ? t("model.orgBlocked") : currentOption?.needsCliUpdate ? t("engines.updateClaude")
+          : currentOption?.protocolUnsupported ? t("model.simple.unavailable") : undefined;
   const summary = active
     ? `${engineDisplayName(active)} · ${modelLabel(active, selection.model)}${
         modelProvider(active, selection.model) ? ` · ${modelProvider(active, selection.model)}` : ""
