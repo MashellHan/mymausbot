@@ -22,8 +22,15 @@ export function signature(contract, platform) {
   return createHash("sha256").update(`${contract}\0${platform}`).digest("hex").slice(0, 24);
 }
 
+const UNKNOWN_TEST_FILE = "unknown test file";
+
 function relativeTest(value) {
-  return String(value).replaceAll("\\", "/").match(/(?:^|\/)((?:src|server|shared|scripts|evals|cloudflare)\/.*?\.test\.[cm]?[jt]sx?)$/)?.[1] ?? "unknown test file";
+  return String(value).replaceAll("\\", "/").match(/(?:^|\/)((?:src|server|shared|scripts|evals|cloudflare|electron)\/.*?\.test\.[cm]?[jt]sx?)$/)?.[1] ?? UNKNOWN_TEST_FILE;
+}
+
+function testIssueKey(file, title, platform) {
+  const identityFile = String(file).startsWith("electron/") ? UNKNOWN_TEST_FILE : file;
+  return signature(`${identityFile} > ${title}`, platform);
 }
 
 export function testFindings(files, platform) {
@@ -38,15 +45,16 @@ export function testFindings(files, platform) {
     for (const suite of report.testResults) {
       const file = relativeTest(suite.name);
       for (const test of suite.assertionResults ?? []) {
-        const contract = `${file} > ${[...(test.ancestorTitles ?? []), test.title].filter(Boolean).join(" > ") || test.fullName}`;
-        const key = signature(contract, platform);
+        const title = [...(test.ancestorTitles ?? []), test.title].filter(Boolean).join(" > ") || test.fullName;
+        const contract = `${file} > ${title}`;
+        const key = testIssueKey(file, title, platform);
         if (test.status === "passed") passed.add(key);
         if (test.status === "failed") findings.push({ key, contract, file, platform, kind: "product", assertion: sanitize((test.failureMessages ?? []).join("\n")), retries: 0,
           ...(test.meta?.qaTextChange?.from === "MausBot" && test.meta.qaTextChange.to === "mymausbot" ? { textChange: { from: "MausBot", to: "mymausbot" } } : {}) });
       }
       if (suite.status === "failed" && !(suite.assertionResults ?? []).some((test) => test.status === "failed")) {
         const contract = `${file} > suite setup`;
-        findings.push({ key: signature(contract, platform), contract, file, platform, kind: "unclassified", assertion: sanitize(suite.message), retries: 0 });
+        findings.push({ key: testIssueKey(file, "suite setup", platform), contract, file, platform, kind: "unclassified", assertion: sanitize(suite.message), retries: 0 });
       }
     }
   }
@@ -55,7 +63,7 @@ export function testFindings(files, platform) {
       const retry = JSON.parse(line);
       if (retry.listError) throw new Error(`Retry evidence invalid in ${name}`);
       const contract = `${retry.file} > ${retry.test}`;
-      const key = signature(contract, platform);
+      const key = testIssueKey(retry.file, retry.test, platform);
       passed.delete(key);
       const existing = findings.find((finding) => finding.key === key);
       if (existing) existing.retries = retry.retries;

@@ -40,9 +40,9 @@ function narrowPlan(source = pushRun) {
     outputs: { ...plan.outputs, full_required: false, expected_jobs: expectedJobs(selected, false) } };
 }
 const testFile = "server/request-auth.test.ts";
-function result(status = "failed") {
+function result(status = "failed", file = testFile) {
   return { "vitest.json": JSON.stringify({ numTotalTests: 1, numFailedTests: status === "failed" ? 1 : 0, numPendingTests: status === "pending" ? 1 : 0,
-    testResults: [{ name: `/home/runner/work/mausbot/mausbot/${testFile}`, status,
+    testResults: [{ name: `/home/runner/work/mausbot/mausbot/${file}`, status,
       assertionResults: [{ ancestorTitles: ["auth"], title: "rejects a foreign owner", status, failureMessages: ["Expected 403, received 200"] }] }] }) };
 }
 
@@ -818,6 +818,22 @@ describe("complete CI and trusted QA health", () => {
 });
 
 describe("QA findings and idempotent delivery", () => {
+  it("reports Electron paths while preserving the original issue key for failure, pass, and retry", () => {
+    const file = "electron/cua-watch-restart.test.mjs";
+    const title = "auth > rejects a foreign owner";
+    const key = signature(`unknown test file > ${title}`, "darwin");
+    const contract = `${file} > ${title}`;
+    expect(testFindings(result("failed", file), "darwin").findings).toEqual([
+      expect.objectContaining({ file, contract, key, kind: "product" }),
+    ]);
+    const clean = result("passed", file);
+    expect(testFindings(clean, "darwin").passed).toEqual([key]);
+    const retry = JSON.stringify({ file, test: title, retries: 1, state: "pass" });
+    expect(testFindings({ ...clean, "vitest-retries.jsonl": retry }, "darwin")).toMatchObject({
+      passed: [], findings: [{ file, contract, key, kind: "flake", retries: 1 }],
+    });
+  });
+
   it("keeps retry passes as flakes and uses the same identity across revisions", () => {
     const data = testFindings({ ...result("passed"), "vitest-retries.jsonl": JSON.stringify({ file: testFile, test: "auth > rejects a foreign owner", retries: 2, state: "pass" }) }, "linux");
     expect(data.passed).toEqual([]);
