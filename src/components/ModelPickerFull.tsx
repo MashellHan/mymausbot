@@ -29,8 +29,8 @@ export function ModelRow({ option, current, defaultId, botModel = false, onPick 
   onPick: () => void;
 }) {
   const needsUpdate = option.needsCliUpdate !== undefined;
-  const blocked = option.orgBlocked === true || needsUpdate;
-  const reason = needsUpdate ? t("chat.claudeUpdate.offer") : t("model.orgBlocked");
+  const blocked = option.orgBlocked === true || needsUpdate || option.protocolUnsupported === true;
+  const reason = needsUpdate ? t("chat.claudeUpdate.offer") : option.protocolUnsupported ? t("model.simple.unavailable") : t("model.orgBlocked");
   const meta = needsUpdate ? t("engines.updateClaude") : blocked ? reason : [option.provider, option.id === defaultId ? t("model.effort.default") : undefined].filter(Boolean).join(" · ");
   return (
     <button

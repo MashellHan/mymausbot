@@ -1,4 +1,5 @@
 import type { InstanceInfo, ModelSelection } from "@/state/store";
+import { modelEffortLevels } from "../../shared/model-selection";
 import { openCodeRunsTypedModel, typedOpenCodeModel, typedOpenCodeModelId } from "../../shared/opencode-model-id";
 import { t } from "./i18n";
 
@@ -24,11 +25,19 @@ export function choiceIsSelected(choice: ModelChoice, selection: ModelSelection)
   return (choice.nativeModel ?? choice.id) === selection.model && choice.variant === selection.variant;
 }
 
+export function pickerModelEffortLevels(instance: InstanceInfo | undefined, model: string) {
+  const option = instance?.models.options.find((candidate) => candidate.id === model);
+  if (instance?.driverKind === "codex" && option?.custom) return option.effortLevels ?? [];
+  return modelEffortLevels(instance?.models.options, model, instance?.capabilities?.effortLevels);
+}
+
 export function modelSelectionForPick(selection: ModelSelection, instance: InstanceInfo, model: string): ModelSelection {
   const next: ModelSelection = { instanceId: instance.instanceId, model };
   if (instance.instanceId === selection.instanceId) {
+    const levels = model === selection.model ? modelEffortLevels(instance.models.options, model, instance.capabilities?.effortLevels)
+      : pickerModelEffortLevels(instance, model);
     if (instance.capabilities?.modelVariants && model === selection.model && selection.variant !== undefined) next.variant = selection.variant;
-    else if (!instance.capabilities?.modelVariants && selection.effort) next.effort = selection.effort;
+    else if (!instance.capabilities?.modelVariants && selection.effort && levels.includes(selection.effort)) next.effort = selection.effort;
   }
   return next;
 }

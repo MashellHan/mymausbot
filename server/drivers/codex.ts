@@ -58,7 +58,8 @@ import { CodexDeviceAuthController } from "./codex-device-auth.ts"; import { mes
 import { codexAccountEmail, codexHome } from "./codex-identity.ts";
 import { keepChatsOutOfCodexHistory, linkSharedCodexHome } from "./codex-shared-home.ts";
 import { containsControlCharacter, mcpAppApprovalForm, mcpAppApprovalText, mcpElicitationDeclined, plainRecord } from "./codex-app-approval.ts";
-import { archivedNativeCodexThread, CODEX_MISSING_CREDENTIALS, codexProviderMismatch, CODEX_SIGN_IN_EXPIRED, codexLimitFacts, codexNotSignedIn, CodexRpcError, codexSignInExpired, codexPlanModelRefused, codexSignInRefused, codexUserError, codexUserFailure, missingNativeCodexThread, type CodexRoute } from "./codex-errors.ts";
+import { CODEX_TOOL_CONVERSION_REFUSAL, CONNECTION_INPUT_REFUSAL, isCodexToolConversionRefusal } from "../../shared/failed-turn.ts";
+import { archivedNativeCodexThread, CODEX_MISSING_CREDENTIALS, codexConnectionInputRefused, codexProviderMismatch, CODEX_SIGN_IN_EXPIRED, codexLimitFacts, codexNotSignedIn, CodexRpcError, codexSignInExpired, codexPlanModelRefused, codexSignInRefused, codexUserError, codexUserFailure, missingNativeCodexThread, type CodexRoute } from "./codex-errors.ts";
 import { codexLoginCheck, readCodexLogin, storedCodexLogin } from "./codex-login.ts";
 import { keyRejected, noteKeyAccepted, noteKeyRejected } from "../key-rejections.ts";
 import { classifyResumeFailure, mayReplay, rebuiltSessionNotice, recoveryPromptFor } from "../resume-recovery.ts";
@@ -983,8 +984,15 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         void relaunch("auth", raw, "auth_required").catch(() => {});
         return true;
       };
-      const turnError = (error: { message?: unknown; codexErrorInfo?: unknown }) => {
+      const failConnection = (message: string) => {
+        if (message === CODEX_TOOL_CONVERSION_REFUSAL) models = { ...models, options: models.options.map((option) => option.id === turn.model ? { ...option, protocolUnsupported: true } : option) };
+        emit({ ...base(threadId, turnId), type: "runtime.error", message, terminal: true });
+        return settle(false, "refusal");
+      };
+      const turnError = (error: { message?: unknown; codexErrorInfo?: unknown; additionalDetails?: unknown }) => {
+        if (codexConnectionInputRefused(error)) return void failConnection(CONNECTION_INPUT_REFUSAL);
         const raw = String(error.message);
+        if (route === "other" && isCodexToolConversionRefusal(raw)) return void failConnection(CODEX_TOOL_CONVERSION_REFUSAL);
         const refused = chatgptTurn && loginMark() !== null && (codexSignInRefused(error) ||
           (state.authRecovery && !/\b403\b|forbidden/i.test(raw) && /\b401\b|unauthorized/i.test(raw)));
         if (retryLoginRace(raw, refused)) return;
@@ -1181,7 +1189,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             } else if (t.status === "failed" && !state.lastError && state.retryError) {
               turnError({ message: state.retryError });
             }
-            if (abandoned) break;
+            if (abandoned || state.settled) break;
             reportUnsupportedCalls(rolloutAt, (message, text) => emit({ ...base(threadId, turnId), type: "runtime.notice", message, ...(text ? { text } : {}) }));
             void settle(t.status === "completed", t.status === "completed" ? null :
               (classifyError({ text: state.lastError }).reason === "provider_safety" ? "provider_safety" : (state.lastError || t.status || "failed")));
@@ -1192,7 +1200,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             const error = p.error && typeof p.error === "object" ? p.error : { message: p.message };
             if (!error.message) break;
             // 0.160 reports each of its own reconnects ("Reconnecting... 1/5") with willRetry: true.
-            if (p.willRetry === true) {
+            if (p.willRetry === true && !codexConnectionInputRefused(error)) {
               state.retryError = String(error.message);
               break;
             }
@@ -1385,7 +1393,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ...approvalParams.thread,
           });
           // An archived session is unarchived and resumed; if that fails it is rebuilt like a missing one.
-          const resumeUnarchived = () => resumeThread().catch((error) => !archivedNativeCodexThread(error, cursor) ? Promise.reject(error)
+          const resumeUnarchived = () => resumeThread().catch((error) => codexConnectionInputRefused(error) || !archivedNativeCodexThread(error, cursor) ? Promise.reject(error)
             : request("thread/unarchive", { threadId: cursor }).then(resumeThread, () => Promise.reject(error)));
           try {
             let resumed;
@@ -1407,7 +1415,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               promptSubmitted,
               producedOutput: state.sawStreamDelta,
             });
-            if (recoveredMissingSession || stopRequested || state.settled ||
+            if (recoveredMissingSession || stopRequested || state.settled || codexConnectionInputRefused(error) ||
                 !turn.recoveryText?.trim() || !(missingNativeCodexThread(error, cursor) || archivedNativeCodexThread(error, cursor) || codexProviderMismatch(error)) || !mayReplay(failure)) throw error;
             // Codex no longer has the thread, or keeps it under another provider: rebuild once, or every later turn fails the same way.
             recoveredMissingSession = true;
@@ -1493,6 +1501,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       } catch (e) {
         const failure = e instanceof Error ? e : { text: String(e) };
         const raw = e instanceof Error ? e.message : String(e);
+        if (!state.settled && !abandoned && codexConnectionInputRefused(e)) return failConnection(CONNECTION_INPUT_REFUSAL);
+        if (!state.settled && !abandoned && route === "other" && isCodexToolConversionRefusal(raw)) return failConnection(CODEX_TOOL_CONVERSION_REFUSAL);
         const refused = chatgptTurn && loginMark() !== null && codexSignInRefused({ message: raw });
         hideRefusedModel(raw);
         const reported: ReturnType<typeof codexUserFailure> = refused ? { message: codexSignInExpired(raw) } : codexUserFailure(raw, route);

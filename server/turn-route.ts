@@ -1,5 +1,6 @@
 import type { ModelCatalog, ModelSelection } from "./contracts.ts";
 import { isConversational, type ReplyStyle } from "../shared/reply-style.ts";
+import { modelEffortLevels } from "../shared/model-selection.ts";
 import type { EffortLevel } from "../shared/wire.ts";
 
 export type TurnTier = "simple" | "complex";
@@ -41,7 +42,7 @@ export function fastModelFor(catalog: ModelCatalog | undefined, current: string,
   if (!catalog) return undefined;
   if (FAST.test(current)) return current;
   const provider = catalog.options.find((option) => option.id === current)?.provider;
-  const pick = catalog.options.find((option) => !option.custom && !refused.has(option.id) &&
+  const pick = catalog.options.find((option) => !option.custom && !option.protocolUnsupported && !refused.has(option.id) &&
     FAST.test(option.id) && (option.provider ?? undefined) === (provider ?? undefined));
   return pick?.id;
 }
@@ -102,6 +103,9 @@ export function routeDirectTurn(
   refused?: ReadonlySet<string>,
 ): RouteResult {
   const lastAsk = path.findLastIndex((m) => m.role === "user" && m.kind === "text");
+  const { model, effort } = bot.modelSelection;
+  const effortLevels = modelEffortLevels(instance.models?.options, model, instance.adapter.capabilities.effortLevels);
+  const modelEfforts = instance.models?.options.find((option) => option.id === model)?.effortLevels;
   return routeTurn({
     conversational: isConversational(bot.replyStyle),
     followsBotModel: task.modelSelection === undefined,
@@ -111,13 +115,13 @@ export function routeDirectTurn(
       attachments: message.images.length,
       priorTurnUsedTools: lastAsk >= 0 && path.slice(lastAsk + 1).some((m) => m.kind === "activity"),
     },
-    model: bot.modelSelection.model,
-    effort: bot.modelSelection.effort,
+    model,
+    effort: effort !== undefined && modelEfforts && !modelEfforts.includes(effort) ? undefined : effort,
     variant: bot.modelSelection.variant,
     contextWindowTokens: bot.modelSelection.contextWindowTokens,
     catalog: instance.quickModelsUsable?.() === false ? undefined : instance.models,
     refused,
-    effortLevels: instance.adapter.capabilities.effortLevels,
+    effortLevels,
     contextTokens: task.usage?.context?.tokens,
   });
 }

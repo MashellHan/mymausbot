@@ -1,13 +1,16 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { isEffortLevel } from "../shared/model-selection.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import type { ModelCatalog } from "./contracts.ts";
 import { buildStamp } from "./environment.ts";
 import { afterFirstEngineRead } from "./first-engine-read.ts";
+import { sanitizeModelProviderRoute } from "./model-provider-routes.ts";
 
 const SAFE_INSTANCE_ID = /^[\w.-]+$/;
+const CATALOG_SCHEMA_VERSION = 2;
 /** A list this server's build read this recently is used as it is at start; an older one, or one an earlier build read,
  * is read again in the background. A sleeping Cloud wakes many times an hour, and each read can start the engine's CLI. */
 export const STARTUP_MODEL_CACHE_FRESH_MS = 6 * 60 * 60_000;
@@ -53,22 +56,30 @@ function catalogFrom(value: unknown): ModelCatalog | null {
       custom?: unknown;
       loaded?: unknown;
       provider?: unknown;
+      providerRoute?: unknown;
       contextWindow?: unknown;
+      effortLevels?: unknown;
+      protocolUnsupported?: unknown;
       variants?: unknown;
       orgBlocked?: unknown;
       needsCliUpdate?: unknown;
     };
     if (typeof option.id !== "string" || typeof option.label !== "string") return null;
     const variants = variantList(option.variants);
+    const route = sanitizeModelProviderRoute(option.providerRoute);
+    const levels = Array.isArray(option.effortLevels) && option.effortLevels.every(isEffortLevel) ? option.effortLevels : undefined;
     options.push({
       id: option.id,
       label: option.label,
       ...(option.custom === true ? { custom: true } : {}),
       ...(option.loaded === true ? { loaded: true } : {}),
       ...(typeof option.provider === "string" ? { provider: option.provider } : {}),
+      ...(route ? { providerRoute: route } : {}),
       ...(typeof option.contextWindow === "number" && Number.isFinite(option.contextWindow)
         ? { contextWindow: option.contextWindow }
         : {}),
+      ...(levels ? { effortLevels: levels } : {}),
+      ...(option.protocolUnsupported === true ? { protocolUnsupported: true } : {}),
       ...(variants ? { variants } : {}),
       ...(option.orgBlocked === true ? { orgBlocked: true as const } : {}),
       ...(typeof option.needsCliUpdate === "string" ? { needsCliUpdate: option.needsCliUpdate } : {}),
@@ -94,12 +105,12 @@ export function readStartupModelCacheEntry(instanceId: string): StartupModelCach
   const path = startupModelCachePath(instanceId);
   if (!path) return null;
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as { checkedAt?: unknown; build?: unknown };
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { checkedAt?: unknown; build?: unknown; schemaVersion?: unknown };
     const catalog = catalogFrom(raw);
     return catalog ? {
       catalog,
       checkedAt: typeof raw.checkedAt === "number" && Number.isFinite(raw.checkedAt) ? raw.checkedAt : null,
-      build: typeof raw.build === "string" ? raw.build : null,
+      build: raw.schemaVersion === CATALOG_SCHEMA_VERSION && typeof raw.build === "string" ? raw.build : null,
     } : null;
   } catch {
     return null;
@@ -117,7 +128,8 @@ export function writeStartupModelCache(instanceId: string, catalog: ModelCatalog
   const stored = catalogFrom(catalog);
   if (!stored) return;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileAtomic(path, JSON.stringify({ ...stored, checkedAt: read.checkedAt ?? (unconfirmed.has(catalog) ? 0 : Date.now()), build: read.build ?? buildStamp() }), { durable: false });
+  writeFileAtomic(path, JSON.stringify({ ...stored, schemaVersion: CATALOG_SCHEMA_VERSION,
+    checkedAt: read.checkedAt ?? (unconfirmed.has(catalog) ? 0 : Date.now()), build: read.build ?? buildStamp() }), { durable: false });
 }
 
 /** An object, not a promise: an async function cannot hand back a promise without `await` following it. */

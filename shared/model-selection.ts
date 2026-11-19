@@ -7,6 +7,11 @@ export function isEffortLevel(value: unknown): value is EffortLevel {
   return typeof value === "string" && (EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
+export function modelEffortLevels(options: readonly { id: string; effortLevels?: readonly EffortLevel[] }[] | undefined,
+  model: string, fallback: readonly EffortLevel[] | undefined): readonly EffortLevel[] {
+  return options?.find((option) => option.id === model)?.effortLevels ?? fallback ?? [];
+}
+
 /** Input bounds for a requested native window, not a model's advertised capacity. */
 export const MIN_CONTEXT_WINDOW_TOKENS = 8_192;
 export const MAX_CONTEXT_WINDOW_TOKENS = 1_000_000;

@@ -50,6 +50,26 @@ describe("model provider routes", () => {
     expect(JSON.stringify((result[0].models.options[0] as any).providerRoute)).not.toContain("secret.example");
   });
 
+  it("groups only matching configured loopback endpoints across runtime catalogs", () => {
+    const endpoint = "http://127.0.0.1:4040/v1";
+    const codexRoute = configuredProviderRoute("raven", "Raven (Local)", endpoint);
+    const piRoute = configuredProviderRoute("raven", "raven", `${endpoint}/`);
+    expect(piRoute.connectionGroup).toMatch(/^loopback:[0-9a-f]{16}$/);
+    expect(piRoute.connectionGroup).toBe(codexRoute.connectionGroup);
+    expect(configuredProviderRoute("different", "Raven (Local)", endpoint).connectionGroup).not.toBe(piRoute.connectionGroup);
+    expect(configuredProviderRoute("raven", "Raven (Local)", `${endpoint}/different`).connectionGroup).not.toBe(piRoute.connectionGroup);
+    expect(configuredProviderRoute("raven", "Raven (Local)", "https://external.example/v1").connectionGroup).toBeUndefined();
+    expect(configuredProviderRoute("raven", "Raven (Local)", `${endpoint}?key=secret`).connectionGroup).toBeUndefined();
+
+    const described = [{ instanceId: "pi", driverKind: "piAgent", models: { default: "m", options: [
+      { id: "m", label: "M", providerRoute: piRoute },
+      { id: "x", label: "X", providerRoute: { ...piRoute, connectionGroup: `${endpoint}?key=secret` } },
+    ] } }];
+    const result = withModelProviderRoutes(described, {}) as typeof described;
+    expect(result[0].models.options[0]?.providerRoute.connectionGroup).toBe(piRoute.connectionGroup);
+    expect(result[0].models.options[1]?.providerRoute.connectionGroup).toBeUndefined();
+  });
+
   it("keeps an explicit Codex endpoint on its configured connection even with ordinary noncustom model ids", () => {
     const described = [{ instanceId: "endpoint", driverKind: "codex", models: { default: "M", options: [
       { id: "M", label: "M", custom: false, providerRoute: { id: "native:openai", label: "OpenAI", provenance: "native" as const } },

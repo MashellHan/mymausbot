@@ -118,6 +118,30 @@ describe("startup model catalogs", () => {
     expect(readStartupModelCache("org-blocked")?.options[1]).toEqual({ id: "b", label: "B", orgBlocked: true });
   });
 
+  it("round-trips model capabilities and validates saved connection metadata", () => {
+    const catalog: ModelCatalog = {
+      default: "a", options: [
+        { id: "a", label: "A", effortLevels: ["low", "high"],
+          providerRoute: { id: "configured:62ecdef896b71a45", label: "Raven", provenance: "configured", connectionGroup: "loopback:70701c719d76d35e" } },
+        { id: "b", label: "B", effortLevels: [], protocolUnsupported: true },
+        { id: "c", label: "C" },
+      ],
+    };
+    const instanceId = "model-capabilities";
+    writeStartupModelCache(instanceId, catalog);
+    expect(readStartupModelCache(instanceId)).toEqual(catalog);
+
+    writeFileSync(join(DATA_DIR, "providers", "engine-models", instanceId + ".json"), JSON.stringify({
+      default: "a", options: [{
+        id: "a", label: "A", effortLevels: ["low", "unknown"], protocolUnsupported: "true",
+        providerRoute: { id: "configured:62ecdef896b71a45", label: "https://private.example", provenance: "configured", connectionGroup: "unknown", endpoint: "https://private.example" },
+      }],
+    }));
+    expect(readStartupModelCache(instanceId)).toEqual({
+      default: "a", options: [{ id: "a", label: "A", providerRoute: { id: "configured:62ecdef896b71a45", provenance: "configured" } }],
+    });
+  });
+
   it("does not wait for a slow refresh when a later start already has a catalog", async () => {
     seedBots();
     writeStartupModelCache("slow", CACHED, STALE);

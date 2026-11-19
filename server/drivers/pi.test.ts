@@ -13,6 +13,7 @@ import { caseTokens, LIVE_REPLY_CASES, liveReplyScripts } from "../testing/live-
 import { removeTempDir } from "../testing/cleanup.ts";
 import { encodeInjectId, localHost } from "./local-inject.ts";
 import { buildMcpServers } from "./pi-mcp-servers.ts";
+import { configuredProviderRoute } from "../model-provider-routes.ts";
 import {
   applyPiLocalCatalog,
   decodePiFrame,
@@ -56,6 +57,24 @@ describe("parsePiCatalog", () => {
       ["zai/glm-5.3", "zai"],
       ["nous/glm-5.3", "nous"],
     ]);
+  });
+
+  it("keeps Pi's native model ids and reflects the levels each model supports", () => {
+    const baseUrl = "http://127.0.0.1:4040/v1";
+    const line = JSON.stringify({ type: "response", command: "get_available_models", success: true, data: { models: [
+      { provider: "raven", baseUrl, id: "gemini-4-carbon", reasoning: true, thinkingLevelMap: { off: null, medium: null, xhigh: null } },
+      { provider: "raven", baseUrl, id: "sol", reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } },
+      { provider: "raven", baseUrl, id: "plain-chat", reasoning: false },
+    ] } });
+    const { options } = parsePiCatalog(line);
+    expect(options.map(({ id, effortLevels }) => [id, effortLevels])).toEqual([
+      ["raven/gemini-4-carbon", ["low", "high"]],
+      ["raven/sol", ["none", "low", "medium", "high", "xhigh", "max"]],
+      ["raven/plain-chat", []],
+    ]);
+    expect(options[0]?.providerRoute?.connectionGroup)
+      .toBe(configuredProviderRoute("raven", "Raven (Local)", baseUrl).connectionGroup);
+    expect(options[0]?.providerRoute?.connectionGroup).toMatch(/^loopback:/);
   });
 
   it("keeps an empty catalog when the probe fails or reports no models", () => {

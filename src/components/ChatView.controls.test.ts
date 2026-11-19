@@ -453,6 +453,14 @@ describe("thread control placement", () => {
     expect(markup).not.toContain("<button");
     expect(renderToStaticMarkup(createElement(ErrorRow, { message: "Network timeout", onRetry: () => {} }))).toContain("<button");
   });
+
+  it("points a previous connection refusal to a new conversation without a sign-in or retry action", () => {
+    const tool = failedTurnTool('unexpected status 401 Unauthorized: input item does not belong to this connection', { setup: true });
+    const markup = renderToStaticMarkup(createElement(FailedTurnRow, { tool, engine: undefined, onRetry: () => {} }));
+    expect(markup).toContain("Start a new conversation with this bot");
+    expect(markup).not.toContain("Retry</button>");
+    expect(markup).not.toContain("Connect ChatGPT");
+  });
   it("shows the provider safety guidance from the catalog, word for word", () => {
     expect(en["chat.providerSafety.guidance"]).toBe(PROVIDER_SAFETY_GUIDANCE);
   });

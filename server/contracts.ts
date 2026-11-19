@@ -488,6 +488,10 @@ export interface ModelCatalog {
     providerRoute?: ModelProviderRoute;
     /** Context window in tokens, when known; sizes the model-facing rebuild. */
     contextWindow?: number;
+    /** The supported reasoning choices for this model, when reported. An empty list means no choices. */
+    effortLevels?: readonly EffortLevel[];
+    /** This engine needs a native protocol that the model's catalog explicitly does not support. */
+    protocolUnsupported?: true;
     /** Discovery hints; the native session revalidates these before each turn. */
     variants?: ModelVariantOption[];
     /** The organization of the signed-in account turned this model off: the engine would answer with another. */

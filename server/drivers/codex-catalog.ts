@@ -4,6 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
+import { isEffortLevel, type EffortLevel } from "../../shared/model-selection.ts";
 import type { ModelCatalog } from "../contracts.ts";
 import { qualifiedModelLabel } from "../contracts.ts";
 import { killCliTree, spawnCli } from "../procs.ts";
@@ -70,9 +71,18 @@ interface CodexAppServerModel {
   isDefault?: unknown;
   serviceTiers?: unknown;
   defaultServiceTier?: unknown;
+  supportedReasoningEfforts?: unknown;
 }
 
 const FAST_TIER = /fast/i;
+
+function effortLevels(value: unknown): readonly EffortLevel[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const levels = value.map((entry) => typeof entry === "string" ? entry
+    : entry?.reasoningEffort ?? entry?.reasoning_effort ?? entry?.effort);
+  if (levels.some((level) => typeof level !== "string")) return undefined;
+  return [...new Set(levels.filter(isEffortLevel))];
+}
 
 /** The model's Fast tier (codex-cli 0.167 lists `{id: "priority", name: "Fast"}`), unless it already runs on it. */
 function fastTier(row: CodexAppServerModel): { id: string; name: string } | null {
@@ -171,12 +181,14 @@ export function readCodexAppServerModelCatalog(
         const seen = new Set<string>();
         let defaultModel: string | null = null;
         for (const row of models) {
-          if (row.hidden === true || typeof row.id !== "string" || !MODEL_ID.test(row.id) || seen.has(row.id)) continue;
+          if (!row || row.hidden === true || typeof row.id !== "string" || !MODEL_ID.test(row.id) || seen.has(row.id)) continue;
           seen.add(row.id);
           const label = typeof row.displayName === "string" && row.displayName.trim() ? row.displayName : row.id;
-          options.push({ id: row.id, label });
+          const levels = effortLevels(row.supportedReasoningEfforts);
+          const option = { id: row.id, label, ...(levels ? { effortLevels: levels } : {}) };
+          options.push(option);
           const fast = fastTier(row);
-          if (fast && !TIERED_ID.test(row.id)) options.push({ id: `${row.id}+${fast.id}`, label: `${label} · ${fast.name}` });
+          if (fast && !TIERED_ID.test(row.id)) options.push({ ...option, id: `${row.id}+${fast.id}`, label: `${label} · ${fast.name}` });
           if (row.isDefault === true) defaultModel = row.id;
         }
         if (!options.length) {
@@ -291,9 +303,7 @@ function providerName(provider: string, known: Map<string, CodexProvider>): stri
   return providerLabel(known.get(provider)?.name) ?? providerLabel(provider) ?? "Local connection";
 }
 
-function niceLabel(model: string, provider: string, known: Map<string, CodexProvider>, named: Map<string, string>): string {
-  const encoded = encodeCodexSelection(provider, model);
-  if (named.has(encoded)) return named.get(encoded)!;
+function niceLabel(model: string, provider: string, known: Map<string, CodexProvider>): string {
   const host = providerName(provider, known);
   return qualifiedModelLabel(model, host, {
     redundantWhen: () => host === provider,
@@ -301,8 +311,23 @@ function niceLabel(model: string, provider: string, known: Map<string, CodexProv
   });
 }
 
-function collectCatalogNames(home: string): Map<string, string> {
-  const named = new Map<string, string>();
+type CatalogFacts = { effortLevels?: readonly EffortLevel[] };
+
+function modelRecords(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  const { models, data } = payload as { models?: unknown; data?: unknown };
+  return Array.isArray(models) ? models : Array.isArray(data) ? data : [];
+}
+
+function modelFacts(row: Record<string, unknown>): CatalogFacts {
+  const levels = effortLevels(row.supported_reasoning_efforts) ?? effortLevels(row.supported_reasoning_levels) ??
+    effortLevels(row.reasoning_levels) ?? (row.reasoning === false ? [] : undefined);
+  return levels ? { effortLevels: levels } : {};
+}
+
+function collectCatalogMetadata(home: string): Map<string, CatalogFacts & { label?: string }> {
+  const metadata = new Map<string, CatalogFacts & { label?: string }>();
   for (const file of listDir(join(home, "model-catalogs"))) {
     if (!file.endsWith(".json")) continue;
     const provider = basename(file, ".json").replace(/-models$/, "");
@@ -315,46 +340,23 @@ function collectCatalogNames(home: string): Map<string, string> {
     } catch {
       continue;
     }
-    const records = Array.isArray(parsed)
-      ? parsed
-      : parsed && typeof parsed === "object" && Array.isArray((parsed as { models?: unknown }).models)
-        ? (parsed as { models: unknown[] }).models
-        : parsed && typeof parsed === "object" && Array.isArray((parsed as { data?: unknown }).data)
-          ? (parsed as { data: unknown[] }).data
-          : [];
-    for (const record of records) {
+    for (const record of modelRecords(parsed)) {
       if (!record || typeof record !== "object") continue;
-      const row = record as { slug?: unknown; id?: unknown; display_name?: unknown; name?: unknown };
+      const row = record as Record<string, unknown>;
       const slug = typeof row.slug === "string" ? row.slug : typeof row.id === "string" ? row.id : "";
       if (!MODEL_ID.test(slug)) continue;
       const label = typeof row.display_name === "string" ? row.display_name : typeof row.name === "string" ? row.name : "";
-      if (label) named.set(encodeCodexSelection(provider, slug), label);
+      metadata.set(encodeCodexSelection(provider, slug), { ...modelFacts(row), ...(label ? { label } : {}) });
     }
   }
-  return named;
-}
-
-function idsFromModelsPayload(payload: unknown): string[] {
-  const records = Array.isArray(payload)
-    ? payload
-    : payload && typeof payload === "object" && Array.isArray((payload as { data?: unknown }).data)
-      ? (payload as { data: unknown[] }).data
-      : payload && typeof payload === "object" && Array.isArray((payload as { models?: unknown }).models)
-        ? (payload as { models: unknown[] }).models
-        : [];
-  return records.flatMap((record) => {
-    if (typeof record === "string") return MODEL_ID.test(record) ? [record] : [];
-    if (!record || typeof record !== "object") return [];
-    const id = (record as { id?: unknown; slug?: unknown }).id ?? (record as { slug?: unknown }).slug;
-    return typeof id === "string" && MODEL_ID.test(id) ? [id] : [];
-  });
+  return metadata;
 }
 
 async function probeProviderModels(
   provider: CodexProvider,
   env: Record<string, string | undefined>,
   fetchImpl: typeof fetch,
-): Promise<string[]> {
+): Promise<Array<{ model: string; facts: CatalogFacts }>> {
   if (!provider.baseUrl) return [];
   const url = `${provider.baseUrl.replace(/\/$/, "")}/models`;
   const headers: Record<string, string> = {};
@@ -367,7 +369,13 @@ async function probeProviderModels(
   try {
     const response = await fetchImpl(url, { signal: controller.signal, headers });
     if (!response.ok) return [];
-    return idsFromModelsPayload(await response.json());
+    const models: Array<{ model: string; facts: CatalogFacts }> = [];
+    for (const record of modelRecords(await response.json())) {
+      const row = record && typeof record === "object" ? record as Record<string, unknown> : undefined;
+      const id = typeof record === "string" ? record : row?.id ?? row?.slug;
+      if (typeof id === "string" && MODEL_ID.test(id)) models.push({ model: id, facts: row ? modelFacts(row) : {} });
+    }
+    return models;
   } catch {
     return [];
   } finally {
@@ -399,7 +407,7 @@ async function catalogAround(
 
   const main = parseCodexToml(mainText);
   const known = new Map(main.providers.map((provider) => [provider.id, provider]));
-  const named = collectCatalogNames(home);
+  const metadata = collectCatalogMetadata(home);
   const extras: Array<{ provider: string; model: string }> = [];
 
   const remember = (provider: string | undefined, model: string | undefined) => {
@@ -424,18 +432,22 @@ async function catalogAround(
     remember(profile.modelProvider ?? main.modelProvider, profile.model);
   }
 
-  for (const [encoded, _label] of named) {
+  for (const encoded of metadata.keys()) {
     const decoded = decodeCodexSelection(encoded);
     if (decoded.model && decoded.modelProvider) remember(decoded.modelProvider, decoded.model);
   }
 
   const live = await Promise.all(
     [...known.values()].map(async (provider) => {
-      const ids = await probeProviderModels(provider, env, fetchImpl);
-      return ids.map((model) => ({ provider: provider.id, model }));
+      const models = await probeProviderModels(provider, env, fetchImpl);
+      return models.map((row) => ({ provider: provider.id, ...row }));
     }),
   );
-  for (const row of live.flat()) remember(row.provider, row.model);
+  for (const { provider, model, facts } of live.flat()) {
+    const id = encodeCodexSelection(provider, model);
+    metadata.set(id, { ...metadata.get(id), ...facts });
+    remember(provider, model);
+  }
 
   const options = official.options.map((option) => ({ ...option }));
   const seen = new Set(options.map((option) => option.id));
@@ -443,12 +455,15 @@ async function catalogAround(
     const id = encodeCodexSelection(extra.provider, extra.model);
     if (seen.has(id)) continue;
     seen.add(id);
+    const facts = metadata.get(id);
+    const provider = known.get(extra.provider);
     options.push({
       id,
-      label: niceLabel(extra.model, extra.provider, known, named),
+      label: facts?.label ?? niceLabel(extra.model, extra.provider, known),
       custom: true,
       providerRoute: (codexInjectHost(extra.provider) ? localProviderRoute(extra.provider) : undefined)
-        ?? configuredProviderRoute(extra.provider, known.get(extra.provider)?.name),
+        ?? configuredProviderRoute(extra.provider, provider?.name, provider?.baseUrl),
+      ...(facts?.effortLevels ? { effortLevels: facts.effortLevels } : {}),
     });
   }
 
@@ -474,7 +489,7 @@ async function catalogAround(
     const provider = decodeCodexSelection(option.id).modelProvider;
     const declared = provider ? known.get(provider) : undefined;
     if (provider && declared?.baseUrl && !codexInjectHost(provider)) {
-      option.providerRoute = configuredProviderRoute(provider, declared.name);
+      option.providerRoute = configuredProviderRoute(provider, declared.name, declared.baseUrl);
     }
   }
   return catalog;

@@ -151,6 +151,13 @@ describe("routeDirectTurn", () => {
     expect(routeDirectTurn(bot, {}, [], message, instance, true).tier).toBeNull();
   });
 
+  it("keeps a legacy selection usable when its model no longer offers the saved effort", () => {
+    const saved = { ...bot, modelSelection: { ...bot.modelSelection, effort: "high" as const } };
+    const restricted = { ...instance, models: { ...claude, options: [{ id: saved.modelSelection.model, label: "Opus", effortLevels: ["medium"] as const }] } };
+    expect(routeDirectTurn(saved, {}, [], message, restricted, true).effort).toBeUndefined();
+    expect(routeDirectTurn(saved, {}, [], message, instance, true).effort).toBe("high");
+  });
+
   it("keeps the explicit window on the selected model but not on a quick replacement", () => {
     const own = { replyStyle: "conversational" as const,
       modelSelection: { instanceId: "codex", model: "gpt-5.4", effort: "high" as const, contextWindowTokens: 200_000 } };
