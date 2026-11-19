@@ -11,12 +11,15 @@ import { useStore, type InstanceInfo } from "@/state/store";
 import type { TraceDetail, TraceNode, TraceRootSummary, TraceTotals } from "../../../shared/usage-trace";
 import { appName, StepIcon, ToolIcon, TurnAvatar, useAppCards } from "./TraceIcon";
 
-export function modelName(model: string, instances: readonly InstanceInfo[]): string {
+export function modelName(model: string, instances: readonly InstanceInfo[], driverKind?: string): string {
+  let fallback: string | undefined;
   for (const instance of instances) {
     const label = instance.models?.options?.find((option) => option.id === model)?.label;
-    if (label) return label;
+    if (!label) continue;
+    if (driverKind === undefined || instance.driverKind === driverKind) return label;
+    fallback ??= label;
   }
-  return model;
+  return fallback ?? model;
 }
 
 export function LiveBadge() {

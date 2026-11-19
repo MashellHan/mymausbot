@@ -87,7 +87,9 @@ describe("usage ledger through real turns", () => {
       from: "2026-01-16", to: "2026-01-16", timeZone: "Asia/Shanghai", unit: "hour",
       totals: { turns: 1, costUsd: 0.01 }, bots: [expect.objectContaining({ label: "Ledger probe" })],
     });
-    expect((await (await api(`/api/usage/traces?${query}`)).json()).roots).toHaveLength(1);
+    const traces = await api(`/api/usage/traces?${query}`);
+    expect(traces.status).toBe(200);
+    expect(await traces.json()).toMatchObject({ roots: [expect.any(Object)] });
     const localCsv = await api(`/api/usage.csv?${query}`);
     expect(localCsv.headers.get("content-disposition")).toContain("usage-2026-01-16-2026-01-16.csv");
     expect((await localCsv.text()).trim().split("\n")).toHaveLength(2);
