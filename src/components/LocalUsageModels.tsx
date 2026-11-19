@@ -25,17 +25,17 @@ function costText(estimate?: Cost) {
   return t("computer.usage.costAtLeast", { cost: formatUsd(bound) });
 }
 
-export function UsageTokenBreakdown({ cacheRead, input, output, estimatedCost, className }: {
-  cacheRead: number | null; input: number | null; output: number | null; estimatedCost?: Cost; className?: string;
+export function UsageTokenBreakdown({ cacheRead, input, output, estimatedCost, asRows = false }: {
+  cacheRead: number | null; input: number | null; output: number | null; estimatedCost?: Cost; asRows?: boolean;
 }) {
   const metrics = [
     ["cachedInput", metricText(cacheRead)], ["freshInput", metricText(input)],
     ["output", metricText(output)], ["estimatedCost", costText(estimatedCost)],
   ] as const;
-  return <dl data-usage-token-breakdown className={cn("grid min-w-0 grid-cols-2 gap-x-3 gap-y-1 text-[13px] tabular-nums", className)}>
-    {metrics.map(([key, value]) => <div key={key} className="min-w-0 [overflow-wrap:anywhere]">
+  return <dl data-usage-token-breakdown className={cn("grid min-w-0 gap-x-3 gap-y-1 text-[13px] tabular-nums", asRows ? "grid-cols-1" : "grid-cols-2")}>
+    {metrics.map(([key, value]) => <div key={key} className={cn("min-w-0 [overflow-wrap:anywhere]", asRows && "flex items-baseline justify-between gap-x-3")}>
       <dt className="text-ink-secondary">{t(`computer.usage.${key}`)}</dt>
-      <dd className="text-ink">{value}</dd>
+      <dd className={cn("text-ink", asRows && "text-end")}>{value}</dd>
     </div>)}
   </dl>;
 }
@@ -44,12 +44,14 @@ type ShortPeriod = typeof shortUsagePeriods[number];
 
 export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, UsageWindow> }) {
   const [period, setPeriod] = useState<ShortPeriod>("1");
+  const [open, setOpen] = useState(true);
   const window = windows[period];
   const models = window.tokenDetails?.models;
   const rows = models?.coverage === "unavailable" ? [] : models?.rows.toSorted((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model, activeLocale())) ?? [];
   const percent = new Intl.NumberFormat(activeLocale(), { style: "percent", maximumFractionDigits: 1 });
   const title = t("computer.usage.modelUsage");
   return <UsagePeriodSection kind="models" heading={title} periods={shortUsagePeriods} period={period} onPeriodChange={setPeriod} window={window}
+    open={open} onToggle={() => setOpen((current) => !current)}
     hint={<InfoHint label={t("computer.usage.costHelp")}>{t("computer.usage.costHint")}</InfoHint>}>
     {models?.coverage === "partial" && <p className="mb-2 text-[13px] text-ink-secondary">{t("computer.usage.modelsPartial")}</p>}
     {rows.length === 0 ? <p className="text-[14px] text-ink-secondary">
@@ -71,7 +73,7 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
                 <div className="h-full bg-accent/75" style={{ width: `${share * 100}%` }} />
               </div>}
             </div>
-            <UsageTokenBreakdown {...row} className="@min-[42rem]/usage:grid-cols-4" />
+            <UsageTokenBreakdown {...row} asRows />
           </li>;
         })}
       </ul>

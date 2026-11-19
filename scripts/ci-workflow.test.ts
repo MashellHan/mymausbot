@@ -495,8 +495,15 @@ describe("CI on Boat", () => {
     const steps = workflow.jobs.static.steps as Step[];
     const boatOnly = steps.slice(steps.findIndex((step) => step.name === "Remove what Boat installs and GitHub's runners lack"));
     expect(boatOnly.map((step) => step.if)).toEqual([
-      "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes", "steps.scope.outputs.linux_lanes",
-      "${{ !cancelled() && steps.scope.outputs.linux_lanes }}", "failure() && steps.scope.outputs.linux_lanes", "always() && steps.scope.outputs.linux_lanes",
+      "steps.scope.outputs.linux_lanes",
+      "steps.scope.outputs.linux_lanes",
+      "steps.scope.outputs.linux_lanes && steps.electron-cache.outputs.eligible == 'true'",
+      "steps.scope.outputs.linux_lanes",
+      "steps.scope.outputs.linux_lanes && steps.electron-cache.outputs.eligible == 'true' && steps.electron-cache-restore.outputs.cache-hit != 'true' && steps.electron-cache-prepare.outputs.cache-ready == 'true'",
+      "steps.scope.outputs.linux_lanes",
+      "${{ !cancelled() && steps.scope.outputs.linux_lanes }}",
+      "failure() && steps.scope.outputs.linux_lanes",
+      "always() && steps.scope.outputs.linux_lanes",
     ]);
     const lanes = boatOnly.find((step) => step.run === "node scripts/ci-linux-lanes.mjs")!;
     expect(lanes.env).toMatchObject({ OMB_CI_LINUX_LANES: "${{ steps.scope.outputs.linux_lanes }}", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" });
