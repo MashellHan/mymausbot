@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import type { UsageTrendDay, UsageWindow, UsageRepositoryWindow } from "@/lib/local-usage-view";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
@@ -46,7 +46,7 @@ export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
                       <span dir="auto">{row.name}</span> · {t(`computer.usage.category.${row.category}`)}
                       <div>{t("computer.usage.metric.prs")} <UsageCount value={row.prs} known={row.knownPrs} /> · {t("computer.usage.metric.commits")} <UsageCount value={row.commits} known={row.knownCommits} /></div>
                     </li>)}
-                    {!!((day.repositories.unattributedPrs ?? 0) + (day.repositories.unattributedCommits ?? 0)) && <li>{t("computer.usage.unattributedRepository")} · {t("computer.usage.metric.prs")} {metricText(day.repositories.unattributedPrs)} · {t("computer.usage.metric.commits")} {metricText(day.repositories.unattributedCommits)}</li>}
+                    {!!((day.repositories.unattributedPrs ?? 0) + (day.repositories.unattributedCommits ?? 0)) && <li>{t("computer.usage.unattributedRepository")} · {t("computer.usage.metric.prs")} <UsageCount value={day.prs === null ? null : day.repositories.unattributedPrs} known={day.repositories.unattributedPrs} /> · {t("computer.usage.metric.commits")} {metricText(day.repositories.unattributedCommits)}</li>}
                   </ul>
                   {!day.repositories.rows.length && !((day.repositories.unattributedPrs ?? 0) + (day.repositories.unattributedCommits ?? 0)) && <p>{t(day.repositories.coverage === "ready" ? "computer.usage.noRepositoryActivity" : "computer.usage.repositoriesUnavailable")}</p>}
                 </details>}
@@ -58,34 +58,30 @@ export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
   </details>;
 }
 
-const shortPeriods = ["1", "7", "30"] as const;
-type Period = typeof shortPeriods[number] | "60";
+export const shortUsagePeriods = ["1", "7", "30"] as const;
+type Period = typeof shortUsagePeriods[number] | "60";
 
-export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "1" }: {
-  windows: Record<typeof shortPeriods[number], UsageWindow>; historyWindow?: UsageRepositoryWindow | null; defaultPeriod?: Period;
+export function UsagePeriodSection<P extends Period>({ kind, heading, hint, periods, period, onPeriodChange, window, children }: {
+  kind: "models" | "repositories"; heading: string; hint: ReactNode;
+  periods: readonly P[]; period: P; onPeriodChange: (period: P) => void;
+  window: Pick<UsageWindow, "startDay" | "endDay">; children: ReactNode;
 }) {
-  const usageMetricHint = useUsageMetricHint();
-  const [period, setPeriod] = useState<Period>(defaultPeriod);
-  const periods: readonly Period[] = historyWindow ? [...shortPeriods, "60"] : shortPeriods;
   const id = useId();
-  const window = period === "60" && historyWindow ? historyWindow : windows[period === "60" ? "30" : period];
-  const periodDays = period === "60" ? undefined : windows[period].days;
-  const repositories = window.repositories;
-  return <section className="mt-6" aria-labelledby={`${id}-heading`}>
+  return <section className="mt-6" aria-labelledby={`${id}-heading`} data-usage-period={kind}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <h3 id={`${id}-heading`} className="text-[16px] font-semibold text-ink">{t("computer.usage.primaryRepositories")}</h3>
-        <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay} – {window.endDay}</span>
-        {repositories.coverage === "partial" && <InfoHint label={t("computer.usage.coverage.partial")} warning>{t("computer.usage.repositoriesPartial")}</InfoHint>}
+        <h3 id={`${id}-heading`} className="text-[16px] font-semibold text-ink">{heading}</h3>
+        <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay === window.endDay && kind === "models" ? window.endDay : `${window.startDay} – ${window.endDay}`}</span>
+        {hint}
       </div>
-      <div role="tablist" aria-label={t("computer.usage.repositoryPeriod")} className="flex rounded-lg bg-inset p-1">
+      <div role="tablist" aria-label={t(kind === "models" ? "computer.usage.modelPeriod" : "computer.usage.repositoryPeriod")} className="flex rounded-lg bg-inset p-1">
         {periods.map((key, index) => <button key={key} type="button" role="tab" id={`${id}-tab-${key}`} aria-controls={`${id}-panel`}
-          aria-selected={period === key} tabIndex={period === key ? 0 : -1} onClick={() => setPeriod(key)}
+          aria-selected={period === key} tabIndex={period === key ? 0 : -1} onClick={() => onPeriodChange(key)}
           onKeyDown={(event) => {
             const next = event.key === "ArrowRight" ? (index + 1) % periods.length : event.key === "ArrowLeft" ? (index + periods.length - 1) % periods.length
               : event.key === "Home" ? 0 : event.key === "End" ? periods.length - 1 : null;
             if (next === null) return;
-            event.preventDefault(); setPeriod(periods[next]!);
+            event.preventDefault(); onPeriodChange(periods[next]!);
             event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
           }}
           className={cn("min-h-8 rounded-md px-3 text-[13px] tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-accent/60", period === key ? "bg-card font-medium text-ink" : "text-ink-secondary hover:bg-raised-hover")}>
@@ -94,6 +90,22 @@ export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "
       </div>
     </div>
     <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-tab-${period}`} tabIndex={0} className="mt-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+      {children}
+    </div>
+  </section>;
+}
+
+export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "1" }: {
+  windows: Record<typeof shortUsagePeriods[number], UsageWindow>; historyWindow?: UsageRepositoryWindow | null; defaultPeriod?: Period;
+}) {
+  const usageMetricHint = useUsageMetricHint();
+  const [period, setPeriod] = useState<Period>(defaultPeriod);
+  const periods: readonly Period[] = historyWindow ? [...shortUsagePeriods, "60"] : shortUsagePeriods;
+  const window = period === "60" && historyWindow ? historyWindow : windows[period === "60" ? "30" : period];
+  const periodDays = period === "60" ? undefined : windows[period].days;
+  const repositories = window.repositories;
+  return <UsagePeriodSection kind="repositories" heading={t("computer.usage.primaryRepositories")} periods={periods} period={period} onPeriodChange={setPeriod} window={window}
+    hint={repositories.coverage === "partial" && <InfoHint label={t("computer.usage.coverage.partial")} warning>{t("computer.usage.repositoriesPartial")}</InfoHint>}>
       {repositories.coverage === "unavailable" ? <p className="text-[14px] text-ink-secondary">{t("computer.usage.repositoriesUnavailable")}</p> : <>
         <div className={tableRegion} role="region" aria-label={t("computer.usage.primaryRepositories")} tabIndex={0}>
           <table className="w-full min-w-[560px] table-fixed text-[13px] tabular-nums" data-usage-repositories>
@@ -114,14 +126,13 @@ export function UsageRepositoryTable({ windows, historyWindow, defaultPeriod = "
               </tr>)}
               {!!((repositories.unattributedPrs ?? 0) + (repositories.unattributedCommits ?? 0)) && <tr className="border-t border-hairline/40 text-ink-secondary">
                 <th scope="row" colSpan={2} className="px-3 py-2 text-left font-normal">{t("computer.usage.unattributedRepository")}</th>
-                <td className="px-3 py-2 text-right">{metricText(repositories.unattributedPrs)}</td>
+                <td className="px-3 py-2 text-right"><UsageCount value={repositories.coverage === "ready" ? repositories.unattributedPrs : null} known={repositories.unattributedPrs} /></td>
                 <td className="px-3 py-2 text-right">{metricText(repositories.unattributedCommits)}</td>
               </tr>}
             </tbody>
           </table>
         </div>
-        {repositories.rows.length === 0 && !((repositories.unattributedPrs ?? 0) + (repositories.unattributedCommits ?? 0)) && <p className="mt-3 text-[14px] text-ink-secondary">{t("computer.usage.noRepositoryActivity")}</p>}
+        {repositories.rows.length === 0 && !((repositories.unattributedPrs ?? 0) + (repositories.unattributedCommits ?? 0)) && <p className="mt-3 text-[14px] text-ink-secondary">{t(repositories.coverage === "ready" ? "computer.usage.noRepositoryActivity" : "computer.usage.repositoriesUnavailable")}</p>}
       </>}
-    </div>
-  </section>;
+  </UsagePeriodSection>;
 }

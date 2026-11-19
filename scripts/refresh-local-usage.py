@@ -29,6 +29,7 @@ import local_usage_merged
 import local_usage_github
 import local_usage_contributions
 import local_usage_ado
+import local_usage_models
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
 LOCAL_COLLECT_TIMEOUT = 120
@@ -85,7 +86,7 @@ def protect_collector(collector):
     return collector
 
 
-def retain_token_history(snapshot, previous):
+def retain_token_history(snapshot, previous, model_days=None, saved=None):
     at = snapshot.get("updatedAt")
     if type(at) is not int:
         return snapshot
@@ -93,7 +94,7 @@ def retain_token_history(snapshot, previous):
     first = end - dt.timedelta(days=local_usage_merged.MAX_HISTORY_DAYS - 1)
     records = {}
 
-    def retain(rows, projected=False):
+    def retain(rows, projected=False, fresh=False):
         if not isinstance(rows, list) or len(rows) > local_usage_merged.MAX_HISTORY_DAYS:
             return
         for row in rows:
@@ -102,38 +103,56 @@ def retain_token_history(snapshot, previous):
                 status = row["tokenStatus"]
                 if day.isoformat() != row["day"] or not first <= day <= end or status not in ("ready", "partial", "unavailable"):
                     continue
+                known = records.get(row["day"])
+                split, models = {}, None
                 if status == "unavailable":
                     new, cache = None, None
                 elif projected:
                     new, cache = row["newTokens"], row["cacheRead"]
                     if row["totalTokens"] != new + cache:
                         continue
+                    inputs = [row.get(key) for key in ("input", "output")]
+                    if all(type(value) is int and value >= 0 for value in inputs) and sum(inputs) == new:
+                        split = dict(zip(("input", "output"), inputs))
+                        models = row.get("models")
+                    elif known and "input" in known and known["newTokens"] == new and known["cacheRead"] == cache:
+                        split = {key: known[key] for key in ("input", "output")}
+                        models = known.get("models")
                 else:
                     categories = [row["categories"][key] for key in ("work", "personal", "unclassified")]
                     values = [value[key] for value in categories for key in ("input", "output", "cacheRead")]
                     if any(type(value) is not int or value < 0 for value in values):
                         continue
-                    new = sum(value["input"] + value["output"] for value in categories)
+                    split = {key: sum(value[key] for value in categories) for key in ("input", "output")}
+                    new = sum(split.values())
                     cache = sum(value["cacheRead"] for value in categories)
+                    if fresh and model_days is not None:
+                        models = model_days.get(row["day"])
                 if status != "unavailable" and any(type(value) is not int or not 0 <= value <= 2**53 - 1 for value in (new, cache, new + cache)):
                     continue
-                known = records.get(row["day"])
                 if status == "unavailable" and known and known["tokenStatus"] != "unavailable":
                     records[row["day"]] = {**known, "tokenStatus": "partial"}
                 else:
-                    records[row["day"]] = {"day": row["day"], "tokenStatus": status,
+                    details = local_usage_models.validate_models(models, {**split, "cacheRead": cache}) if split else None
+                    records[row["day"]] = {"day": row["day"], "tokenStatus": status, **split,
                         "newTokens": new, "cacheRead": cache, "totalTokens": None if new is None else new + cache}
+                    if details:
+                        records[row["day"]]["models"] = details
             except (KeyError, TypeError, ValueError, OverflowError):
                 continue
 
+    if (isinstance(saved, dict) and saved.get("version") == 1 and saved.get("timeZone") == "Asia/Shanghai"
+            and type(saved.get("updatedAt")) is int and 0 < saved["updatedAt"] <= at
+            and isinstance(saved.get("trendHistory"), dict) and saved["trendHistory"].get("version") == 1):
+        retain(saved["trendHistory"].get("daily"), projected=True)
     if isinstance(previous, dict) and previous.get("version") == 1 and previous.get("timeZone") == "Asia/Shanghai":
         retain(previous.get("daily"))
         for key in ("localHistory", "trendHistory"):
             if isinstance(previous.get(key), dict):
                 retain(previous[key].get("daily"), key == "trendHistory")
     if isinstance(snapshot.get("localHistory"), dict):
-        retain(snapshot["localHistory"].get("daily"))
-    retain(snapshot.get("daily"))
+        retain(snapshot["localHistory"].get("daily"), fresh=True)
+    retain(snapshot.get("daily"), fresh=True)
     snapshot["trendHistory"] = {"version": 1, "daily": [records[day] for day in sorted(records)]}
     return snapshot
 
@@ -781,7 +800,7 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                     processes[stage] = process
                     process.stdin.write(json.dumps(request).encode())
                     process.stdin.close()
-                results = {}
+                results, captured = {}, {}
                 for stage in ("github", "ado"):
                     process = processes[stage]
                     try:
@@ -790,11 +809,20 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
                         _stop_worker(process)
                         results[stage] = "timeout"
                     else:
-                        results[stage] = "ready" if process.returncode == 0 else "unavailable"
+                        if process.returncode:
+                            results[stage] = "unavailable"
+                            continue
+                        try:
+                            captured[stage] = json.loads((Path(temporary) / (stage + ".json")).read_text())
+                            results[stage] = "ready"
+                        except (OSError, ValueError):
+                            results[stage] = "invalid-output"
+                for stage, status in results.items():
+                    if status != "ready":
+                        print(f"usage stage={stage} status={status} generation=retained", file=sys.stderr, flush=True)
                 if results["github"] != "ready" or results["ado"] != "ready":
                     raise ValueError("Remote contribution capture is incomplete; previous generation retained")
-                current = {"version": 2, **{stage: json.loads((Path(temporary) / (stage + ".json")).read_text())
-                    for stage in ("github", "ado")}}
+                current = {"version": 2, **captured}
                 local_usage_contributions.validate_bindings(current, config)
                 local_usage_contributions.preserve_incomplete_github(previous, current)
                 current["refreshState"] = {"version": 1, "scopeHash": scope_hash,
@@ -836,13 +864,47 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
         return refresh_primary(collector_path, config, azure_config_dir, publish=publish, reuse_sources=reuse_sources)
     collector = load_collector(collector_path)
     original_run = collector.run
-    azure = AzureMemorySession(azure_config_dir, config["authorEmails"], projects=ado_project_scopes(config) or None)
+    projects = ado_project_scopes(config)
+    azure = AzureMemorySession(azure_config_dir, config["authorEmails"], projects=projects or None)
     github = GitHubFileSession(config)
+
+    original_refresh_prs = getattr(collector, "refresh_prs", None)
+    if original_refresh_prs is not None and projects:
+        def authorized_remote(remote):
+            try:
+                coords = collector.ado_coordinates(remote)
+                return coords and tuple(part.casefold() for part in coords[:2]) in projects
+            except (TypeError, ValueError):
+                return False
+
+        def refresh_prs(config, machines, *args, **kwargs):
+            eligible = [{**machine, "adoRepos": [remote for remote in machine.get("adoRepos", [])
+                                                 if isinstance(remote, str) and authorized_remote(remote)]}
+                        for machine in machines]
+            return original_refresh_prs(config, eligible, *args, **kwargs)
+
+        collector.refresh_prs = refresh_prs
+
+    storage = Path(config["storageDir"]).expanduser() if "storageDir" in config else None
+    latest = storage / "latest.json" if storage is not None else None
+    retained = storage / "token-history.json" if storage is not None else None
+    original_write = getattr(collector, "write_json", None)
+    if latest is not None and original_write is not None:
+        def write_json(path, value):
+            original_write(path, value)
+            if path == latest and "trendHistory" in value:
+                try:
+                    original_write(retained, {key: value[key] for key in ("version", "timeZone", "updatedAt", "trendHistory")})
+                except OSError:
+                    print("usage stage=token-history status=unavailable", file=sys.stderr, flush=True)
+
+        collector.write_json = write_json
 
     original_aggregate = getattr(collector, "aggregate", None)
     if original_aggregate is not None:
-        def aggregate(machines, *args, **kwargs):
-            snapshot = original_aggregate(machines, *args, **kwargs)
+        def aggregate(machines, prs, at, *args, **kwargs):
+            machines = local_usage_models.eligible_machines(collector, machines, at)
+            snapshot = original_aggregate(machines, prs, at, *args, **kwargs)
             if len(snapshot["sources"]) != len(machines):
                 raise ValueError("Activity source coverage does not match the collected machines")
             for source, machine in zip(snapshot["sources"], machines):
@@ -855,8 +917,10 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and git_fetch_only
                 ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
-            previous = collector.read_json(Path(config["storageDir"]).expanduser() / "latest.json", {}) if "storageDir" in config else {}
-            return retain_token_history(snapshot, previous)
+            previous = collector.read_json(latest, {}) if latest is not None else {}
+            saved = collector.read_json(retained, {}) if retained is not None else {}
+            models = local_usage_models.daily_models(collector, machines, snapshot)
+            return retain_token_history(snapshot, previous, models, saved)
 
         collector.aggregate = aggregate
 
