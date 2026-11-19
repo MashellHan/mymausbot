@@ -6,7 +6,7 @@ import { tokenTrendStacks, weeklyUsageTrend, type TokenTrendMode, type TokenTren
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
 import { metricText, observedCountText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
 import { UsageDailyTable, UsageRepositoryTable, shortUsagePeriods } from "./LocalUsageTables";
-import { UsageModelPanel, UsageTokenBreakdown } from "./LocalUsageModels";
+import { costText, UsageModelPanel } from "./LocalUsageModels";
 import { InfoHint } from "./InfoHint";
 import { Select } from "./Select";
 import { activeLocale, t } from "@/lib/i18n";
@@ -39,6 +39,15 @@ function tokenComparisonUnavailableHint(window: UsageWindow) {
 function WindowCard({ window }: { window: UsageWindow }) {
   const usageMetricHint = useUsageMetricHint();
   const details = window.tokenDetails;
+  const cachedInput = window.cacheRead;
+  const freshInput = details?.input ?? null;
+  const output = details?.output ?? null;
+  const cacheRatio = cachedInput !== null && freshInput !== null && output !== null
+    && freshInput + output === window.newTokens && cachedInput + freshInput > 0
+    ? new Intl.NumberFormat(activeLocale(), { style: "percent", maximumFractionDigits: 1 }).format(cachedInput / (cachedInput + freshInput))
+    : null;
+  const tokenCoverageHint = window.tokenCoverage === "partial" ? t("computer.usage.tokensPartial") : undefined;
+  const tokenTotalTitle = [metricText(window.totalTokens), tokenCoverageHint].filter(Boolean).join(" · ");
   const rows = [
     ["prs", null, window.comparison.prs ?? window.comparison.known?.prs ?? null],
     ["commits", null, window.comparison.commits ?? window.comparison.known?.commits ?? null],
@@ -58,7 +67,7 @@ function WindowCard({ window }: { window: UsageWindow }) {
           <div key={metric} className="min-w-0">
             <dt title={usageMetricHint(metric)} className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
             <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
-              <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
+              <span title={metric === "totalTokens" ? tokenTotalTitle : undefined} aria-description={metric === "totalTokens" ? tokenCoverageHint : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
               <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric}
                 periodDays={window.days} known={metric !== "totalTokens" && window.comparison[metric] === null && comparison !== null}
                 unavailableHint={metric === "totalTokens" && comparison === null ? tokenComparisonUnavailableHint(window) : undefined} />
@@ -67,8 +76,16 @@ function WindowCard({ window }: { window: UsageWindow }) {
         ))}
       </dl>
       <div className="mt-2 border-t border-hairline/40 pt-2">
-        <UsageTokenBreakdown cacheRead={window.cacheRead} input={details?.input ?? null} output={details?.output ?? null} estimatedCost={details?.estimatedCost} />
-        {window.tokenCoverage === "partial" && <p className="mt-1 text-[13px] text-ink-secondary">{t("computer.usage.tokensPartial")}</p>}
+        <dl data-usage-token-breakdown className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-1 text-[13px] tabular-nums">
+          <div className="min-w-0 [overflow-wrap:anywhere]">
+            <dt className="text-ink-secondary">{t("computer.usage.cachedInput")}</dt>
+            <dd className="text-ink">{metricText(cachedInput)}{cacheRatio === null ? null : ` (${cacheRatio})`}</dd>
+          </div>
+          <div className="min-w-0 [overflow-wrap:anywhere]">
+            <dt className="text-ink-secondary">{t("computer.usage.estimatedCost")}</dt>
+            <dd className="text-ink">{costText(details?.estimatedCost)}</dd>
+          </div>
+        </dl>
       </div>
       <div className="mt-2 border-t border-hairline/40 pt-2 text-[13px] tabular-nums">
         <div className="mb-1 grid grid-cols-[1fr_1fr_1fr] gap-2 text-ink-secondary" aria-hidden="true"><span /><span className="text-right">{t("computer.usage.metric.prs")}</span><span className="text-right">{t("computer.usage.metric.commits")}</span></div>
