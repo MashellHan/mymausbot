@@ -25,24 +25,24 @@ afterEach(() => {
 });
 
 describe("window preferences", () => {
-  it("keeps Raw, Simple and Advanced distinct when a bot changes the window mode", () => {
+  it("keeps Raw, Simple and Advanced distinct when a bot changes the window mode", async () => {
     applyWindowPref({ kind: "window-pref", id: "appearance.mode", value: "raw" });
-    expect(windowPrefValues()["appearance.mode"]).toBe("raw");
+    expect((await windowPrefValues())["appearance.mode"]).toBe("raw");
     applyWindowPref({ kind: "window-pref", id: "appearance.mode", value: "advanced" });
-    expect(windowPrefValues()["appearance.mode"]).toBe("advanced");
+    expect((await windowPrefValues())["appearance.mode"]).toBe("advanced");
     applyWindowPref({ kind: "window-pref", id: "appearance.mode", value: false });
-    expect(windowPrefValues()["appearance.mode"]).toBe("advanced");
+    expect((await windowPrefValues())["appearance.mode"]).toBe("advanced");
     applyWindowPref({ kind: "window-pref", id: "appearance.mode", value: "simple" });
-    expect(windowPrefValues()["appearance.mode"]).toBe("simple");
+    expect((await windowPrefValues())["appearance.mode"]).toBe("simple");
   });
 
-  it("applies a frame with the preference's setter and ignores a value the schema refuses", () => {
+  it("applies a frame with the preference's setter and ignores a value the schema refuses", async () => {
     applyWindowPref({ kind: "window-pref", id: "general.sendKey", value: "mod-enter" });
     expect(values.get("omb-send-key")).toBe("mod-enter");
     applyWindowPref({ kind: "window-pref", id: "general.sendKey", value: "space" });
     expect(values.get("omb-send-key")).toBe("mod-enter");
     applyWindowPref({ kind: "window-pref", id: "general.notificationSounds", value: false });
-    expect(windowPrefValues()).toMatchObject({ "general.sendKey": "mod-enter", "general.notificationSounds": false });
+    expect(await windowPrefValues()).toMatchObject({ "general.sendKey": "mod-enter", "general.notificationSounds": false });
   });
 
   it("applies only valid sidebar tools frames and reports the in-session choice when storage is blocked", async () => {
@@ -229,7 +229,7 @@ describe("window preferences", () => {
     expect(JSON.parse(String(init.body)).values).toMatchObject({ "general.sendKey": "shift-enter", "appearance.runCard": false });
     applyWindowPref({ kind: "window-pref", id: "appearance.runCard", value: true });
     applyWindowPref({ kind: "window-pref", id: "appearance.runCard", value: "false" });
-    expect(windowPrefValues()["appearance.runCard"]).toBe(true);
+    expect((await windowPrefValues())["appearance.runCard"]).toBe(true);
   });
 
   it("applies and reports the stored thread choice, rejecting a non-boolean frame", async () => {
@@ -239,7 +239,7 @@ describe("window preferences", () => {
     applyWindowPref({ kind: "window-pref", id: "appearance.showThreads", value: false });
     expect(values.get("omb-show-threads")).toBe("0");
     applyWindowPref({ kind: "window-pref", id: "appearance.showThreads", value: "true" });
-    expect(windowPrefValues()["appearance.showThreads"]).toBe(false);
+    expect((await windowPrefValues())["appearance.showThreads"]).toBe(false);
     setShowThreads(true);
     await vi.advanceTimersByTimeAsync(250);
     expect(fetched).toHaveBeenCalledTimes(1);
@@ -255,7 +255,7 @@ describe("window preferences", () => {
     applyWindowPref({ kind: "window-pref", id: "appearance.userBubbles", value: false });
     expect(values.get("omb-color-user-bubbles")).toBe("0");
     applyWindowPref({ kind: "window-pref", id: "appearance.userBubbles", value: "true" });
-    expect(windowPrefValues()["appearance.userBubbles"]).toBe(false);
+    expect((await windowPrefValues())["appearance.userBubbles"]).toBe(false);
     setColorUserBubbles(true);
     await vi.advanceTimersByTimeAsync(250);
     expect(fetched).toHaveBeenCalledTimes(1);
@@ -268,15 +268,32 @@ describe("window preferences", () => {
     vi.useFakeTimers();
     const fetched = vi.fn(async () => new Response("{}"));
     vi.stubGlobal("fetch", fetched);
-    expect(windowPrefValues()["general.notificationFeed"]).toBe(false);
+    expect((await windowPrefValues())["general.notificationFeed"]).toBe(false);
     applyWindowPref({ kind: "window-pref", id: "general.notificationFeed", value: true });
     expect(values.get("omb-notification-feed")).toBe("1");
     applyWindowPref({ kind: "window-pref", id: "general.notificationFeed", value: "false" });
-    expect(windowPrefValues()["general.notificationFeed"]).toBe(true);
+    expect((await windowPrefValues())["general.notificationFeed"]).toBe(true);
     await vi.advanceTimersByTimeAsync(250);
     expect(fetched).toHaveBeenCalledTimes(1);
     const [url, init] = fetched.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/window-prefs");
     expect(JSON.parse(String(init.body)).values["general.notificationFeed"]).toBe(true);
+  });
+
+  it("leaves out a preference whose desktop bridge this window lacks, so the server refuses it here", async () => {
+    const values = await windowPrefValues();
+    expect(values).not.toHaveProperty("remote.relay");
+    expect(values).not.toHaveProperty("general.openAtLogin");
+  });
+
+  it("reads and switches a remote route through the companion bridge on this computer's page", async () => {
+    const routes = { wifi: { on: false, since: null }, relay: { on: true, since: 1 } };
+    const setRoute = vi.fn(async (route: "wifi" | "relay", on: boolean) => { routes[route].on = on; return { routes } as never; });
+    const ogb = { companion: { state: async () => ({ routes, keepAwake: false }), setRoute } };
+    vi.stubGlobal("window", { ogb });
+    vi.stubGlobal("ogb", ogb);
+    expect(await windowPrefValues()).toMatchObject({ "remote.wifi": false, "remote.relay": true, "remote.keepAwake": false });
+    applyWindowPref({ kind: "window-pref", id: "remote.wifi", value: true });
+    expect(setRoute).toHaveBeenCalledWith("wifi", true);
   });
 });

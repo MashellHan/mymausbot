@@ -27,8 +27,8 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
   const dataDir = mkdtempSync(join(tmpdir(), "app-settings-"));
   dirs.push(dataDir);
   const bots: BotRecord[] = [
-    { id: "kiwi", name: "Kiwi", color: "#0f0", threadId: "t-kiwi", approvalMode: "full", section: "Sales" } as unknown as BotRecord,
-    { id: "clive", name: "Clive", color: "#00f", threadId: "t-clive", approvalMode: "ask" } as unknown as BotRecord,
+    { id: "kiwi", name: "Kiwi", color: "#0f0", threadId: "t-kiwi", modelSelection: { instanceId: "claude", model: "opus" }, approvalMode: "full", section: "Sales" } as unknown as BotRecord,
+    { id: "clive", name: "Clive", color: "#00f", threadId: "t-clive", modelSelection: { instanceId: "claude", model: "sonnet" }, approvalMode: "ask" } as unknown as BotRecord,
   ];
   const cfg = { language: "en", rooms: { turnTimeoutMinutes: 30 }, mcp: {}, threads: { maxConcurrentPerBot: 3 }, openai: { key: OPENAI_KEY }, anthropic: { url: "https://api.anthropic.com" },
     instances: { "openai-compat-gw": { driver: "openai-compat", displayName: "Gateway", config: { key: GATEWAY_KEY, url: "https://gw.example/v1" } } } } as unknown as AppConfig;
@@ -113,6 +113,11 @@ function fixture(options: { owner?: boolean; guest?: boolean; group?: boolean; w
       bot.sidebarHidden = !shown;
       return null;
     },
+    patchBot: async () => "not used by this fixture",
+    call: async () => "not used by this fixture",
+    read: async () => null,
+    paused: () => [],
+    groupBots: async () => "not used by this fixture",
     credentials: () => cfg,
     engines: () => [{ instanceId: "claude", name: "Claude", working: true }, { instanceId: "openai-compat-gw", name: "Gateway", working: true }],
     engineChosen: (instanceId) => chosen.has(instanceId),

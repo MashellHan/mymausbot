@@ -4,7 +4,7 @@
 // directory, OMB_AGENT_BROWSER_PATH or PATH) or OMB_UI_E2E=1 asks for the
 // verified download; otherwise skipped.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { resolveAgentBrowserBinary } from "../../server/browser-engine.ts";
 import { removeTempDir, waitForExit } from "../../server/testing/cleanup.ts";
 import { runControlOmb } from "../control-omb.ts";
-import { UI_TOOLS_DIR } from "./control-omb-ui.ts";
+import { agentBrowser, sessionEnv, UI_TOOLS_DIR, type UiHandle } from "./control-omb-ui.ts";
 import { fixtureApi } from "./preview-fixture.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -153,25 +153,25 @@ describe("the thinking timer stays anchored across a thread switch", () => {
     const { info } = launched;
     const api = fixtureApi(info.url);
     const evaluate = async (js: string) => (await ui("eval", info.ui, "--js", js)).result;
+    const browser = JSON.parse(readFileSync(info.ui, "utf8")) as UiHandle;
+    await agentBrowser(browser.binary, sessionEnv(browser), ["set", "viewport", "1280", "900"]);
+    await waitUntil(() => evaluate(`innerWidth === 1280 && Boolean(document.querySelector('textarea[aria-label="Message Pepper"]')?.getClientRects().length)`), 10_000, "Pepper's desktop composer to load");
     // Simple mode's working line says how long in its tooltip, worked out each time the line draws.
     const timerText = () => evaluate(`(() => {
       const title = document.querySelector('.turn-presence [title]')?.getAttribute('title');
       return title?.split(' · ').find(part => /^(?:\\d+m )?\\d+s$/.test(part)) ?? null;
     })()`);
-    const selectThread = (threadId: string) => evaluate(`document.querySelector('[data-sidebar-thread-row="${threadId}"]')?.click(); true`);
-    const isCurrent = (threadId: string) => evaluate(`Boolean(document.querySelector('[data-sidebar-thread-row="${threadId}"][aria-current="page"]'))`);
+    const threadRow = (threadId: string) => `[data-panel-card="conversations"] [data-sidebar-thread-row="${threadId}"]`;
+    const selectThread = (threadId: string) => evaluate(`document.querySelector('${threadRow(threadId)}')?.click(); true`);
+    const isCurrent = (threadId: string) => evaluate(`Boolean(document.querySelector('${threadRow(threadId)}[aria-current="page"]'))`);
     const taskOf = async (threadId: string) =>
       (await api("GET", "/api/bots")).bots.find((bot: any) => bot.id === info.botId).tasks.find((task: any) => task.threadId === threadId);
 
-    // The second conversation comes through the same POST the panel's "New conversation" uses.
     const busyThread = (await api("GET", "/api/bots")).bots.find((bot: any) => bot.id === info.botId).threadId;
-    const otherThread = (await api("POST", `/api/bots/${info.botId}/tasks`, {})).task.threadId;
+    const otherThread = (await api("POST", `/api/bots/${info.botId}/tasks`, { select: false })).task.threadId;
     await openConversations(info.ui, "Pepper");
-    await waitUntil(() => evaluate(`Boolean(document.querySelector('[data-sidebar-thread-row="${otherThread}"]'))`), 10_000, "the new thread's row to appear");
-    // Creating a thread selects it on the server. Pin the original thread in
-    // the renderer before sending the turn whose stamp this case observes.
-    await selectThread(busyThread);
-    await waitUntil(() => isCurrent(busyThread), 10_000, "the original thread to become current");
+    await waitUntil(() => evaluate(`Boolean(document.querySelector('${threadRow(otherThread)}') &&
+      document.querySelector('${threadRow(busyThread)}[aria-current="page"]'))`), 10_000, "both conversations to show with the original selected");
 
     await ui("type", info.ui, "--name", "Message Pepper", "--text", "hello");
     await ui("press", info.ui, "--keys", "Enter");

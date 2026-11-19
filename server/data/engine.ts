@@ -2,13 +2,13 @@
 // node_modules). DuckDB's interrupt() is per connection, so each connection runs one statement at a time.
 import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
-import { cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import type * as DuckDB from "@duckdb/node-api";
 
 import { DATA_LIMITS, DATA_RESULTS_SCHEMA } from "../../shared/data-surface.ts";
 import type { MiniAppDataBinding, MiniAppNamedPage, MiniAppNamedRead, MiniAppSourceTable } from "../../shared/mini-app-data.ts";
 import { botFolder as defaultBotFolder } from "../bot-folder.ts";
+import { instanceSettings } from "./duckdb-settings.ts";
 import { DATA_DIR } from "../config.ts";
 import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
 import { DataAdmission, DataStoreLane } from "./admission.ts";
@@ -19,7 +19,7 @@ import { validateDataBindings } from "./named-query.ts";
 import { executeNamedRead, listSourceTables, readNamedPage, verifyBaseTable, type NamedConnection } from "./named-reader.ts";
 import { commitBusinessCreate, ensureRevision, readRevision } from "./revision.ts";
 import { quoteIdentifier } from "./sql-identifiers.ts";
-import { removeSourceStore, retainedStoreFile, storeFolder, DATA_DB_FILE, DATA_TMP_DIR } from "./storage.ts";
+import { removeSourceStore, retainedStoreFile, storeFolder, DATA_DB_FILE } from "./storage.ts";
 import { tableIdentifierParts } from "./identifiers.ts";
 import {
   DataFailure,
@@ -77,24 +77,11 @@ export function nativeRequire(directory: string | null = duckdbDirectory()): Nod
   return createRequire(directory ? join(directory, "node_modules", "openmausbot-duckdb-anchor.js") : import.meta.url);
 }
 
-/** DuckDB's defaults assume it owns the machine (80 % of RAM, every core), and a native OOM takes the server down. */
-export function instanceSettings(folder: string, dataDir: string, duckdbVersion: string, env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const quarterOfRam = Math.floor(totalmem() / 4);
-  const memoryMiB = Math.max(256, Math.floor(Math.min(2 * 1024 ** 3, quarterOfRam) / 1024 ** 2));
-  return {
-    memory_limit: env.OMB_DUCKDB_MEMORY_LIMIT || `${memoryMiB}MiB`,
-    temp_directory: join(folder, DATA_TMP_DIR),
-    max_temp_directory_size: env.OMB_DUCKDB_MAX_TEMP_SIZE || "20GB",
-    threads: String(Math.max(1, Math.min(4, cpus().length || 1))),
-    // Extensions are tied to the exact DuckDB version.
-    extension_directory: join(dataDir, "duckdb-extensions", duckdbVersion),
-    autoinstall_known_extensions: "false",
-    autoload_known_extensions: "true",
-    // Persistent secrets sit unencrypted on disk; OMB's broker issues temporary ones.
-    allow_persistent_secrets: "false",
-    preserve_insertion_order: "false",
-  };
+function loadBinding(directory: string | null): Binding {
+  return nativeRequire(directory)("@duckdb/node-api") as Binding;
 }
+
+export { instanceSettings } from "./duckdb-settings.ts";
 
 export { quoteIdentifier } from "./sql-identifiers.ts";
 
@@ -642,10 +629,14 @@ class BotDb implements BotDatabase {
     const result: DataHistogram = { table: this.displayName(entry), column: found.name, bins: [] };
 
     if (numeric || temporal) {
-      const value = numeric ? `CAST(${id} AS DOUBLE)` : `epoch(CAST(${id} AS TIMESTAMP))`;
-      const sql = `WITH omb_range AS (SELECT min(${value}) AS lo, max(${value}) AS hi FROM ${from} WHERE ${id} IS NOT NULL)
-SELECT coalesce(LEAST(floor((${value} - omb_range.lo) / nullif(omb_range.hi - omb_range.lo, 0) * ${bins}), ${bins - 1}), 0)::INTEGER AS bin, count(*) AS n, min(omb_range.lo), min(omb_range.hi)
-FROM ${from}, omb_range WHERE ${id} IS NOT NULL GROUP BY bin ORDER BY bin`;
+      const sourceId = `omb_source.${id}`;
+      const value = numeric ? `CAST(${sourceId} AS DOUBLE)` : `epoch(CAST(${sourceId} AS TIMESTAMP))`;
+      // NaN/infinity cannot define a finite bucket. Infinite dates produce
+      // NULL epochs; they must not be counted in the constant/first bucket.
+      const finite = `isfinite(${value})`;
+      const sql = `WITH omb_range AS (SELECT min(${value}) AS lo, max(${value}) AS hi FROM ${from} AS omb_source WHERE ${finite})
+SELECT LEAST(coalesce(floor((${value} - omb_range.lo) / nullif(omb_range.hi - omb_range.lo, 0) * ${bins}), 0), ${bins - 1})::INTEGER AS bin, count(*) AS n, min(omb_range.lo), min(omb_range.hi)
+FROM ${from} AS omb_source, omb_range WHERE ${finite} GROUP BY bin ORDER BY bin`;
       const rows = (await this.statement("panel", sql, options, (o, conn) => this.read(o, conn, sql))).rows;
       if (!rows.length) return result;
       const lo = Number(rows[0][2]);
@@ -852,7 +843,7 @@ class Engine implements DataEngine {
     if (this.loaded) return this.loaded;
     const directory = duckdbDirectory(this.env);
     try {
-      this.loaded = { binding: nativeRequire(directory)("@duckdb/node-api") as Binding };
+      this.loaded = { binding: loadBinding(directory) };
     } catch (error) {
       const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0].trim();
       const where = directory ? `from ${directory}` : "from the server's node_modules";

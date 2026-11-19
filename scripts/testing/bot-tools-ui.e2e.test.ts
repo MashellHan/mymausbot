@@ -1,10 +1,12 @@
 // Full-app regression through the existing disposable browser harness. No
 // real provider, OAuth account, MCP package, or user data is used.
 import { spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentBrowserBinary } from "../../server/browser-engine.ts";
 import { waitForExit } from "../../server/testing/cleanup.ts";
 import { BOT_ROLES } from "../../src/lib/bot-roles.ts";
@@ -21,7 +23,8 @@ const LAUNCH_TIMEOUT_MS = forced && !binary ? 600_000 : 180_000;
 const PHASE_PREFIX = "QA507_PHASE:";
 const LAUNCH_PHASES = new Set([
   "browser-ensure", "browser-ready", "fixture-start", "fixture-ready", "fixture-configured",
-  "preview-start", "preview-ready", "browser-open-start", "browser-opened",
+  "preview-start", "preview-ready", "browser-open-start", "chrome-start", "chrome-ready",
+  "browser-cdp-ready", "preview-mounted", "browser-opened",
 ]);
 
 function readLaunchPhases(onPhase: (phase: string) => void): (chunk: string) => void {
@@ -94,6 +97,84 @@ interface SavedBot { id: string; name: string; soul?: string; mcpServers?: strin
 
 const DIAGNOSTIC_LIMIT = 64 * 1024;
 
+function launcherExitKind(stderr: string): string {
+  if (/agent-browser open did not finish within \d{1,6}ms\b/.test(stderr)) return "browser-open-deadline";
+  if (stderr.includes("agent-browser open failed: Operation timed out.")) return "browser-open-timeout";
+  if (stderr.includes("agent-browser open failed:")) return "browser-open-failed";
+  return "launcher-exit";
+}
+
+function waitForUiLauncher(child: Pick<ChildProcess, "stdout" | "stderr" | "once" | "off">,
+  deadlineMs: number, onPhase: (phase: string) => void): Promise<FixtureInfo> {
+  return new Promise((resolve, reject) => {
+    let stdout = "", stderr = "", phase = "launcher-spawned";
+    const readPhases = readLaunchPhases((name) => { phase = name; onPhase(name); });
+    const cleanup = () => {
+      clearTimeout(deadline);
+      child.stdout?.off("data", onStdout);
+      child.stderr?.off("data", onStderr);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    const fail = (kind: string, exit?: number | NodeJS.Signals | null) => {
+      cleanup();
+      reject(new Error(`UI launcher ${kind} at ${phase}${exit == null ? "" : ` (${exit})`}`));
+    };
+    const onStdout = (chunk: Buffer | string) => {
+      stdout += String(chunk);
+      if (stdout.length > DIAGNOSTIC_LIMIT) { fail("invalid-handle"); return; }
+      let info: Partial<FixtureInfo> | null;
+      try { info = JSON.parse(stdout); } catch { return; }
+      if (!info || typeof info.ui !== "string" || typeof info.url !== "string"
+        || typeof info.dataDir !== "string" || typeof info.logPath !== "string") { fail("invalid-handle"); return; }
+      cleanup();
+      resolve({ ui: info.ui, url: info.url, dataDir: info.dataDir, logPath: info.logPath });
+    };
+    const onStderr = (chunk: Buffer | string) => {
+      const text = String(chunk);
+      readPhases(text);
+      stderr = (stderr + text).slice(-4_096);
+    };
+    const onError = () => fail("launcher-spawn-failed");
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => fail(launcherExitKind(stderr), signal ?? code);
+    const deadline = setTimeout(() => fail("readiness-deadline"), deadlineMs);
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+}
+
+it.each(["handle", "exit", "spawn", "deadline"] as const)("releases renderer readiness resources on %s", async (end) => {
+  vi.useFakeTimers();
+  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
+  try {
+    const pending = waitForUiLauncher(child, 100, () => {});
+    const handle = { ui: "fixture.json", url: "http://127.0.0.1:1", dataDir: "fixture-data", logPath: "fixture.log" };
+    const expected = { handle: "", exit: "browser-open-failed at browser-open-start (1)", spawn: "launcher-spawn-failed at browser-open-start", deadline: "readiness-deadline at browser-open-start" };
+    const result = end === "handle" ? expect(pending).resolves.toEqual(handle)
+      : expect(pending).rejects.toThrow(new Error(`UI launcher ${expected[end]}`));
+    child.stderr.write("QA507_PHASE:browser-open-start\nagent-browser open failed: private fixture text\n");
+    if (end === "handle") {
+      child.stdout.write("{");
+      child.stdout.write(JSON.stringify(handle).slice(1));
+    } else if (end === "exit") child.emit("exit", 1, null);
+    else if (end === "spawn") child.emit("error", new Error("private fixture text"));
+    else await vi.advanceTimersByTimeAsync(100);
+    await result;
+    expect(child.stdout.listenerCount("data")).toBe(0);
+    expect(child.stderr.listenerCount("data")).toBe(0);
+    expect(child.listenerCount("error")).toBe(0);
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(launcherExitKind("agent-browser open failed: Operation timed out. Private suffix")).toBe("browser-open-timeout");
+    expect(launcherExitKind("agent-browser open did not finish within 120000ms; private suffix")).toBe("browser-open-deadline");
+    expect(launcherExitKind("private launcher text")).toBe("launcher-exit");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 async function boundedFixtureJson(url: string): Promise<unknown> {
   const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
   if (!response.ok || !response.body) return { status: response.status };
@@ -152,10 +233,7 @@ describe("bot setup and tools in the real renderer", () => {
           binaryResolvedAtStart: Boolean(binary) }));
       } catch {}
     };
-    const readPhases = readLaunchPhases(phase);
     try {
-    let stdout = "";
-    let launchError = false;
     // Windows kill("SIGINT") terminates immediately instead of delivering a
     // catchable signal. Ask the disposable launcher to run its normal cleanup.
     const launcher = new URL("./control-omb-ui.ts", import.meta.url).href;
@@ -167,14 +245,10 @@ describe("bot setup and tools in the real renderer", () => {
       cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
     phase("launcher-spawned");
-    child.stdout!.on("data", (chunk: Buffer) => { stdout += String(chunk); });
-    child.stderr!.on("data", (chunk: Buffer) => { readPhases(String(chunk)); });
-    child.on("error", () => { launchError = true; });
-    await expect.poll(() => {
-      if (launchError || child!.exitCode !== null || child!.signalCode !== null) throw new Error("UI launcher exited before readiness");
-      try { info = JSON.parse(stdout); return Boolean(info.ui); } catch { return false; }
-    }, { timeout: LAUNCH_TIMEOUT_MS + 120_000, interval: 250 }).toBe(true);
+    info = await waitForUiLauncher(child, LAUNCH_TIMEOUT_MS + 120_000, phase);
     phase("handle-ready");
+    const browser = JSON.parse(readFileSync(info.ui, "utf8")) as UiHandle;
+    await agentBrowser(browser.binary, sessionEnv(browser), ["set", "viewport", "1280", "900"], 60_000);
     const ui = (verb: string, ...args: string[]) => runControlOmb(["ui", verb, "--ui", info.ui, ...args]) as Promise<Record<string, any>>;
     const evaluate = async (js: string) => (await ui("eval", "--js", js)).result;
     const click = (name: string) => ui("click", "--name", name);
@@ -185,18 +259,32 @@ describe("bot setup and tools in the real renderer", () => {
       return (await agentBrowser(handle.binary, sessionEnv(handle), ["eval", js], 2_000)).result;
     };
     const snapshot = async () => (await ui("snapshot")).snapshot as string;
-    const openPanel = () => expect.poll(() => evaluate(`(() => {
-      if (document.querySelector('[data-chathead-pill][aria-expanded="true"]')) return true;
-      document.querySelector('[data-chathead-pill]')?.click();
-      return false;
-    })()`), { timeout: 10_000 }).toBe(true);
+    const computerSettings = '[data-computer-panel] button[aria-label="Bot settings"]';
+    const botPanelVisible = () => evaluate("Boolean(document.querySelector('#bot-panel')?.getClientRects().length)");
+    const openBotSettings = async () => {
+      if (await botPanelVisible()) return;
+      await expect.poll(() => evaluate(`(() => {
+        const pill = document.querySelector('[data-chathead-pill]');
+        if (pill && pill.getAttribute('aria-expanded') !== 'true') pill.click();
+        const button = document.querySelector(${JSON.stringify(computerSettings)});
+        const panel = button?.closest('[data-computer-panel]');
+        if (!button || !panel || panel.getAnimations().some(animation => animation.playState === 'running')) return false;
+        const { x, y, width, height } = button.getBoundingClientRect();
+        return width > 0 && height > 0 && button.contains(document.elementFromPoint(x + width / 2, y + height / 2));
+      })()`), { timeout: 10_000 }).toBe(true);
+      await agentBrowser(browser.binary, sessionEnv(browser), ["click", computerSettings]);
+      await expect.poll(botPanelVisible, { timeout: 10_000 }).toBe(true);
+    };
     const appsEntryState = (expectedBotName: string) => diagnosticEval(`(() => {
       const panel = document.querySelector('#bot-panel');
       const gear = document.querySelector('[data-panel-gear]');
       const pill = document.querySelector('[data-chathead-pill]');
       const page = panel?.querySelector('[data-panel-page-view]')?.getAttribute('data-panel-page-view') ?? null;
       const tab = panel?.querySelector('[data-panel-tab][aria-selected="true"]')?.getAttribute('data-panel-tab') ?? null;
+      const mode = localStorage.getItem('omb-interface-mode');
       return {
+        mode: mode === 'raw' || mode === 'simple' || mode === 'advanced' ? mode : null,
+        viewport: { width: innerWidth, height: innerHeight },
         panel: { exists: !!panel, visible: !!panel?.getClientRects().length,
           botMatchesExpected: panel?.querySelector('#bot-settings-title')?.textContent?.trim() === ${JSON.stringify(expectedBotName)} },
         pill: { expanded: pill?.getAttribute('aria-expanded') ?? null,
@@ -208,11 +296,11 @@ describe("bot setup and tools in the real renderer", () => {
       };
     })()`);
     const openApps = async (expectedBotName: string) => {
-      await openPanel();
-      await click("Bot settings");
-      await expect.poll(() => evaluate("(() => { const gear = document.querySelector('[data-panel-gear]'); gear?.click(); return Boolean(gear); })()"), { timeout: 10_000 }).toBe(true);
-      const afterGear = await appsEntryState(expectedBotName).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
+      let afterGear: unknown;
       try {
+        await openBotSettings();
+        await expect.poll(() => evaluate("(() => { const gear = document.querySelector('[data-panel-gear]'); gear?.click(); return Boolean(gear); })()"), { timeout: 10_000 }).toBe(true);
+        afterGear = await appsEntryState(expectedBotName).catch((error: unknown) => ({ unavailable: error instanceof Error ? error.name : "UiReadError" }));
         await expect.poll(() => evaluate("Boolean(document.querySelector('[data-panel-page=\"apps\"]'))"), { timeout: 10_000 }).toBe(true);
       } catch (original) {
         try {
@@ -276,8 +364,7 @@ describe("bot setup and tools in the real renderer", () => {
     const searchValue = () => evaluate("document.querySelector('[data-settings-search]')?.value ?? null");
     // The panel's Usage row shows what this bot has spent and opens Settings on Spending, in Advanced mode.
     const openPanelUsage = async () => {
-      await openPanel();
-      await click("Bot settings");
+      await openBotSettings();
       const probeInstalled = await diagnosticEval(`(() => {
         window.__qa507UsageProbe?.close();
         const state = () => {
@@ -342,10 +429,13 @@ describe("bot setup and tools in the real renderer", () => {
     };
     // The bot panel's close button has the same name, so press the one in the Settings dialog.
     const closeSettings = async () => {
-      // Spending is an Advanced page, so opening it turned Advanced mode on; Simple's chat head comes back with it off.
-      await evaluate("(() => { const mode = document.querySelector('select[aria-labelledby=\"settings-interface-mode\"]'); if (mode && mode.value !== \"simple\") { mode.value = \"simple\"; mode.dispatchEvent(new Event('change', { bubbles: true })); } })(); true");
       await evaluate("document.querySelector('[data-settings-search]').closest('[role=dialog]').querySelector('button[aria-label=\"Close settings\"]').click(); true");
       await expect.poll(() => evaluate("Boolean(document.querySelector('[data-settings-search]'))"), { timeout: 10_000 }).toBe(false);
+      await evaluate(`(async () => {
+        const { setInterfaceMode } = await import('/src/lib/interface-mode.ts');
+        setInterfaceMode('simple');
+        return true;
+      })()`);
     };
     await openPanelUsage();
     await ui("screenshot", "--out", `${info.logPath}.settings.png`);

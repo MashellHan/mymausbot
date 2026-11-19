@@ -41,6 +41,8 @@ retain actual validation failures, source binding and data/security decisions.
 Recover useful mistakenly closed PRs or link verified adoption through another
 PR, preserving source and review/check history.
 
+UI changes follow [`DESIGN.md`](DESIGN.md).
+
 ## Comments
 
 Write a comment only for what the code cannot say:

@@ -89,15 +89,21 @@ function fixture(root: string): DatabaseSync {
   }
   return db;
 }
-function encryptedPayload(root: string, plaintext: Buffer): string {
+function encryptedPayloadWriter(): (root: string, plaintext: Buffer) => string {
   const salt = randomBytes(16);
-  const iv = randomBytes(12);
-  const header = Buffer.concat([Buffer.from("OMB-WORKSPACE-1\n"), salt, iv]);
-  const cipher = createCipheriv("aes-256-gcm", scryptSync(PASSWORD, salt, 32, { N: 131_072, r: 8, p: 1, maxmem: 256 * 1024 ** 2 }), iv);
-  cipher.setAAD(header);
-  const path = join(root, "malicious.ombbackup");
-  writeFileSync(path, Buffer.concat([header, cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]));
-  return path;
+  const key = scryptSync(PASSWORD, salt, 32, { N: 131_072, r: 8, p: 1, maxmem: 256 * 1024 ** 2 });
+  return (root, plaintext) => {
+    const path = join(root, "malicious.ombbackup");
+    const iv = randomBytes(12);
+    const header = Buffer.concat([Buffer.from("OMB-WORKSPACE-1\n"), salt, iv]);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    cipher.setAAD(header);
+    writeFileSync(path, Buffer.concat([header, cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]));
+    return path;
+  };
+}
+function encryptedPayload(root: string, plaintext: Buffer): string {
+  return encryptedPayloadWriter()(root, plaintext);
 }
 function tarEntry(path: string, type: "File" | "Directory" | "SymbolicLink" | "Link" | "FIFO" = "File", content = "", size = Buffer.byteLength(content)): Buffer {
   const header = new Header({ path, type, size, mode: 0o600, ...(type === "Link" || type === "SymbolicLink" ? { linkpath: "/outside" } : {}) });
@@ -240,6 +246,8 @@ describe("encrypted full workspace backups", () => {
         expect(followup).not.toHaveProperty("prompt");
       } finally { restoredDb.close(); }
       expect(readJson(join(target, "routines.json"))).toMatchObject({ routines: [{ enabled: false }], runs: [{ status: "failed" }, { status: "completed" }] });
+      // A restore counts as a change to each routine, so nothing later reads an old stamp as the moment something else switched it off.
+      expect(Date.now() - readJson(join(target, "routines.json")).routines[0].updatedAt).toBeLessThan(5 * 60_000);
       expect(readJson(join(target, "webhooks.json"))).toMatchObject({ webhooks: [{ enabled: false }], deliveries: [{ id: "delivery" }] });
       expect(readJson(join(target, "webhooks.json")).webhooks[0].secretHash).toMatch(/^[a-f0-9]{64}$/);
       expect(readJson(join(target, "webhooks.json")).webhooks[0].secretHash).not.toBe("a".repeat(64));
@@ -525,18 +533,29 @@ describe("encrypted full workspace backups", () => {
     const exported = await createWorkspaceBackup(source, { password: PASSWORD });
     const staged = await stageWorkspaceBackup(source, exported.path, { password: PASSWORD });
     const base = readJson(join(source, ".backups", staged.id, "staged", "manifest.json"));
+    const writePayload = encryptedPayloadWriter();
+    const rejectsRestore = async (payload: Buffer, reason: RegExp) => {
+      const archive = writePayload(directory(), payload);
+      const target = directory();
+      const existing = join(target, "untouched");
+      writeFileSync(existing, "original");
+      await expect(stageWorkspaceBackup(target, archive, { password: PASSWORD })).rejects.toThrow(reason);
+      expect(readFileSync(existing, "utf8")).toBe("original");
+      expect(readdirSync(target).sort()).toEqual([".backups", "untouched"]);
+      expect(readdirSync(join(target, ".backups"))).toEqual([]);
+    };
+    const waitForPair = async (checks: Promise<void>[]) => {
+      for (const result of await Promise.allSettled(checks)) if (result.status === "rejected") throw result.reason;
+    };
     phase("setup end");
     phase("metadata begin");
-    for (const variant of [
+    await waitForPair([
       { credentials: { xaiApiKey: "secret" } },
       { summary: { ...base.summary, includesCredentials: false } },
-    ]) {
-      const path = encryptedPayload(source, Buffer.concat([tarEntry("manifest.json", "File", JSON.stringify({ ...base, ...variant })), tarEntry("data", "Directory"), Buffer.alloc(1024)]));
-      await expect(stageWorkspaceBackup(directory(), path, { password: PASSWORD })).rejects.toThrow(/metadata/);
-    }
+    ].map((variant) => rejectsRestore(Buffer.concat([tarEntry("manifest.json", "File", JSON.stringify({ ...base, ...variant })), tarEntry("data", "Directory"), Buffer.alloc(1024)]), /metadata/)));
     phase("metadata end");
     phase("path/config begin");
-    for (const [name, content] of [
+    const paths = [
       ["team-computers.json", '{"computers":[{"id":"foreign-computer","section":"Design"}]}'],
       ["workspace-credentials.json", '{"xaiApiKey":"secret"}'],
       ["external-runtimes.json", '{"bot-id":"external-runtime-secret"}'],
@@ -555,12 +574,14 @@ describe("encrypted full workspace backups", () => {
       ["webhooks.json", '{"webhooks":[{"secretHash":"secret"}]}'],
       ["webhooks.json", '{"webhooks":[{"sealedSecret":"secret"}]}'],
       ["webhooks.json", '{"webhooks":[],"deleted":[{"at":1,"webhook":{"sealedSecret":"secret"}}]}'],
-    ]) {
-      const entry = { path: name, type: "file", size: Buffer.byteLength(content), mode: 0o600, sha256: createHash("sha256").update(content).digest("hex") };
-      const parents = name.split("/").slice(0, -1).map((_part, index) => name.split("/").slice(0, index + 1).join("/"));
-      const manifest = { ...base, entries: [...parents.map((path) => ({ path, type: "directory", size: 0, mode: 0o700 })), entry], summary: { ...base.summary, directories: parents.length, files: 1, bytes: entry.size } };
-      const path = encryptedPayload(source, Buffer.concat([tarEntry("manifest.json", "File", JSON.stringify(manifest)), tarEntry("data", "Directory"), ...parents.map((parent) => tarEntry(`data/${parent}`, "Directory")), tarEntry(`data/${name}`, "File", content), Buffer.alloc(1024)]));
-      await expect(stageWorkspaceBackup(directory(), path, { password: PASSWORD })).rejects.toThrow(/Unsafe|connection settings|webhook credentials/);
+    ] as const;
+    for (let index = 0; index < paths.length; index += 2) {
+      await waitForPair(paths.slice(index, index + 2).map(async ([name, content]) => {
+        const entry = { path: name, type: "file", size: Buffer.byteLength(content), mode: 0o600, sha256: createHash("sha256").update(content).digest("hex") };
+        const parents = name.split("/").slice(0, -1).map((_part, index) => name.split("/").slice(0, index + 1).join("/"));
+        const manifest = { ...base, entries: [...parents.map((path) => ({ path, type: "directory", size: 0, mode: 0o700 })), entry], summary: { ...base.summary, directories: parents.length, files: 1, bytes: entry.size } };
+        await rejectsRestore(Buffer.concat([tarEntry("manifest.json", "File", JSON.stringify(manifest)), tarEntry("data", "Directory"), ...parents.map((parent) => tarEntry(`data/${parent}`, "Directory")), tarEntry(`data/${name}`, "File", content), Buffer.alloc(1024)]), /Unsafe|connection settings|webhook credentials/);
+      }));
     }
     phase("path/config end");
   });

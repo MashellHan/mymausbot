@@ -266,12 +266,12 @@ describe("peer allow-list", () => {
       expect(systemPrompt).toContain("(Starter) [id: ");
       expect(systemPrompt).toContain("Team availability: every teammate is available.");
       expect(systemPrompt).toContain("Use coordinate_bots");
-      expect(systemPrompt).toContain("Each recipient runs with its own model and permissions");
+      expect(systemPrompt).toContain("Recipients use their own model and permissions");
       expect(systemPrompt).toContain("you cannot grant them your access");
       expect(systemPrompt).not.toContain("Use delegate_bot");
       expect(systemPrompt).not.toContain("use ask_bot");
       expect(systemPrompt).not.toContain("create_bot");
-      expect(systemPrompt).toContain("[/TEAM ROSTER] If a supported API key is missing");
+      expect(systemPrompt).toContain("[/TEAM ROSTER] Missing a supported API key the task needs?");
 
       const providerToken = String(dump.mcpConfig?.mcpServers?.agents?.env?.OMB_COMMS_TOKEN ?? "");
       expect(providerToken).toMatch(/^[a-f0-9]{48}$/);

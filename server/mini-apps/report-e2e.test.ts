@@ -90,7 +90,7 @@ it("installs empty reports for one producer and keeps real Automation publicatio
 
     const tool = async (args: Record<string, unknown>) => {
       const current = await fixture.mint("agents", bot.id, bot.activeTaskId);
-      return callTool("mini_app_report", args, { botId: bot.id, threadId: bot.activeTaskId, depth: 0,
+      return callTool("mini_app_report", args, { botId: bot.id, threadId: bot.activeTaskId,
         externalRuntime: false, sharedComputers: false, client: createHarnessClient(url, current.token) });
     };
     const repeated = await tool({ action: "publish", kind: "x_ai_digest", edition: { ...xEdition, editionKey: day } });

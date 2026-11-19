@@ -2,14 +2,16 @@
 // slowest shard sets how long every PR waits. These pin that the configured
 // sequencer splits by recorded seconds, still runs every file exactly once,
 // and that its weights stay keyed to files that exist.
-import { globSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BaseSequencer, type TestSequencerConstructor, type TestSpecification, type Vitest } from "vitest/node";
+import { parse } from "yaml";
 import viteConfig from "../../vite.config.ts";
 import { VITEST_SHARDS, VITEST_WORKERS } from "../ci-scope.mjs";
 import { DurationSequencer, SHARD_WEIGHTS_FILE, loadPlatformShardWeights, loadShardWeights, planShards, weightKey } from "./duration-sequencer.ts";
+import { interpolate } from "./github-expression.ts";
 import { isPortableE2e } from "./host-e2e.ts";
 import { buildWeights, mergePlatformWeights, parseVitestLog, RUNNER_PLATFORMS, VITEST_JOB } from "./update-shard-weights.mjs";
 
@@ -58,10 +60,21 @@ describe("vitest shard balance", () => {
     expect(Math.max(...loads) / mean, `recorded seconds per shard: ${loads.join(", ")}`).toBeLessThan(1.05);
   });
 
-  it("keeps macOS all-mode on one worker with room for observed 1.4x work under the 30-minute cap", () => {
-    const { loads } = planShards(FILES, loadShardWeights(ROOT, "darwin"), VITEST_SHARDS["macos-latest"], 120);
+  it("keeps estimated macOS all-mode work under the retained 30-minute non-PR cap on one worker", () => {
+    const firstShardWorkSeconds = 120;
+    const setupAndReportSeconds = 120;
+    const { loads } = planShards(FILES, loadShardWeights(ROOT, "darwin"), MACOS_SHARDS, firstShardWorkSeconds);
+    const workSeconds = Math.max(...loads.map((load, index) => {
+      const fixedSeconds = index === 0 ? firstShardWorkSeconds : 0;
+      return (load - fixedSeconds) * 1.4 + fixedSeconds;
+    }));
+    const workflow = parse(readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"));
+    const jobMinutes = Number(interpolate(workflow.jobs.vitest["timeout-minutes"], {
+      matrix: { os: "macos-latest", files: "" }, github: { event_name: "push" },
+    }));
     expect(VITEST_WORKERS["macos-latest"]).toBe(1);
-    expect(Math.max(...loads) * 1.4).toBeLessThan(28 * 60);
+    expect(workSeconds).toBeLessThan(30 * 60);
+    expect(workSeconds + setupAndReportSeconds, "modeled shard work plus setup and reporting").toBeLessThan(jobMinutes * 60);
   });
 
   it("runs every test file in exactly one shard through the full macOS count", async () => {
