@@ -950,7 +950,7 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
             elif commit_statuses and all(s in ("ready", "local-ref-ready") for s in commit_statuses):
                 day_commit_status = "local-ref-ready"
             if day_commit_status:
-                at_instant = collector.instant(at)
+                at_instant = collector.instant(at.isoformat() if isinstance(at, dt.datetime) else at)
                 tz = getattr(collector, "TZ", dt.timezone(dt.timedelta(hours=8)))
                 today_date = at_instant.astimezone(tz).date() if at_instant is not None else None
                 active_machines = [machine for machine in machines if machine.get("status") != "missing"]

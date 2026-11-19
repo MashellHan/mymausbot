@@ -589,7 +589,8 @@ def aggregate(machines, prs, at, history_days=30):
             "localHistory": {"daily": [{"day": "2026-11-04"}, {"day": "2026-11-05"}, {"day": "2026-11-06"}]},
             "historyDays": history_days}
 def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_days=30):
-    result = aggregate(config["machines"], {}, "2026-11-06T08:00:00Z", history_days=history_days)
+    at = dt.datetime(2026, 11, 6, 8, tzinfo=dt.timezone.utc)
+    result = aggregate(config["machines"], {}, at, history_days=history_days)
     with open(config["result"], "w") as stream:
         json.dump(result, stream)
 ''')
