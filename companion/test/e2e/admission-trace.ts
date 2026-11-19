@@ -10,8 +10,10 @@ const eventLimit = 256;
 const phases = new Set([
   "refresh_timer_scheduled", "refresh_timer_fired", "admission_refresh", "relay_control_received",
   "relay_control_closed", "relay_admit_result", "phone_admission_refused", "phone_admitted",
-  "open_sent_to_host", "host_data_attach_seen", "relay_spliced_ready_sent", "relay_no_data_socket",
-  "relay_ready_seen", "noise_started", "noise_ready", "noise_deadline", "outer_deadline",
+  "open_sent_to_host", "host_open_received", "host_data_dial_started", "host_data_socket_opened",
+  "host_data_auth_sent", "host_data_session_attached", "host_data_attach_seen", "host_data_socket_closed",
+  "host_data_socket_error", "relay_spliced_ready_sent", "relay_no_data_socket", "relay_ready_seen",
+  "noise_started", "noise_ready", "noise_deadline", "outer_deadline",
   "dial_ready", "dial_closed",
 ]);
 const statusNames = new Set(["off", "connecting", "connected"]);
