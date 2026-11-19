@@ -1,0 +1,63 @@
+import { placeUnreadDivider } from "@/lib/unread-divider";
+import { visibleMessages } from "./snapshot-navigation";
+import type { Action, AppState, Message } from "./store";
+
+export const MESSAGE_PAGE_SIZE = 200;
+type OlderMessages = Extract<Action, { type: "olderMessages" }>;
+type TrimHeldMessages = Extract<Action, { type: "trimHeldMessages" }>;
+type HeldOwner = { id: string; messages: Message[]; threadId: string; hasMore?: boolean; activeLeafId?: string | null; pinnedMessageId?: string };
+
+export function reduceOlderMessages(state: AppState, action: OlderMessages): AppState {
+  const { [action.threadId]: _done, ...loadingOlder } = state.loadingOlder;
+  if ((state.transcriptGeneration[action.threadId] ?? 0) !== action.generation) return { ...state, loadingOlder };
+  const current = [...state.bots, ...state.groups].find((owner) => owner.threadId === action.threadId);
+  if (action.before !== undefined && current?.messages[0]?.id !== action.before) return { ...state, loadingOlder };
+  const prepend = <T extends HeldOwner>(owner: T): T => {
+    const page = new Set(action.messages.map((message) => message.id));
+    const held = new Set(owner.messages.filter((message) => page.has(message.id)).map((message) => message.id));
+    return {
+      ...owner,
+      messages: [...action.messages.filter((message) => !held.has(message.id)), ...owner.messages],
+      hasMore: action.hasMore,
+    };
+  };
+  const bots = state.bots.map((bot) => (bot.threadId === action.threadId ? prepend(bot) : bot));
+  const groups = state.groups.map((group) => (group.threadId === action.threadId ? prepend(group) : group));
+  const owner = [...bots, ...groups].find((candidate) => candidate.threadId === action.threadId);
+  const unreadDivider = placeUnreadDivider(state.unreadDivider, action.threadId, owner ? visibleMessages(owner) : [], action.hasMore);
+  return { ...state, loadingOlder, bots, groups, unreadDivider };
+}
+
+export const HELD_AFTER_LEAVING = MESSAGE_PAGE_SIZE;
+export const HELD_FOR_PLACE = 3 * MESSAGE_PAGE_SIZE;
+
+/** The newest rows of `owner`, from `keepFromId` when that is close enough to the end, never cutting off its pinned
+ * message or the leaf of the branch it shows. */
+export function trimmedHeld<T extends HeldOwner>(owner: T, keepFromId?: string): T {
+  const total = owner.messages.length;
+  let from = total - HELD_AFTER_LEAVING;
+  if (from <= 0) return owner;
+  for (const id of [keepFromId, owner.activeLeafId, owner.pinnedMessageId]) {
+    const at = id ? owner.messages.findIndex((message) => message.id === id) : -1;
+    if (at < 0 || at >= from) continue;
+    if (id !== keepFromId && total - at > HELD_FOR_PLACE) return owner;
+    if (total - at <= HELD_FOR_PLACE) from = at;
+  }
+  return from > 0 ? { ...owner, messages: owner.messages.slice(from), hasMore: true } : owner;
+}
+
+export function reduceTrimHeldMessages(state: AppState, { threadId, keepFromId }: TrimHeldMessages): AppState {
+  const shown = state.activeView === "chat" &&
+    [...state.bots, ...state.groups].some((owner) => owner.id === state.selectedId && owner.threadId === threadId);
+  if (shown || state.forkPanel?.threadId === threadId) return state;
+  let changed = false;
+  const trim = <T extends HeldOwner>(owner: T): T => {
+    if (owner.threadId !== threadId) return owner;
+    const next = trimmedHeld(owner, keepFromId);
+    changed ||= next !== owner;
+    return next;
+  };
+  const bots = state.bots.map(trim);
+  const groups = state.groups.map(trim);
+  return changed ? { ...state, bots, groups } : state;
+}
