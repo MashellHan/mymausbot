@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { launchVerificationServer, runControlOmb, type VerificationServer } from "../scripts/control-omb.ts";
+import { appendUsage } from "./usage-ledger.ts";
 
 describe("usage ledger through real turns", () => {
   let session: VerificationServer;
@@ -74,5 +75,25 @@ describe("usage ledger through real turns", () => {
     const client = await pair("Client phone", ["client"]);
     expect((await api("/api/usage", { headers: { authorization: `Bearer ${client}` } })).status).toBe(403);
     expect((await api("/api/usage.csv", { headers: { authorization: `Bearer ${client}` } })).status).toBe(403);
+
+    await appendUsage(session.info.dataDir, {
+      ...rows[0], at: "2026-01-15T16:30:01Z", startedAt: "2026-01-15T16:30:00Z", endedAt: "2026-01-15T16:30:01Z",
+    });
+    const query = "from=2026-01-16&to=2026-01-16&tz=Asia%2FShanghai";
+    const insight = await api(`/api/usage/insights?${query}`);
+    expect(insight.status).toBe(200);
+    expect(insight.headers.get("cache-control")).toBe("no-store");
+    expect(await insight.json()).toMatchObject({
+      from: "2026-01-16", to: "2026-01-16", timeZone: "Asia/Shanghai", unit: "hour",
+      totals: { turns: 1, costUsd: 0.01 }, bots: [expect.objectContaining({ label: "Ledger probe" })],
+    });
+    const traces = await api(`/api/usage/traces?${query}`);
+    expect(traces.status).toBe(200);
+    expect(await traces.json()).toMatchObject({ roots: [expect.any(Object)] });
+    const localCsv = await api(`/api/usage.csv?${query}`);
+    expect(localCsv.headers.get("content-disposition")).toContain("usage-2026-01-16-2026-01-16.csv");
+    expect((await localCsv.text()).trim().split("\n")).toHaveLength(2);
+    expect((await api(`/api/usage/insights?${query}`, { headers: { authorization: `Bearer ${client}` } })).status).toBe(403);
+    expect((await api("/api/usage/insights?from=2026-01-16&to=2026-01-16&tz=Mars%2FOlympus")).status).toBe(400);
   }, 120_000);
 });

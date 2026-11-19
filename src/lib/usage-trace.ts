@@ -8,8 +8,8 @@ import type {
   TraceDetail, TraceGroup, TraceList, TraceNode, TraceRootSummary, TraceStep, TraceTokens, TraceTool, TraceTurn,
 } from "../../shared/usage-trace.ts";
 
-export type UsagePeriod = "today" | "week" | "month" | "lastMonth" | "days30";
-export const USAGE_PERIODS: readonly UsagePeriod[] = ["today", "week", "month", "lastMonth", "days30"];
+export type UsagePeriod = "today" | "week" | "month" | "lastMonth" | "days30" | "days90";
+export const USAGE_PERIODS: readonly UsagePeriod[] = ["today", "week", "month", "lastMonth", "days30", "days90"];
 
 const DAY_MS = 24 * 60 * 60_000;
 const day = (date: Date) => date.toISOString().slice(0, 10);
@@ -21,7 +21,21 @@ export function usagePeriodRange(period: UsagePeriod, now = new Date()): { from:
   if (period === "week") return { from: day(new Date(now.getTime() - 6 * DAY_MS)), to: day(now) };
   if (period === "month") return { from: day(new Date(Date.UTC(year, month, 1))), to: day(now) };
   if (period === "lastMonth") return { from: day(new Date(Date.UTC(year, month - 1, 1))), to: day(new Date(Date.UTC(year, month, 0))) };
+  if (period === "days90") return { from: day(new Date(now.getTime() - 89 * DAY_MS)), to: day(now) };
   return { from: day(new Date(now.getTime() - 29 * DAY_MS)), to: day(now) };
+}
+
+export type UsageDateRange = { from: string; to: string; timeZone?: string };
+
+export function localPeriodRange(period: UsagePeriod, now = new Date()): UsageDateRange {
+  const shifted = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 12));
+  return { ...usagePeriodRange(period, shifted), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" };
+}
+
+export function usageRangeQuery(range: UsageDateRange): string {
+  const query = new URLSearchParams({ from: range.from, to: range.to });
+  if (range.timeZone) query.set("tz", range.timeZone);
+  return query.toString();
 }
 
 /** A cost as the trace prints it: a sliver of a cent reads "<$0.001", never "$0.000". */
@@ -30,12 +44,12 @@ export function formatCost(usd: number | null | undefined): string {
   return usd > 0 && usd < 0.001 ? `<${usdText(0.001, 3)}` : formatUsd(usd);
 }
 
-export function usageExportHref(range: { from: string; to: string }): string {
-  return `/api/usage.csv?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
+export function usageExportHref(range: UsageDateRange): string {
+  return `/api/usage.csv?${usageRangeQuery(range)}`;
 }
 
-export function fetchTraces(range: { from: string; to: string }, offset = 0): Promise<TraceList> {
-  return api(`/api/usage/traces?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}&offset=${offset}&limit=50`);
+export function fetchTraces(range: UsageDateRange, offset = 0): Promise<TraceList> {
+  return api(`/api/usage/traces?${usageRangeQuery(range)}&offset=${offset}&limit=50`);
 }
 
 export function fetchTrace(id: string, at?: number): Promise<TraceDetail> {
