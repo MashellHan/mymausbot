@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { assistantMessagePreview, redactedAgentToolArguments, redactedAgentToolResult } from "./local-agent-visible-message.ts";
+import { assistantMessagePreview, redactedAgentToolArguments, redactedAgentToolResult, visibleToolDetail } from "./local-agent-visible-message.ts";
 
 const assistant = (text: string, phase = "commentary") => ({ type: "response_item", payload: {
   type: "message", role: "assistant", phase, content: [{ type: "output_text", text }],
@@ -139,5 +139,75 @@ describe("bounded tool details", () => {
     ]))).toEqual({ text: null, clipped: true });
     const full = redactedAgentToolResult(blocks(["rows ".repeat(140), "complete"]));
     expect(full).toEqual({ text: "rows ".repeat(120), clipped: true });
+  });
+
+  it("recognizes a numeric max_output_tokens option in recorded Codex exec JavaScript", () => {
+    const source = `const run = await tools.exec_command({ cmd: "printf ready", max_output_tokens: 400 });`;
+    expect(visibleToolDetail("tool-call", source, "codex", "exec")).toMatchObject({ text: source, detailStatus: "available" });
+    const blockSource = `{ const run = await tools.exec_command({ cmd: "printf block", max_output_tokens: 400 }); }`;
+    expect(visibleToolDetail("tool-call", blockSource, "codex", "exec")).toMatchObject({ text: blockSource, detailStatus: "available" });
+    expect(visibleToolDetail("tool-call", blockSource + ' text({ cookie: "fixture-value" });', "codex", "exec"))
+      .toMatchObject({ detailStatus: "withheld" });
+    expect(visibleToolDetail("tool-call", source, "codex", "other")).toMatchObject({ detailStatus: "withheld" });
+    for (const unsafe of ['"fixture-value"', '400 + fixtureValue', '400\n + fixtureValue', '9007199254740992']) {
+      expect(visibleToolDetail("tool-call", source.replace("400", unsafe), "codex", "exec")).toMatchObject({ detailStatus: "withheld" });
+    }
+    expect(visibleToolDetail("tool-call", source + ' text({ cookie: "fixture-value" });', "codex", "exec"))
+      .toMatchObject({ detailStatus: "withheld" });
+  });
+
+  it("only displays classified literal declarations in custom exec source", () => {
+    const show = (source: string) => visibleToolDetail("tool-call", source, "codex", "exec");
+    const safe = 'text({ encoding: `utf-8`, name: "fixture" });';
+    expect(show(safe)).toMatchObject({ text: safe, detailStatus: "available" });
+    const members = 'options.encoding = "utf-8"; options["name"] = `fixture`;';
+    expect(show(members)).toMatchObject({ text: members, detailStatus: "available" });
+    for (const assignment of ['options.encoding = `base64`;', 'options.name = value;', 'options["name"] = "Cookie";', 'options[field] = "fixture";']) {
+      expect(show(assignment)).toMatchObject({ detailStatus: "withheld" });
+    }
+    for (const assignment of ['options[field] ??= "fixture";', 'options.encoding += "fixture";',
+      'options.name /* recorded */ = value;', 'options[field] // recorded\n = "fixture";']) {
+      expect(show(assignment)).toMatchObject({ detailStatus: "withheld" });
+    }
+    const privateMember = show('options.cookie /* recorded */ = "fixture-marker";');
+    expect(privateMember.detailStatus).toBe("withheld");
+    expect(privateMember.text).not.toContain("fixture-marker");
+    for (const source of ['text({ encoding: `base64` });', 'text({ name: `Cookie` });', 'text({ name: fixtureName });']) {
+      expect(show(source)).toMatchObject({ detailStatus: "withheld" });
+    }
+  });
+
+  it("shows a verified Codex exec result envelope and ordinary redacted output", () => {
+    const header = { type: "input_text", text: "Script completed\nWall time 0.123 seconds\nOutput:\n" };
+    const command = (output: string) => ({ type: "input_text",
+      text: JSON.stringify({ chunk_id: "abc123", wall_time_seconds: 0.07, exit_code: 0, session_id: 43210,
+        original_token_count: 7, output }) });
+    const minimalCommand = { type: "input_text",
+      text: JSON.stringify({ chunk_id: "abc123", wall_time_seconds: 0.07, exit_code: 0, output: "Ready" }) };
+    const ordinary = [header, command("Read /Users/fixture/report.txt")];
+    expect(visibleToolDetail("tool-result", ordinary, "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds Exit code: 0 Read [path]", clipped: false, detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-result", [header, minimalCommand], "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds Exit code: 0 Ready", clipped: false, detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-result", [header, { ...minimalCommand, type: "output_text" }], "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds · Output excerpt unavailable", clipped: true, detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-result", [header, { type: "input_text",
+      text: JSON.stringify({ wall_time_seconds: 0.07, exit_code: 0, unknown_field: "benign", output: "Ready" }) }], "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds · Output excerpt unavailable", clipped: true, detailStatus: "available",
+    });
+    expect(visibleToolDetail("tool-result", ordinary, "codex", "other")).toMatchObject({ detailStatus: "withheld" });
+    expect(visibleToolDetail("tool-result", [header, { ...ordinary[1], encoding: "base64" }], "codex", "exec"))
+      .toMatchObject({ detailStatus: "withheld" });
+    const splitPrivate = [header, command('{"content":"fixture-opaque-cookie",'), command('"name":"Cookie"}')];
+    expect(visibleToolDetail("tool-result", splitPrivate, "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds Exit code: 0 Exit code: 0 · Output excerpt unavailable", clipped: true, detailStatus: "available",
+    });
+    const large = [header, command("sensitive content ".repeat(2_000))];
+    expect(visibleToolDetail("tool-result", large, "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds · Output excerpt unavailable", clipped: true, detailStatus: "available",
+    });
   });
 });

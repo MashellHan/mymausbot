@@ -90,7 +90,7 @@ describe("bounded per-agent Codex activity", () => {
   });
 
   it("pages a bounded Codex tail in source order without moving an older cursor after append", async () => {
-    const pairs = Array.from({ length: 42 }, (_, index) => [
+    const pairs = Array.from({ length: 72 }, (_, index) => [
       row("response_item", { type: "function_call", call_id: `call-${index}`, name: "functions.exec", arguments: '{"cmd":"fixture"}' }),
       row("response_item", { type: "function_call_output", call_id: `call-${index}`,
         output: index === 0 ? [{ type: "input_text", text: "Large result " + "x".repeat(300_000) }] : `Result ${index}` }),
@@ -105,17 +105,17 @@ describe("bounded per-agent Codex activity", () => {
     const activity = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([active]) });
     const first = await activity.get(pane, { occupantId });
     expect(first).toMatchObject({ status: "ready", truncated: true, history: { version: 1, streamId: expect.any(String) } });
-    expect(first.events).toHaveLength(30);
+    expect(first.events).toHaveLength(60);
     const before = first.history!.nextBefore!;
     const older = await activity.get(pane, { occupantId, before });
-    expect(older.events).toHaveLength(30);
-    expect(older.events.at(-1)?.text).toBe("Result 26");
+    expect(older.events).toHaveLength(60);
+    expect(older.events.at(-1)?.text).toBe("Result 41");
     const oldest = await activity.get(pane, { occupantId, before: older.history!.nextBefore! });
     expect(oldest.history!.nextBefore).toBeNull();
     expect(oldest.events[0]?.text).toBe("Oldest retained");
     expect(oldest.events[2]).toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
     const ids = [...oldest.events, ...older.events, ...first.events].map((event) => event.id);
-    expect(new Set(ids).size).toBe(85);
+    expect(new Set(ids).size).toBe(145);
     expect(JSON.stringify(oldest)).not.toMatch(/Below scan budget|Large result/);
     const file = join(home, "sessions", "2026", "11", "05", `rollout-2026-11-05-${SESSION}.jsonl`);
     await appendFile(file, JSON.stringify(row("event_msg", { type: "agent_message", message: "Latest reply" })) + "\n");
@@ -262,20 +262,45 @@ describe("bounded per-agent Codex activity", () => {
   });
 
   it("reads custom tool text and supports alphanumeric current pane IDs without exposing other records", async () => {
+    const input = 'const run = await tools.exec_command({ cmd: "printf synthetic", max_output_tokens: 300 });';
+    const blockInput = '{ const run = await tools.exec_command({ cmd: "printf block", max_output_tokens: 300 }); }';
+    const minimalOutput = [
+      { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+      { type: "input_text", text: JSON.stringify({ chunk_id: "abc123", wall_time_seconds: 0.1, exit_code: 0, output: "Minimal output" }) },
+    ];
+    const output = [
+      { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+      { type: "input_text", text: JSON.stringify({ chunk_id: "abc123", wall_time_seconds: 0.1, exit_code: 0,
+        session_id: 12345, original_token_count: 7, output: "Synthetic command output" }) },
+    ];
     const home = await fixture([
+      row("response_item", { type: "custom_tool_call_output", call_id: "missing", output }),
       row("response_item", { type: "custom_tool_call", name: "functions.exec", call_id: "c1",
-        input: "inspect synthetic fixture", arguments: "ignored alternative" }),
-      row("response_item", { type: "custom_tool_call_output", call_id: "c1", output: "synthetic output" }),
+        input, arguments: "ignored alternative" }),
+      row("response_item", { type: "custom_tool_call_output", call_id: "c1", output }),
+      row("response_item", { type: "custom_tool_call", name: "functions.exec", call_id: "c-block", input: blockInput }),
+      row("response_item", { type: "custom_tool_call_output", call_id: "c-block", output: minimalOutput }),
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: "mismatch-fn", arguments: '{"cmd":"ok"}' }),
+      row("response_item", { type: "custom_tool_call_output", call_id: "mismatch-fn", output: minimalOutput }),
+      row("response_item", { type: "custom_tool_call", name: "functions.exec", call_id: "mismatch-custom", input }),
+      row("response_item", { type: "function_call_output", call_id: "mismatch-custom", output: "MISMATCH_FN_RESULT" }),
       row("response_item", { type: "function_call", name: "/private/tool", call_id: "c2", arguments: "private path" }),
       row("response_item", { type: "reasoning", summary: "private reasoning" }),
     ]);
     const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent(SESSION, "codex", "w6:pG")]) });
     const result = await provider.get("w6:pG");
     expect(result.events.map(({ kind, tool, text }) => [kind, tool, text])).toEqual([
-      ["tool-call", "functions.exec", "inspect synthetic fixture"],
-      ["tool-result", "functions.exec", "synthetic output"],
+      ["tool-result", null, "[Result details unavailable]"],
+      ["tool-call", "functions.exec", input],
+      ["tool-result", "functions.exec", "Script completed Wall time 0.1 seconds Exit code: 0 Synthetic command output"],
+      ["tool-call", "functions.exec", blockInput],
+      ["tool-result", "functions.exec", "Script completed Wall time 0.1 seconds Exit code: 0 Minimal output"],
+      ["tool-call", "functions.exec", "cmd: ok"],
+      ["tool-result", null, "[Result details unavailable]"],
+      ["tool-call", "functions.exec", input],
+      ["tool-result", null, "[Result details unavailable]"],
     ]);
-    expect(JSON.stringify(result)).not.toMatch(/ignored alternative|private path|private reasoning|c1|c2/);
+    expect(JSON.stringify(result)).not.toMatch(/ignored alternative|private path|private reasoning|c1|c2|12345|original_token_count|chunk_id|MISMATCH_FN_RESULT/);
   });
 
   it("does not reveal malformed, unpaired or encoded Codex tool details", async () => {

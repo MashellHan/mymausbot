@@ -261,9 +261,9 @@ The bridge inserts `expectedRevision`. Omit `history` and `before` for the
 legacy request. History v1 accepts `before` only with `history: 1`. Every page
 revalidates the installed app, resource grant and current selected occupant.
 The history scan retains at most 360 events from a bounded tail of up to
-4 MiB for Codex or 8 MiB for Pi. A v1 page has at most 60 events including
-30 tool events and is ordered oldest first. Use `snapshot.history.nextBefore`
-for the next earlier page. A null cursor ends the available history.
+4 MiB for Codex or 8 MiB for Pi. Each v1 page includes up to 60 events in
+source order, oldest first. Use `snapshot.history.nextBefore` for the next
+earlier page. A null cursor ends the available history.
 
 Keep older rows by event ID while polling the newest page within the same
 `streamId`. A changed stream or unavailable cursor calls for a fresh newest
