@@ -61,21 +61,28 @@ export function UsageDailyTable({ days }: { days: UsageTrendDay[] }) {
 export const shortUsagePeriods = ["1", "7", "30"] as const;
 type Period = typeof shortUsagePeriods[number] | "60";
 
-export function UsagePeriodSection<P extends Period>({ kind, heading, hint, periods, period, onPeriodChange, window, children }: {
+export function UsagePeriodSection<P extends Period>({ kind, heading, hint, periods, period, onPeriodChange, window, open, onToggle, children }: {
   kind: "models" | "repositories"; heading: string; hint: ReactNode;
   periods: readonly P[]; period: P; onPeriodChange: (period: P) => void;
-  window: Pick<UsageWindow, "startDay" | "endDay">; children: ReactNode;
+  window: Pick<UsageWindow, "startDay" | "endDay">; open?: boolean; onToggle?: () => void; children: ReactNode;
 }) {
   const id = useId();
+  const panelId = `${id}-panel`;
   return <section className="mt-6" aria-labelledby={`${id}-heading`} data-usage-period={kind}>
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <h3 id={`${id}-heading`} className="text-[16px] font-semibold text-ink">{heading}</h3>
+        <h3 id={`${id}-heading`} className="text-[16px] font-semibold text-ink">
+          {onToggle ? <button type="button" aria-expanded={open} aria-controls={panelId} onClick={onToggle}
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-md pe-1 text-left outline-none hover:text-ink-secondary focus-visible:ring-2 focus-visible:ring-accent/60">
+            <ChevronRight size={16} className={cn("shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} aria-hidden="true" />
+            <span>{heading}</span>
+          </button> : heading}
+        </h3>
         <span className="text-[13px] tabular-nums text-ink-secondary">{window.startDay === window.endDay && kind === "models" ? window.endDay : `${window.startDay} – ${window.endDay}`}</span>
-        {hint}
+        {open !== false && hint}
       </div>
-      <div role="tablist" aria-label={t(kind === "models" ? "computer.usage.modelPeriod" : "computer.usage.repositoryPeriod")} className="flex rounded-lg bg-inset p-1">
-        {periods.map((key, index) => <button key={key} type="button" role="tab" id={`${id}-tab-${key}`} aria-controls={`${id}-panel`}
+      {open !== false && <div role="tablist" aria-label={t(kind === "models" ? "computer.usage.modelPeriod" : "computer.usage.repositoryPeriod")} className="flex rounded-lg bg-inset p-1">
+        {periods.map((key, index) => <button key={key} type="button" role="tab" id={`${id}-tab-${key}`} aria-controls={panelId}
           aria-selected={period === key} tabIndex={period === key ? 0 : -1} onClick={() => onPeriodChange(key)}
           onKeyDown={(event) => {
             const next = event.key === "ArrowRight" ? (index + 1) % periods.length : event.key === "ArrowLeft" ? (index + periods.length - 1) % periods.length
@@ -87,9 +94,9 @@ export function UsagePeriodSection<P extends Period>({ kind, heading, hint, peri
           className={cn("min-h-8 rounded-md px-3 text-[13px] tabular-nums outline-none focus-visible:ring-2 focus-visible:ring-accent/60", period === key ? "bg-card font-medium text-ink" : "text-ink-secondary hover:bg-raised-hover")}>
           {t("computer.usage.periodDays", { days: key })}
         </button>)}
-      </div>
+      </div>}
     </div>
-    <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-tab-${period}`} tabIndex={0} className="mt-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+    <div role="tabpanel" id={panelId} aria-labelledby={`${id}-tab-${period}`} tabIndex={0} hidden={open === false} className="mt-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
       {children}
     </div>
   </section>;

@@ -178,12 +178,14 @@ describe("local Usage panel", () => {
     const legend = () => chart.querySelector("[data-usage-token-legend]")?.textContent;
     const tooltip = () => chart.querySelector('[role="tooltip"]')?.textContent;
     await act(async () => bar.focus());
-    expect(tooltip()).toContain("Tokens: 110");
-    expect(tooltip()).toContain("Cached input10Fresh input65Output35");
+    expect(tooltip()).toContain("2026-11-03 · Tue");
+    expect(tooltip()).toContain("Tokens110Cached input10Fresh input65Output35");
+    expect(chart.querySelectorAll('[role="tooltip"] dt').length).toBeGreaterThanOrEqual(4);
     expect(chart.querySelector('[data-usage-token-segment="unknown"]')).not.toBeNull();
     const models = chart.querySelector<HTMLButtonElement>('[role="group"] button:last-child')!;
     await act(async () => models.click());
     expect(legend()).toContain("ABCDEOther modelsUnattributed tokens");
+    expect(tooltip()).toContain("Tokens110");
     expect(tooltip()).toContain("A10 · 9.1%");
     expect(tooltip()).toContain("Other models10 · 9.1%Unattributed tokens50");
     expect(bar.getAttribute("aria-describedby")).toBe(chart.querySelector('[role="tooltip"]')?.id);
@@ -195,7 +197,7 @@ describe("local Usage panel", () => {
     const first = chart.querySelector<HTMLButtonElement>('[data-usage-day]')!;
     await act(async () => { first.focus(); first.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })); });
     expect(tooltip()).toContain("2026-11-02 – 2026-11-03");
-    expect(tooltip()).toContain("Tokens: 220");
+    expect(tooltip()).toContain("Tokens220");
     expect(tooltip()).toContain("Other models20 · 9.1%Unattributed tokens160");
     await act(async () => (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(tooltip()).toBeUndefined();
@@ -248,7 +250,7 @@ describe("local Usage panel", () => {
     const bars = [...tokenChart.querySelectorAll<HTMLButtonElement>("[data-usage-day]")];
     await act(async () => bars[0]!.focus());
     expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("2026-05-04 – 2026-05-10");
-    expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("Tokens: 770");
+    expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("Tokens770");
     await act(async () => bars[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(bars.at(-1));
     expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("2026-11-02 – 2026-11-03");
@@ -510,8 +512,43 @@ describe("local Usage panel", () => {
     expect(host.querySelector('[data-usage-daily] tbody tr:first-child td:nth-child(4)')?.textContent).toBe("110");
     const last = host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="totalTokens"] [data-usage-day]')[29]!;
     await act(async () => last.focus());
-    expect(host.querySelector('[data-usage-trend="totalTokens"] [role="tooltip"]')?.textContent).toContain("Tokens: 110");
+    expect(host.querySelector('[data-usage-trend="totalTokens"] [role="tooltip"]')?.textContent).toContain("Tokens110");
     expect(last.getAttribute("title")).toBeNull();
+  });
+
+  it("toggles Model usage disclosure via keyboard while preserving the selected period and keeping Repository usage static", async () => {
+    const snapshot = structuredClone(sample);
+    snapshot.windows!["7"].tokenDetails = {
+      input: 400, output: 200, estimatedCost: { coverage: "ready", usd: 1.5 },
+      models: { coverage: "ready", rows: [{ model: "fixture-week-model", totalTokens: 600, input: 400, output: 200, cacheRead: 0, estimatedCost: { coverage: "ready", usd: 1.5 } }] },
+    };
+    await renderRaw(snapshot);
+    const model = host.querySelector('[data-usage-period="models"]')!;
+    const repo = host.querySelector('[data-usage-period="repositories"]')!;
+    const toggle = model.querySelector<HTMLButtonElement>("h3 > button[aria-expanded]")!;
+    const panel = model.querySelector<HTMLElement>('[role="tabpanel"]')!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.hidden).toBe(false);
+    expect(toggle.querySelector('[data-info-hint]')).toBeNull();
+    expect(model.querySelector('h3 ~ [data-info-hint]')).not.toBeNull();
+    expect(repo.querySelector('h3 > button[aria-expanded]')).toBeNull();
+    const tabs = [...model.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(tabs[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(panel.textContent).toContain("fixture-week-model");
+    await act(async () => { toggle.focus(); toggle.click(); });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(panel.hidden).toBe(true);
+    expect(model.querySelector('[role="tablist"]')).toBeNull();
+    expect(model.querySelector('[data-info-hint]')).toBeNull();
+    expect(document.activeElement).toBe(toggle);
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.hidden).toBe(false);
+    expect(model.querySelector('[role="tab"][aria-selected="true"]')?.id).toBe(tabs[1]!.id);
+    expect(model.querySelector('[data-info-hint]')).not.toBeNull();
+    expect(panel.textContent).toContain("fixture-week-model");
   });
 
   it("stacks Enterprise and Personal trend values and adds Unclassified only when observed", async () => {
