@@ -231,32 +231,40 @@ function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucke
         {values.includes(null) && <span>{t("computer.usage.tokenGapLegend")}</span>}
       </div>}
       {active && <div id={tooltipId} role="tooltip" data-usage-tooltip
-        className={cn("pointer-events-none absolute right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2 py-1.5 text-[12px] text-ink shadow-lg",
+        className={cn("pointer-events-none absolute right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2.5 py-2 text-[12px] text-ink shadow-lg",
           stack ? "top-full" : "bottom-2")}>
-        <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
-          <time dateTime={active.day} className="font-medium">{active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}</time>
-          <span>{t(`computer.usage.metric.${metric}`)}: {metric === "totalTokens" ? metricText(active.totalTokens) : trendCountText(active, metric)}</span>
-        </div>
-        {stack && active.totalTokens !== null && <div className="mt-1 text-ink-secondary">
-          {active.tokenStatus === "partial" && <p>{t("computer.usage.tokensPartial")}</p>}
-          <dl className="grid gap-x-3 gap-y-0.5 sm:grid-cols-2 tabular-nums">
-            {stack.series.map((series, index) => {
+        {stack ? <>
+          <time dateTime={active.day} className="block font-medium tabular-nums">
+            {active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}
+          </time>
+          {active.tokenStatus === "partial" && <p className="mt-0.5 text-ink-secondary">{t("computer.usage.tokensPartial")}</p>}
+          <dl className="mt-1.5 grid grid-cols-1 gap-y-0.5 tabular-nums">
+            <div className="flex min-w-0 items-baseline justify-between gap-3">
+              <dt className="text-ink-secondary">{t("computer.usage.metric.totalTokens")}</dt>
+              <dd className="shrink-0 text-right font-medium text-ink">{metricText(active.totalTokens)}</dd>
+            </div>
+            {active.totalTokens !== null && stack.series.map((series, index) => {
               const amount = stack.points[activeIndex]?.[index] ?? null;
               const total = active.totalTokens ?? 0;
               const share = (series.kind === "model" || series.kind === "other") && amount !== null && total > 0
                 ? percent.format(amount / total) : null;
-              return (series.kind === "type" || !!amount) && <div key={index} className="flex min-w-0 justify-between gap-1">
-                <dt dir="auto" className="[overflow-wrap:anywhere]">{tokenSeriesLabel(series, mode)}</dt>
-                <dd className="shrink-0">{metricText(amount)}{share && ` · ${share}`}</dd>
+              return (series.kind === "type" || !!amount) && <div key={index} className="flex min-w-0 items-baseline justify-between gap-3">
+                <dt dir="auto" className="min-w-0 [overflow-wrap:anywhere] text-ink-secondary">{tokenSeriesLabel(series, mode)}</dt>
+                <dd className="shrink-0 text-right text-ink">{metricText(amount)}{share && ` · ${share}`}</dd>
               </div>;
             })}
           </dl>
-        </div>}
-        {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
-          {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category}>
-            {t(`computer.usage.category.${category}`)}: {observedCountText(active.categories[category][metric], metric === "prs" ? active.categories[category].knownPrs : active.categories[category].knownCommits)}
-          </span>)}
-        </div>}
+        </> : <>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
+            <time dateTime={active.day} className="font-medium">{active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}</time>
+            <span>{t(`computer.usage.metric.${metric}`)}: {metric === "totalTokens" ? metricText(active.totalTokens) : trendCountText(active, metric)}</span>
+          </div>
+          {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
+            {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category}>
+              {t(`computer.usage.category.${category}`)}: {observedCountText(active.categories[category][metric], metric === "prs" ? active.categories[category].knownPrs : active.categories[category].knownCommits)}
+            </span>)}
+          </div>}
+        </>}
       </div>}
     </div>
   );
