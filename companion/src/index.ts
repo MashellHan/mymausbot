@@ -5,6 +5,7 @@
 //   :8811  127.0.0.1  you         pairing and revocation, never off-machine
 //   :8799  127.0.0.1  the harness spoken to as this machine, unmodified
 //   UDS/pipe            one Electron-owned sidecar generation, never TCP
+import { channel } from "node:diagnostics_channel";
 import { createServer } from "node:http";
 
 import { createAddressWatcher } from "./advertise-watch.ts";
@@ -226,8 +227,15 @@ function configureE2E(message: Record<string, unknown>): void {
 
 /** A removal closes the device's sessions with an authenticated GoAway(3) first; the relay drops a session whose
  * admission leaves the set at once (4404), so the smaller set follows a moment later. */
+const admissionTrace = channel("openmausbot.relay.admission");
 const ADMISSION_SETTLE_MS = 300;
-devices.onChange(() => setTimeout(() => relay?.refreshAdmission(), ADMISSION_SETTLE_MS).unref());
+devices.onChange(() => {
+  setTimeout(() => {
+    if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "refresh_timer_fired", status: relay?.status ?? "off" });
+    relay?.refreshAdmission();
+  }, ADMISSION_SETTLE_MS).unref();
+  if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "refresh_timer_scheduled", status: relay?.status ?? "off", budgetMs: ADMISSION_SETTLE_MS });
+});
 e2e.onAdmissionChange(() => relay?.refreshAdmission());
 devices.onDropped((deviceId) => {
   e2e.closeDevice(deviceId);

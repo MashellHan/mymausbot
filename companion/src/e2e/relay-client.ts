@@ -1,7 +1,11 @@
 // The computer's side of MausBot Relay: one outbound control socket, and one data socket per phone session. The relay
 // splices sealed bytes and can't open them; everything here is outside the encryption. Wire spec: README section 9.
+import { channel } from "node:diagnostics_channel";
 import { webSocketTransport } from "./phone.ts";
+import { sha256 } from "./credentials.ts";
 import type { RecordTransport } from "./session.ts";
+
+const admissionTrace = channel("openmausbot.relay.admission");
 
 export const RELAY_PROTOCOL = "omb-relay.v1";
 export type RelayStatus = "connected" | "connecting" | "off";
@@ -185,12 +189,23 @@ export class RelayClient {
 
   /** Sends the full set whenever it differs from the last one sent. */
   refreshAdmission(force = false): void {
-    if (this.#status !== "connected" || !this.#control) return;
+    if (this.#status !== "connected" || !this.#control) {
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "admission_refresh", result: "not-connected", status: this.#status, socketState: this.#control?.readyState ?? null });
+      return;
+    }
     const set = this.#options.admissionSet();
     const text = JSON.stringify(set);
-    if (!force && text === this.#lastAdmit) return;
+    const trace = admissionTrace.hasSubscribers ? {
+      phase: "admission_refresh", status: this.#status, socketState: this.#control.readyState,
+      count: set.length, digest: sha256(text).toString("hex"),
+    } : null;
+    if (!force && text === this.#lastAdmit) {
+      if (trace) admissionTrace.publish({ ...trace, result: "unchanged" });
+      return;
+    }
     this.#lastAdmit = text;
     this.#control.send(JSON.stringify({ t: "admit", set }));
+    if (trace) admissionTrace.publish({ ...trace, result: "sent" });
   }
 
   #url(node: string, path: string): string {

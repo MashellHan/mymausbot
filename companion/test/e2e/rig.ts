@@ -13,6 +13,7 @@ import { admission, b64u, credentialHash, ed25519RawPublicKey, fromB64u, keyId, 
 import { TRANSPORT_DIRECT, TRANSPORT_RELAY } from "../../src/e2e/noise.ts";
 import { dial } from "../../src/e2e/phone.ts";
 import type { E2ESession } from "../../src/e2e/session.ts";
+import { admissionTraceArgs, admissionTraceEnv, type AdmissionTrace } from "./admission-trace.ts";
 import { startFakeHarness, type FakeHarness } from "./fake-harness.ts";
 
 const ENTRY = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
@@ -49,11 +50,12 @@ export interface RelayProcess {
 }
 
 /** `relay/src/main.ts` as a child process, as on the boxes, holding only the public token key. */
-export async function spawnRelay(publicKey: Buffer, port: number): Promise<RelayProcess> {
-  const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", RELAY_MAIN], {
-    env: { PATH: process.env.PATH ?? "", RELAY_HOST: "127.0.0.1", RELAY_PORT: String(port), RELAY_NODE: "relay1", RELAY_TOKEN_KEYS: JSON.stringify({ k1: b64u(publicKey) }) },
-    stdio: ["ignore", "pipe", "pipe"],
+export async function spawnRelay(publicKey: Buffer, port: number, trace?: AdmissionTrace): Promise<RelayProcess> {
+  const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", ...(trace ? admissionTraceArgs : []), RELAY_MAIN], {
+    env: { ...trace && admissionTraceEnv, PATH: process.env.PATH ?? "", RELAY_HOST: "127.0.0.1", RELAY_PORT: String(port), RELAY_NODE: "relay1", RELAY_TOKEN_KEYS: JSON.stringify({ k1: b64u(publicKey) }) },
+    stdio: trace ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
   });
+  trace?.watch(child, "relay");
   let err = "";
   child.stderr!.on("data", (chunk: Buffer) => (err += chunk));
   await new Promise<void>((resolve, reject) => {
@@ -103,7 +105,7 @@ export interface Rig {
 }
 
 /** `relayUrl` is where the sidecar's relay client dials, for every node. */
-export async function startRig(relayUrl: (signingPublicKey: Buffer) => Promise<string>): Promise<Rig> {
+export async function startRig(relayUrl: (signingPublicKey: Buffer) => Promise<string>, trace?: AdmissionTrace): Promise<Rig> {
   const harness = await startFakeHarness();
   const signingKey = generateKeyPairSync("ed25519").privateKey;
   const signingPublicKey = ed25519RawPublicKey(signingKey);
@@ -113,8 +115,9 @@ export async function startRig(relayUrl: (signingPublicKey: Buffer) => Promise<s
   const controlToken = randomBytes(32).toString("base64url");
   const [companionPort, controlPort, webhookPort] = await freePorts(3);
   const dir = mkdtempSync(join(tmpdir(), "omb-e2e-sidecar-"));
-  const sidecar: ChildProcess = spawn(process.execPath, [ENTRY], {
+  const sidecar: ChildProcess = spawn(process.execPath, [...(trace ? admissionTraceArgs : []), ENTRY], {
     env: {
+      ...trace && admissionTraceEnv,
       PATH: process.env.PATH,
       HOME: dir,
       OMB_PORT: String(harness.port),
@@ -128,8 +131,9 @@ export async function startRig(relayUrl: (signingPublicKey: Buffer) => Promise<s
       OMB_COMPANION_BONJOUR: "0",
       OMB_COMPANION_RELAY_URL: url,
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: trace ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
   });
+  trace?.watch(sidecar, "sidecar");
   if (process.env.OMB_E2E_DEBUG) for (const stream of [sidecar.stdout!, sidecar.stderr!]) stream.on("data", (chunk: Buffer) => process.stderr.write(`[sidecar] ${chunk}`));
   await new Promise<void>((resolve, reject) => {
     let out = "";
@@ -262,14 +266,22 @@ export function events(session: E2ESession<never>, token: string, lastEventId?: 
 }
 
 /** Pairs a phone through the relay with a fresh pairing window; returns its device token and id. */
-export async function pairViaRelay(rig: Rig): Promise<{ token: string; id: string; session: E2ESession<never> }> {
+export async function pairViaRelay(rig: Rig, trace?: AdmissionTrace): Promise<{ token: string; id: string; session: E2ESession<never> }> {
   const state = await rig.control("POST", "/pairing");
   const pairingToken = state.token!;
   const session = await waitFor(() => rig.viaRelay(state, pairingToken).catch(() => null), 5_000);
+  const startedAt = trace?.begin() ?? 0;
   const paired = await http(session, "POST", "/api/pair", { body: JSON.stringify({ credential: pairingToken, deviceName: "Test Phone" }), headers: { "content-type": "application/json" } });
   if (paired.status !== 201) throw new Error(`pairing failed: ${paired.status} ${paired.body}`);
+  const http201At = trace ? Date.now() : 0;
   const body = json(paired) as { token: string; device: { id: string } };
   // The relay admits the new device a moment after pairing.
-  await waitFor(() => rig.viaRelay(state, body.token).then((check) => (check.shutdown(), true), () => null), 5_000);
+  const dial = () => rig.viaRelay(state, body.token);
+  try {
+    await waitFor(() => (trace ? trace.dial(dial) : dial()).then((check) => (check.shutdown(), true), () => null), 5_000);
+  } catch (error) {
+    try { trace?.report(startedAt, http201At); } catch {}
+    throw error;
+  }
   return { token: body.token, id: body.device.id, session };
 }

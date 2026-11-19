@@ -6,10 +6,12 @@ import { WebSocket } from "ws";
 import { CLOSE } from "../../src/e2e/noise.ts";
 import { MAX_PENDING_HANDSHAKES } from "../../src/e2e/registry.ts";
 import { SessionClosed } from "../../src/e2e/session.ts";
+import { AdmissionTrace } from "./admission-trace.ts";
 import { attachmentByte } from "./fake-harness.ts";
 import { events, freePort, http, json, pairViaRelay, spawnRelay, startRig, waitFor, type RelayProcess, type Rig } from "./rig.ts";
 
 const LONG = process.env.OMB_E2E_LONG === "1";
+const initialAdmission = new AdmissionTrace();
 let rig: Rig;
 let relay: RelayProcess;
 let relayPort: number;
@@ -19,9 +21,9 @@ let deviceId = "";
 beforeAll(async () => {
   relayPort = await freePort();
   rig = await startRig(async (publicKey) => {
-    relay = await spawnRelay(publicKey, relayPort);
+    relay = await spawnRelay(publicKey, relayPort, initialAdmission);
     return relay.url;
-  });
+  }, initialAdmission);
 }, 30_000);
 
 afterAll(async () => {
@@ -120,7 +122,7 @@ describe("the sidecar's end-to-end connection, through the real relay", () => {
   });
 
   it("re-pairs a phone in place: the old device and its sessions go, the count stays", async () => {
-    const before = await pairViaRelay(rig);
+    const before = await pairViaRelay(rig, initialAdmission);
     before.session.shutdown();
     const count = (await state()).devices.length;
     const oldSession = await rig.direct(await state(), before.token);
