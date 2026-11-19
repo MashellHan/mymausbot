@@ -180,6 +180,8 @@ export interface LocalUsageComparison {
   unavailableTokenDays: string[];
   prs: LocalUsagePeriodChange;
   commits: LocalUsagePeriodChange;
+  /** Qualified local-ref commit comparisons when fetch-disabled scope matches across both periods. */
+  known?: { prs: LocalUsagePeriodChange; commits: LocalUsagePeriodChange };
   totalTokens: LocalUsagePeriodChange;
   categories: Record<LocalUsageCategory, LocalUsageCountComparison>;
 }
