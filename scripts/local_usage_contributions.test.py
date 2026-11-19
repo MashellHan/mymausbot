@@ -1,6 +1,8 @@
+import contextlib
 import copy
 import datetime as dt
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -34,7 +36,7 @@ class ContributionWriterTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.fixture = self.root / "helpers"
         self.fixture.mkdir()
-        for name in ("refresh-local-usage.py", "local_usage_contributions.py"):
+        for name in ("refresh-local-usage.py", "local_usage_contributions.py", "local_usage_models.py"):
             shutil.copy2(SCRIPT.with_name(name), self.fixture / name)
         (self.fixture / "local_usage_merged.py").write_text("MAX_HISTORY_DAYS = 191\nTZ = None\n")
         (self.fixture / "local_usage_github.py").write_text('DEFINITION = "github-profile-v1"\n')
@@ -262,9 +264,12 @@ def refresh(config, **options):
             (self.fixture / "local_usage_ado.py").write_text('''def collect(*args, **kwargs):
     raise ValueError("synthetic provider failure")
 ''')
-            with self.assertRaisesRegex(ValueError, "previous generation retained"):
+            diagnostics = io.StringIO()
+            with contextlib.redirect_stderr(diagnostics), self.assertRaisesRegex(ValueError, "previous generation retained"):
                 self.wrapper.refresh_primary(self.collector, self.config, self.root, file=self.target, whole_cycle_seconds=10)
             self.assertEqual(self.target.read_bytes(), before)
+            self.assertIn("stage=ado status=unavailable generation=retained", diagnostics.getvalue())
+            self.assertNotIn("synthetic provider failure", diagnostics.getvalue())
 
     def test_incomplete_history_retains_partial_observations_and_resumes_after_restart(self):
         with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
@@ -365,10 +370,12 @@ def refresh(config, **options):
     def test_whole_cycle_deadline_reaps_owned_workers_without_publication(self):
         profile = self.fixture / "local_usage_profile.py"
         profile.write_text(profile.read_text().replace('    assert days == 60', '    import time; time.sleep(2)\n    assert days == 60'))
+        diagnostics = io.StringIO()
         with patch.object(self.wrapper, "__file__", str(self.fixture / "refresh-local-usage.py")):
-            with self.assertRaisesRegex(ValueError, "previous generation retained"):
+            with contextlib.redirect_stderr(diagnostics), self.assertRaisesRegex(ValueError, "previous generation retained"):
                 self.wrapper.refresh_primary(self.collector, self.config, self.root, file=self.target,
                     whole_cycle_seconds=0.15)
+        self.assertIn("stage=github status=timeout generation=retained", diagnostics.getvalue())
         self.assertFalse(self.target.exists())
         self.assertTrue(self.target.with_suffix(".lock").is_file())
 

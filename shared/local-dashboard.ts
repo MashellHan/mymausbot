@@ -184,6 +184,29 @@ export interface LocalUsageComparison {
   categories: Record<LocalUsageCategory, LocalUsageCountComparison>;
 }
 
+/** Partial coverage qualifies the USD value as a priced subtotal. */
+export interface LocalUsageEstimatedCost {
+  coverage: LocalUsageCoverage;
+  usd: number | null;
+}
+
+export interface LocalUsageModelRow {
+  model: string;
+  totalTokens: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  estimatedCost: LocalUsageEstimatedCost;
+}
+
+export interface LocalUsageTokenDetails {
+  /** Fresh input includes cache writes. Output includes reasoning. */
+  input: number | null;
+  output: number | null;
+  estimatedCost: LocalUsageEstimatedCost;
+  models: { coverage: LocalUsageCoverage; rows: LocalUsageModelRow[] };
+}
+
 /** Numeric values are observed totals when coverage is partial; non-null knownPrs is a lower bound when prs is null. */
 export interface LocalUsageWindow<Days extends 1 | 7 | 30 | 60 = 1 | 7 | 30> {
   days: Days;
@@ -192,6 +215,7 @@ export interface LocalUsageWindow<Days extends 1 | 7 | 30 | 60 = 1 | 7 | 30> {
   asOf: number;
   coverage: LocalUsageCoverage;
   tokenCoverage: LocalUsageTokenStatus;
+  tokenDetails?: LocalUsageTokenDetails;
   missingDays: string[];
   unavailableTokenDays: string[];
   prs: number | null;
@@ -212,6 +236,8 @@ export interface LocalUsageTrendDay {
   repositories?: LocalUsageRepositories;
   coverage: LocalUsageCoverage;
   tokenStatus: LocalUsageTokenStatus;
+  /** Absent when the daily token total lacks a qualified fresh-input/output split. */
+  tokenDetails?: LocalUsageTokenDetails & { cacheRead: number | null };
   prs: number | null;
   knownPrs: number | null;
   commits: number | null;
