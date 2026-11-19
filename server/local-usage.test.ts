@@ -7,7 +7,7 @@ import { removeTempDir } from "./testing/cleanup.ts";
 import { createLocalUsageProvider } from "./local-usage.ts";
 import { withGithubUsageFixture } from "../scripts/testing/merged-usage-fixture.ts";
 import { primaryUsageSnapshotFixture } from "../scripts/testing/primary-usage-fixture.ts";
-import { localUsageView, profileUsageView, mergedUsageView } from "../src/lib/local-usage-view.ts";
+import { localUsageView, profileUsageView, mergedUsageView, retainUsageSnapshot } from "../src/lib/local-usage-view.ts";
 import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 
 const folders: string[] = [];
@@ -473,7 +473,7 @@ describe("local Usage projection", () => {
     expect(undated.windows?.["1"].comparison.known).toBeUndefined();
     expect(undated.windows?.["7"].comparison.known).toBeUndefined();
 
-    // Invalid localHistory fallback keeps 7-day unknown; stale readback strips comparison.known.
+    // Invalid localHistory fallback keeps 7-day unknown, while 1-day stays qualified if daily rows independently prove coverage; stale readback strips comparison.known.
     for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
       for (const row of rows) Object.assign(row, { commitStatus: "local-ref-ready" });
     }
@@ -483,6 +483,10 @@ describe("local Usage projection", () => {
     const fallback = await provider.get();
     expect(fallback.windows?.["1"].comparison.known).toEqual({ prs: null, commits: 100 });
     expect(fallback.windows?.["7"].comparison.known).toBeUndefined();
+    const retainedClient = retainUsageSnapshot(fallback, { ...fallback, windows: null });
+    expect(retainedClient.status).toBe("stale");
+    expect(retainedClient.windows?.["1"].commits).toBe(8);
+    expect(retainedClient.windows?.["1"].comparison.known).toBeUndefined();
     await writeFile(file, "{invalid");
     const staleFallback = await provider.get();
     expect(staleFallback.status).toBe("stale");

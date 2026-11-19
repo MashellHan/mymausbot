@@ -295,7 +295,11 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
         result["adoRepos"] = sorted(set(result["adoRepos"]) | set(previous.get("adoRepos", [])))
         result["status"] = "partial"
         result["errors"].extend(errors)
-        result["retainedCapturedAt"] = previous.get("retainedCapturedAt") or previous.get("capturedAt")
+        result["retainedTokenCapturedAt"] = (
+            previous.get("retainedTokenCapturedAt") or previous.get("retainedCapturedAt") or previous.get("capturedAt")
+        )
+        if "commits" in retain_fields:
+            result["retainedCapturedAt"] = previous.get("retainedCapturedAt") or previous.get("capturedAt")
     return result
 
 
@@ -935,6 +939,7 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 source["commitStatus"] = "ready" if machine.get("status") == "ok" else (
                     "local-ref-ready" if machine.get("status") == "partial" and fetch_disabled_only
                     and not machine.get("retainedCapturedAt")
+                    and not machine.get("retainedCommits")
                     else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
                 )
                 if machine.get("status") != "missing":
@@ -942,14 +947,39 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
             day_commit_status = None
             if commit_statuses and all(s == "ready" for s in commit_statuses):
                 day_commit_status = "ready"
-            elif commit_statuses and all(s == "local-ref-ready" for s in commit_statuses):
+            elif commit_statuses and all(s in ("ready", "local-ref-ready") for s in commit_statuses):
                 day_commit_status = "local-ref-ready"
             if day_commit_status:
+                at_instant = collector.instant(at)
+                tz = getattr(collector, "TZ", dt.timezone(dt.timedelta(hours=8)))
+                today_date = at_instant.astimezone(tz).date() if at_instant is not None else None
+                active_machines = [machine for machine in machines if machine.get("status") != "missing"]
+                machine_windows = []
+                for machine in active_machines:
+                    m_start = collector.instant(machine.get("start"))
+                    m_end = collector.instant(machine.get("capturedAt"))
+                    if m_start is None or m_end is None or m_start >= m_end:
+                        machine_windows = None
+                        break
+                    machine_windows.append((m_start, m_end))
                 rows_to_mark = list(snapshot.get("daily") or [])
                 if isinstance(snapshot.get("localHistory"), dict) and isinstance(snapshot["localHistory"].get("daily"), list):
                     rows_to_mark.extend(snapshot["localHistory"]["daily"])
                 for row in rows_to_mark:
-                    if isinstance(row, dict) and "commitStatus" not in row:
+                    if not isinstance(row, dict) or "commitStatus" in row:
+                        continue
+                    row_day = row.get("day")
+                    if not isinstance(row_day, str) or machine_windows is None or today_date is None:
+                        continue
+                    try:
+                        row_date = dt.date.fromisoformat(row_day)
+                    except ValueError:
+                        continue
+                    if row_date.isoformat() != row_day or row_date > today_date:
+                        continue
+                    day_start = dt.datetime.combine(row_date, dt.time(), tz)
+                    required_end = at_instant if row_date == today_date else day_start + dt.timedelta(days=1)
+                    if all(m_start <= day_start and m_end >= required_end for m_start, m_end in machine_windows):
                         row["commitStatus"] = day_commit_status
             previous = collector.read_json(latest, {}) if latest is not None else {}
             saved = collector.read_json(retained, {}) if retained is not None else {}
@@ -985,8 +1015,6 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
         if legacy_diagnostics and config.get("githubContributionSource") == local_usage_github.DEFINITION:
             try:
                 local_usage_github.refresh(config, collector.run, collector.remote_category, skip_api=skip_api)
-            except Exception as error:
-                print("GitHub contribution Usage unavailable: " + type(error).__name__, file=sys.stderr)
             except Exception as error:
                 print("GitHub contribution Usage unavailable: " + type(error).__name__, file=sys.stderr)
 

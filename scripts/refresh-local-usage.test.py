@@ -548,6 +548,94 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False):
             result = usage.collect_local(self.root / "collector.py", config, "fixture", at=at, history_days=59)
         self.assertEqual([row["key"] for row in result["commits"]], ["new-commit"])
         self.assertEqual([row["key"] for row in result["tokens"]], ["old-token"])
+        self.assertEqual(result["retainedTokenCapturedAt"], old["capturedAt"])
+        self.assertNotIn("retainedCapturedAt", result)
+
+    def test_repeat_disabled_fetch_only_keeps_local_ref_ready_and_marks_covered_days_only(self):
+        at = dt.datetime.fromisoformat("2026-11-06T08:00:00+00:00")
+        old = {"capturedAt": "2026-11-06T07:00:00Z", "retainedTokenCapturedAt": "2026-11-05T08:00:00Z",
+               "tokens": [{"key": "old-token", "at": "2026-11-06T06:00:00Z", "category": "personal"}],
+               "commits": [{"key": "old-commit", "at": "2026-11-06T06:00:00Z", "repository": {"id": "old"}}],
+               "adoRepos": []}
+        fresh = {"start": "2026-11-05T16:00:00Z", "capturedAt": "2026-11-06T08:00:00Z",
+                 "status": "partial", "errors": [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}],
+                 "tokens": [], "commits": [{"key": "new-commit", "at": "2026-11-06T07:00:00Z", "repository": {"id": "new"}}],
+                 "adoRepos": []}
+        collector_stub = types.SimpleNamespace(read_json=lambda path, default: old,
+            instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
+        config_local = {"repoRoots": ["/fixture/ready"], "storageDir": str(self.root)}
+        def worker(request, timeout):
+            return [{"path": "/fixture/ready", "name": "ready", "category": "work"}] if request["stage"] == "repositories" else fresh
+        with patch.object(usage, "_run_worker", side_effect=worker), patch.object(usage, "load_collector", return_value=collector_stub):
+            repeat = usage.collect_local(self.root / "collector.py", config_local, "fixture", at=at, history_days=59)
+        self.assertEqual(repeat["retainedTokenCapturedAt"], "2026-11-05T08:00:00Z")
+        self.assertNotIn("retainedCapturedAt", repeat)
+
+        collector = self.root / "collector-repeat-commit.py"
+        output = self.root / "repeat-commit.json"
+        collector.write_text('''import datetime as dt
+import json
+from zoneinfo import ZoneInfo
+TZ = ZoneInfo("Asia/Shanghai")
+def instant(value):
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else None
+def day(value):
+    return value.astimezone(TZ).date().isoformat()
+def run(args, timeout=35):
+    raise AssertionError("No CLI should run in this fixture")
+def aggregate(machines, prs, at, history_days=30):
+    return {"status": "partial", "sources": [{"device": m["device"], "status": m["status"]} for m in machines],
+            "daily": [{"day": "2026-11-04"}, {"day": "2026-11-05"}, {"day": "2026-11-06"}],
+            "localHistory": {"daily": [{"day": "2026-11-04"}, {"day": "2026-11-05"}, {"day": "2026-11-06"}]},
+            "historyDays": history_days}
+def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_days=30):
+    result = aggregate(config["machines"], {}, "2026-11-06T08:00:00Z", history_days=history_days)
+    with open(config["result"], "w") as stream:
+        json.dump(result, stream)
+''')
+        config = {"azureCli": "/fixture/az", "authorEmails": [OWNER], "result": str(output),
+                  "machines": [{"device": "0", "status": "partial", "start": "2026-11-05T16:00:00Z",
+                                "capturedAt": "2026-11-06T08:00:00Z", "retainedTokenCapturedAt": "2026-11-05T08:00:00Z",
+                                "errors": [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}]}]}
+        usage.refresh(collector, config, self.root, skip_api=True, reuse_sources=True)
+        result = json.loads(output.read_text())
+        self.assertEqual(result["sources"], [{"device": "0", "status": "partial", "tokenStatus": "ready", "commitStatus": "local-ref-ready"}])
+        self.assertEqual(result["daily"], [
+            {"day": "2026-11-04"},
+            {"day": "2026-11-05"},
+            {"day": "2026-11-06", "commitStatus": "local-ref-ready"},
+        ])
+        self.assertEqual(result["localHistory"]["daily"], [
+            {"day": "2026-11-04"},
+            {"day": "2026-11-05"},
+            {"day": "2026-11-06", "commitStatus": "local-ref-ready"},
+        ])
+
+        midday_output = self.root / "midday-repeat-commit.json"
+        config_midday = {"azureCli": "/fixture/az", "authorEmails": [OWNER], "result": str(midday_output),
+                         "machines": [{"device": "0", "status": "partial", "start": "2026-11-05T17:00:00Z",
+                                       "capturedAt": "2026-11-06T08:00:00Z",
+                                       "errors": [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}]}]}
+        usage.refresh(collector, config_midday, self.root, skip_api=True, reuse_sources=True)
+        midday_result = json.loads(midday_output.read_text())
+        self.assertEqual(midday_result["daily"], [
+            {"day": "2026-11-04"},
+            {"day": "2026-11-05"},
+            {"day": "2026-11-06"},
+        ])
+
+        stale_output = self.root / "stale-repeat-commit.json"
+        config_stale = {"azureCli": "/fixture/az", "authorEmails": [OWNER], "result": str(stale_output),
+                        "machines": [{"device": "0", "status": "partial", "start": "2026-11-04T16:00:00Z",
+                                      "capturedAt": "2026-11-06T07:59:59Z",
+                                      "errors": [{"source": "git-fetch", "code": "DisabledByAuthBoundary"}]}]}
+        usage.refresh(collector, config_stale, self.root, skip_api=True, reuse_sources=True)
+        stale_result = json.loads(stale_output.read_text())
+        self.assertEqual(stale_result["daily"], [
+            {"day": "2026-11-04"},
+            {"day": "2026-11-05", "commitStatus": "local-ref-ready"},
+            {"day": "2026-11-06"},
+        ])
 
     def test_retained_machine_keeps_commit_status_partial_even_when_only_fetch_disabled(self):
         collector = self.root / "collector-retained-commit.py"
