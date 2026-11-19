@@ -914,9 +914,15 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 git_fetch_only = isinstance(errors, list) and bool(errors) and all(
                     isinstance(error, dict) and error.get("source") == "git-fetch" for error in errors
                 )
-                source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
+                ready_or_fetch_only = machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and git_fetch_only
-                ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
+                )
+                source["tokenStatus"] = "ready" if ready_or_fetch_only else (
+                    "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
+                )
+                source["commitStatus"] = "ready" if ready_or_fetch_only else (
+                    "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
+                )
             previous = collector.read_json(latest, {}) if latest is not None else {}
             saved = collector.read_json(retained, {}) if retained is not None else {}
             models = local_usage_models.daily_models(collector, machines, snapshot)

@@ -108,14 +108,20 @@ function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; act
   const coverage = { total: raw.length, ready: 0, partial: 0, stale: 0, missing: 0 };
   let missingSourcesUnsampled = true;
   let tokenReady = 0, tokenIncomplete = false;
+  let commitReady = 0, commitIncomplete = false;
   for (const value of raw) {
     const source = object(value);
     const status = source.status;
     if (source.tokenStatus !== undefined && source.tokenStatus !== "ready" && source.tokenStatus !== "partial" &&
         source.tokenStatus !== "unavailable") throw new Error("Invalid token source status");
+    if (source.commitStatus !== undefined && source.commitStatus !== "ready" && source.commitStatus !== "partial" &&
+        source.commitStatus !== "unavailable") throw new Error("Invalid commit source status");
     if (status === "ok" && (source.tokenStatus === undefined || source.tokenStatus === "ready") ||
         status === "partial" && source.tokenStatus === "ready") tokenReady++;
     else if (status !== "missing") tokenIncomplete = true;
+    if (status === "ok" && (source.commitStatus === undefined || source.commitStatus === "ready") ||
+        status === "partial" && source.commitStatus === "ready") commitReady++;
+    else if (status !== "missing") commitIncomplete = true;
     if (status === "ok") coverage.ready++;
     else if (status === "missing") {
       coverage.missing++;
@@ -124,7 +130,7 @@ function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; act
     } else if (status === "partial" || status === "stale") coverage[status]++;
     else throw new Error("Invalid activity source status");
   }
-  return { coverage, activityScopeReady: coverage.ready > 0 && coverage.partial === 0 && coverage.stale === 0 && missingSourcesUnsampled,
+  return { coverage, activityScopeReady: commitReady > 0 && !commitIncomplete && missingSourcesUnsampled,
     tokenScopeReady: tokenReady > 0 && !tokenIncomplete && missingSourcesUnsampled };
 }
 

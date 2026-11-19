@@ -472,7 +472,7 @@ def refresh(config, upload=False, skip_api=False, reuse_sources=False, history_d
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["historyDays"], 59)
         self.assertEqual(result["daily"], [{"tokenStatus": "partial", "totalTokens": 123}])
-        self.assertEqual(result["sources"], [{"device": str(i), "status": status, "tokenStatus": token_status}
+        self.assertEqual(result["sources"], [{"device": str(i), "status": status, "tokenStatus": token_status, "commitStatus": token_status}
                          for i, (status, _, token_status) in enumerate(cases)])
 
     def test_remote_refresh_stays_independent_when_local_logs_fail(self):
