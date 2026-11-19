@@ -281,6 +281,7 @@ describe("bounded tool details", () => {
     for (const cmd of [
       "curl -H 'Cookie: session=fixture-unclosed; next=fixture-part",
       'curl -H "X-API-Key: fixture-first\nfixture-unclosed',
+      String.raw`curl -H $'Cookie: session=fixture-a\' fixture-exposed' http://localhost:3000`,
     ]) {
       expect(visibleToolDetail("tool-call", { cmd }, "codex", "exec_command"))
         .toEqual({ detailStatus: "withheld", clipped: false, text: "[Arguments unavailable]" });

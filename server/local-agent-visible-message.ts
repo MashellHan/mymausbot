@@ -137,6 +137,7 @@ function advanceShellQuote(value: string, from: number, to: number, quote: strin
       continue;
     }
     if (quote === char) quote = "";
+    else if (!quote && char === "$" && value[index + 1] === "'") return null;
     else if (!quote && (char === '"' || char === "'")) quote = char;
   }
   return quote;
