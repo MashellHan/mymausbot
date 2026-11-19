@@ -5,7 +5,7 @@ import { activeLocale, documentLanguage, t } from "@/lib/i18n";
 import { modelColor, modelFamily } from "@/lib/model-color";
 import { formatTokens, usdText } from "@/lib/usage";
 import { formatCost, formatDuration, usageRangeQuery, type UsageDateRange } from "@/lib/usage-trace";
-import { api, useStore } from "@/state/store";
+import { api, ApiError, useStore } from "@/state/store";
 import type { LocaleKey } from "@/locales";
 import type { InsightBucket, InsightEntry, InsightTotals, UsageInsights } from "../../../shared/usage-insights";
 import { BotAvatar } from "../Avatar";
@@ -33,9 +33,13 @@ function useUsageInsights(range: UsageDateRange, version: number): { data: Usage
   const [state, setState] = useState<{ data: UsageInsights | null; error: string | null; key: string | null }>({ data: null, error: null, key: null });
   useEffect(() => {
     let current = true;
-    void api(`/api/usage/insights?${key}`)
-      .then((data: UsageInsights) => { if (current) setState({ data, error: null, key }); })
-      .catch((cause) => { if (current) setState((prev) => ({ data: prev.key === key ? prev.data : null, error: cause instanceof Error ? cause.message : String(cause), key })); });
+    void api<UsageInsights>(`/api/usage/insights?${key}`)
+      .then((data) => { if (current) setState({ data, error: null, key }); })
+      .catch((cause) => {
+        if (!current) return;
+        const denied = cause instanceof ApiError && (cause.status === 401 || cause.status === 403);
+        setState((prev) => ({ data: !denied && prev.key === key ? prev.data : null, error: cause instanceof Error ? cause.message : String(cause), key }));
+      });
     return () => { current = false; };
   }, [version, key]);
   return { data: state.data, error: state.error, loading: state.key !== key };
@@ -45,7 +49,7 @@ const locale = () => documentLanguage(activeLocale());
 const tokensOf = (value: Pick<InsightTotals, "input" | "cachedInput" | "output">) => value.input + value.cachedInput + value.output;
 const cacheRate = (value: Pick<InsightTotals, "input" | "cachedInput">) => value.input + value.cachedInput > 0 ? value.cachedInput / (value.input + value.cachedInput) : null;
 const percent = (share: number) => share > 0 && share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
-const metricText = (metric: InsightMetric, value: number) => metric === "cost" ? formatCost(value) : formatTokens(value);
+const metricText = (metric: InsightMetric, value: number | null) => value === null ? "—" : metric === "cost" ? formatCost(value) : formatTokens(value);
 const tickText = (metric: InsightMetric, tick: number, step: number) =>
   metric === "cost" && tick > 0 ? usdText(tick, Math.max(2, -Math.floor(Math.log10(step)))) : metricText(metric, tick);
 
@@ -125,7 +129,7 @@ interface Provider {
   key: string;
   label: string;
   color: string;
-  costUsd: number;
+  costUsd: number | null;
   tokens: number;
   turns: number;
   models: string[];
@@ -135,14 +139,14 @@ export function providersOf(models: readonly InsightEntry[], metric: InsightMetr
   const found = new Map<string, Provider>();
   for (const entry of models) {
     const family = modelFamily(entry.key);
-    const provider = found.get(family.id) ?? { key: family.id, label: family.label, color: family.color, costUsd: 0, tokens: 0, turns: 0, models: [] };
-    provider.costUsd += entry.costUsd ?? 0;
+    const provider = found.get(family.id) ?? { key: family.id, label: family.label, color: family.color, costUsd: null, tokens: 0, turns: 0, models: [] };
+    if (entry.costUsd !== null) provider.costUsd = (provider.costUsd ?? 0) + entry.costUsd;
     provider.tokens += tokensOf(entry);
     provider.turns += entry.turns;
     provider.models.push(entry.key);
     found.set(family.id, provider);
   }
-  const size = (provider: Provider) => metric === "cost" ? provider.costUsd : provider.tokens;
+  const size = (provider: Provider) => metric === "cost" ? provider.costUsd ?? -1 : provider.tokens;
   return [...found.values()].sort((a, b) => size(b) - size(a) || b.tokens - a.tokens);
 }
 
@@ -172,8 +176,8 @@ function TooltipRow({ color, label, value, strong = false }: { color?: string; l
   );
 }
 
-function Delta({ now, before }: { now: number; before: number }) {
-  if (!(before > 0) || !Number.isFinite(now)) return <span className="text-[12px] text-ink-tertiary">{t("insights.noPrevious")}</span>;
+function Delta({ now, before }: { now: number | null; before: number | null }) {
+  if (now === null || before === null || !(before > 0) || !Number.isFinite(now)) return <span className="text-[12px] text-ink-tertiary">{t("insights.noPrevious")}</span>;
   const change = (now - before) / before;
   if (Math.abs(change) < 0.005) return <span className="text-[12px] text-ink-tertiary">{t("insights.flat")}</span>;
   const Icon = change > 0 ? ArrowUpRight : ArrowDownRight;
@@ -281,36 +285,38 @@ function ProviderChart({ data, metric, providers }: { data: UsageInsights; metri
 
 function Overview({ data, metric }: { data: UsageInsights; metric: InsightMetric }) {
   const providers = useMemo(() => providersOf(data.models, metric), [data.models, metric]);
-  const total = metric === "cost" ? data.totals.costUsd ?? 0 : tokensOf(data.totals);
-  const totalText = metric === "cost" ? formatCost(data.totals.costUsd) : formatTokens(total);
-  const before = metric === "cost" ? data.previous.costUsd ?? 0 : tokensOf(data.previous);
-  const size = (provider: Provider) => metric === "cost" ? provider.costUsd : provider.tokens;
-  const whole = providers.reduce((sum, provider) => sum + size(provider), 0);
+  const total = metric === "cost" ? data.totals.costUsd : tokensOf(data.totals);
+  const before = metric === "cost" ? data.previous.costUsd : tokensOf(data.previous);
+  const amount = (provider: Provider) => metric === "cost" ? provider.costUsd : provider.tokens;
+  const whole = providers.reduce((sum, provider) => sum + (amount(provider) ?? 0), 0);
   return (
     <div className="grid gap-6 p-4 @min-[720px]/insights:grid-cols-[15rem_minmax(0,1fr)]">
       <div className="flex min-w-0 flex-col gap-4">
         <div className="flex flex-col gap-1" data-testid="insight-hero">
           <span className="text-[12px] leading-4 text-ink-secondary">{t(metric === "cost" ? "insights.totalSpend" : "insights.totalTokens")}</span>
-          <span className="text-[40px] font-semibold leading-[44px] tracking-[-0.02em] text-ink">{totalText}</span>
+          <span className="text-[40px] font-semibold leading-[44px] tracking-[-0.02em] text-ink">{metricText(metric, total)}</span>
           <span className="text-[12px] leading-4 text-ink-secondary">
             {t("insights.heroSub", { turns: data.totals.turns.toLocaleString(locale()), days: String(data.totals.days) })}
           </span>
           <Delta now={total} before={before} />
         </div>
         <ul className="flex flex-col gap-3" aria-label={t("insights.providers")}>
-          {providers.map((provider) => (
-            <li key={provider.key} className="flex min-w-0 flex-col gap-0.5">
-              <span className="flex items-center gap-2 text-[13px] leading-5">
-                <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: provider.color }} />
-                <span className="min-w-0 flex-1 truncate text-ink">{provider.label}</span>
-                <span className="font-medium tabular-nums text-ink">{metricText(metric, size(provider))}</span>
-              </span>
-              <span className="pl-4 text-[11px] leading-4 tabular-nums text-ink-tertiary">
-                {t(metric === "cost" ? "insights.shareOfSpend" : "insights.shareOfTokens", { share: whole > 0 ? percent(size(provider) / whole) : "0%" })}
-                {" · "}{metric === "cost" ? t("insights.tokensCount", { tokens: formatTokens(provider.tokens) }) : t("insights.turnsCount", { count: String(provider.turns) })}
-              </span>
-            </li>
-          ))}
+          {providers.map((provider) => {
+            const value = amount(provider);
+            return (
+              <li key={provider.key} className="flex min-w-0 flex-col gap-0.5">
+                <span className="flex items-center gap-2 text-[13px] leading-5">
+                  <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: provider.color }} />
+                  <span className="min-w-0 flex-1 truncate text-ink">{provider.label}</span>
+                  <span className="font-medium tabular-nums text-ink">{metricText(metric, value)}</span>
+                </span>
+                <span className="pl-4 text-[11px] leading-4 tabular-nums text-ink-tertiary">
+                  {value !== null && <>{t(metric === "cost" ? "insights.shareOfSpend" : "insights.shareOfTokens", { share: whole > 0 ? percent(value / whole) : "0%" })}{" · "}</>}
+                  {metric === "cost" ? t("insights.tokensCount", { tokens: formatTokens(provider.tokens) }) : t("insights.turnsCount", { count: String(provider.turns) })}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </div>
       <ProviderChart data={data} metric={metric} providers={providers} />
@@ -367,7 +373,7 @@ function InsightTiles({ data }: { data: UsageInsights }) {
       <Tile label={t("insights.turns")} value={totals.turns.toLocaleString(locale())}
         sub={<Delta now={totals.turns} before={previous.turns} />} spark={buckets.map((bucket) => bucket.turns)} />
       <Tile label={t("insights.costPerTurn")} value={formatCost(costPerTurn)}
-        sub={<Delta now={costPerTurn ?? Number.NaN} before={perTurn(previous) ?? 0} />}
+        sub={<Delta now={costPerTurn} before={perTurn(previous)} />}
         spark={buckets.map((bucket) => perTurn(bucket) ?? 0)} />
       <Tile label={t("insights.cacheRate")} value={rate === null ? "—" : percent(rate)}
         sub={before !== null && rate !== null
@@ -567,7 +573,7 @@ function Breakdown({ data, metric, groupLabel }: { data: UsageInsights; metric: 
         <span role="cell" className={cn(wide, "text-right tabular-nums text-ink-secondary")}>{bucket.errors || "—"}</span>
         <span role="cell" className={cn(wide, "text-right tabular-nums text-ink-secondary")}>{percent(cacheRate(bucket) ?? 0)}</span>
         <span role="cell" className={cn(wide, "text-right tabular-nums text-ink-secondary")}>{formatTokens(tokensOf(bucket))}</span>
-        <span role="cell" className="text-right font-medium tabular-nums text-ink">{formatCost(bucket.costUsd)}</span>
+        <span role="cell" className="text-right font-medium tabular-nums text-ink">{formatCost(bucket.unpriced === bucket.turns ? null : bucket.costUsd)}</span>
       </div>
     ));
   } else {
@@ -578,6 +584,7 @@ function Breakdown({ data, metric, groupLabel }: { data: UsageInsights; metric: 
       const bot = board === "bots" ? state.bots.find((item) => `bot:${item.id}` === entry.key) : undefined;
       const color = entryColor(board, entry);
       const label = bot?.name ?? entryLabel(board, entry, state.instances, groupLabel);
+      const value = metric === "cost" ? entry.costUsd : tokensOf(entry);
       return (
         <div role="row" key={entry.key} className={cn(header, "rounded-lg px-1 py-2 text-[13px] hover:bg-menu-hover")}>
           <span role="cell" className="text-right text-[11px] tabular-nums text-ink-tertiary">{index + 1}</span>
@@ -587,15 +594,15 @@ function Breakdown({ data, metric, groupLabel }: { data: UsageInsights; metric: 
                 : board === "models" && <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />}
               <span className="truncate">{label}</span>
             </span>
-            <span aria-hidden="true" className="h-0.5 max-w-56">
-              <span className="block h-full rounded-full" style={{ width: `max(0.5rem, ${peak > 0 ? (size(entry) / peak) * 100 : 0}%)`, backgroundColor: color }} />
-            </span>
+            {value !== null && <span aria-hidden="true" className="h-0.5 max-w-56">
+              <span className="block h-full rounded-full" style={{ width: `max(0.5rem, ${peak > 0 ? (value / peak) * 100 : 0}%)`, backgroundColor: color }} />
+            </span>}
           </span>
           <span role="cell" className="text-right tabular-nums text-ink-secondary">{entry.turns}</span>
           <span role="cell" className={cn(wide, "text-right tabular-nums text-ink-secondary")}>{entry.errors || "—"}</span>
-          <span role="cell" className={cn(wide, "text-right tabular-nums text-ink-secondary")}>{whole > 0 ? percent(size(entry) / whole) : "—"}</span>
+          <span role="cell" className={cn(wide, "text-right tabular-nums text-ink-secondary")}>{value !== null && whole > 0 ? percent(value / whole) : "—"}</span>
           <span role="cell" className={cn(wide, "text-right tabular-nums text-ink-secondary")}>{metric === "cost" ? formatTokens(tokensOf(entry)) : formatCost(entry.costUsd)}</span>
-          <span role="cell" className="text-right font-medium tabular-nums text-ink">{metricText(metric, size(entry))}</span>
+          <span role="cell" className="text-right font-medium tabular-nums text-ink">{metricText(metric, value)}</span>
         </div>
       );
     });
