@@ -199,4 +199,95 @@ describe("bounded tool details", () => {
     expect(visibleToolDetail("tool-result", "session=fixture-secret", "codex", "exec_command"))
       .toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
   });
+
+  it("masks complete quoted and escaped shell credential words before clipping", () => {
+    const commands = [
+      ['password="fixture first line\nfixture second line" app && echo complete', ["fixture first", "fixture second"]],
+      ["app --token 'fixture token starts\nfixture token ends' && echo complete", ["fixture token starts", "fixture token ends"]],
+      ['app --api-key="fixture first \\"escaped\\" part"\'fixture joined tail\' && echo complete', ["fixture first", "escaped", "joined tail"]],
+      [String.raw`app --secret fixture\ escaped\ value && echo complete`, ["fixture", "escaped", "value"]],
+    ] as const;
+    for (const [command, privateParts] of commands) {
+      const result = visibleToolDetail("tool-call", { command }, "pi", "bash");
+      expect(result).toMatchObject({ detailStatus: "available", clipped: false });
+      expect(result.text).toContain("«redacted");
+      expect(result.text).toContain("echo complete");
+      for (const part of privateParts) expect(result.text).not.toContain(part);
+    }
+    const command = 'echo ' + 'safe '.repeat(100) + ' && app --password "first private segment\nsecond private segment" && echo ' + 'safe '.repeat(40);
+    const clipped = visibleToolDetail("tool-call", JSON.stringify({ cmd: command }), "codex", "exec_command");
+    expect(clipped).toMatchObject({ detailStatus: "available", clipped: true });
+    expect(clipped.text).toContain("«redacted");
+    expect(clipped.text).not.toContain("private segment");
+  });
+
+  it("withholds shell previews with ambiguous credential boundaries", () => {
+    for (const cmd of [
+      'app --password "unclosed first line\nsecond line',
+      "PASSWORD='unclosed multiline\nvalue app",
+      String.raw`app --token "first $(echo "nested quote") unfinished"`,
+      "app --token fixture\\",
+    ]) {
+      expect(visibleToolDetail("tool-call", { cmd }, "codex", "exec_command"))
+        .toEqual({ detailStatus: "withheld", clipped: false, text: "[Arguments unavailable]" });
+    }
+  });
+
+  it("audits normalized inline declarations and private structured fields across the full shell command", () => {
+    for (const cmd of [
+      "printf '%s' 'encoding=base64; content=Zml4dHVyZQ=='",
+      String.raw`printf '%s' '\u0065ncoding=base64url; content=Zml4dHVyZQ'`,
+      String.raw`curl --data '{\"name\":\"Set-Coo\u006bie\",\"value\":\"fixture-only\"}'`,
+      "printf '%s' '{\"request\":{\"sessionId\":\"fixture-only\"}}'",
+      "printf '%s' \"{'private_key':'fixture-only'}\"",
+      "printf '%s' '{\"data\":\"fixture-only\"}'",
+      "echo " + "safe ".repeat(140) + " && echo 'name=Authorization; value=fixture-only'",
+      'printf "privateKey: «redacted 3 chars» fixture-preview-must-withhold"',
+    ]) {
+      expect(visibleToolDetail("tool-call", JSON.stringify({ cmd }), "codex", "functions.exec_command"))
+        .toEqual({ detailStatus: "withheld", clipped: false, text: "[Arguments unavailable]" });
+    }
+    const encoded = String.raw`echo \u0064ata:application/octet-stream;base64,Zml4dHVyZQ==`;
+    expect(visibleToolDetail("tool-call", { command: encoded }, "pi", "bash"))
+      .toEqual({ detailStatus: "withheld", clipped: true, text: "[Arguments unavailable]" });
+    const ordinary = "herdr --session default && printf '%s' '{\"encoding\":\"utf-8\",\"name\":\"Content-Language\",\"value\":\"en\"}' && echo data key";
+    expect(visibleToolDetail("tool-call", { command: ordinary }, "pi", "bash"))
+      .toEqual({ detailStatus: "available", clipped: false, text: "command: " + ordinary });
+  });
+
+  it("masks full quoted and multiline private headers before clipping and withholds ambiguous header quotes", () => {
+    const cookieHeader = "curl -H 'Cookie: session=fixture-first-cookie; theme=fixture-second-pair' http://localhost:3000";
+    const cookieResult = visibleToolDetail("tool-call", { command: cookieHeader }, "pi", "bash");
+    expect(cookieResult).toMatchObject({ detailStatus: "available", clipped: false });
+    expect(cookieResult.text).toContain("Cookie: «redacted");
+    expect(cookieResult.text).not.toContain("fixture-first-cookie");
+    expect(cookieResult.text).not.toContain("fixture-second-pair");
+    expect(cookieResult.text).not.toContain("theme=");
+
+    const multilineApiKey = 'curl -H "X-API-Key: fixture-first-line\nfixture-second-key-line" http://localhost:3000 && echo complete';
+    const apiKeyResult = visibleToolDetail("tool-call", { cmd: multilineApiKey }, "codex", "exec_command");
+    expect(apiKeyResult).toMatchObject({ detailStatus: "available", clipped: false });
+    expect(apiKeyResult.text).toContain("X-API-Key: «redacted");
+    expect(apiKeyResult.text).toContain("echo complete");
+    expect(apiKeyResult.text).not.toContain("fixture-first-line");
+    expect(apiKeyResult.text).not.toContain("fixture-second-key-line");
+
+    const clippedCookie = "echo " + "safe ".repeat(100) + " && curl -H 'Cookie: session=fixture-a; next=fixture-tail-secret' http://localhost:3000 && echo " + "safe ".repeat(30);
+    const clippedResult = visibleToolDetail("tool-call", { command: clippedCookie }, "pi", "bash");
+    expect(clippedResult).toMatchObject({ detailStatus: "available", clipped: true });
+    expect(clippedResult.text).toContain("Cookie: «redacted");
+    expect(clippedResult.text).not.toContain("fixture-tail-secret");
+
+    for (const cmd of [
+      "curl -H 'Cookie: session=fixture-unclosed; next=fixture-part",
+      'curl -H "X-API-Key: fixture-first\nfixture-unclosed',
+    ]) {
+      expect(visibleToolDetail("tool-call", { cmd }, "codex", "exec_command"))
+        .toEqual({ detailStatus: "withheld", clipped: false, text: "[Arguments unavailable]" });
+    }
+
+    const ordinaryHeader = "curl -H 'Accept-Language: en-US; q=0.9' --session default";
+    expect(visibleToolDetail("tool-call", { command: ordinaryHeader }, "pi", "bash"))
+      .toEqual({ detailStatus: "available", clipped: false, text: "command: " + ordinaryHeader });
+  });
 });
