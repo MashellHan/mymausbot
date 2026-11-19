@@ -40,9 +40,11 @@ function visibleEvent(line: string, offset: number, callFor: (id: string) => { t
     const time = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
     const kind = result ? "tool-result" : "tool-call";
     const recorded = result ? callFor(callId) : null;
-    const customTool = family === "custom" ? (result ? (recorded?.family === "custom" ? recorded.tool : null) : name as string) : null;
+    const detailTool = result
+      ? (family === "custom" && recorded?.family === "custom" ? recorded.tool : null)
+      : (name as string);
     const value = result ? payload.output : family === "custom" ? payload.input : payload.arguments;
-    const detail = visibleToolDetail(kind, value, "codex", customTool);
+    const detail = visibleToolDetail(kind, value, "codex", detailTool, family);
     return { event: { id: `e${offset.toString(36)}`, at: Number.isFinite(time) ? time : null,
       kind, tool: result ? null : name as string, text: detail.text, detailStatus: detail.detailStatus }, clipped: detail.clipped,
       format: "canonical", raw: "", callId, family };

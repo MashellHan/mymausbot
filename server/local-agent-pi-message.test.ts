@@ -50,7 +50,7 @@ describe("verified Pi visible assistant preview", () => {
     const sibling = assistant("Other branch", "00000002", root.id);
     const records: object[] = [root, sibling];
     let parent = root.id;
-    for (let index = 0; index < 73; index++) {
+    for (let index = 0; index < 60; index++) {
       const id = (10 + 2 * index).toString(16).padStart(8, "0");
       const resultId = (11 + 2 * index).toString(16).padStart(8, "0");
       const toolCallId = `fixture-${index}`;
@@ -70,12 +70,11 @@ describe("verified Pi visible assistant preview", () => {
     const activity = createLocalAgentActivityProvider({ home: data.home,
       run: async () => JSON.stringify({ result: { agents: [member] } }) });
     const first = await activity.get(pane, { occupantId });
+    expect(first.events).toHaveLength(100);
     expect(first.history).toMatchObject({ version: 1, streamId: expect.any(String), nextBefore: expect.any(String) });
-    expect(first.events).toHaveLength(60);
     const before = first.history!.nextBefore!;
-    const older = await activity.get(pane, { occupantId, before });
-    expect(older.events).toHaveLength(60);
-    const oldest = await activity.get(pane, { occupantId, before: older.history!.nextBefore! });
+    const oldest = await activity.get(pane, { occupantId, before });
+    expect(oldest.events).toHaveLength(21);
     expect(oldest.history!.nextBefore).toBeNull();
     expect(oldest.events.slice(0, 5).map(({ text, detailStatus }) => [text, detailStatus])).toEqual([
       ["Start of selected history", undefined], ["message: Synthetic update 0", "available"],
@@ -84,11 +83,11 @@ describe("verified Pi visible assistant preview", () => {
     ]);
     expect(oldest.events[6]).toMatchObject({ detailStatus: "absent", text: "[Result details unavailable]" });
     expect(oldest.events[8]).toMatchObject({ detailStatus: "withheld", text: "[Result details unavailable]" });
-    expect(JSON.stringify([...first.events, ...older.events, ...oldest.events])).not.toMatch(/Other branch|fixture-token|fixture-private-short/);
+    expect(JSON.stringify([...first.events, ...oldest.events])).not.toMatch(/Other branch|fixture-token|fixture-private-short/);
     await appendFile(data.file, line(assistant("New descendant", "00000100", parent)));
     const appended = await activity.get(pane, { occupantId });
     expect(appended.history?.streamId).toBe(first.history?.streamId);
-    expect((await activity.get(pane, { occupantId, before })).events).toEqual(older.events);
+    expect((await activity.get(pane, { occupantId, before })).events).toEqual(oldest.events);
     await appendFile(data.file, line(assistant("Switched branch", "00000101", sibling.id)));
     expect(await activity.get(pane, { occupantId, before })).toMatchObject({ status: "unavailable", events: [],
       history: { version: 1, streamId: null, nextBefore: null } });
