@@ -68,7 +68,8 @@ import { unreadMessageIds } from "@/lib/unread-divider";
 import { NewMessagesDivider } from "./NewMessagesDivider";
 import { appendDraftAttachments, replyDraft, useReplyDraft } from "@/lib/drafts";
 import { canReplyToMessage } from "@/lib/replies";
-import { citationPreviewText } from "@/lib/citations";
+import { citationPreviewText, type CitationAttachment } from "@/lib/citations";
+import { highlightCitationSource } from "@/lib/citations-dom";
 import { latestFailure, latestReply, type TranscriptSnapshot } from "@/lib/transcript-announcer";
 import { pendingApprovals } from "./PendingApproval";
 import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard"; import { RoomRichRow } from "./RichMessageRow";
@@ -148,10 +149,18 @@ export const Transcript = memo(function Transcript({
   }, [dispatch, group.id, group.threadId, retryRequest, roomBusy]);
   const focusedId = focus && !focus.consumed && focus.threadId === group.threadId ? focus.messageId : null;
   const byId = useMemo(() => new Map(transcript.map((message) => [message.id, message])), [transcript]);
+  const transcriptById = useRef(byId);
+  useLayoutEffect(() => { transcriptById.current = byId; }, [byId]);
+  const navigateCitation = useCallback(async (citation: CitationAttachment) => {
+    const { ownerType, messageId } = citation.source;
+    if (ownerType !== "group" || !transcriptById.current.has(messageId)) return false;
+    dispatch({ type: "focusMessage", threadId: group.threadId, messageId });
+    return highlightCitationSource(citation, group.threadId);
+  }, [dispatch, group.threadId]);
   const textRow = (message: Message, emerging: boolean, eager: boolean) => (
     <RoomTextMessage groupId={group.id} threadId={group.threadId} dm={Boolean(group.dm)} pinned={group.pinnedMessageId === message.id} working={roomBusy}
       message={message} members={members} replyTarget={message.replyToId ? byId.get(message.replyToId) : undefined}
-      emerging={emerging} eager={eager} onReply={onReply} canReact={canReact} phone={phone} locale={locale} localVoice={localVoice} />
+      emerging={emerging} eager={eager} onReply={onReply} onNavigateCitation={navigateCitation} canReact={canReact} phone={phone} locale={locale} localVoice={localVoice} />
   );
   const unreadIds = useMemo(() => unreadMessageIds(messages, unreadDividerId), [messages, unreadDividerId]);
   let dividerPlaced = false;

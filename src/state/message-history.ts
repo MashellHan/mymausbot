@@ -11,7 +11,14 @@ export function reduceOlderMessages(state: AppState, action: OlderMessages): App
   const { [action.threadId]: _done, ...loadingOlder } = state.loadingOlder;
   if ((state.transcriptGeneration[action.threadId] ?? 0) !== action.generation) return { ...state, loadingOlder };
   const current = [...state.bots, ...state.groups].find((owner) => owner.threadId === action.threadId);
-  if (action.before !== undefined && current?.messages[0]?.id !== action.before) return { ...state, loadingOlder };
+  if (action.before !== undefined) {
+    const held = current?.messages ?? [];
+    const overlap = held.findIndex((message) => message.id === action.before);
+    const overlapStart = action.messages.length - overlap;
+    const canJoin = overlap >= 0 && overlapStart >= 0
+      && action.messages.slice(overlapStart).every((message, index) => message.id === held[index]?.id);
+    if (!canJoin) return { ...state, loadingOlder };
+  }
   const prepend = <T extends HeldOwner>(owner: T): T => {
     const page = new Set(action.messages.map((message) => message.id));
     const held = new Set(owner.messages.filter((message) => page.has(message.id)).map((message) => message.id));

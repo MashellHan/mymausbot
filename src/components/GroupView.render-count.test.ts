@@ -7,6 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Action, BotAnnouncement, InstanceInfo, Message } from "@/state/store";
 import type { RuntimeEvent } from "../../shared/runtime-events";
+import { citationAttachment, createCitationTextSelector, serializeCitation } from "@/lib/citations";
 import { setLocale } from "@/lib/i18n";
 
 const renders = vi.hoisted(() => ({ bubbles: 0, chips: 0 }));
@@ -48,19 +49,34 @@ const history: Message[] = Array.from({ length: 120 }, (_, i) => i % 2 === 0
 const room = {
   id: "room", threadId: "room-thread", name: "Planning", memberIds: ["a", "b"], defaultResponder: { kind: "member", botId: "a" },
   bulletin: "", unread: false, createdAt: 1, messages: history, setupCompletedAt: 1,
-  tasks: [{ threadId: "room-thread", title: "Chat", createdAt: 1 }],
+  tasks: [{ threadId: "room-thread", title: "Chat", createdAt: 1 }, { threadId: "room-fork", title: "Fork", createdAt: 2 }],
 };
+const inheritedSource = history.findLast((message) => message.role === "user")!;
+const forkSource = { id: "fork-source", role: "user", kind: "text", at: inheritedSource.at + 1, text: "A message in the fork" } satisfies Message;
+const forkSources = [inheritedSource, forkSource];
+const forkReply = {
+  id: "fork-reply", role: "user", kind: "text", at: forkSource.at + 1,
+  text: forkSources.map((source) => {
+    const text = source.text!;
+    return serializeCitation(citationAttachment(
+      { ownerType: "group", ownerId: room.id, threadId: "room-fork", messageId: source.id },
+      createCitationTextSelector(text, 0, text.length)!,
+    ));
+  }).join("\n\n"),
+} satisfies Message;
 const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body)));
 const answers: Record<string, unknown> = {
   "/api/instances": { instances: [{ instanceId: "test", driverKind: "codex", displayName: "Test", snapshot: { state: "available" }, models: { options: [{ id: "m", label: "Model" }] } } as unknown as InstanceInfo] },
   "/api/config": { features: { showToolCalls: true } },
   "/api/routines": { routines: [], runs: [] },
   "/api/webhooks": { webhooks: [], attempts: [] },
+  "/api/threads/room-fork/messages": { messages: [...forkSources, forkReply], activeLeafId: forkReply.id },
 };
 
 const { StoreProvider, useStore } = await import("@/state/store");
 const { useStoreSelector } = await import("@/state/store-select");
 const { GroupView } = await import("./GroupView");
+const { ForkPanel } = await import("./ForkPanel");
 const { noteLiveReplyEvent } = await import("@/state/live-reply");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
 
@@ -94,7 +110,7 @@ beforeAll(async () => {
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  flushSync(() => root.render(createElement(StoreProvider, null, createElement(Shown), createElement(Shell))));
+  flushSync(() => root.render(createElement(StoreProvider, null, createElement(Shown), createElement(Shell), createElement(ForkPanel))));
   await settle();
   stream().send({ kind: "hello", resumed: false, cursor: "run:0" });
   await settle();
@@ -183,5 +199,30 @@ describe("a room on screen", () => {
     const before = renders.bubbles;
     await send({ kind: "bot", bot: { ...announced("a", "Ada Lovelace"), busy: true, activity: "working" } });
     expect(renders.bubbles - before).toBeGreaterThanOrEqual(120);
+  });
+
+  it.each(forkSources)("jumps to citation $id in the displayed fork", async (source) => {
+    flushSync(() => dispatch({ type: "openForkPanel", kind: "group", ownerId: room.id, threadId: "room-fork" }));
+    try {
+      await settle();
+      const panel = document.querySelector<HTMLElement>('aside[aria-label="Forked conversation"]');
+      expect(panel?.querySelector(`[data-citation-source="${source.id}"]`)).toBeTruthy();
+      expect(Boolean(document.querySelector(`[data-citation-source="${source.id}"][data-citation-thread="room-thread"]`))).toBe(source === inheritedSource);
+      const badge = panel?.querySelector<HTMLButtonElement>(`button[aria-label="Open citation: ${source.text}"]`);
+      expect(badge).toBeTruthy();
+      flushSync(() => badge!.click());
+      const details = document.querySelector('[role="dialog"][aria-label="Citation details"]');
+      const goToSource = [...(details?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Go to source");
+      expect(goToSource).toBeDefined();
+      flushSync(() => goToSource!.click());
+      await settle();
+      expect(badge!.getAttribute("aria-expanded")).toBe("false");
+      const selection = window.getSelection();
+      expect(selection?.toString()).toBe(source.text);
+      expect(panel?.contains(selection?.anchorNode ?? null)).toBe(true);
+    } finally {
+      window.getSelection()?.removeAllRanges();
+      flushSync(() => dispatch({ type: "closeForkPanel" }));
+    }
   });
 });

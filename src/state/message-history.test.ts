@@ -54,4 +54,10 @@ describe("letting go of paged rows when a conversation is left", () => {
     expect(ids(fresh.bots[0]!)[0]).toBe("m2600");
     expect(fresh.bots[0]!.messages).toHaveLength(400);
   });
+
+  it("rejects an overlapping page that has a gap before its cursor", () => {
+    const owner = bot({ messages: thread(8).slice(4), hasMore: true });
+    const page = reducer(away(owner), { type: "olderMessages", threadId: "thread-1", generation: 0, before: "m6", messages: [message(1), message(4)], hasMore: false });
+    expect(page.bots[0]).toBe(owner);
+  });
 });

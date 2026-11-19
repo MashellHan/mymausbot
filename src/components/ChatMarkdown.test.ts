@@ -27,6 +27,7 @@ import {
 import { getSnippetFileName, parseFenceInfo } from "@/lib/code-block";
 import { markdownImageName, markdownImageOpenUrl } from "@/lib/markdown-image";
 import { BotEditorStore, initialState, StoreProvider } from "@/state/store";
+import { StreamingReplyContext } from "@/state/live-reply";
 import { setLocale } from "@/lib/i18n";
 import { ThreadRefsContext } from "./ThreadRefs";
 import * as AttachmentPreview from "./AttachmentPreview";
@@ -337,6 +338,29 @@ describe("math rendering", () => {
     } finally {
       preview.mockRestore();
     }
+  });
+
+  it("keeps whole-message offsets for local images in later list items after streaming", () => {
+    const list = "- Introduction\n- ![receipt](/workspace/receipt.png)\n\n";
+    renderToStaticMarkup(createElement(StreamingReplyContext, { value: true },
+      createElement(ChatMarkdown, { text: `${list}More text` })));
+    const preview = vi.spyOn(AttachmentPreview, "MarkdownImagePreview");
+    try {
+      renderToStaticMarkup(createElement(ChatMarkdown, {
+        text: list, message: { threadId: "thread-1", messageId: "message-1" },
+      }));
+      expect(preview).toHaveBeenCalledOnce();
+      expect(preview.mock.calls[0][0].sourceOffset).toBe(list.indexOf("!["));
+    } finally {
+      preview.mockRestore();
+    }
+  });
+
+  it("resolves a reference defined in a sibling list item", () => {
+    const text = "- [Read the docs][guide]\n- [guide]: https://example.test/guide\n- Next step";
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, { text }));
+    expect(html).toContain('href="https://example.test/guide"');
+    expect(html).toContain(">Read the docs</a>");
   });
 
   it("normalizes math in messages that also contain an image", () => {

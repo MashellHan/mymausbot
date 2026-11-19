@@ -870,8 +870,9 @@ function ChatMarkdownComponent({ text, message, mentionPeers = NO_MENTION_PEERS,
   const piece: ParsePiece = (source, cacheKey, loose) => parse(source, cacheKey, loose);
   const itemScope: ItemScope = (nodes, index, open) => <StreamSourceContext key={index} value={open}>{nodes}</StreamSourceContext>;
   const draw = ({ text: partText, source, finished, pieces, repair }: MarkdownPart): ReactNode => {
+    if (!streaming) return parse(source, partText);
     if (finished) {
-      return parse(source, partText, false, () => {
+      return parse(source, `\u0004block\u0004${source}`, false, () => {
         const split = splitStreamPieces(partText);
         const joined = split && drawStreamPieces(split, false, piece, itemScope);
         return joined ? <>{joined}</> : null;

@@ -10,11 +10,9 @@ import { canReplyToMessage } from "@/lib/replies";
 import { useSpeech } from "@/lib/tts/useSpeech";
 import { splitTranscriptAttachments } from "@/lib/composer-attachments";
 import { splitTranscriptCitations, type CitationAttachment } from "@/lib/citations";
-import { highlightCitationSource } from "@/lib/citations-dom";
 import { cn } from "@/lib/cn";
 import { formatTime, type Bot, type Message } from "@/state/store";
 import { useStoreDispatch, useStoreSelector } from "@/state/store-select";
-import { useStoreRef } from "@/state/store-ref";
 import { isLiveReply, streamedReply } from "@/state/live-reply";
 import { useTeammates } from "@/state/team-people";
 import { stripLeakedSystemHarnessMessages } from "../../shared/system-message-guard.ts";
@@ -49,6 +47,7 @@ interface RoomTextMessageProps {
   emerging: boolean;
   eager: boolean;
   onReply: (message: Message) => void;
+  onNavigateCitation: (citation: CitationAttachment) => Promise<boolean>;
   canReact: boolean;
   phone: boolean;
   locale: string;
@@ -74,11 +73,12 @@ export const RoomTextMessage = memo(function RoomTextMessage({
   emerging,
   eager,
   onReply,
+  onNavigateCitation,
   canReact,
   phone,
   localVoice,
 }: RoomTextMessageProps) {
-  const dispatch = useStoreDispatch(), store = useStoreRef();
+  const dispatch = useStoreDispatch();
   const focusNonce = useStoreSelector((state) => {
     const focus = state.focusMessage;
     return focus?.messageId === m.id && focus.matchText && focus.threadId === threadId ? focus.nonce : null;
@@ -181,15 +181,7 @@ export const RoomTextMessage = memo(function RoomTextMessage({
               >
                 <ThreadRefText text={display} peers={peers} everyone={!dm} />
               </div>{m.bugReport ? <BugReportNote report={m.bugReport} /> : m.pointed?.length ? <UserLineNote message={m} /> : null}
-              {cited && <SentCitations
-                citations={cited.citations}
-                onNavigate={async (citation: CitationAttachment) => {
-                  const messages = store.state().groups.find((room) => room.id === groupId)?.messages ?? [];
-                  if (citation.source.ownerType !== "group" || !messages.some((candidate) => candidate.id === citation.source.messageId)) return false;
-                  dispatch({ type: "focusMessage", threadId, messageId: citation.source.messageId });
-                  return highlightCitationSource(citation);
-                }}
-              />}
+              {cited && <SentCitations citations={cited.citations} onNavigate={onNavigateCitation} />}
               {m.via === "api" && (
                 <div className="mt-1 text-[11px] text-ink-secondary">{t("room.viaApi")}</div>
               )}
