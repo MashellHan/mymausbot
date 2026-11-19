@@ -104,10 +104,11 @@ export function resolveCitationRange(root: HTMLElement, citation: CitationAttach
   return range;
 }
 
-export function findCitationSource(document: Document, citation: CitationAttachment): HTMLElement | null {
+export function findCitationSource(document: Document, citation: CitationAttachment, threadId?: string): HTMLElement | null {
   return [...document.querySelectorAll<HTMLElement>("[data-citation-source]")].find((element) =>
     element.dataset.citationSource === citation.source.messageId &&
-    element.dataset.citationOwnerType === citation.source.ownerType,
+    element.dataset.citationOwnerType === citation.source.ownerType &&
+    (threadId === undefined || element.dataset.citationThread === threadId),
   ) ?? null;
 }
 
@@ -117,9 +118,9 @@ function sameRange(a: Range, b: Range): boolean {
   return a.startContainer === b.startContainer && a.startOffset === b.startOffset && a.endContainer === b.endContainer && a.endOffset === b.endOffset;
 }
 
-export async function highlightCitationSource(citation: CitationAttachment): Promise<boolean> {
+export async function highlightCitationSource(citation: CitationAttachment, threadId?: string): Promise<boolean> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const source = findCitationSource(document, citation);
+    const source = findCitationSource(document, citation, threadId);
     const range = source ? resolveCitationRange(source, citation) : null;
     if (source && range) {
       source.scrollIntoView({ block: "center", behavior: "smooth" });
