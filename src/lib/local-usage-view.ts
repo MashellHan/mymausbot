@@ -164,9 +164,25 @@ export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRa
     sixtyDayRepositories: period ? repositoryHistoryWindow(period.endDay, repositoryHistory) : null };
 }
 
+function stripKnownCommitComparison(windows: LocalUsageResponse["windows"]): LocalUsageResponse["windows"] {
+  if (!windows) return null;
+  return Object.fromEntries(
+    Object.entries(windows).map(([key, window]) => {
+      if (!window.comparison.known) return [key, window];
+      const { known, ...comparison } = window.comparison;
+      return [key, {
+        ...window,
+        comparison: known.prs === null ? comparison : { ...comparison, known: { ...known, commits: null } },
+      }];
+    }),
+  ) as LocalUsageResponse["windows"];
+}
+
 export function retainUsageSnapshot(previous: LocalUsageResponse | null, next: LocalUsageResponse,
   transportFailure = false): LocalUsageResponse {
-  const local = !next.windows && previous?.windows ? { ...previous, status: "stale" as const } : next;
+  const local = !next.windows && previous?.windows
+    ? { ...previous, status: "stale" as const, windows: stripKnownCommitComparison(previous.windows) }
+    : next;
   const merged = !next.merged?.windows && previous?.merged?.windows ? { ...previous.merged, status: "stale" as const } : next.merged;
   const github = !next.github?.windows && previous?.github?.windows ? { ...previous.github, status: "stale" as const } : next.github;
   const contributions = transportFailure && !next.contributions && previous?.contributions?.windows
