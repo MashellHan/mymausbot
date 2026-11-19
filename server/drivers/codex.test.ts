@@ -3181,17 +3181,17 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     await expect(instance.adapter.respondToRequest("t-async-late", opened.requestId!, { behavior: "answer", message: "Directly" })).resolves.toBe("unavailable");
   });
 
-  it("keeps an async message as plain text when its questions offer nothing to pick", async () => {
-    for (const questions of ["please", [], [{ title: "   ", options: ["Orphan"] }, { title: "Anything else?", options: null }]]) {
-      await create({ mode: "async-question", environment: { FAKE_CODEX_ASYNC_QUESTIONS: JSON.stringify(questions) } });
-      await instance.adapter.sendTurn({ threadId: "t-async-plain", text: "ask loosely" });
-      await recorder.until((e) => e.type === "turn.completed");
-      const first = recorder.events.find((e) => e.type === "item.completed" && e.itemType === "assistant_text");
-      expect(first).toMatchObject({ text: expect.stringContaining("Which source should I use?") });
-      expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
-      recorder.stop();
-      await instance.dispose();
-    }
+  it.each([
+    { name: "string", questions: "please" },
+    { name: "empty list", questions: [] },
+    { name: "unusable options", questions: [{ title: "   ", options: ["Orphan"] }, { title: "Anything else?", options: null }] },
+  ])("keeps an async message as plain text for invalid question payloads ($name)", async ({ questions }) => {
+    await create({ mode: "async-question", environment: { FAKE_CODEX_ASYNC_QUESTIONS: JSON.stringify(questions) } });
+    await instance.adapter.sendTurn({ threadId: "t-async-plain", text: "ask loosely" });
+    await recorder.until((e) => e.type === "turn.completed");
+    const first = recorder.events.find((e) => e.type === "item.completed" && e.itemType === "assistant_text");
+    expect(first).toMatchObject({ text: expect.stringContaining("Which source should I use?") });
+    expect(recorder.events.some((e) => e.type === "request.opened")).toBe(false);
   });
 
   it("keeps a question open for days and still delivers the person's answer", async () => {
