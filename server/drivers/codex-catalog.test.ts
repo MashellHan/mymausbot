@@ -91,7 +91,7 @@ describe("readCodexModelCatalog", () => {
   it("adds a Fast row after each model that offers Fast and does not already run on it", async () => {
     chmodSync(FAKE_CLI, 0o755);
     const catalog = await readCodexModelCatalog(
-      { HOME: join(tmpdir(), "omb-codex-app-server-tiers"), PATH: process.env.PATH, FAKE_CODEX_TIERS: "1" },
+      { HOME: join(tmpdir(), "omb-codex-app-server-tiers"), PATH: process.env.PATH, FAKE_CODEX_TIERS: "1", FAKE_CODEX_EFFORTS: "1" },
       fetch,
       FAKE_CLI,
     );
@@ -99,9 +99,9 @@ describe("readCodexModelCatalog", () => {
     expect(catalog).toEqual({
       default: "gpt-fake-default",
       options: [
-        { id: "gpt-fake-default", label: "GPT Fake Default" },
-        { id: "gpt-fake-default+priority", label: "GPT Fake Default · Fast" },
-        { id: "gpt-page-two", label: "GPT Page Two" },
+        { id: "gpt-fake-default", label: "GPT Fake Default", effortLevels: ["low", "high"] },
+        { id: "gpt-fake-default+priority", label: "GPT Fake Default · Fast", effortLevels: ["low", "high"] },
+        { id: "gpt-page-two", label: "GPT Page Two", effortLevels: [] },
       ],
     });
   });
@@ -251,6 +251,29 @@ env_key = "UNSLOTH_STUDIO_AUTH_TOKEN"
     );
     expect(catalog.options.map((option) => option.id)).toContain(encodeCodexSelection("unsloth_api", "unsloth/extra-live"));
     expect(catalog.options.map((option) => option.id)).not.toContain(encodeCodexSelection("omlx", "ignored"));
+  });
+
+  it("uses configured and live capability metadata for the exact provider model", async () => {
+    const home = scratchHome({
+      "config.toml": `model_provider = "raven"\nmodel = "native"\n[model_providers.raven]\nbase_url = "http://127.0.0.1:7024/v1"\n`,
+      "model-catalogs/raven-models.json": JSON.stringify({ models: [
+        { slug: "native", display_name: "Native Model", supported_reasoning_efforts: [{ reasoning_effort: "high" }] },
+        { slug: "offline", reasoning: false },
+      ] }),
+    });
+    const catalog = await readCodexModelCatalog({ HOME: home }, async () => new Response(JSON.stringify({ data: [
+      { id: "native", supported_reasoning_levels: [{ effort: "medium" }] },
+      { id: "gemini", supported_endpoints: ["/chat/completions"], reasoning_levels: ["high"] },
+      { id: "legacy" },
+    ] }), { status: 200 }));
+    const model = (id: string) => catalog.options.find((row) => row.id === id);
+    expect(model("raven::native")).toMatchObject({ label: "Native Model", effortLevels: ["medium"] });
+    expect(model("raven::native")).not.toHaveProperty("protocolUnsupported");
+    expect(model("raven::gemini")).toMatchObject({ effortLevels: ["high"] });
+    expect(model("raven::gemini")).not.toHaveProperty("protocolUnsupported");
+    expect(model("raven::offline")).toMatchObject({ effortLevels: [] });
+    expect(model("raven::legacy")).not.toHaveProperty("effortLevels");
+    expect(model("raven::legacy")).not.toHaveProperty("protocolUnsupported");
   });
 
   it("refuses a relative CODEX_HOME instead of falling back to ~/.codex", async () => {

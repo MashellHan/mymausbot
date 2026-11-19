@@ -2,7 +2,7 @@ import { offersSignIn } from "@/components/EngineSetup";
 import { t } from "@/lib/i18n";
 import { plainErrorLine } from "@/lib/plain-error";
 import type { Bot, InstanceInfo, Message } from "@/state/store";
-import { failedTurnCause } from "../../shared/failed-turn";
+import { failedTurnCause, isCodexToolConversionRefusal, isConnectionInputRefusal } from "../../shared/failed-turn";
 import { toolStepLabel } from "@/lib/tool-step-label";
 import { activityText, isNoticeCode } from "@/lib/activity-text";
 import { isClientCancellation, isStoppedTurnName } from "../../shared/client-cancel";
@@ -34,6 +34,12 @@ export function failedTurnNotice(tool: ActivityTool): { cause: string; notice: s
   return { cause, notice: isNoticeCode(tool.nameCode) ? activityText(tool, cause) : null };
 }
 
+export function connectionFailureText(cause: unknown): string | undefined {
+  if (isConnectionInputRefusal(cause)) return t("chat.error.connectionInputRefused");
+  if (isCodexToolConversionRefusal(cause)) return t("chat.error.codexToolConversion");
+  return undefined;
+}
+
 export function failedTurnText(tool: ActivityTool, cause: string): string {
   return isNoticeCode(tool.nameCode) ? activityText(tool, cause) : plainErrorLine(cause) ?? cause;
 }
@@ -43,6 +49,8 @@ export function activityPreview(tool: ActivityTool, engine: InstanceInfo | undef
   if (isStoppedTurnName(tool.name)) return t("chat.turnStopped");
   const cause = failedTurnCause(tool.name);
   if (cause !== null && isClientCancellation(cause)) return t("chat.turnStopped");
+  const connectionFailure = connectionFailureText(cause);
+  if (connectionFailure) return connectionFailure;
   if (cause !== null && tool.partial) return t("chat.error.partialPreview");
   if (cause === null && isNoticeCode(tool.nameCode)) return activityText(tool, tool.name.replace(STATUS_MARKER, ""));
   if (cause === null) return advanced ? tool.name : STATUS_MARKER.test(tool.name) ? tool.name.replace(STATUS_MARKER, "") : toolStepLabel(tool);
