@@ -260,20 +260,45 @@ describe("bounded per-agent Codex activity", () => {
   });
 
   it("reads custom tool text and supports alphanumeric current pane IDs without exposing other records", async () => {
+    const input = 'const run = await tools.exec_command({ cmd: "printf synthetic", max_output_tokens: 300 });';
+    const blockInput = '{ const run = await tools.exec_command({ cmd: "printf block", max_output_tokens: 300 }); }';
+    const minimalOutput = [
+      { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+      { type: "input_text", text: JSON.stringify({ chunk_id: "abc123", wall_time_seconds: 0.1, exit_code: 0, output: "Minimal output" }) },
+    ];
+    const output = [
+      { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+      { type: "input_text", text: JSON.stringify({ chunk_id: "abc123", wall_time_seconds: 0.1, exit_code: 0,
+        session_id: 12345, original_token_count: 7, output: "Synthetic command output" }) },
+    ];
     const home = await fixture([
+      row("response_item", { type: "custom_tool_call_output", call_id: "missing", output }),
       row("response_item", { type: "custom_tool_call", name: "functions.exec", call_id: "c1",
-        input: "inspect synthetic fixture", arguments: "ignored alternative" }),
-      row("response_item", { type: "custom_tool_call_output", call_id: "c1", output: "synthetic output" }),
+        input, arguments: "ignored alternative" }),
+      row("response_item", { type: "custom_tool_call_output", call_id: "c1", output }),
+      row("response_item", { type: "custom_tool_call", name: "functions.exec", call_id: "c-block", input: blockInput }),
+      row("response_item", { type: "custom_tool_call_output", call_id: "c-block", output: minimalOutput }),
+      row("response_item", { type: "function_call", name: "functions.exec", call_id: "mismatch-fn", arguments: '{"cmd":"ok"}' }),
+      row("response_item", { type: "custom_tool_call_output", call_id: "mismatch-fn", output: minimalOutput }),
+      row("response_item", { type: "custom_tool_call", name: "functions.exec", call_id: "mismatch-custom", input }),
+      row("response_item", { type: "function_call_output", call_id: "mismatch-custom", output: "MISMATCH_FN_RESULT" }),
       row("response_item", { type: "function_call", name: "/private/tool", call_id: "c2", arguments: "private path" }),
       row("response_item", { type: "reasoning", summary: "private reasoning" }),
     ]);
     const provider = createLocalAgentActivityProvider({ codexHome: home, run: async () => listed([agent(SESSION, "codex", "w6:pG")]) });
     const result = await provider.get("w6:pG");
     expect(result.events.map(({ kind, tool, text }) => [kind, tool, text])).toEqual([
-      ["tool-call", "functions.exec", "inspect synthetic fixture"],
-      ["tool-result", "functions.exec", "synthetic output"],
+      ["tool-result", null, "[Result details unavailable]"],
+      ["tool-call", "functions.exec", input],
+      ["tool-result", "functions.exec", "Script completed Wall time 0.1 seconds Exit code: 0 Synthetic command output"],
+      ["tool-call", "functions.exec", blockInput],
+      ["tool-result", "functions.exec", "Script completed Wall time 0.1 seconds Exit code: 0 Minimal output"],
+      ["tool-call", "functions.exec", "cmd: ok"],
+      ["tool-result", null, "[Result details unavailable]"],
+      ["tool-call", "functions.exec", input],
+      ["tool-result", null, "[Result details unavailable]"],
     ]);
-    expect(JSON.stringify(result)).not.toMatch(/ignored alternative|private path|private reasoning|c1|c2/);
+    expect(JSON.stringify(result)).not.toMatch(/ignored alternative|private path|private reasoning|c1|c2|12345|original_token_count|chunk_id|MISMATCH_FN_RESULT/);
   });
 
   it("does not reveal malformed, unpaired or encoded Codex tool details", async () => {

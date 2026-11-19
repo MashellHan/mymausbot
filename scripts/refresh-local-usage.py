@@ -276,7 +276,15 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
                 previous_category = previous_tokens.get(record["key"], {}).get("category")
                 if record.get("category") == "unclassified" and previous_category in ("work", "personal"):
                     record["category"] = previous_category
-        for field in ("tokens", "commits"):
+        combined_errors = list(result.get("errors") or []) + list(errors)
+        fetch_disabled_only = bool(combined_errors) and all(
+            isinstance(error, dict)
+            and error.get("source") == "git-fetch"
+            and error.get("code") == "DisabledByAuthBoundary"
+            for error in combined_errors
+        )
+        retain_fields = ("tokens",) if fetch_disabled_only else ("tokens", "commits")
+        for field in retain_fields:
             def key(record):
                 return record["key"] if field == "tokens" else (record["key"], (record.get("repository") or {}).get("id"))
             fresh_keys = {key(record) for record in result[field]}
@@ -287,7 +295,11 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
         result["adoRepos"] = sorted(set(result["adoRepos"]) | set(previous.get("adoRepos", [])))
         result["status"] = "partial"
         result["errors"].extend(errors)
-        result["retainedCapturedAt"] = previous.get("retainedCapturedAt") or previous.get("capturedAt")
+        result["retainedTokenCapturedAt"] = (
+            previous.get("retainedTokenCapturedAt") or previous.get("retainedCapturedAt") or previous.get("capturedAt")
+        )
+        if "commits" in retain_fields:
+            result["retainedCapturedAt"] = previous.get("retainedCapturedAt") or previous.get("capturedAt")
     return result
 
 
@@ -907,6 +919,7 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
             snapshot = original_aggregate(machines, prs, at, *args, **kwargs)
             if len(snapshot["sources"]) != len(machines):
                 raise ValueError("Activity source coverage does not match the collected machines")
+            commit_statuses = []
             for source, machine in zip(snapshot["sources"], machines):
                 if source.get("device") != machine.get("device"):
                     raise ValueError("Activity source identity does not match the collected machine")
@@ -914,9 +927,60 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 git_fetch_only = isinstance(errors, list) and bool(errors) and all(
                     isinstance(error, dict) and error.get("source") == "git-fetch" for error in errors
                 )
+                fetch_disabled_only = isinstance(errors, list) and bool(errors) and all(
+                    isinstance(error, dict)
+                    and error.get("source") == "git-fetch"
+                    and error.get("code") == "DisabledByAuthBoundary"
+                    for error in errors
+                )
                 source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and git_fetch_only
                 ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
+                source["commitStatus"] = "ready" if machine.get("status") == "ok" else (
+                    "local-ref-ready" if machine.get("status") == "partial" and fetch_disabled_only
+                    and not machine.get("retainedCapturedAt")
+                    and not machine.get("retainedCommits")
+                    else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
+                )
+                if machine.get("status") != "missing":
+                    commit_statuses.append(source["commitStatus"])
+            day_commit_status = None
+            if commit_statuses and all(s == "ready" for s in commit_statuses):
+                day_commit_status = "ready"
+            elif commit_statuses and all(s in ("ready", "local-ref-ready") for s in commit_statuses):
+                day_commit_status = "local-ref-ready"
+            if day_commit_status:
+                at_instant = collector.instant(at.isoformat() if isinstance(at, dt.datetime) else at)
+                tz = getattr(collector, "TZ", dt.timezone(dt.timedelta(hours=8)))
+                today_date = at_instant.astimezone(tz).date() if at_instant is not None else None
+                active_machines = [machine for machine in machines if machine.get("status") != "missing"]
+                machine_windows = []
+                for machine in active_machines:
+                    m_start = collector.instant(machine.get("start"))
+                    m_end = collector.instant(machine.get("capturedAt"))
+                    if m_start is None or m_end is None or m_start >= m_end:
+                        machine_windows = None
+                        break
+                    machine_windows.append((m_start, m_end))
+                rows_to_mark = list(snapshot.get("daily") or [])
+                if isinstance(snapshot.get("localHistory"), dict) and isinstance(snapshot["localHistory"].get("daily"), list):
+                    rows_to_mark.extend(snapshot["localHistory"]["daily"])
+                for row in rows_to_mark:
+                    if not isinstance(row, dict) or "commitStatus" in row:
+                        continue
+                    row_day = row.get("day")
+                    if not isinstance(row_day, str) or machine_windows is None or today_date is None:
+                        continue
+                    try:
+                        row_date = dt.date.fromisoformat(row_day)
+                    except ValueError:
+                        continue
+                    if row_date.isoformat() != row_day or row_date > today_date:
+                        continue
+                    day_start = dt.datetime.combine(row_date, dt.time(), tz)
+                    required_end = at_instant if row_date == today_date else day_start + dt.timedelta(days=1)
+                    if all(m_start <= day_start and m_end >= required_end for m_start, m_end in machine_windows):
+                        row["commitStatus"] = day_commit_status
             previous = collector.read_json(latest, {}) if latest is not None else {}
             saved = collector.read_json(retained, {}) if retained is not None else {}
             models = local_usage_models.daily_models(collector, machines, snapshot)

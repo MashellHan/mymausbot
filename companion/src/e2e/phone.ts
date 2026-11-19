@@ -1,8 +1,11 @@
 // The reference phone: dials a route with Node's built-in WebSocket client and returns an open session. Used by the
 // interop and integration tests, and by a desktop reaching another desktop.
+import { channel } from "node:diagnostics_channel";
 import { b64u } from "./credentials.ts";
 import { E2ESession, SEND_BUFFER_HIGH, SessionClosed, type RecordTransport } from "./session.ts";
 import { HANDSHAKE_DEADLINE_MS, TRANSPORT_RELAY, type KeyPair, type TransportByte } from "./noise.ts";
+
+const admissionTrace = channel("openmausbot.relay.admission");
 
 export const DIRECT_PROTOCOL = "omb-e2e.v1";
 export const RELAY_PROTOCOL = "omb-relay.v1";
@@ -56,14 +59,17 @@ export function dial(options: DialOptions): Promise<E2ESession<never>> {
   return new Promise((resolve, reject) => {
     let session: E2ESession<never> | null = null;
     const timer = setTimeout(() => {
+      if (relayed && admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "outer_deadline", code: 4002 });
       reject(new SessionClosed(4002));
       socket.close();
     }, (options.timeoutMs ?? HANDSHAKE_DEADLINE_MS) + (relayed ? 10_000 : 0));
     const start = () => {
       session = E2ESession.phone({ ...options, transport });
+      if (relayed && admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "noise_started" });
       session.ready.then(
         () => {
           clearTimeout(timer);
+          if (relayed && admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "noise_ready" });
           resolve(session as E2ESession<never>);
         },
         (error: Error) => {
@@ -92,6 +98,7 @@ export function dial(options: DialOptions): Promise<E2ESession<never>> {
         reject(new SessionClosed(4400));
         return socket.close();
       }
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "relay_ready_seen" });
       start();
     };
     socket.onclose = (event: CloseEvent) => {

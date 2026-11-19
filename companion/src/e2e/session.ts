@@ -18,10 +18,13 @@ import {
   type SessionKeys,
   type TransportByte,
 } from "./noise.ts";
+import { channel } from "node:diagnostics_channel";
 import { b64u } from "./credentials.ts";
 import { decodeFrame, encodeFrame, GO_AWAY, Mux, PING_INTERVAL_MS, PING_TIMEOUT_MS, YamuxError, type Frame, type Role } from "./yamux.ts";
 
 /** A sender stops writing records while the socket holds more than this. */
+const admissionTrace = channel("openmausbot.relay.admission");
+
 export const SEND_BUFFER_HIGH = 1024 * 1024;
 
 /** A WebSocket, as the session needs it: binary messages out, a close, and backpressure. */
@@ -185,7 +188,10 @@ export class E2ESession<Id> {
     this.closed = new Promise((resolve) => {
       this.#settleClosed = resolve;
     });
-    this.#deadline = setTimeout(() => this.close(CLOSE.deadline), this.#timers.handshakeDeadlineMs);
+    this.#deadline = setTimeout(() => {
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "noise_deadline", role, code: CLOSE.deadline, budgetMs: this.#timers.handshakeDeadlineMs });
+      this.close(CLOSE.deadline);
+    }, this.#timers.handshakeDeadlineMs);
     this.#deadline.unref?.();
   }
 

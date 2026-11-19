@@ -67,16 +67,30 @@ describe("Browser panel installation access", () => {
   });
 });
 
-describe("Computer panel on a narrow screen", () => {
+describe("Computer panel viewport sizing", () => {
+  function panelAt(viewport: number): HTMLElement {
+    const previous = window.innerWidth;
+    try {
+      vi.stubGlobal("innerWidth", viewport);
+      const host = document.createElement("div");
+      host.innerHTML = render({});
+      return host.querySelector<HTMLElement>("aside[data-computer-panel]")!;
+    } finally {
+      vi.stubGlobal("innerWidth", previous);
+    }
+  }
+
   it("covers the chat while the default-width panel and chat cannot fit side by side", () => {
-    const markup = render({});
-    const host = document.createElement("div");
-    host.innerHTML = markup;
-    const aside = host.querySelector<HTMLElement>("aside[data-computer-panel]")!;
+    const aside = panelAt(900);
     expect(aside.className.split(" ")).toEqual(expect.arrayContaining(["max-2xl:absolute", "max-2xl:inset-y-0", "max-2xl:right-0", "max-2xl:z-40"]));
-    expect(markup).toContain("width:1152px;max-width:");
+    expect(aside.style.width).toBe("900px");
+    expect(aside.style.maxWidth).toBe("900px");
     const separator = aside.querySelector<HTMLElement>('[role="separator"]')!;
     expect(separator.className.split(" ")).toContain("max-2xl:hidden");
+  });
+
+  it("retains the 1152px default width when the desktop has room", () => {
+    expect(panelAt(2560).style.width).toBe("1152px");
   });
 });
 

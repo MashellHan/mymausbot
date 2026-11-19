@@ -242,25 +242,25 @@ describe("Computer panel tab", () => {
     expect(document.activeElement).toBe(tab("Bot"));
   });
 
-  it("moves over an Android tab that appeared", async () => {
+  it("moves to Phone when an Android device appears", async () => {
     fixture.android = true;
     await open(makeBot());
-    expect(tabLabels()).toEqual(["Bot", "Routines", "Android", "Browser", "Data", "Files", "Mini Apps"]);
+    expect(tabLabels()).toEqual(["Bot", "Routines", "Phone", "Browser", "Data", "Files", "Mini Apps"]);
     press("Routines", "ArrowRight");
     await settle();
-    expect(selected()).toBe("Android");
+    expect(selected()).toBe("Phone");
   });
 
   it("keeps one selected tab when Android disconnects", async () => {
     fixture.android = true;
     await open(makeBot());
-    flushSync(() => tab("Android").click());
+    flushSync(() => tab("Phone").click());
     await settle();
-    expect(selected()).toBe("Android");
+    expect(selected()).toBe("Phone");
 
     fixture.android = false;
     await open(makeBot());
-    expect(tabLabels()).not.toContain("Android");
+    expect(tabLabels()).not.toContain("Phone");
     expect(selected()).toBe("Bot");
   });
 

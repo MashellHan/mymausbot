@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
 import type { Context } from "./context.ts";
@@ -5,6 +6,8 @@ import type { HostEntry } from "./hosts.ts";
 import { TokenBucket } from "./limits.ts";
 import { closeWith, sendJson } from "./socket.ts";
 import { Close, PASS_THROUGH_CODES } from "./wire.ts";
+
+const admissionTrace = channel("openmausbot.relay.admission");
 
 const BACKPRESSURE = 1;
 const THROTTLE = 2;
@@ -85,7 +88,10 @@ export class Session {
     this.phone = phone;
     this.started = ctx.now();
     entry.sessions.set(this.sid, this);
-    this.openTimer = setTimeout(() => this.end(Close.NoDataSocket), ctx.limits.openDeadlineMs);
+    this.openTimer = setTimeout(() => {
+      if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "relay_no_data_socket", code: Close.NoDataSocket, budgetMs: ctx.limits.openDeadlineMs });
+      this.end(Close.NoDataSocket);
+    }, ctx.limits.openDeadlineMs);
     phone.once("close", (code) => this.closed(phone, code));
   }
 
@@ -94,6 +100,7 @@ export class Session {
     this.state = "spliced";
     this.data = data;
     clearTimeout(this.openTimer);
+    if (admissionTrace.hasSubscribers) admissionTrace.publish({ phase: "host_data_attach_seen", socketState: data.readyState });
     const now = this.ctx.now();
     this.meter = new HeavyMeter(this.ctx.limits.heavyWindowMs, this.ctx.limits.heavyBitsPerSecond, now);
     this.toHost = this.direction(this.phone, data, now);
@@ -104,6 +111,7 @@ export class Session {
     this.ctx.metrics.inc("relay_sessions_total");
     this.ctx.metrics.peak("sessions_spliced", (this.ctx.hosts.spliced += 1));
     sendJson(this.phone, { t: "ready" });
+    if (admissionTrace.hasSubscribers && this.phone.readyState === WebSocket.OPEN) admissionTrace.publish({ phase: "relay_spliced_ready_sent" });
   }
 
   fromPhone(data: Buffer, isBinary: boolean): void {

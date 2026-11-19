@@ -1,6 +1,3 @@
-// A Team Cloud's conversations that several people read are read per person: each person's own "read up to" line in
-// each room and in each bot's shared chat (`room-reads.json`), so one person reading one clears its unread mark for nobody
-// else.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -129,6 +126,8 @@ export function createPersonRooms(deps: PersonRoomsDeps) {
       return { ...rest, unread, ...(readUpTo ? { lastReadMessageId: readUpTo } : {}) };
     });
     const unread = tasks ? tasks.some((task) => task.unread) : roomUnreadFor(currentPath, currentRead, group.unread, atOf(group.threadId));
+    if (unread === group.unread && currentRead === group.lastReadMessageId && (!tasks || tasks.every((task, index) =>
+      task.unread === group.tasks?.[index]?.unread && task.lastReadMessageId === group.tasks?.[index]?.lastReadMessageId))) return group;
     const { lastReadMessageId: _shared, ...rest } = group;
     return { ...rest, tasks, unread, ...(currentRead ? { lastReadMessageId: currentRead } : {}) };
   }

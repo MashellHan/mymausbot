@@ -244,6 +244,7 @@ describe("CI outputs", () => {
       "server/cloud-lending-memory.e2e.test.ts",
       "server/cloud-lending.e2e.test.ts",
       "server/cloud-lent-mcp.e2e.test.ts",
+      "server/cloud-personal-slack.e2e.test.ts",
       "server/cloud-send-kinds.e2e.test.ts",
       "server/cloud-send-move.e2e.test.ts",
       "server/cloud-send-rooms.e2e.test.ts",
@@ -253,16 +254,20 @@ describe("CI outputs", () => {
       "server/cloud-sync.e2e.test.ts",
       "server/cloud-team-asker-owns.e2e.test.ts",
       "server/cloud-team-away.e2e.test.ts",
+      "server/cloud-team-bitwarden.e2e.test.ts",
+      "server/cloud-team-box-audience.e2e.test.ts",
       "server/cloud-team-browser.e2e.test.ts",
       "server/cloud-team-connections.e2e.test.ts",
       "server/cloud-team-conversation-share.e2e.test.ts",
       "server/cloud-team-engine-homes.e2e.test.ts",
+      "server/cloud-team-files.e2e.test.ts",
       "server/cloud-team-gateway-mcp.e2e.test.ts",
       "server/cloud-team-inbox.e2e.test.ts",
       "server/cloud-team-included-hosting.e2e.test.ts",
       "server/cloud-team-mausbot-reach.e2e.test.ts",
       "server/cloud-team-member-secrets.e2e.test.ts",
       "server/cloud-team-new-chat-private.e2e.test.ts",
+      "server/cloud-team-onepassword.e2e.test.ts",
       "server/cloud-team-open-reach.e2e.test.ts",
       "server/cloud-team-own-key-apps.e2e.test.ts",
       "server/cloud-team-owners.e2e.test.ts",
@@ -275,10 +280,12 @@ describe("CI outputs", () => {
       "server/cloud-team-private-default.e2e.test.ts",
       "server/cloud-team-private.e2e.test.ts",
       "server/cloud-team-profile.e2e.test.ts",
+      "server/cloud-team-slack.e2e.test.ts",
       "server/cloud-team-published-apps.e2e.test.ts",
       "server/cloud-team-requests.e2e.test.ts",
       "server/cloud-team-routines.e2e.test.ts",
       "server/cloud-team-setup-request.e2e.test.ts",
+      "server/cloud-team-templates.e2e.test.ts",
       "server/cloud-team.e2e.test.ts",
       "server/host/brief-words.test.ts",
       "server/host/lending-lifts.test.ts",
@@ -552,7 +559,7 @@ describe("the repository's import graph", () => {
     const frameSmoke = readFileSync(join(ROOT, "scripts/smoke-app-frames.mjs"), "utf8");
     expect(frameSmoke).toContain('resolveDir: join(ROOT, "src/components/app")');
     expect(frameSmoke).toContain("from \\\"./app-frame-host.ts\\\"");
-    const runtime = ["server", "shared", "electron", "companion", "enterprise", "evals", "cloudflare"]
+    const runtime = ["server", "shared", "packages", "electron", "companion", "enterprise", "evals", "cloudflare"]
       .flatMap((directory) => codeFiles(join(ROOT, directory)))
       .filter((file) => !TEST_FILE.test(relative(ROOT, file).split("\\").join("/")));
     expect(runtime.length).toBeGreaterThan(500);
@@ -563,7 +570,7 @@ describe("the repository's import graph", () => {
   });
 
   it("runs every test outside the renderer that reads a translation other than English with the locale tests", () => {
-    const files = ["server", "shared", "electron", "companion", "enterprise", "evals", "scripts", "cloudflare"]
+    const files = ["server", "shared", "packages", "electron", "companion", "enterprise", "evals", "scripts", "cloudflare"]
       .flatMap((directory) => codeFiles(join(ROOT, directory)))
       // The selection names the catalogs without reading them.
       .filter((file) => !/[/\\]ci-scope\.(?:mjs|test\.ts)$/.test(file));
@@ -589,7 +596,7 @@ describe("the repository's import graph", () => {
     expect(inStatic).toContain("scripts/testing/verification-docs.test.ts");
     // A docs path a test reads from the repository root: join(ROOT, "docs", ...), new URL("docs/...", ROOT) or read("docs/...").
     const DOCS_READ = /(?:(?:join|resolve)\(\s*ROOT\s*,\s*|new URL\(\s*|\bread\w*\(\s*)["'`]((?:apps\/docs|docs)\b[^"'`]*|[A-Z][A-Z_]+\.md)["'`]/g;
-    const readers = ["server", "shared", "electron", "companion", "enterprise", "evals", "scripts", "src", "cloudflare"]
+    const readers = ["server", "shared", "packages", "electron", "companion", "enterprise", "evals", "scripts", "src", "cloudflare"]
       .flatMap((directory) => codeFiles(join(ROOT, directory)))
       .filter((file) => /\.(?:test|node-test)\.[cm]?[jt]sx?$/.test(file) && !file.endsWith("ci-scope.test.ts"))
       .filter((file) => [...readFileSync(file, "utf8").replace(/(["'`])\s*,\s*(["'`])/g, "/").matchAll(DOCS_READ)]
@@ -600,7 +607,7 @@ describe("the repository's import graph", () => {
   });
 
   it("never loads a test file from other code, so a test under scripts/ affects only the jobs that run it", () => {
-    const code = ["server", "shared", "electron", "companion", "enterprise", "evals", "scripts", "src", "cloudflare"]
+    const code = ["server", "shared", "packages", "electron", "companion", "enterprise", "evals", "scripts", "src", "cloudflare"]
       .flatMap((directory) => codeFiles(join(ROOT, directory)));
     const loaders = code.filter((file) => imports(file).some((target) => /\.test\.[cm]?[jt]sx?$/.test(target)));
     expect(loaders.map((file) => relative(ROOT, file))).toEqual([]);

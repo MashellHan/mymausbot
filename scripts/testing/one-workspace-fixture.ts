@@ -392,6 +392,7 @@ export async function launchHomeWorld(fx: CloudSendFixture, { chrome, versionEve
   const started = new Map<string, number>();
   const syncHandlers = new Map<string, (event: any) => void>();
   const ipcMain = { handle: (channel: string, handler: (...args: any[]) => unknown) => { handlers.set(channel, handler); }, on: (channel: string, listener: (event: any) => void) => { syncHandlers.set(channel, listener); } };
+  ipcMain.on("desktop-language:read", (event) => { event.returnValue = "en"; });
   const ipc: Server = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
     res.setHeader("access-control-allow-origin", "*");
     const [path = "", query = ""] = (req.url ?? "").split("?");

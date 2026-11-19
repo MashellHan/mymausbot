@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
 export const PANEL_MIN_WIDTH = 360;
 export const PANEL_DEFAULT_WIDTH = 960;
 export const COMPUTER_PANEL_DEFAULT_WIDTH = 1152;
 export const PANEL_MAX_WIDTH = 1440;
+export const CHAT_MIN_WIDTH = 360;
 const PANEL_INLINE_BREAKPOINT = 1536;
 const PANEL_INLINE_GUTTER = PANEL_INLINE_BREAKPOINT - PANEL_DEFAULT_WIDTH;
 const PANEL_RESIZE_STEP = 40;
@@ -28,7 +29,11 @@ export function useComputerPanelResize(options: ComputerPanelResizeOptions = {})
   const defaultWidth = options.defaultWidth ?? PANEL_DEFAULT_WIDTH;
   const [uncontrolledWidth, setUncontrolledWidth] = useState(defaultWidth);
   const controlled = options.width !== undefined;
-  const panelWidth = controlled ? options.width! : uncontrolledWidth;
+  const chosenWidth = controlled ? options.width! : uncontrolledWidth;
+  const [viewportWidth, setViewportWidth] = useState(() => typeof window === "undefined" ? PANEL_INLINE_BREAKPOINT : window.innerWidth);
+  const [rowMaxWidth, setRowMaxWidth] = useState<number | null>(null);
+  const panelMaxWidth = Math.min(computerPanelMaxWidth(viewportWidth), rowMaxWidth ?? Infinity);
+  const panelWidth = Math.min(chosenWidth, panelMaxWidth);
   const setPanelWidth = (next: number | ((current: number) => number)) => {
     if (controlled) {
       const resolved = typeof next === "function" ? next(panelWidth) : next;
@@ -41,8 +46,6 @@ export function useComputerPanelResize(options: ComputerPanelResizeOptions = {})
       return resolved;
     });
   };
-  const [viewportWidth, setViewportWidth] = useState(() => typeof window === "undefined" ? PANEL_INLINE_BREAKPOINT : window.innerWidth);
-  const panelMaxWidth = computerPanelMaxWidth(viewportWidth);
   const separatorRef = useRef<HTMLDivElement>(null);
   const [separatorWidth, setSeparatorWidth] = useState<number | null>(null);
   const resizeFrom = useRef<{ x: number; width: number } | null>(null);
@@ -68,14 +71,33 @@ export function useComputerPanelResize(options: ComputerPanelResizeOptions = {})
     window.addEventListener("resize", update);
     return () => window.removeEventListener("resize", update);
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const panel = separatorRef.current?.closest("aside");
-    if (!panel) return;
-    const read = () => setSeparatorWidth(panel.offsetWidth);
+    const row = panel?.parentElement;
+    if (!panel || !row) return;
+    let chat: HTMLElement | null = null;
+    const read = () => {
+      const current = row.querySelector<HTMLElement>(":scope > main");
+      if (current !== chat) {
+        if (chat) resizes.unobserve(chat);
+        if (current) resizes.observe(current);
+        chat = current;
+      }
+      const width = panel.offsetWidth;
+      setSeparatorWidth(width);
+      setRowMaxWidth(chat && width > 0
+        ? Math.max(PANEL_MIN_WIDTH, width + chat.offsetWidth - CHAT_MIN_WIDTH)
+        : null);
+    };
+    const resizes = new ResizeObserver(read);
+    resizes.observe(panel);
+    const swaps = new MutationObserver(read);
+    swaps.observe(row, { childList: true });
     read();
-    const observer = new ResizeObserver(read);
-    observer.observe(panel);
-    return () => observer.disconnect();
+    return () => {
+      resizes.disconnect();
+      swaps.disconnect();
+    };
   }, []);
   const onSeparatorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -84,5 +106,5 @@ export function useComputerPanelResize(options: ComputerPanelResizeOptions = {})
     event.preventDefault();
     onResizeBy(widen);
   };
-  return { panelWidth, panelMaxWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd };
+  return { panelWidth, panelMaxWidth, maxWidth: panelMaxWidth, separatorRef, separatorWidth, onSeparatorKeyDown, onResizeStart, onResizeMove, onResizeEnd };
 }

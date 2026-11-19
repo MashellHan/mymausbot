@@ -62,6 +62,7 @@ export async function mountPreview(
   const { entry, route, title, extraRoutes = [], viewport = "width=device-width, initial-scale=1", logLevel, proxyHeaders } = options;
   const page = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="${escapeHtml(viewport)}"><title>${escapeHtml(title)}</title></head><body><div id="root"></div><script type="module" src="${escapeHtml(entry)}"></script></body></html>`;
   const cacheRoot = await mkdtemp(join(tmpdir(), "omb-preview-vite-"));
+  // The React plugin excludes node_modules from Babel transforms.
   const ui = await createServer({
     root: REPO_ROOT, cacheDir: join(cacheRoot, "node_modules", ".vite"),
     ...(logLevel ? { logLevel } : {}),
