@@ -133,7 +133,7 @@ function tokenSeriesTone(series: TokenTrendSeries, index: number) {
 
 function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucket[]; metric: Metric; weekly: boolean; tokenDays?: UsageTrendDay[] }) {
   const usageMetricHint = useUsageMetricHint();
-  const [mode, setMode] = useState<TokenTrendMode>("types");
+  const [mode, setMode] = useState<TokenTrendMode>("models");
   const stack = useMemo(() => tokenDays && tokenTrendStacks(tokenDays, days, mode), [tokenDays, days, mode]);
   const [activeDay, setActiveDay] = useState<string | null>(null);
   const [focusDay, setFocusDay] = useState<string | null>(null);
