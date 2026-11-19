@@ -11,7 +11,7 @@ vi.mock("@/lib/interface-mode", async (original) => ({
 }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({}) }));
 
-import { botRowProps } from "./Sidebar";
+import { BotListItem, botRowProps } from "./Sidebar";
 import { SidebarBotTile, SidebarTileGrid } from "./SidebarTiles";
 
 const bot = (extra: Partial<Bot> = {}): Bot => ({
@@ -80,6 +80,18 @@ describe("the sidebar tiles", () => {
     const pinned = renderToStaticMarkup(createElement(SidebarBotTile, { ...props(bot(), true), raw: true }));
     expect(pinned).toContain('bg-[var(--tile)]');
     expect(pinned).toContain('[--tile:var(--color-raised)]');
+  });
+
+  it("shows a failed last turn as a red dot on the tile and on a Simple row, never the orange waiting one", () => {
+    const failed = bot({ messages: [{ id: "e1", role: "bot", kind: "activity", at: 2, tool: { name: "error: The site did not answer.", ok: false } }] as Bot["messages"] });
+    const html = renderToStaticMarkup(createElement(SidebarBotTile, props(failed)));
+    expect(html).toMatch(/data-testid="failed-dot"[^>]*class="[^"]*\bbg-danger\b/);
+    expect(html).toContain('aria-label="MausBot · Ran into a problem"');
+    expect(html).not.toContain('data-testid="waiting-dot"');
+    const row = renderToStaticMarkup(createElement(BotListItem, props(failed)));
+    expect(row).toMatch(/data-testid="failed-dot"[^>]*class="[^"]*\bbg-danger\b/);
+    expect(row).not.toContain('data-testid="waiting-dot"');
+    expect(row).toContain('<span class="sr-only">Ran into a problem</span>');
   });
 
   it("opens the bot on Enter and its menu from the ContextMenu key", () => {

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useStore, type Bot } from "@/state/store";
 import type { EffortLevel } from "../../shared/wire";
+import { pickerModelEffortLevels } from "@/lib/model-choices";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { variantChoices, variantLabel } from "./model-picker-reasoning";
@@ -37,13 +38,14 @@ export function EffortRow({
   if (instance?.capabilities?.modelVariants) {
     return <ModelVariantRow bot={bot} threadId={threadId} updateBotDefault={updateBotDefault} className={className} label={label} compact={compact} wide={wide} quiet={compact} />;
   }
-  const levels = instance?.capabilities?.effortLevels;
-  if (!levels?.length) return null;
+  const levels = pickerModelEffortLevels(instance, selection.model);
+  if (!levels.length) return null;
+  const effort = selection.effort !== undefined && levels.includes(selection.effort) ? selection.effort : undefined;
 
   if (compact) return (
     <label className={cn("flex items-center justify-between gap-3", className)}>
       {label}
-      <Select size="sm" variant="quiet" className={wide ? "w-[65%]" : "max-w-[65%]"} aria-label={t("model.effort.label")} value={selection.effort ?? ""}
+      <Select size="sm" variant="quiet" className={wide ? "w-[65%]" : "max-w-[65%]"} aria-label={t("model.effort.label")} value={effort ?? ""}
         onChange={(event) => dispatch({ type: "setModel", botId: bot.id, threadId, ...(updateBotDefault ? { updateBotDefault: true } : {}),
           selection: { ...selection, effort: levels.find((level) => level === event.target.value) } })}>
         <option value="">{t("model.effort.default")}</option>
@@ -60,7 +62,7 @@ export function EffortRow({
           <button
             key={level ?? "default"}
             type="button"
-            aria-pressed={selection.effort === level}
+            aria-pressed={effort === level}
             title={
               level === undefined
                 ? t("model.effort.noLevel")
@@ -69,7 +71,7 @@ export function EffortRow({
             onClick={() => dispatch({ type: "setModel", botId: bot.id, threadId, ...(updateBotDefault ? { updateBotDefault: true } : {}), selection: { ...selection, effort: level } })}
             className={cn(
               "rounded-full border px-2.5 py-1 text-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/70",
-              selection.effort === level
+              effort === level
                 ? "border-accent/60 bg-control text-ink"
                 : "border-hairline/40 text-ink-secondary hover:bg-control/60 hover:text-ink",
             )}

@@ -21,8 +21,8 @@ export function ForkLinks(owner: Owner & { phone: boolean }) {
   const dispatch = useStoreDispatch();
   const forks = useStoreSelector((state) => {
     const tasks = owner.kind === "bot"
-      ? state.bots.find((bot) => bot.id === owner.ownerId)?.tasks
-      : state.groups.find((group) => group.id === owner.ownerId)?.tasks;
+      ? state.bots?.find((bot) => bot.id === owner.ownerId)?.tasks
+      : state.groups?.find((group) => group.id === owner.ownerId)?.tasks;
     return tasks?.filter((task) => task.origin?.threadId === owner.threadId && task.origin.messageId === owner.messageId) ?? [];
   }, sameItems);
   if (owner.phone || !forks.length) return null;

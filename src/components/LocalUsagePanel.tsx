@@ -1,11 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LocalUsageCategory, LocalUsageResponse } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
 import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
-import { weeklyUsageTrend, type UsageTrendBucket } from "@/lib/local-usage-trends";
+import { tokenTrendStacks, weeklyUsageTrend, type TokenTrendMode, type TokenTrendSeries, type UsageTrendBucket } from "@/lib/local-usage-trends";
 import { usageTrendRanges, type UsageTrendRange } from "../../shared/local-usage-range";
-import { metricText, countText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
-import { UsageDailyTable, UsageRepositoryTable } from "./LocalUsageTables";
+import { metricText, observedCountText, UsageCount, UsageChange, useUsageMetricHint, UsageSourceContext, usageMetrics as metrics, type UsageMetric as Metric } from "./LocalUsageValues";
+import { UsageDailyTable, UsageRepositoryTable, shortUsagePeriods } from "./LocalUsageTables";
+import { costText, UsageModelPanel } from "./LocalUsageModels";
 import { InfoHint } from "./InfoHint";
 import { Select } from "./Select";
 import { activeLocale, t } from "@/lib/i18n";
@@ -37,9 +38,19 @@ function tokenComparisonUnavailableHint(window: UsageWindow) {
 
 function WindowCard({ window }: { window: UsageWindow }) {
   const usageMetricHint = useUsageMetricHint();
+  const details = window.tokenDetails;
+  const cachedInput = window.cacheRead;
+  const freshInput = details?.input ?? null;
+  const output = details?.output ?? null;
+  const cacheRatio = cachedInput !== null && freshInput !== null && output !== null
+    && freshInput + output === window.newTokens && cachedInput + freshInput > 0
+    ? new Intl.NumberFormat(activeLocale(), { style: "percent", maximumFractionDigits: 1 }).format(cachedInput / (cachedInput + freshInput))
+    : null;
+  const tokenCoverageHint = window.tokenCoverage === "partial" ? t("computer.usage.tokensPartial") : undefined;
+  const tokenTotalTitle = [metricText(window.totalTokens), tokenCoverageHint].filter(Boolean).join(" · ");
   const rows = [
-    ["prs", countText(window.prs, window.knownPrs), window.comparison.prs ?? window.comparison.known?.prs ?? null],
-    ["commits", countText(window.commits, window.knownCommits), window.comparison.commits ?? window.comparison.known?.commits ?? null],
+    ["prs", null, window.comparison.prs ?? window.comparison.known?.prs ?? null],
+    ["commits", null, window.comparison.commits ?? window.comparison.known?.commits ?? null],
     ["totalTokens", window.totalTokens !== null && window.totalTokens >= 1_000_000
       ? new Intl.NumberFormat(activeLocale(), { notation: "compact", maximumFractionDigits: 1 }).format(window.totalTokens) : metricText(window.totalTokens), window.comparison.totalTokens],
   ] as const;
@@ -56,7 +67,7 @@ function WindowCard({ window }: { window: UsageWindow }) {
           <div key={metric} className="min-w-0">
             <dt title={usageMetricHint(metric)} className="text-[13px] text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</dt>
             <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 tabular-nums [overflow-wrap:anywhere]">
-              <span title={metric === "totalTokens" ? metricText(window.totalTokens) : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
+              <span title={metric === "totalTokens" ? tokenTotalTitle : undefined} aria-description={metric === "totalTokens" ? tokenCoverageHint : undefined} className="text-[18px] font-semibold text-ink">{metric === "prs" ? <UsageCount value={window.prs} known={window.knownPrs} /> : metric === "commits" ? <UsageCount value={window.commits} known={window.knownCommits} /> : value}</span>
               <UsageChange value={comparison} startDay={window.comparison.startDay} endDay={window.comparison.endDay} metric={metric}
                 periodDays={window.days} known={metric !== "totalTokens" && window.comparison[metric] === null && comparison !== null}
                 unavailableHint={metric === "totalTokens" && comparison === null ? tokenComparisonUnavailableHint(window) : undefined} />
@@ -64,6 +75,18 @@ function WindowCard({ window }: { window: UsageWindow }) {
           </div>
         ))}
       </dl>
+      <div className="mt-2 border-t border-hairline/40 pt-2">
+        <dl data-usage-token-breakdown className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-1 text-[13px] tabular-nums">
+          <div className="min-w-0 [overflow-wrap:anywhere]">
+            <dt className="text-ink-secondary">{t("computer.usage.cachedInput")}</dt>
+            <dd className="text-ink">{metricText(cachedInput)}{cacheRatio === null ? null : ` (${cacheRatio})`}</dd>
+          </div>
+          <div className="min-w-0 [overflow-wrap:anywhere]">
+            <dt className="text-ink-secondary">{t("computer.usage.estimatedCost")}</dt>
+            <dd className="text-ink">{costText(details?.estimatedCost)}</dd>
+          </div>
+        </dl>
+      </div>
       <div className="mt-2 border-t border-hairline/40 pt-2 text-[13px] tabular-nums">
         <div className="mb-1 grid grid-cols-[1fr_1fr_1fr] gap-2 text-ink-secondary" aria-hidden="true"><span /><span className="text-right">{t("computer.usage.metric.prs")}</span><span className="text-right">{t("computer.usage.metric.commits")}</span></div>
         {(["work", "personal", "unclassified"] as const).filter((key) => key !== "unclassified" || (window.categories[key].knownPrs ?? 0) + (window.categories[key].commits ?? window.categories[key].knownCommits ?? 0) > 0).map((key) => {
@@ -92,7 +115,9 @@ function trendValue(day: UsageTrendDay, metric: Metric): number | null {
   return metric === "prs" ? day.prs ?? day.knownPrs : metric === "commits" ? day.commits ?? day.knownCommits : day.totalTokens;
 }
 
-const tooltipCount = (value: number | null) => value === null ? "—" : metricText(value);
+function trendCountText(day: UsageTrendDay, metric: "prs" | "commits") {
+  return observedCountText(day[metric], metric === "prs" ? day.knownPrs : day.knownCommits);
+}
 
 const categoryOrder = ["work", "personal", "unclassified"] as const;
 const categoryTone: Record<LocalUsageCategory, string> = {
@@ -107,8 +132,26 @@ function categoryValue(day: UsageTrendDay, metric: "prs" | "commits", category: 
   return metric === "prs" ? counts.prs ?? counts.knownPrs : counts.commits ?? counts.knownCommits;
 }
 
-function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric: Metric; weekly: boolean }) {
+const tokenTrendModes = ["types", "models"] as const;
+const tokenLabels = { cacheRead: "cachedInput", input: "freshInput", output: "output" } as const;
+const seriesTones = ["bg-accent/80", "bg-success/75", "bg-warning/75", "bg-ink-secondary/75", "bg-accent/45"] as const;
+
+function tokenSeriesLabel(series: TokenTrendSeries, mode: TokenTrendMode) {
+  if (series.kind === "type") return t(`computer.usage.${tokenLabels[series.key]}`);
+  if (series.kind === "model") return series.key;
+  return t(series.kind === "other" ? "computer.usage.otherModels" : mode === "types" ? "computer.usage.breakdownUnavailable" : "computer.usage.unattributedTokens");
+}
+
+function tokenSeriesTone(series: TokenTrendSeries, index: number) {
+  if (series.kind === "other") return "bg-ink-secondary/35";
+  if (series.kind === "unknown") return "bg-[repeating-linear-gradient(135deg,transparent_0_2px,var(--color-ink-secondary)_2px_3px)] opacity-60";
+  return seriesTones[index];
+}
+
+function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucket[]; metric: Metric; weekly: boolean; tokenDays?: UsageTrendDay[] }) {
   const usageMetricHint = useUsageMetricHint();
+  const [mode, setMode] = useState<TokenTrendMode>("models");
+  const stack = useMemo(() => tokenDays && tokenTrendStacks(tokenDays, days, mode), [tokenDays, days, mode]);
   const [activeDay, setActiveDay] = useState<string | null>(null);
   const [focusDay, setFocusDay] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -116,9 +159,11 @@ function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric
   const lastFocused = useRef<Element | null>(null);
   const tooltipId = useId();
   const weekdayFormat = new Intl.DateTimeFormat(activeLocale(), { weekday: "short", timeZone: "UTC" });
+  const percent = new Intl.NumberFormat(activeLocale(), { style: "percent", maximumFractionDigits: 1 });
   const values = days.map((day) => trendValue(day, metric));
   const max = Math.max(1, ...values.filter((value): value is number => value !== null));
-  const active = days.find((day) => day.day === activeDay) ?? null;
+  const activeIndex = days.findIndex((day) => day.day === activeDay);
+  const active = days[activeIndex];
   const rovingDay = days.some((day) => day.day === focusDay) ? focusDay : days[0]?.day;
   const showUnclassified = metric !== "totalTokens" && days.some((day) => (categoryValue(day, metric, "unclassified") ?? 0) > 0);
   useLayoutEffect(() => {
@@ -134,20 +179,30 @@ function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric
       if (restore && rovingDay) buttons.current.get(rovingDay)?.focus();
     }
   }, [activeDay, active, focusDay, rovingDay]);
-  return (
-    <div className="relative min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric} data-usage-granularity={weekly ? "week" : "day"}>
-      <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 inset-x-2.5 grid gap-[2px]"
+  const weekMarkers = <div aria-hidden="true" className={cn("pointer-events-none absolute grid gap-[2px]", stack ? "inset-0" : "inset-y-0 inset-x-2.5")}
         style={{ gridTemplateColumns: `repeat(${Math.max(1, days.length)}, minmax(0, 1fr))` }}>
         {days.map((day, index) => !weekly && index > 0 && new Date(`${day.day}T00:00:00Z`).getUTCDay() === 1
           ? <span key={day.day} data-usage-week-start={day.day} className="-ml-px border-l border-ink/[0.08]" style={{ gridColumn: index + 1 }} /> : null)}
+      </div>;
+  return (
+    <div className="relative min-w-0 rounded-lg bg-inset p-2.5" data-usage-trend={metric} data-usage-granularity={weekly ? "week" : "day"}>
+      {!stack && weekMarkers}
+      <div className="relative flex flex-wrap items-center justify-between gap-1">
+        <h4 title={usageMetricHint(metric)} className="text-[13px] font-medium text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</h4>
+        {stack && <div role="group" aria-label={t("computer.usage.tokenBreakdown")} className="flex rounded-lg p-0.5">
+          {tokenTrendModes.map((key) => <button key={key} type="button" aria-pressed={mode === key} onClick={() => setMode(key)}
+            className={cn("min-h-7 rounded-md px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+              mode === key ? "bg-card font-medium text-ink" : "text-ink-secondary hover:bg-ink/[0.06]")}>
+            {t(key === "types" ? "computer.usage.tokenTypes" : "computer.usage.tokenModels")}
+          </button>)}
+        </div>}
       </div>
-      <h4 title={usageMetricHint(metric)} className="relative text-[13px] font-medium text-ink-secondary"><span className="bg-inset pr-1">{t(`computer.usage.metric.${metric}`)}</span></h4>
       <div className="relative mt-2 flex h-16 items-end gap-[2px]">
+        {stack && weekMarkers}
         {days.map((day, index) => {
           const date = new Date(`${day.day}T00:00:00Z`);
           const value = values[index];
-          const known = metric === "prs" ? day.knownPrs : day.knownCommits;
-          const label = `${metricText(value)}${metric !== "totalTokens" && day[metric] === null && known !== null ? ` · ${t("computer.usage.primaryKnownLabel")}` : ""}`
+          const label = (metric === "totalTokens" ? metricText(value) : trendCountText(day, metric))
             + `${(metric === "totalTokens" ? day.tokenStatus : day.coverage) === "partial" ? ` · ${t("computer.usage.coverage.partial")}` : ""}`;
           const segments = metric === "totalTokens" ? [] : categoryOrder.map((category) => ({
             category, value: categoryValue(day, metric, category) ?? 0,
@@ -173,7 +228,11 @@ function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric
             {value === null ? <span aria-hidden="true" className="h-full w-full bg-warning/15" />
               : <span aria-hidden="true" className="flex w-full flex-col-reverse overflow-hidden rounded-t-sm"
                 style={{ height: value === 0 ? 0 : `${Math.max(5, value / max * 100)}%` }}>
-                {metric === "totalTokens" ? <span className="h-full w-full bg-accent/75" />
+                {stack ? stack.series.map((series, seriesIndex) => {
+                  const part = stack.points[index]?.[seriesIndex];
+                  return !!part && <span key={seriesIndex} data-usage-token-segment={series.key}
+                    className={tokenSeriesTone(series, seriesIndex)} style={{ height: `${part / value * 100}%` }} />;
+                })
                   : segmentTotal ? segments.map(({ category, value: part, partial }) => <span key={category} data-usage-category={category}
                     className={partial ? partialCategoryTone[category] : categoryTone[category]} style={{ height: `${part / segmentTotal * 100}%` }} />)
                     : <span className="h-full w-full bg-ink-secondary/30" />}
@@ -181,17 +240,48 @@ function TrendChart({ days, metric, weekly }: { days: UsageTrendBucket[]; metric
           </button>;
         })}
       </div>
+      {stack && <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-ink-secondary" data-usage-token-legend>
+        {stack.series.map((series, index) => <span key={index} className="inline-flex min-w-0 items-center gap-1">
+          <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-sm", tokenSeriesTone(series, index))} />
+          <span dir="auto" className="[overflow-wrap:anywhere]">{tokenSeriesLabel(series, mode)}</span>
+        </span>)}
+        {values.includes(null) && <span>{t("computer.usage.tokenGapLegend")}</span>}
+      </div>}
       {active && <div id={tooltipId} role="tooltip" data-usage-tooltip
-        className="pointer-events-none absolute bottom-2 right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2 py-1.5 text-[12px] text-ink shadow-lg">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
-          <time dateTime={active.day} className="font-medium">{active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}</time>
-          <span>{t(`computer.usage.metric.${metric}`)}: {tooltipCount(trendValue(active, metric))}</span>
-        </div>
-        {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
-          {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category}>
-            {t(`computer.usage.category.${category}`)}: {tooltipCount(categoryValue(active, metric, category))}
-          </span>)}
-        </div>}
+        className={cn("pointer-events-none absolute right-2 z-20 w-[calc(100%-1rem)] max-w-[360px] rounded-lg border border-hairline bg-panel px-2.5 py-2 text-[12px] text-ink shadow-lg",
+          stack ? "top-full" : "bottom-2")}>
+        {stack ? <>
+          <time dateTime={active.day} className="block font-medium tabular-nums">
+            {active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}
+          </time>
+          {active.tokenStatus === "partial" && <p className="mt-0.5 text-ink-secondary">{t("computer.usage.tokensPartial")}</p>}
+          <dl className="mt-1.5 grid grid-cols-1 gap-y-0.5 tabular-nums">
+            <div className="flex min-w-0 items-baseline justify-between gap-3">
+              <dt className="text-ink-secondary">{t("computer.usage.metric.totalTokens")}</dt>
+              <dd className="shrink-0 text-right font-medium text-ink">{metricText(active.totalTokens)}</dd>
+            </div>
+            {active.totalTokens !== null && stack.series.map((series, index) => {
+              const amount = stack.points[activeIndex]?.[index] ?? null;
+              const total = active.totalTokens ?? 0;
+              const share = (series.kind === "model" || series.kind === "other") && amount !== null && total > 0
+                ? percent.format(amount / total) : null;
+              return (series.kind === "type" || !!amount) && <div key={index} className="flex min-w-0 items-baseline justify-between gap-3">
+                <dt dir="auto" className="min-w-0 [overflow-wrap:anywhere] text-ink-secondary">{tokenSeriesLabel(series, mode)}</dt>
+                <dd className="shrink-0 text-right text-ink">{metricText(amount)}{share && ` · ${share}`}</dd>
+              </div>;
+            })}
+          </dl>
+        </> : <>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
+            <time dateTime={active.day} className="font-medium">{active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}</time>
+            <span>{t(`computer.usage.metric.${metric}`)}: {metric === "totalTokens" ? metricText(active.totalTokens) : trendCountText(active, metric)}</span>
+          </div>
+          {metric !== "totalTokens" && <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-ink-secondary">
+            {categoryOrder.filter((category) => category !== "unclassified" || showUnclassified).map((category) => <span key={category}>
+              {t(`computer.usage.category.${category}`)}: {observedCountText(active.categories[category][metric], metric === "prs" ? active.categories[category].knownPrs : active.categories[category].knownCommits)}
+            </span>)}
+          </div>}
+        </>}
       </div>}
     </div>
   );
@@ -213,9 +303,17 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
           {view.status === "partial" && <p>{t("computer.usage.partial")}</p>}
           {view.status === "stale" && <p>{t("computer.usage.stale")}</p>}
         </InfoHint>}
+        {windows && <InfoHint label={t("computer.usage.countDefinitions")}>
+          <div className="space-y-1.5">
+            <p>{t("computer.usage.repositoryPrHint")}</p>
+            <p>{t("computer.usage.repositoryCommitHint")}</p>
+            <p>{t("computer.usage.observedCountHint")}</p>
+            {snapshot?.prSourceCoverage && <p>{t("computer.usage.prSources", { ...snapshot.prSourceCoverage })}</p>}
+          </div>
+        </InfoHint>}
         {view?.asOf != null ? <time data-usage-latest-update dateTime={new Date(view.asOf).toISOString()}
           className="ml-auto min-w-0 text-right text-[13px] tabular-nums text-ink-secondary [overflow-wrap:anywhere]">
-          {t("computer.usage.latestUpdate", { time: asOfTime(view.asOf) })}
+          {t(view.status === "stale" ? "computer.usage.retainedUpdate" : "computer.usage.latestUpdate", { time: asOfTime(view.asOf) })}
         </time> : <span data-usage-latest-update className="ml-auto min-w-0 text-right text-[13px] text-ink-secondary">
           {t("computer.usage.latestUpdate", { time: "—" })}
         </span>}
@@ -224,7 +322,7 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
       {view?.status === "unavailable" ? <p role="status" className="rounded-lg bg-inset px-3 py-3 text-[14px] text-ink-secondary">{t("computer.usage.noData")}</p> : null}
       {snapshot && windows && <>
         <div className="grid grid-cols-1 gap-2 @min-[42rem]/usage:grid-cols-3">
-          {(["1", "7", "30"] as const).map((key) => <WindowCard key={key} window={windows[key]} />)}
+          {shortUsagePeriods.map((key) => <WindowCard key={key} window={windows[key]} />)}
         </div>
         <section className="mt-4">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -242,10 +340,11 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
             </span>)}
           </div>
           <div className="mt-2 grid grid-cols-1 gap-3">
-            {metrics.map((metric) => <TrendChart key={metric} days={chartDays} metric={metric} weekly={range === "6m"} />)}
+            {metrics.map((metric) => <TrendChart key={metric} days={chartDays} metric={metric} weekly={range === "6m"} tokenDays={metric === "totalTokens" ? view.trend : undefined} />)}
           </div>
           <UsageDailyTable days={view.trend} />
         </section>
+        <UsageModelPanel windows={windows} />
         <UsageRepositoryTable key={range} windows={windows} historyWindow={view.sixtyDayRepositories} defaultPeriod={range === "60" ? "60" : "1"} />
       </>}
     </div>

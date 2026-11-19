@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { credentialIsConfigured, CREDENTIAL_TARGETS, PROVIDER_CREDENTIAL_TARGETS, type CredentialConfig, type CredentialTargetId } from "../../shared/credential-request.ts";
-import { WINDOW_PREFS, type WindowPrefId } from "../../shared/app-settings.ts";
+import { WINDOW_PREFS, type WindowPrefId, type WindowPrefValue } from "../../shared/app-settings.ts";
 import { BOT_PROFILE_LIMITS, fitsOnOneLine } from "../../shared/bot-profile.ts";
 import { defaultBotPerson } from "../../shared/default-bot.ts";
 import { EFFORT_LEVELS, MAUS_COLOR_NAMES, type EffortLevel, type MausColor } from "../../shared/wire.ts";
@@ -15,7 +15,7 @@ import { cacheKeepWarmSettings, DEFAULT_SKILL_REVIEW_STEPS, MAX_MCP_CALL_TIMEOUT
 import type { InstanceConfig } from "../contracts.ts";
 import { BUILT_IN_DRIVERS } from "../drivers/builtIn.ts";
 import type { ProviderRegistry } from "../harness/registry.ts";
-import { endpointBaseUrl, endpointDisplayUrl, isAddedEndpoint } from "../openai-compat-endpoints.ts";
+import { endpointBaseUrl, endpointDisplayUrl, isAddedEndpoint, localServerAlreadyAdded } from "../openai-compat-endpoints.ts";
 import type { RequestAuth } from "../request-auth.ts";
 import { callRoute, type RouteReply } from "../routes/call-route.ts";
 import { engineChosen } from "../routes/instances.ts";
@@ -25,9 +25,17 @@ import { skillsLibraryEnabled } from "../skill-library.ts";
 import { shareLearnedSkillsMode, type ShareLearnedSkillsMode } from "../skill-share.ts";
 import type { BotRecord, Store } from "../store.ts";
 
-/** Where the person changes it by hand, as the bot tells them. */
-type Where = "Settings → Appearance" | "Settings → General" | "Settings → AI" | "Settings → AI → API keys" | "Settings → You and your bots"
-  | "Settings → Phone & devices" | "Settings → Vault" | "Settings → Data" | "Settings → Your account" | "Settings → Desktops & browser" | "the sidebar" | "a bot's Settings";
+import { SETTINGS_PLACES, type SettingsPlaceId } from "../../shared/settings-places.ts";
+import { placePath } from "./places.ts";
+import { botEntries } from "./registry-bots.ts";
+import { configEntries } from "./registry-config.ts";
+import { pictureEntries } from "./registry-pictures.ts";
+import { windowEntries } from "./registry-window.ts";
+
+const LEGACY_ADVANCED_MODE_ID = "appearance.advanced";
+
+export type Where = string;
+export const settingLocation = (where: Where) => SETTINGS_PLACES.some((place) => place.id === where) ? placePath(where as SettingsPlaceId) : where;
 
 interface Base {
   id: string;
@@ -38,15 +46,20 @@ interface Base {
   /** What a person or bot sees. Never a secret: a key reads as set or not set. */
   read(): string;
 }
-/** `value` checks what the bot sends at the boundary; `current` is the typed value as `write` takes it, kept for Undo. */
+/** `value` checks what the bot sends at the boundary. `current`, read just before the write, is what Undo writes back to
+ * put things as they were (typed as `write` takes it); undefined when the earlier state can't be set back. `describe` is
+ * for a change that does not read as before → after: the one line its applied card shows, or why a bot may not make it. */
 interface Writable {
   tier: "safe" | "confirm";
   value: z.ZodType;
   allowed: string;
-  current(): unknown;
+  /** The value's `path` names a picture file: `describe` sees the path, then the host stores the file and `current` and
+   * `write` get the stored picture's `avatarUrl` in its place. An empty path stays, for taking the picture off. */
+  fromFile?: true;
+  current(value: unknown): unknown;
   preview?(value: unknown): string;
-  describe?(value: unknown): { change: string } | { refusal: string };
   write(value: unknown): Promise<string | null>;
+  describe?(value: unknown): { change: string } | { refusal: string };
 }
 interface Secret {
   tier: "secret";
@@ -58,6 +71,7 @@ interface OwnerOnly {
 export type SettingEntry = Base & (Writable | Secret | OwnerOnly);
 export type WritableEntry = Base & Writable;
 
+export type AppRoute = "starterAwake" | "skills";
 export interface RegistryDeps {
   cfg(): AppConfig;
   /** PUT /api/config as Settings does; a refusal comes back as its text. */
@@ -65,15 +79,27 @@ export interface RegistryDeps {
   bots(): BotRecord[];
   sections(): string[];
   reorderBots(botIds: string[]): Promise<string | null>;
+  /** Moves bots into a sidebar group, making it when new; an empty name ungroups them. */
+  groupBots(name: string, botIds: string[]): Promise<string | null>;
   pinBot(botId: string, pinned: boolean): Promise<string | null>;
+  /** PATCH /api/bots/:id as the bot's Settings panel does; a refusal comes back as its text. */
+  patchBot(botId: string, body: Record<string, unknown>): Promise<string | null>;
+  /** Another of the Settings window's routes, called as the window calls it. */
+  call(route: AppRoute, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: Record<string, unknown>): Promise<string | null>;
+  /** GET on one of those routes, as the window reads it; null when it answers with an error. */
+  read(route: AppRoute, path: string): Promise<Record<string, unknown> | null>;
+  /** On a Starter Cloud, the bots paused past the plan's limit now. */
+  paused(): string[];
+  credentials(): CredentialConfig;
+  window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
+  /** The engines Settings → AI lists; never a key. */
+  engines(): Array<{ instanceId: string; name: string; working: boolean }>;
+  /** POST /api/instances/<path> and DELETE /api/instances/<id>, as Settings does; a refusal comes back as its text. */
   renameBot(botId: string, name: string): Promise<string | null>;
   colorBot(botId: string, color: MausColor): Promise<string | null>;
   archiveBot(botId: string, archived: boolean, demoteChief: boolean): Promise<string | null>;
   showHelper(botId: string, shown: boolean): Promise<string | null>;
   savedStepsHere(): boolean;
-  credentials(): CredentialConfig;
-  window: { read(id: WindowPrefId): unknown; write(id: WindowPrefId, value: unknown): string | null };
-  engines(): Array<{ instanceId: string; name: string; working: boolean }>;
   engineChosen(instanceId: string): boolean;
   addEngine(path: "openai-compat" | "claude-bedrock", body: Record<string, unknown>): Promise<string | null>;
   removeEngine(instanceId: string): Promise<string | null>;
@@ -88,7 +114,22 @@ const KEY_WHERE: Partial<Record<CredentialTargetId, Where>> = {
   onePasswordToken: "Settings → Vault", boxToken: "Settings → Desktops & browser", composioApiKey: "Settings → AI",
 };
 
-type WritableSpec = Omit<Base, "read"> & Omit<Writable, "write" | "describe"> & { read?(): string; write(value: never): Promise<string | null>; describe?(value: never): { change: string } | { refusal: string } };
+export type WritableSpec = Omit<Base, "read"> & Omit<Writable, "tier" | "current" | "write" | "describe"> & {
+  tier?: Writable["tier"]; read?(): string; current(value: never): unknown; write(value: never): Promise<string | null>; describe?(value: never): { change: string } | { refusal: string };
+};
+/** `line` says what the new value does on the applied card; `refusal` names a value only the person sets, in Settings. */
+export type WindowPref = (id: WindowPrefId, label: string, help: string, where: Where, synonyms: string[], allowed: string,
+  line?: { says(value: never): string; refusal?(value: never): string | null }) => SettingEntry;
+/** One plain line for a change only the person makes, in Settings. */
+export const personOnly = (what: string, where: Where) => `${what} is changed only by the person, in ${settingLocation(where)}. Tell them where in one line; do not try another way.`;
+
+/** Security: a key never passes through the bot. A value naming a key, token, secret or password field is refused at
+ * the boundary; `except` lets through a field that only names a saved key. */
+export const withoutKeys = <T extends z.ZodType>(schema: T, except: readonly string[] = []) => z.record(z.string(), z.unknown())
+  .refine((fields) => !Object.keys(fields).some((field) => !except.includes(field) && /key|token|secret|password/i.test(field)),
+    "Never put a key or token in the value. Save it first with set on keys.<id> (a secure card asks the user), then name that id in keyFrom.")
+  // The record check above already holds an object; the schema decides its shape.
+  .pipe(schema as unknown as z.ZodType<z.output<T>, Record<string, unknown>>);
 
 const PROVIDER_KEY_SECTION = {
   openaiApiKey: "openai", anthropicApiKey: "anthropic", openrouterApiKey: "openrouter", mistralApiKey: "mistral", cerebrasApiKey: "cerebras",
@@ -139,10 +180,20 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     const savedOn = savedStepsEnabled(cfg());
     return { enabled: availableHere && savedOn, availableHere, ...(!availableHere ? { savedOn } : {}) };
   };
-  const writable = (spec: WritableSpec): SettingEntry => ({ ...spec, read: spec.read ?? (() => display(spec.current())), write: spec.write as Writable["write"] });
+  const writable = (spec: WritableSpec): SettingEntry => ({
+    ...spec, tier: spec.tier ?? "safe", read: spec.read ?? (() => display((spec.current as () => unknown)())),
+    current: spec.current as Writable["current"], write: spec.write as Writable["write"],
+    ...(spec.describe ? { describe: spec.describe as Writable["describe"] } : {}),
+  });
   const config = <V,>(patch: (value: V) => Record<string, unknown>) => (value: V) => deps.saveConfig(patch(value));
-  const windowPref = (id: WindowPrefId, label: string, help: string, where: Where, synonyms: string[], allowed: string): SettingEntry =>
-    writable({ id, label, help, where, synonyms, tier: "safe", value: WINDOW_PREFS[id], allowed, current: () => deps.window.read(id), write: async (value: unknown) => deps.window.write(id, value) });
+  const windowPref: WindowPref = (id, label, help, where, synonyms, allowed, line) => writable({
+    id, label, help, where, synonyms, value: WINDOW_PREFS[id], allowed,
+    current: () => deps.window.read(id), write: async (value: unknown) => deps.window.write(id, value),
+    ...(line ? { describe: (value: never) => {
+      const refusal = line.refusal?.(value);
+      return refusal ? { refusal } : { change: line.says(value) };
+    } } : {}),
+  });
   const enumOf = (values: readonly string[]) => values.join(", ");
   const pinned = () => deps.bots().filter((bot) => bot.pinned).map((bot) => bot.id);
   const groups = () => Object.fromEntries(deps.sections().map((section) => [section, deps.bots().filter((bot) => bot.section === section).map((bot) => bot.id)]));
@@ -163,6 +214,17 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
   const safe: SettingEntry[] = [
     windowPref("appearance.skin", "Skin", "The window's look; \"system\" follows the computer's light or dark mode.", "Settings → Appearance", ["theme", "dark mode", "light mode", "colors", "look"], enumOf(WINDOW_PREFS["appearance.skin"].options)),
     windowPref("appearance.mode", "Interface mode", "Raw is the first-use layout; Simple shows everyday controls; Advanced shows every setting and tool.", "Settings → Appearance", ["raw mode", "simple mode", "advanced mode", "interface mode"], enumOf(WINDOW_PREFS["appearance.mode"].options)),
+    writable({
+      id: LEGACY_ADVANCED_MODE_ID, label: "Advanced mode", help: "Advanced shows every setting and tool; Simple keeps the everyday ones.", where: "advanced-mode",
+      synonyms: ["advanced mode"], value: WINDOW_PREFS[LEGACY_ADVANCED_MODE_ID], allowed: "true or false",
+      current: () => deps.window.read("appearance.mode"),
+      read: () => display(deps.window.read("appearance.mode") === "advanced"),
+      write: async (value: boolean | WindowPrefValue<"appearance.mode">) => {
+        if (typeof value !== "boolean") return deps.window.write("appearance.mode", value);
+        if (value) return deps.window.write("appearance.mode", "advanced");
+        return deps.window.write("appearance.mode", deps.window.read("appearance.mode") === "raw" ? "raw" : "simple");
+      },
+    }),
     windowPref("appearance.font", "Font", "The app's typeface.", "Settings → Appearance", ["typeface", "typography"], enumOf(WINDOW_PREFS["appearance.font"].options)),
     windowPref("appearance.chatWidth", "Chat width", "How wide the chat column is.", "Settings → Appearance", ["layout", "column", "wide"], enumOf(WINDOW_PREFS["appearance.chatWidth"].options)),
     windowPref("general.sendKey", "Send key", "Which key sends a message in the composer.", "Settings → General", ["enter", "typing", "keyboard", "shortcut"], enumOf(WINDOW_PREFS["general.sendKey"].options)),
@@ -503,7 +565,7 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     const target = CREDENTIAL_TARGETS[credentialId];
     return {
       id: `keys.${credentialId}`, label: target.label, help: target.description, synonyms: ["key", "api key", "token", "credential", target.label.split(" ")[0]!.toLowerCase()],
-      where: KEY_WHERE[credentialId] ?? ((PROVIDER_CREDENTIAL_TARGETS as readonly string[]).includes(credentialId) ? "Settings → AI → API keys" : "Settings → AI"),
+      where: KEY_WHERE[credentialId] ?? ((PROVIDER_CREDENTIAL_TARGETS as readonly string[]).includes(credentialId) ? "keys" : "Settings → AI"),
       tier: "secret", credentialId, read: () => (credentialIsConfigured(deps.credentials(), credentialId) ? "set" : ""),
     };
   });
@@ -536,6 +598,10 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
         const onlyWorking = working.length === 1 && working[0]!.instanceId === change.instanceId;
         const address = isAddedEndpoint(change.instanceId, entry) ? endpointDisplayUrl(entry.config) : undefined;
         return { change: `Remove the engine "${name}" (${kind}${address ? `, ${address}` : ""})${onlyWorking ? ". It is your only working engine" : ""}` };
+      }
+      if (change.kind === "ollama" || change.kind === "lmstudio") {
+        const duplicate = localServerAlreadyAdded(instances(), change.url);
+        if (duplicate) return { refusal: duplicate };
       }
       if (change.kind === "openai-compat") {
         if (!savedKey(change.keyFrom)) return { refusal: keyMissing(change.keyFrom) };
@@ -572,16 +638,36 @@ export function createSettingsRegistry(deps: RegistryDeps): SettingEntry[] {
     ownerOnly("vault.logins", "Vault and logins", "Saved website logins and secrets bots may use.", "Settings → Vault", ["vault", "password", "passwords", "login", "logins", "1password"], () => "managed in Settings"),
     ownerOnly("data.backups", "Backups", "Backing up and restoring this app's data.", "Settings → Data", ["backup", "backups", "restore", "export", "import"], () => "managed in Settings"),
     ownerOnly("computer.sharing", "Computer sharing", "Lending this computer to other places and people.", "Settings → Desktops & browser", ["share computer", "lend", "lending", "shared computers", "desktop"], () => "managed in Settings"),
+    ownerOnly("phone.pairing", "Paired devices", "Pairing a phone or computer with a code, removing one, and what each paired device may do.", "pair",
+      ["pair", "pairing", "qr", "code", "paired", "revoke", "remove device", "device access"], () => "managed in Settings"),
+    ownerOnly("computer.lending", "Lending this computer", "Which folders and apps this computer lends to a Cloud or server; each grant is picked and confirmed in the desktop app's own dialogs.", "your-computers",
+      ["lend", "lending", "share computer", "share folders", "pause sharing"], () => "managed in Settings"),
+    ownerOnly("data.keepHere", "Keep bots on this computer", "Whether this computer's bots stay here or move to My Cloud; the desktop app takes it only from the person's own click.", "move",
+      ["keep here", "move to cloud", "move back", "bring back"], () => "managed in Settings"),
+    ownerOnly("appearance.sidebarPicture", "Sidebar picture", "The picture at the top of the sidebar; it is a file the person picks or removes.", "sidebar-picture",
+      ["wallpaper", "background", "banner", "sidebar image", "picture"], () => "managed in Settings"),
+    ownerOnly("account.organization", "Organization", "Joining or leaving a company's managed MausBot; it signs in through the company's portal.", "organization",
+      ["organization", "organisation", "company", "managed"], () => "managed in Settings"),
+    ownerOnly("people.signIn", "Who may sign in", "On a self-hosted server, the emails or @domains that may sign in, as admins or members. A change could lock someone out, or hand every setting to someone new.",
+      "members", ["people", "members", "invite", "roles", "admins", "sign in access"], () => "managed in Settings"),
+    ownerOnly("remote.domain", "Custom domain", "The web address this self-hosted server answers on. Changing it can cut off the address the person is using right now.", "domain",
+      ["domain", "custom domain", "dns", "public url"], () => cfg().customDomain ?? ""),
+    ownerOnly("remote.httpsAddress", "HTTPS address", "This computer's public HTTPS address for paired devices; turning it off can cut off the device the person is using now.", "tailscale",
+      ["https", "public address"], () => "managed in Settings"),
   ];
 
-  return [...safe, ...confirm, engines, ...secret, ...owner];
+  const entries = [
+    ...botEntries(deps, writable), ...pictureEntries(deps, writable), ...configEntries(deps, writable), ...windowEntries(windowPref),
+    ...safe, ...confirm, engines, ...secret, ...owner,
+  ];
+  return [...new Map(entries.map((entry) => [entry.id, entry])).values()];
 }
 
 export function findSettings(entries: readonly SettingEntry[], query: string, limit = 8): SettingEntry[] {
   const words = query.toLowerCase().split(/[^a-z0-9.-]+/).filter((word) => word.length > 1);
   if (!words.length) return [];
   const phrase = words.join(" ");
-  const scored = entries.map((entry) => {
+  const scored = entries.filter((entry) => entry.id !== LEGACY_ADVANCED_MODE_ID).map((entry) => {
     const label = entry.label.toLowerCase(), id = entry.id.toLowerCase();
     const synonyms = entry.synonyms.map((synonym) => synonym.toLowerCase());
     const loose = [entry.help, ...synonyms].join(" ").toLowerCase();
@@ -596,20 +682,34 @@ export function findSettings(entries: readonly SettingEntry[], query: string, li
 export function routeBackedRegistry(deps: {
   cfg(): AppConfig;
   store: Pick<Store, "bots" | "sections" | "tasks">;
-  routes: { config: RouteHandler; botOrder: RouteHandler; botPatch: RouteHandler; instances: RouteHandler };
+  routes: { config: RouteHandler; botOrder: RouteHandler; botPatch: RouteHandler; sections: RouteHandler; instances: RouteHandler } & Record<AppRoute, RouteHandler>;
   providers: Pick<ProviderRegistry, "instances" | "lastSnapshot">;
   credentials(): CredentialConfig;
   window: RegistryDeps["window"];
+  paused(): string[];
   savedStepsHere(): boolean;
 }): SettingEntry[] {
   const auth: RequestAuth = { kind: "loopback", scopes: ["admin", "client"] };
-  const refusal = async (reply: Promise<RouteReply>) => { const { status, body } = await reply; return status < 300 ? null : String(body.error ?? `HTTP ${status}`); };
+  const refusal = async (reply: Promise<RouteReply>) => {
+    try {
+      const { status, body } = await reply;
+      return status < 300 ? null : String(body.error ?? `HTTP ${status}`);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
   return createSettingsRegistry({
-    cfg: deps.cfg, bots: () => deps.store.bots, sections: () => deps.store.sections, credentials: deps.credentials, window: deps.window,
-    savedStepsHere: deps.savedStepsHere,
+    cfg: deps.cfg, bots: () => deps.store.bots, sections: () => deps.store.sections, credentials: deps.credentials, window: deps.window, paused: deps.paused, savedStepsHere: deps.savedStepsHere,
     saveConfig: (patch) => refusal(callRoute(deps.routes.config, { method: "PUT", path: "/api/config", body: patch, auth })),
     reorderBots: (botIds) => refusal(callRoute(deps.routes.botOrder, { method: "PUT", path: "/api/bots/order", body: { botIds }, auth })),
     pinBot: (botId, pinned) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { pinned }, auth })),
+    patchBot: (botId, body) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body, auth })),
+    call: (route, method, path, body) => refusal(callRoute(deps.routes[route], { method, path, ...(body ? { body } : {}), auth })),
+    read: async (route, path) => {
+      const reply = await callRoute(deps.routes[route], { method: "GET", path, auth }).catch(() => null);
+      return reply && reply.status < 300 ? reply.body : null;
+    },
+    groupBots: (name, botIds) => refusal(callRoute(deps.routes.sections, { method: "POST", path: "/api/sidebar-sections", body: { name, botIds }, auth })),
     renameBot: (botId, name) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { name }, auth })),
     colorBot: (botId, color) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { color }, auth })),
     archiveBot: (botId, archived, demoteChief) => refusal(callRoute(deps.routes.botPatch, { method: "PATCH", path: `/api/bots/${encodeURIComponent(botId)}`, body: { hidden: archived, ...(demoteChief ? { chiefOfStaff: false } : {}) }, auth })),

@@ -37,7 +37,7 @@ if (params.has("focus") || params.has("scroll")) {
     if ((params.get("scroll") === "values" || params.get("focus") === "table") && !table) return false;
     if (params.get("scroll") === "values") table?.scrollIntoView({ block: "start" });
     if (params.get("hscroll") === "end" && table) table.scrollLeft = table.scrollWidth;
-    const target = params.get("focus") === "tab" ? document.querySelector<HTMLElement>('[data-testid="local-usage-panel"] [role="tab"][aria-selected="true"]')
+    const target = params.get("focus") === "tab" ? document.querySelector<HTMLElement>('[data-usage-period="repositories"] [role="tab"][aria-selected="true"]')
       : params.get("focus") === "table" ? table : null;
     if (params.get("focus") === "tab" && !target) return false;
     target?.focus();

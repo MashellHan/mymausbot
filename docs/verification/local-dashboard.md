@@ -12,8 +12,10 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
 - The main Activities surface uses **Repository activity** (`repository-observations-v1`).
   Each card has one Commits metric: observed non-merge commits across local
   branches and synced origin refs, matched to configured author emails and
-  deduplicated by SHA. PRs use configured GitHub/ADO created-PR observations;
-  Tokens use existing synced-device observations, including cache reads.
+  deduplicated by SHA and grouped by author date. PRs are grouped by creation
+  date across the configured GitHub/ADO sources. A PR opened the prior evening
+  can have commits dated the following day. When PR source coverage is incomplete,
+  the observed count is a lower bound, including an observed zero.
 - Cards, trends, comparisons, categories and repository details use that same
   source. The 1-, 7- and 30-day windows include the capture date through the
   displayed timestamp in Asia/Shanghai. Window changes compare the preceding
@@ -23,6 +25,20 @@ revision-guarded app-scoped dashboard endpoint, then renders LocalUsageView.
   remains zero, and header information retains incomplete/stale status on demand.
   Missing devices, unreadable repositories and insufficient history remain
   incomplete. Verified previous zero yields New, or zero when both periods are zero.
+- The window totals and Models panel use `input + output + cacheRead`. Input
+  is fresh input. Cache writes and reasoning are already included in input and
+  output respectively. The Models panel uses the same Beijing date windows and
+  the same event-key deduplication as the synced-device Token totals. A missing
+  model breakdown can coexist with valid window totals from an older capture.
+- The Total Tokens trend can stack these three token types or the five largest
+  models for the selected period. Other sums the remaining attributed models.
+  The six-month range sums observed days by Beijing calendar week. Missing
+  breakdown data stays distinct from the known total and from Other.
+- Estimated USD applies current standard list rates to the observed token mix.
+  Partial estimates sum priced observations. A model or cached-input component
+  without a matching rate has unavailable cost. The estimate can differ from
+  billing by a provider or proxy. A complete window with zero observed Tokens
+  has a zero estimate.
 
 ### Independent API diagnostics
 
@@ -97,8 +113,12 @@ collectors concurrently with the independent local collector. One persistent
 writer lock and a 285-second whole-cycle bound protect the existing 300-second
 job. Both validated envelopes atomically replace one private
 `contributions-v2.json` generation; a failed provider retains the previous
-generation as stale. Local checkout failure does not suppress qualified remote
-metrics. No second scheduler is created. The old private sidecar is
+generation as stale and logs the failed stage and outcome. Local checkout
+failure does not suppress qualified remote metrics. Configured ADO project
+scopes also bound legacy PR discovery from machine checkout metadata.
+Daily model and token splits use the private local token history. Older captures
+can still supply totals for dates with no verified breakdown.
+The old private sidecar is
 `~/.local/share/mymausbot/usage/github-profile-v1.json` (0600, atomic replace,
 independent OS file lock released on process exit). The persistent `.lock` file
 must not be unlinked while writers may run; an old directory lock requires

@@ -84,7 +84,7 @@ function slowDriver(gate: Promise<ModelCatalog>): {
   return { driver, seenByTurn: () => seen };
 }
 
-const acpSupport = (resolveModels: () => Promise<ModelCatalog>): AcpSupport => ({
+const acpSupport = (resolveModels: NonNullable<AcpSupport["resolveModels"]>): AcpSupport => ({
   driverKind: "startup-catalog-test",
   displayName: "Startup catalog",
   models: { default: "static-model", options: [{ id: "static-model", label: "Static" }] },
@@ -116,6 +116,30 @@ describe("startup model catalogs", () => {
   it("keeps a model the organization turned off marked in the saved list, so no start offers it while its refresh waits", () => {
     writeStartupModelCache("org-blocked", { default: "a", options: [{ id: "a", label: "A" }, { id: "b", label: "B", orgBlocked: true }] });
     expect(readStartupModelCache("org-blocked")?.options[1]).toEqual({ id: "b", label: "B", orgBlocked: true });
+  });
+
+  it("round-trips model capabilities and validates saved connection metadata", () => {
+    const catalog: ModelCatalog = {
+      default: "a", options: [
+        { id: "a", label: "A", effortLevels: ["low", "high"],
+          providerRoute: { id: "configured:62ecdef896b71a45", label: "Raven", provenance: "configured", connectionGroup: "loopback:70701c719d76d35e" } },
+        { id: "b", label: "B", effortLevels: [], protocolUnsupported: true },
+        { id: "c", label: "C" },
+      ],
+    };
+    const instanceId = "model-capabilities";
+    writeStartupModelCache(instanceId, catalog);
+    expect(readStartupModelCache(instanceId)).toEqual(catalog);
+
+    writeFileSync(join(DATA_DIR, "providers", "engine-models", instanceId + ".json"), JSON.stringify({
+      default: "a", options: [{
+        id: "a", label: "A", effortLevels: ["low", "unknown"], protocolUnsupported: "true",
+        providerRoute: { id: "configured:62ecdef896b71a45", label: "https://private.example", provenance: "configured", connectionGroup: "unknown", endpoint: "https://private.example" },
+      }],
+    }));
+    expect(readStartupModelCache(instanceId)).toEqual({
+      default: "a", options: [{ id: "a", label: "A", providerRoute: { id: "configured:62ecdef896b71a45", provenance: "configured" } }],
+    });
   });
 
   it("does not wait for a slow refresh when a later start already has a catalog", async () => {
@@ -264,6 +288,44 @@ describe("startup model catalogs", () => {
     await turn;
     expect(finished).toBe(true);
     expect(seenByTurn()).toEqual(FRESH);
+  });
+
+  it("a saved catalog stands in without counting as confirmed, and Refresh drops ids the engine no longer returns", async () => {
+    writeStartupModelCache("saved-gone", {
+      default: "gone-model",
+      options: [{ id: "gone-model", label: "Gone" }, { id: "kept-model", label: "Kept" }],
+    });
+    let reads = 0;
+    const freshSeen: boolean[] = [];
+    const driver = createAcpDriver({
+      ...acpSupport((_env, _config, _id, fresh) => {
+        reads += 1;
+        freshSeen.push(fresh === true);
+        return { default: "kept-model", options: [{ id: "kept-model", label: "Kept" }] };
+      }),
+      // Not probed at startup, so a recent file is the only list until Refresh.
+      resolveModelsOnCreate: false,
+    });
+    const instance = await driver.create({
+      instanceId: "saved-gone",
+      displayName: "Saved gone",
+      environment: {},
+      enabled: true,
+      config: driver.defaultConfig(),
+    });
+    try {
+      expect(instance.models.options.map((option) => option.id)).toEqual(["gone-model", "kept-model"]);
+      expect(instance.modelsUnconfirmed).toBe(true);
+      expect(reads).toBe(0);
+      await instance.refreshModels?.();
+      expect(reads).toBe(1);
+      expect(freshSeen).toEqual([true]);
+      expect(instance.models).toEqual({ default: "kept-model", options: [{ id: "kept-model", label: "Kept" }] });
+      expect(instance.modelsUnconfirmed).toBe(false);
+      expect(readStartupModelCache("saved-gone")?.options.map((option) => option.id)).toEqual(["kept-model"]);
+    } finally {
+      await instance.dispose();
+    }
   });
 
   it("an ACP engine serves a saved catalog and lets the turn wait for the refresh", async () => {

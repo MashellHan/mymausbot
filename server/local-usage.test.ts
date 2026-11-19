@@ -7,7 +7,7 @@ import { removeTempDir } from "./testing/cleanup.ts";
 import { createLocalUsageProvider } from "./local-usage.ts";
 import { withGithubUsageFixture } from "../scripts/testing/merged-usage-fixture.ts";
 import { primaryUsageSnapshotFixture } from "../scripts/testing/primary-usage-fixture.ts";
-import { localUsageView, profileUsageView, mergedUsageView } from "../src/lib/local-usage-view.ts";
+import { localUsageView, profileUsageView, mergedUsageView, retainUsageSnapshot } from "../src/lib/local-usage-view.ts";
 import { weeklyUsageTrend } from "../src/lib/local-usage-trends.ts";
 
 const folders: string[] = [];
@@ -377,10 +377,13 @@ describe("local Usage projection", () => {
   it.each([
     { name: "partial machine", source: { status: "partial" } },
     { name: "incomplete token source", source: { status: "partial", tokenStatus: "partial" } },
+    { name: "incomplete commit source", source: { status: "partial", commitStatus: "partial" } },
     { name: "stale machine", source: { status: "stale" } },
     { name: "stale machine with ready tokens", source: { status: "stale", tokenStatus: "ready" } },
+    { name: "stale machine with ready commits", source: { status: "stale", commitStatus: "ready" } },
     { name: "missing machine with prior capture", source: { status: "missing", capturedAt: "2026-11-02T00:00:00Z" } },
     { name: "missing sampled machine with ready tokens", source: { status: "missing", tokenStatus: "ready", capturedAt: "2026-11-02T00:00:00Z" } },
+    { name: "missing sampled machine with ready commits", source: { status: "missing", commitStatus: "ready", capturedAt: "2026-11-02T00:00:00Z" } },
     { name: "missing machine with sample metadata", source: { status: "missing", repositoryCount: 0 } },
   ])("keeps observed amounts but suppresses changes for $name", async ({ source }) => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
@@ -388,6 +391,7 @@ describe("local Usage projection", () => {
     snapshot.sources.push(source);
     await writeFile(file, JSON.stringify(snapshot));
     const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows?.["1"].comparison.known).toBeUndefined();
     expect(response.windows?.["1"]).toMatchObject({ prs: 4, commits: 8, newTokens: 56, totalTokens: 256,
       tokenCoverage: "partial", comparison: { prs: 100, commits: null, totalTokens: null,
         categories: { work: { prs: 100, commits: null } } },
@@ -420,6 +424,92 @@ describe("local Usage projection", () => {
     expect(gap.windows?.["7"].comparison.totalTokens).toBeNull();
     expect(gap.windows?.["30"].comparison.totalTokens).toBeNull();
     expect(gap.trend.at(-1)?.wow.totalTokens).toBeNull();
+  });
+
+  it.each([false, true])("routes qualified local-ref 1-day and 7-day commit deltas through comparison.known.commits, unsampled machine: %s", async (unsampled) => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    Object.assign(snapshot.sources[0]!, { status: "partial", tokenStatus: "partial", commitStatus: "local-ref-ready" });
+    if (unsampled) snapshot.sources.push({ status: "missing" });
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) Object.assign(row, { tokenStatus: "partial", commitStatus: "local-ref-ready" });
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.sourceCoverage).toMatchObject({ ready: 0, partial: 1, missing: Number(unsampled) });
+    expect(response.windows?.["1"]).toMatchObject({ commits: 8,
+      comparison: { prs: 100, commits: null, known: { prs: null, commits: 100 }, totalTokens: null, categories: { work: { commits: null } } },
+      repositories: { rows: [{ commits: 8, comparison: { commits: null } }] } });
+    expect(response.windows?.["7"].comparison).toMatchObject({ commits: null, known: { prs: null, commits: (16 - 7) / 7 * 100 }, totalTokens: null });
+    expect(response.windows?.["30"].comparison).toMatchObject({ commits: null, totalTokens: null });
+    expect(response.windows?.["30"].comparison.known).toBeUndefined();
+    expect(response.trend.at(-1)?.wow).toMatchObject({ commits: null, totalTokens: null });
+    const view = localUsageView(response);
+    expect(view.windows?.["1"].comparison.known).toEqual({ prs: null, commits: 100 });
+    expect(view.windows?.["7"].comparison.known).toEqual({ prs: null, commits: (16 - 7) / 7 * 100 });
+    expect(view.windows?.["30"].comparison.known).toBeUndefined();
+  });
+
+  it("keeps local-ref commit comparison unknown when daily scope is missing, mismatched, stale, or falls back from invalid history", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    Object.assign(snapshot.sources[0]!, { status: "partial", tokenStatus: "partial", commitStatus: "local-ref-ready" });
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) Object.assign(row, { tokenStatus: "partial", commitStatus: "local-ref-ready" });
+    }
+    // Mixed commitStatus in 7-day history keeps 7-day unknown while 1-day stays qualified.
+    (snapshot.localHistory.daily.find((row) => row.day === "2026-10-25") as { commitStatus?: string }).commitStatus = "partial";
+    await writeFile(file, JSON.stringify(snapshot));
+    const mixed = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(mixed.windows?.["1"].comparison.known).toEqual({ prs: null, commits: 100 });
+    expect(mixed.windows?.["7"].comparison.known).toBeUndefined();
+
+    // Missing per-day commitStatus (older snapshot) keeps comparison.known absent.
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) delete (row as { commitStatus?: string }).commitStatus;
+    }
+    await writeFile(file, JSON.stringify(snapshot));
+    const undated = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(undated.windows?.["1"].comparison.known).toBeUndefined();
+    expect(undated.windows?.["7"].comparison.known).toBeUndefined();
+
+    // Invalid localHistory fallback keeps 7-day unknown, while 1-day stays qualified if daily rows independently prove coverage; stale readback strips comparison.known.
+    for (const rows of [snapshot.daily, snapshot.localHistory.daily]) {
+      for (const row of rows) Object.assign(row, { commitStatus: "local-ref-ready" });
+    }
+    snapshot.localHistory.version = 2;
+    await writeFile(file, JSON.stringify(snapshot));
+    const provider = createLocalUsageProvider({ file, now: () => asOf });
+    const fallback = await provider.get();
+    expect(fallback.windows?.["1"].comparison.known).toEqual({ prs: null, commits: 100 });
+    expect(fallback.windows?.["7"].comparison.known).toBeUndefined();
+    const retainedClient = retainUsageSnapshot(fallback, { ...fallback, windows: null });
+    expect(retainedClient.status).toBe("stale");
+    expect(retainedClient.windows?.["1"].commits).toBe(8);
+    expect(retainedClient.windows?.["1"].comparison.known).toBeUndefined();
+    await writeFile(file, "{invalid");
+    const staleFallback = await provider.get();
+    expect(staleFallback.status).toBe("stale");
+    expect(staleFallback.windows?.["1"].comparison.known).toBeUndefined();
+    expect(staleFallback.windows?.["7"].comparison.known).toBeUndefined();
+  });
+
+  it("keeps legacy ready commitStatus as exact when source is ok or rejects invalid commitStatus", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    Object.assign(snapshot.sources[0]!, { status: "partial", commitStatus: "ready" });
+    await writeFile(file, JSON.stringify(snapshot));
+    const partialReady = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(partialReady.windows?.["1"].comparison.commits).toBeNull();
+    expect(partialReady.windows?.["1"].comparison.known).toBeUndefined();
+
+    Object.assign(snapshot.sources[0]!, { status: "ok", commitStatus: "ready" });
+    await writeFile(file, JSON.stringify(snapshot));
+    const provider = createLocalUsageProvider({ file, now: () => asOf });
+    expect((await provider.get()).status).toBe("ready");
+    Object.assign(snapshot.sources[0]!, { commitStatus: "bogus" });
+    await writeFile(file, JSON.stringify(snapshot));
+    expect((await provider.get()).status).toBe("stale");
   });
 
   it("uses a verified zero within the collected scope for commit and token New", async () => {
@@ -633,6 +723,21 @@ describe("local Usage projection", () => {
     expect(partial.windows?.["1"].categories.personal.prs).toBe(0);
   });
 
+  it("preserves stale observed PR zero as a lower bound in windows, trends, categories and repositories", async () => {
+    const asOf = Date.parse("2026-11-03T08:00:00Z");
+    const { file, snapshot } = await historyFixture(asOf);
+    snapshot.prSources[0]!.status = "stale";
+    snapshot.prCoverage.work = "partial";
+    for (const row of snapshot.localHistory.daily) Object.assign(row.categories.work, { prs: null, knownPrs: 0 });
+    for (const row of snapshot.localHistory.localRepositories.rows[0]!.daily) row.knownPrs = 0;
+    await writeFile(file, JSON.stringify(snapshot));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const counts = { prs: null, knownPrs: 0, categories: { work: { prs: null, knownPrs: 0 }, personal: { prs: 0 } },
+      repositories: { coverage: "partial", rows: [{ prs: null, knownPrs: 0, commits: 8 }] } };
+    expect(response.windows?.["1"]).toMatchObject(counts);
+    expect(response.trend.at(-1)).toMatchObject(counts);
+  });
+
   it("compares all three metrics with the same date seven days earlier, including zero and missing baselines", async () => {
     const asOf = Date.parse("2026-11-03T08:00:00Z");
     const { file, snapshot } = await fixture(asOf);
@@ -753,4 +858,86 @@ it("keeps nested sixty-day shared repository appearances separate from global lo
   expect(view.sixtyDayRepositories!.repositories.rows.map(row => row.knownCommits)).toEqual([138, 2]);
   expect(view.trend.find(row => row.day === "2026-09-21")).toMatchObject({ commits: 2, repositories: { sharedCommits: 2 } });
   expect(response.windows!["1"].repositories.rows).toHaveLength(1);
+});
+
+describe("daily model attribution and Activities list estimates", () => {
+  const asOf = Date.parse("2026-11-18T16:01:00Z");
+  const endDay = "2026-11-19";
+  const model = (label = "gpt-6.2-sol", input = 10, output = 4, cacheRead = 50, provider = "codex") =>
+    ({ provider, model: label, input, output, cacheRead });
+  const retained = (date: string, rows = [model()]) => ({
+    day: date, tokenStatus: "ready", input: 10, output: 4, cacheRead: 50, newTokens: 14, totalTokens: 64, models: rows,
+  });
+
+  it("uses the same reconciled days in China-calendar windows and trends with coverage-qualified prices", async () => {
+    const { file, snapshot } = await fixture(asOf);
+    const priced = [model("gpt-6.2-sol", 2, 4, 45), model("gpt-6.2-sol", 1, 0, 1, "pi")];
+    const unknown = model("activities-unpriced-fixture", 7, 0, 4);
+    const older = day(endDay, -61), legacy = day(endDay, -62);
+    await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: { version: 1, daily: [
+      { day: legacy, tokenStatus: "ready", newTokens: 14, cacheRead: 50, totalTokens: 64 },
+      retained(older),
+      ...snapshot.daily.map(({ day }) => retained(day, day === endDay ? [...priced, unknown] : [model()])),
+    ] } }));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    const windows = response.windows!;
+    expect(windows["1"]).toMatchObject({ startDay: endDay, endDay, newTokens: 14, cacheRead: 50, totalTokens: 64,
+      tokenDetails: { input: 10, output: 4, estimatedCost: { coverage: "partial" }, models: { coverage: "ready", rows: [
+        { model: "gpt-6.2-sol", input: 3, output: 4, cacheRead: 46, totalTokens: 53, estimatedCost: { coverage: "ready" } },
+        { model: "activities-unpriced-fixture", totalTokens: 11, estimatedCost: { coverage: "unavailable", usd: null } },
+      ] } } });
+    expect(windows["1"].tokenDetails!.estimatedCost.usd).toBeCloseTo(50.6 / 1e6, 12);
+    expect(response.trend.at(-1)?.tokenDetails).toEqual({ ...windows["1"].tokenDetails, cacheRead: 50 });
+    expect(response.history?.find((row) => row.day === endDay)?.tokenDetails).toEqual(response.trend.at(-1)?.tokenDetails);
+    expect(response.history?.find((row) => row.day === older)?.tokenDetails).toMatchObject({
+      input: 10, output: 4, cacheRead: 50, models: { coverage: "ready", rows: [{ totalTokens: 64 }] },
+    });
+    expect(response.history?.find((row) => row.day === legacy)).toMatchObject({ totalTokens: 64 });
+    expect(response.history?.find((row) => row.day === legacy)?.tokenDetails).toBeUndefined();
+    for (const key of ["7", "30"] as const) {
+      const window = windows[key];
+      expect(window.tokenDetails).toMatchObject({ input: window.days * 10, output: window.days * 4,
+        models: { rows: [{ totalTokens: window.days * 64 - 11 }, { totalTokens: 11 }] } });
+      expect(window.tokenDetails!.estimatedCost.usd).toBeCloseTo((50.6 + (window.days - 1) * 65) / 1e6, 12);
+    }
+  });
+
+  it("keeps activity and token totals when daily models conflict, and prices only the observed lower bound", async () => {
+    const { file, snapshot } = await fixture(asOf);
+    const unsafe = "sk-" + "x".repeat(25);
+    await writeFile(file, JSON.stringify({ ...snapshot, trendHistory: { version: 1, daily: [
+      retained(endDay, [model("gpt-6.2-sol", 2, 0, 15)]),
+      retained(day(endDay, -1), [model("gpt-6.2-sol", 11, 3, 50)]),
+      { ...retained(day(endDay, -2)), input: 4, output: 10 },
+      retained(day(endDay, -3), [model(unsafe)]),
+      retained(day(endDay, -4), [model(), model()]),
+    ] } }));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.windows?.["1"]).toMatchObject({ prs: 1, commits: 2, totalTokens: 64, tokenDetails: {
+      input: 10, output: 4, models: { coverage: "partial", rows: [{ totalTokens: 17, estimatedCost: { coverage: "partial" } }] },
+      estimatedCost: { coverage: "partial" },
+    } });
+    expect(response.windows?.["1"].tokenDetails?.estimatedCost.usd).toBeCloseTo(5.5 / 1e6, 12);
+    for (const row of response.trend.slice(-5, -1)) {
+      expect(row.tokenDetails).toEqual({ input: 10, output: 4, cacheRead: 50,
+        estimatedCost: { coverage: "unavailable", usd: null }, models: { coverage: "unavailable", rows: [] } });
+    }
+    expect(JSON.stringify(response)).not.toContain(unsafe);
+  });
+
+  it("treats a complete measured zero separately from missing attribution and unknown rates", async () => {
+    const { file, snapshot } = await fixture(asOf);
+    const today = snapshot.daily.at(-1)!;
+    Object.assign(today.categories.work, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, newTokens: 0 });
+    const usage = createLocalUsageProvider({ file, now: () => asOf });
+    await writeFile(file, JSON.stringify(snapshot));
+    expect((await usage.get()).windows?.["1"].tokenDetails).toEqual({
+      input: 0, output: 0, estimatedCost: { coverage: "ready", usd: 0 }, models: { coverage: "ready", rows: [] },
+    });
+    today.tokenStatus = "unavailable";
+    await writeFile(file, JSON.stringify(snapshot));
+    expect((await usage.get()).windows?.["1"].tokenDetails).toEqual({
+      input: null, output: null, estimatedCost: { coverage: "unavailable", usd: null }, models: { coverage: "unavailable", rows: [] },
+    });
+  });
 });

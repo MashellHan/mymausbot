@@ -3,7 +3,7 @@ import App from "../../src/App";
 import { setAnalyticsEnabled, setEmailGateDone } from "../../src/lib/analytics";
 import { setAdvancedMode } from "../../src/lib/interface-mode";
 import { languageChoice, setLanguageChoice } from "../../src/lib/language-preference";
-import { GROK_MOVE_NOTICE, MODELGO_OFFER_NOTICE } from "../../src/lib/notices";
+import { BOAT_OFFER_NOTICE, GROK_MOVE_NOTICE, MODELGO_OFFER_NOTICE, TEAMS_NOTICE } from "../../src/lib/notices";
 import { markSimpleModePromptSeen } from "../../src/lib/simple-mode-prompt";
 import { applySkinChoice, readSkinChoice } from "../../src/lib/skins";
 import "../../src/styles.css";
@@ -25,5 +25,7 @@ if (!query.has("simpleModePrompt")) markSimpleModePromptSeen();
 // The same for the once-per-person Move from Grok Bot popup, with ?grokMovePopup=1.
 if (!query.has("grokMovePopup")) localStorage.setItem(GROK_MOVE_NOTICE, "1");
 if (!query.has("modelgoOffer")) localStorage.setItem(MODELGO_OFFER_NOTICE, "1");
+if (!query.has("teamsPopup")) localStorage.setItem(TEAMS_NOTICE, "1");
+if (!query.has("boatOffer")) localStorage.setItem(BOAT_OFFER_NOTICE, "1");
 applySkinChoice(readSkinChoice());
 createRoot(document.getElementById("root")!).render(<App />);

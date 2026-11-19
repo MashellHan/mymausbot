@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { CloudComputerPowerDeps } from "./host/cloud-computer-power.ts";
 import { hostTimeout } from "./testing/host-timeout.ts";
 
 const INCLUDED = "box_omb_included-relay-token";
@@ -69,11 +70,13 @@ afterAll(async () => {
 });
 
 describe("a cloud computer goes to sleep after its idle window", () => {
+  /** One stop was sent and the sleep it belongs to has finished: a test that ended at the stop itself left that sleep's
+   * log line to land in the next test's log. */
+  const asleep = () => waitFor(() => stops().length === 1 && !power.awake());
   let power: ReturnType<typeof import("./host/cloud-computer-power.ts").createCloudComputerPower>;
-  let logs: string[];
   let busy: boolean;
 
-  async function powerFor(cfg: import("./config.ts").AppConfig) {
+  async function powerFor(cfg: import("./config.ts").AppConfig, overrides: Partial<Pick<CloudComputerPowerDeps, "busy" | "log">> = {}) {
     vi.resetModules();
     const { createCloudComputerPower } = await import("./host/cloud-computer-power.ts");
     power = createCloudComputerPower({
@@ -84,7 +87,8 @@ describe("a cloud computer goes to sleep after its idle window", () => {
       routines: () => [],
       routineComputer: () => null,
       broadcast: () => {},
-      log: line => logs.push(line),
+      log: () => {},
+      ...overrides,
     });
     return power;
   }
@@ -94,7 +98,6 @@ describe("a cloud computer goes to sleep after its idle window", () => {
     state = "ready";
     stopStatus = 200;
     jobRunning = false;
-    logs = [];
     busy = false;
     vi.stubEnv("BOX_TOKEN", undefined);
     vi.stubEnv("OMB_BOAT_API", `${base}/boat/api/v1`);
@@ -105,6 +108,7 @@ describe("a cloud computer goes to sleep after its idle window", () => {
 
   afterEach(() => {
     power?.close();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -113,7 +117,7 @@ describe("a cloud computer goes to sleep after its idle window", () => {
     power.used(botId);
     await new Promise(resolve => setTimeout(resolve, 600));
     expect(stops()).toEqual([]);
-    await waitFor(() => stops().length === 1);
+    await asleep();
     expect(stops()[0]).toMatchObject({ path: `/boat/api/v1/sandboxes/${boxId}/stop`, auth: `Bearer ${OWN}` });
     const quiesce = requests.findIndex(request => request.path.endsWith("/commands"));
     expect(requests[quiesce]?.command).toContain("kill -TERM");
@@ -125,7 +129,7 @@ describe("a cloud computer goes to sleep after its idle window", () => {
   it("with the cloud computer a Cloud plan includes, stops it through the Admin relay only", async () => {
     await powerFor({});
     power.used(botId);
-    await waitFor(() => stops().length === 1);
+    await asleep();
     expect(stops()[0]).toMatchObject({ path: `/relay/api/box/v1/boxes/${boxId}/stop`, auth: `Bearer ${INCLUDED}` });
     expect(requests.every(request => request.path.startsWith("/relay/"))).toBe(true);
   });
@@ -134,7 +138,7 @@ describe("a cloud computer goes to sleep after its idle window", () => {
     await powerFor({});
     await power.armRunning();
     expect(requests.map(request => `${request.method} ${request.path}`)).toEqual(["GET /relay/api/box/v1/boxes"]);
-    await waitFor(() => stops().length === 1);
+    await asleep();
     expect(stops()[0]?.path).toBe(`/relay/api/box/v1/boxes/${boxId}/stop`);
   });
 
@@ -161,25 +165,36 @@ describe("a cloud computer goes to sleep after its idle window", () => {
     await background.startInBackground(cfg, boxId, "python3 job.py", new AbortController().signal);
     power.used(botId);
     await new Promise(resolve => setTimeout(resolve, 3_500));
+    await waitFor(() => requests.filter(request => request.path === `${root}/${boxId}/commands/7`).length >= 2);
     expect(stops()).toEqual([]);
-    expect(requests.filter(request => request.path === `${root}/${boxId}/commands/7`).length).toBeGreaterThanOrEqual(2);
     expect(power.awake()).toBe(true);
     jobRunning = false;
-    await waitFor(() => stops().length === 1);
+    await asleep();
     expect(stops()[0]?.path).toBe(`${root}/${boxId}/stop`);
   });
 
   it("a stop the relay refuses is logged and retried after a longer wait each time", async () => {
     stopStatus = 503;
-    await powerFor({});
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const waits = [1_000, 1_000, 2_000, 4_000];
+    const resolveFailure: Array<(line: string) => void> = [];
+    const failures = waits.map(() => new Promise<string>(resolve => { resolveFailure.push(resolve); }));
+    const busyCheck = vi.fn(() => false);
+    let logged = 0;
+    await powerFor({}, { busy: busyCheck, log: line => resolveFailure[logged++]?.(line) });
     power.used(botId);
-    await waitFor(() => stops().length === 3 && logs.length === 3, hostTimeout(10_000));
-    for (const line of logs) {
-      expect(line).toBe("cloud computer auto-sleep-test: could not go to sleep, retrying in 1 min: boat sleep failed: Cloud computers are not available right now.");
+    for (const [index, delay] of waits.entries()) {
+      const previousChecks = busyCheck.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(busyCheck).toHaveBeenCalledTimes(previousChecks);
+      expect(stops()).toHaveLength(index);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await failures[index]).toBe("cloud computer auto-sleep-test: could not go to sleep, retrying in 1 min: boat sleep failed: Cloud computers are not available right now.");
+      expect(logged).toBe(index + 1);
+      expect(stops()).toHaveLength(index + 1);
+      expect(stops()[index]).toMatchObject({ path: `/relay/api/box/v1/boxes/${boxId}/stop`, auth: `Bearer ${INCLUDED}`, at: Date.now() });
+      expect(state).toBe("ready");
+      expect(power.awake()).toBe(true);
     }
-    const [first, second, third] = stops().map(stop => stop.at);
-    // A Node timer may fire up to a millisecond before its delay by Date.now().
-    expect(second! - first!).toBeGreaterThanOrEqual(1_000 - 5);
-    expect(third! - second!).toBeGreaterThanOrEqual(2_000 - 5);
   });
 });

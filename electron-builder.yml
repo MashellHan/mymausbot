@@ -56,6 +56,7 @@ extraResources:
     to: usage-helpers
     filter:
       - refresh-local-usage.py
+      - local_usage_models.py
       - local_usage_contributions.py
       - local_usage_profile.py
       - local_usage_profile_private.py

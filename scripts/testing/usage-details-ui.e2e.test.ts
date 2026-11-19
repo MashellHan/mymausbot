@@ -6,7 +6,7 @@ import { expect, it } from "vitest";
 import { resolveAgentBrowserBinary } from "../../server/browser-engine.ts";
 import { waitForExit } from "../../server/testing/cleanup.ts";
 import { runControlOmb } from "../control-omb.ts";
-import { agentBrowser, sessionEnv, UI_TOOLS_DIR, type UiHandle } from "./control-omb-ui.ts";
+import { ENABLE_ADVANCED_UI, agentBrowser, sessionEnv, UI_TOOLS_DIR, type UiHandle } from "./control-omb-ui.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const enabled = process.env.OMB_UI_E2E === "1" || Boolean(resolveAgentBrowserBinary({ dataDir: UI_TOOLS_DIR, env: process.env }));
@@ -29,7 +29,7 @@ if (!enabled) console.log("skipping usage details UI: set OMB_UI_E2E=1 to instal
     if (!info) throw new Error(`UI launcher exited: ${stderr}`);
     const handle = info;
     const ui = (verb: string, ...args: string[]) => runControlOmb(["ui", verb, "--ui", handle.ui, ...args]) as Promise<Record<string, any>>;
-    await ui("eval", "--js", "(async () => { const { setAdvancedMode } = await import('/src/lib/interface-mode.ts'); setAdvancedMode(true); return true; })()");
+    await ui("eval", "--js", ENABLE_ADVANCED_UI);
     await ui("type", "--name", "Message Pepper", "--text", "Check the fixture usage");
     await ui("press", "--keys", "Enter");
     const settled = await ui("wait-settle", "--timeout", "60");
@@ -47,7 +47,7 @@ if (!enabled) console.log("skipping usage details UI: set OMB_UI_E2E=1 to instal
     // Header actions stay usable in the consolidated menu, including a
     // denied clipboard. Only this disposable browser's clipboard is stubbed.
     const evaluate = async (js: string) => (await ui("eval", "--js", js)).result;
-    await evaluate(`Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async () => { throw new Error('fixture denial'); } }); true`);
+    await evaluate(`Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async () => { throw new Error('fixture denial'); } }); document.execCommand = () => false; true`);
     await ui("click", "--name", "Copy as Markdown");
     await expect.poll(() => evaluate("document.querySelector('[role=menu] [role=status]')?.textContent")).toBe("Couldn't copy. Use Download instead.");
     await evaluate(`Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async text => { window.copiedTranscript = text; } }); true`);
@@ -112,7 +112,7 @@ if (!enabled) console.log("skipping usage details UI: set OMB_UI_E2E=1 to instal
     await activate('[role="menu"][aria-label="More"] button[data-menu-key="inspector"]');
     await expect.poll(() => evaluate("Boolean(document.querySelector('[aria-label=Inspector]'))"), { timeout: 10_000 }).toBe(true);
     await openUsage();
-    await expect.poll(() => evaluate("getComputedStyle(document.querySelector('[role=dialog]')).position")).toBe("absolute");
+    await expect.poll(() => evaluate("document.querySelector('[role=dialog]') && getComputedStyle(document.querySelector('[role=dialog]')).position")).toBe("absolute");
     expect(await evaluate("document.querySelector('main').getBoundingClientRect().width")).toBeGreaterThan(400);
     await ui("screenshot", "--out", `${handle.logPath}.two-panels-1100.png`);
     await agentBrowser(browser.binary, sessionEnv(browser), ["set", "viewport", "1600", "900"]);

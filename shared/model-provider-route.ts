@@ -1,8 +1,9 @@
-/** Display provenance for one model route inside an exact instance catalog. The pair of instanceId and id is the
- * grouping identity; labels never join routes, and this metadata grants no authority to select or use a model. */
+/** Display provenance for one model route inside an exact instance catalog. Its routing identity is instance-scoped. */
 export interface ModelProviderRoute {
   id: string;
   /** A bounded display name from provider or connection metadata; absent when the provider is unknown. */
   label?: string;
   provenance: "configured" | "native" | "local" | "unknown";
+  /** Display grouping for the same configured loopback endpoint and provider id. */
+  connectionGroup?: string;
 }

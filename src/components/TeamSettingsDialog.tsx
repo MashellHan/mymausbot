@@ -77,7 +77,8 @@ export function TeamSettingsDialog({ team, onClose }: { team: string; onClose: (
   const latestBots = useRef(state.bots);
   latestBots.current = state.bots;
   const models = useMemo(() => teamModelChoices(bots, state.instances), [bots, state.instances]);
-  const efforts = useMemo(() => teamEffortChoices(bots, state.instances, EFFORT_LEVELS), [bots, state.instances]);
+  const efforts = useMemo(() => teamEffortChoices(bots, state.instances, EFFORT_LEVELS, model === KEEP ? undefined : model), [bots, state.instances, model]);
+  const requestedEffort = effort === ENGINE_DEFAULT || efforts.some((level) => level === effort) ? effort : KEEP;
   const change: TeamChange | null = tab === "approval"
     ? mode ? { kind: "approval", mode } : null
     : tab === "access" ? everyone === KEEP && person === KEEP ? null
@@ -86,11 +87,11 @@ export function TeamSettingsDialog({ team, onClose }: { team: string; onClose: (
         ...(everyone === KEEP ? {} : { everyone: everyone === ADD ? "chat" : "none" }),
         ...(person === KEEP ? {} : { person: { email: person, level: personAction === REMOVE ? null : "chat" } }),
       }
-    : model === KEEP && effort === KEEP ? null
+    : model === KEEP && requestedEffort === KEEP ? null
       : {
         kind: "model",
         ...(model === KEEP ? {} : { model }),
-        ...(effort === KEEP ? {} : { effort: effort === ENGINE_DEFAULT ? null : effort as EffortLevel }),
+        ...(requestedEffort === KEEP ? {} : { effort: requestedEffort === ENGINE_DEFAULT ? null : requestedEffort as EffortLevel }),
       };
   const plan = change ? planTeamChange(bots, state.instances, change) : [];
   const applying = plan.filter((row) => row.status === "apply").length;
@@ -208,7 +209,7 @@ export function TeamSettingsDialog({ team, onClose }: { team: string; onClose: (
                   </Select>
                 </label>
                 <label className="text-[13px] text-ink-secondary">{t("teamSettings.effort")}
-                  <Select className="mt-1 w-full" aria-label={t("teamSettings.effort")} value={effort} onChange={(event) => setEffort(event.target.value)}>
+                  <Select className="mt-1 w-full" aria-label={t("teamSettings.effort")} value={requestedEffort} onChange={(event) => setEffort(event.target.value)}>
                     <option value={KEEP}>{t("teamSettings.keepEffort")}</option>
                     <option value={ENGINE_DEFAULT}>{t("teamSettings.engineDefaultEffort")}</option>
                     {efforts.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}

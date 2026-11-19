@@ -103,22 +103,42 @@ describe("conversational replies", () => {
     expect([...document.querySelectorAll("[data-md]")].map((el) => el.textContent)).toContain(reply);
   });
 
-  it("opens the reply composer from the primary action and keeps Copy in More in Simple mode", async () => {
+  it.each([
+    { side: "user", messageId: "m1", quotedText: "where is it" },
+    { side: "bot", messageId: "m2", quotedText: "Found it." },
+  ])("quotes the $side bubble from primary Reply and right-click, with Copy in More in Simple mode", async ({ messageId, quotedText }) => {
+    setAdvancedMode(false);
     await draw(profile({}));
-    const row = document.querySelector("[data-mid='m2']")!;
-    const replyAction = row.querySelector<HTMLButtonElement>('[aria-label="Reply to message"]')!;
-    expect(replyAction).not.toBeNull();
-    expect(row.querySelector('[aria-label="Copy message"]')).toBeNull();
-    flushSync(() => replyAction.click());
-    await settle();
-    expect(replyDraft("pepper-thread")).toBe("m2");
-    expect(document.querySelector('[data-composer-reply]')?.textContent).toContain("Found it.");
-    flushSync(() => document.querySelector<HTMLButtonElement>('[data-composer-reply] button[aria-label="Cancel reply"]')!.click());
+    const row = document.querySelector(`[data-mid="${messageId}"]`)!;
+    const bubble = row.querySelector('[data-chat-bubble="simple"]')!;
+    const primary = row.querySelectorAll<HTMLButtonElement>('[aria-label="Reply to message"]');
     const more = row.querySelector<HTMLButtonElement>('button[aria-label="Message actions"]')!;
+    const menuItems = () => [...row.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')];
+    const verifyQuote = async () => {
+      await settle();
+      expect(replyDraft("pepper-thread")).toBe(messageId);
+      expect(document.querySelector('[data-composer-reply]')?.textContent).toContain(quotedText);
+      flushSync(() => document.querySelector<HTMLButtonElement>('[data-composer-reply] button[aria-label="Cancel reply"]')!.click());
+    };
+
+    expect(primary).toHaveLength(1);
+    expect(row.querySelector('[aria-label="Copy message"]')).toBeNull();
+    flushSync(() => primary[0]!.click());
+    await verifyQuote();
+
     flushSync(() => more.click());
-    const items = [...document.querySelectorAll('[role="menu"][aria-label="Message actions"] [role="menuitem"]')].map((item) => item.textContent);
-    expect(items).toContain("Copy message");
-    expect(items).not.toContain("Reply");
+    expect(menuItems().filter((item) => item.textContent === "Copy message")).toHaveLength(1);
+    expect(menuItems().map((item) => item.textContent)).not.toContain("Reply");
+    flushSync(() => more.click());
+
+    const context = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 40, clientY: 20 });
+    flushSync(() => bubble.dispatchEvent(context));
+    expect(context.defaultPrevented).toBe(true);
+    const items = menuItems();
+    expect(items.slice(0, 2).map((item) => item.textContent)).toEqual(["Reply", "Copy message"]);
+    expect(items.filter((item) => item.textContent === "Copy message")).toHaveLength(1);
+    flushSync(() => items[0]!.click());
+    await verifyQuote();
   });
 
   it("puts a formatted reply in the bot's bubble in Simple mode, and on the open page in Advanced", async () => {

@@ -18,21 +18,21 @@ const LISTED_FROM = 1000;
 const LINES: Record<string, number> = {
   "electron/cloud-send.mjs": 1001,
   "server/drivers/agents-catalog.ts": 1005,
-  "server/index.ts": 15653,
-  "src/state/store.tsx": 3349,
-  "electron/main.mjs": 3175,
-  "server/store.ts": 2303,
-  "src/components/Sidebar.tsx": 1689,
-  "server/drivers/claude.ts": 2090,
-  "server/drivers/acp/core.ts": 1704,
+  "server/index.ts": 15500,
+  "src/state/store.tsx": 3316,
+  "electron/main.mjs": 3135,
+  "server/store.ts": 2265,
+  "src/components/Sidebar.tsx": 1676,
+  "server/drivers/claude.ts": 2069,
+  "server/drivers/acp/core.ts": 1658,
   "server/drivers/codex.ts": 1718,
-  "server/routines.ts": 1555,
+  "server/routines.ts": 1553,
   "src/components/ComputerPanel.tsx": 1782,
   "src/components/RoutineCalendarPage.tsx": 1622,
   "server/config.ts": 1245,
-  "src/components/ChatView.tsx": 1293,
-  "server/routine-requests.ts": 1474,
-  "src/components/GroupView.tsx": 1220,
+  "src/components/ChatView.tsx": 1276,
+  "server/routine-requests.ts": 1468,
+  "src/components/GroupView.tsx": 1186,
   "src/components/LocalComputerSection.tsx": 1437,
   "src/components/CursorAvatar.tsx": 1324,
   "server/skills.ts": 1379,
@@ -41,10 +41,10 @@ const LINES: Record<string, number> = {
   "scripts/mcp-server.ts": 1411,
   "server/boat.ts": 1253,
   "server/drivers/pi.ts": 1033,
-  "server/plan-usage.ts": 1046,
+  "server/plan-usage.ts": 1045,
   "server/container-computer.ts": 1175,
   "src/components/ModelPicker.tsx": 1039,
-  "src/components/PhoneSetupFlow.tsx": 1089,
+  "src/components/PhoneSetupFlow.tsx": 1088,
   "server/cli.ts": 1053,
   "src/components/AttachmentPreview.tsx": 1034,
   "server/meetings/meetbot.ts": 1047,
@@ -53,7 +53,7 @@ const LINES: Record<string, number> = {
 };
 
 function sourceFiles(): string[] {
-  const out = execFileSync("git", ["ls-files", "server", "shared", "src", "scripts", "evals", "electron", "companion"], { cwd: ROOT, encoding: "utf8" });
+  const out = execFileSync("git", ["ls-files", "server", "shared", "packages", "src", "scripts", "evals", "electron", "companion"], { cwd: ROOT, encoding: "utf8" });
   return out.split("\n").filter((file) => /\.(ts|tsx|mjs|cjs)$/.test(file))
     .filter((file) => !file.includes(".test.") && !/^electron\/[^/]+\.node-test\.mjs$/.test(file) && !file.includes("/testing/") && !file.includes("goldens") && !file.startsWith("electron/vendor/"));
 }

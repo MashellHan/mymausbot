@@ -104,11 +104,11 @@ describe("local Usage panel", () => {
       [...card.querySelectorAll("dt")].find(node => node.textContent === "Commits")?.nextElementSibling?.firstElementChild?.textContent);
     await renderRaw(snapshot);
     expect(values()).toEqual(["86", "12", "58"]);
-    expect(host.querySelectorAll("section:first-of-type dt")).toHaveLength(3);
+    expect(host.querySelectorAll("section:first-of-type > dl dt")).toHaveLength(3);
     expect(host.querySelector("[data-usage-branch-commits], [data-usage-primary-sources]")).toBeNull();
     const visible = host.cloneNode(true) as HTMLElement;
     visible.querySelectorAll(".sr-only").forEach(node => node.remove());
-    expect(visible.textContent).not.toMatch(/Default-branch|All-branch|Partial/);
+    expect(visible.textContent).not.toMatch(/Default-branch|All-branch/);
     snapshot.windows!["1"].commits = 0;
     await renderRaw({ ...snapshot, status: "stale" });
     expect(values()[0]).toBe("0");
@@ -118,6 +118,112 @@ describe("local Usage panel", () => {
     await renderRaw({ ...snapshot, status: "unavailable", windows: null });
     expect(host.querySelector("section dd")).toBeNull();
     expect(text()).toContain("Activity summary unavailable");
+  });
+
+  it("shows independently qualified model shares, recorded tokens and USD estimates across periods", async () => {
+    const snapshot = structuredClone(sample);
+    const windows = snapshot.windows!;
+    windows["1"].tokenDetails = {
+      input: 80, output: 20, estimatedCost: { coverage: "partial", usd: 1.239 },
+      models: { coverage: "partial", rows: [
+        { model: "activities-unpriced-fixture", totalTokens: 25, input: 10, output: 5, cacheRead: 10, estimatedCost: { coverage: "unavailable", usd: null } },
+        { model: "fixture-large", totalTokens: 75, input: 50, output: 10, cacheRead: 15, estimatedCost: { coverage: "ready", usd: 0.0004 } },
+      ] },
+    };
+    windows["7"].tokenDetails = {
+      input: 400, output: 200, estimatedCost: { coverage: "partial", usd: 0 },
+      models: { coverage: "unavailable", rows: [] },
+    };
+    Object.assign(windows["7"], { cacheRead: 0, totalTokens: 600 });
+    Object.assign(windows["30"], { totalTokens: 0, newTokens: 0, cacheRead: 0, tokenCoverage: "ready",
+      tokenDetails: { input: 0, output: 0, estimatedCost: { coverage: "ready", usd: 0 }, models: { coverage: "ready", rows: [] } } });
+    await renderRaw(snapshot);
+    const model = host.querySelector('[data-usage-period="models"]')!;
+    const tabs = [...model.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const repo = host.querySelector('[data-usage-period="repositories"]')!;
+    expect([...model.querySelectorAll("li p")].map((row) => row.textContent)).toEqual(["fixture-large", "activities-unpriced-fixture"]);
+    expect(model.textContent).toContain("75 tokens50%");
+    expect(model.textContent).toContain("25 tokens16.7%");
+    expect(model.textContent).toContain("Share of recorded tokens");
+    expect(model.textContent).toContain("<$0.001");
+    expect(model.textContent).toContain("Unavailable");
+    const summaries = () => [...host.querySelectorAll("section [data-usage-token-breakdown]")].slice(0, 3).map((summary) => summary.textContent);
+    expect(summaries()).toEqual([
+      "Cached input50 (38.5%)Estimated cost (USD)At least $1.23",
+      "Cached input0 (0%)Estimated cost (USD)$0.00 priced · Partial",
+      "Cached input0Estimated cost (USD)$0.00",
+    ]);
+    expect(host.querySelector("section")?.textContent).not.toContain("Recorded tokens only");
+    expect(host.querySelector('section [aria-description="Recorded tokens only"]')).not.toBeNull();
+    expect(model.querySelector("[data-usage-token-breakdown]")?.textContent).toBe("Cached input15Fresh input50Output10Estimated cost (USD)<$0.001");
+    await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(document.activeElement).toBe(tabs[1]);
+    expect(model.textContent).toContain("Model usage is unavailable for this period.");
+    await act(async () => tabs[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+    expect(document.activeElement).toBe(tabs[2]);
+    expect(model.textContent).toContain("No model usage recorded in this period.");
+    expect(repo.querySelector('[aria-selected="true"]')?.textContent).toBe("1d");
+    await renderRaw({ ...snapshot, status: "stale" });
+    expect(tabs[2]!.getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector("[data-usage-latest-update]")?.textContent).toContain("Last successful capture");
+    windows["1"].tokenDetails.input = 60;
+    windows["7"].cacheRead = null;
+    Object.assign(windows["30"], { cacheRead: 125, totalTokens: 125 });
+    windows["30"].tokenDetails!.input = null;
+    await renderRaw(snapshot);
+    expect(summaries()).toEqual([
+      "Cached input50Estimated cost (USD)At least $1.23",
+      "Cached inputUnavailableEstimated cost (USD)$0.00 priced · Partial",
+      "Cached input125Estimated cost (USD)$0.00",
+    ]);
+  });
+
+  it("defaults to By model, supports Token types, and ranks models across the selected range", async () => {
+    const snapshot = structuredClone(sample);
+    const ranked = ["A", "B", "C", "D", "E", "F"];
+    const day = snapshot.trend.at(-1)!;
+    day.tokenDetails = { cacheRead: 10, input: 65, output: 35, estimatedCost: { coverage: "unavailable", usd: null },
+      models: { coverage: "partial", rows: [...ranked].reverse().map((model) => ({ model, totalTokens: 10,
+        cacheRead: 0, input: 7, output: 3, estimatedCost: { coverage: "unavailable", usd: null } })) } };
+    const prior = { ...day, day: "2026-09-10", totalTokens: 100, newTokens: 75, cacheRead: 25,
+      tokenDetails: { ...day.tokenDetails, cacheRead: 25, input: 60, output: 15,
+        models: { coverage: "partial" as const, rows: [{ ...day.tokenDetails.models.rows[0]!, model: "Past", totalTokens: 80, cacheRead: 15, input: 55, output: 10 }] } } };
+    snapshot.history = [prior, ...snapshot.trend];
+    await renderRaw(snapshot);
+    const chart = host.querySelector('[data-usage-trend="totalTokens"]')!;
+    const bar = chart.querySelector<HTMLButtonElement>(`[data-usage-day="${day.day}"]`)!;
+    const [types, models] = chart.querySelectorAll<HTMLButtonElement>('[role="group"] button');
+    const legend = () => chart.querySelector("[data-usage-token-legend]")?.textContent;
+    const tooltip = () => chart.querySelector('[role="tooltip"]')?.textContent;
+    expect(types!.getAttribute("aria-pressed")).toBe("false");
+    expect(models!.getAttribute("aria-pressed")).toBe("true");
+    expect(legend()).toContain("ABCDEOther modelsUnattributed tokens");
+    await act(async () => bar.focus());
+    expect(tooltip()).toContain("2026-11-03 · Tue");
+    expect(tooltip()).toContain("Tokens110");
+    expect(tooltip()).toContain("A10 · 9.1%");
+    expect(tooltip()).toContain("Other models10 · 9.1%Unattributed tokens50");
+    expect(bar.getAttribute("aria-describedby")).toBe(chart.querySelector('[role="tooltip"]')?.id);
+    await act(async () => types!.click());
+    expect(types!.getAttribute("aria-pressed")).toBe("true");
+    expect(models!.getAttribute("aria-pressed")).toBe("false");
+    expect(tooltip()).toContain("Tokens110Cached input10Fresh input65Output35");
+    expect(chart.querySelectorAll('[role="tooltip"] dt').length).toBeGreaterThanOrEqual(4);
+    expect(chart.querySelector('[data-usage-token-segment="unknown"]')).not.toBeNull();
+    const range = host.querySelector<HTMLSelectElement>('select[aria-label="Trend range"]')!;
+    await act(async () => { range.value = "60"; range.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(types!.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => models!.click());
+    expect(range.value).toBe("60");
+    expect(legend()).toContain("PastABCDOther modelsUnattributed tokens");
+    await act(async () => { range.value = "6m"; range.dispatchEvent(new Event("change", { bubbles: true })); });
+    const first = chart.querySelector<HTMLButtonElement>('[data-usage-day]')!;
+    await act(async () => { first.focus(); first.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })); });
+    expect(tooltip()).toContain("2026-11-02 – 2026-11-03");
+    expect(tooltip()).toContain("Tokens220");
+    expect(tooltip()).toContain("Other models20 · 9.1%Unattributed tokens160");
+    await act(async () => (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(tooltip()).toBeUndefined();
   });
 
   it("shares the extended range across charts, keeps daily details and restores daily bars", async () => {
@@ -167,7 +273,7 @@ describe("local Usage panel", () => {
     const bars = [...tokenChart.querySelectorAll<HTMLButtonElement>("[data-usage-day]")];
     await act(async () => bars[0]!.focus());
     expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("2026-05-04 – 2026-05-10");
-    expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("Tokens: 770");
+    expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("Tokens770");
     await act(async () => bars[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(bars.at(-1));
     expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("2026-11-02 – 2026-11-03");
@@ -196,7 +302,7 @@ describe("local Usage panel", () => {
     expect(updated.classList.contains("ml-auto")).toBe(true);
     expect(updated.classList.contains("text-right")).toBe(true);
     expect(updated.classList.contains("min-w-0")).toBe(true);
-    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9")).toBe(true);
+    expect([...host.querySelectorAll("[data-usage-provisional]")].some((value) => value.textContent === "9 observed")).toBe(true);
     expect(host.querySelector<HTMLDetailsElement>("[data-usage-daily]")?.open).toBe(false);
     expect(text()).toContain("4,000");
     const firstCard = host.querySelector<HTMLElement>("section")!;
@@ -221,7 +327,7 @@ describe("local Usage panel", () => {
     }
     expect(firstCard.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-11-02 (China time): +10%.");
     expect(firstCard.querySelector('[data-usage-change] .sr-only')?.textContent).toContain("Compared with 2026-11-02");
-    expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("Observed non-merge Git commits across local branches");
+    expect([...firstCard.querySelectorAll('[data-usage-change]')][1]?.getAttribute("title")).toContain("Unique non-merge Git commits across local refs");
     expect([...firstCard.querySelectorAll('[data-usage-change]')][2]?.getAttribute("title")).toContain("Based on synced devices; devices not yet synced are excluded.");
     expect(host.querySelector('section [data-usage-category-row="work"]')?.textContent).toContain("—");
     expect(host.querySelector('section [data-usage-category-row="personal"]')?.textContent).toContain("+10%");
@@ -289,13 +395,13 @@ describe("local Usage panel", () => {
       ...trend.slice(3),
     ] });
     const bars = [...host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="prs"] [data-usage-day]')];
-    expect(bars[0]!.getAttribute("aria-label")).toContain("0 · Known subtotal");
+    expect(bars[0]!.getAttribute("aria-label")).toContain("0 observed");
     expect(bars[1]!.querySelector('[data-usage-category="work"]')?.className).toContain("bg-accent/35");
     expect(bars[2]!.getAttribute("aria-label")).toContain("PRs 0");
-    expect(bars[2]!.getAttribute("aria-label")).not.toContain("Known subtotal");
+    expect(bars[2]!.getAttribute("aria-label")).not.toContain("observed");
     await act(async () => bars[1]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     const tooltip = host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')!;
-    expect(tooltip.textContent).toMatch(/2026-10-06.*PRs: 2.*Enterprise: 2.*Personal:/s);
+    expect(tooltip.textContent).toMatch(/2026-10-06.*PRs: 2 observed.*Enterprise: 2 observed.*Personal:/s);
     expect(tooltip.textContent).not.toMatch(/Verified subtotal|incomplete/);
     expect(tooltip.querySelector("p, [title], [aria-description]")).toBeNull();
     await act(async () => bars[2]!.focus());
@@ -309,11 +415,27 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("Shaded columns: unavailable. Pale PR segments");
   });
 
+  it("renders provisional local-ref commit deltas in DoD and WoW cards without altering exact, repo, or trend", async () => {
+    const snapshot = structuredClone(sample);
+    snapshot.windows!["1"].comparison = { ...snapshot.windows!["1"].comparison, commits: null, known: { prs: null, commits: 100 } };
+    snapshot.windows!["7"].comparison = { ...snapshot.windows!["7"].comparison, commits: null, known: { prs: null, commits: -25 } };
+    snapshot.windows!["30"].comparison = { ...snapshot.windows!["30"].comparison, commits: null };
+    await render(snapshot);
+    const cards = [...host.querySelectorAll("section")].slice(0, 3);
+    const commitChanges = cards.map((card) => card.querySelectorAll("dd [data-usage-change]")[1]!);
+    expect(commitChanges.map((el) => el.querySelector('[aria-hidden="true"]')?.textContent)).toEqual(["+100%", "-25%", "—"]);
+    expect(commitChanges[0]!.hasAttribute("data-usage-provisional")).toBe(true);
+    expect(commitChanges[1]!.hasAttribute("data-usage-provisional")).toBe(true);
+    expect(commitChanges[2]!.hasAttribute("data-usage-provisional")).toBe(false);
+    expect(commitChanges[0]!.getAttribute("title")).toContain("Known subtotal.");
+    expect(commitChanges[1]!.getAttribute("title")).toContain("Known subtotal.");
+  });
+
   it("keeps partial PR counts and same-source category and repository comparisons", async () => {
     const snapshot = structuredClone(sample);
     await renderRaw({ ...snapshot, contributions: primaryUsageFixture("2026-11-03", true) });
     expect([...host.querySelectorAll("section")].slice(0, 3).map(card => card.querySelector("dd > span")?.textContent))
-      .toEqual(["1", "4", "9"]);
+      .toEqual(["1", "4 observed", "9 observed"]);
     for (const [index, period] of ["DoD", "WoW", "30d"].entries()) {
       const card = host.querySelectorAll("section")[index]!;
       expect(card.querySelector('[data-usage-category-row="work"] [data-usage-change]')?.getAttribute("title")).toContain(period);
@@ -322,7 +444,7 @@ describe("local Usage panel", () => {
     expect(host.querySelector('[data-usage-repositories] tbody [data-usage-change]')?.textContent).toContain("—");
     expect(host.querySelector('[data-usage-repositories] tbody tr')?.textContent).toContain("sample/team-repo");
     expect(snapshot.windows!["7"].prs).toBeNull();
-    expect(host.querySelectorAll("section")[1]?.querySelector("dd [data-usage-provisional]")?.textContent).toBe("4");
+    expect(host.querySelectorAll("section")[1]?.querySelector("dd [data-usage-provisional]")?.textContent).toBe("4 observed");
     setLocale("zh");
     await renderRaw(snapshot);
     for (const [index, period] of ["日环比", "周环比", "30 日环比"].entries()) {
@@ -330,7 +452,7 @@ describe("local Usage panel", () => {
     }
   });
 
-  it("shows a dash for missing hover values and numeric zero for observed zero", async () => {
+  it("distinguishes unavailable hover values from measured zero", async () => {
     const snapshot = structuredClone(sample);
     snapshot.trend[0]!.coverage = "unavailable";
     Object.assign(snapshot.trend[1]!, { prs: 0, knownPrs: 0,
@@ -338,7 +460,7 @@ describe("local Usage panel", () => {
     await renderRaw(snapshot);
     const bars = [...host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="prs"] [data-usage-day]')];
     await act(async () => bars[0]!.focus());
-    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/PRs: —.*Enterprise: —.*Personal: —/s);
+    expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/PRs: Unavailable.*Enterprise: Unavailable.*Personal: Unavailable/s);
     await act(async () => bars[1]!.focus());
     expect(host.querySelector('[data-usage-trend="prs"] [role="tooltip"]')?.textContent).toMatch(/PRs: 0.*Enterprise: 0.*Personal: 0/s);
   });
@@ -429,8 +551,43 @@ describe("local Usage panel", () => {
     expect(host.querySelector('[data-usage-daily] tbody tr:first-child td:nth-child(4)')?.textContent).toBe("110");
     const last = host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="totalTokens"] [data-usage-day]')[29]!;
     await act(async () => last.focus());
-    expect(host.querySelector('[data-usage-trend="totalTokens"] [role="tooltip"]')?.textContent).toContain("Tokens: 110");
+    expect(host.querySelector('[data-usage-trend="totalTokens"] [role="tooltip"]')?.textContent).toContain("Tokens110");
     expect(last.getAttribute("title")).toBeNull();
+  });
+
+  it("toggles Model usage disclosure via keyboard while preserving the selected period and keeping Repository usage static", async () => {
+    const snapshot = structuredClone(sample);
+    snapshot.windows!["7"].tokenDetails = {
+      input: 400, output: 200, estimatedCost: { coverage: "ready", usd: 1.5 },
+      models: { coverage: "ready", rows: [{ model: "fixture-week-model", totalTokens: 600, input: 400, output: 200, cacheRead: 0, estimatedCost: { coverage: "ready", usd: 1.5 } }] },
+    };
+    await renderRaw(snapshot);
+    const model = host.querySelector('[data-usage-period="models"]')!;
+    const repo = host.querySelector('[data-usage-period="repositories"]')!;
+    const toggle = model.querySelector<HTMLButtonElement>("h3 > button[aria-expanded]")!;
+    const panel = model.querySelector<HTMLElement>('[role="tabpanel"]')!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.hidden).toBe(false);
+    expect(toggle.querySelector('[data-info-hint]')).toBeNull();
+    expect(model.querySelector('h3 ~ [data-info-hint]')).not.toBeNull();
+    expect(repo.querySelector('h3 > button[aria-expanded]')).toBeNull();
+    const tabs = [...model.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(tabs[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(panel.textContent).toContain("fixture-week-model");
+    await act(async () => { toggle.focus(); toggle.click(); });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(panel.hidden).toBe(true);
+    expect(model.querySelector('[role="tablist"]')).toBeNull();
+    expect(model.querySelector('[data-info-hint]')).toBeNull();
+    expect(document.activeElement).toBe(toggle);
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(panel.hidden).toBe(false);
+    expect(model.querySelector('[role="tab"][aria-selected="true"]')?.id).toBe(tabs[1]!.id);
+    expect(model.querySelector('[data-info-hint]')).not.toBeNull();
+    expect(panel.textContent).toContain("fixture-week-model");
   });
 
   it("stacks Enterprise and Personal trend values and adds Unclassified only when observed", async () => {
@@ -476,7 +633,8 @@ describe("local Usage panel", () => {
     }, trend: trend.map((day, index) => ({ ...day, day: new Date(Date.UTC(2025, 11, 3 + index)).toISOString().slice(0, 10) })) });
     expect(text()).toContain("2025-12-26 – 2026-01-01");
     expect(text()).toContain("2025-12-03 – 2026-01-01");
-    expect(host.querySelector("header [data-info-hint]")).toBeNull();
+    expect(host.querySelectorAll("header [data-info-hint]")).toHaveLength(1);
+    expect(host.querySelector("header [data-info-hint]")?.getAttribute("aria-label")).toBe("Activity count definitions");
     expect(host.querySelector("header time")?.textContent).toContain("00:05");
     expect(host.querySelector("header time")?.textContent).not.toContain("24:05");
     expect(host.querySelectorAll("[data-usage-daily] table tbody tr")).toHaveLength(30);
@@ -494,12 +652,12 @@ describe("local Usage panel", () => {
       coverage: "unavailable", tokenCoverage: "unavailable", prs: null, knownPrs: null, commits: null, newTokens: null, cacheRead: null, totalTokens: null,
     }) } });
     const first = host.querySelector<HTMLElement>("section")!;
-    expect([...first.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["Unavailable", "Unavailable", "Unavailable"]);
+    expect([...first.querySelectorAll(":scope > dl dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["Unavailable", "Unavailable", "Unavailable"]);
 
     await render({ ...sample, status: "ready", windows: { ...sample.windows!, "1": window(1, "2026-11-03", "2026-11-03", {
       coverage: "ready", tokenCoverage: "ready", prs: 0, knownPrs: 0, commits: 0, newTokens: 0, cacheRead: 0, totalTokens: 0,
     }) } });
-    expect([...host.querySelector<HTMLElement>("section")!.querySelectorAll("dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["0", "0", "0"]);
+    expect([...host.querySelector<HTMLElement>("section")!.querySelectorAll(":scope > dl dd")].map((value) => value.firstElementChild?.textContent)).toEqual(["0", "0", "0"]);
   });
 
   it("refreshes the local summary every five seconds and keeps the last good response on failure", async () => {
@@ -554,7 +712,7 @@ describe("local Usage panel", () => {
     expect(daily.querySelector('p')?.textContent).not.toMatch(/DoD|WoW|MoM/);
     expect(daily.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Compared with 2026-10-27");
     expect(daily.querySelector('[data-usage-change]')?.getAttribute("title")).toContain("Same calendar day last week.");
-    const tabs = [...host.querySelectorAll<HTMLButtonElement>('[role="tablist"] [role="tab"]')];
+    const tabs = [...host.querySelectorAll<HTMLButtonElement>('[data-usage-period="repositories"] [role="tab"]')];
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false"]);
     const values = () => [...host.querySelectorAll("[data-usage-repositories] tbody tr:first-child td")].map((cell) => cell.textContent);
     expect(values()[0]).toBe("Enterprise");
@@ -566,7 +724,7 @@ describe("local Usage panel", () => {
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(tabs[3]);
     expect(tabs[3]!.getAttribute("aria-selected")).toBe("true");
-    expect(host.querySelector('[role="tabpanel"]')?.textContent).toContain("Repository details are not available in this snapshot.");
+    expect(host.querySelector('[data-usage-period="repositories"] [role="tabpanel"]')?.textContent).toContain("Repository details are not available in this snapshot.");
     await act(async () => tabs[3]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
     expect(document.activeElement).toBe(tabs[2]);
     expect(values()[1]).toMatch(/^30/);
@@ -678,7 +836,7 @@ it("selects sixty-day repository detail with the trend and preserves source iden
   expect(oldest.textContent).toContain("fixture/retained-personal");
   expect(oldest.textContent).toContain("Personal");
   await act(async () => tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
-  expect(host.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe("1d");
+  expect(host.querySelector('[data-usage-period="repositories"] [role="tab"][aria-selected="true"]')!.textContent).toBe("1d");
   expect(host.querySelector('select[aria-label="Activity source"]')).toBeNull();
   expect(range.value).toBe("60");
 });

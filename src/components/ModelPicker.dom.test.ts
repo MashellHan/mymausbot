@@ -712,6 +712,41 @@ describe("inline overview model settings", () => {
       selection: { instanceId: "codex", model: "gpt-5.6" } }));
   });
 
+  it("routes a model through a supported type and limits thinking to its declared options", async () => {
+    const route = { id: "local:raven", connectionGroup: "loopback:0123456789abcdef", label: "Raven (Local)", provenance: "local" as const };
+    const gpt = { id: "raven::gpt-6.1-sol", label: "GPT 6.1 Sol", custom: true, providerRoute: route, effortLevels: ["high", "xhigh"] as const };
+    const unsupported = { id: "raven::gemini-4-carbon", label: "Gemini Carbon", custom: true, providerRoute: route, protocolUnsupported: true as const };
+    const carbon = { id: "raven/gemini-4-carbon", label: "Gemini Carbon", custom: true, providerRoute: route, effortLevels: ["high"] as const };
+    const flash = { id: "raven/gemini-flash", label: "Gemini Flash", custom: true, providerRoute: route, effortLevels: [] };
+    fixture.instances = [
+      { ...claude([gpt, unsupported]), instanceId: "codex", driverKind: "codex", displayName: "Codex" },
+      { ...claude([carbon, flash]), instanceId: "pi", driverKind: "piAgent", displayName: "pi" },
+    ];
+    const bot: Bot = { ...scout(), modelSelection: { instanceId: "codex", model: gpt.id, effort: "xhigh" } };
+    render(bot, options);
+    await settle();
+    expect([...select("Provider").options].map((option) => option.textContent)).toEqual(["Raven (Local)"]);
+    expect([...select("Model type").options].map((option) => option.value)).toEqual(["codex", "piAgent"]);
+    expect([...select("Choose model").options].find((option) => option.value.includes(unsupported.id))?.disabled).toBe(true);
+    expect([...select("Reasoning effort").options].map((option) => option.value)).toEqual(["", "high", "xhigh"]);
+    choose(select("Model type"), "piAgent");
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect(select("Reasoning effort").closest("fieldset")?.disabled).toBe(true);
+    expect([...select("Choose model").options].map((option) => option.textContent)).toEqual(["Choose model", "Gemini Carbon", "Gemini Flash"]);
+    choose(select("Choose model"), JSON.stringify(["pi", carbon.id]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
+      selection: { instanceId: "pi", model: carbon.id } }));
+    render({ ...bot, modelSelection: { instanceId: "pi", model: carbon.id, effort: "high" } }, options);
+    await settle();
+    expect(select("Model type").value).toBe("piAgent");
+    expect([...select("Reasoning effort").options].map((option) => option.value)).toEqual(["", "high"]);
+    choose(select("Choose model"), JSON.stringify(["pi", flash.id]));
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
+      selection: { instanceId: "pi", model: flash.id } }));
+    render({ ...bot, modelSelection: { instanceId: "pi", model: flash.id } }, options);
+    expect(select("Reasoning effort")).toBeNull();
+  });
+
   it("keeps the saved OpenCode provider and model selected when reasoning uses a native variant", async () => {
     const option: Option = { id: "provider/model", label: "Provider model",
       providerRoute: { id: "configured:route", label: "Example", provenance: "configured" },

@@ -17,9 +17,9 @@ export function createInternalAppSettingsRoutes(deps: {
   };
 }
 
-/** The window's own preferences (skin, Raw, Simple or Advanced, font, chat width, send key, sounds) live in its
- * localStorage. The window reports them here; the server keeps the last report and pushes a change back as a
- * `window-pref` frame, which only an open window can apply. */
+/** The window's own preferences live in its localStorage or behind the desktop app's bridge. The window reports them
+ * here; the server keeps the last report and pushes a change back as a `window-pref` frame, which only an open window
+ * can apply. One the window never reported is one it can't change (a browser has no desktop bridge). */
 export function createWindowPrefs(deps: {
   broadcast(frame: Record<string, unknown>, options: { adminOnly: true }): void;
   ownerOrAdmin(auth: RequestAuth): boolean;
@@ -41,7 +41,8 @@ export function createWindowPrefs(deps: {
     routes,
     read: (id: WindowPrefId) => values.get(id),
     write(id: WindowPrefId, value: unknown): string | null {
-      if (!deps.windowOpen() || !values.has(id)) return "Open mymausbot on this computer first; this setting lives in the app window.";
+      if (!deps.windowOpen()) return "Open mymausbot on this computer first; this setting lives in the app window.";
+      if (!values.has(id)) return "The open mymausbot window can't change this here. It is changed in the mymausbot desktop app on this computer.";
       values.set(id, value);
       deps.broadcast({ kind: "window-pref", id, value }, { adminOnly: true });
       return null;

@@ -127,7 +127,7 @@ describe("the header's right side", () => {
       expect(markup).toContain('data-testid="chat-more"');
       expect(markup).not.toContain('data-panel-share');
       const more = fixture.menus.find((menu) => menu.ariaLabel === "More")!;
-      expect(more.items.map((item) => item.key)).toEqual(["find", "new-thread", "start-fresh", "copy", "download"]);
+      expect(more.items.map((item) => item.key)).toEqual(["find", "new-thread", "start-fresh", "as-template", "copy", "download"]);
     } finally {
       delete window.ogb;
       fixture.raw = false;
@@ -135,7 +135,7 @@ describe("the header's right side", () => {
     }
   });
 
-  it("moves Stop out of the Simple header into the composer's round button while a turn runs", () => {
+  it("moves Stop out of the Simple header into the composer's round button while a turn runs, Call beside it", () => {
     fixture.advanced = false;
     try {
       const busy = { ...bot, busy: true, tasks: (bot.tasks ?? []).map((task) => ({ ...task, busy: true })) };
@@ -143,7 +143,7 @@ describe("the header's right side", () => {
       expect(controls).not.toContain("Stop this turn");
       const stop = markup.match(/<button[^>]*data-composer-stop="slot"[^>]*>/)?.[0] ?? "";
       expect(stop).toContain('aria-label="Stop this turn"');
-      expect(markup).not.toContain('data-call-button="composer"');
+      expect(markup).toContain('data-call-button="composer"');
       expect(header({ ...busy, waitingForTeammates: true, busy: false, tasks: (bot.tasks ?? []).map((task) => ({ ...task, busy: false, waitingForTeammates: true })) }).markup)
         .toContain('data-composer-stop="slot"');
     } finally {
@@ -179,7 +179,7 @@ describe("the header's right side", () => {
     expect(markup).toContain('data-tour="computer"');
     expect(markup).toContain('data-testid="chat-more"');
     const more = fixture.menus.find((menu) => menu.ariaLabel === "More")!;
-    expect(more.items.map((item) => item.key)).toEqual(["find", "start-fresh", "copy", "download", "activity", "inspector"]);
+    expect(more.items.map((item) => item.key)).toEqual(["find", "start-fresh", "as-template", "copy", "download", "activity", "inspector"]);
     const inspector = more.items.find((item) => item.key === "inspector")!;
     expect(inspector.disabled).toBeFalsy();
     expect(inspector.heading).toBeUndefined();
@@ -452,6 +452,14 @@ describe("thread control placement", () => {
     expect(markup).toContain("Full access controls tool approvals, not provider safety checks");
     expect(markup).not.toContain("<button");
     expect(renderToStaticMarkup(createElement(ErrorRow, { message: "Network timeout", onRetry: () => {} }))).toContain("<button");
+  });
+
+  it("points a previous connection refusal to a new conversation without a sign-in or retry action", () => {
+    const tool = failedTurnTool('unexpected status 401 Unauthorized: input item does not belong to this connection', { setup: true });
+    const markup = renderToStaticMarkup(createElement(FailedTurnRow, { tool, engine: undefined, onRetry: () => {} }));
+    expect(markup).toContain("Start a new conversation with this bot");
+    expect(markup).not.toContain("Retry</button>");
+    expect(markup).not.toContain("Connect ChatGPT");
   });
   it("shows the provider safety guidance from the catalog, word for word", () => {
     expect(en["chat.providerSafety.guidance"]).toBe(PROVIDER_SAFETY_GUIDANCE);

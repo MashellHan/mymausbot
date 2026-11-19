@@ -1,22 +1,7 @@
 import { api } from "./api";
+import { loadFullThread } from "./message-history";
 import { optimisticMessageId, optimisticUserMessage } from "./optimistic-send";
 import type { Action, AppState, BotAnnouncement, Group, Message } from "./store";
-
-async function loadFullThread(threadId: string): Promise<{ messages: Message[]; activeLeafId: string | null }> {
-  const messages: Message[] = [];
-  let before: string | undefined;
-  let activeLeafId: string | null = null;
-  for (;;) {
-    const page = await api<{ messages: Message[]; hasMore?: boolean; activeLeafId: string | null }>(
-      `/api/threads/${threadId}/messages?limit=200${before ? `&before=${encodeURIComponent(before)}` : ""}`,
-    );
-    messages.unshift(...page.messages);
-    activeLeafId = page.activeLeafId;
-    if (!page.hasMore || !page.messages.length) break;
-    before = page.messages[0]!.id;
-  }
-  return { messages, activeLeafId };
-}
 
 export interface ForkPanelState {
   kind: "bot" | "group";

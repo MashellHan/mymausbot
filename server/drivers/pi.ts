@@ -25,7 +25,6 @@ import { commandSummary, toolDetailPreview } from "../tool-summary.ts";
 
 import type {
   DriverCreateInput,
-  EffortLevel,
   ModelCatalog,
   ProviderDriver,
   ProviderInstance,
@@ -52,6 +51,8 @@ import { noticeFailure } from "../chat-notices.ts";
 
 import { decodePiFrame, PiRpcChunks, piLineReader, readPiPromptImages } from "./pi-rpc.ts";
 import { PiRunUsage, type PiUsage, type TurnUsage } from "./pi-usage.ts";
+import { piCatalogFromFrame, piThinkingLevel } from "./pi-catalog.ts";
+export { parsePiCatalog, piThinkingLevel } from "./pi-catalog.ts";
 export { decodePiFrame, PiRpcChunks, piLineReader } from "./pi-rpc.ts";
 
 const DRIVER_KIND = "piAgent";
@@ -83,50 +84,6 @@ function piNativeLogMessage(message: Record<string, unknown>): Record<string, un
         : value;
     }),
   };
-}
-
-export function piThinkingLevel(effort: EffortLevel): (typeof EFFORT_LEVELS)[number] | "off" {
-  return effort === "none" ? "off" : effort;
-}
-
-interface PiModelEntry {
-  provider: string;
-  id: string;
-  name?: string;
-}
-
-interface PiModelsResponse {
-  type: "response";
-  command: "get_available_models";
-  success: boolean;
-  data?: { models?: PiModelEntry[] };
-}
-
-function piCatalogFromFrame(frame: unknown, fallbackDefault: string): ModelCatalog | null {
-  const res = frame as PiModelsResponse;
-  if (res?.type !== "response" || res.command !== "get_available_models" || !res.success) return null;
-  const options: Array<{ id: string; label: string; custom: true; provider: string }> = [];
-  for (const m of res.data?.models ?? []) {
-    if (!m?.provider || !m?.id) continue;
-    const id = `${m.provider}/${m.id}`;
-    options.push({ id, label: m.name ?? m.id, custom: true, provider: m.provider });
-  }
-  return { default: fallbackDefault || (options[0]?.id ?? ""), options };
-}
-
-export function parsePiCatalog(stdout: string, fallbackDefault = ""): ModelCatalog {
-  for (const line of stdout.split("\n")) {
-    if (!line.trim()) continue;
-    let msg: unknown;
-    try {
-      msg = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const catalog = piCatalogFromFrame(msg, fallbackDefault);
-    if (catalog) return catalog;
-  }
-  return { default: fallbackDefault, options: [] };
 }
 
 export function splitPiModel(id: string): { provider: string; modelId: string } | null {

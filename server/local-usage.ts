@@ -10,6 +10,9 @@ import type {
 import { redactSecretsInText } from "../shared/redact.ts";
 import { createLocalUsageMergedReader } from "./local-usage-merged.ts";
 import { createLocalUsageGithubReader } from "./local-usage-github.ts";
+import {
+  createLocalTokenProjector, retainedTokenObservation, sameTokenAmounts, type DailyTokenObservation,
+} from "./local-usage-models.ts";
 import { createLocalContributionsReader } from "./local-usage-contributions.ts";
 import { MAX_USAGE_HISTORY_DAYS } from "../shared/local-usage-range.ts";
 
@@ -35,6 +38,7 @@ interface DailyCategory {
 interface DailyRow {
   day: string;
   tokenStatus: LocalUsageTokenStatus;
+  commitStatus?: "ready" | "local-ref-ready" | "partial" | "unavailable";
   categories: Record<LocalUsageCategory, DailyCategory>;
 }
 
@@ -92,27 +96,40 @@ function rows(raw: unknown, captureDay: string, span = 31, historical = false): 
     dayNumber(day);
     if (typeof day !== "string" || day < oldest || day > captureDay || daily.has(day)) throw new Error("Invalid activity day range");
     if (row.tokenStatus !== "ready" && row.tokenStatus !== "partial" && row.tokenStatus !== "unavailable") throw new Error("Invalid token coverage");
+    if (row.commitStatus !== undefined && row.commitStatus !== "ready" && row.commitStatus !== "local-ref-ready" &&
+        row.commitStatus !== "partial" && row.commitStatus !== "unavailable") throw new Error("Invalid commit coverage");
     const rawCategories = object(row.categories);
     const categories = {} as Record<LocalUsageCategory, DailyCategory>;
     for (const key of CATEGORIES) categories[key] = category(rawCategories[key], historical);
-    daily.set(day, { day, tokenStatus: row.tokenStatus, categories });
+    daily.set(day, { day, tokenStatus: row.tokenStatus,
+      ...(row.commitStatus !== undefined ? { commitStatus: row.commitStatus } : {}), categories });
   }
   return daily;
 }
 
-function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; activityScopeReady: boolean; tokenScopeReady: boolean } {
+type CommitObservationScope = "exact" | "local-ref" | "unknown";
+
+function sourceCoverage(raw: unknown): {
+  coverage: LocalUsageSourceCoverage; activityScopeReady: boolean; commitScope: CommitObservationScope; tokenScopeReady: boolean;
+} {
   if (!Array.isArray(raw) || raw.length > 100) throw new Error("Invalid activity sources");
   const coverage = { total: raw.length, ready: 0, partial: 0, stale: 0, missing: 0 };
   let missingSourcesUnsampled = true;
   let tokenReady = 0, tokenIncomplete = false;
+  let commitExactReady = 0, commitLocalRefReady = 0, commitIncomplete = false;
   for (const value of raw) {
     const source = object(value);
     const status = source.status;
     if (source.tokenStatus !== undefined && source.tokenStatus !== "ready" && source.tokenStatus !== "partial" &&
         source.tokenStatus !== "unavailable") throw new Error("Invalid token source status");
+    if (source.commitStatus !== undefined && source.commitStatus !== "ready" && source.commitStatus !== "local-ref-ready" &&
+        source.commitStatus !== "partial" && source.commitStatus !== "unavailable") throw new Error("Invalid commit source status");
     if (status === "ok" && (source.tokenStatus === undefined || source.tokenStatus === "ready") ||
         status === "partial" && source.tokenStatus === "ready") tokenReady++;
     else if (status !== "missing") tokenIncomplete = true;
+    if (status === "ok" && (source.commitStatus === undefined || source.commitStatus === "ready")) commitExactReady++;
+    else if ((status === "ok" || status === "partial") && source.commitStatus === "local-ref-ready") commitLocalRefReady++;
+    else if (status !== "missing") commitIncomplete = true;
     if (status === "ok") coverage.ready++;
     else if (status === "missing") {
       coverage.missing++;
@@ -121,7 +138,10 @@ function sourceCoverage(raw: unknown): { coverage: LocalUsageSourceCoverage; act
     } else if (status === "partial" || status === "stale") coverage[status]++;
     else throw new Error("Invalid activity source status");
   }
-  return { coverage, activityScopeReady: coverage.ready > 0 && coverage.partial === 0 && coverage.stale === 0 && missingSourcesUnsampled,
+  const activityScopeReady = commitExactReady > 0 && commitLocalRefReady === 0 && !commitIncomplete && missingSourcesUnsampled;
+  const commitScope: CommitObservationScope = activityScopeReady ? "exact"
+    : !commitIncomplete && missingSourcesUnsampled && commitExactReady + commitLocalRefReady > 0 ? "local-ref" : "unknown";
+  return { coverage, activityScopeReady, commitScope,
     tokenScopeReady: tokenReady > 0 && !tokenIncomplete && missingSourcesUnsampled };
 }
 
@@ -143,6 +163,8 @@ function totals(row: DailyRow) {
     knownPrs: sum(categories.map((value) => value.knownPrs)),
     prs: categories.every((value) => value.prs !== null) ? sum(categories.map((value) => value.prs!)) : null,
     commits: categories.every((value) => value.commitObserved) ? sum(categories.map((value) => value.commits)) : null,
+    input: sum(categories.map((value) => value.input)),
+    output: sum(categories.map((value) => value.output)),
     newTokens: sum(categories.map((value) => value.input + value.output)),
     cacheRead: sum(categories.map((value) => value.cacheRead)),
     totalTokens: sum(categories.map((value) => value.input + value.output + value.cacheRead)),
@@ -369,11 +391,24 @@ function repositoryCommitsCovered(window: LocalUsageWindow, repositories: Reposi
     window.repositories.unattributedCommits === 0 && datesCovered(window, repositories);
 }
 
+function windowCommitScope(window: LocalUsageWindow, daily: Map<string, DailyRow>, commitScope: CommitObservationScope): CommitObservationScope {
+  if (commitScope !== "local-ref" || window.missingDays.length > 0) return "unknown";
+  const dates = Array.from({ length: window.days }, (_, index) => offsetDay(window.startDay, index));
+  const statuses = dates.map((day) => daily.get(day)?.commitStatus);
+  if (statuses.some((status) => status !== "ready" && status !== "local-ref-ready")) return "unknown";
+  return "local-ref";
+}
+
 function compareWindows(current: LocalUsageWindow, previous: LocalUsageWindow,
   currentRepositories: RepositorySnapshot | null, previousRepositories: RepositorySnapshot | null,
-  sources: LocalUsageSourceCoverage, activityScopeReady: boolean, tokenScopeReady: boolean): void {
+  currentDaily: Map<string, DailyRow>, previousDaily: Map<string, DailyRow>, comparisonDailyIsHistory: boolean,
+  sources: LocalUsageSourceCoverage, activityScopeReady: boolean, commitScope: CommitObservationScope, tokenScopeReady: boolean): void {
   const complete = current.missingDays.length === 0 && previous.missingDays.length === 0;
   const tokenReady = tokenComparisonReady(current, sources, tokenScopeReady) && tokenComparisonReady(previous, sources, tokenScopeReady);
+  const localRefCommits = (current.days === 1 || current.days === 7) && complete && !activityScopeReady &&
+    (current.days === 1 || comparisonDailyIsHistory) &&
+    windowCommitScope(current, currentDaily, commitScope) === "local-ref" &&
+    windowCommitScope(previous, previousDaily, commitScope) === "local-ref";
   const categories = {} as LocalUsageComparison["categories"];
   for (const key of CATEGORIES) {
     categories[key] = {
@@ -385,6 +420,7 @@ function compareWindows(current: LocalUsageWindow, previous: LocalUsageWindow,
     missingDays: previous.missingDays, unavailableTokenDays: previous.unavailableTokenDays,
     prs: complete ? weekChange(current.prs, previous.prs) : null,
     commits: complete && activityScopeReady ? weekChange(current.commits, previous.commits) : null,
+    ...(localRefCommits ? { known: { prs: null, commits: weekChange(current.commits, previous.commits) } } : {}),
     totalTokens: complete && tokenReady
       ? weekChange(current.totalTokens, previous.totalTokens) : null, categories };
   const priorRows = new Map(previous.repositories.rows.map((row) => [row.id, row]));
@@ -408,7 +444,7 @@ function project(raw: unknown, now: number): LocalUsageResponse {
       (snapshot.status !== "ready" && snapshot.status !== "partial")) throw new Error("Invalid activity snapshot");
   const endDay = chinaDay(asOf);
   const daily = rows(snapshot.daily, endDay);
-  const { coverage: sources, activityScopeReady, tokenScopeReady } = sourceCoverage(snapshot.sources);
+  const { coverage: sources, activityScopeReady, commitScope, tokenScopeReady } = sourceCoverage(snapshot.sources);
   const prs = prSourceCoverage(snapshot.prSources);
   const rawPrCoverage = object(snapshot.prCoverage);
   const prCoverage = {} as Record<LocalUsageCategory, "ready" | "partial">;
@@ -430,6 +466,8 @@ function project(raw: unknown, now: number): LocalUsageResponse {
   const historical = localHistory(snapshot.localHistory, endDay, daily);
   const comparisonDaily = historical?.daily ?? daily;
   const comparisonRepositories = historical?.repositories ?? repositories;
+  const stale = chinaDay(now) !== endDay || now - asOf > STALE_AFTER_MS;
+  const effectiveCommitScope: CommitObservationScope = stale ? "unknown" : commitScope;
   const windows = {} as Record<"1" | "7" | "30", LocalUsageWindow>;
   for (const days of WINDOWS) {
     const window = buildWindow(days, endDay, asOf, daily, sources, prs, prComplete, prCoverage, observedCategories);
@@ -438,15 +476,46 @@ function project(raw: unknown, now: number): LocalUsageResponse {
     const previous = buildWindow(days, offsetDay(window.startDay, -1), asOf, comparisonDaily,
       sources, prs, prComplete, prCoverage, observedCategories);
     previous.repositories = repositoryWindow(comparisonRepositories, previous);
-    compareWindows(window, previous, historical?.repositories ?? repositories, comparisonRepositories, sources, activityScopeReady, tokenScopeReady);
+    compareWindows(window, previous, historical?.repositories ?? repositories, comparisonRepositories,
+      daily, comparisonDaily, historical !== null, sources, activityScopeReady, effectiveCommitScope, tokenScopeReady);
     windows[String(days) as "1" | "7" | "30"] = window;
   }
-  const stale = chinaDay(now) !== endDay || now - asOf > STALE_AFTER_MS;
   const status = stale ? "stale" : snapshot.status === "ready" && windows["30"].coverage === "ready" ? "ready" : "partial";
   const recentTrend = trend(windows["30"], daily, sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories, 30, repositories);
   const baseline = trend({ ...windows["30"], startDay: offsetDay(endDay, -59) }, comparisonDaily,
     sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories, 60, comparisonRepositories);
-  const history = tokenHistory(snapshot.trendHistory, endDay, recentTrend, baseline);
+  const { history, retained } = tokenHistory(snapshot.trendHistory, endDay, recentTrend, baseline);
+  const projectTokens = createLocalTokenProjector(new Date(now));
+  const recentObservations = new Map<string, DailyTokenObservation>();
+
+  function observe(row: LocalUsageTrendDay, rawDay: DailyRow | undefined) {
+    if (row.tokenStatus === "unavailable") return;
+    const saved = retained.get(row.day);
+    const matches = (tokens: DailyTokenObservation) => tokens.cacheRead === row.cacheRead && tokens.input + tokens.output === row.newTokens;
+    if (rawDay && rawDay.tokenStatus !== "unavailable") {
+      const { input, output, cacheRead } = totals(rawDay);
+      const current = { input, output, cacheRead, models: [] };
+      if (matches(current)) return saved && sameTokenAmounts(current, saved) ? saved : current;
+    }
+    if (saved && matches(saved)) return saved;
+  }
+
+  for (const row of recentTrend) {
+    const observation = observe(row, daily.get(row.day));
+    if (!observation) continue;
+    recentObservations.set(row.day, observation);
+    row.tokenDetails = { ...projectTokens([observation], row.tokenStatus), cacheRead: observation.cacheRead };
+  }
+  for (const row of history) {
+    if (row.tokenDetails) continue;
+    const observation = observe(row, daily.get(row.day) ?? comparisonDaily.get(row.day));
+    if (observation) row.tokenDetails = { ...projectTokens([observation], row.tokenStatus), cacheRead: observation.cacheRead };
+  }
+  for (const window of Object.values(windows)) {
+    const observations = [...recentObservations].filter(([day]) => day >= window.startDay).map(([, row]) => row);
+    window.tokenDetails = projectTokens(observations, window.tokenCoverage);
+  }
+
   const sixty = buildWindow(60, endDay, asOf, comparisonDaily, sources, prs, prComplete, prCoverage, observedCategories);
   sixty.repositories = repositoryWindow(comparisonRepositories, sixty);
   if (sources.total === 0 || sources.ready !== sources.total || !datesCovered(sixty, comparisonRepositories)) sixty.repositories.coverage = sixty.repositories.coverage === "unavailable" ? "unavailable" : "partial";
@@ -454,8 +523,9 @@ function project(raw: unknown, now: number): LocalUsageResponse {
     prCoverage, windows, trend: recentTrend, history, sixtyDayRepositories: { startDay: sixty.startDay, endDay: sixty.endDay, repositories: sixty.repositories } };
 }
 
-function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[], baseline: LocalUsageTrendDay[]): LocalUsageTrendDay[] {
+function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[], baseline: LocalUsageTrendDay[]) {
   const result = new Map<string, LocalUsageTrendDay>();
+  const retained = new Map<string, DailyTokenObservation>();
   try {
     if (raw !== undefined) {
       const data = object(raw);
@@ -471,13 +541,17 @@ function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[]
         const totalTokens = missing && row.totalTokens === null ? null : count(row.totalTokens);
         if (missing ? [newTokens, cacheRead, totalTokens].some((value) => value !== null)
           : newTokens === null || cacheRead === null || totalTokens !== sum([newTokens, cacheRead])) throw new Error("Invalid token history accounting");
+        if (newTokens !== null && cacheRead !== null) {
+          const observation = retainedTokenObservation(row, newTokens, cacheRead);
+          if (observation) retained.set(day, observation);
+        }
         const empty = () => ({ prs: null, knownPrs: null, commits: null });
         result.set(day, { day, coverage: "unavailable", tokenStatus: row.tokenStatus as LocalUsageTokenStatus,
           ...empty(), newTokens, cacheRead, totalTokens, categories: { work: empty(), personal: empty(), unclassified: empty() },
           wow: { prs: null, commits: null, newTokens: null, totalTokens: null } });
       }
     }
-  } catch { result.clear(); }
+  } catch { result.clear(); retained.clear(); }
   for (const row of [...baseline, ...recent]) {
     const known = result.get(row.day);
     result.set(row.day, row.tokenStatus === "unavailable" && known && known.tokenStatus !== "unavailable"
@@ -490,7 +564,7 @@ function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[]
     if (row.tokenStatus === "ready" && previous?.tokenStatus === "ready") row.wow = { ...row.wow,
       newTokens: weekChange(row.newTokens, previous.newTokens), totalTokens: weekChange(row.totalTokens, previous.totalTokens) };
   }
-  return [...result.values()].sort((a, b) => a.day.localeCompare(b.day));
+  return { history: [...result.values()].sort((a, b) => a.day.localeCompare(b.day)), retained };
 }
 
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
@@ -518,7 +592,19 @@ export function createLocalUsageProvider({ file = DEFAULT_LOCAL_FILE,
         lastGood = project(JSON.parse(data), now());
         local = lastGood;
       } catch {
-        local = lastGood ? { ...lastGood, status: "stale" } : unavailable;
+        local = lastGood ? {
+          ...lastGood,
+          status: "stale",
+          windows: lastGood.windows ? Object.fromEntries(
+            Object.entries(lastGood.windows).map(([key, window]) => [key, {
+              ...window,
+              comparison: (() => {
+                const { known: _unused, ...rest } = window.comparison;
+                return rest;
+              })(),
+            }]),
+          ) as LocalUsageResponse["windows"] : null,
+        } : unavailable;
       }
       const merged = await readMerged();
       const github = await readGithub();

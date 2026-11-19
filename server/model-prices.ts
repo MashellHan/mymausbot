@@ -16,8 +16,12 @@ export function listPrices(): Readonly<Record<string, ListPrice>> {
 export function listPriceFor(model: string, at: Date = new Date()): ModelPrice | null {
   const { prices, aliases } = currentPrices();
   const key = model.trim().toLowerCase();
-  const entry = prices[aliases.get(key) ?? key];
-  if (!entry) return null;
+  const id = aliases.get(key) ?? key;
+  if (!Object.hasOwn(prices, id)) return null;
+  return listPriceAt(prices[id]!, at);
+}
+
+export function listPriceAt(entry: ListPrice, at: Date): ModelPrice {
   const day = at.toISOString().slice(0, 10);
   const change = entry.changes?.filter((candidate) => candidate.from <= day).at(-1);
   const current = change ?? entry;
