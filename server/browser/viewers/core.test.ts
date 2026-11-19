@@ -243,11 +243,20 @@ describe("a viewer's screencast", () => {
     await sleep(ACK_PACE_MS.hi + 20);
     const acks = () => chrome().sent.filter((sent) => sent.method === "Page.screencastFrameAck").length;
     expect(acks()).toBe(0);
+    const fake = chrome();
+    const send = fake.send.bind(fake);
+    let sentAt: number | null = null;
+    fake.send = (message) => {
+      if ((JSON.parse(message) as { method: string }).method === "Page.screencastFrameAck" && sentAt === null) {
+        sentAt = Date.now();
+      }
+      send(message);
+    };
     const acked = Date.now();
     frame.ack();
-    await sleep(10);
-    expect(acks()).toBe(1);
-    expect(Date.now() - acked).toBeLessThan(ACK_PACE_MS.hi);
+    await until(() => acks(), (count) => count === 1);
+    expect(sentAt).not.toBeNull();
+    expect(sentAt! - acked).toBeLessThan(ACK_PACE_MS.hi);
     expect(page().screencasts.size).toBe(1);
   });
 
