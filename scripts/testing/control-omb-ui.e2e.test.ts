@@ -250,12 +250,42 @@ describe("control-omb ui drives the real renderer", () => {
     })()`);
     await click("You");
     await clickUiControl(info.ui, '[role="menuitem"][data-menu-key="settings"]');
-    // Settings is a lazy chunk: it paints once the chunk arrives. Keys sit on the AI page, under Other services.
-    await expect.poll(() => evaluate(`(() => {
-      document.querySelector('[data-settings-page="ai"]')?.click();
-      document.querySelector('[data-settings-disclosure="ai-other-services"] button[aria-expanded="false"]')?.click();
-      return Boolean(${row}?.checkVisibility());
-    })()`), { timeout: 10_000 }).toBe(true);
+    // Settings is a lazy chunk: wait read-only for the AI page or key row, then open AI and Other services at most once each.
+    const readinessDeadline = Date.now() + 10_000;
+    const handle = JSON.parse(readFileSync(info.ui, "utf8")) as UiHandle;
+    const browserEnv = sessionEnv(handle);
+    const readinessRemaining = () => {
+      const remaining = readinessDeadline - Date.now();
+      if (remaining <= 0) throw new Error("Settings readiness exceeded 10000ms");
+      return remaining;
+    };
+    const evaluateReadiness = async (js: string) => {
+      const { result } = await agentBrowser(handle.binary, browserEnv, ["eval", js], readinessRemaining());
+      readinessRemaining();
+      return result;
+    };
+    try {
+      await expect.poll(() => evaluateReadiness(`Boolean(${row}?.checkVisibility() || document.querySelector('[data-settings-page="ai"]')?.checkVisibility())`), { timeout: readinessRemaining() }).toBe(true);
+      if (!(await evaluateReadiness(`Boolean(${row}?.checkVisibility())`))) {
+        await evaluateReadiness(`document.querySelector('[data-settings-page="ai"]')?.click(); true`);
+        await expect.poll(() => evaluateReadiness(`Boolean(${row}?.checkVisibility() || document.querySelector('[data-settings-disclosure="ai-other-services"]'))`), { timeout: readinessRemaining() }).toBe(true);
+      }
+      if (!(await evaluateReadiness(`Boolean(${row}?.checkVisibility())`))) {
+        await evaluateReadiness(`document.querySelector('[data-settings-disclosure="ai-other-services"] button[aria-expanded="false"]')?.click(); true`);
+      }
+      await expect.poll(() => evaluateReadiness(`Boolean(${row}?.checkVisibility())`), { timeout: readinessRemaining() }).toBe(true);
+    } catch (error) {
+      const diag = await agentBrowser(handle.binary, browserEnv, ["eval", `(() => ({
+        pageOpen: document.querySelector('[data-settings-page-open]')?.getAttribute('data-settings-page-open') ?? null,
+        hasAiPage: Boolean(document.querySelector('[data-settings-page="ai"]')),
+        disclosureExpanded: document.querySelector('[data-settings-disclosure="ai-other-services"] button')?.getAttribute('aria-expanded') ?? null,
+        serversExpanded: document.querySelector('[data-settings-disclosure="keys-servers"] button')?.getAttribute('aria-expanded') ?? null,
+        rowExists: Boolean(${row}),
+        rowVisible: Boolean(${row}?.checkVisibility()),
+      }))()`], 1_000).then(({ result }) => result ?? null).catch(() => null);
+      if (diag === null) throw error;
+      throw new Error(`${error instanceof Error ? error.message : String(error)} (settings readiness diag: ${JSON.stringify(diag)})`, { cause: error });
+    }
     // The servers section opens on its own, because a key is saved there.
     await expect.poll(masked, { timeout: 10_000 }).toContain("••••••••-key");
 

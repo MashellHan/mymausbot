@@ -55,8 +55,44 @@ describe("Share a department in the real renderer", () => {
     const handle = JSON.parse(readFileSync(info!.ui, "utf8")) as UiHandle;
     await agentBrowser(handle.binary, sessionEnv(handle), ["set", "viewport", "1280", "900"]);
     await expect.poll(() => evaluate("innerWidth"), { timeout: 10_000 }).toBe(1280);
-    await click("Actions for Sales desk department");
-    await click("Share");
+    const triggerSelector = 'button[aria-label="Actions for Sales desk department"]';
+    try {
+      await expect.poll(() => evaluate(`(() => {
+        const triggers = document.querySelectorAll(${JSON.stringify(triggerSelector)});
+        if (triggers.length !== 1) return false;
+        const trigger = triggers[0];
+        if (!(trigger instanceof HTMLButtonElement) || trigger.disabled || !trigger.checkVisibility()) return false;
+        const { left, top, width, height } = trigger.getBoundingClientRect();
+        if (width <= 0 || height <= 0) return false;
+        const hit = document.elementFromPoint(left + width / 2, top + height / 2);
+        return hit === trigger || trigger.contains(hit);
+      })()`), { timeout: 10_000 }).toBe(true);
+      await click("Actions for Sales desk department");
+      await expect.poll(() => evaluate(`document.querySelector(${JSON.stringify(triggerSelector)})?.getAttribute('aria-expanded') ?? null`), { timeout: 10_000 }).toBe("true");
+      await expect.poll(() => evaluate(`(() => {
+        const menu = document.querySelector('[role="menu"][aria-label="Sales desk"]');
+        if (!menu || !menu.checkVisibility() || menu.closest('[inert], [aria-hidden="true"]')) return false;
+        const shares = [...menu.querySelectorAll('[role="menuitem"]')].filter((item) => item.textContent?.trim() === "Share");
+        return shares.length === 1 && shares[0].checkVisibility();
+      })()`), { timeout: 10_000 }).toBe(true);
+      await click("Share");
+    } catch (error) {
+      const diag = await evaluate(`(() => {
+        const trigger = document.querySelector(${JSON.stringify(triggerSelector)});
+        const menu = document.querySelector('[role="menu"][aria-label="Sales desk"]');
+        const rect = trigger?.getBoundingClientRect();
+        const hit = rect && rect.width > 0 && rect.height > 0 ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) : null;
+        return {
+          innerWidth,
+          triggerCount: document.querySelectorAll(${JSON.stringify(triggerSelector)}).length,
+          ariaExpanded: trigger?.getAttribute('aria-expanded') ?? null,
+          hitTag: hit ? hit.tagName.toLowerCase() : null,
+          menuVisible: Boolean(menu?.checkVisibility() && !menu.closest('[inert], [aria-hidden="true"]')),
+          menuItems: menu ? [...menu.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim()) : [],
+        };
+      })()`).catch(() => null);
+      throw new Error(`${error instanceof Error ? error.message : String(error)} (share menu diag: ${JSON.stringify(diag)})`);
+    }
     await expect.poll(snapshot, { timeout: 20_000 }).toContain("Chats, memory and keys are never shared");
     const dialog = await snapshot();
     for (const line of ["Share Sales desk", "Quote list prices only.", "Publishing isn't available here", "Upload on GitHub", "Save folder…"]) expect(dialog).toContain(line);
