@@ -21,6 +21,10 @@ let root: Root;
 let host: HTMLDivElement;
 let revoked: () => void;
 const frame = () => host.querySelector<HTMLIFrameElement>("[data-daily-x-frame]");
+const tab = (view: "web" | "saved") => host.querySelector<HTMLButtonElement>(`[data-daily-x-tab="${view}"]`)!;
+const panel = (view: "web" | "saved") => window.document.getElementById(tab(view).getAttribute("aria-controls")!)!;
+const press = (view: "web" | "saved", key: string) =>
+  act(() => tab(view).dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })));
 const render = () => act(() => root.render(createElement(DailyXWholePage, { document, state, onRevoked: revoked })));
 const watchPosts = (site: HTMLIFrameElement) => {
   Object.defineProperty(site, "contentWindow", { configurable: true, value: window });
@@ -123,6 +127,33 @@ it("renews readiness when a restored document announces pageshow", () => {
   expect(host.querySelector('[role="status"]')).toBeNull();
 });
 
+it("starts on the web report and switches directly to saved editions and back by keyboard", () => {
+  vi.useFakeTimers();
+  render();
+  const first = frame();
+  expect(tab("web").textContent).toBe("Web report");
+  expect(tab("saved").textContent).toBe("Saved editions");
+  expect(tab("web").getAttribute("aria-selected")).toBe("true");
+  expect(tab("saved").tabIndex).toBe(-1);
+  expect(panel("web").getAttribute("aria-labelledby")).toBe(tab("web").id);
+  expect(panel("saved").hidden).toBe(true);
+  press("web", "ArrowRight");
+  expect(window.document.activeElement).toBe(tab("saved"));
+  expect(tab("saved").getAttribute("aria-selected")).toBe("true");
+  expect(tab("web").tabIndex).toBe(-1);
+  expect(panel("web").hidden).toBe(true);
+  expect(panel("web").hasAttribute("inert")).toBe(true);
+  expect(panel("saved").querySelector('[data-testid="saved-report"]')?.getAttribute("data-revision")).toBe("6");
+  expect(frame()).toBeNull();
+  act(() => vi.advanceTimersByTime(10_000));
+  press("saved", "Home");
+  expect(window.document.activeElement).toBe(tab("web"));
+  expect(tab("web").getAttribute("aria-selected")).toBe("true");
+  expect(panel("saved").hidden).toBe(true);
+  expect(frame()).not.toBe(first);
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+});
+
 it("times out without a site message, retries only on request, and retains the saved report as fallback", () => {
   vi.useFakeTimers();
   render();
@@ -136,6 +167,14 @@ it("times out without a site message, retries only on request, and retains the s
   expect(host.querySelector('[data-testid="daily-x-failed"]')).not.toBeNull();
   act(() => host.querySelectorAll<HTMLButtonElement>('[data-testid="daily-x-failed"] button')[1]!.click());
   expect(host.querySelector('[data-testid="saved-report"]')?.getAttribute("data-revision")).toBe("6");
+  expect(window.document.activeElement).toBe(tab("saved"));
   act(() => host.querySelector<HTMLButtonElement>('[data-testid="saved-report"]')!.click());
   expect(revoked).toHaveBeenCalledOnce();
+  act(() => tab("web").click());
+  expect(tab("web").getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector('[data-testid="daily-x-failed"]')).not.toBeNull();
+  expect(frame()).toBeNull();
+  act(() => host.querySelector<HTMLButtonElement>('[data-testid="daily-x-failed"] button')!.click());
+  expect(frame()).not.toBeNull();
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
 });
