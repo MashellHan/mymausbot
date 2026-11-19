@@ -102,13 +102,16 @@ describe.skipIf(process.platform !== "darwin")("the Mac driver dies after it sta
   });
 
   it("recovers when a later try works", async () => {
-    await cua.startCua();
+    await expect(cua.startCua()).resolves.toMatchObject({ mode: "embedded" });
     fixture.failStarts = 1;
-    fixture.alive = false;
-    await expect.poll(() => fixture.hosts.length).toBeGreaterThanOrEqual(3);
-    fixture.alive = true;
+    fixture.dead.add(fixture.hosts[0].socket);
+    await expect.poll(() => fixture.hosts.length).toBe(3);
+    expect(fixture.hosts[1].stop).toHaveBeenCalledOnce();
     const { readFileSync } = await import("node:fs");
-    await expect.poll(() => JSON.parse(readFileSync(join(fixture.home, "cua-connection.json"), "utf8")).mode).toBe("embedded");
+    await expect.poll(() => JSON.parse(readFileSync(join(fixture.home, "cua-connection.json"), "utf8"))).toMatchObject({
+      mode: "embedded",
+      socketPath: fixture.hosts[2].socket,
+    });
   });
 
   it("doesn't keep asking when macOS permissions are what's missing", async () => {
