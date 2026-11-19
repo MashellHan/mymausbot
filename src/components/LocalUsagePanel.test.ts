@@ -134,6 +134,7 @@ describe("local Usage panel", () => {
       input: 400, output: 200, estimatedCost: { coverage: "partial", usd: 0 },
       models: { coverage: "unavailable", rows: [] },
     };
+    Object.assign(windows["7"], { cacheRead: 0, totalTokens: 600 });
     Object.assign(windows["30"], { totalTokens: 0, newTokens: 0, cacheRead: 0, tokenCoverage: "ready",
       tokenDetails: { input: 0, output: 0, estimatedCost: { coverage: "ready", usd: 0 }, models: { coverage: "ready", rows: [] } } });
     await renderRaw(snapshot);
@@ -146,9 +147,15 @@ describe("local Usage panel", () => {
     expect(model.textContent).toContain("Share of recorded tokens");
     expect(model.textContent).toContain("<$0.001");
     expect(model.textContent).toContain("Unavailable");
-    expect(host.querySelector("section [data-usage-token-breakdown]")?.textContent).toBe("Cached input50Fresh input80Output20Estimated cost (USD)At least $1.23");
-    expect(host.querySelectorAll("section [data-usage-token-breakdown]")[1]?.textContent).toContain("$0.00 priced · Partial");
-    expect(host.querySelectorAll("section [data-usage-token-breakdown]")[2]?.textContent).toContain("$0.00");
+    const summaries = () => [...host.querySelectorAll("section [data-usage-token-breakdown]")].slice(0, 3).map((summary) => summary.textContent);
+    expect(summaries()).toEqual([
+      "Cached input50 (38.5%)Estimated cost (USD)At least $1.23",
+      "Cached input0 (0%)Estimated cost (USD)$0.00 priced · Partial",
+      "Cached input0Estimated cost (USD)$0.00",
+    ]);
+    expect(host.querySelector("section")?.textContent).not.toContain("Recorded tokens only");
+    expect(host.querySelector('section [aria-description="Recorded tokens only"]')).not.toBeNull();
+    expect(model.querySelector("[data-usage-token-breakdown]")?.textContent).toBe("Cached input15Fresh input50Output10Estimated cost (USD)<$0.001");
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
     expect(document.activeElement).toBe(tabs[1]);
     expect(model.textContent).toContain("Model usage is unavailable for this period.");
@@ -159,6 +166,16 @@ describe("local Usage panel", () => {
     await renderRaw({ ...snapshot, status: "stale" });
     expect(tabs[2]!.getAttribute("aria-selected")).toBe("true");
     expect(host.querySelector("[data-usage-latest-update]")?.textContent).toContain("Last successful capture");
+    windows["1"].tokenDetails.input = 60;
+    windows["7"].cacheRead = null;
+    Object.assign(windows["30"], { cacheRead: 125, totalTokens: 125 });
+    windows["30"].tokenDetails!.input = null;
+    await renderRaw(snapshot);
+    expect(summaries()).toEqual([
+      "Cached input50Estimated cost (USD)At least $1.23",
+      "Cached inputUnavailableEstimated cost (USD)$0.00 priced · Partial",
+      "Cached input125Estimated cost (USD)$0.00",
+    ]);
   });
 
   it("defaults to By model, supports Token types, and ranks models across the selected range", async () => {
