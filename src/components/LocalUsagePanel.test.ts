@@ -392,6 +392,22 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("Shaded columns: unavailable. Pale PR segments");
   });
 
+  it("renders provisional local-ref commit deltas in DoD and WoW cards without altering exact, repo, or trend", async () => {
+    const snapshot = structuredClone(sample);
+    snapshot.windows!["1"].comparison = { ...snapshot.windows!["1"].comparison, commits: null, known: { prs: null, commits: 100 } };
+    snapshot.windows!["7"].comparison = { ...snapshot.windows!["7"].comparison, commits: null, known: { prs: null, commits: -25 } };
+    snapshot.windows!["30"].comparison = { ...snapshot.windows!["30"].comparison, commits: null };
+    await render(snapshot);
+    const cards = [...host.querySelectorAll("section")].slice(0, 3);
+    const commitChanges = cards.map((card) => card.querySelectorAll("dd [data-usage-change]")[1]!);
+    expect(commitChanges.map((el) => el.querySelector('[aria-hidden="true"]')?.textContent)).toEqual(["+100%", "-25%", "—"]);
+    expect(commitChanges[0]!.hasAttribute("data-usage-provisional")).toBe(true);
+    expect(commitChanges[1]!.hasAttribute("data-usage-provisional")).toBe(true);
+    expect(commitChanges[2]!.hasAttribute("data-usage-provisional")).toBe(false);
+    expect(commitChanges[0]!.getAttribute("title")).toContain("Known subtotal.");
+    expect(commitChanges[1]!.getAttribute("title")).toContain("Known subtotal.");
+  });
+
   it("keeps partial PR counts and same-source category and repository comparisons", async () => {
     const snapshot = structuredClone(sample);
     await renderRaw({ ...snapshot, contributions: primaryUsageFixture("2026-11-03", true) });

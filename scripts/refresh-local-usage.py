@@ -276,7 +276,15 @@ def collect_local(collector_path, config, device, at=None, history_days=30):
                 previous_category = previous_tokens.get(record["key"], {}).get("category")
                 if record.get("category") == "unclassified" and previous_category in ("work", "personal"):
                     record["category"] = previous_category
-        for field in ("tokens", "commits"):
+        combined_errors = list(result.get("errors") or []) + list(errors)
+        fetch_disabled_only = bool(combined_errors) and all(
+            isinstance(error, dict)
+            and error.get("source") == "git-fetch"
+            and error.get("code") == "DisabledByAuthBoundary"
+            for error in combined_errors
+        )
+        retain_fields = ("tokens",) if fetch_disabled_only else ("tokens", "commits")
+        for field in retain_fields:
             def key(record):
                 return record["key"] if field == "tokens" else (record["key"], (record.get("repository") or {}).get("id"))
             fresh_keys = {key(record) for record in result[field]}
@@ -907,6 +915,7 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
             snapshot = original_aggregate(machines, prs, at, *args, **kwargs)
             if len(snapshot["sources"]) != len(machines):
                 raise ValueError("Activity source coverage does not match the collected machines")
+            commit_statuses = []
             for source, machine in zip(snapshot["sources"], machines):
                 if source.get("device") != machine.get("device"):
                     raise ValueError("Activity source identity does not match the collected machine")
@@ -914,15 +923,34 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                 git_fetch_only = isinstance(errors, list) and bool(errors) and all(
                     isinstance(error, dict) and error.get("source") == "git-fetch" for error in errors
                 )
-                ready_or_fetch_only = machine.get("status") == "ok" or (
+                fetch_disabled_only = isinstance(errors, list) and bool(errors) and all(
+                    isinstance(error, dict)
+                    and error.get("source") == "git-fetch"
+                    and error.get("code") == "DisabledByAuthBoundary"
+                    for error in errors
+                )
+                source["tokenStatus"] = "ready" if machine.get("status") == "ok" or (
                     machine.get("status") == "partial" and git_fetch_only
+                ) else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
+                source["commitStatus"] = "ready" if machine.get("status") == "ok" else (
+                    "local-ref-ready" if machine.get("status") == "partial" and fetch_disabled_only
+                    and not machine.get("retainedCapturedAt")
+                    else "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
                 )
-                source["tokenStatus"] = "ready" if ready_or_fetch_only else (
-                    "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
-                )
-                source["commitStatus"] = "ready" if ready_or_fetch_only else (
-                    "partial" if machine.get("status") in ("partial", "stale") else "unavailable"
-                )
+                if machine.get("status") != "missing":
+                    commit_statuses.append(source["commitStatus"])
+            day_commit_status = None
+            if commit_statuses and all(s == "ready" for s in commit_statuses):
+                day_commit_status = "ready"
+            elif commit_statuses and all(s == "local-ref-ready" for s in commit_statuses):
+                day_commit_status = "local-ref-ready"
+            if day_commit_status:
+                rows_to_mark = list(snapshot.get("daily") or [])
+                if isinstance(snapshot.get("localHistory"), dict) and isinstance(snapshot["localHistory"].get("daily"), list):
+                    rows_to_mark.extend(snapshot["localHistory"]["daily"])
+                for row in rows_to_mark:
+                    if isinstance(row, dict) and "commitStatus" not in row:
+                        row["commitStatus"] = day_commit_status
             previous = collector.read_json(latest, {}) if latest is not None else {}
             saved = collector.read_json(retained, {}) if retained is not None else {}
             models = local_usage_models.daily_models(collector, machines, snapshot)
@@ -957,6 +985,8 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
         if legacy_diagnostics and config.get("githubContributionSource") == local_usage_github.DEFINITION:
             try:
                 local_usage_github.refresh(config, collector.run, collector.remote_category, skip_api=skip_api)
+            except Exception as error:
+                print("GitHub contribution Usage unavailable: " + type(error).__name__, file=sys.stderr)
             except Exception as error:
                 print("GitHub contribution Usage unavailable: " + type(error).__name__, file=sys.stderr)
 
