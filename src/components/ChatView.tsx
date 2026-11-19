@@ -271,8 +271,7 @@ export function FailedTurnRow({ tool, engine, onRetry, botId, threadId, messageA
   const resume = useLimitResetContinue(botId, threadId, tool.limitResetsAt), fix = useFailedTurnFix(tool, botId, threadId);
   const past = usePastLimitNotice(tool, messageAt);
   if (tool.place && botId) return <PlaceFailedRow place={tool.place} botId={botId} threadId={threadId} onRetry={onRetry} />;
-  const credit = trialCreditKind(failedTurnCause(tool.name) ?? "");
-  if (credit) return <TrialCreditFailedRow kind={credit} onRetry={onRetry} />;
+  const credit = trialCreditKind(failedTurnCause(tool.name) ?? ""); if (credit) return <TrialCreditFailedRow kind={credit} onRetry={onRetry} />;
   const { cause, notice } = failedTurnNotice(tool);
   const connectionFailure = connectionFailureText(cause); if (connectionFailure) return <ErrorRow message={connectionFailure} />;
   if (tool.partial) return <PartlyDoneRow cause={notice ?? cause} onRetry={onRetry} />;
