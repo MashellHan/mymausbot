@@ -106,7 +106,7 @@ export function planTeamChange(bots: readonly Bot[], instances: readonly Instanc
     if (!engine) return { bot, status: "skip", reason: t("teamSettings.skip.engineMissing") };
     const model = change.model ?? current.model;
     if (!engineOffersModel(engine, model)) return { bot, status: "skip", reason: t("teamSettings.skip.modelUnsupported", { engine: engineName, model }) };
-    const next: ModelSelection = modelSelectionForPick(current, engine, model);
+    const next = modelSelectionForPick(current, engine, model);
     if (change.effort === null) delete next.effort;
     else if (change.effort !== undefined) {
       if (engine.capabilities?.modelVariants) {
