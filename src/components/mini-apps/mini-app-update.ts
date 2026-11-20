@@ -243,13 +243,16 @@ export function readPendingUpdate(storageKey: string | null, appId: string): Pen
   }
 }
 
-export function writePendingUpdate(storageKey: string | null, update: PendingMiniAppUpdate): void {
+export function writePendingUpdate(storageKey: string | null, update: PendingMiniAppUpdate): boolean {
   try {
     const payload = update.phase === "intent"
       ? update
       : { ...update, phase: "applied" as const };
-    localStorage.setItem(pendingUpdateRecoveryStorageKey(storageKey, update.appId), JSON.stringify(payload));
-  } catch {}
+    const key = pendingUpdateRecoveryStorageKey(storageKey, update.appId);
+    const serialized = JSON.stringify(payload);
+    localStorage.setItem(key, serialized);
+    return localStorage.getItem(key) === serialized;
+  } catch { return false; }
 }
 
 export function readPendingUpdateRecovery(storageKey: string | null, appId: string): PendingMiniAppUpdateRecovery | null {
@@ -300,6 +303,7 @@ export function matchesAppliedUpdateIntent(
 ): boolean {
   if (
     entry.id !== intent.appId
+    || entry.release?.updateRequestKey !== intent.requestKey
     || entry.status !== "active"
     || entry.revision !== intent.expectedRevision + 1
     || entry.templateVersion === intent.previousTemplateVersion

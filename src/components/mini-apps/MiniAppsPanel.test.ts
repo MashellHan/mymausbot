@@ -297,7 +297,7 @@ beforeEach(() => {
               templateVersion: entry.templateVersion + 1,
               updatedAt: entry.updatedAt + 1_000,
               release: {
-                packageId: `mashellhan.${entry.slug}`,
+                packageId: entry.release?.packageId ?? `mashellhan.${entry.slug}`,
                 appVersion: body.appVersion,
                 sourceCommit: body.sourceCommit,
                 tag: `mini-app/${entry.slug}/v${body.appVersion}`,
@@ -311,6 +311,8 @@ beforeEach(() => {
           : entry);
         fixture.updateByApp[id] = { installedVersion: body.appVersion, status: "current", available: null };
       }
+      fixture.apps = fixture.apps.map((entry) => entry.id === id && entry.release && entry.revision === body.expectedRevision + 1
+        ? { ...entry, release: { ...entry.release, updateRequestKey: body.requestKey } } : entry);
       await fixture.updateResultHold;
       return { app: fixture.apps.find((entry) => entry.id === id)!, replayed: false };
     }
@@ -1439,7 +1441,7 @@ describe("Mini App independent release updates", () => {
               revision: 4,
               templateVersion: 3,
               release: {
-                packageId: `mashellhan.${entry.slug}`,
+                packageId: entry.release?.packageId ?? `mashellhan.${entry.slug}`,
                 appVersion: body.appVersion,
                 sourceCommit: body.sourceCommit,
                 tag: `mini-app/${entry.slug}/v${body.appVersion}`,
@@ -1628,6 +1630,76 @@ describe("Mini App independent release updates", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps the previous page when durable update storage is unavailable", async () => {
+    fixture.htmlByApp.app_a = "<p>Previous page</p>";
+    fixture.updateByApp.app_a = { installedVersion: "1.1.0", status: "available", available: CANDIDATE };
+    await render();
+    const action = '[data-mini-app-update-action]';
+    await vi.waitFor(() => expect(host.querySelector(action)).not.toBeNull());
+    const storage = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new DOMException("Full", "QuotaExceededError"); });
+    await act(async () => host.querySelector<HTMLButtonElement>(action)!.click());
+    expect(fixture.updateRequests).toHaveLength(0);
+    expect(frame()?.getAttribute("data-html")).toBe("<p>Previous page</p>");
+    expect(host.textContent).toContain("Could not save update recovery for this workspace");
+    storage.mockImplementation(() => {});
+    await act(async () => host.querySelector<HTMLButtonElement>(action)!.click());
+    expect(fixture.updateRequests).toHaveLength(0);
+  });
+
+  it("leaves a same-release update installed by another request alone", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const key = "omb-mini-app-pending-update:omb-mini-app:fixture-environment:app_a";
+      fixture.suppressRuntimeReady = true;
+      fixture.updateByApp.app_a = { installedVersion: "1.1.0", status: "available", available: CANDIDATE };
+      fixture.onUpdateApply = (appId, request) => {
+        fixture.apps = fixture.apps.map((entry) => entry.id === appId ? { ...entry, revision: request.expectedRevision + 1,
+          templateVersion: entry.templateVersion + 1, release: {
+            packageId: "mashellhan.app-a", appVersion: request.appVersion, sourceCommit: request.sourceCommit,
+            tag: `mini-app/app-a/v${request.appVersion}`, requires: [], htmlSha256: "b".repeat(64), htmlBytes: 12,
+            queriesSha256: "c".repeat(64), queriesBytes: 2, updateRequestKey: "another-window-won",
+          } } : entry);
+        fixture.htmlByApp[appId] = "<p>Other request's update</p>";
+        throw new Error("Response lost");
+      };
+      await render();
+      const action = '[data-mini-app-update-action]';
+      await vi.waitFor(() => expect(host.querySelector(action)).not.toBeNull());
+      await act(async () => host.querySelector<HTMLButtonElement>(action)!.click());
+      expect(JSON.parse(stored.get(key) ?? "{}")).toMatchObject({ phase: "intent", requestKey: fixture.updateRequests[0]?.body.requestKey });
+      await act(async () => { root.render(null); });
+      await render();
+      await vi.waitFor(() => expect(stored.get(key)).toBeUndefined());
+      await act(async () => { await vi.advanceTimersByTimeAsync(MINI_APP_RUNTIME_READY_TIMEOUT_MS + 10); });
+      expect(fixture.rollbackRequests).toHaveLength(0);
+      expect(frame()?.getAttribute("data-html")).toBe("<p>Other request's update</p>");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("pauses automatic recovery after 401 until a fresh authorized inventory read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      fixture.suppressRuntimeReady = true;
+      fixture.updateByApp.app_a = { installedVersion: "1.1.0", status: "available", available: CANDIDATE };
+      await render();
+      const action = '[data-mini-app-update-action]';
+      await vi.waitFor(() => expect(host.querySelector(action)).not.toBeNull());
+      await act(async () => host.querySelector<HTMLButtonElement>(action)!.click());
+      await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+      fixture.failRollback = new ApiError("Unauthorized", 401);
+      fixture.onInventoryRead = async () => { throw new ApiError("Unauthorized", 401); };
+      await act(async () => { await vi.advanceTimersByTimeAsync(MINI_APP_RUNTIME_READY_TIMEOUT_MS + 20); });
+      expect(fixture.rollbackRequests).toHaveLength(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+      expect(fixture.rollbackRequests).toHaveLength(1);
+      fixture.failRollback = null;
+      fixture.onInventoryRead = null;
+      await act(async () => refresh().click());
+      await vi.waitFor(() => expect(fixture.rollbackRequests).toHaveLength(2));
+      expect(fixture.rollbackRequests[1]?.body).toEqual(fixture.rollbackRequests[0]?.body);
+    } finally { vi.useRealTimers(); }
   });
 
   it("persists pre-POST update intent, reconciles lost POST responses on reopen across ready/timeout/later-edit, and respects profile scope", async () => {

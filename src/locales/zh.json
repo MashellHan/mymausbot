@@ -3797,6 +3797,7 @@
   "computer.miniApps.update.custom": "自定义应用",
   "computer.miniApps.update.dismiss": "关闭",
   "computer.miniApps.update.failed": "无法更新此 Mini App。",
+  "computer.miniApps.update.recoveryUnavailable": "无法保存此工作区的更新恢复记录。请重试。",
   "computer.miniApps.update.incompatible": "此更新需要更高版本的 {app}。",
   "computer.miniApps.update.installedVersion": "版本 {version}",
   "computer.miniApps.update.rolledBack": "更新未能正常加载，已恢复到上一版本。",

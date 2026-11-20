@@ -22,6 +22,7 @@ import {
   clearPendingUpdateRecovery,
   hasAnnouncedUpdateVersion,
   isPendingUpdateApplied,
+  matchesAppliedUpdateIntent,
   parseMiniAppUpdateInfo,
   readAppPackageId,
   readPendingUpdate,
@@ -128,7 +129,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const updateCheckSeqRef = useRef(0);
   const mutationEpochRef = useRef(0);
   const pendingUpdatesRef = useRef<Record<string, PendingMiniAppUpdate>>({});
-  const unresolvedStorageAppsRef = useRef(new Set<string>());
+  const recoveryAuthBlockedRef = useRef(false);
   const recoveryTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const rollingBackAppsRef = useRef(new Set<string>());
   const runtimeReadySeenRef = useRef<Record<string, { revision: number; templateVersion: number }>>({});
@@ -192,12 +193,16 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     clearRecoveryTimer(appId);
     delete pendingUpdatesRef.current[appId];
     clearPendingUpdateRecovery(storageKeyRef.current, appId);
-    if (unresolvedStorageAppsRef.current.delete(appId) && storageKeyRef.current !== null) {
-      clearPendingUpdateRecovery(null, appId);
-    }
+  };
+
+  const pauseRecovery = () => {
+    if (!recoveryAuthBlockedRef.current) mutationEpochRef.current += 1;
+    recoveryAuthBlockedRef.current = true;
+    for (const appId of Object.keys(recoveryTimersRef.current)) clearRecoveryTimer(appId);
   };
 
   const scheduleRecoveryTimer = (recovery: PendingMiniAppUpdateRecovery, delayMs: number) => {
+    if (recoveryAuthBlockedRef.current) return;
     clearRecoveryTimer(recovery.appId);
     recoveryTimersRef.current[recovery.appId] = setTimeout(() => {
       delete recoveryTimersRef.current[recovery.appId];
@@ -216,7 +221,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   };
 
   const rollbackRecovery = async (recovery: PendingMiniAppUpdateRecovery, manual = false) => {
-    if (!mountedRef.current || ownerRef.current !== true || !nativeGuard) return;
+    if (!mountedRef.current || ownerRef.current !== true || !nativeGuard || (!manual && recoveryAuthBlockedRef.current)) return;
     if (rollingBackAppsRef.current.has(recovery.appId)) return;
     rollingBackAppsRef.current.add(recovery.appId);
     clearRecoveryTimer(recovery.appId);
@@ -266,7 +271,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     } catch (cause) {
       if (!mountedRef.current) return;
       if (manual) setError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
-      if (cause instanceof ApiError && (cause.status === 409 || cause.status === 400 || cause.status === 403 || cause.status === 404)) {
+      if (cause instanceof ApiError && cause.status === 401) pauseRecovery();
+      else if (cause instanceof ApiError && (cause.status === 409 || cause.status === 400 || cause.status === 403 || cause.status === 404)) {
         if (!manual || pendingUpdatesRef.current[recovery.appId]?.rollbackRequestKey === recovery.rollbackRequestKey) finishPendingRecovery(recovery.appId);
         setRefreshKey((current) => current + 1);
       } else {
@@ -326,10 +332,6 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     for (const entry of inventoryApps) {
       seenIds.add(entry.id);
       const currentInMemory = pendingUpdatesRef.current[entry.id];
-      if (currentInMemory && activeStorageKey !== null && unresolvedStorageAppsRef.current.delete(entry.id)) {
-        writePendingUpdate(activeStorageKey, currentInMemory);
-        clearPendingUpdateRecovery(null, entry.id);
-      }
       const pending = currentInMemory ?? readPendingUpdate(activeStorageKey, entry.id);
       if (!pending) continue;
 
@@ -511,6 +513,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         if (!active || !Array.isArray(inventory.apps)) return;
         readingInventory = false;
         if (startMutationEpoch !== mutationEpochRef.current) return;
+        if (ownerRef.current === true) recoveryAuthBlockedRef.current = false;
         const { staleAppIds, promotedApps } = reconcileInventory(inventory.apps);
         applyPromotedUiState(promotedApps);
         const mergedInventory = staleAppIds.size === 0 || !inventoryRef.current
@@ -634,6 +637,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       } catch (cause) {
         if (!active || controller.signal.aborted) return;
         if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
+          pauseRecovery();
           forgetHongguoHome(storageKey, readingInventory ? undefined : selectedRef.current ?? undefined);
           documentRef.current = null;
           stateRef.current = null;
@@ -754,8 +758,6 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     const previousTemplateVersion = targetApp.templateVersion;
     const capturedStorageKey = storageKeyRef.current;
     const targetPackageId = readAppPackageId(targetApp);
-    setUpdatingAppId(targetApp.id);
-    updatingAppIdRef.current = targetApp.id;
     setUpdateSource(source);
     setUpdateError("");
     setUpdateCheckError("");
@@ -784,12 +786,14 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       rollbackRequestKey: randomUuid(),
       createdAt: Date.now(),
     };
+    if (!capturedStorageKey || (existingPending && !matchingIntent) || !writePendingUpdate(capturedStorageKey, intent)) {
+      setUpdateError(t("computer.miniApps.update.recoveryUnavailable"));
+      return;
+    }
+    setUpdatingAppId(targetApp.id);
+    updatingAppIdRef.current = targetApp.id;
     delete runtimeReadySeenRef.current[targetApp.id];
     pendingUpdatesRef.current[targetApp.id] = intent;
-    writePendingUpdate(capturedStorageKey, intent);
-    if (capturedStorageKey === null) {
-      unresolvedStorageAppsRef.current.add(targetApp.id);
-    }
 
     const body: MiniAppUpdateRequest = {
       appVersion: candidate.appVersion,
@@ -803,8 +807,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         body: JSON.stringify(body),
         timeoutMs: 30_000,
       });
-      if (!result?.app || result.app.id !== targetApp.id
-        || !Number.isSafeInteger(result.app.revision)
+      if (!result?.app || !matchesAppliedUpdateIntent(result.app, intent)
         || !Number.isSafeInteger(result.app.templateVersion)) {
         throw new Error(t("computer.miniApps.changedDuringRead"));
       }
@@ -828,26 +831,13 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               deadlineAt: Date.now() + MINI_APP_RUNTIME_READY_TIMEOUT_MS,
             })
         : null;
-      const targetStorageKey = capturedStorageKey ?? storageKeyRef.current;
-      if (recovery) {
-        writePendingUpdate(targetStorageKey, recovery);
-      } else {
-        clearPendingUpdateRecovery(targetStorageKey, targetApp.id);
-        if (unresolvedStorageAppsRef.current.delete(targetApp.id) && targetStorageKey !== null) {
-          clearPendingUpdateRecovery(null, targetApp.id);
-        }
-      }
+      if (recovery) writePendingUpdate(capturedStorageKey, recovery);
+      else clearPendingUpdateRecovery(capturedStorageKey, targetApp.id);
       if (!mountedRef.current) return;
       mutationEpochRef.current += 1;
       updateCheckSeqRef.current += 1;
       if (recovery) {
         pendingUpdatesRef.current[recovery.appId] = recovery;
-        if (storageKeyRef.current !== null && capturedStorageKey === null) {
-          writePendingUpdate(storageKeyRef.current, recovery);
-          if (unresolvedStorageAppsRef.current.delete(recovery.appId)) {
-            clearPendingUpdateRecovery(null, recovery.appId);
-          }
-        }
         scheduleRecoveryTimer(recovery, recovery.deadlineAt - Date.now());
       } else {
         finishPendingRecovery(targetApp.id);
@@ -895,6 +885,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     } catch (cause) {
       if (!mountedRef.current) return;
       setUpdateError(cause instanceof Error && cause.message ? cause.message : t("computer.miniApps.update.failed"));
+      if (cause instanceof ApiError && cause.status === 401) pauseRecovery();
       if (cause instanceof ApiError && (cause.status === 400 || cause.status === 403 || cause.status === 404
         || cause.status === 409 || cause.status === 413 || cause.status === 422)) {
         finishPendingRecovery(targetApp.id);
