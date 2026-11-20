@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as DuckDB from "@duckdb/node-api";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MiniAppDefaultsInput, MiniAppDocument, MiniAppPublish } from "../../shared/mini-apps.ts";
+import { githubDeepDiveBinding, reportMiniAppBinding } from "../../shared/report-mini-app.ts";
 import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
 import { AppDocs } from "../app-docs.ts";
 import { createDataEngine } from "../data/engine.ts";
@@ -13,7 +14,8 @@ import type { Routine } from "../routines.ts";
 import { DefaultMiniApps } from "./defaults.ts";
 import { MiniApps, type MiniAppActor } from "./registry.ts";
 import { ReportStore } from "./report-store.ts";
-import { reportAppsForBot } from "./report-apps.ts";
+import { hasReportBindingForProducer, reportAppsForBot } from "./report-apps.ts";
+import { dispatchRoutineReportTurn } from "../routine-report-publication.ts";
 import { DEFAULT_APPS, pendingDefaultHtml } from "./default-documents.ts";
 import { REVIEWED_AGENT_TEAM_HTML_SHA256, SHIPPED_TEMPLATE_SHA256 } from "./default-template-history.ts";
 
@@ -354,4 +356,192 @@ it("advertises only the producer's current exact report binding without relying 
   const current = apps.document(owner, app.id);
   await apps.publish(owner, { ...publication(current), requestKey: "revoke", publisherBotIds: [] }, app.id);
   expect(await reportAppsForBot(deps, "reports")).toEqual([]);
+});
+
+it("keeps reportAppsForBot, chunked deep_dive reads, and the Automation prompt chain working for github_activity with the producer-owned deepDive binding", async () => {
+  const { apps, data, bots } = fixture();
+  const deps = { apps, data, bots: () => bots, localEnabled: () => true };
+  const source = await new ReportStore(data, createReportTemplate).prepare("reports", "github_activity");
+  const botDb = await data.forBot("reports");
+  await botDb.run(`CREATE TABLE main.github_deep_dive_v1 (
+    edition_key VARCHAR NOT NULL,
+    repo VARCHAR NOT NULL,
+    schema_version INTEGER NOT NULL,
+    part_index INTEGER NOT NULL,
+    part_count INTEGER NOT NULL,
+    payload_chunk VARCHAR NOT NULL,
+    PRIMARY KEY (edition_key, repo, schema_version, part_index)
+  )`, { connection: "bot", businessMutation: true });
+  const chunk0 = "A".repeat(1500);
+  const chunk1 = "B".repeat(1500);
+  await botDb.run(`INSERT INTO main.github_deep_dive_v1 VALUES
+    ('2026-11-20', 'dream-num/univer', 1, 1, 2, '${chunk1}'),
+    ('2026-11-20', 'dream-num/univer', 1, 0, 2, '${chunk0}')`, { connection: "bot", businessMutation: true });
+  const deepDive = githubDeepDiveBinding(source.dataset.datasetId);
+  const { app } = await apps.publish(owner, {
+    ...source.publication,
+    requestKey: "github-deep-dive-positive",
+    slug: "github-activity",
+    shippedTemplateKind: "github_activity",
+    publisherBotIds: ["reports"],
+    bindings: [reportMiniAppBinding(source.dataset.datasetId, "github_activity"), deepDive],
+  });
+  expect(await reportAppsForBot(deps, "reports")).toEqual([{
+    slug: app.slug, status: "active", shippedTemplateKind: "github_activity",
+    publisherBotIds: ["reports"], reportBoundToProducer: true,
+  }]);
+  expect(await reportAppsForBot(deps, "ledger")).toEqual([]);
+  const chunkPage = await apps.query(owner, app.id, {
+    queryId: "deep_dive",
+    parameters: { editionKey: "2026-11-20", repo: "dream-num/univer" },
+    expectedRevision: app.revision,
+  });
+  expect(chunkPage.rows).toEqual([
+    ["2026-11-20", "dream-num/univer", "1", "0", "2", chunk0],
+    ["2026-11-20", "dream-num/univer", "1", "1", "2", chunk1],
+  ]);
+  // Multi-page (>16 parts) chunked read preserves partIndex asc order across nextCursor.
+  const multiValues = Array.from({ length: 18 }, (_, i) => `('2026-11-20', 'example/big', 1, ${17 - i}, 18, 'part-${17 - i}')`).join(", ");
+  await botDb.run(`INSERT INTO main.github_deep_dive_v1 VALUES ${multiValues}`, { connection: "bot", businessMutation: true });
+  const page1 = await apps.query(owner, app.id, {
+    queryId: "deep_dive",
+    parameters: { editionKey: "2026-11-20", repo: "example/big" },
+    expectedRevision: app.revision,
+  });
+  expect(page1.rows).toHaveLength(16);
+  expect(page1.nextCursor).toBeTruthy();
+  const page2 = await apps.query(owner, app.id, {
+    queryId: "deep_dive",
+    parameters: { editionKey: "2026-11-20", repo: "example/big" },
+    expectedRevision: app.revision,
+    cursor: page1.nextCursor!,
+  });
+  expect(page2.rows).toHaveLength(2);
+  expect(page2.nextCursor).toBeUndefined();
+  expect([...page1.rows, ...page2.rows].map((r) => r[3])).toEqual(Array.from({ length: 18 }, (_, i) => String(i)));
+
+  // Real Automation prompt-chain proof: [Installed report edition] is injected when 2-binding github_activity is bound.
+  const basePrompt = "[Scheduled routine \"GitHub discovery report\" — do this now:]\nCollect open-source updates.";
+  const dispatched: string[] = [];
+  const run = { id: "run-gh-1", routineId: "routine-gh", botId: "reports", target: "bot" as const, runOn: "maus" as const, status: "running" as const, triggerSource: "schedule" as const };
+  const routine: Routine = { id: "routine-gh", botId: "reports", name: "GitHub discovery report", prompt: "Collect open-source updates.",
+    enabled: true, target: "bot", runOn: "maus", schedule: { type: "interval", everyMinutes: 1440, anchorAt: 1 }, durationMinutes: 0, nextRunAt: null, createdAt: 1, updatedAt: 1 };
+  await dispatchRoutineReportTurn(basePrompt, "reports", "thread-gh", {
+    routines: { runForThread: () => run, listRoutines: () => [routine] },
+    botForId: (id) => (id === "reports" ? { id: "reports" } : null),
+    reportAppsForBot: (botId) => reportAppsForBot(deps, botId),
+    localEnabled: () => true,
+    writeAllowed: () => true,
+    stopped: () => false,
+  }, async (prompt) => { dispatched.push(prompt); });
+  expect(dispatched).toHaveLength(1);
+  expect(dispatched[0]).toContain("[Installed report edition]");
+  expect(dispatched[0]).toContain("mini_app_report with action \"publish\", kind \"github_activity\"");
+
+  // Negative admission cases: report must remain first, deepDive must match exact schema/query, datasetId must match producer, no 3rd binding.
+  await apps.publish(owner, {
+    ...publication(apps.document(owner, app.id)),
+    requestKey: "github-deep-dive-swapped",
+    bindings: [deepDive, reportMiniAppBinding(source.dataset.datasetId, "github_activity")],
+  }, app.id);
+  expect((await reportAppsForBot(deps, "reports"))[0]?.reportBoundToProducer).toBe(false);
+
+  const legacyContentJsonBinding = {
+    id: "deepDive",
+    datasetId: source.dataset.datasetId,
+    source: { schema: "main", table: "github_deep_dive_v1" },
+    fields: {
+      editionKey: { column: "edition_key", sourceType: "VARCHAR", as: "text" as const },
+      repo: { column: "repo", sourceType: "VARCHAR", as: "text" as const },
+      schemaVersion: { column: "schema_version", sourceType: "INTEGER", as: "decimal" as const, scale: 0 },
+      contentJson: { column: "content_json", sourceType: "VARCHAR", as: "text" as const },
+    },
+    queries: {
+      deep_dive: {
+        kind: "rows" as const,
+        columns: ["editionKey", "repo", "schemaVersion", "contentJson"],
+        parameters: { editionKey: { type: "text" as const }, repo: { type: "text" as const } },
+        filters: [
+          { field: "editionKey", op: "eq" as const, parameter: "editionKey" },
+          { field: "repo", op: "eq" as const, parameter: "repo" },
+          { field: "schemaVersion", op: "eq" as const, literal: "1" },
+        ],
+        orderBy: [],
+        pageSize: 1,
+      },
+    },
+  };
+  expect(
+    hasReportBindingForProducer(
+      [reportMiniAppBinding(source.dataset.datasetId, "github_activity"), legacyContentJsonBinding],
+      source.dataset.datasetId,
+      "github_activity",
+    ),
+  ).toBe(false);
+
+  const unorderedDeepDive = githubDeepDiveBinding(source.dataset.datasetId);
+  unorderedDeepDive.queries.deep_dive!.orderBy = [];
+  await apps.publish(owner, {
+    ...publication(apps.document(owner, app.id)),
+    requestKey: "github-deep-dive-unordered",
+    bindings: [reportMiniAppBinding(source.dataset.datasetId, "github_activity"), unorderedDeepDive],
+  }, app.id);
+  expect((await reportAppsForBot(deps, "reports"))[0]?.reportBoundToProducer).toBe(false);
+
+  const mutatedDeepDive = githubDeepDiveBinding(source.dataset.datasetId);
+  mutatedDeepDive.queries.deep_dive!.pageSize = 2;
+  await apps.publish(owner, {
+    ...publication(apps.document(owner, app.id)),
+    requestKey: "github-deep-dive-mutated",
+    bindings: [reportMiniAppBinding(source.dataset.datasetId, "github_activity"), mutatedDeepDive],
+  }, app.id);
+  expect((await reportAppsForBot(deps, "reports"))[0]?.reportBoundToProducer).toBe(false);
+
+  const extraThird = { ...githubDeepDiveBinding(source.dataset.datasetId), id: "deepDiveExtra", queries: { deep_dive_extra: githubDeepDiveBinding(source.dataset.datasetId).queries.deep_dive! } };
+  await apps.publish(owner, {
+    ...publication(apps.document(owner, app.id)),
+    requestKey: "github-deep-dive-third-binding",
+    bindings: [reportMiniAppBinding(source.dataset.datasetId, "github_activity"), deepDive, extraThird],
+  }, app.id);
+  expect((await reportAppsForBot(deps, "reports"))[0]?.reportBoundToProducer).toBe(false);
+
+  const ledgerDb = await data.forBot("ledger");
+  await ledgerDb.run(`CREATE TABLE main.github_deep_dive_v1 (
+    edition_key VARCHAR NOT NULL,
+    repo VARCHAR NOT NULL,
+    schema_version INTEGER NOT NULL,
+    part_index INTEGER NOT NULL,
+    part_count INTEGER NOT NULL,
+    payload_chunk VARCHAR NOT NULL
+  )`, { connection: "bot", businessMutation: true });
+  const foreignDataset = (await data.promoteForBot("ledger", "workspace-owner")).datasetId;
+  await apps.publish(owner, {
+    ...publication(apps.document(owner, app.id)),
+    requestKey: "github-deep-dive-foreign",
+    bindings: [reportMiniAppBinding(source.dataset.datasetId, "github_activity"), githubDeepDiveBinding(foreignDataset)],
+  }, app.id);
+  expect((await reportAppsForBot(deps, "reports"))[0]?.reportBoundToProducer).toBe(false);
+
+  const rejectedDispatched: string[] = [];
+  await dispatchRoutineReportTurn(basePrompt, "reports", "thread-gh", {
+    routines: { runForThread: () => run, listRoutines: () => [routine] },
+    botForId: (id) => (id === "reports" ? { id: "reports" } : null),
+    reportAppsForBot: (botId) => reportAppsForBot(deps, botId),
+    localEnabled: () => true,
+    writeAllowed: () => true,
+    stopped: () => false,
+  }, async (prompt) => { rejectedDispatched.push(prompt); });
+  expect(rejectedDispatched).toEqual([basePrompt]);
+
+  // x_ai_digest remains strictly limited to the single canonical report binding.
+  const xSource = await new ReportStore(data, createReportTemplate).prepare("reports", "x_ai_digest");
+  const { app: xApp } = await apps.publish(owner, {
+    ...xSource.publication,
+    requestKey: "x-extra-binding-rejected",
+    slug: "x-ai-digest-extra",
+    shippedTemplateKind: "x_ai_digest",
+    publisherBotIds: ["reports"],
+    bindings: [reportMiniAppBinding(xSource.dataset.datasetId, "x_ai_digest"), deepDive],
+  });
+  expect((await reportAppsForBot(deps, "reports")).find((entry) => entry.slug === xApp.slug)?.reportBoundToProducer).toBe(false);
 });

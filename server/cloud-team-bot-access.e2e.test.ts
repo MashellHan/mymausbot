@@ -95,6 +95,28 @@ afterAll(async () => {
 });
 
 describe("a team bot shared with a level per person", () => {
+  it("limits both standing instruction documents to editors of the named bot", async () => {
+    for (const kind of ["agents", "soul"]) {
+      const path = `/api/bots/${mirror.id}/documents/${kind}`;
+      const doc = await as("dan", "GET", path);
+      expect(doc.status).toBe(200);
+      const edit = { text: `Fixture ${kind} instructions.`, expectedHash: doc.body.hash };
+      for (const who of ["bob", "cara"]) {
+        expect((await as(who, "GET", path)).status).toBe(403);
+        expect((await as(who, "PUT", path, edit)).status).toBe(403);
+      }
+      for (const method of ["GET", "PUT"]) {
+        const hidden = await as("eve", method, path, method === "PUT" ? edit : undefined);
+        const missing = await as("eve", method, `/api/bots/no-such-bot/documents/${kind}`, method === "PUT" ? edit : undefined);
+        expect(hidden.status).toBe(404);
+        expect(hidden.body).toEqual(missing.body);
+      }
+      const saved = await as("dan", "PUT", path, edit);
+      expect(saved).toMatchObject({ status: 200, body: { text: edit.text, hash: expect.any(String) } });
+      expect((await as("ada", "PUT", path, { text: doc.body.text, expectedHash: saved.body.hash })).status).toBe(200);
+    }
+  });
+
   it("lists the bot with each person's own level, its sharing only to those who can edit it, and not at all for Eve", async () => {
     expect((await botOf("bob", payroll.id))).toMatchObject({ yourAccess: "view" });
     expect((await botOf("cara", payroll.id))).toMatchObject({ yourAccess: "chat" });

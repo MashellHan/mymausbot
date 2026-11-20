@@ -297,8 +297,9 @@ describe("encrypted full workspace backups", () => {
     const source = directory();
     const windows = "C:\\Users\\Ada\\.openmausbot", site = "C:\\Users\\Ada\\Projects\\site";
     const soul = `Read ${windows}\\files\\brief.md before you start.`;
+    const agentInstructions = `Save the log to ${windows}\\files\\log.md.`;
     json(join(source, "bots.json"), [
-      { id: "bot", threadId: "thread", cwd: site, soul, tasks: [
+      { id: "bot", threadId: "thread", cwd: site, soul, agentInstructions, tasks: [
         { threadId: "thread", cwd: "c:\\users\\ada\\.openmausbot\\task-workspaces\\bot\\thread", resumeCursors: { claude: "kept" } },
         { threadId: "other", cwd: site, resumeCursors: { claude: "only-on-that-pc" } },
       ] },
@@ -313,6 +314,7 @@ describe("encrypted full workspace backups", () => {
     writeFileSync(join(source, "workspaces", "bot", "memory", "people.md"), "Ada prefers short replies.\n");
     mkdirSync(join(source, "bots", "bot"), { recursive: true });
     writeFileSync(join(source, "bots", "bot", "SOUL.md"), soul);
+    writeFileSync(join(source, "bots", "bot", "AGENTS.md"), agentInstructions);
     const exported = await createWorkspaceBackup(source, { password: PASSWORD });
     const target = directory();
     const staged = await stageWorkspaceBackup(target, exported.path, { password: PASSWORD });
@@ -324,6 +326,7 @@ describe("encrypted full workspace backups", () => {
     const [bot, helper] = readJson(join(target, "bots.json"));
     expect(bot).not.toHaveProperty("cwd");
     expect(bot.soul).toBe(`Read ${target}/files/brief.md before you start.`);
+    expect(bot.agentInstructions).toBe(`Save the log to ${target}/files/log.md.`);
     expect(bot.tasks).toEqual([
       { threadId: "thread", cwd: join(target, "task-workspaces", "bot", "thread"), resumeCursors: { claude: "kept" } },
       { threadId: "other", resumeCursors: {} },
@@ -336,6 +339,7 @@ describe("encrypted full workspace backups", () => {
       .toBe(`- The brief: ${target}/files/brief.md\n- Drafts go to ${target}/files/drafts/\n- C:\\Users\\Ada\\.openmausbot-old\\notes.md is an old copy\n`);
     expect(readFileSync(join(target, "workspaces", "bot", "memory", "people.md"), "utf8")).toBe("Ada prefers short replies.\n");
     expect(readFileSync(join(target, "bots", "bot", "SOUL.md"), "utf8")).toBe(bot.soul);
+    expect(readFileSync(join(target, "bots", "bot", "AGENTS.md"), "utf8")).toBe(bot.agentInstructions);
     const leftBehind = { bots: 1, paths: [site, "C:\\Users\\Ada\\Shared", "C:\\Users\\Ada\\.openmausbot-old\\notes.md", "C:\\Users\\Ada\\Desktop\\x.docx"] };
     expect(result.leftBehind).toEqual(leftBehind);
     expect(readLastWorkspaceRestore(target)!.leftBehind).toEqual(leftBehind);
