@@ -52,6 +52,27 @@ export function requestComputerPanelView(botId: string, view: ComputerPanelView,
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(COMPUTER_PANEL_VIEW_REQUEST, { detail: { botId, view, focusTabs } }));
 }
 
+let upcomingRoutinesBot: string | undefined;
+
+export function requestUpcomingRoutines(botId: string): void {
+  upcomingRoutinesBot = botId;
+  requestComputerPanelView(botId, "computer");
+}
+
+export function useUpcomingRoutinesFocus(botId: string, heading: RefObject<HTMLHeadingElement | null>, upcoming: boolean): void {
+  useEffect(() => {
+    if (!upcoming) return;
+    const focus = () => {
+      if (upcomingRoutinesBot !== botId || !heading.current) return;
+      upcomingRoutinesBot = undefined;
+      heading.current.focus();
+    };
+    focus();
+    window.addEventListener(COMPUTER_PANEL_VIEW_REQUEST, focus);
+    return () => window.removeEventListener(COMPUTER_PANEL_VIEW_REQUEST, focus);
+  }, [botId, heading, upcoming]);
+}
+
 export function useComputerPanelViewRequest(
   botId: string,
   panelRef: RefObject<HTMLElement | null>,

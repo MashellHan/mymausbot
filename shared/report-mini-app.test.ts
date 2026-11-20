@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parsePublish } from "../server/mini-apps/validation.ts";
-import { REPORT_APPS, REPORT_COLUMNS, REPORT_HEADER_FIELDS, REPORT_ITEM_FIELDS, reportMiniAppBinding,
-  reportPublicationDraft, type ReportKind } from "./report-mini-app.ts";
+import { GITHUB_DEEP_DIVE_TABLE, REPORT_APPS, REPORT_COLUMNS, REPORT_HEADER_FIELDS, REPORT_ITEM_FIELDS,
+  githubDeepDiveBinding, reportMiniAppBinding, reportPublicationDraft, type ReportKind } from "./report-mini-app.ts";
 
 const DATASET = "dd2dba36-739b-42ba-bbad-e134920138a8";
 
@@ -35,5 +35,38 @@ describe("report Mini App contract", () => {
       expect(draft).not.toHaveProperty("routineId");
       expect(draft).not.toHaveProperty("botId");
     }
+  });
+
+  it("defines the scoped chunked GitHub deep-dive extension binding on the producer dataset", () => {
+    const binding = githubDeepDiveBinding(DATASET);
+    expect(binding.id).toBe("deepDive");
+    expect(binding.datasetId).toBe(DATASET);
+    expect(binding.source).toEqual({ schema: "main", table: GITHUB_DEEP_DIVE_TABLE });
+    expect(binding.fields).toEqual({
+      editionKey: { column: "edition_key", sourceType: "VARCHAR", as: "text" },
+      repo: { column: "repo", sourceType: "VARCHAR", as: "text" },
+      schemaVersion: { column: "schema_version", sourceType: "INTEGER", as: "decimal", scale: 0 },
+      partIndex: { column: "part_index", sourceType: "INTEGER", as: "decimal", scale: 0 },
+      partCount: { column: "part_count", sourceType: "INTEGER", as: "decimal", scale: 0 },
+      payloadChunk: { column: "payload_chunk", sourceType: "VARCHAR", as: "text" },
+    });
+    expect(Object.keys(binding.queries)).toEqual(["deep_dive"]);
+    expect(binding.queries.deep_dive).toEqual({
+      kind: "rows",
+      columns: ["editionKey", "repo", "schemaVersion", "partIndex", "partCount", "payloadChunk"],
+      parameters: { editionKey: { type: "text" }, repo: { type: "text" } },
+      filters: [
+        { field: "editionKey", op: "eq", parameter: "editionKey" },
+        { field: "repo", op: "eq", parameter: "repo" },
+        { field: "schemaVersion", op: "eq", literal: "1" },
+      ],
+      orderBy: [{ field: "partIndex", direction: "asc" }],
+      pageSize: 16,
+    });
+    const combined = {
+      ...reportPublicationDraft("github_activity", DATASET, "<main>Fixture</main>"),
+      bindings: [reportMiniAppBinding(DATASET, "github_activity"), binding],
+    };
+    expect(parsePublish(combined)).toEqual(combined);
   });
 });

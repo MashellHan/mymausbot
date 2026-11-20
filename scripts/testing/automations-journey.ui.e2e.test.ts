@@ -99,11 +99,11 @@ async function openApp(server: { url: string; port: number; dataDir: string; log
   mkdirSync(options.shots, { recursive: true });
   const tools = await ensureUiBrowser(process.env);
   const preview = await mountPreview({ info: { url: server.url } }, { entry: "/scripts/testing/threads-preview.tsx", route: "/__threads.html", title: "Automations journey", logLevel: "warn", proxyHeaders: options.proxyHeaders });
-  const handle: UiHandle = { url: server.url, previewUrl: preview.previewUrl, session: `omb-journey-${server.port}`, binary: tools.binary, home: server.dataDir, botId: Object.values(options.bots)[0]!, logPath: server.logPath, chrome: tools.chrome };
+  const handle: UiHandle = { url: server.url, previewUrl: `${preview.previewUrl}?fixtureMode=advanced`, session: `omb-journey-${server.port}`, binary: tools.binary, home: server.dataDir, botId: Object.values(options.bots)[0]!, logPath: server.logPath, chrome: tools.chrome };
   const browserEnv = sessionEnv(handle);
   const browser = (...args: string[]) => agentBrowser(tools.binary, browserEnv, args, 120_000);
   await browser("set", "viewport", "1280", "800");
-  await browser("open", preview.previewUrl);
+  await browser("open", handle.previewUrl);
   const handlePath = join(server.dataDir, "ui.json");
   writeFileSync(handlePath, JSON.stringify(handle));
   const ui = (verb: string, ...args: string[]) => runControlOmb(["ui", verb, "--ui", handlePath, ...args]) as Promise<Record<string, any>>;

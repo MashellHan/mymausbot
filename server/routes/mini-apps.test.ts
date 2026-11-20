@@ -1,9 +1,11 @@
+import * as githubMediaModule from "../github-activity/media.ts";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { expect, it, vi } from "vitest";
 
 import type { RequestAuth } from "../request-auth.ts";
 import { HongguoCovers } from "../hongguo/cover.ts";
+import { appFailure } from "../mini-apps/validation.ts";
 import { createMiniAppRoutes, createMiniAppsInternalRoutes } from "./mini-apps.ts";
 
 it("rejects local Mini App writes before reading a write-disallowed turn", async () => {
@@ -284,4 +286,55 @@ it("keeps suggestions behind the local owner gate and passes only the selected B
   expect(read).toHaveBeenCalledWith(expect.objectContaining({ writeAllowed: true }), { botId: "bot", threadId: "current" });
   expect(json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200,
     { botId: "bot", threadId: "current", suggestions: [], refreshPending: false, status: "ready" });
+});
+
+it("gates GitHub Activity media behind owner loopback auth, exact app revision, and strict query validation", async () => {
+  const id = "0643df6c-24ea-4076-87b6-572d3637a4d9";
+  const mediaBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const digest = "a".repeat(64);
+  const requireGithubActivity = vi.fn();
+  const fetchMedia = vi.spyOn(githubMediaModule, "fetchGithubActivityMedia")
+    .mockResolvedValue({ mimeType: "image/png", bytes: mediaBytes, sha256: digest });
+  const deps = { localEnabled: () => true, apps: { requireGithubActivity } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
+  const route = createMiniAppRoutes(deps);
+
+  const sendReq = async (rawPath: string, auth: RequestAuth = { kind: "loopback", scopes: ["admin"] }, method = "GET") => {
+    const req = new IncomingMessage(new Socket());
+    Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+    const res = new ServerResponse(req);
+    const json = vi.fn();
+    await route({ method, path: rawPath.split("?", 1)[0]!, url: new URL(`http://127.0.0.1${rawPath}`), req, res, auth, json,
+      readBody: async () => ({}) });
+    return { res, json };
+  };
+
+  const denied = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png&sha256=${digest}`,
+    { kind: "loopback", scopes: ["admin"], companionDevice: { id: "c1" } } as unknown as RequestAuth);
+  expect(denied.json).toHaveBeenCalledWith(expect.any(ServerResponse), 403, { error: "Mini Apps are available only to this local workspace's owner." });
+  expect(fetchMedia).not.toHaveBeenCalled();
+
+  requireGithubActivity.mockImplementationOnce(() => { throw appFailure(403, "This Mini App has no GitHub Activity media grant."); });
+  const revokedApp = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png&sha256=${digest}`);
+  expect(revokedApp.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 403, { error: "This Mini App has no GitHub Activity media grant." });
+
+  fetchMedia.mockRejectedValueOnce(appFailure(403, "Redirected GitHub Activity media address is not allowed.", githubMediaModule.GITHUB_MEDIA_POLICY_DENIED));
+  const policyDenied = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png&sha256=${digest}`);
+  expect(policyDenied.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 403, {
+    error: "Redirected GitHub Activity media address is not allowed.",
+    code: githubMediaModule.GITHUB_MEDIA_POLICY_DENIED,
+  });
+  requireGithubActivity.mockClear();
+
+  const badQuery = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png`);
+  expect(badQuery.json).toHaveBeenCalledWith(expect.any(ServerResponse), 400, expect.any(Object));
+
+  const ok = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png&sha256=${digest}`);
+  expect(requireGithubActivity).toHaveBeenCalledTimes(2);
+  expect(requireGithubActivity).toHaveBeenLastCalledWith(expect.objectContaining({ writeAllowed: true }), id, 6);
+  expect(ok.res.statusCode).toBe(200);
+  expect(ok.res.getHeader("content-type")).toBe("image/png");
+  expect(ok.res.getHeader("x-content-type-options")).toBe("nosniff");
+  expect(ok.res.getHeader("content-security-policy")).toBe("default-src 'none'");
+  expect(ok.res.getHeader("x-github-activity-sha256")).toBe(digest);
+  fetchMedia.mockRestore();
 });

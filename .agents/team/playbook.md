@@ -249,9 +249,14 @@ not trigger another review, test or build cycle; recheck only actual conflicts,
 new risks or findings with focused deltas. Required current-head CI and source
 acceptance still gate merging. The user has authorized reviewed merges into the
 personal repository.
-Lead decides merge order and merges only after Reviewer has no unresolved
-findings and required checks pass. Creating and pushing reviewable PRs is
-authorized here.
+GitHub auto-merge is the default merge path for team PRs so ordinary PRs do not
+wait on Lead for per-PR merge handoffs. Once the assigned Reviewer finds no
+blocking defects, resolves all GitHub review threads, and confirms no explicit
+Lead merge-order hold applies, the Reviewer (or PR owner when `mausbot-review3`
+is read-only) enables `gh pr merge --auto --merge` directly—or merges
+immediately if required `CI` is already green. Lead retains merge-order control
+only for explicitly held or dependent batches. Creating and pushing reviewable
+PRs is authorized here.
 Never equate a green badge or an idle agent with completed work.
 
 Lead owns disposition of every open PR, including drafts. Inspect the queue at
@@ -278,16 +283,21 @@ source review and CI can start while those checks finish. Do not wait for all
 screenshots or a package to begin source review. Pending acceptance still blocks
 the corresponding delivery. Batch corrections and review only their delta.
 
-Dev sends the ready head to Lead once, with the existing handoff record and
-pending checks. The assigned Reviewer sends its final verdict to Lead once
-when it finishes, including the reviewed SHA and any findings. Do not leave a
-verdict only in an idle pane. Lead follows the existing CI run and resumes the
-merge decision as soon as review and required results are available; the
-06:00/21:00 Beijing Lead checkpoint catches missed handoffs without delaying
-normal delivery. Check
-current-head acceptance, CI and holds before merging. Do not add polling jobs,
-duplicate notifications, a second review owner for the same scope or a new
-approval gate.
+Dev sends the ready head to the assigned Reviewer once (or to Lead when an
+explicit batch/merge-order boundary is active), with the existing handoff record
+and pending checks. When GitHub PR access is available (`mausbot-review`,
+`mausbot-review2`), the assigned Reviewer posts findings directly as GitHub PR
+review comments/threads on the reviewed SHA (using `COMMENT` on single-account
+PRs rather than `APPROVE`), resolves addressed threads after verifying
+correction deltas, and enables `gh pr merge --auto --merge` (or merges if `CI`
+is already green) as soon as all review threads are resolved and no explicit Lead
+hold applies; do not keep review conclusions only in local chat or wait on Lead
+for ordinary merges. When a read-only reviewer (`mausbot-review3`) returns its
+exact-SHA verdict, the PR owner or Lead records it on the PR review thread and
+enables auto-merge immediately. Lead steps in only for explicit merge-order
+holds, conflicts, QA holds, or missed handoffs caught at the 06:00/21:00 Beijing
+checkpoint. Do not add polling jobs, duplicate notifications, a second review
+owner for the same scope or a new approval gate.
 
 Freeze operational callers before their focused review as well. A caller or
 fixture correction does not reopen unchanged product source or require another

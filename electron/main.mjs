@@ -49,6 +49,7 @@ import { desktopViewerPermissionAllowed } from "./desktop-viewer-permissions.mjs
 import { appPermissionHandlers, externalLinkUrl } from "./app-permissions.mjs";
 import { appFrameBlinkSettings, createAppFrameFallback } from "./app-frame-guard.mjs";
 import { installDailyXFrameGuards } from "./daily-x-frame.mjs";
+import { createGithubActivityFrameGuards } from "./github-activity-frame.mjs";
 import { writeClipboardText } from "./clipboard-write.mjs";
 import {
   managedComposioAccess,
@@ -2030,9 +2031,13 @@ function createWindow({ deferNavigation = false } = {}) {
   };
   win.webContents.on("will-navigate", guardNavigation);
   // No page may embed the local server, or any saved server, in this preload-bearing window.
-  installDailyXFrameGuards(win.webContents, { localOrigin: rendererOrigin, redirectFallback: guardNavigation,
+  const githubActivityGuards = createGithubActivityFrameGuards({ webContents: win.webContents, localOrigin: rendererOrigin,
+    redirectFallback: guardNavigation,
     frameFallback: createAppFrameFallback({ webContents: win.webContents, localOrigin: rendererOrigin,
       serverOrigins: () => allowedOrigins(environmentsState, rendererOrigin()), log: slog }) });
+  installDailyXFrameGuards(win.webContents, { localOrigin: rendererOrigin,
+    redirectFallback: githubActivityGuards.redirectFallback,
+    frameFallback: githubActivityGuards.frameFallback });
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame || errorCode === -3) return; // -3: aborted by a newer navigation
     const remote = activeRemote(environmentsState);

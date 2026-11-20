@@ -1,0 +1,129 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { createAppFrameFallback } from "./app-frame-guard.mjs";
+import environments from "./environments.cjs";
+import { installDailyXFrameGuards } from "./daily-x-frame.mjs";
+import { GITHUB_ACTIVITY_FRAME_NAME, GITHUB_ACTIVITY_URL, createGithubActivityFrameGuards,
+  createGithubActivityFrameNavigation, githubActivityPageAllowed, githubMediaUrlAllowed } from "./github-activity-frame.mjs";
+
+const LOCAL = "http://127.0.0.1:8799";
+const CLOUD = "https://saved.example.test";
+const { workspaceNavigationAllowed } = environments;
+
+function fixture() {
+  const main = { origin: LOCAL, url: `${LOCAL}/`, frames: [] };
+  const frame = { frameTreeNodeId: 77, origin: "null", url: "", name: GITHUB_ACTIVITY_FRAME_NAME, parent: main };
+  main.frames.push(frame);
+  const handlers = new Map();
+  const webContents = { mainFrame: main, on: (name, listener) => handlers.set(name, listener) };
+  let redirectFallbacks = 0;
+  let frameFallbacks = 0;
+  const appFallback = createAppFrameFallback({ webContents, localOrigin: () => LOCAL,
+    serverOrigins: () => new Set([LOCAL, CLOUD]), log: () => {} });
+  const githubGuards = createGithubActivityFrameGuards({
+    webContents,
+    localOrigin: () => LOCAL,
+    redirectFallback: (details, url) => {
+      redirectFallbacks++;
+      if (!workspaceNavigationAllowed(url, { activeId: "local", environments: [] }, LOCAL)) details.preventDefault();
+    },
+    frameFallback: (details, url) => {
+      frameFallbacks++;
+      appFallback(details, url);
+    },
+  });
+  installDailyXFrameGuards(webContents, {
+    localOrigin: () => LOCAL,
+    redirectFallback: githubGuards.redirectFallback,
+    frameFallback: githubGuards.frameFallback,
+  });
+  const emit = (event, url, change = {}) => {
+    const details = { isMainFrame: false, url, frame, initiator: main, prevented: false,
+      preventDefault() { this.prevented = true; }, ...change };
+    handlers.get(event)(details, url);
+    return details.prevented;
+  };
+  return { main, frame, emit, getFallbacks: () => [redirectFallbacks, frameFallbacks] };
+}
+
+test("only the local host authorizes its named direct GitHub Activity frame", () => {
+  const { main, frame } = fixture();
+  const navigation = { isMainFrame: false, url: GITHUB_ACTIVITY_URL, frame, initiator: main };
+  assert.equal(createGithubActivityFrameNavigation()(navigation, main, LOCAL, true), true);
+  for (const change of [
+    { initiator: null }, { initiator: frame }, { frame: { ...frame, name: "other" } },
+    { frame: { ...frame, parent: { ...main } } }, { frame: { ...frame, url: "about:srcdoc" } },
+    { frame: { ...frame, origin: LOCAL } }, { isMainFrame: true },
+  ]) {
+    const candidate = { ...navigation, ...change };
+    main.frames = [candidate.frame];
+    assert.notEqual(createGithubActivityFrameNavigation()(candidate, main, LOCAL, true), true);
+  }
+  main.frames = [frame];
+  assert.equal(createGithubActivityFrameNavigation()(navigation, main, "https://cloud.example", true), false);
+});
+
+test("combined guards allow canonical GitHub routes and redirects while blocking media/static/off-origin navigations", () => {
+  const { main, frame, emit, getFallbacks } = fixture();
+  assert.equal(emit("will-frame-navigate", GITHUB_ACTIVITY_URL), false);
+  assert.equal(emit("will-redirect", "https://mxhan.com/github/20261120/", { initiator: null }), false);
+  assert.equal(emit("will-redirect", "https://mxhan.com/github/media/demo.png", { initiator: null }), true);
+  assert.equal(emit("will-redirect", "https://mxhan.com/x/", { initiator: null }), true);
+  frame.origin = "https://mxhan.com";
+  frame.url = "https://mxhan.com/github/20261120/";
+  frame.name = "renamed-by-page";
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/20261120/dream-num/univer/", { initiator: frame }), false);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/univer-orders/", { initiator: frame }), false);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/univer-orders/demo.js", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://other.example/", { initiator: frame }), true);
+  assert.equal(emit("will-redirect", "https://other.example/", { initiator: null }), true);
+  assert.deepEqual(getFallbacks(), [0, 0]);
+  main.frames = [];
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/20261120/", { initiator: frame }), true);
+});
+
+test("validates canonical GitHub document routes and media URLs strictly", () => {
+  for (const url of [
+    "https://mxhan.com/github/",
+    "https://mxhan.com/github/20261120/",
+    "https://mxhan.com/github/20261120/dream-num/univer/",
+    "https://mxhan.com/github/20261120/dream-num/univer/#section-1",
+    "https://mxhan.com/github/demo/univer-orders/",
+  ]) assert.equal(githubActivityPageAllowed(url), true, url);
+
+  for (const url of [
+    "http://mxhan.com/github/",
+    "https://www.mxhan.com/github/",
+    "https://mxhan.com:443/github/",
+    "https://user:pass@mxhan.com/github/",
+    "https://mxhan.com/github/?q=1",
+    "https://mxhan.com/github/20261399/",
+    "https://mxhan.com/github/20261120/Dream-Num/univer/",
+    "https://mxhan.com/github/20261120/dream-num/../x/",
+    "https://mxhan.com/github/20261120/%2e%2e/x/",
+    "https://mxhan.com/github/20261120/dream-num/univer/extra/",
+    "https://mxhan.com/github/media/20261120/demo.png",
+    "https://mxhan.com/github/demo/univer-orders/demo.js",
+    "https://mxhan.com/x/",
+  ]) assert.equal(githubActivityPageAllowed(url), false, url);
+
+  for (const url of [
+    "https://mxhan.com/github/media/demo.png",
+    "https://mxhan.com/github/media/20261120/univer-orders-1280.webp",
+    "https://mxhan.com/github/media/20261120/walkthrough.mp4",
+    "https://mxhan.com/github/media/20261120/clip.webm",
+    "https://mxhan.com/github/media/20261120/still.avif",
+  ]) assert.equal(githubMediaUrlAllowed(url), true, url);
+
+  for (const url of [
+    "https://mxhan.com/github/media/demo.png?v=1",
+    "https://mxhan.com/github/media/demo.png#frag",
+    "https://mxhan.com/github/media/demo.html",
+    "https://mxhan.com/github/media/demo.svg",
+    "https://mxhan.com/github/media/../x.png",
+    "https://mxhan.com/github/media/%2e%2e/x.png",
+    "https://mxhan.com/x/assets/demo.png",
+    "https://other.example/github/media/demo.png",
+  ]) assert.equal(githubMediaUrlAllowed(url), false, url);
+});

@@ -172,14 +172,20 @@ describe("complete CI and trusted QA health", () => {
     const observed = [{ name: staticJob.name, status: "completed", conclusion: "success", steps: names.map((name) => ({ name, conclusion: "success" })) }];
     expect(executionComplete([staticJob], observed, new Set())).toBe(true);
     expect(executionComplete([staticJob], [{ ...observed[0], steps: observed[0].steps.slice(0, -2) }], new Set())).toBe(false);
+    const noVerifyJob = expectedJobs({ ...selection, ci_verify: false }, false)[0];
+    expect(executionComplete([noVerifyJob], [{
+      name: noVerifyJob.name, status: "completed", conclusion: "success",
+      steps: names.filter((name) => name !== "Verify CI selection and documentation references").map((name) => ({ name, conclusion: "success" })),
+    }], new Set())).toBe(true);
   });
 
   it("requires the broker owning lane for a broad source-only fast PR", async () => {
     const policy = readCheckPolicy();
+    const allCore = [...policy.core, ...(policy.serverCore ?? [])].sort();
     const selected = selectCheckPlan({ files: ["cloudflare/composio-broker/src/triggers.ts", "package.json"], policy, fastPr: true });
     expect(selected.areas).toEqual(["everything"]);
     expect(selected.scope.checks).toEqual(["build", "control-plane"]);
-    expect(selected.fastFiles).toEqual([...policy.core].sort());
+    expect(selected.fastFiles).toEqual(allCore);
     const ci = ciOutputs(selected.scope, ["ubuntu-latest"]);
     const prHead = "b".repeat(40);
     const outputs = { ...ci, fast_pr: true, full_required: false, reduced: false, required_jobs: ci.jobs,

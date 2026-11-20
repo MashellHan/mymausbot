@@ -89,9 +89,9 @@ const finishedRun: RoutineRun = {
   createdAt: Date.UTC(2026, 8, 6, 9),
 };
 
-function render(routines: Routine[], runs: RoutineRun[], compact = false) {
+function render(routines: Routine[], runs: RoutineRun[], compact = false, upcoming = false) {
   return renderToStaticMarkup(
-    createElement(RoutinesSection, { bot, routines, runs, compact }),
+    createElement(RoutinesSection, { bot, routines, runs, compact, upcoming }),
   );
 }
 
@@ -108,6 +108,17 @@ describe("RoutinesSection", () => {
   it("shows an empty state when the bot has no routines", () => {
     const markup = render([], []);
     expect(markup).toContain("No schedules yet.");
+  });
+
+  it("shows the upcoming schedule and its actual next run, omitting paused and past schedules", () => {
+    const future = { ...activeRoutine, nextRunAt: Date.now() + 86_400_000 };
+    const past = { ...activeRoutine, id: "past", name: "Past check", nextRunAt: Date.now() - 1_000 };
+    const markup = render([future, pausedRoutine, past], [], true, true);
+    expect(markup).toContain("Upcoming</h2>");
+    expect(markup).toContain("Morning brief");
+    expect(markup).toContain("Next ");
+    expect(markup).not.toMatch(/Weekly digest|Past check/);
+    expect(render([pausedRoutine], [], true, true)).toContain("No next run scheduled");
   });
 
   it("renders a capitalized schedule sentence and name for each routine", () => {

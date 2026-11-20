@@ -19,6 +19,7 @@ import { ReportStore } from "../mini-apps/report-store.ts";
 import { DefaultMiniApps } from "../mini-apps/defaults.ts";
 import { parseHongguoCatalog, parseHongguoCatalogResult, parseHongguoPlayback, parseHongguoPreparedPlayback,
   parseHongguoSeries, parseHongguoSeriesResult } from "../mini-apps/hongguo-validation.ts";
+import { fetchGithubActivityMedia } from "../github-activity/media.ts";
 import { HongguoCovers } from "../hongguo/cover.ts";
 import type { HongguoProvider } from "../hongguo/provider.ts";
 import { MiniAppSuggestions } from "../mini-apps/suggestions.ts";
@@ -36,6 +37,7 @@ const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|
 const HONGGUO_ACTION = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/(catalog|series|playback|history|preferences)$/;
 const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Za-z0-9_-]{1,256})$/;
 const HONGGUO_COVER = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/cover$/;
+const GITHUB_ACTIVITY_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/github-activity\/media$/;
 const SOURCE = z.object({ botId: z.string().regex(/^[\w-]{1,128}$/) }).strict();
 const INTERNAL_ID = z.object({ app_id: z.uuid() }).strict();
 const CONNECT = z.object({}).strict();
@@ -82,8 +84,10 @@ export function miniAppError(error: unknown): { status: number; error: string; c
     return { status, error: error.message, code: error.error.code };
   }
   const status = error && typeof error === "object" && "status" in error ? Number(error.status) : 500;
+  const code = error && typeof error === "object" && "status" in error && "code" in error && typeof error.code === "string"
+    ? error.code : undefined;
   return { status: Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500,
-    error: error instanceof Error ? error.message : "Mini Apps are unavailable." };
+    error: error instanceof Error ? error.message : "Mini Apps are unavailable.", ...(code ? { code } : {}) };
 }
 
 async function datasetInfo(data: DataEngine, datasetId: string): Promise<MiniAppDataset> {
@@ -115,7 +119,39 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       assertOwner();
       const hongguoMedia = HONGGUO_MEDIA.exec(path);
       const hongguoCover = HONGGUO_COVER.exec(path);
-      if (url.search && !hongguoMedia && !hongguoCover) throw appFailure(400, "Query parameters are not supported.");
+      const githubMedia = GITHUB_ACTIVITY_MEDIA.exec(path);
+      if (url.search && !hongguoMedia && !hongguoCover && !githubMedia) throw appFailure(400, "Query parameters are not supported.");
+      if (githubMedia) {
+        if (method !== "GET") throw appFailure(405, "Method not allowed.");
+        const rawRevision = url.searchParams.get("expectedRevision");
+        const mediaUrl = url.searchParams.get("url");
+        const sha256 = url.searchParams.get("sha256");
+        if (url.searchParams.size !== 3 || url.searchParams.getAll("expectedRevision").length !== 1
+          || url.searchParams.getAll("url").length !== 1 || url.searchParams.getAll("sha256").length !== 1
+          || !rawRevision || !/^[1-9]\d*$/.test(rawRevision) || !Number.isSafeInteger(Number(rawRevision))
+          || !mediaUrl || !sha256) {
+          throw appFailure(400, "Invalid GitHub Activity media request.");
+        }
+        const id = githubMedia[1]!;
+        const revision = Number(rawRevision);
+        deps.apps.requireGithubActivity(owner, id, revision);
+        const abort = new AbortController();
+        const onClose = () => abort.abort();
+        res.once("close", onClose);
+        try {
+          const media = await fetchGithubActivityMedia(mediaUrl, sha256, abort.signal);
+          deps.apps.requireGithubActivity(owner, id, revision);
+          if (abort.signal.aborted) return;
+          res.statusCode = 200;
+          res.setHeader("content-type", media.mimeType);
+          res.setHeader("content-length", String(media.bytes.length));
+          res.setHeader("x-content-type-options", "nosniff");
+          res.setHeader("content-security-policy", "default-src 'none'");
+          res.setHeader("x-github-activity-sha256", media.sha256);
+          res.end(media.bytes);
+          return;
+        } finally { res.off("close", onClose); }
+      }
       if (hongguoCover) {
         if (method !== "GET") throw appFailure(405, "Method not allowed.");
         const rawRevision = url.searchParams.get("expectedRevision");
