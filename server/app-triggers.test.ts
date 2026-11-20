@@ -380,6 +380,20 @@ describe("createAppTriggerHost", () => {
     const json = ((_res: unknown, status: number, body: unknown) => { answers.push({ status, body }); }) as never;
     const operation = { action: "create", trigger: { name: "Acme", instructions: "Draft a reply.", app: "gmail", event: "GMAIL_NEW_GMAIL_MESSAGE", filter: { from: "acme.com" } } };
     const context = (from: any, guestDriven = false) => ({ from, threadId: "thread-1", ownsThread: () => true, guestDriven, outsideDriven: () => false, canCommit: () => true });
+    const phases: string[] = [];
+    const listEvents = (guestDriven: boolean) => host.internalRoutes({
+      ...context(bots.scout, guestDriven),
+      startAutomation: (action) => {
+        phases.push(`${action}:started`);
+        return () => { phases.push(`${action}:finished`); };
+      },
+    })({ method: "GET", path: "/api/internal/trigger-events", url: new URL("http://127.0.0.1/api/internal/trigger-events?app=gmail"), res: {}, json } as never);
+    await listEvents(true);
+    expect(answers.at(-1)?.status).toBe(403);
+    expect(phases).toEqual([]);
+    await listEvents(false);
+    expect(answers.at(-1)?.status).toBe(200);
+    expect(phases).toEqual(["view:started", "view:finished"]);
     await host.submit({} as never, json, { ...context(bots.scout, true), operation });
     expect(answers.at(-1)).toMatchObject({ status: 403, body: { error: expect.stringContaining("Only the Cloud's owner") } });
     await host.submit({} as never, json, { ...context(bots.narrow), operation });

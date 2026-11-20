@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { WebhookRequestCardData, WebhookRequestDefinition, WebhookRequestOperation, WebhookRequestSnapshot } from "../shared/webhook-request.ts";
 import { instructionsUpdateRefusal } from "./automation-instructions.ts";
 import { newId } from "./contracts.ts";
+import type { StartAutomationStatus } from "./chat-live-status.ts";
 import { UNDO_STALE } from "./direct-apply.ts";
 import { redactSecretsInText } from "./redact.ts";
 import type { WebhookManager, WebhookTrigger } from "./webhooks.ts";
@@ -151,6 +152,7 @@ export class WebhookRequestService {
     operation: unknown;
     from?: { botId: string; name: string; color: string };
     canCommit?: () => boolean;
+    startAutomation?: StartAutomationStatus;
   }): WebhookRequestResult {
     const parsed = operationSchema.safeParse(args.operation);
     if (!parsed.success) throw new WebhookRequestError(parsed.error.issues[0]?.message ?? "Invalid webhook trigger request");
@@ -172,26 +174,31 @@ export class WebhookRequestService {
     if (args.canCommit && !args.canCommit()) throw new WebhookRequestError("The requesting turn ended before this change could be saved", 401);
     let after: WebhookTrigger | null = null;
     let runId: string | undefined;
-    switch (operation.action) {
-      case "create":
-        after = webhooks.create({ ...managerInput(operation.webhook), name: operation.webhook.name, prompt: operation.webhook.instructions, botId: owner, enabled: true }).webhook;
-        break;
-      case "update":
-        after = webhooks.update(operation.webhookId, managerInput(operation.changes));
-        break;
-      case "pause":
-      case "resume":
-        after = webhooks.update(operation.webhookId, { enabled: operation.action === "resume", verificationPending: false });
-        break;
-      case "run_now": {
-        const result = webhooks.test(operation.webhookId);
-        runId = result?.runId;
-        after = before ?? null;
-        break;
+    const finish = args.startAutomation?.(operation.action);
+    try {
+      switch (operation.action) {
+        case "create":
+          after = webhooks.create({ ...managerInput(operation.webhook), name: operation.webhook.name, prompt: operation.webhook.instructions, botId: owner, enabled: true }).webhook;
+          break;
+        case "update":
+          after = webhooks.update(operation.webhookId, managerInput(operation.changes));
+          break;
+        case "pause":
+        case "resume":
+          after = webhooks.update(operation.webhookId, { enabled: operation.action === "resume", verificationPending: false });
+          break;
+        case "run_now": {
+          const result = webhooks.test(operation.webhookId);
+          runId = result?.runId;
+          after = before ?? null;
+          break;
+        }
+        case "delete":
+          if (!webhooks.remove(operation.webhookId)) throw new WebhookRequestError("That webhook trigger no longer exists.", 404);
+          break;
       }
-      case "delete":
-        if (!webhooks.remove(operation.webhookId)) throw new WebhookRequestError("That webhook trigger no longer exists.", 404);
-        break;
+    } finally {
+      finish?.();
     }
     const subject = after ?? before!;
     const resultId = subject.id;

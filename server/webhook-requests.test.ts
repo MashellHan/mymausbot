@@ -50,6 +50,23 @@ function harness() {
 const create = { action: "create", webhook: { name: "Interested replies", instructions: "Draft a follow-up for the lead in the payload." } };
 
 describe("WebhookRequestService", () => {
+  it("starts status only for an accepted target and finishes after the change", () => {
+    const { service, webhooks } = harness();
+    const entry = service.submit({ botId: "bot-a", threadId: "thread-a", operation: create });
+    const events: string[] = [];
+    const submit = (webhookId: string) => service.submit({
+      botId: "bot-a", threadId: "thread-a", operation: { action: "update", webhookId, changes: { name: "Renamed" } },
+      startAutomation: (action) => {
+        events.push(`${action}:${webhooks.list()[0]?.name}`);
+        return () => { events.push(`finished:${webhooks.list()[0]?.name}`); };
+      },
+    });
+    expect(() => submit("missing-webhook")).toThrow(expect.objectContaining({ status: 404 }));
+    expect(events).toEqual([]);
+    submit(entry.resultId);
+    expect(events).toEqual(["update:Interested replies", "finished:Renamed"]);
+  });
+
   it("refuses replacing redacted instructions atomically but allows a rename", () => {
     const { service, webhooks, store } = harness();
     const prompt = "Review the queue.\n".repeat(180) + "Use token=fixture-secret-value.";

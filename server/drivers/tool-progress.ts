@@ -124,17 +124,20 @@ export function acpToolProgress(update: unknown): TurnProgressFields | null {
     (part): part is { path?: unknown; oldText?: unknown; newText?: unknown } => part?.type === "diff",
   );
   const kind = typeof u.kind === "string" ? ACP_KINDS[u.kind] : undefined;
-  if (!kind && !diffs.length) return null;
+  const itemId = typeof u.toolCallId === "string" && u.toolCallId ? u.toolCallId : undefined;
+  const toolState = u.status === "in_progress" ? "running" : u.status === "pending" ? "pending" : undefined;
+  if (!kind && !diffs.length && !(itemId && toolState)) return null;
   const activity: TurnProgressActivity = diffs.length
     ? diffs.every((diff) => typeof diff.oldText !== "string" || !diff.oldText) ? "write" : "edit"
-    : kind!;
+    : kind ?? "tool";
   const locations = Array.isArray(u.locations) ? (u.locations as Array<{ path?: unknown }>) : [];
   const file = progressFile(diffs[0]?.path ?? locations[0]?.path);
   const bytes = diffs.reduce((sum, diff) => sum + (typeof diff.newText === "string" ? Buffer.byteLength(diff.newText) : 0), 0);
   return report(activity, typeof u.title === "string" ? u.title : "tool", {
     ...(diffs.length ? { bytes } : {}),
     ...(file ? { file } : {}),
-    ...(typeof u.toolCallId === "string" && u.toolCallId ? { itemId: u.toolCallId } : {}),
+    ...(itemId ? { itemId } : {}),
+    ...(toolState ? { toolState } : {}),
   });
 }
 
