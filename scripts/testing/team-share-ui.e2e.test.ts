@@ -57,16 +57,39 @@ describe("Share a department in the real renderer", () => {
     await expect.poll(() => evaluate("innerWidth"), { timeout: 10_000 }).toBe(1280);
     const triggerSelector = 'button[aria-label="Actions for Sales desk department"]';
     try {
+      // Switching from Chrome's initial narrow viewport across `md` triggers Sidebar's
+      // 200ms `transition-[width]`, so wait until layout and trigger coordinates settle.
       await expect.poll(() => evaluate(`(() => {
+        const aside = document.querySelector("aside");
+        if (!aside || aside.getAnimations().some((animation) => animation.playState === "running")) {
+          window.__shareTriggerRect = null;
+          return false;
+        }
         const triggers = document.querySelectorAll(${JSON.stringify(triggerSelector)});
-        if (triggers.length !== 1) return false;
+        if (triggers.length !== 1) {
+          window.__shareTriggerRect = null;
+          return false;
+        }
         const trigger = triggers[0];
-        if (!(trigger instanceof HTMLButtonElement) || trigger.disabled || !trigger.checkVisibility()) return false;
+        if (!(trigger instanceof HTMLButtonElement) || trigger.disabled || !trigger.checkVisibility()) {
+          window.__shareTriggerRect = null;
+          return false;
+        }
         const { left, top, width, height } = trigger.getBoundingClientRect();
-        if (width <= 0 || height <= 0) return false;
+        if (width <= 0 || height <= 0) {
+          window.__shareTriggerRect = null;
+          return false;
+        }
         const hit = document.elementFromPoint(left + width / 2, top + height / 2);
-        return hit === trigger || trigger.contains(hit);
-      })()`), { timeout: 10_000 }).toBe(true);
+        if (hit !== trigger && !trigger.contains(hit)) {
+          window.__shareTriggerRect = null;
+          return false;
+        }
+        const next = [Math.round(left), Math.round(top), Math.round(width), Math.round(height)].join(",");
+        const stable = window.__shareTriggerRect === next;
+        window.__shareTriggerRect = next;
+        return stable;
+      })()`), { timeout: 10_000, interval: 50 }).toBe(true);
       await click("Actions for Sales desk department");
       await expect.poll(() => evaluate(`document.querySelector(${JSON.stringify(triggerSelector)})?.getAttribute('aria-expanded') ?? null`), { timeout: 10_000 }).toBe("true");
       await expect.poll(() => evaluate(`(() => {
@@ -78,13 +101,16 @@ describe("Share a department in the real renderer", () => {
       await click("Share");
     } catch (error) {
       const diag = await evaluate(`(() => {
+        const aside = document.querySelector("aside");
         const trigger = document.querySelector(${JSON.stringify(triggerSelector)});
         const menu = document.querySelector('[role="menu"][aria-label="Sales desk"]');
         const rect = trigger?.getBoundingClientRect();
         const hit = rect && rect.width > 0 && rect.height > 0 ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) : null;
         return {
           innerWidth,
+          asideWidth: aside ? Math.round(aside.getBoundingClientRect().width) : null,
           triggerCount: document.querySelectorAll(${JSON.stringify(triggerSelector)}).length,
+          triggerRect: rect ? { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) } : null,
           ariaExpanded: trigger?.getAttribute('aria-expanded') ?? null,
           hitTag: hit ? hit.tagName.toLowerCase() : null,
           menuVisible: Boolean(menu?.checkVisibility() && !menu.closest('[inert], [aria-hidden="true"]')),
@@ -109,6 +135,31 @@ describe("Share a department in the real renderer", () => {
     expect(zip).not.toContain("UIFIXTURESECRET");
     expect(zip).not.toContain("UI_FIXTURE_MEMORY");
     await click("Close");
-    process.stdout.write(`${JSON.stringify({ fixture: info!, departmentShared: true, savedZip: true })}\n`);
+    await expect.poll(() => evaluate("Boolean(document.querySelector('[data-share-department]'))"), { timeout: 10_000 }).toBe(false);
+
+    // Keyboard path: focus the department row menu button, open with Enter, arrow to Share, and open the card.
+    expect(await evaluate(`(() => {
+      const trigger = document.querySelector(${JSON.stringify(triggerSelector)});
+      if (!(trigger instanceof HTMLButtonElement)) return false;
+      trigger.focus();
+      return document.activeElement === trigger;
+    })()`)).toBe(true);
+    await expect.poll(() => evaluate(`(() => {
+      const trigger = document.querySelector(${JSON.stringify(triggerSelector)});
+      return trigger instanceof HTMLButtonElement && document.activeElement === trigger && getComputedStyle(trigger).opacity === "1";
+    })()`), { timeout: 5_000, interval: 50 }).toBe(true);
+    await ui("press", "--keys", "Enter");
+    await expect.poll(() => evaluate(`document.querySelector(${JSON.stringify(triggerSelector)})?.getAttribute('aria-expanded') ?? null`), { timeout: 10_000 }).toBe("true");
+    await expect.poll(async () => {
+      const active = await evaluate("document.activeElement?.textContent?.trim() ?? null");
+      if (active === "Share") return true;
+      await ui("press", "--keys", "ArrowDown");
+      return false;
+    }, { timeout: 10_000, interval: 100 }).toBe(true);
+    await ui("press", "--keys", "Enter");
+    await expect.poll(snapshot, { timeout: 20_000 }).toContain("Chats, memory and keys are never shared");
+    await ui("press", "--keys", "Escape");
+    await expect.poll(() => evaluate("Boolean(document.querySelector('[data-share-department]'))"), { timeout: 10_000 }).toBe(false);
+    process.stdout.write(`${JSON.stringify({ fixture: info!, departmentShared: true, savedZip: true, keyboardPath: true })}\n`);
   }, launchTimeout + 120_000);
 });
