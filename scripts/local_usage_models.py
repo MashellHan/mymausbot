@@ -787,11 +787,17 @@ def daily_agents(collector, machines, snapshot, config=None, intervals=None, *, 
     matched_files = []
     for path, sid_lower in file_sids:
         target_sid = _nearest_sid(sid_lower)
-        if target_sid is not None:
-            matched_files.append((path, sid_lower, target_sid))
+        if target_sid is None:
+            continue
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        matched_files.append((mtime_ns, path, sid_lower, target_sid))
 
     if not matched_files:
         return {}
+    matched_files.sort(key=lambda item: -item[0])
 
     by_root = defaultdict(list)
     for sid_lower, sid_intervals in by_sid.items():
@@ -802,7 +808,7 @@ def daily_agents(collector, machines, snapshot, config=None, intervals=None, *, 
     end_at = max_at + dt.timedelta(microseconds=1)
     key_owners = defaultdict(set)
     scan_bytes = 0
-    for path, sid_lower, target_sid in matched_files:
+    for _, path, sid_lower, target_sid in matched_files:
         try:
             size = path.stat().st_size
         except OSError:
