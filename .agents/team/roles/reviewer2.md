@@ -1,6 +1,6 @@
 ---
 id: reviewer2
-name: MausBot Reviewer 2
+name: MausBot Reviewer Two
 runtime: codex
 model: gpt-6.2-astra
 effort: xhigh

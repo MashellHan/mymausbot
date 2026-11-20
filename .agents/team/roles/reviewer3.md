@@ -1,6 +1,6 @@
 ---
 id: reviewer3
-name: MausBot Reviewer 3
+name: MausBot Reviewer Three
 runtime: pi
 model: gemini-4-carbon
 effort: high

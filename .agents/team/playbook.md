@@ -7,7 +7,7 @@ personal repository `MashellHan/mymausbot` (`fork=false`) in
 `legacy-fork` names the old `MashellHan/openmausbot` repository and its historical
 PR, issue, review and CI records. Preserve upstream license and notices.
 
-## Roles
+## Roles and launch defaults
 
 | Herdr name | Role | Runtime | Model | Effort | Context requested |
 | --- | --- | --- | --- | --- | --- |
@@ -19,14 +19,14 @@ PR, issue, review and CI records. Preserve upstream license and notices.
 | mausbot-dev1 | Additional developer | Pi (Raven, native execution) | gpt-6.2-sol | high | 1,000,000 |
 | mausbot-dev2 | Additional developer | Pi (Raven, native execution) | gemini-4-hydrogen | high | provider default |
 | mausbot-dev3 | Additional developer | Pi (Raven, native execution) | gpt-6.2-sol | high | 1,000,000 |
-| mausbot-review | Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
-| mausbot-review2 | Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
-| mausbot-review3 | Reviewer | Pi (Raven, native execution) | gemini-4-carbon | high | provider default |
-| mausbot-mini-review | Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
+| mausbot-review | Reviewer One | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
+| mausbot-review2 | Reviewer Two | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
+| mausbot-review3 | Reviewer Three | Pi (Raven, native execution) | gemini-4-carbon | high | provider default |
+| mausbot-mini-review | Mini App Reviewer | Codex (Raven YOLO) | gpt-6.2-astra | xhigh | provider default |
 
-All seven current MausBot Codex roles launch with the existing Raven provider
+The Codex launch defaults use the existing Raven provider
 in YOLO mode (preserving any existing pane shell profile without duplicating
-`--profile`). All five current MausBot Pi roles run through the existing Raven
+`--profile`). The Pi launch defaults use the existing Raven
 provider with automatic native tool execution (no per-call tool approval
 prompts). Preserve existing designated providers, accounts and authentication
 boundaries.
@@ -47,10 +47,17 @@ as recorded in [roles/reviewer3.md](roles/reviewer3.md) (catalog window
 Codex with `gpt-6.2-astra` and `xhigh` effort, preserving their source-review
 duties and inherited `--profile raven --yolo` pane alias.
 
-`mausbot-mini-review` remains the supplemental Mini App reviewer on Codex with
+`mausbot-mini-review` uses [roles/mini-reviewer.md](roles/mini-reviewer.md) on Codex with
 `gpt-6.2-astra`/`xhigh`. This update adds no agent, grants, QA-owner labels or
 approval requirement. The general review pool remains `mausbot-review`,
 `mausbot-review2` and `mausbot-review3`.
+
+Lead coordinates scope and delivery. Designer owns UX and visual acceptance.
+Frontend implements the renderer and owns App packaging. Backend owns server,
+data and writer contracts. Upstream integration owns upstream carries. The three
+additional developers take exclusive source assignments from Lead. Reviewer One,
+Reviewer Two and Reviewer Three independently review their assigned source. Mini
+App Reviewer handles supplemental Mini App review.
 
 Role files and launch defaults are requested settings, not claims of live
 runtime verification; verify live session settings before claiming a model or
