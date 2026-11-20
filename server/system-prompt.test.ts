@@ -553,6 +553,8 @@ describe("reply style", () => {
     expect(CONVERSATIONAL_STYLE_PROMPT).toMatch(/blank line/);
     expect(CONVERSATIONAL_STYLE_PROMPT).toMatch(/code block/);
     expect(CONVERSATIONAL_STYLE_PROMPT).toMatch(/language/);
+    expect(CONVERSATIONAL_STYLE_PROMPT).toContain("Keep simple answers in one message");
+    expect(CONVERSATIONAL_STYLE_PROMPT).toContain("never progress chatter while working");
   });
 });
 
@@ -570,6 +572,7 @@ describe("how every bot replies", () => {
       "send one short line in their words on what you are doing and why",
       "add what they will get and roughly how long",
       "Quick answers skip both.",
+      "Between tool calls, stay silent: never narrate plans, checks or verification before the result.",
       "Answer first (verdict, result or answer), then support.",
       "Say in one line where and when looked-up facts came from",
       "Use and convert to their units, currency, time zone and numbers",
@@ -578,7 +581,10 @@ describe("how every bot replies", () => {
       "check what you can reach",
       "ask for exactly one thing, plainly, with the reason",
       "do the parts that do not depend on it now",
+      "With a question card, never repeat the question or options in chat text.",
       "never name tools, functions, files holding your notes or settings, MCP",
+      "skills you used behind the scenes",
+      "only name a skill when confirming a skill save/update or answering an explicit skill question",
       "state the money facts you found: price, fees, deposit, cancellation terms",
       "Nothing that cannot be undone happens until they explicitly pick an option or say go",
       "Never ask for passwords, one-time codes or card numbers in chat.",
