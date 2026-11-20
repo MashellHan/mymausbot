@@ -9,8 +9,9 @@ export const MINI_APP_DASHBOARD_RESOURCES = {
 } as const;
 export type MiniAppDashboardKind = keyof typeof MINI_APP_DASHBOARD_RESOURCES;
 export type MiniAppDashboardResource = "teams" | "activity" | "configuration" | "team-rules" | "skill" | "usage";
-export type MiniAppShippedTemplateKind = "bookkeeping" | "x_ai_digest" | "github_activity";
-export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage", "hongguo"] as const;
+export const MINI_APP_SHIPPED_TEMPLATE_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "mojo"] as const;
+export type MiniAppShippedTemplateKind = typeof MINI_APP_SHIPPED_TEMPLATE_KINDS[number];
+export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage", "hongguo", "mojo"] as const;
 export type DefaultMiniAppKind = typeof DEFAULT_MINI_APP_KINDS[number];
 export type MiniAppNativeKind = "hongguo";
 
@@ -67,8 +68,6 @@ export const MINI_APP_RELEASE_BOUNDS = {
   queriesBytes: 64 * 1024,
 } as const;
 export const MINI_APP_RELEASE_ASSETS = ["manifest.json", "index.html", "queries.json"] as const;
-export const MINI_APP_SUPPORTED_CAPABILITIES = ["agent-team-v1"] as const;
-export type MiniAppSupportedCapability = typeof MINI_APP_SUPPORTED_CAPABILITIES[number];
 
 export interface MiniAppReleaseManifestArtifact {
   bytes: number;

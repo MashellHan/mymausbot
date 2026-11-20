@@ -1,6 +1,6 @@
 import type { MiniAppShippedTemplateKind } from "../../shared/mini-apps.ts";
 
-export const SHIPPED_TEMPLATE_SHA256: Record<MiniAppShippedTemplateKind, readonly string[]> = {
+export const SHIPPED_TEMPLATE_SHA256: Record<Exclude<MiniAppShippedTemplateKind, "mojo">, readonly string[]> = {
   bookkeeping: [
     "2cdf85124737205c693df442bff7e8da5190aa8df8c7e42dde4b901be96789e9",
     "4f7a3a893d159ffdc74abbf7cf661e6308ef7a9ca23afa99680e157ec8d7b268",
@@ -35,7 +35,7 @@ export const AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256 = [
 ] as const;
 
 /** Exact legacy installed HTML snapshots from Mini inventory adoptable only with equivalent reviewed bindings. */
-export const ADOPTABLE_LEGACY_TEMPLATE_SHA256: Record<MiniAppShippedTemplateKind, readonly string[]> = {
+export const ADOPTABLE_LEGACY_TEMPLATE_SHA256: Record<Exclude<MiniAppShippedTemplateKind, "mojo">, readonly string[]> = {
   bookkeeping: ["6cab8df9d0c2d2d90694c0e3202a4a9075bed84260f48467e4a6e1991e1465ce"],
   x_ai_digest: ["a25effe6fffb0f09d6833a3dd9d4ed331be1d4a34cfd889af628428718b320d3"],
   github_activity: [],

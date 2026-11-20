@@ -1,15 +1,14 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { MiniAppDataBinding } from "../../shared/mini-app-data.ts";
+import { LEGACY_MINI_APP_IDS, matchesMiniAppReleasePackage, miniAppReleasePackage } from "../../shared/mini-app-release-packages.ts";
 import {
-  MINI_APP_RELEASE_ASSETS, MINI_APP_RELEASE_BOUNDS, MINI_APP_RELEASE_REPO, MINI_APP_SUPPORTED_CAPABILITIES,
+  MINI_APP_RELEASE_ASSETS, MINI_APP_RELEASE_BOUNDS, MINI_APP_RELEASE_REPO,
   type DefaultMiniAppKind, type MiniAppReleaseManifestV1, type MiniAppReleaseProvenance,
   type MiniAppReleaseQueriesFile, type MiniAppSummary, type MiniAppUpdateCheckResult,
 } from "../../shared/mini-apps.ts";
-import { reportMiniAppBinding } from "../../shared/report-mini-app.ts";
 import { findCliCandidates, sealedFixture, whichWin } from "../env-path.ts";
 import { matchesPendingDefaultHtml, NATIVE_DEFAULT_HTML } from "./default-documents.ts";
 import {
@@ -18,6 +17,7 @@ import {
 } from "./default-template-history.ts";
 import { bundledBookkeepingBinding } from "./default-updates.ts";
 import { hasReportBindingForProducer } from "./report-apps.ts";
+import { acceptsOptionalDailyXEditorial, bookkeepingReleaseQueriesMatch, reportReleaseQueriesMatch } from "./report-release-bindings.ts";
 import {
   appFailure, bindingFieldSchema, bindingNameSchema, COMMIT_SHA_RE, namedQuerySchema,
   SEMVER_3_RE, sourceNameSchema,
@@ -25,7 +25,6 @@ import {
 
 const TRUSTED_GH_HOST = "github.com";
 const TRUSTED_GH_LOGIN = "MashellHan";
-const MOJO_APP_ID = "01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7";
 const NATIVE_DEFAULT_HTML_SHA256 = createHash("sha256").update(NATIVE_DEFAULT_HTML).digest("hex");
 /** Verified official Agent Team HTML builds installed via owner publish before independent release provenance (#45 and #48). */
 export const ADOPTABLE_AGENT_TEAM_HTML_SHA256: readonly string[] = [
@@ -67,7 +66,7 @@ export interface MiniAppReleaseReader {
 export interface MiniAppReleaseMapping {
   packageId: string;
   releaseSlug: string;
-  kind: DefaultMiniAppKind | "mojo";
+  kind: DefaultMiniAppKind;
 }
 
 export interface VerifiedMiniAppRelease {
@@ -127,29 +126,22 @@ function decodeUtf8Strict(bytes: Uint8Array, label: string): string {
 }
 
 export function miniAppReleaseMapping(app: MiniAppSummary): MiniAppReleaseMapping | null {
-  if (app.dashboardIdentity === "agent-team") return { packageId: "mashellhan.agent-team", releaseSlug: "agent-team", kind: "agent-team" };
-  if (app.dashboardIdentity === "usage") return { packageId: "mashellhan.work-tracker", releaseSlug: "work-tracker", kind: "usage" };
-  if (app.shippedTemplateKind === "bookkeeping") return { packageId: "mashellhan.bookkeeping", releaseSlug: "bookkeeping", kind: "bookkeeping" };
-  if (app.shippedTemplateKind === "x_ai_digest") return { packageId: "mashellhan.x-ai-digest", releaseSlug: "x-ai-digest", kind: "x_ai_digest" };
-  if (app.shippedTemplateKind === "github_activity") return { packageId: "mashellhan.github-activity", releaseSlug: "github-activity", kind: "github_activity" };
-  if (app.nativeIdentity === "hongguo") return { packageId: "mashellhan.hongguo", releaseSlug: "hongguo", kind: "hongguo" };
-  if (app.id === MOJO_APP_ID) return { packageId: "mashellhan.mojo", releaseSlug: "mojo", kind: "mojo" };
-  return null;
-}
-
-export function parseSemver3(version: string): [number, number, number] | null {
-  const match = SEMVER_3_RE.exec(version);
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
+  const kind = app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind
+    ?? (app.id === LEGACY_MINI_APP_IDS.mojo ? "mojo" : null);
+  if (!kind) return null;
+  const { packageId, releaseSlug } = miniAppReleasePackage(kind);
+  return { kind, packageId, releaseSlug };
 }
 
 export function compareSemver3(a: string, b: string): number {
-  const pa = parseSemver3(a);
-  const pb = parseSemver3(b);
-  if (!pa || !pb) throw appFailure(400, "Invalid 3-component semantic version.");
-  if (pa[0] !== pb[0]) return pa[0] - pb[0];
-  if (pa[1] !== pb[1]) return pa[1] - pb[1];
-  return pa[2] - pb[2];
+  const pa = SEMVER_3_RE.exec(a);
+  const pb = SEMVER_3_RE.exec(b);
+  if (pa?.[0] !== a || pb?.[0] !== b) throw appFailure(400, "Invalid 3-component semantic version.");
+  for (const index of [1, 2, 3]) {
+    const left = pa[index]!, right = pb[index]!;
+    if (left !== right) return left.length - right.length || (left > right ? 1 : -1);
+  }
+  return 0;
 }
 
 export function releaseTagFor(slug: string, appVersion: string): string {
@@ -160,7 +152,7 @@ export function parseReleaseTag(tagName: string, slug: string): string | null {
   const prefix = `mini-app/${slug}/v`;
   if (!tagName.startsWith(prefix)) return null;
   const version = tagName.slice(prefix.length);
-  return SEMVER_3_RE.test(version) ? version : null;
+  return SEMVER_3_RE.exec(version)?.[0] === version ? version : null;
 }
 
 export function hasRevokedBuiltInGrant(app: MiniAppSummary, mapping: MiniAppReleaseMapping): boolean {
@@ -181,7 +173,7 @@ export function isCustomAppTemplate(
   const hash = sha256Hex(html);
   const nativeOrDashboard = mapping.kind === "agent-team" || mapping.kind === "usage" || mapping.kind === "hongguo" || mapping.kind === "mojo";
   if (app.release) {
-    return hash !== app.release.htmlSha256 || (nativeOrDashboard && bindings.length > 0);
+    return !matchesMiniAppReleasePackage(mapping.kind, app.release) || hash !== app.release.htmlSha256 || (nativeOrDashboard && bindings.length > 0);
   }
   if (mapping.kind === "agent-team") {
     return bindings.length > 0 || !ADOPTABLE_AGENT_TEAM_HTML_SHA256.includes(hash);
@@ -194,7 +186,8 @@ export function isCustomAppTemplate(
     return bindings.length > 0 || hash !== NATIVE_DEFAULT_HTML_SHA256;
   }
   if (mapping.kind === "mojo") {
-    return bindings.length > 0 || hash !== MOJO_LEGACY_HTML_SHA256;
+    return bindings.length > 0 || !(app.shippedTemplateKind === "mojo" && matchesPendingDefaultHtml("mojo", html)
+      || app.id === LEGACY_MINI_APP_IDS.mojo && hash === MOJO_LEGACY_HTML_SHA256);
   }
   if (bindings.length === 0) return !matchesPendingDefaultHtml(mapping.kind, html);
   const adoptable = (SHIPPED_TEMPLATE_SHA256[mapping.kind] as readonly string[]).includes(hash)
@@ -203,20 +196,16 @@ export function isCustomAppTemplate(
   if (mapping.kind === "bookkeeping") {
     return bindings.length !== 1 || !bundledBookkeepingBinding(bindings[0]!);
   }
-  return !hasReportBindingForProducer(bindings, bindings[0]!.datasetId, mapping.kind)
-    && !isDeepStrictEqual(bindings, [reportMiniAppBinding(bindings[0]!.datasetId, mapping.kind)]);
+  if (mapping.kind === "x_ai_digest") return !acceptsOptionalDailyXEditorial(bindings);
+  return !hasReportBindingForProducer(bindings, bindings[0]!.datasetId, mapping.kind);
 }
 
 export function isReleaseCompatible(app: MiniAppSummary, mapping: MiniAppReleaseMapping, requires: readonly string[]): boolean {
-  const supported = new Set<string>(MINI_APP_SUPPORTED_CAPABILITIES);
-  return requires.every((capability) => {
-    if (!supported.has(capability)) return false;
-    if (capability === "agent-team-v1") {
-      return mapping.kind === "agent-team" && app.status === "active" && app.dashboard?.kind === "agent-team";
-    }
-    return false;
-  });
+  return app.status === "active" && miniAppReleaseMapping(app)?.kind === mapping.kind && !hasRevokedBuiltInGrant(app, mapping)
+    && matchesMiniAppReleasePackage(mapping.kind, { packageId: mapping.packageId, requires });
 }
+
+const requiresData = (kind: DefaultMiniAppKind) => kind === "bookkeeping" || kind === "x_ai_digest" || kind === "github_activity";
 
 function findGhExecutable(): string | null {
   if (process.platform === "win32") return whichWin("gh");
@@ -509,7 +498,7 @@ export class MiniAppReleaseSource {
     if (!mapping || isCustomAppTemplate(app, mapping, html, bindings)) {
       return { installedVersion, status: "custom", available: null };
     }
-    if (app.status !== "active" || hasRevokedBuiltInGrant(app, mapping)) {
+    if (app.status !== "active" || hasRevokedBuiltInGrant(app, mapping) || (requiresData(mapping.kind) && !bindings.length)) {
       return { installedVersion, status: "unavailable", available: null };
     }
     let summaries: MiniAppReleaseSummary[];
@@ -530,7 +519,7 @@ export class MiniAppReleaseSource {
     }
     let verified: VerifiedMiniAppRelease;
     try {
-      verified = await this.verifyRelease(app, mapping, latest.item.tagName, latest.version, signal);
+      verified = await this.verifyRelease(app, mapping, bindings, latest.item.tagName, latest.version, signal);
     } catch {
       return { installedVersion, status: "unavailable", available: null };
     }
@@ -563,11 +552,12 @@ export class MiniAppReleaseSource {
     if (hasRevokedBuiltInGrant(app, mapping)) {
       throw appFailure(403, "This Mini App's built-in grant has been revoked.");
     }
+    if (requiresData(mapping.kind) && !bindings.length) throw appFailure(409, "This Mini App is still waiting for its Data source.");
     if (app.release && compareSemver3(expected.appVersion, app.release.appVersion) <= 0) {
       throw appFailure(409, "This version is already installed or older than the current release. Use rollback to restore an earlier version.");
     }
     const tagName = releaseTagFor(mapping.releaseSlug, expected.appVersion);
-    const verified = await this.verifyRelease(app, mapping, tagName, expected.appVersion, signal);
+    const verified = await this.verifyRelease(app, mapping, bindings, tagName, expected.appVersion, signal);
     if (verified.manifest.sourceCommit !== expected.sourceCommit) {
       throw appFailure(409, "The release commit does not match the requested candidate.");
     }
@@ -580,6 +570,7 @@ export class MiniAppReleaseSource {
   private async verifyRelease(
     app: MiniAppSummary,
     mapping: MiniAppReleaseMapping,
+    bindings: readonly MiniAppDataBinding[],
     tagName: string,
     expectedVersion: string,
     signal?: AbortSignal,
@@ -678,7 +669,9 @@ export class MiniAppReleaseSource {
       throw appFailure(422, "Native/dashboard Mini App releases must declare empty dataSlots.");
     }
 
-    const compatible = isReleaseCompatible(app, mapping, manifest.requires);
+    const compatible = isReleaseCompatible(app, mapping, manifest.requires)
+      && (mapping.kind === "bookkeeping" ? !!bindings[0] && bookkeepingReleaseQueriesMatch(bindings[0], queries.dataSlots)
+        : mapping.kind === "x_ai_digest" || mapping.kind === "github_activity" ? reportReleaseQueriesMatch(mapping.kind, queries.dataSlots) : true);
     const provenance: MiniAppReleaseProvenance = {
       packageId: manifest.packageId,
       appVersion: manifest.appVersion,

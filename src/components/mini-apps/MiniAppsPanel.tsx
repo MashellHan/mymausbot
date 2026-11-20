@@ -42,6 +42,8 @@ import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { mojoHostEligible } from "./mojo-host";
 import { dailyXHostEligible } from "./daily-x-host";
 import { githubActivityHostEligible } from "./github-activity-host";
+import { isManagedHongguoDocument } from "./hongguo-frame-host";
+import { managedMiniAppSite } from "./mini-app-site";
 
 const REFRESH_MS = 15_000;
 const ROLLBACK_RETRY_MS = 5_000;
@@ -148,7 +150,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const dashboard = document?.app.dashboard;
   const currentHead = !!document && !!appState && !!selected && document.app.status === "active" && appState.status === "active"
     && appState.appId === document.app.id && appState.revision === document.app.revision
-    && selected.id === document.app.id && selected.revision === document.app.revision;
+    && selected.id === document.app.id && selected.revision === document.app.revision
+    && selected.templateVersion === document.app.templateVersion && appState.templateVersion === document.app.templateVersion;
   const dashboardCurrent = currentHead && !!selected && !!dashboard && owner === true && nativeGuard
     && selected.dashboard?.kind === dashboard.kind && dashboard.renderer === "native" && dashboard.htmlRole === "fallback-only";
   const teamHtmlCurrent = currentHead && owner === true && nativeGuard && selected?.dashboard?.kind === "agent-team"
@@ -165,6 +168,10 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const nativeInstalled = !!(selected?.nativeIdentity || document?.app.nativeIdentity || selected?.nativeKind || document?.app.nativeKind);
   const hongguoCurrent = currentHead && owner === true && selected?.nativeIdentity === "hongguo" && document?.app.nativeIdentity === "hongguo"
     && selected?.nativeKind === "hongguo" && document?.app.nativeKind === "hongguo";
+  const managedScope = !stale && currentHead && owner === true && nativeGuard && window.ogb?.app?.ownPage === true
+    && window.ogb?.remoteClient?.active !== true;
+  const managedSite = managedScope ? managedMiniAppSite(document) : undefined;
+  const managedHongguo = managedScope && hongguoCurrent && isManagedHongguoDocument(document);
   const hongguoRecovery = currentHead && owner === true && selected?.nativeIdentity === "hongguo" && document?.app.nativeIdentity === "hongguo"
     && !selected?.nativeKind && !document?.app.nativeKind;
   const mojoCurrent = !stale && mojoHostEligible({ selected, document, state: appState,
@@ -877,7 +884,10 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         {loading && apps === null && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>}
         {selected && <div id="mini-app-content" role="tabpanel" aria-labelledby={`mini-app-tab-${selected.id}`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-accent">
           {document && appState ? <>
-            {appState.status === "active" && nativeGuard && nativeInstalled ? hongguoCurrent
+            {managedSite || managedHongguo
+              ? <MiniAppFrame key={`${document.app.id}:${frameEpochByApp[document.app.id] ?? 0}`} document={document} state={appState}
+                site={managedSite} hongguo={managedHongguo} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} onRuntimeReady={handleRuntimeReady} />
+              : appState.status === "active" && nativeGuard && nativeInstalled ? hongguoCurrent
               ? <HongguoView key={JSON.stringify([storageKey, document.app.id, document.app.revision])} document={document} state={appState}
                 storageKey={storageKey} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
               : hongguoRecovery ? <section lang="zh-CN" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="hongguo-recovery">

@@ -19,12 +19,14 @@ const defaultDescriptions = {
   "agent-team": "Your local teams and their current activity.",
   usage: "Your work, contributions and agent activity.",
   hongguo: "Browse short dramas and resume episodes on this device.",
+  mojo: "Quotes and poetry.",
 };
 
 export function miniAppDisplayDescription(app: MiniAppSummary): string {
   if (app.nativeIdentity === "hongguo") return hongguoText("computer.miniApps.hongguo.description");
   const kind = app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind;
   if (!kind || app.description !== defaultDescriptions[kind]) return app.description;
+  if (kind === "mojo") return t("computer.miniApps.mojo.description");
   return t(kind === "bookkeeping" ? "computer.miniApps.bookkeepingDefaultDescription"
     : kind === "x_ai_digest" ? "computer.miniApps.report.xDescription"
       : kind === "github_activity" ? "computer.miniApps.report.githubDescription"

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as DuckDB from "@duckdb/node-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LocalUsageResponse } from "../../shared/local-dashboard.ts";
 import type { MiniAppPublish, MiniAppReleaseManifestV1, MiniAppSummary } from "../../shared/mini-apps.ts";
 import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
 import { AppDocs } from "../app-docs.ts";
@@ -13,6 +14,8 @@ import { createDataEngine } from "../data/engine.ts";
 import { resetPathCacheForTests } from "../env-path.ts";
 import { closeMessageDb } from "../message-db.ts";
 import { ADOPTABLE_LEGACY_TEMPLATE_SHA256, MOJO_LEGACY_HTML_SHA256 } from "./default-template-history.ts";
+import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
+import { NATIVE_DEFAULT_HTML } from "./default-documents.ts";
 import { DefaultMiniApps } from "./defaults.ts";
 import { MiniApps, type MiniAppActor } from "./registry.ts";
 import { ReportStore } from "./report-store.ts";
@@ -132,7 +135,7 @@ function syntheticReader(releases: SyntheticReleaseSpec[], options: {
 
 const cleanups: Array<() => Promise<void>> = [];
 
-function createRegistryFixture(reader: MiniAppReleaseReader) {
+function createRegistryFixture(reader: MiniAppReleaseReader, dashboardProviders?: LocalDashboardProviders) {
   const root = mkdtempSync(join(tmpdir(), "omb-release-source-"));
   const database = new DatabaseSync(join(root, "registry.db"));
   const publishers = new Set(["publisher"]);
@@ -151,6 +154,7 @@ function createRegistryFixture(reader: MiniAppReleaseReader) {
     validPublisher: (id) => publishers.has(id),
     access: { database: () => database, write },
     releaseSource,
+    dashboardProviders,
   });
   cleanups.push(async () => {
     await data.closeAll();
@@ -173,6 +177,63 @@ function agentTeamInstall(extra: Partial<MiniAppPublish> = {}): MiniAppPublish {
     ...extra,
   };
 }
+
+describe("Activities versioned capability", () => {
+  afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
+
+  it("applies the exact package, reads owner usage, rolls back, and does not restore a revoked grant", async () => {
+    const snapshot: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
+      sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
+    const unused = async () => { throw new Error("Unrelated dashboard provider"); };
+    const getUsage = vi.fn(async () => snapshot);
+    const dashboardProviders: LocalDashboardProviders = {
+      usage: { get: getUsage }, agents: { get: unused }, activity: { get: unused },
+      configuration: { getAgent: unused, getTeamRules: unused, getSkill: unused },
+    };
+    const html = "<!doctype html><html><body><h1>Activities</h1></body></html>";
+    const baseRelease = { slug: "work-tracker", packageId: "mashellhan.work-tracker", html };
+    const valid = buildValidRelease({ ...baseRelease, appVersion: "0.1.0", requires: ["usage-v1"] });
+    const undeclared = buildValidRelease({ ...baseRelease, appVersion: "0.1.1", requires: [] });
+    const unrelated = buildValidRelease({ ...baseRelease, appVersion: "0.1.2", requires: ["agent-team-v1"] });
+    const releases = [valid];
+    const { apps } = createRegistryFixture(syntheticReader(releases), dashboardProviders);
+    const install = { requestKey: "install-activities", expectedRevision: 0, slug: "usage", title: "My activity",
+      description: "Local work metrics", html: NATIVE_DEFAULT_HTML, bindings: [], publisherBotIds: ["publisher"],
+      responsibleBotId: "publisher", dashboardKind: "usage" };
+    const { app } = await apps.publish(owner, install);
+    expect(app.dashboard).toMatchObject({ kind: "usage", renderer: "native" });
+    expect(await apps.checkUpdate(owner, app.id)).toMatchObject({ status: "available", available: { appVersion: "0.1.0" } });
+    const input = { appVersion: "0.1.0", sourceCommit: COMMIT_A, expectedRevision: 1, requestKey: "apply" };
+    const applied = await apps.applyUpdate(owner, app.id, input);
+    expect(applied.app).toMatchObject({ id: app.id, title: "My activity", description: install.description, revision: 2,
+      publisherBotIds: ["publisher"], responsibleBotId: "publisher",
+      dashboard: { kind: "usage", renderer: "html", resources: ["usage"] },
+      release: { packageId: "mashellhan.work-tracker", requires: ["usage-v1"], htmlSha256: sha256(html) } });
+    expect(await apps.applyUpdate(owner, app.id, input)).toEqual({ app: applied.app, replayed: true });
+    expect(apps.document(owner, app.id)).toMatchObject({ html, bindings: [] });
+    expect(await apps.state(owner, app.id)).toMatchObject({ data: [], templateVersion: 2 });
+    await expect(apps.dashboardRead(owner, app.id, { resource: "usage", expectedRevision: 1 })).rejects.toMatchObject({ status: 409 });
+    await expect(apps.dashboardRead(owner, app.id, { resource: "teams", expectedRevision: 2 })).rejects.toMatchObject({ status: 403 });
+    await expect(apps.dashboardRead(bot(), app.id, { resource: "usage", expectedRevision: 2 })).rejects.toMatchObject({ status: 403 });
+    await expect(apps.dashboardRead(owner, app.id, { resource: "usage", expectedRevision: 2 }))
+      .resolves.toEqual({ appId: app.id, revision: 2, resource: "usage", snapshot });
+    expect(getUsage).toHaveBeenCalledOnce();
+
+    for (const release of [undeclared, unrelated]) {
+      releases.push(release);
+      expect(await apps.checkUpdate(owner, app.id)).toMatchObject({ status: "incompatible" });
+      const appVersion = release.tagName.split("/v").at(-1)!;
+      await expect(apps.applyUpdate(owner, app.id, { ...input, expectedRevision: 2,
+        appVersion, requestKey: `reject-${appVersion}` })).rejects.toMatchObject({ status: 409 });
+    }
+    const fallback = await apps.rollback(owner, app.id, { expectedRevision: 2, templateVersion: 1, requestKey: "fallback" });
+    expect(fallback.app).toMatchObject({ id: app.id, dashboard: { renderer: "native" }, release: null });
+    await apps.publish(owner, { ...install, dashboardKind: null, expectedRevision: 3, requestKey: "revoke" }, app.id);
+    const reverted = await apps.rollback(owner, app.id, { expectedRevision: 4, templateVersion: 2, requestKey: "restore-released" });
+    expect(reverted.app).toMatchObject({ dashboard: null, dashboardIdentity: "usage", release: { appVersion: "0.1.0" } });
+    await expect(apps.dashboardRead(owner, app.id, { resource: "usage", expectedRevision: 5 })).rejects.toMatchObject({ status: 403 });
+  });
+});
 
 describe("MiniAppReleaseSource and MiniApps release lifecycle", () => {
   beforeEach(() => {

@@ -65,7 +65,6 @@ export const HONGGUO_FRAME_SDK_SOURCE = String.raw`
   window.addEventListener("pagehide", stop, { signal: lifetime.signal });
   base.getContext = function () { return call("context", {}); };
   base.onContextChanged = function (listener) { return subscribe(listeners, listener); };
-  base.ready = base.markReady;
   base.hongguo = Object.freeze({
     catalog: allow("catalog"), series: allow("series"), playback: allow("playback"), history: allow("history"),
     preferences: allow("preferences"), cover: allow("cover"),

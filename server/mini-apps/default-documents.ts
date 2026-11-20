@@ -26,7 +26,7 @@ export function matchesPendingDefaultHtml(kind: DefaultMiniAppKind, html: string
 
 export function pendingDefaultHtml(kind: DefaultMiniAppKind): string {
   const ledger = kind === "bookkeeping";
-  const mojo = DEFAULT_APPS[kind].slug === "mojo";
+  const mojo = kind === "mojo";
   const zh = ledger ? "还没有找到记账记录。记账 Bot 的账本准备好后，记录会自动出现在这里。"
     : mojo ? "Mojo 还未下载。"
     : "报告更新后会出现在这里。现有 Bot 和自动化可以持续更新这个应用。";

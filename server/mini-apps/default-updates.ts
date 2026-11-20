@@ -19,7 +19,7 @@ export function bundledBookkeepingBinding(binding: MiniAppDataBinding): boolean 
 }
 
 export function defaultMiniAppUpdate(document: MiniAppDocument, kind: DefaultMiniAppKind, bookkeepingHtml: string): MiniAppPublish | null {
-  if (kind === "agent-team" || kind === "usage" || kind === "hongguo" || document.app.shippedTemplateKind !== kind) return null;
+  if (kind === "agent-team" || kind === "usage" || kind === "hongguo" || kind === "mojo" || document.app.shippedTemplateKind !== kind) return null;
   if (document.app.release || document.versions.some((version) => Boolean(version.release))) return null;
   if (document.versions.some((version) => version.version > document.app.templateVersion)) return null;
   const hash = createHash("sha256").update(document.html).digest("hex");

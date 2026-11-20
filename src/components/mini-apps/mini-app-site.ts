@@ -1,4 +1,5 @@
 import { matchesMiniAppReleasePackage } from "../../../shared/mini-app-release-packages";
+import type { MiniAppDocument } from "../../../shared/mini-apps";
 import { DAILY_X_FRAME_NAME, DAILY_X_URL } from "./daily-x-host";
 import { GITHUB_ACTIVITY_FRAME_NAME, GITHUB_ACTIVITY_URL, githubWebUrlForSelection, type GithubActivitySelection } from "./github-activity-host";
 
@@ -14,6 +15,16 @@ export function miniAppReleaseSite(release: { packageId: string; requires: reado
   if (matchesMiniAppReleasePackage("mojo", release)) return MOJO_POETRY_SITE;
   if (matchesMiniAppReleasePackage("x_ai_digest", release)) return "daily-x";
   if (matchesMiniAppReleasePackage("github_activity", release)) return "github-activity";
+  return undefined;
+}
+
+export function managedMiniAppSite(document: MiniAppDocument | null): MiniAppSite | undefined {
+  const app = document?.app;
+  if (!app || app.status !== "active" || app.dashboardIdentity || app.dashboard || app.nativeIdentity || app.nativeKind) return undefined;
+  const site = miniAppReleaseSite(app.release);
+  if (site === MOJO_POETRY_SITE && app.shippedTemplateKind === "mojo" && !document.bindings.length) return site;
+  if (site === "daily-x" && app.shippedTemplateKind === "x_ai_digest" && document.bindings.length) return site;
+  if (site === "github-activity" && app.shippedTemplateKind === "github_activity" && document.bindings.length) return site;
   return undefined;
 }
 

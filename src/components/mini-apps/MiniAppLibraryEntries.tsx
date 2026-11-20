@@ -11,6 +11,7 @@ import type { MiniAppUpdateCandidate, MiniAppUpdateInfo } from "./mini-app-updat
 
 export const shippedAppDetails = (kind: DefaultMiniAppKind) => kind === "bookkeeping"
   ? { name: t("computer.miniApps.bookkeepingTitle"), description: t("computer.miniApps.bookkeepingDescription") }
+  : kind === "mojo" ? { name: "Mojo", description: t("computer.miniApps.mojo.description") }
   : kind === "hongguo"
     ? { name: hongguoText("computer.miniApps.hongguo.title"), description: hongguoText("computer.miniApps.hongguo.description") }
   : kind === "agent-team" || kind === "usage"

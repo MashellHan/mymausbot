@@ -469,7 +469,7 @@ describe("Mini Apps panel", () => {
     expect(selected()?.querySelector(".line-clamp-2")?.classList.contains("pr-6")).toBe(false);
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
     expect(host.querySelector('[data-mini-app-custom="01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7"] [data-mini-app-icon="mojo"]')).not.toBeNull();
-    expect(host.querySelector('[data-mini-app-catalog="mojo"]')).toBeNull();
+    expect(host.querySelector('[data-mini-app-catalog="mojo"]')).not.toBeNull();
     expect(host.querySelector('[data-mini-app-custom="other"] [data-mini-app-icon="custom"]')).not.toBeNull();
   });
 
@@ -805,7 +805,7 @@ describe("Mini Apps panel", () => {
     expect(popover).not.toBeNull();
     expect(trigger.parentElement?.contains(popover)).toBe(true);
     expect(popover.getAttribute("aria-modal")).toBe("false");
-    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(6);
+    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(7);
     expect(document.activeElement?.getAttribute("data-mini-app-grid-item")).toBe("bookkeeping");
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
     expect(host.querySelector('[data-mini-app-popover]')).toBeNull();
@@ -844,7 +844,7 @@ describe("Mini Apps panel", () => {
     expect(fixture.defaultCalls).toHaveLength(0);
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
     const popover = host.querySelector<HTMLElement>('[data-mini-app-popover]')!;
-    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(6);
+    expect(popover.querySelectorAll('[data-mini-app-catalog]')).toHaveLength(7);
     expect([...popover.querySelectorAll<HTMLButtonElement>('[data-mini-app-grid-item]')].every((item) => item.disabled)).toBe(true);
     expect(fixture.api.mock.calls.some(([path, init]) => path === "/api/mini-apps" && init?.method === "POST")).toBe(false);
   });

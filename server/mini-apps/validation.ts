@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { MiniAppDashboardRead, MiniAppPublish, MiniAppQuery, MiniAppUpdateApply } from "../../shared/mini-apps.ts";
+import { MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppDashboardRead, type MiniAppPublish, type MiniAppQuery, type MiniAppUpdateApply } from "../../shared/mini-apps.ts";
 import { LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR } from "../../shared/local-dashboard.ts";
 
 export const bindingNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/);
@@ -51,7 +51,7 @@ export const publishSchema = z.object({
   capabilities: z.array(z.string().trim().min(8).max(160)).max(8).optional(),
   dashboardKind: z.enum(["agent-team", "usage"]).nullable().optional(),
   nativeKind: z.literal("hongguo").nullable().optional(),
-  shippedTemplateKind: z.enum(["bookkeeping", "x_ai_digest", "github_activity"]).optional(),
+  shippedTemplateKind: z.enum(MINI_APP_SHIPPED_TEMPLATE_KINDS).optional(),
 }).strict();
 export const rollbackSchema = z.object({ ...mutationKey, templateVersion: z.number().int().positive() }).strict();
 export const archiveSchema = z.object(mutationKey).strict();

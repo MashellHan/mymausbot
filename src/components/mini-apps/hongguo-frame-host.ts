@@ -1,7 +1,8 @@
 import { api, ApiError } from "@/state/api";
 import { utf8Bytes } from "../../../shared/app";
-import { HONGGUO_FRAME_CAPABILITY, HONGGUO_PACKAGE_ID, type HongguoFrameContext, type HongguoFrameNotice, type HongguoFramePlayback,
+import { type HongguoFrameContext, type HongguoFrameNotice, type HongguoFramePlayback,
   type HongguoFrameReply, type HongguoPlayerBounds, type HongguoPlayerPosition, type HongguoPlayerRestore } from "../../../shared/hongguo-frame";
+import { matchesMiniAppReleasePackage } from "../../../shared/mini-app-release-packages";
 import type { HongguoCatalogResponse, HongguoHistoryEntry, HongguoHistoryResponse, HongguoPlaybackResponse,
   HongguoSeries, HongguoSeriesResponse } from "../../../shared/hongguo-mini-app";
 import type { MiniAppDocument, MiniAppState } from "../../../shared/mini-apps";
@@ -46,9 +47,7 @@ function fail(status: number): never { throw new ApiError("Hongguo request unava
 export function isManagedHongguoDocument(document: MiniAppDocument | null): boolean {
   if (!document || document.app.status !== "active" || document.app.nativeIdentity !== "hongguo"
     || document.app.nativeKind !== "hongguo" || document.bindings.length !== 0) return false;
-  const release = "release" in document.app ? document.app.release : null;
-  return record(release) && release.packageId === HONGGUO_PACKAGE_ID
-    && Array.isArray(release.requires) && release.requires.includes(HONGGUO_FRAME_CAPABILITY);
+  return matchesMiniAppReleasePackage("hongguo", document.app.release);
 }
 
 type ReadyPlayback = { source: string; durationSeconds: number | null; entry: Omit<HongguoHistoryEntry, "updatedAt" | "positionSeconds" | "durationSeconds"> };

@@ -606,6 +606,33 @@ describe("persistent Mini App frame", () => {
     mount.retire();
   });
 
+  it("binds a packaged Mojo site to the current opaque frame and retires it on revision loss", () => {
+    const release = { packageId: "mashellhan.mojo", requires: ["mojo-poetry-v1"], appVersion: "1.0.0",
+      sourceCommit: "a".repeat(40), tag: "mini-app/mojo/v1.0.0", htmlSha256: "b".repeat(64), htmlBytes: 12,
+      queriesSha256: "c".repeat(64), queriesBytes: 2 };
+    const packaged: MiniAppDocument = { ...document, app: { ...app, shippedTemplateKind: "mojo", release }, bindings: [] };
+    const current = { ...state, data: [] };
+    const onSiteView = vi.fn();
+    const mount = mountMiniAppFrame({ container, document: packaged, state: current, onRevoked: vi.fn(), site: "mojo-poetry", onSiteView });
+    try {
+      Object.defineProperties(mount.iframe, { clientWidth: { value: 360 }, clientHeight: { value: 500 } });
+      const source = mount.iframe.contentWindow!;
+      const post = (data: unknown, origin = "null") => window.dispatchEvent(new MessageEvent("message", { source, origin, data }));
+      const viewport = { x: 0, y: 30, width: 360, height: 440 };
+      const show = { mausMiniApp: 1, type: "site-show", id: "mini:2", site: "mojo-poetry", viewport };
+      post(show);
+      post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+      post(show, "https://example.test");
+      expect(onSiteView).not.toHaveBeenCalled();
+      post(show);
+      expect(onSiteView).toHaveBeenLastCalledWith({ site: "mojo-poetry", viewport });
+      mount.update({ ...current, revision: current.revision + 1 });
+      expect(onSiteView).toHaveBeenLastCalledWith(undefined);
+      post(show);
+      expect(onSiteView).toHaveBeenCalledTimes(2);
+    } finally { mount.retire(); }
+  });
+
   it("exposes window.mausApp.markReady only for active managed releases and validates runtime-ready messages", async () => {
     const release = {
       packageId: "mashellhan.demo",

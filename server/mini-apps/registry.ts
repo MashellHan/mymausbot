@@ -2,9 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import type { MiniAppDataBinding } from "../../shared/mini-app-data.ts";
+import { LEGACY_MINI_APP_IDS, matchesMiniAppReleasePackage } from "../../shared/mini-app-release-packages.ts";
 import type { HongguoHistoryEntry, HongguoHistoryRequest, HongguoHistoryResponse, HongguoPreferencesRequest,
   HongguoPreferencesResponse } from "../../shared/hongguo-mini-app.ts";
-import { MINI_APP_DASHBOARD_RESOURCES, type MiniAppArchive, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
+import { MINI_APP_DASHBOARD_RESOURCES, MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppArchive, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
   type MiniAppDashboardKind, type MiniAppDashboardReadResult, type MiniAppDocument, type MiniAppMutationResult,
   type MiniAppDashboardResource, type MiniAppQuery, type MiniAppQueryResult, type MiniAppReleaseProvenance,
   type MiniAppRollback, type MiniAppState, type MiniAppShippedTemplateKind, type MiniAppNativeKind,
@@ -18,7 +19,7 @@ import { appFailure, archiveSchema, parseDashboardRead, parsePublish, parseQuery
 import { developedMiniApps, ensureMiniAppDevelopment, recordMiniAppDevelopment } from "./development.ts";
 import { AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
 import { parseHongguoHistory, parseHongguoPreferences } from "./hongguo-validation.ts";
-import { hasRevokedBuiltInGrant, isCustomAppTemplate, miniAppReleaseMapping, MiniAppReleaseSource } from "./release-source.ts";
+import { hasRevokedBuiltInGrant, isCustomAppTemplate, isReleaseCompatible, miniAppReleaseMapping, MiniAppReleaseSource } from "./release-source.ts";
 
 export const MINI_APPS_OWNER = "workspace-owner";
 
@@ -35,6 +36,7 @@ export interface MiniAppDatabaseAccess {
 }
 
 const initialized = new WeakSet<DatabaseSync>();
+const shippedKindColumn = `shipped_template_kind TEXT CHECK(shipped_template_kind IN (${MINI_APP_SHIPPED_TEMPLATE_KINDS.map((kind) => `'${kind}'`).join(", ")}) OR shipped_template_kind IS NULL)`;
 export function ensureMiniApps(db: DatabaseSync): void {
   if (initialized.has(db)) return;
   db.exec(`
@@ -48,7 +50,7 @@ export function ensureMiniApps(db: DatabaseSync): void {
       dashboard_html INTEGER NOT NULL DEFAULT 0 CHECK(dashboard_html IN (0, 1)),
       native_kind TEXT CHECK(native_kind = 'hongguo' OR native_kind IS NULL),
       native_identity TEXT CHECK(native_identity = 'hongguo' OR native_identity IS NULL),
-      shipped_template_kind TEXT CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL),
+      ${shippedKindColumn},
       responsible_bot_id TEXT, capabilities TEXT NOT NULL DEFAULT '[]',
       release_provenance TEXT,
       UNIQUE(owner_id, slug)
@@ -98,7 +100,22 @@ export function ensureMiniApps(db: DatabaseSync): void {
     db.exec("ALTER TABLE mini_apps ADD COLUMN native_identity TEXT CHECK(native_identity = 'hongguo' OR native_identity IS NULL)");
   }
   if (!columns.some(({ name }) => name === "shipped_template_kind")) {
-    db.exec("ALTER TABLE mini_apps ADD COLUMN shipped_template_kind TEXT CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL)");
+    db.exec(`ALTER TABLE mini_apps ADD COLUMN ${shippedKindColumn}`);
+  } else {
+    const schema = db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'mini_apps' AND type = 'table'").get()?.sql;
+    if (typeof schema === "string" && schema.includes("CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL)")) {
+      db.exec("SAVEPOINT mini_app_shipped_kind");
+      try {
+        db.exec(`ALTER TABLE mini_apps RENAME COLUMN shipped_template_kind TO previous_shipped_template_kind;
+          ALTER TABLE mini_apps ADD COLUMN ${shippedKindColumn};
+          UPDATE mini_apps SET shipped_template_kind = previous_shipped_template_kind;
+          ALTER TABLE mini_apps DROP COLUMN previous_shipped_template_kind;
+          RELEASE mini_app_shipped_kind;`);
+      } catch (error) {
+        db.exec("ROLLBACK TO mini_app_shipped_kind; RELEASE mini_app_shipped_kind;");
+        throw error;
+      }
+    }
   }
   if (!columns.some(({ name }) => name === "responsible_bot_id")) db.exec("ALTER TABLE mini_apps ADD COLUMN responsible_bot_id TEXT");
   if (!columns.some(({ name }) => name === "capabilities")) db.exec("ALTER TABLE mini_apps ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'");
@@ -232,8 +249,9 @@ export class MiniApps {
     const app = this.require(actor, id);
     this.expected(app, revision);
     if (app.status !== "active") throw appFailure(409, "This Mini App is archived.");
-    if (app.id !== "0643df6c-24ea-4076-87b6-572d3637a4d9" || app.slug !== "github-activity"
-      || app.shippedTemplateKind !== "github_activity" || app.dashboard || app.nativeKind) {
+    const legacy = app.id === LEGACY_MINI_APP_IDS.github_activity && app.slug === "github-activity";
+    if (app.shippedTemplateKind !== "github_activity" || app.dashboard || app.nativeKind
+      || (!legacy && !matchesMiniAppReleasePackage("github_activity", app.release))) {
       throw appFailure(403, "This Mini App has no GitHub Activity media grant.");
     }
     return app;
@@ -536,23 +554,24 @@ export class MiniApps {
       if (hasRevokedBuiltInGrant(current, mapping)) {
         throw appFailure(403, "This Mini App's built-in grant has been revoked.");
       }
-      if (verified.provenance.packageId !== mapping.packageId) {
+      if (verified.provenance.packageId !== mapping.packageId || !isReleaseCompatible(current, mapping, verified.provenance.requires)) {
         throw appFailure(409, "The Mini App identity changed while applying the update.");
       }
       const now = Date.now();
       const last = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM mini_app_versions WHERE app_id = ?").get(id) as { version: number };
-      const dashboardHtml = current.dashboard?.kind === "agent-team" ? true : currentVersion.dashboard_html === 1;
+      const dashboardHtml = current.dashboard?.kind === "agent-team" || current.dashboard?.kind === "usage";
       const releaseProvenanceJson = JSON.stringify(verified.provenance);
       const app: MiniAppSummary = {
         ...current,
         revision: current.revision + 1,
         templateVersion: last.version + 1,
         dashboard: declaration(current.dashboard?.kind ?? null, dashboardHtml),
+        shippedTemplateKind: mapping.kind === "mojo" ? "mojo" : current.shippedTemplateKind ?? null,
         release: verified.provenance,
         updatedAt: now,
       };
-      db.prepare("UPDATE mini_apps SET revision = ?, template_version = ?, updated_at = ?, dashboard_html = ?, release_provenance = ? WHERE id = ?")
-        .run(app.revision, app.templateVersion, now, dashboardHtml ? 1 : 0, releaseProvenanceJson, id);
+      db.prepare("UPDATE mini_apps SET revision = ?, template_version = ?, updated_at = ?, dashboard_html = ?, shipped_template_kind = ?, release_provenance = ? WHERE id = ?")
+        .run(app.revision, app.templateVersion, now, dashboardHtml ? 1 : 0, app.shippedTemplateKind ?? null, releaseProvenanceJson, id);
       db.prepare("INSERT INTO mini_app_versions (app_id, version, doc, title, description, bindings, created_at, dashboard_html, release_provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(id, app.templateVersion, stored.doc, app.title, app.description, currentVersion.bindings, now, dashboardHtml ? 1 : 0, releaseProvenanceJson);
       return this.receipt(db, actor, id, "update", input, app);

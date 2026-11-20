@@ -1,9 +1,10 @@
 import type { MiniAppDocument, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
+import { LEGACY_MINI_APP_IDS, matchesMiniAppReleasePackage } from "../../../shared/mini-app-release-packages";
 import { GITHUB_ACTIVITY_URL, githubActivityPageAllowed } from "../../../electron/github-activity-frame.mjs";
 
 export { GITHUB_ACTIVITY_URL, GITHUB_ACTIVITY_FRAME_NAME, githubActivityPageAllowed, githubMediaUrlAllowed } from "../../../electron/github-activity-frame.mjs";
 
-export const GITHUB_ACTIVITY_APP_ID = "0643df6c-24ea-4076-87b6-572d3637a4d9";
+export const GITHUB_ACTIVITY_APP_ID = LEGACY_MINI_APP_IDS.github_activity;
 export const GITHUB_DEEP_DIVE_FIRST_EDITION = "2026-11-20";
 const REPO_SEGMENT = /^[a-z0-9_.-]{1,100}$/;
 
@@ -80,8 +81,8 @@ export function selectionFromGithubPath(path: string, rawEditionKey?: unknown, r
 
 export function isEligibleGithubActivityDocument(document: MiniAppDocument | null): boolean {
   return !!document
-    && document.app.id === GITHUB_ACTIVITY_APP_ID
-    && document.app.slug === "github-activity"
+    && (document.app.id === GITHUB_ACTIVITY_APP_ID && document.app.slug === "github-activity"
+      || matchesMiniAppReleasePackage("github_activity", document.app.release))
     && document.app.shippedTemplateKind === "github_activity"
     && document.app.status === "active"
     && !document.app.dashboard
