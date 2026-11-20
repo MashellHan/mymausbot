@@ -4079,7 +4079,7 @@
   "computer.miniApps.update.custom": "Custom app",
   "computer.miniApps.update.dismiss": "Dismiss",
   "computer.miniApps.update.failed": "Could not update this Mini App.",
-  "computer.miniApps.update.recoveryUnavailable": "Could not save update recovery for this workspace. Try again.",
+  "computer.miniApps.update.recoveryUnavailable": "Could not save this app's update recovery record. Try again.",
   "computer.miniApps.update.incompatible": "This update requires a newer version of {app}.",
   "computer.miniApps.update.installedVersion": "Version {version}",
   "computer.miniApps.update.rolledBack": "Update failed to load; restored the previous version.",
