@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LocalUsageCategory, LocalUsageResponse } from "../../shared/local-dashboard";
 import { cn } from "@/lib/cn";
 import { localUsageView, retainUsageSnapshot, type UsageTrendDay, type UsageWindow } from "@/lib/local-usage-view";
@@ -132,20 +132,23 @@ function categoryValue(day: UsageTrendDay, metric: "prs" | "commits", category: 
   return metric === "prs" ? counts.prs ?? counts.knownPrs : counts.commits ?? counts.knownCommits;
 }
 
-const tokenTrendModes = ["types", "models"] as const;
+const tokenTrendModes = ["types", "models", "agents"] as const;
+const tokenModeLabels = { types: "tokenTypes", models: "tokenModels", agents: "tokenAgents" } as const;
 const tokenLabels = { cacheRead: "cachedInput", input: "freshInput", output: "output" } as const;
 const seriesTones = ["bg-accent/80", "bg-success/75", "bg-warning/75", "bg-ink-secondary/75", "bg-accent/45"] as const;
 
 function tokenSeriesLabel(series: TokenTrendSeries, mode: TokenTrendMode) {
   if (series.kind === "type") return t(`computer.usage.${tokenLabels[series.key]}`);
   if (series.kind === "model") return series.key;
+  if (series.kind === "agent") return series.name;
+  if (mode === "agents") return t("computer.usage.tokenUnattributed");
   return t(series.kind === "other" ? "computer.usage.otherModels" : mode === "types" ? "computer.usage.breakdownUnavailable" : "computer.usage.unattributedTokens");
 }
 
 function tokenSeriesTone(series: TokenTrendSeries, index: number) {
   if (series.kind === "other") return "bg-ink-secondary/35";
   if (series.kind === "unknown") return "bg-[repeating-linear-gradient(135deg,transparent_0_2px,var(--color-ink-secondary)_2px_3px)] opacity-60";
-  return seriesTones[index];
+  return seriesTones[index % seriesTones.length];
 }
 
 function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTrendBucket[]; metric: Metric; weekly: boolean; range: UsageTrendRange; tokenDays?: UsageTrendDay[] }) {
@@ -165,11 +168,32 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
   const max = Math.max(1, ...values.filter((value): value is number => value !== null));
   const activeIndex = days.findIndex((day) => day.day === activeDay);
   const active = days[activeIndex];
-  const modelTotal = active?.totalTokens ?? 0;
-  const modelRows = stack && mode === "models" && modelTotal > 0 ? stack.series.flatMap((series, index) => {
+  const tokenTotal = active?.totalTokens ?? 0;
+  const tokenRows = stack && mode !== "types" && active?.totalTokens != null ? stack.series.flatMap((series, index) => {
     const amount = stack.points[activeIndex]?.[index];
-    return amount ? [{ series, amount, index }] : [];
+    return amount || (series.kind === "agent" && amount === 0) ? [{ series, amount, index }] : [];
   }).sort((a, b) => b.amount - a.amount) : [];
+  const teams = new Map<string, { name: string; total: number; members: typeof tokenRows }>();
+  for (const row of tokenRows) {
+    if (row.series.kind !== "agent") continue;
+    const team = teams.get(row.series.teamId) ?? { name: row.series.teamName, total: 0, members: [] };
+    team.total += row.amount;
+    team.members.push(row);
+    teams.set(row.series.teamId, team);
+  }
+  const partialTeamTotal = active?.tokenStatus !== "ready" || tokenRows.some(({ series }) => series.kind === "unknown");
+  const tokenRow = ({ series, amount, index }: typeof tokenRows[number]) => {
+    const highlighted = hoveredSegment?.day === active?.day
+      && hoveredSegment?.series.kind === series.kind && hoveredSegment.series.key === series.key;
+    return <tr key={index} data-usage-token-row={series.key} data-usage-token-highlighted={highlighted || undefined}
+      className={highlighted ? "bg-raised" : undefined}>
+      <th scope="row" dir="auto" className={cn("py-0.5 pe-3 text-start align-top font-normal [overflow-wrap:anywhere] text-ink-secondary", series.kind === "agent" && "ps-2")}>{tokenSeriesLabel(series, mode)}</th>
+      <td className="whitespace-nowrap py-0.5 pe-3 text-start align-top text-ink">{metricText(amount)}</td>
+      <td className="whitespace-nowrap py-0.5 text-start align-top text-ink">
+        {tokenTotal > 0 && (mode === "agents" || series.kind === "model" || series.kind === "other") ? percent.format(amount / tokenTotal) : "—"}
+      </td>
+    </tr>;
+  };
   const showDay = (day: string) => {
     setActiveDay(day);
     setHoveredSegment((segment) => segment?.day === day ? segment : null);
@@ -204,7 +228,7 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
           {tokenTrendModes.map((key) => <button key={key} type="button" aria-pressed={mode === key} onClick={() => { setMode(key); setHoveredSegment(null); }}
             className={cn("min-h-7 rounded-md px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
               mode === key ? "bg-card font-medium text-ink" : "text-ink-secondary hover:bg-ink/[0.06]")}>
-            {t(key === "types" ? "computer.usage.tokenTypes" : "computer.usage.tokenModels")}
+            {t(`computer.usage.${tokenModeLabels[key]}`)}
           </button>)}
         </div>}
       </div>
@@ -244,8 +268,8 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
                 {stack ? stack.series.map((series, seriesIndex) => {
                   const part = stack.points[index]?.[seriesIndex];
                   return !!part && <span key={seriesIndex} data-usage-token-segment={series.key}
-                    onMouseEnter={mode === "models" ? () => setHoveredSegment({ day: day.day, series }) : undefined}
-                    onMouseLeave={mode === "models" ? () => setHoveredSegment(null) : undefined}
+                    onMouseEnter={mode !== "types" ? () => setHoveredSegment({ day: day.day, series }) : undefined}
+                    onMouseLeave={mode !== "types" ? () => setHoveredSegment(null) : undefined}
                     className={tokenSeriesTone(series, seriesIndex)} style={{ height: `${part / value * 100}%` }} />;
                 })
                   : segmentTotal ? segments.map(({ category, value: part, partial }) => <span key={category} data-usage-category={category}
@@ -269,7 +293,7 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
           <time dateTime={active.day} className="block font-medium tabular-nums">
             {active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}
           </time>
-          {active.tokenStatus === "partial" && <p className={mode === "models" ? "sr-only" : "mt-0.5 text-ink-secondary"}>{t("computer.usage.tokensPartial")}</p>}
+          {active.tokenStatus === "partial" && <p className={mode === "types" ? "mt-0.5 text-ink-secondary" : "sr-only"}>{t("computer.usage.tokensPartial")}</p>}
           {mode === "types" && <dl className="mt-1.5 grid grid-cols-1 gap-y-0.5 tabular-nums">
             <div className="flex min-w-0 items-baseline justify-between gap-3">
               <dt className="text-ink-secondary">{t("computer.usage.metric.totalTokens")}</dt>
@@ -283,9 +307,9 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
               </div>;
             })}
           </dl>}
-          {mode === "models" && <table className="mt-1.5 w-full tabular-nums">
+          {mode !== "types" && <table className="mt-1.5 w-full tabular-nums">
             <thead className="text-ink-secondary"><tr>
-              <th scope="col" className="w-full pb-1 pe-3 text-start font-normal">{t("usage.history.byModel")}</th>
+              <th scope="col" className="w-full pb-1 pe-3 text-start font-normal">{t(mode === "agents" ? "computer.usage.tokenAgents" : "usage.history.byModel")}</th>
               <th scope="col" className="whitespace-nowrap pb-1 pe-3 text-start font-normal">{t("computer.usage.metric.totalTokens")}</th>
               <th scope="col" className="whitespace-nowrap pb-1 text-start font-normal">{t("computer.usage.tokenShare")}</th>
             </tr></thead>
@@ -295,18 +319,20 @@ function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTre
                 <td className="whitespace-nowrap py-0.5 pe-3 text-start align-top font-medium">{metricText(active.totalTokens)}</td>
                 <td />
               </tr>
-              {modelRows.map(({ series, amount, index }) => {
-                const highlighted = hoveredSegment?.day === active.day
-                  && hoveredSegment.series.kind === series.kind && hoveredSegment.series.key === series.key;
-                return <tr key={index} data-usage-token-row={series.key} data-usage-token-highlighted={highlighted || undefined}
-                  className={highlighted ? "bg-raised" : undefined}>
-                  <th scope="row" dir="auto" className="py-0.5 pe-3 text-start align-top font-normal [overflow-wrap:anywhere] text-ink-secondary">{tokenSeriesLabel(series, mode)}</th>
-                  <td className="whitespace-nowrap py-0.5 pe-3 text-start align-top text-ink">{metricText(amount)}</td>
-                  <td className="whitespace-nowrap py-0.5 text-start align-top text-ink">
-                    {series.kind === "model" || series.kind === "other" ? percent.format(amount / modelTotal) : "—"}
+              {[...teams].map(([id, team]) => <Fragment key={id}>
+                <tr data-usage-token-team={id} className="border-t border-hairline/50 font-medium">
+                  <th scope="row" className="py-0.5 pe-3 text-start align-top [overflow-wrap:anywhere]">
+                    {t("computer.usage.tokenTeamTotal")} · <bdi>{team.name}</bdi>
+                  </th>
+                  <td className="whitespace-nowrap py-0.5 pe-3 text-start align-top"
+                    aria-label={partialTeamTotal ? t("computer.usage.tokenTeamPartial", { count: metricText(team.total) }) : undefined}>
+                    {partialTeamTotal ? "≥ " : ""}{metricText(team.total)}
                   </td>
-                </tr>;
-              })}
+                  <td />
+                </tr>
+                {team.members.map(tokenRow)}
+              </Fragment>)}
+              {tokenRows.filter(({ series }) => series.kind !== "agent").map(tokenRow)}
             </tbody>
           </table>}
         </> : <>
