@@ -213,6 +213,18 @@ export class MiniApps {
     return app;
   }
 
+  requireGithubActivity(actor: MiniAppActor, id: string, revision: number): MiniAppSummary {
+    if (actor.botId) throw appFailure(403, "Only the workspace owner can read GitHub Activity media.");
+    const app = this.require(actor, id);
+    this.expected(app, revision);
+    if (app.status !== "active") throw appFailure(409, "This Mini App is archived.");
+    if (app.id !== "0643df6c-24ea-4076-87b6-572d3637a4d9" || app.slug !== "github-activity"
+      || app.shippedTemplateKind !== "github_activity" || app.dashboard || app.nativeKind) {
+      throw appFailure(403, "This Mini App has no GitHub Activity media grant.");
+    }
+    return app;
+  }
+
   private hongguoHistoryResult(db: DatabaseSync, app: MiniAppSummary): HongguoHistoryResponse {
     const rows = db.prepare(`SELECT series_id, series_title, cover_url, episode_id, episode_number,
       episode_title, position_seconds, duration_seconds, updated_at FROM mini_app_hongguo_history

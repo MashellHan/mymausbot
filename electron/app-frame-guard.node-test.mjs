@@ -5,6 +5,7 @@ import vm from "node:vm";
 
 import { appFrameBlinkSettings, appFrameNavigationAllowed, createAppFrameFallback } from "./app-frame-guard.mjs";
 import { installDailyXFrameGuards } from "./daily-x-frame.mjs";
+import { createGithubActivityFrameGuards } from "./github-activity-frame.mjs";
 import environments from "./environments.cjs";
 import { MOJO_POETRY_FRAME_NAME, MOJO_POETRY_URL } from "./mojo-poetry-frame.mjs";
 
@@ -65,7 +66,7 @@ test("the main window's actual listeners block local and saved server frames on 
   const handlers = new Map();
   const win = { webContents: { mainFrame, on: (name, listener) => handlers.set(name, listener) } };
   const environmentsState = { activeId: "local", environments: [{ id: "saved", origin: saved }] };
-  vm.runInNewContext(source.slice(start, end), { win, environmentsState, URL, createAppFrameFallback, installDailyXFrameGuards,
+  vm.runInNewContext(source.slice(start, end), { win, environmentsState, URL, createAppFrameFallback, installDailyXFrameGuards, createGithubActivityFrameGuards,
     rendererOrigin: () => local, workspaceNavigationAllowed: environments.workspaceNavigationAllowed,
     allowedOrigins: environments.allowedOrigins, slog: () => {} });
   const emit = (event, url, change = {}) => {

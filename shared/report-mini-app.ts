@@ -149,3 +149,35 @@ export function reportPublicationDraft(kind: ReportKind, datasetId: string, html
   return { requestKey: `report-install-v1:${kind}`, expectedRevision: 0, slug: app.slug, title: app.title,
     description: app.description, html, bindings: [reportMiniAppBinding(datasetId, kind)] };
 }
+
+export const GITHUB_DEEP_DIVE_TABLE = "github_deep_dive_v1";
+
+export function githubDeepDiveBinding(datasetId: string): MiniAppDataBinding {
+  return {
+    id: "deepDive",
+    datasetId,
+    source: { schema: "main", table: GITHUB_DEEP_DIVE_TABLE },
+    fields: {
+      editionKey: { column: "edition_key", sourceType: "VARCHAR", as: "text" },
+      repo: { column: "repo", sourceType: "VARCHAR", as: "text" },
+      schemaVersion: { column: "schema_version", sourceType: "INTEGER", as: "decimal", scale: 0 },
+      partIndex: { column: "part_index", sourceType: "INTEGER", as: "decimal", scale: 0 },
+      partCount: { column: "part_count", sourceType: "INTEGER", as: "decimal", scale: 0 },
+      payloadChunk: { column: "payload_chunk", sourceType: "VARCHAR", as: "text" },
+    },
+    queries: {
+      deep_dive: {
+        kind: "rows",
+        columns: ["editionKey", "repo", "schemaVersion", "partIndex", "partCount", "payloadChunk"],
+        parameters: { editionKey: { type: "text" }, repo: { type: "text" } },
+        filters: [
+          { field: "editionKey", op: "eq", parameter: "editionKey" },
+          { field: "repo", op: "eq", parameter: "repo" },
+          { field: "schemaVersion", op: "eq", literal: "1" },
+        ],
+        orderBy: [{ field: "partIndex", direction: "asc" }],
+        pageSize: 16,
+      },
+    },
+  };
+}

@@ -9,15 +9,21 @@ import type { MiniAppDashboardReadResult, MiniAppDashboardRequest, MiniAppDocume
   MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
 import { mountAppFrame, type AppFrameHost } from "../app/app-frame-host";
 import { appHostContext, appMaxHeight, appThemeContext } from "../app/app-host-context";
+import { githubMediaUrlAllowed, isEligibleGithubActivityDocument, parseGithubSelection,
+  type GithubActivitySelection } from "./github-activity-host";
 import { miniAppFrameDocument } from "./mini-app-document";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 
 const MAX_ARGUMENT_BYTES = 64 * 1024;
 const MAX_RESULT_BYTES = 1_000_000;
 const MAX_READS_PER_MINUTE = 240;
+const ALLOWED_GITHUB_MEDIA_MIME = new Set([
+  "image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", "video/mp4", "video/webm",
+]);
 
 type FrameQuery = { mausMiniApp: 1; type: "query"; id: string; queryId: string; parameters: Record<string, string | string[]>; options?: MiniAppQueryOptions };
 type FrameDashboard = { mausMiniApp: 1; type: "dashboard-read"; id: string; selection: MiniAppDashboardRequest };
+type FrameMediaRead = { mausMiniApp: 1; type: "media-read"; id: string; url: string; sha256: string };
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -78,9 +84,20 @@ function parseFrameDashboard(value: unknown): FrameDashboard | null {
   return value as FrameDashboard;
 }
 
+function parseFrameMediaRead(value: unknown): FrameMediaRead | null {
+  if (!record(value) || value.mausMiniApp !== 1 || value.type !== "media-read"
+    || typeof value.id !== "string" || !value.id || value.id.length > 100
+    || typeof value.url !== "string" || !githubMediaUrlAllowed(value.url)
+    || typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256)) {
+    return null;
+  }
+  return value as FrameMediaRead;
+}
+
 export interface MiniAppFrameMount {
   readonly iframe: HTMLIFrameElement;
   update(state: MiniAppState): void;
+  setGithubSelection(selection: GithubActivitySelection | null): void;
   contextChanged(width: number): void;
   retire(): void;
 }
@@ -90,16 +107,30 @@ export function mountMiniAppFrame(options: {
   document: MiniAppDocument;
   state: MiniAppState;
   onRevoked(): void;
+  githubSelection?: GithubActivitySelection | null;
+  onGithubSelectionChange?(selection: GithubActivitySelection): void;
 }): MiniAppFrameMount {
   if (!miniAppNativeFrameGuard()) throw new Error("This Mini App requires the guarded desktop window.");
   const { container, document } = options;
   let state = options.state;
+  let currentGithubSelection = options.githubSelection ?? null;
+  let frameInitialized = false;
   let active = true;
   let host: AppFrameHost | null = null;
   const frameDocument = miniAppFrameDocument(document, typeof window.ogb?.openExternal === "function");
   const controllers = new Map<AbortController, string>();
   const dashboardControllers = new Map<AbortController, string>();
+  const mediaControllers = new Map<AbortController, string>();
   let recentReads: number[] = [];
+  const postHostSelection = (selection: GithubActivitySelection | null) => {
+    if (!active || !frameInitialized || !selection || !isEligibleGithubActivityDocument(document) || !miniAppNativeFrameGuard()) return;
+    host?.iframe.contentWindow?.postMessage({
+      mausMiniApp: 1,
+      type: "host-selection",
+      editionKey: selection.editionKey,
+      repo: selection.repo,
+    }, "*");
+  };
   const reply = (id: string, result?: MiniAppQueryResult, error?: string) => {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "query-result", id, ...(error ? { error } : { result }) }, "*");
@@ -108,8 +139,67 @@ export function mountMiniAppFrame(options: {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "dashboard-result", id, ...(error ? { error } : { result }) }, "*");
   };
+  const replyMedia = (id: string, payload?: { mimeType: string; bytes: ArrayBuffer; sha256: string }, error?: string) => {
+    if (!active) return;
+    host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "media-result", id, ...(error ? { error } : payload) }, "*");
+  };
   const handle = (event: MessageEvent) => {
     if (!active || !host || event.source !== host.iframe.contentWindow) return;
+    if (record(event.data) && event.data.jsonrpc === "2.0" && event.data.method === "ui/notifications/initialized") {
+      frameInitialized = true;
+      postHostSelection(currentGithubSelection);
+      return;
+    }
+    if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "selection") {
+      if (!miniAppNativeFrameGuard() || !isEligibleGithubActivityDocument(document) || state.status !== "active"
+        || state.appId !== document.app.id || state.revision !== document.app.revision) return;
+      const parsedSelection = parseGithubSelection(event.data);
+      if (parsedSelection) {
+        currentGithubSelection = parsedSelection;
+        options.onGithubSelectionChange?.(parsedSelection);
+      }
+      return;
+    }
+    if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "media-read") {
+      const request = parseFrameMediaRead(event.data);
+      if (!request) {
+        if (typeof event.data.id === "string") replyMedia(event.data.id, undefined, "This media request is unavailable.");
+        return;
+      }
+      if (!miniAppNativeFrameGuard() || !isEligibleGithubActivityDocument(document) || state.status !== "active"
+        || state.appId !== document.app.id || state.revision !== document.app.revision) {
+        return replyMedia(request.id, undefined, "GitHub Activity media is unavailable.");
+      }
+      const now = Date.now();
+      recentReads = recentReads.filter((at) => now - at < 60_000);
+      if (recentReads.length >= MAX_READS_PER_MINUTE) return replyMedia(request.id, undefined, "Too many reads. Wait a minute and try again.");
+      recentReads.push(now);
+      const controller = new AbortController();
+      mediaControllers.set(controller, request.id);
+      const revision = state.revision;
+      const mediaEndpoint = `/api/mini-apps/${encodeURIComponent(document.app.id)}/github-activity/media?expectedRevision=${revision}&url=${encodeURIComponent(request.url)}&sha256=${encodeURIComponent(request.sha256)}`;
+      const timeoutSignal = typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(20_000) : undefined;
+      const signal = timeoutSignal && typeof AbortSignal.any === "function"
+        ? AbortSignal.any([controller.signal, timeoutSignal]) : controller.signal;
+      void fetch(mediaEndpoint, { method: "GET", signal }).then(async (response) => {
+        if (!response.ok) {
+          const errorBody = await response.json().catch(() => ({})) as { error?: unknown };
+          const message = typeof errorBody.error === "string" ? errorBody.error : `${response.status} ${response.statusText}`;
+          throw new ApiError(message, response.status);
+        }
+        const mimeType = (response.headers.get("content-type") ?? "").split(";", 1)[0]!.trim().toLowerCase();
+        if (!ALLOWED_GITHUB_MEDIA_MIME.has(mimeType)) throw new Error("Unsupported media content type.");
+        const bytes = await response.arrayBuffer();
+        if (!active || state.revision !== revision || controller.signal.aborted) return;
+        if (!miniAppNativeFrameGuard()) return replyMedia(request.id, undefined, "This Mini App requires the guarded desktop window.");
+        replyMedia(request.id, { mimeType, bytes, sha256: request.sha256 });
+      }).catch((error: unknown) => {
+        if (!active || controller.signal.aborted) return;
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) options.onRevoked();
+        replyMedia(request.id, undefined, error instanceof Error ? error.message : "The media read failed. Try again.");
+      }).finally(() => mediaControllers.delete(controller));
+      return;
+    }
     if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "dashboard-read") {
       const request = parseFrameDashboard(event.data);
       if (!request) {
@@ -216,7 +306,12 @@ export function mountMiniAppFrame(options: {
       state = next;
       for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "Data changed while this report was being read. Refresh and try again."); }
       for (const [controller, id] of dashboardControllers) { controller.abort(); replyDashboard(id, undefined, "This dashboard changed. Refresh and try again."); }
+      for (const [controller, id] of mediaControllers) { controller.abort(); replyMedia(id, undefined, "Data changed while this media was being read. Refresh and try again."); }
       host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "data-changed" }, "*");
+    },
+    setGithubSelection(selection) {
+      currentGithubSelection = selection;
+      postHostSelection(selection);
     },
     contextChanged(width) {
       host?.contextChanged({ ...appThemeContext(), locale: activeLocale(), containerDimensions: { width, maxHeight: appMaxHeight() } });
@@ -225,6 +320,7 @@ export function mountMiniAppFrame(options: {
       if (!active) return;
       for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "This app was closed."); }
       for (const [controller, id] of dashboardControllers) { controller.abort(); replyDashboard(id, undefined, "This app was closed."); }
+      for (const [controller, id] of mediaControllers) { controller.abort(); replyMedia(id, undefined, "This app was closed."); }
       active = false;
       window.removeEventListener("message", handle);
       host?.retire();
@@ -232,17 +328,34 @@ export function mountMiniAppFrame(options: {
   };
 }
 
-export function MiniAppFrame({ document, state, onRevoked }: { document: MiniAppDocument; state: MiniAppState; onRevoked(): void }) {
+export function MiniAppFrame({ document, state, onRevoked, githubSelection, onGithubSelectionChange }: {
+  document: MiniAppDocument;
+  state: MiniAppState;
+  onRevoked(): void;
+  githubSelection?: GithubActivitySelection | null;
+  onGithubSelectionChange?(selection: GithubActivitySelection): void;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const mount = useRef<MiniAppFrameMount | null>(null);
   const revoked = useRef(onRevoked);
+  const selectionRef = useRef(githubSelection ?? null);
+  const selectionChangeRef = useRef(onGithubSelectionChange);
   revoked.current = onRevoked;
+  selectionRef.current = githubSelection ?? null;
+  selectionChangeRef.current = onGithubSelectionChange;
   const bindings = JSON.stringify(document.bindings);
   const nativeGuard = miniAppNativeFrameGuard();
 
   useLayoutEffect(() => {
     if (!nativeGuard || !box.current) return;
-    const current = mountMiniAppFrame({ container: box.current, document, state, onRevoked: () => revoked.current() });
+    const current = mountMiniAppFrame({
+      container: box.current,
+      document,
+      state,
+      onRevoked: () => revoked.current(),
+      githubSelection: selectionRef.current,
+      onGithubSelectionChange: (selection) => selectionChangeRef.current?.(selection),
+    });
     mount.current = current;
     const changed = () => current.contextChanged(Math.round(box.current?.clientWidth || 400));
     const skin = typeof MutationObserver === "undefined" ? null : new MutationObserver(changed);
@@ -254,5 +367,6 @@ export function MiniAppFrame({ document, state, onRevoked }: { document: MiniApp
   }, [document.app.id, document.app.templateVersion, document.html, bindings, nativeGuard]);
 
   useEffect(() => { mount.current?.update(state); }, [state]);
+  useEffect(() => { mount.current?.setGithubSelection(githubSelection ?? null); }, [githubSelection?.editionKey, githubSelection?.repo]);
   return nativeGuard ? <div ref={box} className="min-h-0 min-w-0 flex-1" data-testid="mini-app-frame" /> : null;
 }
