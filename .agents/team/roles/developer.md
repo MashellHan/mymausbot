@@ -54,10 +54,12 @@ Freeze coherent source in atomic commits and focused PRs after scoped checks.
 Start mandatory current-head CI and one independent review alongside independent
 work, then consolidate integration testing/findings at Lead's chosen batch
 boundary and batch repairs. Address and reply directly on GitHub PR review
-threads when fixing findings, and keep correction deltas with the original
-reviewer. Retain normal hooks, protected CI, blocking findings and applicable QA
-holds; add no approval gate or time-based cancellation. Send one exact-head
-source handoff to Lead with the PR's current QA-Handoff; do not wait for an ACK.
+threads when fixing findings, keep correction deltas with the original reviewer,
+and enable `gh pr merge --auto --merge` right away when mirroring a clean
+read-only `mausbot-review3` verdict so ordinary PRs do not block on Lead.
+Retain normal hooks, protected CI, blocking findings and applicable QA holds; add
+no approval gate or time-based cancellation. Send one exact-head source handoff
+with the PR's current QA-Handoff; do not wait for an ACK.
 Use the Herdr skill and `herdr --session default` with actual agent names.
 
 Front remains the sole App builder/installer; Root is the delivery operator.

@@ -27,14 +27,14 @@ the live app. Send blockers with the smallest concrete correction needed.
 Use the playbook's three-entry task brief before assigning implementation.
 Resolve scope changes in that record and act on ready/review/CI events without
 waiting for the scheduled checkpoint. Keep the original task clock through retries.
-Own the order of upstream integration and feature PR merges. The user has
-authorized reviewed merges into the personal repository; merge—or enable GitHub
-auto-merge (`gh pr merge --auto --merge`)—only after Reviewer has no unresolved
-findings or unresolved GitHub PR review threads, no applicable QA hold applies,
-and required checks pass. Record read-only reviewer verdicts on the PR review
-thread instead of keeping conclusions only in local chats. Resolve routine
-integration choices and escalate uncertain product choices through the user's
-assistant. Daily upstream sync does not automatically replace the live App.
+GitHub auto-merge is the default for reviewed PRs so Lead does not gate every
+PR individually. Reserve direct Lead merge intervention for explicit cross-PR
+merge-order holds, conflicts, or QA holds; ordinary PRs auto-merge directly via
+`gh pr merge --auto --merge` as soon as the assigned Reviewer resolves all GitHub
+review threads and accepts the head (or via PR owner/Lead mirroring a read-only
+`mausbot-review3` verdict onto the PR thread). Resolve routine integration
+choices and escalate uncertain product choices through the user's assistant.
+Daily upstream sync does not automatically replace the live App.
 
 Balance independent review assignments among mausbot-review, mausbot-review2
 and mausbot-review3 using their actual active work and waiting queue. Each PR or
