@@ -112,11 +112,11 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     expect(expectedText).toContain("Line\ntwo");
     expect(expectedText).toContain("m482");
 
-    // Step earlier twice: without selection hold, the 240-row window would become [140, 380) and unmount m480..m482.
+    // Step earlier twice: with 20-row steps and selection hold, m480..m482 stay mounted ([340, 500)).
     flushSync(() => viewport.showEarlier());
     flushSync(() => viewport.showEarlier());
 
-    expect(viewport.hiddenCount).toBe(140);
+    expect(viewport.hiddenCount).toBe(340);
     expect(container.querySelector('[data-mid="m480"]')).not.toBeNull();
     expect(container.querySelector('[data-mid="m482"]')).not.toBeNull();
     expect(String(document.getSelection())).toBe(expectedText);
@@ -127,8 +127,7 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     render({ messages });
 
     const expectedText = selectCrossLine("m680", "m682");
-    flushSync(() => viewport.showEarlier());
-    flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 7; step++) flushSync(() => viewport.showEarlier());
     expect(String(document.getSelection())).toBe(expectedText);
     expect(viewport.windowedMessages.length).toBeGreaterThan(TRANSCRIPT_WINDOW_MAX);
 
@@ -146,13 +145,13 @@ describe("useTranscriptViewport cross-line selection retention", () => {
 
     const expectedText = selectCrossLine("m1180", "m1182");
     // Step far up past SELECTION_HOLD_MAX (480 rows).
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
 
     expect(viewport.windowedMessages.length).toBeLessThanOrEqual(TRANSCRIPT_WINDOW_MAX);
     expect(document.getSelection()!.isCollapsed).toBe(true);
 
     // Scroll back down to the selected rows: selection comes back copyable.
-    for (let step = 0; step < 6 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
+    for (let step = 0; step < 19 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
     expect(String(document.getSelection())).toBe(expectedText);
   });
 
@@ -162,7 +161,7 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     render({ threadId: "thread-a", messages: threadA });
 
     selectCrossLine("a1180", "a1182");
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
     expect(document.getSelection()!.isCollapsed).toBe(true);
 
     // Switch to thread B and back to thread A: set-aside selection was dropped by the switch.
@@ -177,11 +176,11 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     render({ messages });
 
     selectCrossLine("m1180", "m1182");
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
     expect(document.getSelection()!.isCollapsed).toBe(true);
 
     window.dispatchEvent(new Event("pointerdown"));
-    for (let step = 0; step < 6 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
+    for (let step = 0; step < 19 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
     expect(document.getSelection()!.isCollapsed).toBe(true);
   });
 
@@ -197,13 +196,13 @@ describe("useTranscriptViewport cross-line selection retention", () => {
         nativeEvent: { offsetX: 10 },
       } as never);
     });
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
 
     // While dragging, the window stays on the held rows instead of dropping the selection mid-drag.
     expect(String(document.getSelection())).toBe(expectedText);
 
     window.dispatchEvent(new Event("pointerup"));
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
     expect(document.getSelection()!.isCollapsed).toBe(true);
   });
 
@@ -215,7 +214,7 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     store.state.focusMessage = { threadId: "thread-1", messageId: "m200", nonce: 1, consumed: false };
     render({ messages });
 
-    expect(container.querySelector('[data-mid="m200"]')).not.toBeNull();
+    expect(container.querySelector('[data-mid="m200\"]')).not.toBeNull();
     expect(document.getSelection()!.isCollapsed).toBe(true);
 
     // Jumping back to latest restores the set-aside selection once m1180..m1182 return.
@@ -232,7 +231,7 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     expect(expectedText).toContain("Line\ntwo");
     expect(expectedText.endsWith("Line\ntwo")).toBe(true);
 
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
 
     expect(viewport.windowedMessages.length).toBeLessThanOrEqual(TRANSCRIPT_WINDOW_MAX);
     expect(container.querySelector('[data-mid="m1180"]')).toBeNull();
@@ -263,7 +262,7 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     }
 
     // Scrolling back still restores the exact selection with original offsets and whitespace.
-    for (let step = 0; step < 6 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
+    for (let step = 0; step < 19 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
     expect(String(document.getSelection())).toBe(expectedText);
   });
 
@@ -284,7 +283,7 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     expect(expectedText.trim()).toBe("");
     expect(expectedText).toContain("\n");
 
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
 
     expect(container.querySelector('[data-mid="m1180"]')).toBeNull();
     expect(document.getSelection()!.isCollapsed).toBe(true);
@@ -328,33 +327,33 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     // 1. Cleared by pointer click.
     render({ threadId: "thread-a", messages: threadA });
     selectCrossLine("a1180", "a1182");
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
     window.dispatchEvent(new Event("pointerdown"));
     expect(dispatchCopy()).toEqual({ prevented: false, text: null });
 
     // 2. Replaced by a new selection (even if that new selection is later cleared).
-    for (let step = 0; step < 6 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
+    for (let step = 0; step < 19 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
     selectCrossLine("a1180", "a1182");
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
-    const visibleText = selectCrossLine("a460", "a461");
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
+    const visibleText = selectCrossLine("a800", "a801");
     expect(dispatchCopy()).toEqual({ prevented: false, text: null });
     expect(String(document.getSelection())).toBe(visibleText);
     document.getSelection()!.removeAllRanges();
     expect(dispatchCopy()).toEqual({ prevented: false, text: null });
 
     // 3. Conversation switch (and switching back).
-    for (let step = 0; step < 6 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
+    for (let step = 0; step < 19 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
     selectCrossLine("a1180", "a1182");
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
     render({ threadId: "thread-b", messages: threadB });
     expect(dispatchCopy()).toEqual({ prevented: false, text: null });
     render({ threadId: "thread-a", messages: threadA });
     expect(dispatchCopy()).toEqual({ prevented: false, text: null });
 
     // 4. Inside an editable input/textarea, copy is never hijacked.
-    for (let step = 0; step < 6 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
+    for (let step = 0; step < 19 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
     const expectedText = selectCrossLine("a1180", "a1182");
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
     const input = document.createElement("textarea");
     document.body.append(input);
     input.focus();
@@ -368,14 +367,14 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     render({ messages });
 
     selectCrossLine("m1180", "m1182");
-    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+    for (let step = 0; step < 19; step++) flushSync(() => viewport.showEarlier());
     expect(container.querySelector('[data-mid="m1181"]')).toBeNull();
 
     const edited = messages.map((row) =>
       row.id === "m1181" ? { ...row, lines: ["Line\none of m1181", row.lines[1]] as [string, string] } : row,
     );
     render({ messages: edited });
-    for (let step = 0; step < 6 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
+    for (let step = 0; step < 19 && viewport.laterCount > 0; step++) flushSync(() => viewport.showLater());
     expect(document.getSelection()!.isCollapsed).toBe(true);
   });
 
