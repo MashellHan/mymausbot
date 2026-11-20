@@ -84,7 +84,7 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
             const costShareLabel = estimatedShare === null ? undefined : t(estimate?.coverage === "partial"
               ? "computer.usage.recordedCostShare" : "computer.usage.estimatedCostShare", { share: estimatedShare });
             return <tr key={row.model}>
-              <th scope="row" dir="auto" className={cn(tableCell, "w-full min-w-40 font-medium [overflow-wrap:anywhere]")}>{row.model}</th>
+              <th scope="row" dir="auto" className={cn(tableCell, "w-[22%] min-w-40 font-medium [overflow-wrap:anywhere]")}>{row.model}</th>
               <td className={numericCell}>{metricText(row.totalTokens)}</td>
               <td className={numericCell} data-usage-model-share>
                 {share === null ? t("computer.usage.shareUnavailable") : <>{percent.format(share)}<ShareBar share={share} /></>}
