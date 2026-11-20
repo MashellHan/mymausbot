@@ -39,6 +39,7 @@ import {
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 
 const REFRESH_MS = 15_000;
+const RELEASE_REQUEST_TIMEOUT_MS = 30_000;
 const ROLLBACK_RETRY_MS = 5_000;
 const DEFAULT_BAR_COLLAPSED_KEY = "omb-mini-apps-bar-collapsed";
 type Inventory = { apps: MiniAppSummary[] };
@@ -610,7 +611,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
           const checkSeq = ++updateCheckSeqRef.current;
           try {
             const rawUpdate = await api<unknown>(`/api/mini-apps/${encodeURIComponent(target)}/update`, {
-              background: true, signal: controller.signal, timeoutMs: 10_000,
+              background: true, signal: controller.signal, timeoutMs: RELEASE_REQUEST_TIMEOUT_MS,
             });
             if (!active || controller.signal.aborted || target !== selectedRef.current || checkSeq !== updateCheckSeqRef.current) return;
             const parsed = parseMiniAppUpdateInfo(rawUpdate);
@@ -805,7 +806,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       const result = await api<MiniAppMutationResult>(`/api/mini-apps/${encodeURIComponent(targetApp.id)}/update`, {
         method: "POST",
         body: JSON.stringify(body),
-        timeoutMs: 30_000,
+        timeoutMs: RELEASE_REQUEST_TIMEOUT_MS,
       });
       if (!result?.app || !matchesAppliedUpdateIntent(result.app, intent)
         || !Number.isSafeInteger(result.app.templateVersion)) {
