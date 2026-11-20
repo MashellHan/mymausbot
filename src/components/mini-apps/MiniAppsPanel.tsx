@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronDown, ChevronUp, History, Loader2, RotateCw } from "lucide-react";
-import { activeLocale, t } from "@/lib/i18n";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { randomUuid } from "@/lib/random-uuid";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
@@ -9,19 +9,14 @@ import type { DefaultMiniAppKind, MiniAppArchive, MiniAppDefaultsResult, MiniApp
   MiniAppMutationResult, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
 import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?raw";
 import agentTeamHtml from "../../../examples/mini-apps/agent-team/index.html?raw";
-import { revealSelectedTab, scrollTabsWithWheel } from "../computer-panel-tabs";
-import { InfoHint } from "../InfoHint";
-import { MiniAppDashboard } from "./MiniAppDashboard";
-import { DailyXWholePage } from "./DailyXWholePage";
-import { GitHubActivityWholePage } from "./GitHubActivityWholePage";
+import { revealSelectedTab } from "../computer-panel-tabs";
 import { ensureMiniAppDefaults } from "./MiniAppDefaultsBootstrap";
-import { MiniAppFrame } from "./MiniAppFrame";
-import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
+import { iconKindForApp } from "./MiniAppIcon";
 import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
+import { MiniAppContent, MiniAppsHeader } from "./MiniAppsPanelViews";
 import { MiniAppUpdateToast } from "./MiniAppUpdateToast";
-import { MojoWholePage } from "./MojoWholePage";
-import { HongguoView, forgetHongguoHome } from "./HongguoView";
-import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-display";
+import { forgetHongguoHome } from "./HongguoView";
+import { miniAppDisplayName } from "./mini-app-display";
 import {
   MINI_APP_RUNTIME_READY_TIMEOUT_MS,
   clearPendingUpdateRecovery,
@@ -29,11 +24,9 @@ import {
   isPendingUpdateApplied,
   parseMiniAppUpdateInfo,
   readAppPackageId,
-  readAppReleaseMeta,
   readPendingUpdate,
   reconcilePendingUpdateWithSummary,
   rememberAnnouncedUpdateVersion,
-  shortCommit,
   writePendingUpdate,
   type MiniAppUpdateCandidate,
   type MiniAppUpdateInfo,
@@ -42,13 +35,7 @@ import {
   type PendingMiniAppUpdateIntent,
   type PendingMiniAppUpdateRecovery,
 } from "./mini-app-update";
-import { hongguoText } from "./hongguo-copy";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
-import { mojoHostEligible } from "./mojo-host";
-import { dailyXHostEligible } from "./daily-x-host";
-import { githubActivityHostEligible } from "./github-activity-host";
-import { isManagedHongguoDocument } from "./hongguo-frame-host";
-import { managedMiniAppSite } from "./mini-app-site";
 
 const REFRESH_MS = 15_000;
 const ROLLBACK_RETRY_MS = 5_000;
@@ -84,10 +71,6 @@ function rememberBarCollapsed(storageKey: string | null, collapsed: boolean): vo
     localStorage.setItem(DEFAULT_BAR_COLLAPSED_KEY, value);
     if (storageKey) localStorage.setItem(barKey(storageKey), value);
   } catch {}
-}
-
-function stamp(value: number): string {
-  return Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString(activeLocale()) : t("computer.miniApps.timeUnavailable");
 }
 
 function changedState(left: MiniAppState | null, right: MiniAppState): boolean {
@@ -159,7 +142,6 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   updatingAppIdRef.current = updatingAppId;
   const selected = apps?.find((app) => app.id === selectedId) ?? null;
   const selectedUpdate = selected ? (updateByApp[selected.id] ?? null) : null;
-  const dashboard = document?.app.dashboard;
   const currentHead = !!document && !!appState && !!selected && document.app.status === "active" && appState.status === "active"
     && appState.appId === document.app.id && appState.revision === document.app.revision
     && selected.id === document.app.id && selected.revision === document.app.revision
@@ -167,36 +149,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const previousReleaseTemplate = currentHead && !stale && owner === true && nativeGuard
     && window.ogb?.app?.ownPage === true && window.ogb?.remoteClient?.active !== true
     ? document.app.release?.previousTemplateVersion : undefined;
-  const dashboardCurrent = currentHead && !!selected && !!dashboard && owner === true && nativeGuard
-    && selected.dashboard?.kind === dashboard.kind && dashboard.renderer === "native" && dashboard.htmlRole === "fallback-only";
-  const teamHtmlCurrent = currentHead && owner === true && nativeGuard && selected?.dashboard?.kind === "agent-team"
-    && selected.dashboard.renderer === "html" && document?.app.dashboard?.kind === "agent-team"
-    && document.app.dashboard.renderer === "html" && document.app.dashboardIdentity === "agent-team";
-  const usageHtmlCurrent = currentHead && owner === true && nativeGuard && window.ogb?.app?.ownPage === true
-    && window.ogb?.remoteClient?.active !== true && selected?.dashboardIdentity === "usage"
-    && selected.dashboard?.kind === "usage" && selected.dashboard.renderer === "html"
-    && document?.app.dashboardIdentity === "usage" && dashboard?.kind === "usage" && dashboard.renderer === "html"
-    && document.bindings.length === 0 && appState.data.length === 0;
-  const recoveryKind = currentHead && selected && document && !dashboard && !selected.dashboard && selected.dashboardIdentity
-    && document.app.dashboardIdentity === selected.dashboardIdentity ? selected.dashboardIdentity : null;
-  const dashboardInstalled = !!(selected?.dashboardIdentity || document?.app.dashboardIdentity || selected?.dashboard || dashboard);
-  const nativeInstalled = !!(selected?.nativeIdentity || document?.app.nativeIdentity || selected?.nativeKind || document?.app.nativeKind);
-  const hongguoCurrent = currentHead && owner === true && selected?.nativeIdentity === "hongguo" && document?.app.nativeIdentity === "hongguo"
-    && selected?.nativeKind === "hongguo" && document?.app.nativeKind === "hongguo";
-  const managedScope = !stale && currentHead && owner === true && nativeGuard && window.ogb?.app?.ownPage === true
-    && window.ogb?.remoteClient?.active !== true;
-  const managedSite = managedScope ? managedMiniAppSite(document) : undefined;
-  const managedHongguo = managedScope && hongguoCurrent && isManagedHongguoDocument(document);
-  const hongguoRecovery = currentHead && owner === true && selected?.nativeIdentity === "hongguo" && document?.app.nativeIdentity === "hongguo"
-    && !selected?.nativeKind && !document?.app.nativeKind;
-  const mojoCurrent = !stale && mojoHostEligible({ selected, document, state: appState,
-    localOwner: owner === true && typeof window !== "undefined" && window.ogb?.remoteClient?.active !== true, nativeGuard });
-  const dailyXCurrent = !stale && dailyXHostEligible({ selected, document, state: appState,
-    localOwner: owner === true && typeof window !== "undefined" && window.ogb?.app?.ownPage === true
-      && window.ogb?.remoteClient?.active !== true, nativeGuard });
-  const githubActivityCurrent = !stale && githubActivityHostEligible({ selected, document, state: appState,
-    localOwner: owner === true && typeof window !== "undefined" && window.ogb?.app?.ownPage === true
-      && window.ogb?.remoteClient?.active !== true, nativeGuard });
+  const archived = owner === true && nativeGuard ? inventory?.find((app) => app.status === "archived" && iconKindForApp(app)) : undefined;
+  const archivedKind = archived ? iconKindForApp(archived) : null;
 
   useEffect(() => {
     const target = focusAfter.current;
@@ -972,20 +926,6 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     setRefreshKey((current) => current + 1);
   };
 
-  const onNavKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.altKey || event.ctrlKey || event.metaKey || !apps?.length) return;
-    const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    const at = buttons.findIndex((button) => button === event.target);
-    if (at < 0) return;
-    const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
-      : event.key === "ArrowRight" ? (at + 1) % buttons.length : event.key === "ArrowLeft" ? (at - 1 + buttons.length) % buttons.length : -1;
-    if (next < 0) return;
-    event.preventDefault();
-    const button = buttons[next]!;
-    choose(button.dataset.appId!);
-    button.focus();
-    revealSelectedTab(event.currentTarget);
-  };
 
   const revoked = () => {
     documentRef.current = null;
@@ -1022,63 +962,11 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
 
   return (
     <div ref={panelRef} className="@container/mini-apps flex min-h-0 min-w-0 flex-1 flex-col" data-testid="mini-apps-panel">
-      <header className={`shrink-0 border-b border-hairline/50 px-4 ${barCollapsed ? "py-2" : "pb-3 pt-2"}`}>
-        <div className="flex min-w-0 items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <h2 className="shrink-0 text-[15px] font-semibold text-ink">{t("computer.miniApps.heading")}</h2>
-            {barCollapsed && selected && <button id={`mini-app-tab-${selected.id}`} data-mini-app-collapsed-current data-app-id={selected.id} type="button"
-              onClick={toggleBar} title={miniAppDisplayName(selected)}
-              className="flex min-w-0 items-center gap-1.5 rounded-lg bg-control px-2 py-1 text-[12px] font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">
-              <MiniAppIcon kind={iconKindForApp(selected)} app={selected} />
-              <span className="truncate">{miniAppDisplayName(selected)}</span>
-            </button>}
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {owner === true && nativeGuard && inventory?.some((app) => app.status === "archived" && iconKindForApp(app))
-              && <button type="button" data-mini-app-add className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
-                onClick={() => { setLibraryFocus(iconKindForApp(inventory.find((app) => app.status === "archived" && iconKindForApp(app))!)); setLibraryOpen(true); }}>{t("computer.miniApps.add")}</button>}
-            {apps && barCollapsed && libraryPopover}
-            {previousReleaseTemplate && selected && <button type="button" data-mini-app-restore-version
-              disabled={updatingAppId !== null || busyKind !== null}
-              aria-label={t("computer.miniApps.update.restorePrevious")} title={t("computer.miniApps.update.restorePrevious")}
-              onClick={() => void restorePreviousRelease()}
-              className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">
-              <History size={15} aria-hidden="true" />
-            </button>}
-            <button type="button" disabled={checking || busyKind !== null || updatingAppId !== null} aria-label={t("computer.miniApps.refresh")} title={t("computer.miniApps.refresh")} onClick={() => { manualRefreshRef.current = true; setRollbackNotice(null); setRefreshKey((current) => current + 1); }} className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"><RotateCw size={15} aria-hidden="true" /></button>
-            {apps && <button type="button" data-mini-app-bar-toggle aria-expanded={!barCollapsed} aria-controls="mini-apps-bar"
-              aria-label={t(barCollapsed ? "computer.miniApps.expandApps" : "computer.miniApps.collapseApps")}
-              title={t(barCollapsed ? "computer.miniApps.expandApps" : "computer.miniApps.collapseApps")}
-              onClick={toggleBar}
-              className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent">
-              {barCollapsed ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronUp size={15} aria-hidden="true" />}
-            </button>}
-          </div>
-        </div>
-        {apps && !barCollapsed && <div id="mini-apps-bar" className="mt-2 flex min-w-0 items-center gap-2">
-          {apps.length ? <div ref={tabListRef} role="tablist" aria-label={t("computer.miniApps.chooseApp")} onKeyDown={onNavKey} onWheel={scrollTabsWithWheel} className="flex min-w-0 flex-1 flex-nowrap gap-1 overflow-x-auto pb-1 [scrollbar-width:thin]">
-            {apps.map((app) => <div key={app.id} className="relative w-[104px] shrink-0">
-              <button id={`mini-app-tab-${app.id}`} data-app-id={app.id} type="button" role="tab" aria-selected={app.id === selectedId} aria-controls="mini-app-content" tabIndex={app.id === selectedId ? 0 : -1} onClick={() => choose(app.id)}
-              aria-label={miniAppDisplayName(app)} title={miniAppDisplayName(app)}
-              className={`flex w-full flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-[11px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}>
-                <MiniAppIcon kind={iconKindForApp(app)} app={app} launcher /><span className="line-clamp-2 min-h-8 w-full text-center leading-4">{miniAppDisplayName(app)}</span>
-              </button>
-              {app.id === selectedId && (() => {
-                const release = readAppReleaseMeta(app, selectedUpdate);
-                return <InfoHint className="absolute end-0 top-1" label={`${miniAppDisplayName(app)}: ${t("app.info")}`}>
-                  <p>{miniAppDisplayDescription(app)}</p>
-                  {release.version && <p data-mini-app-release-version className="tabular-nums text-ink-secondary">{t("computer.miniApps.update.installedVersion", { version: release.version })}</p>}
-                  {release.sourceCommit && <p data-mini-app-source-commit title={release.sourceCommit} className="tabular-nums text-ink-secondary">{t("computer.miniApps.update.sourceCommit", { commit: shortCommit(release.sourceCommit) })}</p>}
-                  {selectedUpdate?.status === "incompatible" && <p className="text-ink-secondary">{t("computer.miniApps.update.incompatible")}</p>}
-                  {selectedUpdate?.status === "custom" && <p className="text-ink-secondary">{t("computer.miniApps.update.custom")}</p>}
-                  <p className="tabular-nums text-ink-secondary">{t("computer.miniApps.published", { time: stamp(app.updatedAt) })}</p>
-                </InfoHint>;
-              })()}
-            </div>)}
-          </div> : <div className="min-w-0 flex-1" />}
-          {libraryPopover}
-        </div>}
-      </header>
+      <MiniAppsHeader apps={apps} selected={selected} selectedId={selectedId} selectedUpdate={selectedUpdate} barCollapsed={barCollapsed}
+        archivedKind={archivedKind} actionsBusy={busyKind !== null || updatingAppId !== null} checking={checking} canRestore={Boolean(previousReleaseTemplate)}
+        libraryPopover={libraryPopover} tabListRef={tabListRef} choose={choose} toggleBar={toggleBar}
+        onAddArchived={() => { setLibraryFocus(archivedKind); setLibraryOpen(true); }} onRestorePrevious={() => void restorePreviousRelease()}
+        onRefresh={() => { manualRefreshRef.current = true; setRollbackNotice(null); setRefreshKey((current) => current + 1); }} />
       <>
         {defaultsError && <p role="alert" className="mx-4 mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{defaultsError}</p>}
         {stale && <p role="status" className="mx-4 mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.miniApps.stale")}</p>}
@@ -1097,40 +985,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
           />
         )}
         {loading && apps === null && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>}
-        {selected && <div id="mini-app-content" role="tabpanel" aria-labelledby={`mini-app-tab-${selected.id}`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-accent">
-          {document && appState ? <>
-            {managedSite || managedHongguo
-              ? <MiniAppFrame key={`${document.app.id}:${frameEpochByApp[document.app.id] ?? 0}`} document={document} state={appState}
-                site={managedSite} hongguo={managedHongguo} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} onRuntimeReady={handleRuntimeReady} />
-              : appState.status === "active" && nativeGuard && nativeInstalled ? hongguoCurrent
-              ? <HongguoView key={JSON.stringify([storageKey, document.app.id, document.app.revision])} document={document} state={appState}
-                storageKey={storageKey} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
-              : hongguoRecovery ? <section lang="zh-CN" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="hongguo-recovery">
-                <p>{hongguoText("computer.miniApps.dashboard.recovery")}</p>
-                <button type="button" onClick={() => void addDefault("hongguo")}
-                  className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{hongguoText("computer.miniApps.dashboard.reauthorize")}</button>
-              </section>
-              : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
-              : appState.status === "active" && nativeGuard && dashboardInstalled ? dashboardCurrent
-              ? <MiniAppDashboard key={`${document.app.id}:${document.app.revision}`} document={document} state={appState} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
-              : teamHtmlCurrent || usageHtmlCurrent ? <MiniAppFrame key={`${document.app.id}:${frameEpochByApp[document.app.id] ?? 0}`} document={document} state={appState} onRevoked={revoked} onChanged={changed} onRuntimeReady={handleRuntimeReady} />
-              : recoveryKind && owner === true ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="dashboard-recovery">
-                <p>{t("computer.miniApps.dashboard.recovery")}</p>
-                <button type="button" onClick={() => void addDefault(recoveryKind)} className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.dashboard.reauthorize")}</button>
-              </section>
-              : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === null ? "computer.miniApps.opening" : owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
-              : appState.status === "active" && nativeGuard ? mojoCurrent
-                ? <MojoWholePage key={`${document.app.id}:${document.app.revision}:${document.app.templateVersion}`}
-                  document={document} state={appState} onRevoked={revoked} />
-                : dailyXCurrent ? <DailyXWholePage key={`${document.app.id}:${document.app.revision}:${document.app.templateVersion}`}
-                  document={document} state={appState} onRevoked={revoked} />
-                : githubActivityCurrent ? <GitHubActivityWholePage key={`${document.app.id}:${document.app.revision}:${document.app.templateVersion}`}
-                  document={document} state={appState} onRevoked={revoked} />
-                : <MiniAppFrame key={`${document.app.id}:${frameEpochByApp[document.app.id] ?? 0}`} document={document} state={appState} onRevoked={revoked} onRuntimeReady={handleRuntimeReady} />
-              : appState.status === "active" ? <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t("computer.miniApps.desktopRequired")}</p>
-              : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t("computer.miniApps.archivedContent")}</p>}
-          </> : !error && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.opening")}</p>}
-        </div>}
+        {selected && <MiniAppContent selected={selected} document={document} appState={appState} owner={owner} nativeGuard={nativeGuard}
+          currentHead={currentHead} stale={stale} storageKey={storageKey} frameEpoch={document ? frameEpochByApp[document.app.id] ?? 0 : 0}
+          refreshKey={refreshKey} error={error} addDefault={addDefault} revoked={revoked} changed={changed} handleRuntimeReady={handleRuntimeReady} />}
       </>
     </div>
   );
