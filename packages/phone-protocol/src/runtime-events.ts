@@ -102,6 +102,8 @@ export type RuntimeEvent = RuntimeEventBase &
     | {
         type: "item.started";
         itemType: "tool" | "reasoning";
+        /** The engine announced the tool before it started executing. */
+        toolState?: "pending";
         title?: string;
         /** The shell command the call runs, on one redacted line of at most
          * 200 characters, for the chip and the Verify card. Absent for calls

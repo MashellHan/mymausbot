@@ -866,6 +866,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
                 type: "item.started",
                 itemType: "tool",
                 itemId,
+                ...(u.status !== "in_progress" ? { toolState: "pending" as const } : {}),
                 title: String(u.rawInput?.command ?? u.title ?? "tool").slice(0, 80),
                 summary: commandSummary(u.rawInput),
                 input: toolDetailPreview(u.rawInput),
@@ -886,7 +887,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
               if (!report.step) break;
               current.flushAssistantText();
               const itemId = `plan-${newId()}`;
-              emit({ ...base(threadId, current.turnId), type: "item.started", itemType: "tool", itemId, ...report.step });
+              emit({ ...base(threadId, current.turnId), type: "item.started", itemType: "tool", itemId, ...report.step, toolState: "pending" });
               emit({ ...base(threadId, current.turnId), type: "item.completed", itemType: "tool", itemId, ok: true });
               break;
             }

@@ -41,6 +41,8 @@ it("reports real authenticated automation actions on the held turn, then rejects
       const internal = { authorization: `Bearer ${token}` };
       const update = (operation: Record<string, unknown>) => request("/api/internal/trigger-requests", "POST",
         { fromBotId: bot.id, fromThreadId: bot.threadId, ...operation }, internal);
+      const missing = await update({ action: "update", triggerId: "missing-trigger", changes: { name: "Fixture invalid" } });
+      expect(missing.status).toBe(404);
       const accept = async (action: TurnAutomationAction, response: Promise<Response>, status: number) => {
         const reply = await response;
         expect(reply.status).toBe(status);

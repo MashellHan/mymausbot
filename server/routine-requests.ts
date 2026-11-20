@@ -7,6 +7,7 @@ import { conversationLanguage, serverLine } from "./server-lines.ts";
 import { plainClock, plainTimeZone, plainWeekdays } from "../shared/plain-time-zone.ts";
 import { normalizeCronSchedule, nextCronRuns } from "../shared/routine-schedule.ts";
 import { newId } from "./contracts.ts";
+import type { StartAutomationStatus } from "./chat-live-status.ts";
 import { UNDO_STALE, type DirectApply, type DirectApplyCheck } from "./direct-apply.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
@@ -128,6 +129,7 @@ export interface ProposeRoutineRequestArgs {
   from?: { botId: string; name: string; color: string };
   /** Caller/turn lease, checked synchronously right before the durable card append. */
   canCommit?: () => boolean;
+  startAutomation?: StartAutomationStatus;
 }
 
 export interface RoutineProposalResult {
@@ -1034,11 +1036,14 @@ export class RoutineRequestService {
       timeZone,
     };
     if (!automatic) return proposal;
+    const finish = args.startAutomation?.(operation.action);
     let result: ResolveRoutineRequestResult;
     try {
       result = this.resolve({ botId, threadId, requestId, behavior: "allow" });
     } catch (error) {
       result = { claimed: true, state: "invalid", error: error instanceof Error ? error.message : String(error), status: error instanceof RoutineRequestError ? error.status : 400 };
+    } finally {
+      finish?.();
     }
     if (result.state === "applied") {
       this.recordAutoApplied(threadId, message.id, definition, before);

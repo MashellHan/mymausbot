@@ -37,7 +37,7 @@ export function chatLiveStatusKey(live: TurnLive): LocaleKey | undefined {
 
 function messageLanguage(messages: readonly Message[], requestMessageId: string | undefined, app: string): string {
   const message = requestMessageId && messages.find((row) => row.id === requestMessageId);
-  if (!message || message.role !== "user" || message.kind !== "text" || message.queued || message.reaction ||
+  if (!message || message.role !== "user" || message.kind !== "text" || message.automated || message.queued || message.reaction ||
       message.id.startsWith("optimistic-") || peerLine(message)) return app;
   const text = message.text?.replace(/```[\s\S]*?```|`[^`]*`/g, "") ?? "";
   const han = text.match(/\p{Script=Han}/gu)?.length ?? 0;
@@ -50,7 +50,7 @@ function messageLanguage(messages: readonly Message[], requestMessageId: string 
     return app;
   }
   if (han >= 3 && han * 2 >= latin) return app.startsWith("zh") || app === "ja" || app === "ko" ? app : "zh";
-  const english = new Set(text.toLowerCase().match(/\b(?:and|are|can|could|for|is|it|my|please|that|the|this|to|when|with|would|you|your)\b/g) ?? []);
+  const english = new Set(text.toLowerCase().match(/\b(?:and|are|can|could|for|is|it|my|please|that|the|this|to|update|when|with|would|you|your)\b/g) ?? []);
   return latin >= 12 && english.size >= 2 ? "en" : app;
 }
 

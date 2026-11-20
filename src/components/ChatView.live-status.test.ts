@@ -92,6 +92,22 @@ afterEach(() => {
 });
 
 describe("Simple mode's working line", () => {
+  it("shows ACP execution only after a running signal and clears it for permission waits", () => {
+    mode.advanced = false;
+    engine({ type: "turn.started", requestMessageId: ask.id });
+    render(busyBot([ask]));
+    engine({ type: "item.started", itemType: "tool", itemId: "acp", title: "Command", toolState: "pending" });
+    engine({ type: "turn.progress", activity: "command", itemId: "acp", toolState: "pending", target: "fixture-private-command" });
+    expect(statusLine()).toBe("");
+    engine({ type: "turn.progress", activity: "command", itemId: "acp", toolState: "running" });
+    expect(statusLine()).toBe("Running a command");
+    engine({ type: "request.opened", requestType: "permission", requestId: "permission", tool: "Command", summary: "fixture-private-approval" });
+    expect(statusLine()).toBe("");
+    engine({ type: "item.completed", itemType: "tool", itemId: "acp", ok: false });
+    expect(statusLine()).toBe("");
+    expect(mascot()?.outerHTML).not.toContain("fixture-private");
+  });
+
   it("keeps the existing avatar and shows a safe phrase only after a tool starts", () => {
     mode.advanced = false;
     engine({ type: "turn.started" });
@@ -258,6 +274,18 @@ describe("what the bot is doing right now", () => {
 });
 
 describe("verified automation updates in the accepted turn language", () => {
+  it("uses the app language for a routine-generated user-role row", async () => {
+    await loadLocalePack("zh");
+    setLocale("zh");
+    mode.advanced = false;
+    const routine = { ...ask, automated: true, text: "Update the daily automation schedule tomorrow." };
+    engine({ type: "turn.started", requestMessageId: routine.id });
+    render(busyBot([routine]));
+    engine({ type: "turn.progress", activity: "tool", itemId: "update", automation: { action: "update", phase: "started" } });
+    expect(statusLine()).toBe("正在更新自动化");
+    expect(host.querySelector("[data-turn-status]")?.getAttribute("lang")).toBe("zh");
+  });
+
   it("uses the current operation and ignores a different finish or a retired turn", () => {
     mode.advanced = false;
     engine({ type: "turn.started", requestMessageId: ask.id });
@@ -283,6 +311,7 @@ describe("verified automation updates in the accepted turn language", () => {
   it.each([
     { app: "en", language: "zh", text: "请更新这条自动化的运行时间。", status: "正在更新自动化" },
     { app: "zh", language: "en", text: "Please update when this automation runs.", status: "Updating automation" },
+    { app: "zh", language: "en", text: "Update the daily automation schedule tomorrow.", status: "Updating automation" },
     { app: "en", language: "ja", text: "この自動化を更新してください。", status: "自動化を更新中" },
     { app: "en", language: "ko", text: "이 자동화를 업데이트해 주세요.", status: "자동화 업데이트 중" },
     { app: "zh", language: "zh", text: "OK", status: "正在更新自动化" },

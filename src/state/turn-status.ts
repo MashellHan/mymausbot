@@ -11,6 +11,12 @@ export type LiveStatus =
   | { activity: "thinking" | "reply"; itemId?: undefined };
 
 type StartedTool = { id: string; activity: TurnProgressActivity };
+function startTool(tools: readonly StartedTool[] | undefined, id: string, activity: TurnProgressActivity): readonly StartedTool[] {
+  const active = tools ?? [];
+  if (active.find((tool) => tool.id === id)?.activity === activity) return active;
+  return [...active.filter((tool) => tool.id !== id), { id, activity }];
+}
+
 export interface TurnLive {
   turnId?: string;
   requestMessageId?: string;
@@ -57,7 +63,7 @@ export function noteTurnEvent(event: RuntimeEvent): void {
   const turnId = event.turnId ?? current?.turnId;
   const live: TurnLive = sameTurn ? current : { turnId, ended: false, status: null };
   if (event.type !== "turn.started" && current?.turnId && event.turnId && !sameTurn && !current.ended) return;
-  if (event.type !== "turn.started" && sameTurn && current.ended) return;
+  if (event.type !== "turn.started" && current?.ended) return;
   switch (event.type) {
     case "turn.started":
       return put(threadId, { turnId, requestMessageId: event.requestMessageId, ended: false, status: null });
@@ -81,7 +87,9 @@ export function noteTurnEvent(event: RuntimeEvent): void {
         }
         return;
       }
-      return put(threadId, { ...live, ended: false, status: {
+      const startedTools = itemId && event.toolState === "running" ? startTool(live.startedTools, itemId, activity)
+        : itemId && event.toolState === "pending" ? live.startedTools?.filter((step) => step.id !== itemId) : live.startedTools;
+      return put(threadId, { ...live, startedTools, ended: false, status: {
         activity, ...(tool ? { tool } : {}), ...(file ? { file } : {}), ...(bytes !== undefined ? { bytes } : {}), ...(itemId ? { itemId } : {}),
         ...(target ? { target } : {}), ...(detail ? { detail } : {}), ...(quiet ? { quiet } : {}), ...(tail?.length ? { tail } : {}),
       } });
@@ -95,7 +103,8 @@ export function noteTurnEvent(event: RuntimeEvent): void {
       if (event.itemType !== "tool") return put(threadId, { ...live, ended: false, status });
       const id = event.itemId ?? event.eventId;
       const activity = event.step?.activity ?? status?.activity ?? "tool";
-      const startedTools = [...(live.startedTools ?? []).filter((step) => step.id !== id), { id, activity }];
+      const startedTools = event.toolState === "pending" ? live.startedTools?.filter((step) => step.id !== id)
+        : startTool(live.startedTools, id, activity);
       return put(threadId, { ...live, ended: false, status, waiting: undefined, startedTools });
     }
     case "item.completed": {
@@ -104,7 +113,7 @@ export function noteTurnEvent(event: RuntimeEvent): void {
       return put(threadId, { ...live, status: null, startedTools });
     }
     case "request.opened":
-      return put(threadId, { ...live, status: null });
+      return put(threadId, { ...live, status: null, startedTools: undefined, automation: undefined, waiting: undefined });
     case "turn.wait_started":
       return put(threadId, { ...live, waiting: "resource" });
     case "turn.wait_ended":
