@@ -1,6 +1,7 @@
 import type { MiniAppDocument, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
+import { LEGACY_MINI_APP_IDS } from "../../../shared/mini-app-release-packages";
 
-export const MOJO_APP_ID = "01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7";
+export const MOJO_APP_ID = LEGACY_MINI_APP_IDS.mojo;
 export { MOJO_POETRY_URL, MOJO_POETRY_FRAME_NAME } from "../../../electron/mojo-poetry-frame.mjs";
 const QUOTES_MARKER = '<meta name="openmausbot:mojo-view" content="quotes-v1">';
 

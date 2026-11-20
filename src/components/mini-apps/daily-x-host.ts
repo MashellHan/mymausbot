@@ -1,8 +1,9 @@
 import type { MiniAppDocument, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
+import { LEGACY_MINI_APP_IDS } from "../../../shared/mini-app-release-packages";
 
 export { DAILY_X_URL, DAILY_X_FRAME_NAME, dailyXPageAllowed } from "../../../electron/daily-x-frame.mjs";
 
-export const DAILY_X_APP_ID = "5a22c351-114d-4b01-bf2d-216f187ae79b";
+export const DAILY_X_APP_ID = LEGACY_MINI_APP_IDS.x_ai_digest;
 
 export function dailyXHostEligible({ selected, document, state, localOwner, nativeGuard }: {
   selected: MiniAppSummary | null;

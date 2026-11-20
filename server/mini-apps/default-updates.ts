@@ -8,7 +8,7 @@ import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
 import { updatedDefaultAppTitle } from "./default-documents.ts";
 import { SHIPPED_TEMPLATE_SHA256 } from "./default-template-history.ts";
 
-function bundledBookkeepingBinding(binding: MiniAppDataBinding): boolean {
+export function bundledBookkeepingBinding(binding: MiniAppDataBinding): boolean {
   if (!BOOKKEEPING_FIELDS.every((field) => binding.fields[field])) return false;
   const table = { schema: binding.source.schema, name: binding.source.table, rowCount: 0,
     columns: BOOKKEEPING_FIELDS.map((field) => ({ name: binding.fields[field]!.column, type: binding.fields[field]!.sourceType })) };
@@ -19,7 +19,8 @@ function bundledBookkeepingBinding(binding: MiniAppDataBinding): boolean {
 }
 
 export function defaultMiniAppUpdate(document: MiniAppDocument, kind: DefaultMiniAppKind, bookkeepingHtml: string): MiniAppPublish | null {
-  if (kind === "agent-team" || kind === "usage" || kind === "hongguo" || document.app.shippedTemplateKind !== kind) return null;
+  if (kind === "agent-team" || kind === "usage" || kind === "hongguo" || kind === "mojo" || document.app.shippedTemplateKind !== kind) return null;
+  if (document.app.release || document.versions.some((version) => Boolean(version.release))) return null;
   if (document.versions.some((version) => version.version > document.app.templateVersion)) return null;
   const hash = createHash("sha256").update(document.html).digest("hex");
   if (!SHIPPED_TEMPLATE_SHA256[kind].includes(hash) || document.bindings.length !== 1) return null;

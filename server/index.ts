@@ -187,7 +187,7 @@ import { installSessionConfigHandoff, type UtilityParentPort } from "./session-c
 import { serveStatic } from "./static-files.ts";
 import { startUpkeep } from "./host/start-upkeep.ts";
 import { ComputerControl, type ControlSnapshot } from "./computer-control.ts"; import { createSharedVmControl } from "./host/shared-vm-control.ts";
-import { resetPathCache } from "./env-path.ts";
+import { resetPathCache, sealedFixture } from "./env-path.ts";
 import { registerEnginesBinDir } from "./engine-install.ts"; import { engineUpdatesFor } from "./engine-updates-host.ts";
 import { appendUsage, flushUsageLedger, queuedTurnTrigger, usageTriggerFor, type UsageRow, type UsageTrigger } from "./usage-ledger.ts"; import { createUsageAttribution } from "./usage-attribution.ts";
 import { createTraceRecorder } from "./usage-trace/recorder.ts";
@@ -471,7 +471,7 @@ import { appliesNow, directApply, UNDO_STALE, type DirectApply } from "./direct-
 import { createTeamMemoryRequests } from "./team-memory-requests.ts";
 import { createAgentCard } from "./chat-widgets.ts";
 import { createChatAppRoutes, createChatAppsMcp } from "./routes/chat-apps.ts";
-import { createMiniAppRouteHandlers } from "./routes/mini-apps.ts"; import { dispatchRoutineReportTurn, type RoutineReportApp } from "./routine-report-publication.ts"; import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts"; import { createHongguoProvider } from "./hongguo/provider.ts";
+import { createMiniAppRouteHandlers } from "./routes/mini-apps.ts"; import { dispatchRoutineReportTurn, type RoutineReportApp } from "./routine-report-publication.ts"; import { assertMiniAppExportPrivacy, withMiniAppBackup } from "./mini-apps/backup.ts"; import { createHongguoProvider } from "./hongguo/provider.ts"; import { createFixtureFileReader, MiniAppReleaseSource } from "./mini-apps/release-source.ts";
 import { buildBotOverview, type BotOverview, connectedAppsFacts } from "./bot-overview.ts";
 import { ProfileRequestService } from "./profile-requests.ts"; import { browserProfileLabel } from "./bot-browser-profile.ts";
 import { ModelRequestService } from "./model-requests.ts";
@@ -12098,7 +12098,7 @@ ROUTES.push(createBotMessageRoutes({
     { emoji, name: person.name ?? person.email, at: Date.now() }),
 }));
 const liveRoots = (threadId: string, botId: string | undefined) => { const bot = botId ? store.bot(botId) : store.botByThread(threadId); return bot ? messageFileRootsForThread(bot.id, threadId).filter((root) => root !== ATTACHMENTS_DIR) : null; };
-const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, hongguoProvider: createHongguoProvider({ dataDir: DATA_DIR }), validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen(), suggestionWriter: (botId) => sideJobs.text("mini-app-suggestions", botId) }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
+const miniAppRoutes = createMiniAppRouteHandlers({ store, dataDir: DATA_DIR, data: dataEngine, hongguoProvider: createHongguoProvider({ dataDir: DATA_DIR }), releaseSource: sealedFixture() && Boolean(process.env.OMB_TEST_INTERNAL_CAPABILITY_KEY) && Boolean(process.env.OMB_TEST_MINI_APP_RELEASES_FILE) && !DESKTOP_MANAGED && !CLOUD_HOME && !HOSTED_WORKSPACE && utilityParentPort === undefined ? new MiniAppReleaseSource({ reader: createFixtureFileReader(process.env.OMB_TEST_MINI_APP_RELEASES_FILE!) }) : undefined, validPublisher: (id) => Boolean(store.bot(id)), routines: () => routines, localEnabled: () => !CLOUD_HOME && !HOSTED_WORKSPACE && !sharedMembership(), bots: () => store.bots, liveRows: liveAppRows, liveRoots, paused: () => workspaceMaintenance.active || moveFreeze.frozen(), suggestionWriter: (botId) => sideJobs.text("mini-app-suggestions", botId) }); reportAppsForBot = miniAppRoutes.reportAppsForBot; const { chatApps } = miniAppRoutes; ROUTES.push(miniAppRoutes.owner);
 const chatAppsMcp = createChatAppsMcp({ store, apps: chatApps, dataDir: DATA_DIR, keys: mcpKeys, storedServers: () => cfg.mcpServers ?? {}, mountedServers: engineMcpServers, personMcp: teamConnections.personMcp, probeAs: (server) => mcpServersHost.probeAs(server), oauth: mcpOAuth });
 ROUTES.push(createChatAppRoutes({ store, apps: chatApps, threadRefusal: cloudThreadRefusal, mcpRpc: chatAppsMcp.rpc, threadVisible: (auth, threadId) => (auth.kind !== "session" || sessions.isLive(auth.session.id)) && visibleTo(viewerFor(auth)).thread(threadId) }));
 const { react } = createReactions({

@@ -338,3 +338,65 @@ it("gates GitHub Activity media behind owner loopback auth, exact app revision, 
   expect(ok.res.getHeader("x-github-activity-sha256")).toBe(digest);
   fetchMedia.mockRestore();
 });
+
+it("gates Mini App release update check and apply behind local workspace owner auth and forwards AbortSignal", async () => {
+  const id = "0643df6c-24ea-4076-87b6-572d3637a4d9";
+  const checkUpdate = vi.fn(async () => ({
+    installedVersion: null,
+    status: "available" as const,
+    available: { appVersion: "0.1.1", sourceCommit: "81253883c34a1d4ca829fa907ee0514156b780d7" },
+  }));
+  const applyUpdate = vi.fn(async () => ({
+    app: { id, revision: 2 },
+    replayed: false,
+  }));
+  const deps = { localEnabled: () => true, apps: { checkUpdate, applyUpdate } } as unknown as Parameters<typeof createMiniAppRoutes>[0];
+  const route = createMiniAppRoutes(deps);
+
+  const call = async (method: string, auth: RequestAuth, body: unknown = undefined) => {
+    const req = new IncomingMessage(new Socket());
+    Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1", configurable: true });
+    const res = new ServerResponse(req);
+    const json = vi.fn();
+    const readBody = vi.fn(async () => body ?? {});
+    const path = `/api/mini-apps/${id}/update`;
+    await route({ method, path, url: new URL(`http://127.0.0.1${path}`), req, res, auth, json, readBody });
+    return { res, json, readBody };
+  };
+
+  const companion: RequestAuth = { kind: "loopback", scopes: ["admin"], companionDevice: { id: "c1" } } as unknown as RequestAuth;
+  const nonAdmin: RequestAuth = { kind: "loopback", scopes: [] };
+  const ownerAuth: RequestAuth = { kind: "loopback", scopes: ["admin"] };
+
+  const deniedGet = await call("GET", companion);
+  expect(deniedGet.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 403, { error: "Mini Apps are available only to this local workspace's owner." });
+  expect(checkUpdate).not.toHaveBeenCalled();
+
+  const deniedPost = await call("POST", nonAdmin, { appVersion: "0.1.1", sourceCommit: "81253883c34a1d4ca829fa907ee0514156b780d7", expectedRevision: 1, requestKey: "k1" });
+  expect(deniedPost.readBody).not.toHaveBeenCalled();
+  expect(applyUpdate).not.toHaveBeenCalled();
+
+  const getOk = await call("GET", ownerAuth);
+  expect(checkUpdate).toHaveBeenCalledWith(expect.objectContaining({ writeAllowed: true }), id, expect.any(AbortSignal));
+  expect(getOk.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200, {
+    installedVersion: null,
+    status: "available",
+    available: { appVersion: "0.1.1", sourceCommit: "81253883c34a1d4ca829fa907ee0514156b780d7" },
+  });
+
+  const payload = {
+    appVersion: "0.1.1",
+    sourceCommit: "81253883c34a1d4ca829fa907ee0514156b780d7",
+    expectedRevision: 1,
+    requestKey: "apply-1",
+  };
+  const postOk = await call("POST", ownerAuth, payload);
+  expect(applyUpdate).toHaveBeenCalledWith(expect.objectContaining({ writeAllowed: true }), id, payload, expect.any(AbortSignal));
+  expect(postOk.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 200, {
+    app: { id, revision: 2 },
+    replayed: false,
+  });
+
+  const putDenied = await call("PUT", ownerAuth);
+  expect(putDenied.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 405, { error: "Method not allowed." });
+});

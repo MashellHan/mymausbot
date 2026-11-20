@@ -1,4 +1,4 @@
-import type { MiniAppDataBinding, MiniAppNamedPage, MiniAppSourceTable } from "./mini-app-data.ts";
+import type { MiniAppDataBinding, MiniAppField, MiniAppNamedPage, MiniAppNamedQuery, MiniAppSourceTable } from "./mini-app-data.ts";
 import type { LocalAgentActivityResponse, LocalAgentConfigurationResponse, LocalAgentSkillDocumentResponse,
   LocalAgentTeamRulesResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "./local-dashboard.ts";
 export type { MiniAppSourceTable } from "./mini-app-data.ts";
@@ -7,10 +7,12 @@ export const MINI_APP_DASHBOARD_RESOURCES = {
   "agent-team": ["teams", "activity", "configuration", "team-rules", "skill"],
   usage: ["usage"],
 } as const;
+export const MINI_APP_AGENT_TEAM_BASE_RESOURCES = ["teams", "activity"] as const;
 export type MiniAppDashboardKind = keyof typeof MINI_APP_DASHBOARD_RESOURCES;
 export type MiniAppDashboardResource = "teams" | "activity" | "configuration" | "team-rules" | "skill" | "usage";
-export type MiniAppShippedTemplateKind = "bookkeeping" | "x_ai_digest" | "github_activity";
-export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage", "hongguo"] as const;
+export const MINI_APP_SHIPPED_TEMPLATE_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "mojo"] as const;
+export type MiniAppShippedTemplateKind = typeof MINI_APP_SHIPPED_TEMPLATE_KINDS[number];
+export const DEFAULT_MINI_APP_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "agent-team", "usage", "hongguo", "mojo"] as const;
 export type DefaultMiniAppKind = typeof DEFAULT_MINI_APP_KINDS[number];
 export type MiniAppNativeKind = "hongguo";
 
@@ -28,9 +30,11 @@ export interface MiniAppDefaultsResult {
 /** A native dashboard grant belongs to the installed app, independent of its HTML template. */
 export type MiniAppDashboardDeclaration =
   | { kind: "agent-team"; renderer: "native"; htmlRole: "fallback-only";
-    editableFields: readonly ["title", "description"]; resources: readonly ["teams", "activity"] }
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_AGENT_TEAM_BASE_RESOURCES }
   | { kind: "agent-team"; renderer: "html"; htmlRole: "primary";
-    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["agent-team"] }
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_AGENT_TEAM_BASE_RESOURCES | typeof MINI_APP_DASHBOARD_RESOURCES["agent-team"] }
+  | { kind: "usage"; renderer: "html"; htmlRole: "primary";
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["usage"] }
   | { kind: "usage"; renderer: "native"; htmlRole: "fallback-only";
     editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["usage"] };
 export interface MiniAppDashboardDiscovery {
@@ -58,6 +62,82 @@ export type MiniAppDashboardReadResult =
   | { appId: string; revision: number; resource: "skill"; snapshot: LocalAgentSkillDocumentResponse }
   | { appId: string; revision: number; resource: "usage"; snapshot: LocalUsageResponse };
 
+export const MINI_APP_RELEASE_REPO = "MashellHan/mymausbotminiapps";
+export const MINI_APP_RELEASE_BOUNDS = {
+  manifestBytes: 16 * 1024,
+  htmlBytes: 512 * 1024,
+  queriesBytes: 64 * 1024,
+} as const;
+export const MINI_APP_RELEASE_ASSETS = ["manifest.json", "index.html", "queries.json"] as const;
+
+export interface MiniAppReleaseManifestArtifact {
+  bytes: number;
+  sha256: string;
+}
+
+/** Manifest v1 published as `manifest.json` on per-app GitHub Releases (`mini-app/<slug>/v<appVersion>`). */
+export interface MiniAppReleaseManifestV1 {
+  formatVersion: 1;
+  packageId: string;
+  appVersion: string;
+  sourceCommit: string;
+  requires: string[];
+  artifacts: {
+    "index.html": MiniAppReleaseManifestArtifact;
+    "queries.json": MiniAppReleaseManifestArtifact;
+  };
+}
+
+/** Provenance bound to an installed template version from a verified independent release. */
+export interface MiniAppReleaseProvenance {
+  packageId: string;
+  appVersion: string;
+  sourceCommit: string;
+  tag: string;
+  requires: string[];
+  htmlSha256: string;
+  htmlBytes: number;
+  queriesSha256: string;
+  queriesBytes: number;
+  previousTemplateVersion?: number;
+  updateRequestKey?: string;
+}
+
+export type MiniAppUpdateStatus = "available" | "current" | "unavailable" | "incompatible" | "custom";
+
+export interface MiniAppUpdateCandidate {
+  appVersion: string;
+  sourceCommit: string;
+}
+
+export interface MiniAppUpdateCheckResult {
+  installedVersion: string | null;
+  status: MiniAppUpdateStatus;
+  available: MiniAppUpdateCandidate | null;
+}
+
+/** Portable query slot declaration published in `queries.json` without local datasetIds. */
+export interface MiniAppReleaseQuerySlot {
+  id: string;
+  source: { schema: string | null; table: string | null };
+  fields: Record<string, MiniAppField>;
+  queries: Record<string, MiniAppNamedQuery>;
+}
+
+/** Portable `queries.json` artifact published alongside `manifest.json` and `index.html`. */
+export interface MiniAppReleaseQueriesFile {
+  notice?: string;
+  contractVersion: string;
+  dataSlots: MiniAppReleaseQuerySlot[];
+}
+
+export interface MiniAppUpdateApply {
+  appVersion: string;
+  sourceCommit: string;
+  expectedRevision: number;
+  requestKey: string;
+}
+
 /** Local apps belong to the workspace owner; publisher grants do not transfer ownership. */
 export interface MiniAppSummary {
   id: string;
@@ -82,6 +162,8 @@ export interface MiniAppSummary {
   nativeIdentity?: MiniAppNativeKind | null;
   /** Owner-assigned display provenance; it grants no publisher, Data or dashboard access. */
   shippedTemplateKind?: MiniAppShippedTemplateKind | null;
+  /** Independent release provenance bound to the current template version, or null for bundled/custom templates. */
+  release?: MiniAppReleaseProvenance | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -90,6 +172,8 @@ export interface MiniAppVersion {
   version: number;
   createdAt: number;
   title: string;
+  /** Independent release provenance for this template version, when installed from a verified release. */
+  release?: MiniAppReleaseProvenance | null;
 }
 
 export interface MiniAppDocument {

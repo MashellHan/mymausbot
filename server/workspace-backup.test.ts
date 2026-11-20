@@ -6,7 +6,9 @@ import { DatabaseSync } from "node:sqlite";
 import { createServer as createNetServer } from "node:net";
 import { gzipSync } from "node:zlib";
 import { Header } from "tar";
+import { AppDocs } from "./app-docs.ts";
 import { browserProfilesRoot } from "./browser-engine.ts";
+import { MiniApps } from "./mini-apps/registry.ts";
 import { openRuntimeStore } from "./runtime/store.ts";
 import type { Assignment } from "./runtime/types.ts";
 import { SessionRegistry } from "./sessions.ts";
@@ -162,6 +164,15 @@ describe("encrypted full workspace backups", () => {
   it("round-trips WAL conversations, binary files, drafts and IDs; preserves destination identity and connections", async () => {
     const source = directory();
     const db = fixture(source);
+    const miniApps = new MiniApps({ docs: new AppDocs(join(source, "app-docs")), validPublisher: (id) => id === "bot",
+      data: { async listDatasets() { return []; }, async validateBinding() { throw new Error("Unexpected binding"); },
+        async readNamed() { throw new Error("Unexpected Data read"); } }, access: { database: () => db, write: (work) => work(db) } });
+    const owner = { writeAllowed: true, assertActive() {}, canBind: () => false };
+    const { app: team } = await miniApps.publish(owner, { requestKey: "team", expectedRevision: 0, slug: "team", title: "Team", description: "",
+      html: readFileSync(new URL("../examples/mini-apps/agent-team/index.html", import.meta.url), "utf8"), bindings: [],
+      publisherBotIds: ["bot"], dashboardKind: "agent-team" }, undefined, true);
+    const { app: video } = await miniApps.publish(owner, { requestKey: "video", expectedRevision: 0, slug: "video", title: "Video", description: "",
+      html: "<p>Video</p>", bindings: [], nativeKind: "hongguo" });
     // Production closes its sole message handle after draining writes, while the maintenance gate is held.
     db.close();
     try {
@@ -238,6 +249,9 @@ describe("encrypted full workspace backups", () => {
         expect(message.text).toContain(`<attached-image path="${join(target, "attachments", "image.png")}" name="image.png" />`);
         expect(message.text).toContain(`\`\`\`\n<attached-image path="${join(source, "attachments", "image.png")}" />\n\`\`\``);
         expect(restoredDb.prepare("SELECT active_leaf_id FROM thread_state").get()?.active_leaf_id).toBe("message");
+        expect(restoredDb.prepare("SELECT id, publishers, dashboard_kind, native_kind, agent_team_detail_grant FROM mini_apps ORDER BY slug").all()).toEqual([team.id, video.id].map((id) => ({
+          id, publishers: "[]", dashboard_kind: null, native_kind: null, agent_team_detail_grant: 0,
+        })));
         expect(restoredDb.prepare("SELECT id, status FROM chat_followups ORDER BY rowid").all()).toEqual([
           { id: "pending", status: "interrupted" }, { id: "dispatching", status: "interrupted" }, { id: "cancelled", status: "cancelled" },
         ]);

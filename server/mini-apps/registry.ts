@@ -2,21 +2,24 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import type { MiniAppDataBinding } from "../../shared/mini-app-data.ts";
+import { LEGACY_MINI_APP_IDS, matchesMiniAppReleasePackage } from "../../shared/mini-app-release-packages.ts";
 import type { HongguoHistoryEntry, HongguoHistoryRequest, HongguoHistoryResponse, HongguoPreferencesRequest,
   HongguoPreferencesResponse } from "../../shared/hongguo-mini-app.ts";
-import { MINI_APP_DASHBOARD_RESOURCES, type MiniAppArchive, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
+import { MINI_APP_AGENT_TEAM_BASE_RESOURCES, MINI_APP_DASHBOARD_RESOURCES, MINI_APP_SHIPPED_TEMPLATE_KINDS, type MiniAppArchive, type MiniAppDashboardDeclaration, type MiniAppDashboardDiscovery,
   type MiniAppDashboardKind, type MiniAppDashboardReadResult, type MiniAppDocument, type MiniAppMutationResult,
-  type MiniAppDashboardResource, type MiniAppQuery, type MiniAppQueryResult, type MiniAppRollback, type MiniAppState,
-  type MiniAppShippedTemplateKind, type MiniAppNativeKind, type MiniAppSummary } from "../../shared/mini-apps.ts";
+  type MiniAppDashboardResource, type MiniAppQuery, type MiniAppQueryResult, type MiniAppReleaseProvenance,
+  type MiniAppRollback, type MiniAppState, type MiniAppShippedTemplateKind, type MiniAppNativeKind,
+  type MiniAppSummary, type MiniAppUpdateCheckResult } from "../../shared/mini-apps.ts";
 import { AppDocs } from "../app-docs.ts";
 import { rowRate } from "../chat-apps.ts";
 import type { DataEngine } from "../data/types.ts";
 import { applicationDatabase, withApplicationWrite } from "../message-db.ts";
 import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
-import { appFailure, archiveSchema, parseDashboardRead, parsePublish, parseQuery, rollbackSchema } from "./validation.ts";
+import { appFailure, archiveSchema, parseDashboardRead, parsePublish, parseQuery, parseReleaseUpdateApply, rollbackSchema } from "./validation.ts";
 import { developedMiniApps, ensureMiniAppDevelopment, recordMiniAppDevelopment } from "./development.ts";
 import { AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
 import { parseHongguoHistory, parseHongguoPreferences } from "./hongguo-validation.ts";
+import { hasRevokedBuiltInGrant, isCustomAppTemplate, isReleaseCompatible, miniAppReleaseMapping, MiniAppReleaseSource } from "./release-source.ts";
 
 export const MINI_APPS_OWNER = "workspace-owner";
 
@@ -33,6 +36,7 @@ export interface MiniAppDatabaseAccess {
 }
 
 const initialized = new WeakSet<DatabaseSync>();
+const shippedKindColumn = `shipped_template_kind TEXT CHECK(shipped_template_kind IN (${MINI_APP_SHIPPED_TEMPLATE_KINDS.map((kind) => `'${kind}'`).join(", ")}) OR shipped_template_kind IS NULL)`;
 export function ensureMiniApps(db: DatabaseSync): void {
   if (initialized.has(db)) return;
   db.exec(`
@@ -44,16 +48,19 @@ export function ensureMiniApps(db: DatabaseSync): void {
       dashboard_kind TEXT CHECK(dashboard_kind IN ('agent-team', 'usage') OR dashboard_kind IS NULL),
       dashboard_identity TEXT CHECK(dashboard_identity IN ('agent-team', 'usage') OR dashboard_identity IS NULL),
       dashboard_html INTEGER NOT NULL DEFAULT 0 CHECK(dashboard_html IN (0, 1)),
+      agent_team_detail_grant INTEGER NOT NULL DEFAULT 0 CHECK(agent_team_detail_grant IN (0, 1)),
       native_kind TEXT CHECK(native_kind = 'hongguo' OR native_kind IS NULL),
       native_identity TEXT CHECK(native_identity = 'hongguo' OR native_identity IS NULL),
-      shipped_template_kind TEXT CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL),
+      ${shippedKindColumn},
       responsible_bot_id TEXT, capabilities TEXT NOT NULL DEFAULT '[]',
+      release_provenance TEXT,
       UNIQUE(owner_id, slug)
     );
     CREATE TABLE IF NOT EXISTS mini_app_versions (
       app_id TEXT NOT NULL, version INTEGER NOT NULL, doc TEXT NOT NULL, title TEXT NOT NULL,
       description TEXT NOT NULL, bindings TEXT NOT NULL, created_at INTEGER NOT NULL,
       dashboard_html INTEGER NOT NULL DEFAULT 0 CHECK(dashboard_html IN (0, 1)),
+      release_provenance TEXT,
       PRIMARY KEY(app_id, version), FOREIGN KEY(app_id) REFERENCES mini_apps(id)
     );
     CREATE TABLE IF NOT EXISTS mini_app_receipts (
@@ -83,6 +90,17 @@ export function ensureMiniApps(db: DatabaseSync): void {
   if (!columns.some(({ name }) => name === "dashboard_html")) {
     db.exec("ALTER TABLE mini_apps ADD COLUMN dashboard_html INTEGER NOT NULL DEFAULT 0 CHECK(dashboard_html IN (0, 1))");
   }
+  if (!columns.some(({ name }) => name === "agent_team_detail_grant")) {
+    db.exec("SAVEPOINT mini_app_agent_team_grant");
+    try {
+      db.exec(`ALTER TABLE mini_apps ADD COLUMN agent_team_detail_grant INTEGER NOT NULL DEFAULT 0 CHECK(agent_team_detail_grant IN (0, 1));
+        UPDATE mini_apps SET agent_team_detail_grant = 1 WHERE status = 'active' AND dashboard_kind = 'agent-team' AND dashboard_html = 1;
+        RELEASE mini_app_agent_team_grant;`);
+    } catch (error) {
+      db.exec("ROLLBACK TO mini_app_agent_team_grant; RELEASE mini_app_agent_team_grant;");
+      throw error;
+    }
+  }
   const versionColumns = db.prepare("PRAGMA table_info(mini_app_versions)").all() as Array<{ name: string }>;
   if (!versionColumns.some(({ name }) => name === "dashboard_html")) {
     db.exec("ALTER TABLE mini_app_versions ADD COLUMN dashboard_html INTEGER NOT NULL DEFAULT 0 CHECK(dashboard_html IN (0, 1))");
@@ -94,10 +112,27 @@ export function ensureMiniApps(db: DatabaseSync): void {
     db.exec("ALTER TABLE mini_apps ADD COLUMN native_identity TEXT CHECK(native_identity = 'hongguo' OR native_identity IS NULL)");
   }
   if (!columns.some(({ name }) => name === "shipped_template_kind")) {
-    db.exec("ALTER TABLE mini_apps ADD COLUMN shipped_template_kind TEXT CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL)");
+    db.exec(`ALTER TABLE mini_apps ADD COLUMN ${shippedKindColumn}`);
+  } else {
+    const schema = db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'mini_apps' AND type = 'table'").get()?.sql;
+    if (typeof schema === "string" && schema.includes("CHECK(shipped_template_kind IN ('bookkeeping', 'x_ai_digest', 'github_activity') OR shipped_template_kind IS NULL)")) {
+      db.exec("SAVEPOINT mini_app_shipped_kind");
+      try {
+        db.exec(`ALTER TABLE mini_apps RENAME COLUMN shipped_template_kind TO previous_shipped_template_kind;
+          ALTER TABLE mini_apps ADD COLUMN ${shippedKindColumn};
+          UPDATE mini_apps SET shipped_template_kind = previous_shipped_template_kind;
+          ALTER TABLE mini_apps DROP COLUMN previous_shipped_template_kind;
+          RELEASE mini_app_shipped_kind;`);
+      } catch (error) {
+        db.exec("ROLLBACK TO mini_app_shipped_kind; RELEASE mini_app_shipped_kind;");
+        throw error;
+      }
+    }
   }
   if (!columns.some(({ name }) => name === "responsible_bot_id")) db.exec("ALTER TABLE mini_apps ADD COLUMN responsible_bot_id TEXT");
   if (!columns.some(({ name }) => name === "capabilities")) db.exec("ALTER TABLE mini_apps ADD COLUMN capabilities TEXT NOT NULL DEFAULT '[]'");
+  if (!columns.some(({ name }) => name === "release_provenance")) db.exec("ALTER TABLE mini_apps ADD COLUMN release_provenance TEXT");
+  if (!versionColumns.some(({ name }) => name === "release_provenance")) db.exec("ALTER TABLE mini_app_versions ADD COLUMN release_provenance TEXT");
   ensureMiniAppDevelopment(db);
   initialized.add(db);
 }
@@ -117,27 +152,34 @@ type AppRow = {
   id: string; slug: string; title: string; description: string; status: MiniAppSummary["status"];
   revision: number; template_version: number; publishers: string; created_at: number; updated_at: number;
   dashboard_kind: MiniAppDashboardKind | null; dashboard_identity: MiniAppDashboardKind | null; dashboard_html: number;
+  agent_team_detail_grant: number;
   native_kind: MiniAppNativeKind | null; native_identity: MiniAppNativeKind | null;
   shipped_template_kind: MiniAppShippedTemplateKind | null;
   responsible_bot_id: string | null; capabilities: string;
+  release_provenance: string | null;
 };
-type VersionRow = { version: number; doc: string; title: string; description: string; bindings: string; created_at: number; dashboard_html: number };
-function declaration(kind: MiniAppDashboardKind | null, html = false): MiniAppDashboardDeclaration | null {
+type VersionRow = { version: number; doc: string; title: string; description: string; bindings: string; created_at: number; dashboard_html: number; release_provenance: string | null };
+const parseProvenance = (raw: string | null | undefined): MiniAppReleaseProvenance | null =>
+  raw ? JSON.parse(raw) as MiniAppReleaseProvenance : null;
+function declaration(kind: MiniAppDashboardKind | null, html: boolean, agentTeamDetails: boolean): MiniAppDashboardDeclaration | null {
   if (kind === null) return null;
   if (kind === "agent-team") return html
+    ? { kind, renderer: "html", htmlRole: "primary", editableFields: ["title", "description"],
+      resources: agentTeamDetails ? MINI_APP_DASHBOARD_RESOURCES[kind] : MINI_APP_AGENT_TEAM_BASE_RESOURCES }
+    : { kind, renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: MINI_APP_AGENT_TEAM_BASE_RESOURCES };
+  if (kind === "usage") return html
     ? { kind, renderer: "html", htmlRole: "primary", editableFields: ["title", "description"], resources: MINI_APP_DASHBOARD_RESOURCES[kind] }
-    : { kind, renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["teams", "activity"] };
-  if (kind === "usage") return { kind, renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"],
-    resources: MINI_APP_DASHBOARD_RESOURCES[kind] };
+    : { kind, renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: MINI_APP_DASHBOARD_RESOURCES[kind] };
   throw appFailure(503, "The Mini App dashboard grant is invalid.");
 }
 const summary = (row: AppRow): MiniAppSummary => ({
   id: row.id, slug: row.slug, title: row.title, description: row.description, status: row.status,
   revision: row.revision, templateVersion: row.template_version, publisherBotIds: JSON.parse(row.publishers) as string[],
   responsibleBotId: row.responsible_bot_id, capabilities: JSON.parse(row.capabilities) as string[],
-  dashboard: declaration(row.dashboard_kind, row.dashboard_html === 1), dashboardIdentity: row.dashboard_identity,
+  dashboard: declaration(row.dashboard_kind, row.dashboard_html === 1, row.agent_team_detail_grant === 1), dashboardIdentity: row.dashboard_identity,
   nativeKind: row.native_kind, nativeIdentity: row.native_identity,
   shippedTemplateKind: row.shipped_template_kind,
+  release: parseProvenance(row.release_provenance),
   createdAt: row.created_at, updatedAt: row.updated_at,
 });
 
@@ -149,6 +191,7 @@ export class MiniApps {
   readonly data: Pick<DataEngine, "validateBinding" | "readNamed" | "listDatasets">;
   private readonly validPublisher: (id: string) => boolean;
   private readonly dashboardProviders?: LocalDashboardProviders;
+  private readonly releaseSource: MiniAppReleaseSource;
 
   constructor(deps: {
     docs: AppDocs;
@@ -156,12 +199,14 @@ export class MiniApps {
     validPublisher(id: string): boolean;
     dashboardProviders?: LocalDashboardProviders;
     access?: MiniAppDatabaseAccess;
+    releaseSource?: MiniAppReleaseSource;
   }) {
     this.docs = deps.docs;
     this.data = deps.data;
     this.validPublisher = deps.validPublisher;
     this.dashboardProviders = deps.dashboardProviders;
     this.access = deps.access ?? { database: applicationDatabase, write: withApplicationWrite };
+    this.releaseSource = deps.releaseSource ?? new MiniAppReleaseSource();
   }
 
   private db(): DatabaseSync {
@@ -218,8 +263,9 @@ export class MiniApps {
     const app = this.require(actor, id);
     this.expected(app, revision);
     if (app.status !== "active") throw appFailure(409, "This Mini App is archived.");
-    if (app.id !== "0643df6c-24ea-4076-87b6-572d3637a4d9" || app.slug !== "github-activity"
-      || app.shippedTemplateKind !== "github_activity" || app.dashboard || app.nativeKind) {
+    const legacy = app.id === LEGACY_MINI_APP_IDS.github_activity && app.slug === "github-activity";
+    if (app.shippedTemplateKind !== "github_activity" || app.dashboard || app.nativeKind
+      || (!legacy && !matchesMiniAppReleasePackage("github_activity", app.release))) {
       throw appFailure(403, "This Mini App has no GitHub Activity media grant.");
     }
     return app;
@@ -291,12 +337,12 @@ export class MiniApps {
     this.authorize(actor);
     return (this.db().prepare("SELECT * FROM mini_apps WHERE owner_id = ? AND status = 'active' AND dashboard_identity IS NOT NULL ORDER BY created_at, id")
       .all(MINI_APPS_OWNER) as unknown as AppRow[]).map((row) => ({ id: row.id, revision: row.revision,
-      dashboardIdentity: row.dashboard_identity!, dashboard: declaration(row.dashboard_kind, row.dashboard_html === 1) }));
+      dashboardIdentity: row.dashboard_identity!, dashboard: declaration(row.dashboard_kind, row.dashboard_html === 1, row.agent_team_detail_grant === 1) }));
   }
 
   canAdoptAgentTeamDefault(actor: MiniAppActor, id: string): boolean {
     const app = this.require(actor, id);
-    if (app.status !== "active" || app.dashboardIdentity !== "agent-team" || app.dashboard?.renderer !== "native") return false;
+    if (app.status !== "active" || app.dashboardIdentity !== "agent-team" || app.dashboard?.renderer !== "native" || app.release) return false;
     const versions = this.db().prepare("SELECT doc, bindings FROM mini_app_versions WHERE app_id = ? ORDER BY version").all(id) as
       Array<{ doc: string; bindings: string }>;
     return versions.length > 0 && versions.length <= 128 && versions.every((version) => {
@@ -311,8 +357,15 @@ export class MiniApps {
     const version = this.version(id, app.templateVersion);
     const doc = this.docs.read(version.doc);
     if (!doc) throw appFailure(503, "The Mini App document is unavailable. Restore its workspace backup.");
+    const versionRows = this.db().prepare("SELECT version, title, created_at AS createdAt, release_provenance FROM mini_app_versions WHERE app_id = ? ORDER BY version DESC")
+      .all(id) as Array<{ version: number; title: string; createdAt: number; release_provenance: string | null }>;
     return { app, html: doc.html, bindings: JSON.parse(version.bindings) as MiniAppDataBinding[],
-      versions: (this.db().prepare("SELECT version, title, created_at AS createdAt FROM mini_app_versions WHERE app_id = ? ORDER BY version DESC").all(id) as unknown as MiniAppDocument["versions"]) };
+      versions: versionRows.map((row) => ({
+        version: row.version,
+        title: row.title,
+        createdAt: row.createdAt,
+        release: parseProvenance(row.release_provenance),
+      })) };
   }
 
   private version(id: string, version: number): VersionRow {
@@ -329,7 +382,7 @@ export class MiniApps {
     const app = JSON.parse(row.result) as MiniAppSummary;
     return { app: { ...app, dashboard: app.dashboard ?? null, dashboardIdentity: app.dashboardIdentity ?? app.dashboard?.kind ?? null,
       shippedTemplateKind: app.shippedTemplateKind ?? null, responsibleBotId: app.responsibleBotId ?? null,
-      capabilities: app.capabilities ?? [] }, replayed: true };
+      capabilities: app.capabilities ?? [], release: app.release ?? null }, replayed: true };
   }
 
   private hash(input: unknown): string { return createHash("sha256").update(canonical(input)).digest("hex"); }
@@ -350,7 +403,7 @@ export class MiniApps {
   private requireDashboardTemplateWrite(actor: MiniAppActor, app: MiniAppSummary | undefined, html: string): void {
     if (!actor.botId || app?.dashboard?.renderer !== "html") return;
     const current = this.docs.read(this.version(app.id, app.templateVersion).doc);
-    if (!current || current.html !== html) throw appFailure(403, "Only the owner can change the Agent Team dashboard page.");
+    if (!current || current.html !== html) throw appFailure(403, "Only the owner can change this dashboard page.");
   }
 
   async publish(actor: MiniAppActor, raw: unknown, id?: string, trustedAgentTeamHtml = false): Promise<MiniAppMutationResult> {
@@ -433,30 +486,111 @@ export class MiniApps {
       }
       this.requireNativeBindings(Boolean(dashboardIdentity || nativeIdentity), input.bindings);
       const previousVersion = current && this.version(appId, current.templateVersion);
-      const dashboardHtml = dashboardKind === "agent-team" && (trustedAgentTeamHtml || previousVersion?.dashboard_html === 1);
+      const dashboardHtml = dashboardKind === "agent-team" && (trustedAgentTeamHtml || previousVersion?.dashboard_html === 1)
+        || dashboardIdentity === "usage" && previousVersion?.dashboard_html === 1 && previousVersion.doc === stored.doc;
+      const agentTeamDetails = dashboardKind === "agent-team" && (this.row(appId)?.agent_team_detail_grant === 1 || (!current && trustedAgentTeamHtml));
       const developed = !current || previousVersion?.doc !== stored.doc ||
         !isDeepStrictEqual(JSON.parse(previousVersion.bindings) as MiniAppDataBinding[], input.bindings);
+      const releaseProvenance = developed ? null : parseProvenance(previousVersion?.release_provenance);
+      const releaseProvenanceJson = releaseProvenance ? JSON.stringify(releaseProvenance) : null;
       const app: MiniAppSummary = { id: appId, slug: input.slug, title: input.title, description: input.description,
         status: "active", revision: (current?.revision ?? 0) + 1, templateVersion: last.version + 1,
         publisherBotIds: publishers, responsibleBotId, capabilities: input.capabilities ?? current?.capabilities ?? [],
-        dashboard: declaration(dashboardKind, dashboardHtml), dashboardIdentity, nativeKind, nativeIdentity, shippedTemplateKind,
-        createdAt: current?.createdAt ?? now, updatedAt: now };
-      db.prepare(`INSERT INTO mini_apps (id, owner_id, slug, title, description, status, revision, template_version, publishers, created_at, updated_at, dashboard_kind, dashboard_identity, dashboard_html, native_kind, native_identity, shipped_template_kind, responsible_bot_id, capabilities)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        dashboard: declaration(dashboardKind, dashboardHtml, agentTeamDetails), dashboardIdentity, nativeKind, nativeIdentity, shippedTemplateKind,
+        release: releaseProvenance, createdAt: current?.createdAt ?? now, updatedAt: now };
+      db.prepare(`INSERT INTO mini_apps (id, owner_id, slug, title, description, status, revision, template_version, publishers, created_at, updated_at, dashboard_kind, dashboard_identity, dashboard_html, agent_team_detail_grant, native_kind, native_identity, shipped_template_kind, responsible_bot_id, capabilities, release_provenance)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET title=excluded.title, description=excluded.description, status=excluded.status,
         revision=excluded.revision, template_version=excluded.template_version, publishers=excluded.publishers,
         updated_at=excluded.updated_at, dashboard_kind=excluded.dashboard_kind, dashboard_identity=excluded.dashboard_identity,
-        dashboard_html=excluded.dashboard_html,
+        dashboard_html=excluded.dashboard_html, agent_team_detail_grant=excluded.agent_team_detail_grant,
         native_kind=excluded.native_kind, native_identity=excluded.native_identity,
         shipped_template_kind=excluded.shipped_template_kind, responsible_bot_id=excluded.responsible_bot_id,
-        capabilities=excluded.capabilities`)
+        capabilities=excluded.capabilities, release_provenance=excluded.release_provenance`)
         .run(appId, MINI_APPS_OWNER, app.slug, app.title, app.description, app.status, app.revision, app.templateVersion,
-          JSON.stringify(publishers), app.createdAt, now, dashboardKind, dashboardIdentity, dashboardHtml ? 1 : 0, nativeKind, nativeIdentity, shippedTemplateKind,
-          responsibleBotId, JSON.stringify(app.capabilities));
-      db.prepare("INSERT INTO mini_app_versions (app_id, version, doc, title, description, bindings, created_at, dashboard_html) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(appId, app.templateVersion, stored.doc, app.title, app.description, JSON.stringify(input.bindings), now, dashboardHtml ? 1 : 0);
+          JSON.stringify(publishers), app.createdAt, now, dashboardKind, dashboardIdentity, dashboardHtml ? 1 : 0, agentTeamDetails ? 1 : 0, nativeKind, nativeIdentity, shippedTemplateKind,
+          responsibleBotId, JSON.stringify(app.capabilities), releaseProvenanceJson);
+      db.prepare("INSERT INTO mini_app_versions (app_id, version, doc, title, description, bindings, created_at, dashboard_html, release_provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(appId, app.templateVersion, stored.doc, app.title, app.description, JSON.stringify(input.bindings), now, dashboardHtml ? 1 : 0, releaseProvenanceJson);
       if (actor.botId && developed) recordMiniAppDevelopment(db, appId, actor.botId, now);
       return this.receipt(db, actor, target, "publish", input, app);
+    });
+  }
+
+  async checkUpdate(actor: MiniAppActor, id: string, signal?: AbortSignal): Promise<MiniAppUpdateCheckResult> {
+    if (actor.botId) throw appFailure(403, "Only the workspace owner can check Mini App updates.");
+    const doc = this.document(actor, id);
+    const result = await this.releaseSource.checkUpdate(doc.app, doc.html, doc.bindings, signal);
+    if (signal?.aborted) throw appFailure(503, "Mini App release request was cancelled.");
+    this.authorize(actor);
+    return result;
+  }
+
+  async applyUpdate(actor: MiniAppActor, id: string, raw: unknown, signal?: AbortSignal): Promise<MiniAppMutationResult> {
+    this.authorize(actor, undefined, true);
+    if (actor.botId) throw appFailure(403, "Only the workspace owner can update Mini Apps from releases.");
+    const input = parseReleaseUpdateApply(raw);
+    const existing = this.require(actor, id, true);
+    const replay = this.replay(actor, id, "update", input);
+    if (replay) return replay;
+    this.expected(existing, input.expectedRevision);
+    const existingVersion = this.version(id, existing.templateVersion);
+    const existingDoc = this.docs.read(existingVersion.doc);
+    if (!existingDoc) throw appFailure(503, "The Mini App document is unavailable. Restore its workspace backup.");
+    const existingBindings = JSON.parse(existingVersion.bindings) as MiniAppDataBinding[];
+    const verified = await this.releaseSource.fetchVerifiedUpdate(
+      existing,
+      existingDoc.html,
+      existingBindings,
+      { appVersion: input.appVersion, sourceCommit: input.sourceCommit },
+      signal,
+    );
+    if (signal?.aborted) throw appFailure(503, "Mini App release request was cancelled.");
+    for (const binding of existingBindings) await this.data.validateBinding(MINI_APPS_OWNER, binding);
+    if (signal?.aborted) throw appFailure(503, "Mini App release request was cancelled.");
+    this.authorize(actor, undefined, true);
+    const stored = this.docs.put({ source: "html", html: verified.html });
+    if (!stored.ok) throw appFailure(413, "The local app document store is full. The previous version is unchanged.");
+    return this.access.write((db) => {
+      if (signal?.aborted) throw appFailure(503, "Mini App release request was cancelled.");
+      const current = this.require(actor, id, true);
+      const retry = this.replay(actor, id, "update", input);
+      if (retry) return retry;
+      this.expected(current, input.expectedRevision);
+      if (current.status !== "active") throw appFailure(409, "This Mini App is archived.");
+      const mapping = miniAppReleaseMapping(current);
+      const currentVersion = this.version(id, current.templateVersion);
+      const currentDoc = this.docs.read(currentVersion.doc);
+      if (!currentDoc) throw appFailure(503, "The Mini App document is unavailable. Restore its workspace backup.");
+      const currentBindings = JSON.parse(currentVersion.bindings) as MiniAppDataBinding[];
+      if (!mapping || isCustomAppTemplate(current, mapping, currentDoc.html, currentBindings)) {
+        throw appFailure(409, "This Mini App has custom changes and cannot be overwritten by a release update.");
+      }
+      if (hasRevokedBuiltInGrant(current, mapping)) {
+        throw appFailure(403, "This Mini App's built-in grant has been revoked.");
+      }
+      if (verified.provenance.packageId !== mapping.packageId || !isReleaseCompatible(current, mapping, verified.provenance.requires)) {
+        throw appFailure(409, "The Mini App identity changed while applying the update.");
+      }
+      const now = Date.now();
+      const last = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM mini_app_versions WHERE app_id = ?").get(id) as { version: number };
+      const dashboardHtml = current.dashboard?.kind === "agent-team" || current.dashboard?.kind === "usage";
+      const release = { ...verified.provenance, previousTemplateVersion: current.templateVersion, updateRequestKey: input.requestKey };
+      const releaseProvenanceJson = JSON.stringify(release);
+      const app: MiniAppSummary = {
+        ...current,
+        revision: current.revision + 1,
+        templateVersion: last.version + 1,
+        dashboard: declaration(current.dashboard?.kind ?? null, dashboardHtml, this.row(id)?.agent_team_detail_grant === 1),
+        shippedTemplateKind: mapping.kind === "mojo" ? "mojo" : current.shippedTemplateKind ?? null,
+        release,
+        updatedAt: now,
+      };
+      db.prepare("UPDATE mini_apps SET revision = ?, template_version = ?, updated_at = ?, dashboard_html = ?, shipped_template_kind = ?, release_provenance = ? WHERE id = ?")
+        .run(app.revision, app.templateVersion, now, dashboardHtml ? 1 : 0, app.shippedTemplateKind ?? null, releaseProvenanceJson, id);
+      db.prepare("INSERT INTO mini_app_versions (app_id, version, doc, title, description, bindings, created_at, dashboard_html, release_provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, app.templateVersion, stored.doc, app.title, app.description, currentVersion.bindings, now, dashboardHtml ? 1 : 0, releaseProvenanceJson);
+      return this.receipt(db, actor, id, "update", input, app);
     });
   }
 
@@ -466,17 +600,26 @@ export class MiniApps {
     const current = this.require(actor, id, true);
     this.authorizeTemplate(actor, current);
     if (actor.botId && current.dashboard?.renderer === "html") {
-      throw appFailure(403, "Only the owner can change the Agent Team dashboard page.");
+      throw appFailure(403, "Only the owner can change this dashboard page.");
     }
     const replay = this.replay(actor, id, "rollback", input.data);
     if (replay) return replay;
+    this.expected(current, input.data.expectedRevision);
     const version = this.version(id, input.data.templateVersion);
-    if (actor.botId && current.dashboardIdentity === "agent-team" &&
-      (current.dashboard?.renderer === "html" || version.dashboard_html === 1)) {
-      throw appFailure(403, "Only the owner can change the Agent Team dashboard page.");
+    if (actor.botId && current.dashboardIdentity && version.dashboard_html === 1) {
+      throw appFailure(403, "Only the owner can change this dashboard page.");
     }
     if (!this.docs.read(version.doc)) throw appFailure(503, "The requested template is unavailable.");
     const bindings = JSON.parse(version.bindings) as MiniAppDataBinding[];
+    const managed = Boolean(current.release || version.release_provenance || this.db()
+      .prepare("SELECT 1 FROM mini_app_versions WHERE app_id = ? AND release_provenance IS NOT NULL LIMIT 1").get(id));
+    if (managed) {
+      if (actor.botId) throw appFailure(403, "Only the workspace owner can restore Mini App releases.");
+      const currentBindings = JSON.parse(this.version(id, current.templateVersion).bindings) as MiniAppDataBinding[];
+      if (!isDeepStrictEqual(currentBindings, bindings)) {
+        throw appFailure(409, "This template uses different Data bindings. The current Mini App was kept unchanged.");
+      }
+    }
     this.requireNativeBindings(Boolean(current.dashboardIdentity || current.nativeIdentity), bindings);
     this.authorizeTemplate(actor, current, bindings);
     for (const binding of bindings) await this.data.validateBinding(MINI_APPS_OWNER, binding);
@@ -484,7 +627,8 @@ export class MiniApps {
     return this.changeHead(actor, id, "rollback", input.data, (app) => {
       this.authorizeTemplate(actor, app, bindings);
       this.requireNativeBindings(Boolean(app.dashboardIdentity || app.nativeIdentity), bindings);
-      return { ...app, title: version.title, description: version.description, templateVersion: version.version, status: "active" };
+      return { ...app, title: managed ? app.title : version.title, description: managed ? app.description : version.description,
+        templateVersion: version.version, status: "active" };
     });
   }
 
@@ -502,10 +646,15 @@ export class MiniApps {
       if (replay) return replay;
       this.expected(current, input.expectedRevision);
       const changed = change(current);
-      const dashboardHtml = this.version(id, changed.templateVersion).dashboard_html === 1;
-      const app = { ...changed, dashboard: declaration(changed.dashboard?.kind ?? null, dashboardHtml), revision: current.revision + 1, updatedAt: Date.now() };
-      db.prepare("UPDATE mini_apps SET title = ?, description = ?, status = ?, revision = ?, template_version = ?, updated_at = ?, dashboard_kind = ?, dashboard_html = ?, native_kind = ? WHERE id = ?")
-        .run(app.title, app.description, app.status, app.revision, app.templateVersion, app.updatedAt, app.dashboard?.kind ?? null, dashboardHtml ? 1 : 0, app.nativeKind ?? null, id);
+      const targetVersion = this.version(id, changed.templateVersion);
+      const dashboardHtml = targetVersion.dashboard_html === 1;
+      const releaseProvenance = parseProvenance(targetVersion.release_provenance);
+      const releaseProvenanceJson = releaseProvenance ? JSON.stringify(releaseProvenance) : null;
+      const agentTeamDetails = changed.dashboard?.kind === "agent-team" && this.row(id)?.agent_team_detail_grant === 1;
+      const app = { ...changed, dashboard: declaration(changed.dashboard?.kind ?? null, dashboardHtml, agentTeamDetails),
+        release: releaseProvenance, revision: current.revision + 1, updatedAt: Date.now() };
+      db.prepare("UPDATE mini_apps SET title = ?, description = ?, status = ?, revision = ?, template_version = ?, updated_at = ?, dashboard_kind = ?, dashboard_html = ?, agent_team_detail_grant = ?, native_kind = ?, release_provenance = ? WHERE id = ?")
+        .run(app.title, app.description, app.status, app.revision, app.templateVersion, app.updatedAt, app.dashboard?.kind ?? null, dashboardHtml ? 1 : 0, agentTeamDetails ? 1 : 0, app.nativeKind ?? null, releaseProvenanceJson, id);
       return this.receipt(db, actor, id, operation, input, app);
     });
   }

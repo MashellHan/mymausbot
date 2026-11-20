@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { createBookkeepingPublish } from "../../shared/bookkeeping-mini-app.ts";
+import { LEGACY_MINI_APP_IDS } from "../../shared/mini-app-release-packages.ts";
 import { DEFAULT_MINI_APP_KINDS, type DefaultMiniAppKind, type MiniAppDefaultsInput, type MiniAppDefaultsResult,
   type MiniAppDocument, type MiniAppPublish, type MiniAppSummary } from "../../shared/mini-apps.ts";
 import type { ReportKind } from "../../shared/report-mini-app.ts";
@@ -8,7 +9,7 @@ import { reportKindForRoutine } from "../../shared/report-routine.ts";
 import type { DataEngine } from "../data/types.ts";
 import type { Routine } from "../routines.ts";
 import { DEFAULT_APPS, matchesPendingDefaultHtml, NATIVE_DEFAULT_HTML, pendingDefaultHtml, updatedDefaultAppTitle } from "./default-documents.ts";
-import { REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
+import { MOJO_LEGACY_HTML_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
 import { existingBookkeepingSource } from "./default-sources.ts";
 import { defaultMiniAppUpdate } from "./default-updates.ts";
 import type { MiniAppActor, MiniApps } from "./registry.ts";
@@ -65,10 +66,24 @@ export class DefaultMiniApps {
   private async ensureKind(owner: MiniAppActor, kind: DefaultMiniAppKind, input: MiniAppDefaultsInput): Promise<void> {
     const apps = this.deps.apps.list(owner);
     const matches = apps.filter((app) => identity(app) === kind);
+    if (kind === "mojo" && !matches.length) {
+      const legacy = apps.find((app) => app.id === LEGACY_MINI_APP_IDS.mojo && !identity(app));
+      if (legacy) {
+        const document = this.deps.apps.document(owner, legacy.id);
+        if (!document.bindings.length && createHash("sha256").update(document.html).digest("hex") === MOJO_LEGACY_HTML_SHA256) matches.push(legacy);
+      }
+    }
     if (matches.length > 1) throw appFailure(409, "More than one copy of this included app exists. Your apps were kept unchanged.");
     const existing = matches[0];
     if (existing?.status === "archived" && input.restore !== kind) return;
     const current = existing ? this.deps.apps.document(owner, existing.id) : null;
+    if (current && (current.app.release || current.versions.some((version) => Boolean(version.release)))) {
+      if (input.restore === kind && (current.app.status === "archived" || nativeKind(kind) && !current.app.dashboard
+          || kind === "hongguo" && !current.app.nativeKind)) {
+        await this.restore(owner, current, kind);
+      }
+      return;
+    }
     if (current && !this.waiting(current, kind)) {
       if (kind === "agent-team" && input.agentTeamHtml && this.deps.apps.canAdoptAgentTeamDefault(owner, current.app.id)) {
         await this.deps.apps.publish(owner, { requestKey: randomUUID(), expectedRevision: current.app.revision,
@@ -104,7 +119,7 @@ export class DefaultMiniApps {
   }
 
   private waiting(document: MiniAppDocument, kind: DefaultMiniAppKind): boolean {
-    return kind !== "hongguo" && !nativeKind(kind) && !document.bindings.length && !document.app.publisherBotIds.length
+    return kind !== "hongguo" && kind !== "mojo" && !nativeKind(kind) && !document.bindings.length && !document.app.publisherBotIds.length
       && matchesPendingDefaultHtml(kind, document.html);
   }
 
@@ -135,7 +150,7 @@ export class DefaultMiniApps {
   }
 
   private async publication(owner: MiniAppActor, kind: DefaultMiniAppKind, bookkeepingHtml: string, agentTeamHtml?: string): Promise<MiniAppPublish> {
-    if (kind === "agent-team" || kind === "usage" || kind === "hongguo") return this.draft(kind, undefined, agentTeamHtml);
+    if (kind === "agent-team" || kind === "usage" || kind === "hongguo" || kind === "mojo") return this.draft(kind, undefined, agentTeamHtml);
     if (kind === "bookkeeping") {
       const source = await existingBookkeepingSource(this.deps.data, this.deps.bots().map((bot) => bot.id), owner.assertActive);
       if (!source) return this.draft(kind);

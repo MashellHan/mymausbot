@@ -19,7 +19,7 @@ import { ephemeralWorkspaceTokenPath, excludedWorkspaceAuthPath, liveDataEngineP
 import { omittedAsTeamPrivate, routinesWithoutTeamPrivate, stripTeamPrivate, TEAM_PRIVATE_NOTE, teamPrivateAttachments, teamPrivateThreads, withoutTeamPrivate } from "./workspace-backup-team-private.ts";
 import { flushLaterSaves } from "./save-batch.ts";
 import type { WorkspaceBackupClientState, WorkspaceBackupPrivateMetadata, WorkspaceBackupSummary, WorkspaceLeftBehind } from "../shared/workspace-backup.ts";
-import { assertMiniAppExportPrivacy, verifyMiniAppSnapshot, verifyMiniAppDataFiles } from "./mini-apps/backup.ts";
+import { assertMiniAppExportPrivacy, clearImportedMiniAppGrants, verifyMiniAppSnapshot, verifyMiniAppDataFiles } from "./mini-apps/backup.ts";
 
 export type { WorkspaceBackupSummary, WorkspaceBackupPrivateMetadata } from "../shared/workspace-backup.ts";
 export const MAX_WORKSPACE_BACKUP_BYTES = 10 * 1024 ** 3;
@@ -839,10 +839,7 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
           if (json !== row.json) update.run(json, text, ...(searchText ? [cjkSearchText(text)] : []), row.thread_id, row.id);
         }
       }
-      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'mini_apps'").get()) {
-        const columns = db.prepare("PRAGMA table_info(mini_apps)").all() as Array<{ name: string }>;
-        db.exec(`UPDATE mini_apps SET publishers = '[]'${columns.some(({ name }) => name === "dashboard_kind") ? ", dashboard_kind = NULL" : ""}${columns.some(({ name }) => name === "native_kind") ? ", native_kind = NULL" : ""}`);
-      }
+      clearImportedMiniAppGrants(db);
       // Import is not a restart: the source may still be running, so never execute a copy of its pending work.
       if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chat_followups'").get()) {
         const pause = db.prepare("UPDATE chat_followups SET status = 'interrupted', payload = ? WHERE id = ?");

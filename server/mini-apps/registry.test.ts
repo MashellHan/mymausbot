@@ -449,6 +449,39 @@ describe("persistent Mini Apps", () => {
     await expect(apps.dashboardRead(owner, old.id, { resource: "teams", expectedRevision: 6 })).rejects.toMatchObject({ status: 403 });
   });
 
+  it("keeps the trusted Activities renderer tied to its template bytes and the current owner grant", async () => {
+    const { apps } = fixture(undefined, dashboardProviders());
+    const html = "<h1>Released Activities fixture</h1>";
+    const initial = publication({ html, slug: "usage", dashboardKind: "usage", bindings: [], publisherBotIds: ["publisher"] });
+    const first = (await apps.publish(owner, initial)).app;
+    expect(first.dashboard?.renderer).toBe("native");
+    const db = applicationDatabase();
+    db.prepare("UPDATE mini_app_versions SET dashboard_html = 1 WHERE app_id = ? AND version = 1").run(first.id);
+    db.prepare("UPDATE mini_apps SET dashboard_html = 1 WHERE id = ?").run(first.id);
+    expect(apps.document(owner, first.id).app.dashboard).toMatchObject({ kind: "usage", renderer: "html", resources: ["usage"] });
+    expect(await apps.state(owner, first.id)).toMatchObject({ data: [] });
+
+    const edit = { ...initial, expectedRevision: 1, title: "Renamed Activities", requestKey: "rename" };
+    await expect(apps.publish(bot(), { ...edit, dashboardKind: undefined, publisherBotIds: undefined,
+      html: "<h1>Bot replacement</h1>" }, first.id)).rejects.toMatchObject({ status: 403 });
+    const renamed = (await apps.publish(owner, edit, first.id)).app;
+    expect(renamed).toMatchObject({ id: first.id, dashboard: { renderer: "html" } });
+    const custom = (await apps.publish(owner, { ...edit, expectedRevision: 2, requestKey: "custom",
+      html: "<h1>Custom fallback</h1>" }, first.id)).app;
+    expect(custom).toMatchObject({ dashboard: { renderer: "native" } });
+    await expect(apps.rollback(bot(), first.id, { expectedRevision: 3, templateVersion: 1, requestKey: "bot-restore" }))
+      .rejects.toMatchObject({ status: 403 });
+    expect((await apps.rollback(owner, first.id, { expectedRevision: 3, templateVersion: 1, requestKey: "owner-restore" })).app)
+      .toMatchObject({ revision: 4, dashboard: { renderer: "html" } });
+    expect((await apps.publish(owner, { ...edit, expectedRevision: 4, dashboardKind: null, requestKey: "revoke" }, first.id)).app)
+      .toMatchObject({ dashboardIdentity: "usage", dashboard: null });
+    await expect(apps.dashboardRead(owner, first.id, { resource: "usage", expectedRevision: 5 })).rejects.toMatchObject({ status: 403 });
+    expect((await apps.publish(owner, { ...edit, expectedRevision: 5, requestKey: "regrant" }, first.id)).app)
+      .toMatchObject({ revision: 6, dashboard: { renderer: "html" } });
+    expect(await apps.dashboardRead(owner, first.id, { resource: "usage", expectedRevision: 6 }))
+      .toEqual({ appId: first.id, revision: 6, resource: "usage", snapshot: usageSnapshot });
+  });
+
   it("checks the exact current occupant before and after each Agent Team detail read", async () => {
     const readers = dashboardProviders();
     const { apps } = fixture(undefined, readers);

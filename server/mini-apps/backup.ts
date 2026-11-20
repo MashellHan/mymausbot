@@ -11,6 +11,17 @@ export const MINI_APP_SNAPSHOT_FILE = "mini-app-data.json";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const hasTable = (db: DatabaseSync, name: string) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
 
+export function clearImportedMiniAppGrants(db: DatabaseSync): void {
+  if (!hasTable(db, "mini_apps")) return;
+  const columns = db.prepare("PRAGMA table_info(mini_apps)").all();
+  const names = new Set(columns.map(({ name }) => name));
+  const cleared = ["publishers = '[]'"];
+  if (names.has("dashboard_kind")) cleared.push("dashboard_kind = NULL");
+  if (names.has("agent_team_detail_grant")) cleared.push("agent_team_detail_grant = 0");
+  if (names.has("native_kind")) cleared.push("native_kind = NULL");
+  db.exec(`UPDATE mini_apps SET ${cleared.join(", ")}`);
+}
+
 function fileHash(file: string): string {
   if (!lstatSync(file).isFile()) throw new Error("A Mini App snapshot contains a non-file store.");
   const hash = createHash("sha256");

@@ -4,7 +4,7 @@ import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import { allowsTool } from "../../shared/tool-scope.ts";
 import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
-import type { MiniAppDataset, MiniAppSources } from "../../shared/mini-apps.ts";
+import type { MiniAppDataset, MiniAppSources, MiniAppUpdateCheckResult } from "../../shared/mini-apps.ts";
 import type { DataEngine } from "../data/types.ts";
 import { DataFailure } from "../data/types.ts";
 import { quoteIdentifier } from "../data/sql-identifiers.ts";
@@ -13,6 +13,7 @@ import { appDocRefs } from "../message-db.ts";
 import type { json as sendJson } from "../harness/http.ts";
 import { MINI_APP_TOOL_ROUTES } from "../drivers/agents-mini-app-tools.ts";
 import { MiniApps, MINI_APPS_OWNER, miniAppDocRefs, type MiniAppActor } from "../mini-apps/registry.ts";
+import type { MiniAppReleaseSource } from "../mini-apps/release-source.ts";
 import { appFailure, parsePublish } from "../mini-apps/validation.ts";
 import { MINI_APP_AUTHOR_GUIDE } from "../mini-apps/author-guide.ts";
 import { ReportStore } from "../mini-apps/report-store.ts";
@@ -33,7 +34,7 @@ import { PASS, type RouteHandler } from "./table.ts";
 
 const ROOT = "/api/mini-apps";
 const REPORT_SOURCE = `${ROOT}/report-source`;
-const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive))?$/;
+const APP_PATH = /^\/api\/mini-apps\/([0-9a-f-]{36})(?:\/(state|query|dashboard|publish|rollback|archive|update))?$/;
 const HONGGUO_ACTION = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/(catalog|series|playback|history|preferences)$/;
 const HONGGUO_MEDIA = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/media\/([A-Za-z0-9_-]{1,256})$/;
 const HONGGUO_COVER = /^\/api\/mini-apps\/([0-9a-f-]{36})\/hongguo\/cover$/;
@@ -62,13 +63,14 @@ export function createMiniAppRouteHandlers(input: Omit<MiniAppRouteDeps, "apps" 
   validPublisher(id: string): boolean;
   dashboardProviders?: LocalDashboardProviders;
   hongguoProvider?: HongguoProvider;
+  releaseSource?: MiniAppReleaseSource;
   suggestionWriter?(botId: string): SideJobText | null;
 } & Pick<Parameters<typeof createChatApps>[0], "liveRows" | "liveRoots" | "paused">) {
-  const { store, dataDir, validPublisher, dashboardProviders, suggestionWriter, liveRows, liveRoots, paused, ...shared } = input;
+  const { store, dataDir, validPublisher, dashboardProviders, releaseSource, suggestionWriter, liveRows, liveRoots, paused, ...shared } = input;
   const chatApps = createChatApps({ store, dataDir,
     references: () => [...appDocRefs(), ...miniAppDocRefs()], liveRows, liveRoots, paused });
   const apps = new MiniApps({ docs: chatApps.docs, data: shared.data, validPublisher,
-    dashboardProviders: dashboardProviders ?? localDashboardProviders });
+    dashboardProviders: dashboardProviders ?? localDashboardProviders, releaseSource });
   apps.initialize();
   const deps = { ...shared, apps, suggestions: new MiniAppSuggestions({ apps, store,
     writer: suggestionWriter ?? (() => null) }), reports: new ReportStore(shared.data, createReportTemplate) };
@@ -320,6 +322,22 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       const action = match[2];
       if (method === "GET" && !action) return json(res, 200, deps.apps.document(owner, id));
       if (method === "GET" && action === "state") return json(res, 200, await deps.apps.state(owner, id));
+      if (method === "GET" && action === "update") {
+        const abort = new AbortController();
+        const onClose = () => abort.abort();
+        res.once("close", onClose);
+        if (res.destroyed) abort.abort();
+        let result: MiniAppUpdateCheckResult;
+        try {
+          if (abort.signal.aborted) return;
+          result = await deps.apps.checkUpdate(owner, id, abort.signal);
+        } catch (error) {
+          if (abort.signal.aborted) return;
+          throw error;
+        } finally { res.off("close", onClose); }
+        if (abort.signal.aborted || res.destroyed) return;
+        return json(res, 200, result);
+      }
       if (method !== "POST") throw appFailure(405, "Method not allowed.");
       if (action === "dashboard") return json(res, 200, await deps.apps.dashboardRead(owner, id, await readBody(req, 4096)));
       const body: unknown = await readBody(req, action === "publish" ? 900_000 : 20_000);
@@ -327,6 +345,22 @@ export function createMiniAppRoutes(deps: MiniAppRouteDeps): RouteHandler {
       if (action === "publish") return json(res, 200, await deps.apps.publish(owner, body, id));
       if (action === "rollback") return json(res, 200, await deps.apps.rollback(owner, id, body));
       if (action === "archive") return json(res, 200, deps.apps.archive(owner, id, body));
+      if (action === "update") {
+        const abort = new AbortController();
+        const onClose = () => abort.abort();
+        res.once("close", onClose);
+        if (res.destroyed) abort.abort();
+        let result: Awaited<ReturnType<MiniApps["applyUpdate"]>>;
+        try {
+          if (abort.signal.aborted) return;
+          result = await deps.apps.applyUpdate(owner, id, body, abort.signal);
+        } catch (error) {
+          if (abort.signal.aborted) return;
+          throw error;
+        } finally { res.off("close", onClose); }
+        if (abort.signal.aborted || res.destroyed) return;
+        return json(res, 200, result);
+      }
       throw appFailure(404, "Mini App action not found.");
     } catch (error) {
       const failure = miniAppError(error);

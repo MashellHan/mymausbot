@@ -13,6 +13,7 @@ vi.mock("@/state/store", () => ({
   ApiError: class ApiError extends Error { constructor(message: string, readonly status: number, readonly body?: Record<string, unknown>) { super(message); } },
 }));
 
+import { ApiError } from "@/state/store";
 import { mountMiniAppFrame } from "./MiniAppFrame";
 import { miniAppFrameDocument, MINI_APP_CSP } from "./mini-app-document";
 import { AppDocs } from "../../../server/app-docs";
@@ -36,6 +37,9 @@ const page: MiniAppQueryResult = { columns: [{ name: "amount", type: "decimal" }
 const teamDocument: MiniAppDocument = { ...document, app: { ...app, dashboardIdentity: "agent-team",
   dashboard: { kind: "agent-team", renderer: "html", htmlRole: "primary", editableFields: ["title", "description"],
     resources: ["teams", "activity", "configuration", "team-rules", "skill"] } }, bindings: [] };
+const usageDocument: MiniAppDocument = { ...document, app: { ...app, title: "Activities", dashboardIdentity: "usage",
+  dashboard: { kind: "usage", renderer: "html", htmlRole: "primary", editableFields: ["title", "description"], resources: ["usage"] } }, bindings: [] };
+const usageState: MiniAppState = { ...state, data: [] };
 let container: HTMLDivElement;
 
 function send(view: Window, data: unknown) {
@@ -176,6 +180,87 @@ describe("persistent Mini App frame", () => {
     expect(fixture.api).toHaveBeenCalledTimes(1);
     fallback.retire();
   });
+  it("uses only the current owner Activities frame to read the existing usage resource", async () => {
+    vi.spyOn(container, "clientWidth", "get").mockReturnValue(400);
+    vi.spyOn(container, "clientHeight", "get").mockReturnValue(720);
+    vi.spyOn(container.ownerDocument, "visibilityState", "get").mockReturnValue("visible");
+    const revoked = vi.fn(), changed = vi.fn();
+    const snapshot = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
+      prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
+    const result = { appId: app.id, revision: 3, resource: "usage", snapshot };
+    fixture.api.mockResolvedValue(result);
+    const mount = mountMiniAppFrame({ container, document: usageDocument, state: usageState, onRevoked: revoked, onChanged: changed });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    const request = { mausMiniApp: 1, type: "dashboard-read", id: "fixture-usage", selection: { resource: "usage" } };
+    const initialize = (view: Window) => send(view, { jsonrpc: "2.0", method: "ui/notifications/initialized" });
+    try {
+      send(view, request);
+      expect(fixture.api).not.toHaveBeenCalled();
+      initialize(view);
+      send(window, request);
+      send(view, { ...request, selection: { resource: "usage", expectedRevision: 3 } });
+      send(view, { ...request, selection: { resource: "usage", appId: app.id } });
+      send(view, { ...request, selection: { resource: "teams" } });
+      expect(fixture.api).not.toHaveBeenCalled();
+      send(view, request);
+      await vi.waitFor(() => expect(posted).toHaveBeenCalledWith(
+        { mausMiniApp: 1, type: "dashboard-result", id: request.id, result }, "*"));
+      expect(fixture.api).toHaveBeenCalledWith("/api/mini-apps/app_demo/dashboard",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ resource: "usage", expectedRevision: 3 }) }));
+      fixture.api.mockRejectedValueOnce(new ApiError("Outdated", 409));
+      send(view, request);
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      fixture.api.mockRejectedValueOnce(new ApiError("Denied", 403));
+      send(view, request);
+      await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
+
+      mount.update({ ...usageState, appId: "another" });
+      send(view, request);
+      mount.update({ ...usageState, revision: 4 });
+      send(view, request);
+      mount.update({ ...usageState, templateVersion: 2 });
+      send(view, request);
+      expect(fixture.api).toHaveBeenCalledTimes(3);
+    } finally { mount.retire(); }
+
+    for (const denied of [document, teamDocument, { ...usageDocument, app: { ...usageDocument.app, dashboard: null } },
+      { ...usageDocument, bindings: document.bindings }]) {
+      const wrong = mountMiniAppFrame({ container, document: denied, state: usageState, onRevoked: vi.fn() });
+      initialize(wrong.iframe.contentWindow!);
+      send(wrong.iframe.contentWindow!, request);
+      wrong.retire();
+    }
+    expect(fixture.api).toHaveBeenCalledTimes(3);
+  });
+
+  it("cancels a pending Activities read when the owner window hides and never replies with that snapshot", async () => {
+    vi.spyOn(container, "clientWidth", "get").mockReturnValue(400);
+    vi.spyOn(container, "clientHeight", "get").mockReturnValue(720);
+    const visibility = vi.spyOn(container.ownerDocument, "visibilityState", "get").mockReturnValue("visible");
+    let resolve!: (value: unknown) => void;
+    fixture.api.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    const mount = mountMiniAppFrame({ container, document: usageDocument, state: usageState, onRevoked: vi.fn() });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    try {
+      send(view, { jsonrpc: "2.0", method: "ui/notifications/initialized" });
+      send(view, { mausMiniApp: 1, type: "dashboard-read", id: "pending", selection: { resource: "usage" } });
+      const signal = fixture.api.mock.calls[0]?.[1].signal as AbortSignal;
+      visibility.mockReturnValue("hidden");
+      container.ownerDocument.dispatchEvent(new Event("visibilitychange"));
+      expect(signal.aborted).toBe(true);
+      resolve({ appId: app.id, revision: 3, resource: "usage", snapshot: { status: "ready" } });
+      await Promise.resolve();
+      expect(posted).toHaveBeenCalledWith(
+        { mausMiniApp: 1, type: "dashboard-result", id: "pending", error: "This Activities frame is hidden." }, "*");
+      expect(posted.mock.calls.some(([message]) => (message as { id?: string; result?: unknown }).id === "pending"
+        && (message as { result?: unknown }).result)).toBe(false);
+      send(view, { mausMiniApp: 1, type: "dashboard-read", id: "hidden", selection: { resource: "usage" } });
+      expect(fixture.api).toHaveBeenCalledTimes(1);
+    } finally { mount.retire(); }
+  });
+
   it("starts with an opaque document and no generic app capability", () => {
     const doc = miniAppFrameDocument(document, false);
     expect(doc.srcdoc).toMatch(/^<!DOCTYPE html><meta http-equiv="Content-Security-Policy"/);
@@ -519,5 +604,127 @@ describe("persistent Mini App frame", () => {
     await vi.waitFor(() => expect(posted.mock.calls.some(([answer]) => (answer as { id?: string }).id === "guarded")).toBe(true));
     expect(posted.mock.calls.find(([answer]) => (answer as { id?: string }).id === "guarded")?.[0]).toMatchObject({ error: expect.stringContaining("guarded desktop window") });
     mount.retire();
+  });
+
+  it("binds a packaged Mojo site to the current opaque frame and retires it on revision loss", () => {
+    const release = { packageId: "mashellhan.mojo", requires: ["mojo-poetry-v1"], appVersion: "1.0.0",
+      sourceCommit: "a".repeat(40), tag: "mini-app/mojo/v1.0.0", htmlSha256: "b".repeat(64), htmlBytes: 12,
+      queriesSha256: "c".repeat(64), queriesBytes: 2 };
+    const packaged: MiniAppDocument = { ...document, app: { ...app, shippedTemplateKind: "mojo", release }, bindings: [] };
+    const current = { ...state, data: [] };
+    const onSiteView = vi.fn();
+    const mount = mountMiniAppFrame({ container, document: packaged, state: current, onRevoked: vi.fn(), site: "mojo-poetry", onSiteView });
+    try {
+      Object.defineProperties(mount.iframe, { clientWidth: { value: 360 }, clientHeight: { value: 500 } });
+      const source = mount.iframe.contentWindow!;
+      const post = (data: unknown, origin = "null") => window.dispatchEvent(new MessageEvent("message", { source, origin, data }));
+      const viewport = { x: 0, y: 30, width: 360, height: 440 };
+      const show = { mausMiniApp: 1, type: "site-show", id: "mini:2", site: "mojo-poetry", viewport };
+      post(show);
+      post({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+      post(show, "https://example.test");
+      expect(onSiteView).not.toHaveBeenCalled();
+      post(show);
+      expect(onSiteView).toHaveBeenLastCalledWith({ site: "mojo-poetry", viewport });
+      mount.update({ ...current, revision: current.revision + 1 });
+      expect(onSiteView).toHaveBeenLastCalledWith(undefined);
+      post(show);
+      expect(onSiteView).toHaveBeenCalledTimes(2);
+    } finally { mount.retire(); }
+  });
+
+  it("exposes window.mausApp.markReady only for active managed releases and validates runtime-ready messages", async () => {
+    const release = {
+      packageId: "mashellhan.demo",
+      appVersion: "1.2.0",
+      sourceCommit: "a".repeat(40),
+      tag: "mini-app/demo/v1.2.0",
+      requires: [],
+      htmlSha256: "b".repeat(64),
+      htmlBytes: 12,
+      queriesSha256: "c".repeat(64),
+      queriesBytes: 2,
+    };
+    const managedDoc = { ...document, app: { ...app, release } } as MiniAppDocument;
+
+    // Unmanaged and archived docs do not expose markReady.
+    for (const candidateDoc of [document, { ...managedDoc, app: { ...managedDoc.app, status: "archived" as const } }]) {
+      const child = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+      Object.defineProperty(child, "parent", { value: { postMessage: () => {} } });
+      child.eval(/<script>([\s\S]*?)<\/script>/.exec(miniAppFrameDocument(candidateDoc, false).srcdoc)![1]!);
+      const sdk = (child as unknown as { mausApp: { markReady?: () => Promise<void> } }).mausApp;
+      expect(sdk.markReady).toBeUndefined();
+      await child.happyDOM.abort();
+    }
+
+    // Active managed doc exposes markReady, waits for initialized, and posts exact { mausMiniApp: 1, type: "runtime-ready" } once.
+    const child = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+    const sent: Array<Record<string, unknown>> = [];
+    const parent = { postMessage: (message: Record<string, unknown>) => sent.push(message) };
+    Object.defineProperty(child, "parent", { value: parent });
+    child.eval(/<script>([\s\S]*?)<\/script>/.exec(miniAppFrameDocument(managedDoc, false).srcdoc)![1]!);
+    const sdk = (child as unknown as { mausApp: { markReady?: () => Promise<void> } }).mausApp;
+    expect(typeof sdk.markReady).toBe("function");
+    const firstMark = sdk.markReady!();
+    const secondMark = sdk.markReady!();
+    expect(sent.some((m) => m.type === "runtime-ready")).toBe(false);
+    const init = sent.find((m) => m.method === "ui/initialize")!;
+    child.dispatchEvent(new child.MessageEvent("message", { source: parent as unknown as HappyWindow,
+      data: { jsonrpc: "2.0", id: init.id, result: { hostCapabilities: {} } } }));
+    await Promise.all([firstMark, secondMark]);
+    const readyIdx = sent.findIndex((m) => m.type === "runtime-ready");
+    const initializedIdx = sent.findIndex((m) => m.method === "ui/notifications/initialized");
+    expect(initializedIdx).toBeGreaterThanOrEqual(0);
+    expect(readyIdx).toBeGreaterThan(initializedIdx);
+    expect(sent.filter((m) => m.type === "runtime-ready")).toEqual([{ mausMiniApp: 1, type: "runtime-ready" }]);
+    await child.happyDOM.abort();
+
+    // Receiver binds to current frame WindowProxy, opaque origin "null", exact shape, initialized, and matching appId/revision/templateVersion.
+    const onRuntimeReady = vi.fn();
+    const unmanagedReady = vi.fn();
+    const unmanagedMount = mountMiniAppFrame({ container, document, state, onRevoked: vi.fn(), onRuntimeReady: unmanagedReady });
+    window.dispatchEvent(new MessageEvent("message", {
+      source: unmanagedMount.iframe.contentWindow!,
+      origin: "null",
+      data: { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} },
+    }));
+    window.dispatchEvent(new MessageEvent("message", {
+      source: unmanagedMount.iframe.contentWindow!,
+      origin: "null",
+      data: { mausMiniApp: 1, type: "runtime-ready" },
+    }));
+    expect(unmanagedReady).not.toHaveBeenCalled();
+    unmanagedMount.retire();
+
+    const mount = mountMiniAppFrame({ container, document: managedDoc, state, onRevoked: vi.fn(), onRuntimeReady });
+    const view = mount.iframe.contentWindow!;
+    // Reject before initialized, wrong source, non-opaque origin, and extra keys.
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "null", data: { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} } }));
+    window.dispatchEvent(new MessageEvent("message", { source: window, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "https://example.com", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready", extra: true } }));
+    expect(onRuntimeReady).not.toHaveBeenCalled();
+
+    // Reject if state revision diverged before readiness arrived.
+    mount.update({ ...state, revision: 99 });
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    expect(onRuntimeReady).not.toHaveBeenCalled();
+    mount.retire();
+
+    // Valid runtime-ready fires once with exact appId, revision, templateVersion, even after data-only or synchronized revision bumps.
+    const validMount = mountMiniAppFrame({ container, document: managedDoc, state, onRevoked: vi.fn(), onRuntimeReady });
+    const validView = validMount.iframe.contentWindow!;
+    validMount.update({ ...state, data: [{ datasetId: "dataset_demo", revision: 8 }] });
+    validMount.update(
+      { ...state, revision: 4, data: [{ datasetId: "dataset_demo", revision: 8 }] },
+      { ...managedDoc, app: { ...managedDoc.app, revision: 4 } },
+    );
+    window.dispatchEvent(new MessageEvent("message", { source: validView, origin: "null", data: { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} } }));
+    window.dispatchEvent(new MessageEvent("message", { source: validView, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    window.dispatchEvent(new MessageEvent("message", { source: validView, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    expect(onRuntimeReady).toHaveBeenCalledTimes(1);
+    expect(onRuntimeReady).toHaveBeenCalledWith({ appId: app.id, revision: 4, templateVersion: state.templateVersion });
+    validMount.retire();
   });
 });

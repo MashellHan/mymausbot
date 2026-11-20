@@ -4,6 +4,8 @@ import { buildSrcdoc, stripDocumentPreamble } from "../../../shared/app-frame/do
 import { APP_THEME_STYLE } from "../../../shared/app-frame/helper";
 import type { MiniAppDocument } from "../../../shared/mini-apps";
 import { isEligibleGithubActivityDocument } from "./github-activity-host";
+import { HONGGUO_FRAME_SDK_SOURCE } from "./hongguo-frame-sdk";
+import type { MiniAppSite } from "./mini-app-site";
 
 export const MINI_APP_CSP = [
   "default-src 'none'",
@@ -20,7 +22,7 @@ export const MINI_APP_CSP = [
   "form-action 'none'",
 ].join("; ");
 
-function buildMiniAppSdkSource(githubActivity: boolean): string {
+function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean, site: MiniAppSite | undefined, hongguo: boolean): string {
   return `(function () {
   "use strict";
   var parent = window.parent;
@@ -28,10 +30,13 @@ function buildMiniAppSdkSource(githubActivity: boolean): string {
   var pending = new Map();
   var listeners = new Set();
   var selectionListeners = new Set();
+  var siteListeners = new Set();
+  var siteTarget = ${JSON.stringify(site ?? null)};
   var createdBlobUrls = new Set();
   var currentHostSelection = null;
   var sequence = 0;
   var closed = false;
+  var markedReady = false;
   var canOpenSources = false;
   function post(message) { parent.postMessage(message, "*"); }
   function request(message) {
@@ -62,6 +67,7 @@ function buildMiniAppSdkSource(githubActivity: boolean): string {
     pending.clear();
     listeners.clear();
     selectionListeners.clear();
+    siteListeners.clear();
     createdBlobUrls.forEach(function (url) { try { URL.revokeObjectURL(url); } catch (e) {} });
     createdBlobUrls.clear();
   }
@@ -102,7 +108,11 @@ function buildMiniAppSdkSource(githubActivity: boolean): string {
         createdBlobUrls.add(blobUrl);
         mediaAnswer.resolve({ blobUrl: blobUrl, mimeType: message.mimeType, sha256: message.sha256 });
       }
-    } else if ((message.type === "query-result" || message.type === "dashboard-result") && pending.has(message.id)) {
+    } else if (message.type === "site-status" && siteTarget && message.site === siteTarget) {
+      siteListeners.forEach(function (listener) {
+        listener({ site: message.site, opening: message.opening, phase: message.phase });
+      });
+    } else if ((message.type === "query-result" || message.type === "dashboard-result" || message.type === "site-result") && pending.has(message.id)) {
       var answer = pending.get(message.id);
       pending.delete(message.id);
       if (message.error) answer.reject(new Error(String(message.error)));
@@ -166,13 +176,42 @@ function buildMiniAppSdkSource(githubActivity: boolean): string {
       });
     };
   }
+  if (${managedRelease ? "true" : "false"}) {
+    base.markReady = function () {
+      if (markedReady) return ready;
+      markedReady = true;
+      return ready.then(function () {
+        if (!closed) post({ mausMiniApp: 1, type: "runtime-ready" });
+      });
+    };
+  }
+  if (siteTarget) {
+    base.site = Object.freeze({
+      show: function (target, viewport, options) {
+        if (target !== siteTarget) return Promise.reject(new Error("This site is unavailable."));
+        var message = { mausMiniApp: 1, type: "site-show", site: target, viewport: viewport };
+        if (target !== "mojo-poetry") {
+          message.opening = options && options.opening;
+          if (options && options.retry === true) message.retry = true;
+        }
+        return ready.then(function () { return request(message); });
+      },
+      onStatusChanged: function (listener) {
+        if (typeof listener !== "function") throw new TypeError("A listener is required.");
+        siteListeners.add(listener);
+        return function () { siteListeners.delete(listener); };
+      }
+    });
+  }
+  ${hongguo ? HONGGUO_FRAME_SDK_SOURCE : ""}
   var api = Object.freeze(base);
   Object.defineProperty(window, "mausApp", { value: api, enumerable: true });
 })();`;
 }
 
-export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean): AppDocument {
-  const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document));
+export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean, scope: { site?: MiniAppSite; hongguo?: boolean } = {}): AppDocument {
+  const managedRelease = document.app.status === "active" && Boolean((document.app as { release?: unknown }).release);
+  const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document), managedRelease, scope.site, scope.hongguo === true);
   const html = `<style>${APP_THEME_STYLE}</style><script>${sdk}</script>${stripDocumentPreamble(document.html)}`;
   return {
     v: 1,
