@@ -266,6 +266,8 @@ export const POLICY_PATH = "scripts/testing/check-policy.json";
 export const POLICY_CHANGE = /^(?:\.github\/|scripts\/(?:ci-|check\.|qa\/|testing\/(?:check-policy|ci-retry|host-e2e|duration-sequencer|vitest-shard))|(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|vite\.config\.ts|tsconfig[^/]*|\.npmrc|\.node-version)$)/;
 export const SENSITIVE_PATH = /^(?:shared\/|packages\/phone-protocol\/|server\/(?:drivers?\/|host\/|routes\/|local-|request-auth|guarded|store|message-db|turn-|safety|pairing|secret)|electron\/|companion\/|enterprise\/)/;
 const SENSITIVE_LINE = /\b(?:auth|authorization|permission|credential|secret|redact|token|password|localStorage|sessionStorage|fetch|WebSocket|postMessage|ipcRenderer|persist|migration|dispatch|cancel|spawn|exec)\b/i;
+const SERVER_CORE_AREAS = new Set(["server", "desktop", "windows-computer-control", "e2e-vectors", "everything"]);
+const CI_VERIFY_PATH = /^(?:\.github\/|scripts\/|docs\/|[^/]+\.md$|(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|vite\.config\.ts|tsconfig[^/]*|\.npmrc|\.node-version)$|src\/locales\/|electron\/)/;
 export const SAFE_TEST_PATH = /^(?:[a-zA-Z0-9_.-]+\/)*[a-zA-Z0-9_.-]+\.test\.[cm]?[jt]sx?$/;
 export const FAST_AFFECTED_LIMIT = 4;
 export const SETTINGS_PLACES_TEST = "src/components/settings/settings-places.test.ts";
@@ -281,8 +283,11 @@ const unique = (values) => [...new Set(values)].sort();
 
 export function readCheckPolicy(text = readFileSync(POLICY_PATH, "utf8"), present = existsSync) {
   const policy = JSON.parse(text);
-  const tests = [...(policy.core ?? []), ...(policy.guards ?? []), ...(policy.areas ?? []).flatMap((area) => area.tests ?? [])];
-  if (policy.version !== 1 || !policy.core?.length || !policy.guards?.length || !Array.isArray(policy.areas)
+  const hasServerCore = policy.serverCore !== undefined;
+  const serverCore = hasServerCore ? policy.serverCore : [];
+  const tests = [...(policy.core ?? []), ...(Array.isArray(serverCore) ? serverCore : []), ...(policy.guards ?? []), ...(policy.areas ?? []).flatMap((area) => area.tests ?? [])];
+  if (policy.version !== 1 || !policy.core?.length || (hasServerCore && (!Array.isArray(serverCore) || !serverCore.length))
+    || !policy.guards?.length || !Array.isArray(policy.areas)
     || tests.some((file) => !SAFE_TEST_PATH.test(file) || !present(file))
     || policy.areas.some((area) => !/^[a-z][a-z-]+$/.test(area.id) || !area.sources?.length || !area.tests?.length
       || typeof area.admitted !== "boolean" || area.sources.some((file) => areaOf(file) === "everything"))
@@ -305,13 +310,16 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   const affected = unique([...areas.flatMap((area) => area.tests), ...direct]);
   const focused = fastPr || focusedPush;
   const settingsPlaces = !Array.isArray(files) || changed.some((file) => SETTINGS_PLACES_INPUTS.has(file));
+  const ciVerify = !Array.isArray(files) || !changed.length || changed.some((file) => CI_VERIFY_PATH.test(file));
   const nativeRelay = changed.some((file) => file.startsWith("relay/"));
   const vitestAffected = affected.filter((file) => !RELAY_NATIVE_TEST.test(file) && !BROKER_OWN_TEST.test(file));
+  const sensitiveLine = lines.some((line) => /^[+-](?![+-]{2})/.test(line) && SENSITIVE_LINE.test(line));
+  const sensitivePath = changed.some((file) => SENSITIVE_PATH.test(file));
   const reasons = [];
   if (["ci:full", "qa:repair", "windows"].some((label) => labels.includes(label))) reasons.push("explicit full validation request");
   if (!changed.length || baseline.areas.includes("everything")) reasons.push("unknown or empty change scope");
   if (changed.some((file) => POLICY_CHANGE.test(file))) reasons.push("CI, policy, dependency or toolchain change");
-  if (changed.some((file) => SENSITIVE_PATH.test(file)) || lines.some((line) => /^[+-](?![+-]{2})/.test(line) && SENSITIVE_LINE.test(line))) {
+  if (sensitivePath || sensitiveLine) {
     reasons.push(focused ? "sensitive contract: remaining coverage in full QA" : "sensitive contract: retain full validation");
   }
   if (baseline.areas.length >= 3 && !baseline.areas.every((area) => area === "docs" || area === "locales")) reasons.push("broad integration change");
@@ -325,20 +333,24 @@ export function selectCheckPlan({ files, policy, labels = [], lines = [], mode =
   if (candidate && (!qa.healthy || qaBlocked)) reasons.push(qa.reason || "untriaged or held QA findings affect this area");
   if (candidate && mode !== "tiered") reasons.push(`${mode}: retain existing coverage`);
   const docs = changed.length > 0 && changed.every((file) => areaOf(file) === "docs");
-  const filesToRun = unique([...policy.core, ...vitestAffected]);
+  const serverCore = policy.serverCore ?? [];
+  const allCore = unique([...policy.core, ...serverCore]);
+  const needsServerCore = changed.some((file) => SERVER_CORE_AREAS.has(areaOf(file)) || SENSITIVE_PATH.test(file)) || sensitiveLine;
+  const fastCore = needsServerCore ? allCore : policy.core;
+  const filesToRun = unique([...allCore, ...vitestAffected]);
   if (filesToRun.some((file) => !SAFE_TEST_PATH.test(file) || !present(file))) throw new Error("Unsafe or missing selected test");
-  const additional = [...new Set([...unique(direct), ...affected])].filter((file) => !policy.core.includes(file)
+  const additional = [...new Set([...unique(direct), ...affected])].filter((file) => !allCore.includes(file)
     && !policy.guards.includes(file) && !/^scripts\/qa\/.*\.test\.ts$/.test(file)
     && file !== "scripts/release-ci.test.ts" && file !== SETTINGS_PLACES_TEST);
   const portable = additional.filter((file) => !FAST_EXPENSIVE_TEST.test(file) && !BROKER_OWN_TEST.test(file));
-  const fastFiles = unique([...policy.core, ...portable.slice(0, FAST_AFFECTED_LIMIT)]);
+  const fastFiles = unique([...fastCore, ...portable.slice(0, FAST_AFFECTED_LIMIT)]);
   const deferred = unique(additional.filter((file) => !fastFiles.includes(file) && !BROKER_OWN_TEST.test(file)));
   const controlPlane = changed.some((file) => ["control-plane", "broker"].includes(areaOf(file)));
   const fastChecks = controlPlane ? ["build", "control-plane"] : ["build"];
   return {
     version: policy.version, mode, files: changed, areas: baseline.areas, fastAreas: areas.map((area) => area.id),
     holdAreas: !full && mappedArea ? areas.map((area) => area.id) : ["global"],
-    full, candidate, admitted, reduced, fast: fastPr, focusedPush, settingsPlaces, reasons,
+    full, candidate, admitted, reduced, fast: fastPr, focusedPush, settingsPlaces, ciVerify, needsServerCore, reasons,
     scope: focused ? { areas: baseline.areas, checks: fastChecks, files: fastFiles }
       : full ? FULL_SCOPE : reduced ? { areas: areas.map((area) => area.id), checks: ["build", "core-tests"], files: filesToRun } : baseline,
     edit: docs ? [...VITEST_SUBSETS["docs-tests"].files, ...policy.guards] : vitestAffected,
@@ -601,6 +613,7 @@ export async function runCiScope({ readPullRequest = pullRequestControls, fastPr
   outputs.fast_pr = Boolean(plan?.fast);
   outputs.focused_push = focusedPush;
   outputs.settings_places = plan?.settingsPlaces ?? true;
+  outputs.ci_verify = plan?.ciVerify ?? true;
   outputs.fast_files = focused ? plan.fastFiles.join(" ") : "";
   outputs.deferred_files = focused ? plan.deferred : [];
   outputs.deferred_checks = focused ? selectCiScope(files).checks.filter((check) => !scope.checks.includes(check)) : [];

@@ -865,15 +865,17 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
 
   it("selects both Room contracts for either file or their shared fixture", () => {
     const policy = readCheckPolicy();
+    const allCore = [...policy.core, ...(policy.serverCore ?? [])];
     const fixture = "server/testing/room-coordination-fixture.ts";
     const rooms = ["server/room-coordination.e2e.test.ts", "server/room-coordination-followon.e2e.test.ts"];
-    expect(policy.core).toHaveLength(26);
+    expect(policy.core).toHaveLength(19);
+    expect(policy.serverCore).toHaveLength(7);
     expect(policy.areas.find((area) => area.id === "room-coordination"))
       .toMatchObject({ sources: [fixture, ...rooms], tests: rooms, admitted: false });
     for (const source of [fixture, ...rooms]) {
       const plan = selectCheckPlan({ files: [source], policy, fastPr: true });
       expect(plan.edit).toEqual([...rooms].sort());
-      expect(plan.fastFiles).toEqual([...new Set([...policy.core, ...rooms])].sort());
+      expect(plan.fastFiles).toEqual([...new Set([...allCore, ...rooms])].sort());
       expect(plan.deferred).toEqual([]);
     }
     const combined = selectCheckPlan({
@@ -882,8 +884,8 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
       policy,
       fastPr: true,
     });
-    expect(combined.fastFiles).toEqual([...new Set([...policy.core, ...rooms])].sort());
-    expect(combined.fastFiles).toHaveLength(policy.core.length + rooms.length);
+    expect(combined.fastFiles).toEqual([...new Set([...allCore, ...rooms])].sort());
+    expect(combined.fastFiles).toHaveLength(allCore.length + rooms.length);
     expect(combined.deferred).toEqual([]);
   });
 
@@ -900,7 +902,11 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     expect(plan.fastFiles).not.toContain("scripts/guard.test.ts");
     expect(plan.deferred).toEqual(["server/d.test.ts"]);
     expect(plan.settingsPlaces).toBe(true);
+    expect(plan.ciVerify).toBe(true);
+    expect(selectCheckPlan({ files: ["src/source.ts"], policy, fastPr: true, present: () => true }).ciVerify).toBe(false);
     expect(selectCheckPlan({ files: ["src/locales/pt-br.json"], policy, fastPr: true, present: () => true }).settingsPlaces).toBe(false);
+    expect(selectCheckPlan({ files: ["src/locales/pt-br.json"], policy, fastPr: true, present: () => true }).ciVerify).toBe(true);
+    expect(selectCheckPlan({ files: ["scripts/ci-scope.mjs"], policy, fastPr: true, present: () => true }).ciVerify).toBe(true);
   });
 
   it("runs every platform for the sensitive desktop app", async () => {
