@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { activeChatTurn, automationStatus, publicChatStatus } from "./chat-live-status.ts";
 import type { RuntimeEvent } from "./contracts.ts";
+import { workOrigin } from "./peer-provenance.ts";
 
 describe("host live chat status", () => {
   it("emits only a scoped start/finish enum for an accepted automation update", () => {
@@ -39,10 +40,12 @@ describe("host live chat status", () => {
   it("only identifies the accepted source for the live generation", () => {
     const event: RuntimeEvent = { type: "turn.started", eventId: "1", threadId: "thread", turnId: "turn-a",
       provider: "harness", createdAt: "2026-11-20T12:00:00Z" };
-    const owner = { generation: "current", messageId: "person-message", personLine: true as const };
+    const person = { role: "user", kind: "text", text: "Update automation." } as const;
+    const owner = { generation: "current", messageId: "person-message", personLine: true as const, origin: workOrigin(person) };
     expect(publicChatStatus(event, owner, "former")).toBe(event);
     expect(publicChatStatus(event, { ...owner, stopped: true }, "current")).toBe(event);
     expect(publicChatStatus(event, owner, "current")).toMatchObject({ requestMessageId: "person-message" });
+    expect(publicChatStatus(event, { ...owner, origin: workOrigin({ ...person, relayed: true }) }, "current")).toBe(event);
     expect(publicChatStatus(event, { generation: "current", messageId: "routine-line", automation: "routine" }, "current")).toBe(event);
     expect(publicChatStatus({ ...event, requestMessageId: "provider-source" }, undefined, "current")).toMatchObject({ requestMessageId: undefined });
     expect(publicChatStatus({ ...event, type: "turn.progress", activity: "tool", automation: { action: "update", phase: "started" } },

@@ -1,5 +1,6 @@
 import { newId, type RuntimeEvent } from "./contracts.ts";
 import { isTurnAutomationAction } from "../shared/turn-progress.ts";
+import type { WorkOrigin } from "./peer-provenance.ts";
 
 export type StartAutomationStatus = (action: string) => (() => void) | undefined;
 
@@ -9,6 +10,7 @@ type ChatTurnOwner = {
   turnId?: string | null;
   stopped?: boolean;
   personLine?: true;
+  origin?: WorkOrigin;
   automation?: unknown;
 };
 
@@ -19,7 +21,8 @@ export function activeChatTurn(turnId: string | undefined, owner: ChatTurnOwner 
 export function publicChatStatus(event: RuntimeEvent, owner: ChatTurnOwner | undefined, generation: string | undefined): RuntimeEvent {
   if (event.type === "turn.progress" && event.automation) return { ...event, automation: undefined };
   if (event.type !== "turn.started") return event;
-  const requestMessageId = owner?.personLine && owner.generation === generation && !owner.stopped && !owner.automation
+  const requestMessageId = owner?.personLine && owner.origin?.kind === "user" &&
+      owner.generation === generation && !owner.stopped && !owner.automation
     ? owner.messageId : undefined;
   return requestMessageId === event.requestMessageId ? event : { ...event, requestMessageId };
 }

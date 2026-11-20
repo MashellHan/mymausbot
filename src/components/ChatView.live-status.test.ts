@@ -274,6 +274,18 @@ describe("what the bot is doing right now", () => {
 });
 
 describe("verified automation updates in the accepted turn language", () => {
+  it("uses the app language for guarded relay text, even when a host frame names that row", async () => {
+    await loadLocalePack("zh");
+    setLocale("zh");
+    mode.advanced = false;
+    const relay = { ...ask, relayed: true, text: "Update automation." };
+    engine({ type: "turn.started", requestMessageId: relay.id });
+    render(busyBot([relay]));
+    engine({ type: "turn.progress", activity: "tool", itemId: "update", automation: { action: "update", phase: "started" } });
+    expect(statusLine()).toBe("正在更新自动化");
+    expect(host.querySelector("[data-turn-status]")?.getAttribute("lang")).toBe("zh");
+  });
+
   it("uses the app language for a routine-generated user-role row", async () => {
     await loadLocalePack("zh");
     setLocale("zh");
@@ -346,6 +358,7 @@ describe("verified automation updates in the accepted turn language", () => {
     { app: "zh", language: "en", text: "Update the daily automation schedule tomorrow.", status: "Updating automation" },
     { app: "zh", language: "en", text: "Update automation.", status: "Updating automation" },
     { app: "zh", language: "en", text: "Rename this automation.", status: "Updating automation" },
+    { app: "zh", language: "en", text: "Rename yesterday’s automation schedule, keeping Monday mornings unchanged.", status: "Updating automation" },
     { app: "en", language: "ja", text: "この自動化を更新してください。", status: "自動化を更新中" },
     { app: "en", language: "ko", text: "이 자동화를 업데이트해 주세요.", status: "자동화 업데이트 중" },
     { app: "zh", language: "zh", text: "OK", status: "正在更新自动化" },

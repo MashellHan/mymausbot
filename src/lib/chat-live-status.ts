@@ -50,9 +50,9 @@ export function useChatLiveStatusKey(live: TurnLive): LocaleKey | undefined {
 function messageLanguage(messages: readonly Message[], requestMessageId: string | undefined, app: string): string {
   const message = requestMessageId && messages.find((row) => row.id === requestMessageId);
   if (!message || message.role !== "user" || message.kind !== "text" || message.automated || message.queued || message.reaction ||
+      message.relayed || message.aside || message.via === "api" ||
       message.id.startsWith("optimistic-") || peerLine(message)) return app;
   const text = message.text?.replace(/```[\s\S]*?```|`[^`]*`/g, "") ?? "";
-  if (/^\s*(?:check|create|update|rename|pause|resume|run|delete)\s+(?:(?:this|the|my)\s+)?automations?[.!?]?\s*$/i.test(text)) return "en";
   const han = text.match(/\p{Script=Han}/gu)?.length ?? 0;
   const latin = text.match(/\p{Script=Latin}/gu)?.length ?? 0;
   const kana = text.match(/[\p{Script=Hiragana}\p{Script=Katakana}]/gu)?.length ?? 0;
@@ -63,6 +63,9 @@ function messageLanguage(messages: readonly Message[], requestMessageId: string 
     return app;
   }
   if (han >= 3 && han * 2 >= latin) return app.startsWith("zh") || app === "ja" || app === "ko" ? app : "zh";
+  const firstClause = text.trim().split(/[.!?。！？\n]/, 1)[0]!;
+  if (han === 0 && /^(?:check|create|update|rename|pause|resume|run|delete)\s+/i.test(firstClause) &&
+      /\bautomations?\b/i.test(firstClause)) return "en";
   const english = new Set(text.toLowerCase().match(/\b(?:and|are|can|could|for|is|it|my|please|that|the|this|to|update|when|with|would|you|your)\b/g) ?? []);
   return latin >= 12 && english.size >= 2 ? "en" : app;
 }
