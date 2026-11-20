@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { ApprovalCard, appliedChange } from "./ApprovalCard";
 import { pendingApprovals, PendingApprovalActions, PendingApprovalPanel, spokenApprovalPrompt, type Pending } from "./PendingApproval";
-import { StoreProvider, type Bot, type Message } from "@/state/store";
+import { BotEditorStore, initialState, StoreProvider, type Bot, type Message } from "@/state/store";
 import { skillRequestBehavior } from "../../shared/skill-request";
 
 const routineRequest = {
@@ -658,6 +658,9 @@ describe("ApprovalCard for a change that applied on its own", () => {
     routineRequest: { ...routineRequest, operation, resultId: "routine-1", ...(undo ? { undo } : {}) } as NonNullable<Message["card"]>["routineRequest"],
   });
   const render = (message: Message) => renderToStaticMarkup(createElement(ApprovalCard, { bot: { name: "Scout" }, message, threadId: "thread-1" }));
+  const renderCompact = (message: Message) => renderToStaticMarkup(createElement(BotEditorStore, { value: {
+    state: initialState, dispatch: () => {}, flushBotPatches: async () => null, refreshInstances: async () => {}, refreshModels: async () => {},
+  }, children: createElement(ApprovalCard, { bot: { name: "Scout" }, message, threadId: "thread-1", compact: true }) }));
 
   // A create renders the live trigger card (TriggerCard.test.ts); every later change is this one line.
   const update = { action: "update" as const, routineId: "routine-1", expectedUpdatedAt: 1, changes: { name: "Renamed" } };
@@ -673,6 +676,17 @@ describe("ApprovalCard for a change that applied on its own", () => {
     expect(markup).not.toContain("30 14 * * 3");
     expect(markup).not.toContain("Waiting for your confirmation");
     expect(markup).not.toContain("schedule_routine");
+  });
+
+  it("keeps compact update, pause and delete receipts to the action and stored title", () => {
+    for (const action of ["update", "pause", "resume", "run_now", "delete"] as const) {
+      const operation = { ...update, action };
+      const message = routineCard(operation, { name: "Morning brief", before });
+      const markup = renderCompact(message);
+      expect(markup).toContain(`data-routine-receipt="${action}"`);
+      expect(markup).toContain("Morning brief");
+      expect(markup).not.toMatch(/<button|Undo|Details/);
+    }
   });
 
   it("offers app-setting Undo only for safe changes and only after owner status is known", () => {
@@ -707,16 +721,20 @@ describe("ApprovalCard for a change that applied on its own", () => {
   });
 
   it("names profile fields, the model, and the skill in plain words", () => {
-    const profile = render(applied({
+    const profileMessage = applied({
       tool: "update_profile",
       profileRequest: {
         version: 1, requestId: "p", botId: "bot-1", threadId: "thread-1", targetBotId: "bot-1", targetName: "Scout",
         createdAt: 1, reason: "asked", changes: { title: "Researcher", soul: "Be brief." }, before: { title: "", soul: "" },
         expectedRevision: "r", undo: { appliedRevision: "r2" },
       },
-    }));
+    });
+    const profile = render(profileMessage);
     expect(profile).toContain("Scout updated its profile: title, standing instructions");
     expect(profile).toContain(">Undo<");
+    const compactProfile = renderCompact(profileMessage);
+    expect(compactProfile).toContain("Profile updated");
+    expect(compactProfile).not.toMatch(/standing instructions|<button/);
     const model = render(applied({
       tool: "update_model",
       modelRequest: {

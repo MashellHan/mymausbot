@@ -7705,6 +7705,7 @@
   "routines.unavailableBot": "机器人无法使用",
   "routines.unread": "未查看的失败",
   "routines.unreadable": "无法读取已保存的例行任务，所以它们现在都无法运行。没有删除任何内容：文件保持原样，OpenMausBot 会继续尝试读取。",
+  "routines.upcoming": "即将运行",
   "routines.view.day": "日",
   "routines.view.label": "计划视图",
   "routines.view.list": "列表",

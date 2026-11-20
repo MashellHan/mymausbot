@@ -6,6 +6,7 @@ import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { usePageVisible } from "@/lib/page-visible";
+import { useAdvancedMode } from "@/lib/interface-mode";
 import { api, useStore, type Bot } from "@/state/store";
 import { BotAvatar } from "./Avatar";
 import { ModelPicker } from "./ModelPicker";
@@ -57,6 +58,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
   onOpenApps: (id?: string) => void;
 }) {
   const owner = useOwnerOrAdmin();
+  const advanced = useAdvancedMode();
   const nativeGuard = miniAppNativeFrameGuard();
   const visible = usePageVisible();
   const waitingForTask = Boolean(bot.switchingTo || bot.awaitingThreadSnapshot);
@@ -103,7 +105,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
       <h1 className="min-w-0 truncate text-[19px] font-semibold leading-7 text-ink" title={bot.name}>{bot.name}</h1>
     </header>
     <OverviewModel key={`model:${bot.id}`} bot={bot} />
-    <RoutinesSection key={bot.id} bot={bot} routines={routines} runs={runs} defaultRunOn={defaultRunOn} compact />
+    <RoutinesSection key={bot.id} bot={bot} routines={routines} runs={runs} defaultRunOn={defaultRunOn} compact upcoming={!advanced} />
     <section aria-label={t("model.suggested")}>
       <div className="mb-3 flex items-center gap-3 px-1">
         <Lightbulb size={17} className="shrink-0 text-ink-secondary" aria-hidden="true" />

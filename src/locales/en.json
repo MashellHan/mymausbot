@@ -8393,6 +8393,7 @@
   "routines.unavailableBot": "Bot unavailable",
   "routines.unread": "Unseen failure",
   "routines.unreadable": "Your saved routines could not be read, so none of them can run right now. Nothing was deleted: the file is kept as it is, and OpenMausBot keeps trying to read it.",
+  "routines.upcoming": "Upcoming",
   "routines.view.day": "Day",
   "routines.view.label": "Schedule view",
   "routines.view.list": "List",

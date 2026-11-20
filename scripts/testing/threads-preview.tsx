@@ -18,7 +18,8 @@ if (query.has("ombVoiceProbe")) {
 setAnalyticsEnabled(false);
 if (languageChoice() === null) setLanguageChoice("en");
 // ?onboarding=1 plays a brand-new install with the default interface mode.
-if (query.get("fixtureMode") === "simple") setAdvancedMode(false);
+const fixtureMode = query.get("fixtureMode");
+if (fixtureMode === "simple" || fixtureMode === "advanced") setAdvancedMode(fixtureMode === "advanced");
 if (!query.has("onboarding")) setEmailGateDone("skipped");
 // Every launch is a new browser, so the once-per-browser Simple mode popup shows only with ?simpleModePrompt=1.
 if (!query.has("simpleModePrompt")) markSimpleModePromptSeen();

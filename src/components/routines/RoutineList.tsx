@@ -8,7 +8,7 @@ import { latestRoutineRun, routineDateTime, routineFinished, routineHeldNote, ro
 import type { Bot } from "@/state/store";
 import { Switch } from "../SettingsPrimitives";
 
-export function RoutineList({ routines, runs, bots, pausedBots, heldBots, loading, error, unreadable, compact = false, onOpen, onLogs, onToggle }: {
+export function RoutineList({ routines, runs, bots, pausedBots, heldBots, loading, error, unreadable, compact = false, upcoming = false, onOpen, onLogs, onToggle }: {
   routines: Routine[];
   runs: RoutineRun[];
   bots?: Bot[];
@@ -19,6 +19,7 @@ export function RoutineList({ routines, runs, bots, pausedBots, heldBots, loadin
   loading?: boolean;
   error?: boolean;
   compact?: boolean;
+  upcoming?: boolean;
   /** The server cannot read its saved routines. */
   unreadable?: boolean;
   onOpen: (routine: Routine) => void;
@@ -31,7 +32,7 @@ export function RoutineList({ routines, runs, bots, pausedBots, heldBots, loadin
     {error && <div role="alert" className="rounded-lg bg-danger/10 p-3 text-[12px] text-danger">{t("routines.loadError")}</div>}
     {unreadable && <div role="alert" className="rounded-lg bg-danger/10 p-3 text-[12px] leading-relaxed text-danger" data-routines-unreadable="">{t("routines.unreadable")}</div>}
     {loading && <p role="status" className="flex items-center gap-2 p-3 text-[12px] text-ink-secondary"><Loader2 size={14} className="animate-spin" />{t("routines.loading")}</p>}
-    {!loading && !error && !unreadable && routines.length === 0 && <div className="rounded-xl border border-dashed border-hairline/50 p-5 text-center text-[13px] text-ink-secondary"><Repeat2 size={20} className="mx-auto mb-2 opacity-60" />{t("routines.empty")}</div>}
+    {!loading && !error && !unreadable && routines.length === 0 && <div className="rounded-xl border border-dashed border-hairline/50 p-5 text-center text-[13px] text-ink-secondary"><Repeat2 size={20} className="mx-auto mb-2 opacity-60" />{t(upcoming ? "routines.noNextRun" : "routines.empty")}</div>}
     {sorted.map((routine) => {
       const latest = latestRoutineRun(routine.id, runs);
       const said = latest && (latest.attention ? "attention" : latest.error ? "error" : latest.output ? "output" : null);
@@ -43,7 +44,7 @@ export function RoutineList({ routines, runs, bots, pausedBots, heldBots, loadin
           <button type="button" onClick={() => onOpen(routine)} title={compact ? routine.name : undefined} className={cn("min-w-0 flex-1 text-left hover:text-accent", compact && "rounded-sm focus-visible:outline-2 focus-visible:outline-accent")}>
             <span data-compact-routine-title={compact ? "" : undefined} className={cn("block truncate text-ink", compact ? "text-[13px] font-medium leading-[18px]" : "text-[13px] font-semibold")}>{routine.name}</span>
             <span className={compact ? "mt-0.5 block truncate text-[12px] text-ink-secondary" : "mt-1 block text-[12px] leading-relaxed text-ink-secondary"}>{!compact && bot && `${bot.name} · `}{scheduleLabel(routine.schedule)}</span>
-            {compact && <span className="mt-0.5 block truncate text-[11px] text-ink-secondary">
+            {upcoming ? <span className="mt-0.5 block truncate text-[11px] text-ink-secondary">{routineNextLabel(routine)}</span> : compact && <span className="mt-0.5 block truncate text-[11px] text-ink-secondary">
               {t("routines.lastRunPrefix")} <span className={latest ? routineRunTone(latest) : undefined}>{latest ? routineRunLabel(latest) : t("routines.neverRun")}</span>
               {latest && <> · {routineDateTime(latest.finishedAt ?? latest.startedAt ?? latest.scheduledFor)}</>}
             </span>}
