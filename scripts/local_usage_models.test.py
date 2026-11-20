@@ -1081,6 +1081,172 @@ class AgentAttributionTests(unittest.TestCase):
             bad_cont.write_text('{"version": 1, "healthy": "yes"}', encoding="utf-8")
             self.assertIsNone(models.load_continuity(bad_cont))
 
+    def test_daily_agents_ranks_matched_files_by_mtime_under_scan_budget(self):
+        collector = self._collector()
+        sid_old_match = "44444444-4444-4444-8444-444444444444"
+        sid_unverified = "55555555-5555-4555-8555-555555555555"
+        sid_unrelated = "66666666-6666-4666-8666-666666666666"
+        with tempfile.TemporaryDirectory() as root:
+            old_dir = Path(root) / ".codex" / "sessions" / "2026" / "11" / "18"
+            old_dir.mkdir(parents=True, exist_ok=True)
+            old_match_path = old_dir / f"rollout-2026-11-18-{sid_old_match}.jsonl"
+            old_match_path.write_text(
+                "\n".join([
+                    json.dumps({"type": "session_meta", "payload": {"id": sid_old_match, "forked_from_id": self.SID_A, "base_instructions": {"text": "x" * 500}}}),
+                    json.dumps({"type": "turn_context", "payload": {"cwd": "/shared/repo", "model": "gpt-6.2-sol"}}),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+
+            unrelated_records = self._write_codex_rollout(
+                root,
+                sid_unrelated,
+                [("2026-11-19T01:02:30Z", 40, 5, 5)],
+                header_pad=4096,
+            )
+            unrelated_path = Path(root) / ".codex" / "sessions" / "2026" / "11" / "19" / f"rollout-2026-11-19-{sid_unrelated}.jsonl"
+
+            unverified_records = self._write_codex_rollout(
+                root,
+                sid_unverified,
+                [("2026-11-19T01:02:45Z", 50, 10, 10)],
+                header_pad=4096,
+            )
+            unverified_path = Path(root) / ".codex" / "sessions" / "2026" / "11" / "19" / f"rollout-2026-11-19-{sid_unverified}.jsonl"
+
+            lead_records = self._write_codex_rollout(
+                root,
+                self.SID_A,
+                [
+                    ("2026-11-19T00:50:00Z", 4, 1, 5),
+                    ("2026-11-19T01:02:00Z", 10, 2, 3),
+                ],
+            )
+            lead_path = Path(root) / ".codex" / "sessions" / "2026" / "11" / "19" / f"rollout-2026-11-19-{self.SID_A}.jsonl"
+
+            review_records = self._write_codex_rollout(
+                root,
+                self.SID_B,
+                [("2026-11-19T01:03:00Z", 20, 4, 6)],
+            )
+            review_path = Path(root) / ".codex" / "sessions" / "2026" / "11" / "19" / f"rollout-2026-11-19-{self.SID_B}.jsonl"
+
+            os.utime(old_match_path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+            os.utime(lead_path, ns=(1_800_000_000_000_000_000, 1_800_000_000_000_000_000))
+            os.utime(review_path, ns=(1_800_000_100_000_000_000, 1_800_000_100_000_000_000))
+            os.utime(unrelated_path, ns=(1_900_000_000_000_000_000, 1_900_000_000_000_000_000))
+            os.utime(unverified_path, ns=(1_950_000_000_000_000_000, 1_950_000_000_000_000_000))
+
+            old_size = old_match_path.stat().st_size
+            lead_size = lead_path.stat().st_size
+            review_size = review_path.stat().st_size
+            synthetic_cap = lead_size + review_size
+            self.assertLessEqual(old_size, synthetic_cap)
+            self.assertGreater(old_size + lead_size, synthetic_cap)
+            self.assertGreater(old_size + review_size, synthetic_cap)
+
+            runner = _herdr_payload(
+                self.WORKSPACES,
+                [
+                    _agent_row("w6:p1", "w6", "mausbot-lead", session_id=self.SID_A),
+                    _agent_row("w6:p2", "w6", "mausbot-review2", session_id=self.SID_B),
+                    _agent_row("w6:p3", "w6", "unverified-member", session_id=sid_unverified, source="unknown:manual"),
+                ],
+                generation="gen-budget",
+            )
+            _, intervals = models.reconcile_continuity(
+                None,
+                models.sample_herdr(at="2026-11-19T01:00:00Z", herdr_runner=runner),
+                models.sample_herdr(at="2026-11-19T01:05:00Z", herdr_runner=runner),
+                now="2026-11-19T01:05:00Z",
+            )
+
+            all_tokens = lead_records + review_records + unrelated_records + unverified_records
+            snap = snapshot([daily(
+                TODAY,
+                input=sum(r["input"] for r in all_tokens),
+                output=sum(r["output"] for r in all_tokens),
+                cache=sum(r["cacheRead"] for r in all_tokens),
+            )])
+
+            with patch.object(models, "MAX_CODEX_SCAN_BYTES", synthetic_cap):
+                attributed = models.daily_agents(
+                    collector,
+                    [{"tokens": all_tokens}],
+                    snap,
+                    config={"home": root},
+                    intervals=intervals,
+                )
+
+            self.assertEqual(attributed, {
+                TODAY: [
+                    {"id": "w6:p2", "name": "mausbot-review2", "teamId": "w6", "teamName": "MausBot", "totalTokens": 30},
+                    {"id": "w6:p1", "name": "mausbot-lead", "teamId": "w6", "teamName": "MausBot", "totalTokens": 15},
+                ]
+            })
+            retained = usage.retain_token_history(snap, None, None, agent_days=attributed)
+            self.assertEqual(retained["trendHistory"]["daily"][0]["totalTokens"], 175)
+            self.assertEqual(retained["trendHistory"]["daily"][0]["agentTokens"], attributed[TODAY])
+
+            # Equal mtime ties preserve the existing lexical scan order stably.
+            tie_ns = 1_850_000_000_000_000_000
+            os.utime(lead_path, ns=(tie_ns, tie_ns))
+            os.utime(review_path, ns=(tie_ns, tie_ns))
+            with patch.object(models, "MAX_CODEX_SCAN_BYTES", lead_size):
+                tie_attributed = models.daily_agents(
+                    collector,
+                    [{"tokens": all_tokens}],
+                    snap,
+                    config={"home": root},
+                    intervals=intervals,
+                )
+            self.assertEqual(tie_attributed, {
+                TODAY: [
+                    {"id": "w6:p1", "name": "mausbot-lead", "teamId": "w6", "teamName": "MausBot", "totalTokens": 15},
+                ]
+            })
+
+            # Fresh scan-boundary stat re-reads st_size so a file that grows past cap after ranking is skipped cleanly.
+            os.utime(review_path, ns=(1_900_000_000_000_000_000, 1_900_000_000_000_000_000))
+            headers_seen = [False]
+            review_stat_calls = [0]
+            orig_read_header = models._read_codex_header
+            orig_stat = Path.stat
+
+            def tracked_header(path, *args, **kwargs):
+                if path == review_path:
+                    headers_seen[0] = True
+                return orig_read_header(path, *args, **kwargs)
+
+            def grown_stat(path_self, *args, **kwargs):
+                st = orig_stat(path_self, *args, **kwargs)
+                if path_self == review_path and headers_seen[0]:
+                    review_stat_calls[0] += 1
+                    if review_stat_calls[0] >= 2:
+                        return types.SimpleNamespace(
+                            st_mode=st.st_mode,
+                            st_size=synthetic_cap + 1,
+                            st_mtime_ns=st.st_mtime_ns,
+                        )
+                return st
+
+            with patch.object(models, "MAX_CODEX_SCAN_BYTES", synthetic_cap), \
+                 patch.object(models, "_read_codex_header", side_effect=tracked_header), \
+                 patch.object(Path, "stat", grown_stat):
+                grown_attributed = models.daily_agents(
+                    collector,
+                    [{"tokens": all_tokens}],
+                    snap,
+                    config={"home": root},
+                    intervals=intervals,
+                )
+            self.assertEqual(review_stat_calls[0], 2)
+            self.assertEqual(grown_attributed, {
+                TODAY: [
+                    {"id": "w6:p1", "name": "mausbot-lead", "teamId": "w6", "teamName": "MausBot", "totalTokens": 15},
+                ]
+            })
+
     def test_retain_token_history_recomputes_fresh_same_sum_days_and_keeps_unavailable_fallback(self):
         agent_a = {"id": "w6:p1", "name": "mausbot-back", "teamId": "w6", "teamName": "MausBot", "totalTokens": 15}
         agent_b = {"id": "w6:p2", "name": "mausbot-dev2", "teamId": "w6", "teamName": "MausBot", "totalTokens": 15}
