@@ -36,22 +36,61 @@ export function weeklyUsageTrend(days: UsageTrendDay[]): UsageTrendBucket[] {
   });
 }
 
-export type TokenTrendMode = "types" | "models";
+export type TokenTrendMode = "types" | "models" | "agents";
 export const tokenTypeKeys = ["cacheRead", "input", "output"] as const;
 type TokenType = typeof tokenTypeKeys[number];
 
-export type TokenTrendSeries = { kind: "type"; key: TokenType } | { kind: "model"; key: string }
+type AgentSeries = { kind: "agent"; key: string; name: string; teamId: string; teamName: string };
+export type TokenTrendSeries = { kind: "type"; key: TokenType } | { kind: "model"; key: string } | AgentSeries
   | { kind: "other" | "unknown"; key: "other" | "unknown" };
+
+function daysInBucket(byDay: ReadonlyMap<string, UsageTrendDay>, bucket: UsageTrendBucket) {
+  const rows: UsageTrendDay[] = [];
+  for (let date = bucket.day; date <= (bucket.endDay ?? bucket.day); date = shiftUsageDay(date, 1)) {
+    const row = byDay.get(date);
+    if (row && row.totalTokens !== null) rows.push(row);
+  }
+  return rows;
+}
+
+function agentTokenStacks(byDay: ReadonlyMap<string, UsageTrendDay>, buckets: UsageTrendBucket[]) {
+  const members = new Map<string, { series: AgentSeries; total: number }>();
+  const points = buckets.map((bucket) => {
+    const assigned = new Map<string, { series: AgentSeries; total: number }>();
+    for (const day of daysInBucket(byDay, bucket)) {
+      const rows = day.agentTokens ?? [];
+      const keys = rows.map((row) => JSON.stringify([row.teamId, row.id]));
+      const total = rows.reduce((count, row) => count + row.totalTokens, 0);
+      if (day.totalTokens === null || total > day.totalTokens || new Set(keys).size !== rows.length ||
+        rows.some(({ totalTokens }) => !Number.isSafeInteger(totalTokens) || totalTokens < 0)) continue;
+      rows.forEach(({ name, teamId, teamName, totalTokens }, index) => {
+        const key = keys[index]!;
+        assigned.set(key, { series: { kind: "agent", key, name, teamId, teamName },
+          total: (assigned.get(key)?.total ?? 0) + totalTokens });
+      });
+    }
+    const total = [...assigned.values()].reduce((count, row) => count + row.total, 0);
+    if (bucket.totalTokens === null || total > bucket.totalTokens) {
+      assigned.clear();
+      return { assigned, unknown: bucket.totalTokens };
+    }
+    for (const [key, row] of assigned) members.set(key, { series: row.series, total: (members.get(key)?.total ?? 0) + row.total });
+    return { assigned, unknown: bucket.totalTokens - total };
+  });
+  const series: TokenTrendSeries[] = [...members.values()]
+    .sort((a, b) => b.total - a.total || a.series.key.localeCompare(b.series.key))
+    .map((member) => member.series);
+  if (points.some(({ unknown }) => unknown !== null && unknown > 0)) series.push({ kind: "unknown", key: "unknown" });
+  return { series, points: points.map((point) => series.map((item) =>
+    item.kind === "agent" ? point.assigned.get(item.key)?.total ?? null : point.unknown)) };
+}
 
 export function tokenTrendStacks(days: UsageTrendDay[], buckets: UsageTrendBucket[], mode: TokenTrendMode) {
   const byDay = new Map(days.map((day) => [day.day, day]));
+  if (mode === "agents") return agentTokenStacks(byDay, buckets);
   const modelTotals = new Map<string, number>();
   const points = buckets.map((bucket) => {
-    const rows: UsageTrendDay[] = [];
-    for (let date = bucket.day; date <= (bucket.endDay ?? bucket.day); date = shiftUsageDay(date, 1)) {
-      const row = byDay.get(date);
-      if (row && row.totalTokens !== null) rows.push(row);
-    }
+    const rows = daysInBucket(byDay, bucket);
     const types = mode === "types" ? {
       cacheRead: sum(rows.map((day) => day.tokenDetails?.cacheRead ?? day.cacheRead)),
       input: sum(rows.map((day) => day.tokenDetails?.input ?? null)),

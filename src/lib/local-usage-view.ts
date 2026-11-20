@@ -155,6 +155,7 @@ export function localUsageView(snapshot: LocalUsageResponse, range: UsageTrendRa
       tokenStatus: token?.tokenStatus ?? "unavailable", newTokens: token?.newTokens ?? null,
       cacheRead: token?.cacheRead ?? null, totalTokens: token?.totalTokens ?? null,
       ...(token?.tokenDetails && { tokenDetails: token.tokenDetails }),
+      ...(token?.agentTokens && { agentTokens: token.agentTokens }),
       wow: { prs: activity?.wow.prs ?? null, commits: activity?.wow.commits ?? null,
         newTokens: token?.wow.newTokens ?? null, totalTokens: token?.wow.totalTokens ?? null } };
   }) : [];

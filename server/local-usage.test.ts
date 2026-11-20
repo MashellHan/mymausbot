@@ -940,4 +940,49 @@ describe("daily model attribution and Activities list estimates", () => {
       input: null, output: null, estimatedCost: { coverage: "unavailable", usd: null }, models: { coverage: "unavailable", rows: [] },
     });
   });
+
+  it("attaches valid retained agentTokens and rejects mismatched splits, overflow sums, duplicates, and secret labels", async () => {
+    const { file, snapshot } = await fixture(asOf);
+    const unsafe = "sk-" + "x".repeat(25);
+    const older = day(endDay, -45);
+    const agent = (id: string, name: string, totalTokens: number) => ({
+      id, name, teamId: "w6", teamName: "MausBot", totalTokens,
+    });
+    const baseRow = (date: string, extra: Record<string, unknown> = {}) => ({
+      day: date, tokenStatus: "ready", input: 10, output: 4, cacheRead: 50, newTokens: 14, totalTokens: 64,
+      models: [model()], ...extra,
+    });
+    await writeFile(file, JSON.stringify({
+      ...snapshot,
+      trendHistory: {
+        version: 1,
+        daily: [
+          baseRow(older, { agentTokens: [agent("w6:p1", "mausbot-back", 40)] }),
+          baseRow(endDay, { agentTokens: [agent("w6:p1", "mausbot-back", 32), agent("w6:p2", "mausbot-front", 18)] }),
+          // Same newTokens/cacheRead/totalTokens (14/50/64), but mismatched input/output split (4/10 vs 10/4) -> discard stale agentTokens.
+          { ...baseRow(day(endDay, -1), { agentTokens: [agent("w6:p1", "mausbot-back", 64)] }), input: 4, output: 10 },
+          // Overflow sum (> 64) -> discard.
+          baseRow(day(endDay, -2), { agentTokens: [agent("w6:p1", "mausbot-back", 65)] }),
+          // Duplicate (teamId, id) -> discard.
+          baseRow(day(endDay, -3), { agentTokens: [agent("w6:p1", "a", 10), agent("w6:p1", "b", 10)] }),
+          // Secret-bearing label -> discard and never leak.
+          baseRow(day(endDay, -4), { agentTokens: [agent("w6:p1", unsafe, 10)] }),
+        ],
+      },
+    }));
+    const response = await createLocalUsageProvider({ file, now: () => asOf }).get();
+    expect(response.trend.at(-1)?.agentTokens).toEqual([
+      agent("w6:p1", "mausbot-back", 32),
+      agent("w6:p2", "mausbot-front", 18),
+    ]);
+    expect(response.history?.find((row) => row.day === older)?.agentTokens).toEqual([
+      agent("w6:p1", "mausbot-back", 40),
+    ]);
+    for (const offset of [-1, -2, -3, -4]) {
+      const target = response.trend.find((row) => row.day === day(endDay, offset));
+      expect(target?.totalTokens).toBe(64);
+      expect(target?.agentTokens).toBeUndefined();
+    }
+    expect(JSON.stringify(response)).not.toContain(unsafe);
+  });
 });

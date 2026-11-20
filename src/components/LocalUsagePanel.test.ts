@@ -295,6 +295,81 @@ describe("local Usage panel", () => {
     expect(tooltip()).toBeUndefined();
   });
 
+  it("breaks out verified members, team totals and unattributed tokens on the same calendar", async () => {
+    vi.useFakeTimers();
+    const snapshot = structuredClone(sample);
+    const lastDay = snapshot.trend.at(-1)!;
+    const previousDay = snapshot.trend.at(-2)!;
+    const { day: last } = lastDay;
+    const { day: previous } = previousDay;
+    const zero = snapshot.trend.find((day) => day.day === "2026-10-31")!;
+    Object.assign(zero, { totalTokens: 0, newTokens: 0, cacheRead: 0, tokenStatus: "ready" });
+    const research = { teamId: "research", teamName: "Research" };
+    const operations = { teamId: "operations", teamName: "Operations" };
+    const editor = { ...research, id: "shared-label", name: "Editor" };
+    zero.agentTokens = [{ ...editor, totalTokens: 0 }];
+    previousDay.agentTokens = [{ ...editor, totalTokens: 30 }];
+    lastDay.agentTokens = [
+      { ...editor, totalTokens: 35 },
+      { ...research, id: "checker", name: "Fact checker", totalTokens: 20 },
+      { ...operations, id: "shared-label", name: "Editor", totalTokens: 15 },
+    ];
+    const retained = "2026-09-10";
+    snapshot.history = [{ ...snapshot.trend[0]!, day: retained, agentTokens: [{ ...editor, totalTokens: 42 }] }];
+    calls.api.mockResolvedValue(snapshot);
+    await renderRaw(null, true);
+    expect(calls.api).toHaveBeenCalledWith("/api/local-dashboard/usage", expect.objectContaining({ background: true }));
+    const chart = host.querySelector('[data-usage-trend="totalTokens"]')!;
+    const modes = [...chart.querySelectorAll<HTMLButtonElement>('[role="group"] button')];
+    expect(modes.map((mode) => mode.textContent)).toEqual(["Token types", "Models", "Agents"]);
+    expect(modes.find((mode) => mode.getAttribute("aria-pressed") === "true")?.textContent).toBe("Models");
+    const dates = () => [...chart.querySelectorAll<HTMLButtonElement>("[data-usage-day]")];
+    const initialDates = dates();
+    const bar = dates().at(-1)!;
+    const tooltip = () => chart.querySelector('[role="tooltip"]');
+    const tableRows = (selector: string) => [...tooltip()!.querySelectorAll<HTMLTableRowElement>(selector)].map((row) =>
+      [...row.cells].map((cell) => cell.textContent));
+    await act(async () => bar.focus());
+    await act(async () => modes[2]!.click());
+    expect(dates()).toEqual(initialDates);
+    expect(modes[2]!.getAttribute("aria-pressed")).toBe("true");
+    expect(tooltip()?.querySelector("time")?.textContent).toBe(`${last} · Tue`);
+    expect(bar.getAttribute("aria-describedby")).toBe(tooltip()?.id);
+    expect(tableRows("[data-usage-token-total]")).toEqual([["Total tokens", "110", ""]]);
+    expect(tableRows("[data-usage-token-team]")).toEqual([["Team total · Research", "≥ 55", ""], ["Team total · Operations", "≥ 15", ""]]);
+    expect(chart.textContent).not.toContain("Team totals include attributed tokens only.");
+    expect([...tooltip()!.querySelectorAll("[data-usage-token-team] td[aria-label]")]
+      .map((cell) => cell.getAttribute("aria-label"))).toEqual(["At least 55 attributed tokens", "At least 15 attributed tokens"]);
+    expect(tableRows("[data-usage-token-row]").map(([name, count]) => [name, count])).toEqual([
+      ["Editor", "35"], ["Fact checker", "20"], ["Editor", "15"], ["Unattributed", "40"],
+    ]);
+    const segments = [...bar.querySelectorAll<HTMLElement>("[data-usage-token-segment]")];
+    expect(segments.reduce((sum, segment) => sum + parseFloat(segment.style.height), 0)).toBeCloseTo(100);
+    await act(async () => segments[0]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    expect(tooltip()?.querySelector('[data-usage-token-highlighted="true"]')?.textContent).toContain("Editor35");
+    const old = dates().find((button) => button.dataset.usageDay === "2026-11-01")!;
+    await act(async () => old.focus());
+    expect(tableRows("[data-usage-token-row]")).toEqual([["Unattributed", "110", "100%"]]);
+    expect(tableRows("[data-usage-token-team]")).toEqual([]);
+    await act(async () => dates().find((button) => button.dataset.usageDay === zero.day)!.focus());
+    expect(tableRows("[data-usage-token-team]")).toEqual([["Team total · Research", "0", ""]]);
+    expect(tableRows("[data-usage-token-row]")).toEqual([["Editor", "0", "—"]]);
+    const range = host.querySelector<HTMLSelectElement>('select[aria-label="Trend range"]')!;
+    await act(async () => { range.value = "60"; range.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => dates().find((button) => button.dataset.usageDay === retained)!.focus());
+    expect(tableRows("[data-usage-token-team]")).toEqual([["Team total · Research", "≥ 42", ""]]);
+    expect(tableRows('[data-usage-token-row="unknown"]')[0]?.slice(0, 2)).toEqual(["Unattributed", "68"]);
+    await act(async () => { range.value = "6m"; range.dispatchEvent(new Event("change", { bubbles: true })); });
+    const week = dates().at(-1)!;
+    await act(async () => week.focus());
+    expect(tooltip()?.querySelector("time")?.textContent).toBe(`${previous} – ${last}`);
+    expect(tableRows("[data-usage-token-total]")).toEqual([["Total tokens", "220", ""]]);
+    expect(tableRows("[data-usage-token-team]")).toEqual([["Team total · Research", "≥ 85", ""], ["Team total · Operations", "≥ 15", ""]]);
+    expect(tableRows('[data-usage-token-row="unknown"]')[0]?.slice(0, 2)).toEqual(["Unattributed", "120"]);
+    await act(async () => week.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(tooltip()).toBeNull();
+  });
+
   it("shares the extended range across charts, keeps daily details and restores daily bars", async () => {
     const history = Array.from({ length: 184 }, (_, index) => ({ ...trend[0]!, day: shiftDay("2026-11-03", index - 183) }));
     Object.assign(history.find((day) => day.day === "2026-09-20")!, { tokenStatus: "partial", newTokens: 0, cacheRead: 0, totalTokens: 0 });

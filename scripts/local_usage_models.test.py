@@ -1,9 +1,11 @@
 import contextlib
 import datetime as dt
+import hashlib
 import importlib.util
 import io
 import json
 import os
+import socket
 import subprocess
 from pathlib import Path
 import tempfile
@@ -23,7 +25,8 @@ PREVIOUS_DAY, TODAY = "2026-11-18", "2026-11-19"
 
 
 def collector_fixture():
-    return types.SimpleNamespace(instant=dt.datetime.fromisoformat,
+    return types.SimpleNamespace(
+        instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else None,
         day=lambda value: value.astimezone(TZ).date().isoformat(),
         count=lambda value: value if type(value) is int and value >= 0 else 0)
 
@@ -178,6 +181,607 @@ assert.equal(Object.hasOwn(published, "trendHistory"), false);
                     usage.refresh(collector_path, {**config, "adoRemotes": []}, storage,
                                   reuse_sources=True, legacy_diagnostics=False)
                 self.assertCountEqual(queried, [inside, outside])
+
+    def test_real_collector_end_to_end_agent_attribution_preserves_collector_totals(self):
+        collector_path = Path(os.environ["OMB_ACTIVITY_COLLECTOR_FIXTURE"])
+        sid_root = "11111111-1111-4111-8111-111111111111"
+        sid_child = "33333333-3333-4333-8333-333333333333"
+        workspaces = [{"workspace_id": "w6", "label": "MausBot"}]
+        runner = _herdr_payload(workspaces, [_agent_row("w6:p1", "w6", "mausbot-back", session_id=sid_root)], generation="gen-real")
+
+        def write_rollout(home, sid, events, *, forked_from=None):
+            directory = Path(home) / ".codex" / "sessions" / "2026" / "11" / "19"
+            directory.mkdir(parents=True, exist_ok=True)
+            payload = {"id": sid, "cwd": str(home)}
+            if forked_from:
+                payload["forked_from_id"] = forked_from
+            lines = [
+                json.dumps({"type": "session_meta", "payload": payload}),
+                json.dumps({"type": "turn_context", "payload": {"cwd": str(home), "model": "gpt-6.2-sol"}}),
+            ]
+            cum_in = cum_out = cum_cache = 0
+            for stamp_at, inp, out, cache in events:
+                cum_in += inp + cache
+                cum_out += out
+                cum_cache += cache
+                lines.append(json.dumps({
+                    "type": "event_msg",
+                    "timestamp": stamp_at,
+                    "payload": {
+                        "type": "token_count",
+                        "info": {"total_token_usage": {
+                            "input_tokens": cum_in,
+                            "cached_input_tokens": cum_cache,
+                            "cache_write_input_tokens": 0,
+                            "output_tokens": cum_out,
+                            "reasoning_output_tokens": 0,
+                        }},
+                    },
+                }))
+            (directory / f"rollout-2026-11-19-{sid}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root) / "home"
+            storage = Path(root) / "storage"
+            baseline_storage = Path(root) / "baseline"
+            home.mkdir()
+            write_rollout(home, sid_root, [
+                ("2026-11-19T00:50:00Z", 10, 5, 5),
+                ("2026-11-19T01:02:00Z", 25, 10, 5),
+            ])
+            write_rollout(home, sid_child, [
+                ("2026-11-19T01:03:00Z", 15, 5, 5),
+            ], forked_from=sid_root)
+
+            base_config = {
+                "azureCli": "/fixture/az",
+                "authorEmails": ["owner@example.test"],
+                "home": str(home),
+                "repoRoots": [],
+                "machines": [{"id": "mini-2", "mode": "local"}],
+                "githubProfiles": [],
+                "adoRemotes": [],
+            }
+            t0 = dt.datetime.fromisoformat("2026-11-19T01:00:00+00:00")
+            t1 = dt.datetime.fromisoformat("2026-11-19T01:05:00+00:00")
+            t_gap = dt.datetime.fromisoformat("2026-11-19T04:05:05+00:00")
+
+            def run_usage(now_dt, *, herdr_fn):
+                collector = usage.load_collector(collector_path)
+                cfg = {**base_config, "storageDir": str(storage)}
+                with patch.object(usage, "load_collector", return_value=collector), \
+                     patch.object(collector, "now", return_value=now_dt), \
+                     patch.object(collector, "ado_prs", return_value=[]), \
+                     patch.object(collector, "github_prs", return_value=[]), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    usage.refresh(collector_path, cfg, storage, legacy_diagnostics=False, herdr_runner=herdr_fn)
+                return json.loads((storage / "latest.json").read_text(encoding="utf-8"))
+
+            run_usage(t0, herdr_fn=runner)
+            res_t1 = run_usage(t1, herdr_fn=runner)
+            # Add a new event inside the 3-hour gap before running at t_gap; it must remain unattributed.
+            write_rollout(home, sid_root, [
+                ("2026-11-19T00:50:00Z", 10, 5, 5),
+                ("2026-11-19T01:02:00Z", 25, 10, 5),
+                ("2026-11-19T02:30:00Z", 30, 10, 10),
+            ])
+            res_gap = run_usage(t_gap, herdr_fn=runner)
+
+            # Baseline run directly with the real collector at t_gap must match today/totals/daily identically.
+            baseline_collector = usage.load_collector(collector_path)
+            baseline_cfg = {**base_config, "storageDir": str(baseline_storage)}
+            with patch.object(baseline_collector, "now", return_value=t_gap), \
+                 patch.object(baseline_collector, "ado_prs", return_value=[]), \
+                 patch.object(baseline_collector, "github_prs", return_value=[]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                baseline_collector.refresh(baseline_cfg, history_days=59)
+            baseline = json.loads((baseline_storage / "latest.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(res_gap["today"], baseline["today"])
+            self.assertEqual(res_gap["totals"], baseline["totals"])
+            self.assertEqual(res_gap["daily"], baseline["daily"])
+            self.assertEqual(res_t1["trendHistory"]["daily"][-1]["totalTokens"], 85)
+            self.assertEqual(res_t1["trendHistory"]["daily"][-1]["agentTokens"], [{
+                "id": "w6:p1", "name": "mausbot-back", "teamId": "w6", "teamName": "MausBot", "totalTokens": 65,
+            }])
+            # After the 3h gap, totalTokens increases by 50 (85 -> 135) while attributed agentTokens stays 65.
+            self.assertEqual(res_gap["trendHistory"]["daily"][-1]["totalTokens"], 135)
+            self.assertEqual(res_gap["trendHistory"]["daily"][-1]["agentTokens"], [{
+                "id": "w6:p1", "name": "mausbot-back", "teamId": "w6", "teamName": "MausBot", "totalTokens": 65,
+            }])
+            continuity_file = storage / "agent-continuity.json"
+            self.assertEqual(continuity_file.stat().st_mode & 0o777, 0o600)
+            continuity = json.loads(continuity_file.read_text(encoding="utf-8"))
+            self.assertTrue(continuity["healthy"])
+            self.assertEqual(continuity["generation"], "gen-real")
+
+            # Broken Herdr runner must never fail refresh or change collector totals; only degrades Agents.
+            def broken_herdr(_args):
+                raise RuntimeError("herdr down")
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                res_broken = run_usage(t_gap + dt.timedelta(seconds=300), herdr_fn=broken_herdr)
+            self.assertEqual(res_broken["today"], baseline["today"])
+            self.assertEqual(res_broken["trendHistory"]["daily"][-1]["agentTokens"], [{
+                "id": "w6:p1", "name": "mausbot-back", "teamId": "w6", "teamName": "MausBot", "totalTokens": 65,
+            }])
+            broken_continuity = json.loads(continuity_file.read_text(encoding="utf-8"))
+            self.assertFalse(broken_continuity["healthy"])
+            self.assertEqual(broken_continuity["active"], {})
+
+
+def _digest(*values):
+    return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _stamp(value):
+    return value.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _codex_events_fixture(lines, classify, start, end, parents=None):
+    session = ""
+    cwd = None
+    model = "unknown"
+    previous = None
+    for line in lines:
+        if not any(x in line[:1024] for x in ('"session_meta"', '"turn_context"', '"token_count"')):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        payload = event.get("payload") or {}
+        if event.get("type") == "session_meta":
+            session = payload.get("id", session)
+            lineage = parents or {}
+            visited = set()
+            while session in lineage and session not in visited:
+                visited.add(session)
+                session = lineage[session]
+            cwd = payload.get("cwd", cwd)
+        elif event.get("type") == "turn_context":
+            cwd, model = payload.get("cwd", cwd), payload.get("model", model)
+        elif event.get("type") == "event_msg" and payload.get("type") == "token_count":
+            total = (payload.get("info") or {}).get("total_token_usage")
+            at = collector_fixture().instant(event.get("timestamp")) if isinstance(event.get("timestamp"), str) else None
+            if not isinstance(total, dict) or not at:
+                continue
+            names = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "reasoning_output_tokens")
+            current = {k: total.get(k) if type(total.get(k)) is int and total.get(k) >= 0 else 0 for k in names}
+            if current == previous:
+                continue
+            reset = previous is not None and any(current[k] < previous[k] for k in ("input_tokens", "output_tokens"))
+            delta = {k: max(0, current[k] - (0 if previous is None or reset else previous[k])) for k in names}
+            previous = current
+            if not start <= at < end or not (delta["input_tokens"] or delta["output_tokens"]):
+                continue
+            cached = min(delta["cached_input_tokens"], delta["input_tokens"])
+            yield {
+                "key": _digest("codex", session, _stamp(at), current),
+                "at": _stamp(at),
+                "provider": "codex",
+                "model": model,
+                "category": classify.classify(cwd),
+                "input": delta["input_tokens"] - cached,
+                "cacheRead": cached,
+                "cacheWrite": min(delta["cache_write_input_tokens"], delta["input_tokens"] - cached),
+                "output": delta["output_tokens"],
+                "reasoning": min(delta["reasoning_output_tokens"], delta["output_tokens"]),
+            }
+
+
+def _herdr_payload(workspaces, agents, generation=None):
+    ws_doc = {"result": {"workspaces": workspaces}}
+    ag_doc = {"result": {"agents": agents}}
+    if generation is not None:
+        ws_doc["server_generation"] = generation
+        ag_doc["server_generation"] = generation
+
+    def runner(args):
+        if args[-2:] == ["workspace", "list"]:
+            return json.dumps(ws_doc)
+        if args[-2:] == ["agent", "list"]:
+            return json.dumps(ag_doc)
+        return ""
+
+    return runner
+
+
+def _agent_row(pane_id="w6:p1", workspace_id="w6", name="mausbot-back", agent="codex",
+               session_id="11111111-1111-4111-8111-111111111111", *, source="herdr:codex",
+               kind="id", session_agent="codex", terminal_id="term_1"):
+    row = {
+        "pane_id": pane_id,
+        "workspace_id": workspace_id,
+        "name": name,
+        "agent": agent,
+        "agent_session": None if session_id is None else {
+            "agent": session_agent,
+            "kind": kind,
+            "source": source,
+            "value": session_id,
+        },
+    }
+    if terminal_id is not None:
+        row["terminal_id"] = terminal_id
+    return row
+
+
+class AgentAttributionTests(unittest.TestCase):
+    SID_A = "11111111-1111-4111-8111-111111111111"
+    SID_B = "22222222-2222-4222-8222-222222222222"
+    SID_CHILD = "33333333-3333-4333-8333-333333333333"
+    WORKSPACES = [{"workspace_id": "w6", "label": "MausBot"}, {"workspace_id": "w7", "label": "Other"}]
+
+    def _collector(self):
+        base = collector_fixture()
+        return types.SimpleNamespace(
+            instant=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) else None,
+            day=base.day,
+            count=base.count,
+            codex_events=_codex_events_fixture,
+        )
+
+    def _write_codex_rollout(self, home, sid, events, *, forked_from=None, extra_lines=(), header_pad=0):
+        directory = Path(home) / ".codex" / "sessions" / "2026" / "11" / "19"
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {"id": sid, "cwd": "/shared/repo"}
+        if forked_from:
+            payload["forked_from_id"] = forked_from
+        if header_pad:
+            payload["base_instructions"] = {"text": "x" * header_pad}
+        lines = [
+            json.dumps({"type": "session_meta", "payload": payload}),
+            json.dumps({"type": "turn_context", "payload": {"cwd": "/shared/repo", "model": "gpt-6.2-sol"}}),
+            *extra_lines,
+        ]
+        cum_in = 0
+        cum_out = 0
+        cum_cache = 0
+        records = []
+        for key_at, inp, out, cache in events:
+            cum_in += inp + cache
+            cum_out += out
+            cum_cache += cache
+            total_usage = {
+                "input_tokens": cum_in,
+                "cached_input_tokens": cum_cache,
+                "cache_write_input_tokens": 0,
+                "output_tokens": cum_out,
+                "reasoning_output_tokens": 0,
+            }
+            lines.append(json.dumps({
+                "type": "event_msg",
+                "timestamp": key_at,
+                "payload": {"type": "token_count", "info": {"total_token_usage": total_usage}},
+            }))
+            records.append({
+                "key": _digest("codex", forked_from or sid, key_at, total_usage),
+                "at": key_at,
+                "provider": "codex",
+                "model": "gpt-6.2-sol",
+                "input": inp,
+                "output": out,
+                "cacheRead": cache,
+            })
+        path = directory / f"rollout-2026-11-19-{sid}.jsonl"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return records
+
+    def test_sample_herdr_matches_verified_member_rules_and_rejects_ambiguity(self):
+        # Rejects unknown:manual, non-id kind, non-UUID, invalid workspace/pane ID, and duplicate names across panes.
+        good = _agent_row("w6:p1", "w6", "mausbot-back", session_id=self.SID_A)
+        bad_source = _agent_row("w6:p2", "w6", "fake-source", session_id=self.SID_B, source="unknown:manual")
+        bad_kind = _agent_row("w6:p3", "w6", "bad-kind", session_id="33333333-3333-4333-8333-333333333333", kind="path")
+        bad_pane = _agent_row("w6:badpane", "w6", "bad-pane", session_id="44444444-4444-4444-8444-444444444444")
+        bad_uuid = _agent_row("w6:p4", "w6", "bad-uuid", session_id="not-a-uuid")
+        sample = models.sample_herdr(
+            at="2026-11-19T01:00:00Z",
+            herdr_runner=_herdr_payload(self.WORKSPACES, [good, bad_source, bad_kind, bad_pane, bad_uuid]),
+        )
+        self.assertEqual(list(sample["panes"].keys()), ["w6:p1"])
+        self.assertEqual(sample["panes"]["w6:p1"]["name"], "mausbot-back")
+
+        # Same member name on two different panes (even across different workspaces or agents) drops ambiguity.
+        dup_a = _agent_row("w6:p1", "w6", "shared-name", session_id=self.SID_A)
+        dup_b = _agent_row("w7:p1", "w7", "shared-name", agent="opencode", session_id=None)
+        dup_sample = models.sample_herdr(
+            at="2026-11-19T01:00:00Z",
+            herdr_runner=_herdr_payload(self.WORKSPACES, [dup_a, dup_b]),
+        )
+        self.assertEqual(dup_sample["panes"], {})
+
+        # Conflicting session claim across two panes drops both.
+        claim_a = _agent_row("w6:p1", "w6", "alice", session_id=self.SID_A)
+        claim_b = _agent_row("w6:p2", "w6", "bob", session_id=self.SID_A)
+        conflict_sample = models.sample_herdr(
+            at="2026-11-19T01:00:00Z",
+            herdr_runner=_herdr_payload(self.WORKSPACES, [claim_a, claim_b]),
+        )
+        self.assertEqual(conflict_sample["panes"], {})
+        self.assertIn(self.SID_A, conflict_sample["conflictedSessions"])
+
+    def test_continuity_adjacent_cadence_vs_three_hour_gap_missed_round_and_generation_change(self):
+        runner = _herdr_payload(self.WORKSPACES, [_agent_row("w6:p1", "w6", "mausbot-back", session_id=self.SID_A)], generation="gen-1")
+        t0 = "2026-11-19T01:00:00Z"
+        t0_end = "2026-11-19T01:00:05Z"
+        s0_pre = models.sample_herdr(at=t0, herdr_runner=runner)
+        s0_post = models.sample_herdr(at=t0_end, herdr_runner=runner)
+        state1, iv1 = models.reconcile_continuity(None, s0_pre, s0_post, now=t0_end)
+        self.assertTrue(state1["healthy"])
+        self.assertEqual(len(iv1), 1)
+        self.assertEqual(iv1[0]["startAt"], models._utc_instant(t0))
+        self.assertEqual(iv1[0]["endAt"], models._utc_instant(t0_end))
+
+        # Adjacent normal writer cadence (+300s from prior lastSampleAt) extends continuity seamlessly.
+        t1_pre = "2026-11-19T01:05:05Z"
+        t1_post = "2026-11-19T01:05:10Z"
+        state2, iv2 = models.reconcile_continuity(
+            state1,
+            models.sample_herdr(at=t1_pre, herdr_runner=runner),
+            models.sample_herdr(at=t1_post, herdr_runner=runner),
+            now=t1_post,
+        )
+        self.assertEqual(iv2[0]["startAt"], models._utc_instant(t0))
+        self.assertEqual(iv2[0]["endAt"], models._utc_instant(t1_post))
+
+        # 3-hour gap (10805s) between identical endpoints MUST NOT bridge [01:05:10Z, 04:05:15Z].
+        t_3h_pre = "2026-11-19T04:05:15Z"
+        t_3h_post = "2026-11-19T04:05:20Z"
+        state_3h, iv_3h = models.reconcile_continuity(
+            state2,
+            models.sample_herdr(at=t_3h_pre, herdr_runner=runner),
+            models.sample_herdr(at=t_3h_post, herdr_runner=runner),
+            now=t_3h_post,
+        )
+        gap_event = models._utc_instant("2026-11-19T02:30:00Z")
+        self.assertFalse(any(iv["startAt"] <= gap_event <= iv["endAt"] for iv in iv_3h))
+        # Closed prior [01:00:00Z, 01:05:10Z] remains valid; new active starts at 04:05:15Z.
+        self.assertEqual(state_3h["active"]["w6:p1"]["observedSince"], t_3h_pre)
+
+        # Missed round (605s > 450s) breaks continuity.
+        t_miss_pre = "2026-11-19T01:15:15Z"
+        t_miss_post = "2026-11-19T01:15:20Z"
+        _, iv_miss = models.reconcile_continuity(
+            state2,
+            models.sample_herdr(at=t_miss_pre, herdr_runner=runner),
+            models.sample_herdr(at=t_miss_post, herdr_runner=runner),
+            now=t_miss_post,
+        )
+        miss_event = models._utc_instant("2026-11-19T01:10:00Z")
+        self.assertFalse(any(iv["startAt"] <= miss_event <= iv["endAt"] for iv in iv_miss))
+
+        # Server generation change at normal +300s cadence breaks continuity.
+        runner_gen2 = _herdr_payload(self.WORKSPACES, [_agent_row("w6:p1", "w6", "mausbot-back", session_id=self.SID_A)], generation="gen-2")
+        _, iv_gen = models.reconcile_continuity(
+            state2,
+            models.sample_herdr(at=t1_post, herdr_runner=runner_gen2) if False else models.sample_herdr(at="2026-11-19T01:10:00Z", herdr_runner=runner_gen2),
+            models.sample_herdr(at="2026-11-19T01:10:05Z", herdr_runner=runner_gen2),
+            now="2026-11-19T01:10:05Z",
+        )
+        gen_event = models._utc_instant("2026-11-19T01:07:30Z")
+        self.assertFalse(any(iv["startAt"] <= gen_event <= iv["endAt"] for iv in iv_gen))
+
+        # Exceeded single-round span (> 450s) invalidates the round.
+        state_span, iv_span = models.reconcile_continuity(
+            state2,
+            models.sample_herdr(at="2026-11-19T01:10:00Z", herdr_runner=runner),
+            models.sample_herdr(at="2026-11-19T01:19:00Z", herdr_runner=runner),
+            now="2026-11-19T01:19:00Z",
+        )
+        self.assertFalse(state_span["healthy"])
+        self.assertEqual(state_span["active"], {})
+        span_event = models._utc_instant("2026-11-19T01:15:00Z")
+        self.assertFalse(any(iv["startAt"] <= span_event <= iv["endAt"] for iv in iv_span))
+
+        # Production path (herdr_runner=None): stable herdr.sock identity bridges normal cadence;
+        # unverifiable generation (missing herdr.sock / generation=None) across consecutive rounds
+        # preserves only previously proved intervals and sends new growth to Unattributed.
+        prod_runner = _herdr_payload(self.WORKSPACES, [_agent_row("w6:p1", "w6", "mausbot-back", session_id=self.SID_A)])
+        with tempfile.TemporaryDirectory() as sock_home:
+            sock_dir = Path(sock_home) / ".config" / "herdr"
+            sock_dir.mkdir(parents=True, exist_ok=True)
+            sock_path = sock_dir / "herdr.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv, \
+                 patch.object(models, "_run_herdr", side_effect=lambda _h, args, _r=None: prod_runner(args)):
+                srv.bind(str(sock_path))
+                cfg_sock = {"home": sock_home}
+                sp0_pre = models.sample_herdr(cfg_sock, at=t0)
+                sp0_post = models.sample_herdr(cfg_sock, at=t0_end)
+                self.assertTrue(sp0_pre["generation"].startswith("sock:"))
+                st_sock1, _ = models.reconcile_continuity(None, sp0_pre, sp0_post, now=t0_end)
+                st_sock2, iv_sock2 = models.reconcile_continuity(
+                    st_sock1,
+                    models.sample_herdr(cfg_sock, at=t1_pre),
+                    models.sample_herdr(cfg_sock, at=t1_post),
+                    now=t1_post,
+                )
+                self.assertTrue(st_sock2["healthy"])
+                self.assertEqual(iv_sock2[0]["startAt"], models._utc_instant(t0))
+                self.assertEqual(iv_sock2[0]["endAt"], models._utc_instant(t1_post))
+
+                sock_path.unlink()
+                u1_pre = models.sample_herdr(cfg_sock, at="2026-11-19T01:10:00Z")
+                u1_post = models.sample_herdr(cfg_sock, at="2026-11-19T01:10:05Z")
+                self.assertIsNone(u1_pre["generation"])
+                st_unk1, iv_unk1 = models.reconcile_continuity(
+                    st_sock2, u1_pre, u1_post, now="2026-11-19T01:10:05Z"
+                )
+                self.assertFalse(st_unk1["healthy"])
+                self.assertEqual(st_unk1["active"], {})
+                self.assertEqual(len(iv_unk1), 1)
+                self.assertEqual(iv_unk1[0]["endAt"], models._utc_instant(t1_post))
+
+                u2_pre = models.sample_herdr(cfg_sock, at="2026-11-19T01:15:05Z")
+                u2_post = models.sample_herdr(cfg_sock, at="2026-11-19T01:15:10Z")
+                st_unk2, iv_unk2 = models.reconcile_continuity(
+                    st_unk1, u2_pre, u2_post, now="2026-11-19T01:15:10Z"
+                )
+                self.assertFalse(st_unk2["healthy"])
+                self.assertEqual(st_unk2["active"], {})
+                self.assertEqual(len(iv_unk2), 1)
+                self.assertEqual(iv_unk2[0]["endAt"], models._utc_instant(t1_post))
+                unk_event = models._utc_instant("2026-11-19T01:12:00Z")
+                self.assertFalse(any(iv["startAt"] <= unk_event <= iv["endAt"] for iv in iv_unk2))
+
+    def test_daily_agents_exact_events_subagent_move_rebind_and_jsonl_hardening(self):
+        collector = self._collector()
+        with tempfile.TemporaryDirectory() as root:
+            # 24 KB base_instructions header + malformed scalar/list/non-object payload lines in JSONL.
+            bad_lines = [
+                "123",
+                '"just a string"',
+                '["list", "line"]',
+                json.dumps({"type": "event_msg", "payload": ["not-a-dict"]}),
+                json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": ["not-a-dict"]}}),
+            ]
+            # Events:
+            # - 00:50:00Z: before observation start (unproven start -> Unattributed)
+            # - 01:02:00Z: inside adjacent round [01:00:00Z, 01:05:10Z] -> Attributed (15)
+            # - 02:30:00Z: inside 3-hour 10805s gap -> Unattributed (30)
+            root_records = self._write_codex_rollout(
+                root,
+                self.SID_A,
+                [
+                    ("2026-11-19T00:50:00Z", 4, 1, 5),
+                    ("2026-11-19T01:02:00Z", 10, 2, 3),
+                    ("2026-11-19T02:30:00Z", 20, 4, 6),
+                ],
+                extra_lines=bad_lines,
+                header_pad=24000,
+            )
+            # Subagent forked from SID_A at 01:03:00Z -> Attributed to SID_A's owner (25)
+            child_records = self._write_codex_rollout(
+                root,
+                self.SID_CHILD,
+                [("2026-11-19T01:03:00Z", 15, 5, 5)],
+                forked_from=self.SID_A,
+            )
+            # Second session SID_B moved from w6:p2 to w7:p1 between pre and post -> Unattributed (40)
+            moved_records = self._write_codex_rollout(
+                root,
+                self.SID_B,
+                [("2026-11-19T01:05:07Z", 30, 5, 5)],
+            )
+
+            all_tokens = root_records + child_records + moved_records
+            total_in = sum(r["input"] for r in all_tokens)
+            total_out = sum(r["output"] for r in all_tokens)
+            total_cache = sum(r["cacheRead"] for r in all_tokens)
+            snap = snapshot([daily(TODAY, input=total_in, output=total_out, cache=total_cache)])
+
+            r_a = _agent_row("w6:p1", "w6", "mausbot-back", session_id=self.SID_A)
+            r_b_pre = _agent_row("w6:p2", "w6", "mover", session_id=self.SID_B)
+            r_b_post = _agent_row("w7:p1", "w7", "mover", session_id=self.SID_B)
+            runner_t0 = _herdr_payload(self.WORKSPACES, [r_a, r_b_pre], generation="gen-1")
+            runner_t1_post = _herdr_payload(self.WORKSPACES, [r_a, r_b_post], generation="gen-1")
+
+            st1, _ = models.reconcile_continuity(
+                None,
+                models.sample_herdr(at="2026-11-19T01:00:00Z", herdr_runner=runner_t0),
+                models.sample_herdr(at="2026-11-19T01:00:05Z", herdr_runner=runner_t0),
+                now="2026-11-19T01:00:05Z",
+            )
+            st2, _ = models.reconcile_continuity(
+                st1,
+                models.sample_herdr(at="2026-11-19T01:05:05Z", herdr_runner=runner_t0),
+                models.sample_herdr(at="2026-11-19T01:05:10Z", herdr_runner=runner_t1_post),
+                now="2026-11-19T01:05:10Z",
+            )
+            # Run 3 after 3-hour (10805s) gap: SID_A endpoints match again, must NOT bridge gap.
+            runner_3h = _herdr_payload(self.WORKSPACES, [r_a], generation="gen-1")
+            _, intervals = models.reconcile_continuity(
+                st2,
+                models.sample_herdr(at="2026-11-19T04:05:15Z", herdr_runner=runner_3h),
+                models.sample_herdr(at="2026-11-19T04:05:20Z", herdr_runner=runner_3h),
+                now="2026-11-19T04:05:20Z",
+            )
+
+            attributed = models.daily_agents(
+                collector,
+                [{"tokens": all_tokens}],
+                snap,
+                config={"home": root},
+                intervals=intervals,
+            )
+            self.assertEqual(attributed, {
+                TODAY: [{
+                    "id": "w6:p1",
+                    "name": "mausbot-back",
+                    "teamId": "w6",
+                    "teamName": "MausBot",
+                    "totalTokens": 40,  # 15 (root at 01:02) + 25 (forked subagent at 01:03); 10 + 30 + 40 remain Unattributed
+                }]
+            })
+
+            # Missing/malformed Herdr sample degrades only Agents, never raises.
+            self.assertIsNone(models.sample_herdr(at="2026-11-19T01:00:00Z", herdr_runner=lambda _args: "not-json"))
+            self.assertIsNone(models.sample_herdr(at="2026-11-19T01:00:00Z", herdr_runner=lambda _args: "[]"))
+
+            # Member rebinding on same pane (rename alice -> bob) breaks continuity and seeds bob from post_at.
+            reb_pre = _herdr_payload(self.WORKSPACES, [_agent_row("w6:p1", "w6", "alice", session_id=self.SID_A)], generation="gen-1")
+            reb_post = _herdr_payload(self.WORKSPACES, [_agent_row("w6:p1", "w6", "bob", session_id=self.SID_A)], generation="gen-1")
+            st_reb1, _ = models.reconcile_continuity(
+                None,
+                models.sample_herdr(at="2026-11-19T01:00:00Z", herdr_runner=reb_pre),
+                models.sample_herdr(at="2026-11-19T01:00:05Z", herdr_runner=reb_pre),
+                now="2026-11-19T01:00:05Z",
+            )
+            st_reb2, iv_reb2 = models.reconcile_continuity(
+                st_reb1,
+                models.sample_herdr(at="2026-11-19T01:05:05Z", herdr_runner=reb_pre),
+                models.sample_herdr(at="2026-11-19T01:05:10Z", herdr_runner=reb_post),
+                now="2026-11-19T01:05:10Z",
+            )
+            self.assertEqual(st_reb2["active"]["w6:p1"]["name"], "bob")
+            self.assertEqual(st_reb2["active"]["w6:p1"]["observedSince"], "2026-11-19T01:05:10Z")
+            self.assertEqual(len(iv_reb2), 1)
+            self.assertEqual(iv_reb2[0]["name"], "alice")
+            self.assertEqual(iv_reb2[0]["endAt"], models._utc_instant("2026-11-19T01:05:05Z"))
+
+            # Mid-file conflicting session_meta drops attribution for that rollout file cleanly.
+            conflict_root = Path(root) / "conflict_home"
+            conflict_records = self._write_codex_rollout(
+                conflict_root,
+                self.SID_A,
+                [("2026-11-19T01:02:00Z", 10, 2, 3)],
+                extra_lines=[json.dumps({"type": "session_meta", "payload": {"id": self.SID_B}})],
+            )
+            self.assertEqual(
+                models.daily_agents(
+                    collector,
+                    [{"tokens": conflict_records}],
+                    snapshot([daily(TODAY, input=10, output=2, cache=3)]),
+                    config={"home": str(conflict_root)},
+                    intervals=intervals,
+                ),
+                {},
+            )
+
+            # Malformed continuity JSON returns None without crashing.
+            bad_cont = Path(root) / "bad-continuity.json"
+            bad_cont.write_text('{"version": 1, "healthy": "yes"}', encoding="utf-8")
+            self.assertIsNone(models.load_continuity(bad_cont))
+
+    def test_retain_token_history_recomputes_fresh_same_sum_days_and_keeps_unavailable_fallback(self):
+        agent_a = {"id": "w6:p1", "name": "mausbot-back", "teamId": "w6", "teamName": "MausBot", "totalTokens": 15}
+        agent_b = {"id": "w6:p2", "name": "mausbot-dev2", "teamId": "w6", "teamName": "MausBot", "totalTokens": 15}
+        first = usage.retain_token_history(snapshot([daily(TODAY)]), None, None, agent_days={TODAY: [agent_a]})
+        self.assertEqual(first["trendHistory"]["daily"][0]["agentTokens"], [agent_a])
+
+        # Same daily token sum (15) from different fresh collection with no attributed agents must NOT retain stale agent_a.
+        fresh_unattributed = usage.retain_token_history(snapshot([daily(TODAY)]), first, None, saved=first, agent_days={})
+        self.assertEqual(fresh_unattributed["trendHistory"]["daily"][0]["totalTokens"], 15)
+        self.assertNotIn("agentTokens", fresh_unattributed["trendHistory"]["daily"][0])
+
+        # Same daily sum (15) recomputed to a different agent replaces previous attribution.
+        fresh_reassigned = usage.retain_token_history(snapshot([daily(TODAY)]), first, None, saved=first, agent_days={TODAY: [agent_b]})
+        self.assertEqual(fresh_reassigned["trendHistory"]["daily"][0]["agentTokens"], [agent_b])
+
+        # Unavailable fresh day falls back to prior retained day and preserves that original day's agentTokens.
+        fallback = usage.retain_token_history(snapshot([daily(TODAY, "unavailable")]), first, None, saved=first, agent_days={})
+        self.assertEqual(fallback["trendHistory"]["daily"][0]["tokenStatus"], "partial")
+        self.assertEqual(fallback["trendHistory"]["daily"][0]["agentTokens"], [agent_a])
 
 
 if __name__ == "__main__":
