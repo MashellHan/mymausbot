@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { t } from "@/lib/i18n";
+import { usePageVisible } from "@/lib/page-visible";
 import { SITE_FRAME_ALLOW, SITE_THUMB_SANDBOX } from "@/lib/published-apps";
 import { SiteFrame } from "../published-apps/SiteFrame";
 import { dailyXPageAllowed } from "./daily-x-host";
@@ -75,6 +76,7 @@ function ReportSiteFrame({ view, visible }: { view: MiniAppReportSiteView; visib
 
 export function MiniAppSiteOverlay({ frameBox, view }: { frameBox: RefObject<HTMLDivElement | null>; view: MiniAppSiteView }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const pageVisible = usePageVisible();
 
   useLayoutEffect(() => {
     const box = frameBox.current;
@@ -92,7 +94,7 @@ export function MiniAppSiteOverlay({ frameBox, view }: { frameBox: RefObject<HTM
   }, [frameBox]);
 
   if (!view) return null;
-  const bounds = view.viewport && clipMiniAppSiteViewport(view.viewport, size);
+  const bounds = pageVisible && view.viewport ? clipMiniAppSiteViewport(view.viewport, size) : null;
   const mojo = view.site === MOJO_POETRY_SITE;
   const visible = Boolean(bounds) && (mojo || view.phase === "ready");
   return <div hidden={!bounds} inert={!visible} aria-hidden={!visible}
@@ -101,6 +103,6 @@ export function MiniAppSiteOverlay({ frameBox, view }: { frameBox: RefObject<HTM
     {mojo
       ? <SiteFrame url={MOJO_POETRY_URL} title={t("computer.miniApps.mojo.poetry")} attempt={0}
         sandbox={SITE_THUMB_SANDBOX} frameName={MOJO_POETRY_FRAME_NAME} />
-      : <ReportSiteFrame view={view} visible={Boolean(view.viewport)} />}
+      : <ReportSiteFrame view={view} visible={Boolean(bounds)} />}
   </div>;
 }

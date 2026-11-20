@@ -1,3 +1,4 @@
+import { matchesMiniAppReleasePackage } from "../../../shared/mini-app-release-packages";
 import { DAILY_X_FRAME_NAME, DAILY_X_URL } from "./daily-x-host";
 import { GITHUB_ACTIVITY_FRAME_NAME, GITHUB_ACTIVITY_URL, githubWebUrlForSelection, type GithubActivitySelection } from "./github-activity-host";
 
@@ -10,10 +11,9 @@ export type MiniAppReportSite = keyof typeof MINI_APP_REPORT_SITES;
 export type MiniAppSite = typeof MOJO_POETRY_SITE | MiniAppReportSite;
 
 export function miniAppReleaseSite(release: { packageId: string; requires: readonly string[] } | null | undefined): MiniAppSite | undefined {
-  if (!release) return undefined;
-  if (release.packageId === "mashellhan.mojo" && release.requires.includes("mojo-poetry-v1")) return MOJO_POETRY_SITE;
-  if (release.packageId === "mashellhan.x-ai-digest" && release.requires.includes("daily-x-site-v1")) return "daily-x";
-  if (release.packageId === "mashellhan.github-activity" && release.requires.includes("github-activity-site-v1")) return "github-activity";
+  if (matchesMiniAppReleasePackage("mojo", release)) return MOJO_POETRY_SITE;
+  if (matchesMiniAppReleasePackage("x_ai_digest", release)) return "daily-x";
+  if (matchesMiniAppReleasePackage("github_activity", release)) return "github-activity";
   return undefined;
 }
 
@@ -105,9 +105,17 @@ export function createMiniAppSitePresentation(options: {
       };
       if (!current || !initialized || data.site !== site
         || Object.keys(data).length !== keys.length || !keys.every((key) => Object.hasOwn(data, key))
-        || viewport === undefined || (viewport && !clipMiniAppSiteViewport(viewport, { width: iframe.clientWidth, height: iframe.clientHeight }))) {
+        || viewport === undefined) {
         return deny();
       }
+      const { clientWidth: width, clientHeight: height } = iframe;
+      if (viewport && (iframe.ownerDocument.visibilityState === "hidden" || width <= 0 || height <= 0)) {
+        if (!view?.viewport || (view.site !== MOJO_POETRY_SITE && (data.opening !== view.opening || data.retry))) return deny();
+        setView({ ...view, viewport });
+        frame.postMessage({ mausMiniApp: 1, type: "site-result", id }, "*");
+        return true;
+      }
+      if (viewport && !clipMiniAppSiteViewport(viewport, { width, height })) return deny();
       if (site === MOJO_POETRY_SITE) {
         if (viewport || view) setView({ site, viewport });
       } else {

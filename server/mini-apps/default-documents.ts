@@ -9,6 +9,7 @@ export const DEFAULT_APPS = {
   "agent-team": { slug: "agent-team", title: "Agent Team", description: "Your local teams and their current activity." },
   usage: { slug: "usage", title: "Activities", description: "Your work, contributions and agent activity." },
   hongguo: { slug: "hongguo", title: "红果", description: "浏览短剧，并从本机保存的剧集进度继续观看。" },
+  mojo: { slug: "mojo", title: "Mojo", description: "Quotes and poetry." },
 } as const;
 
 export const NATIVE_DEFAULT_HTML = '<!doctype html><html lang="en"><meta charset="utf-8"><title>Built-in Mini App</title><body>Open this app in the OpenMausBot desktop app.</body></html>';
@@ -25,9 +26,12 @@ export function matchesPendingDefaultHtml(kind: DefaultMiniAppKind, html: string
 
 export function pendingDefaultHtml(kind: DefaultMiniAppKind): string {
   const ledger = kind === "bookkeeping";
+  const mojo = DEFAULT_APPS[kind].slug === "mojo";
   const zh = ledger ? "还没有找到记账记录。记账 Bot 的账本准备好后，记录会自动出现在这里。"
+    : mojo ? "Mojo 还未下载。"
     : "报告更新后会出现在这里。现有 Bot 和自动化可以持续更新这个应用。";
   const en = ledger ? "No ledger is available yet. Your bookkeeping Bot’s records will appear here automatically."
+    : mojo ? "Mojo hasn’t been downloaded yet."
     : "New reports will appear here as your Bot and its Automations publish updates.";
   return `<!doctype html><html><meta charset="utf-8"><title>${DEFAULT_APPS[kind].title}</title>
 <style>body{margin:0;color:var(--color-text-primary);background:var(--color-background-primary);font:14px/1.6 system-ui,sans-serif}main{padding:24px;max-width:65ch}h1{font-size:20px;line-height:1.3;margin:0 0 12px}p{margin:0;color:var(--color-text-secondary)}:root:lang(zh) .en{display:none}:root:not(:lang(zh)) .zh{display:none}</style>

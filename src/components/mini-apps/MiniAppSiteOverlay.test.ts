@@ -55,6 +55,7 @@ it.each([
 ])("enables only the fixed verified release capability and retains legacy views for %s", (packageId, capability, target) => {
   expect(miniAppReleaseSite(null)).toBeUndefined();
   expect(miniAppReleaseSite({ packageId, requires: [] })).toBeUndefined();
+  expect(miniAppReleaseSite({ packageId, requires: [capability, "other-v1"] })).toBeUndefined();
   expect(miniAppReleaseSite({ packageId: "mashellhan.other", requires: [capability] })).toBeUndefined();
   expect(miniAppReleaseSite({ packageId, requires: [capability] })).toBe(target);
 });
@@ -219,6 +220,38 @@ it("keeps Daily X inert until the allowlisted site answers the live opening chal
   retry.notify({ ...ready, nonce: retry.load(), path: "/github/" });
   f.phase(2, "failed");
   expect(overlay.inert).toBe(true);
+});
+
+it("pauses the report handshake when the retained Mini App panel is parked", () => {
+  vi.useFakeTimers();
+  const f = reportFixture("daily-x");
+  f.send(1);
+  const remote = f.watch(), previous = remote.load();
+  const resize = (width: number) => {
+    for (const element of [frameBox, iframe]) Object.defineProperty(element, "clientWidth", { configurable: true, value: width });
+    act(() => window.dispatchEvent(new Event("resize")));
+  };
+  const ready = { type: "ready", path: "/x/20261120/" };
+  resize(0);
+  expect(f.overlay().hidden).toBe(true);
+  expect(f.remote()).toBe(remote.element);
+  f.send(1, { viewport: { ...viewport, width: 200 } });
+  expect(f.received).toHaveBeenLastCalledWith({ mausMiniApp: 1, type: "site-result", id: show.id }, "*");
+  f.send(2, { retry: true });
+  expect(f.received).toHaveBeenLastCalledWith(expect.objectContaining({ error: "This site is unavailable." }), "*");
+  const before = f.received.mock.calls.length;
+  remote.notify({ ...ready, nonce: previous });
+  act(() => vi.advanceTimersByTime(10_000));
+  expect(f.received.mock.calls).toHaveLength(before);
+  resize(360);
+  expect(f.remote()).toBe(remote.element);
+  expect(f.overlay().style.width).toBe("180px");
+  const fresh = remote.load();
+  expect(fresh).not.toBe(previous);
+  remote.notify({ ...ready, nonce: previous });
+  expect(f.overlay().inert).toBe(true);
+  remote.notify({ ...ready, nonce: fresh });
+  expect(f.overlay().inert).toBe(false);
 });
 
 it("retains GitHub across hide, ignores prior openings and only reopens the Web path for a valid new Saved selection", () => {

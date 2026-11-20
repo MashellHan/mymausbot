@@ -68,7 +68,7 @@ it("keeps custom slugs, removals and revoked dashboard grants across default ini
     description: "Custom", html: "<p>Custom</p>", bindings: [] });
   const result = await defaults.ensure(owner, input);
   expect(result.issues).toEqual([]);
-  expect(result.apps).toHaveLength(7);
+  expect(result.apps).toHaveLength(8);
   expect(result.apps.find((app) => app.id === custom.app.id)).toEqual(custom.app);
   const native = result.apps.find((app) => app.dashboardIdentity === "usage")!;
   expect(native.slug).toBe("usage-included-1");
@@ -188,7 +188,7 @@ it("does not assign a report source when multiple producer Bots match", async ()
     durationMinutes: 0, nextRunAt: null, createdAt: 1, updatedAt: 1 });
   routines.push(routine("one", "ledger"), routine("two", "reports"));
   const result = await defaults.ensure(owner, input);
-  expect(result.apps).toHaveLength(6);
+  expect(result.apps).toHaveLength(7);
   expect(result.issues).toEqual([{ kind: "x_ai_digest", error: expect.stringContaining("More than one Bot") }]);
   expect(result.apps.find((app) => app.shippedTemplateKind === "x_ai_digest")?.publisherBotIds).toEqual([]);
   expect(await data.listBotSources("workspace-owner", ["ledger", "reports"])).toEqual([]);
