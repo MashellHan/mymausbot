@@ -761,6 +761,9 @@ describe("inline overview model settings", () => {
     choose(select("Reasoning effort"), "medium");
     expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
       selection: { instanceId: "codex", model, effort: "medium" } }));
+    render({ ...bot, modelSelection: { ...bot.modelSelection, effort: "none" } }, options);
+    await settle();
+    expect(select("Reasoning effort").selectedOptions[0]).toMatchObject({ value: "none", disabled: true, textContent: "None (unavailable)" });
     fixture.instances = [{ ...instance, models: { default: model, options: [{ ...option, effortLevels: [] }] } }];
     render(bot, options);
     await settle();

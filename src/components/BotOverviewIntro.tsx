@@ -25,8 +25,8 @@ function OverviewModel({ bot }: { bot: Bot }) {
   const instance = state.instances.find((candidate) => candidate.instanceId === selection.instanceId);
   const model = modelName(instance, selection.model, selection.variant);
   const levels = pickerModelEffortLevels(instance, selection.model);
-  const effort = selection.effort && levels.includes(selection.effort) ? effortLabel(selection.effort) : t("settings.newBotEffort.default");
-  const reasoning = selection.model && levels.length && !instance?.capabilities?.modelVariants
+  const effort = selection.effort ? effortLabel(selection.effort, Boolean(instance) && !levels.includes(selection.effort)) : t("settings.newBotEffort.default");
+  const reasoning = selection.model && (levels.length || selection.effort) && !instance?.capabilities?.modelVariants
     ? `${t("model.simple.reasoning")} · ${effort}` : null;
 
   return <section data-panel-card="model">

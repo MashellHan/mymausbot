@@ -77,6 +77,8 @@ it("shows the configured reasoning or provider default on the collapsed Model ro
   expect(modelRow.textContent).toContain("Reasoning · X-High");
   await render({ ...selected, modelSelection: { instanceId: "codex", model } });
   expect(modelRow.textContent).toContain("Reasoning · Provider default");
+  await render({ ...selected, modelSelection: { instanceId: "codex", model, effort: "none" } });
+  expect(modelRow.textContent).toContain("Reasoning · None (unavailable)");
 });
 
 describe("Bot overview suggestions", () => {

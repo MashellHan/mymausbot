@@ -7,8 +7,9 @@ import { t } from "@/lib/i18n";
 import { variantChoices, variantLabel } from "./model-picker-reasoning";
 import { Select } from "./Select";
 
-export function effortLabel(level: EffortLevel): string {
-  return t(`model.effort.${level}` as Parameters<typeof t>[0]);
+export function effortLabel(level: EffortLevel, unavailable = false): string {
+  const label = t(`model.effort.${level}` as Parameters<typeof t>[0]);
+  return unavailable ? `${label} (${t("model.variant.unavailable")})` : label;
 }
 
 /**
@@ -40,7 +41,8 @@ export function EffortRow({
   }
   const levels = pickerModelEffortLevels(instance, selection.model);
   if (!levels.length) return null;
-  const effort = selection.effort !== undefined && levels.includes(selection.effort) ? selection.effort : undefined;
+  const effort = selection.effort;
+  const unavailable = effort !== undefined && !levels.includes(effort);
 
   if (compact) return (
     <label className={cn("flex items-center justify-between gap-3", className)}>
@@ -49,6 +51,7 @@ export function EffortRow({
         onChange={(event) => dispatch({ type: "setModel", botId: bot.id, threadId, ...(updateBotDefault ? { updateBotDefault: true } : {}),
           selection: { ...selection, effort: levels.find((level) => level === event.target.value) } })}>
         <option value="">{t("model.effort.default")}</option>
+        {unavailable && <option value={effort} disabled>{effortLabel(effort, true)}</option>}
         {levels.map((level) => <option key={level} value={level}>{effortLabel(level)}</option>)}
       </Select>
     </label>
@@ -57,6 +60,7 @@ export function EffortRow({
   return (
     <div className={className}>
       {label}
+      {unavailable && <p className="mt-1 text-[12px] text-ink-secondary">{effortLabel(effort, true)}</p>}
       <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label={t("model.effort.label")}>
         {[undefined, ...levels].map((level) => (
           <button
