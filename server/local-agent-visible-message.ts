@@ -443,8 +443,8 @@ function recordExecCalls(calls: CallExpression[], env: StaticExecEnvironment, sc
   if (scan.calls > MAX_TOOL_FIELDS || scan.failed) { scan.failed = true; return false; }
   for (const call of calls) {
     const command = literalExecCommand(call, env, scan);
-    if (command) scan.commands.push(command);
-    else scan.clipped = true;
+    if (!command) { scan.failed = true; return false; }
+    scan.commands.push(command);
   }
   return !scan.failed;
 }
@@ -473,10 +473,14 @@ function scanExecStatement(statement: Statement, source: string, env: StaticExec
     const calls = execCallsInExpression(statement.expression, env, scan);
     if (calls) return recordExecCalls(calls, env, scan);
     const { expression } = statement;
-    return expression.type === "CallExpression" && !expression.optional &&
-      expression.callee.type === "Identifier" && expression.callee.name === "text" && !env.has("text") &&
-      expression.arguments.length === 1 && expression.arguments[0]?.type === "Literal" &&
-      typeof expression.arguments[0].value === "string" &&
+    if (expression.type !== "CallExpression" || expression.optional ||
+        expression.callee.type !== "Identifier" || expression.callee.name !== "text" || env.has("text") ||
+        expression.arguments.length !== 1 || expression.arguments[0]?.type !== "Literal" ||
+        typeof expression.arguments[0].value !== "string") return false;
+    const decoded = expression.arguments[0].value;
+    const normalized = normalizedToolLabels(decoded).replace(/[\p{Cc}\p{Cf}]/gu, "");
+    return Boolean(safeToolText(decoded, true).text) && Boolean(safeToolText(normalized, true).text) &&
+      !INTERNAL_ENVELOPE.test(decoded) && !INTERNAL_ENVELOPE.test(normalized) &&
       !/\bexec_command\b/.test(source.slice(statement.start, statement.end));
   }
   if (statement.type === "VariableDeclaration") {
@@ -537,7 +541,8 @@ function staticExecCommandDetail(source: string): { text: string; clipped: boole
   const context = [...unique.values()].sort((left, right) => right.start - left.start)
     .reduce((value, command) => value.slice(0, command.start) + '""' + value.slice(command.end), source);
   const normalizedContext = normalizedToolLabels(context).replace(/[\p{Cc}\p{Cf}]/gu, "");
-  if (!safeToolText(normalizedContext, true).text || INTERNAL_ENVELOPE.test(normalizedContext)) return null;
+  if (!safeToolText(context, true).text || !safeToolText(normalizedContext, true).text ||
+      INTERNAL_ENVELOPE.test(context) || INTERNAL_ENVELOPE.test(normalizedContext)) return null;
   const details: string[] = [];
   let clipped = scan.clipped;
   for (const command of scan.commands) {
