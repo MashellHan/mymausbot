@@ -7,6 +7,7 @@ import { conversationLanguage, serverLine } from "./server-lines.ts";
 import { plainClock, plainTimeZone, plainWeekdays } from "../shared/plain-time-zone.ts";
 import { normalizeCronSchedule, nextCronRuns } from "../shared/routine-schedule.ts";
 import { newId } from "./contracts.ts";
+import type { StartAutomationStatus } from "./chat-live-status.ts";
 import { UNDO_STALE, type DirectApply, type DirectApplyCheck } from "./direct-apply.ts";
 import { redactSecretsInText } from "./redact.ts";
 import { parseJson, schemaIssue, type JsonObject, type JsonValue } from "./schema.ts";
@@ -119,7 +120,6 @@ export interface RoutineRequestServiceOptions {
   validateTarget?: (proposerBotId: string, target: { botId: string; name: string }) => string | null;
   engines?: LimitResetEngines;
 }
-
 export interface ProposeRoutineRequestArgs {
   botId: string;
   threadId: string;
@@ -128,8 +128,8 @@ export interface ProposeRoutineRequestArgs {
   from?: { botId: string; name: string; color: string };
   /** Caller/turn lease, checked synchronously right before the durable card append. */
   canCommit?: () => boolean;
+  startAutomation?: StartAutomationStatus;
 }
-
 export interface RoutineProposalResult {
   requestId: string;
   messageId: string;
@@ -139,7 +139,6 @@ export interface RoutineProposalResult {
   nextRunAt: number | null;
   timeZone: string;
 }
-
 interface RoutineCardCopy {
   title: string;
   summary: string;
@@ -147,7 +146,6 @@ interface RoutineCardCopy {
   nextRunAt: number | null;
   tool: "schedule_routine" | "manage_routine";
 }
-
 export type ResolveRoutineRequestResult =
   | { claimed: false; state: "not_found" }
   | { claimed: true; state: "invalid"; error: string; status: number }
@@ -161,7 +159,6 @@ export type ResolveRoutineRequestResult =
       settlementPending?: true;
       message?: string;
     };
-
 export type UndoRoutineRequestResult =
   | { claimed: false }
   | { claimed: true; state: "already_undone" }
@@ -1034,11 +1031,14 @@ export class RoutineRequestService {
       timeZone,
     };
     if (!automatic) return proposal;
+    const finish = args.startAutomation?.(operation.action);
     let result: ResolveRoutineRequestResult;
     try {
       result = this.resolve({ botId, threadId, requestId, behavior: "allow" });
     } catch (error) {
       result = { claimed: true, state: "invalid", error: error instanceof Error ? error.message : String(error), status: error instanceof RoutineRequestError ? error.status : 400 };
+    } finally {
+      finish?.();
     }
     if (result.state === "applied") {
       this.recordAutoApplied(threadId, message.id, definition, before);

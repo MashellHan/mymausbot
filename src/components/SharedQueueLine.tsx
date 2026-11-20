@@ -7,15 +7,16 @@ import { useReactor } from "@/lib/cloud-guest";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import type { LocalePack } from "@/locales";
 import type { Bot } from "@/state/store";
 import { useStoreDispatch, useStoreSelector } from "@/state/store-select";
 
 type Waiting = { queueId: string; text: string; sender?: ResolvedSender };
 
 /** The working line's lead in a conversation several people write in: whose request runs. */
-export function workingForLabel(askedBy: ResolvedSender | undefined, viewer: string): string | undefined {
+export function workingForLabel(askedBy: ResolvedSender | undefined, viewer: string, pack?: LocalePack): string | undefined {
   if (!askedBy) return undefined;
-  return askedBy.id === viewer ? t("chat.queue.workingForYou") : t("chat.queue.workingFor", { name: shownPersonName(askedBy.name) });
+  return askedBy.id === viewer ? t("chat.queue.workingForYou", undefined, pack) : t("chat.queue.workingFor", { name: shownPersonName(askedBy.name) }, pack);
 }
 
 /** "Next: Tom's request, then 2 more", or null when nothing waits. */
@@ -75,14 +76,14 @@ export function SharedQueueLine({ waiting, viewer, onRemove, className }: {
 
 /** In a Team Cloud conversation several people write in: the working line's lead, the quiet line under it, and whether
  * the viewer may act on a request someone made. */
-export function useSharedRun(bot: Bot, advanced: boolean): { label?: string; line: ReactNode; mayAct: (asker: ResolvedSender | undefined) => boolean } {
+export function useSharedRun(bot: Bot, advanced: boolean, pack?: LocalePack): { label?: string; line: ReactNode; mayAct: (asker: ResolvedSender | undefined) => boolean } {
   const team = useStoreSelector((state) => Boolean(state.config?.team)), waiting = useStoreSelector((state) => state.pendingQueued[bot.threadId]), dispatch = useStoreDispatch();
   const viewer = useReactor();
   const mayAct = useMayAct();
   const task = team ? bot.tasks?.find((one) => one.threadId === bot.threadId && !one.private) : undefined;
   if (!task) return { line: null, mayAct: () => true };
   return {
-    label: workingForLabel(task.askedBy, viewer),
+    label: workingForLabel(task.askedBy, viewer, pack),
     line: <SharedQueueLine waiting={waiting ?? []} viewer={viewer} className={advanced ? "ps-11" : "ps-12"}
       onRemove={(queueId) => dispatch({ type: "cancelQueued", botId: bot.id, threadId: bot.threadId, queueId })} />,
     mayAct,

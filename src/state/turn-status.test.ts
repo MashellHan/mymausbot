@@ -67,8 +67,11 @@ describe("a thread's live turn", () => {
     expect(turnLive("t")).toEqual({ turnId: "turn-1", ended: true, status: null });
     note({ type: "thread.token-usage.updated", input: 1, output: 1 } as Partial<RuntimeEvent>);
     expect(turnLive("t").ended, "a late frame of the ended turn does not reopen it").toBe(true);
-    note({ type: "item.completed", itemType: "assistant_text", text: "late", turnId: "turn-2" } as Partial<RuntimeEvent>);
+    note({ type: "turn.started", turnId: "turn-2" });
     expect(turnLive("t")).toEqual({ turnId: "turn-2", ended: false, status: null });
+    note({ type: "turn.completed", ok: true, turnId: "turn-2" });
+    note({ type: "item.started", itemType: "tool", itemId: "retired-tool", turnId: "turn-1" });
+    expect(turnLive("t")).toEqual({ turnId: "turn-2", ended: true, status: null });
   });
 
   it("carries what a call works on, how it is doing and its last output, and changes only when one of them does", () => {

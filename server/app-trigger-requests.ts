@@ -7,6 +7,7 @@ import { appLabel } from "./app-event-catalog.ts";
 import { AppTriggerError, type AppTriggerManager } from "./app-triggers.ts";
 import { instructionsUpdateRefusal } from "./automation-instructions.ts";
 import { newId } from "./contracts.ts";
+import type { StartAutomationStatus } from "./chat-live-status.ts";
 import { UNDO_STALE } from "./direct-apply.ts";
 import { redactSecretsInText } from "./redact.ts";
 
@@ -117,7 +118,7 @@ export class AppTriggerRequestService {
     return trigger;
   }
 
-  async submit(args: { botId: string; threadId: string; operation: unknown; from?: { botId: string; name: string; color: string }; canCommit?: () => boolean }): Promise<AppTriggerRequestResult> {
+  async submit(args: { botId: string; threadId: string; operation: unknown; from?: { botId: string; name: string; color: string }; canCommit?: () => boolean; startAutomation?: StartAutomationStatus }): Promise<AppTriggerRequestResult> {
     const parsed = operationSchema.safeParse(args.operation);
     if (!parsed.success) throw new AppTriggerError(parsed.error.issues[0]?.message ?? "Invalid automation request");
     const operation = parsed.data as AppTriggerRequestOperation;
@@ -131,28 +132,33 @@ export class AppTriggerRequestService {
     if (args.canCommit && !args.canCommit()) throw new AppTriggerError("The requesting turn ended before this change could be saved", 401);
     let after: AppTrigger | null = null;
     let runId: string | undefined;
-    switch (operation.action) {
-      case "create": {
-        const { instructions, ...definition } = operation.trigger;
-        after = await triggers.create({ ...definition, prompt: instructions, botId: owner, sourceThreadId: args.threadId });
-        break;
+    const finish = args.startAutomation?.(operation.action);
+    try {
+      switch (operation.action) {
+        case "create": {
+          const { instructions, ...definition } = operation.trigger;
+          after = await triggers.create({ ...definition, prompt: instructions, botId: owner, sourceThreadId: args.threadId });
+          break;
+        }
+        case "update": {
+          const { instructions, ...changes } = operation.changes;
+          after = await triggers.update(operation.triggerId, { ...changes, ...(instructions !== undefined ? { prompt: instructions } : {}) }, { protectInstructions: true });
+          break;
+        }
+        case "pause":
+        case "resume":
+          after = await triggers.update(operation.triggerId, { enabled: operation.action === "resume" });
+          break;
+        case "run_now":
+          runId = (await triggers.runNow(operation.triggerId))?.runId;
+          after = before ?? null;
+          break;
+        case "delete":
+          if (!await triggers.remove(operation.triggerId)) throw new AppTriggerError("That automation no longer exists.", 404);
+          break;
       }
-      case "update": {
-        const { instructions, ...changes } = operation.changes;
-        after = await triggers.update(operation.triggerId, { ...changes, ...(instructions !== undefined ? { prompt: instructions } : {}) }, { protectInstructions: true });
-        break;
-      }
-      case "pause":
-      case "resume":
-        after = await triggers.update(operation.triggerId, { enabled: operation.action === "resume" });
-        break;
-      case "run_now":
-        runId = (await triggers.runNow(operation.triggerId))?.runId;
-        after = before ?? null;
-        break;
-      case "delete":
-        if (!await triggers.remove(operation.triggerId)) throw new AppTriggerError("That automation no longer exists.", 404);
-        break;
+    } finally {
+      finish?.();
     }
     const subject = after ?? before!;
     const summary = appTriggerSentence(subject, this.options.botName(owner));

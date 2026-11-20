@@ -226,38 +226,37 @@ pnpm exec vitest run src/state/store.test.ts src/components/ChatView.follow.test
 
 ## What a bot is doing right now
 
-While a step runs, the working line names it ("Running scrape.py", "Searching the
-web for “Acme construction leads”", "Reading linkedin.com"), with the whole command on
-hover. Once the step has run past the quiet notice it adds how it is doing: the
-time since its last output, or what its own processes show ("waiting on the
-network", "busy, no output yet", "idle, no output yet"). A click on the line,
-or Enter on it, unfolds the **Now** card: the current ask's steps, a running
-command's last lines of output and **Open activity**, which opens the Activity
-panel at this run. A second click or Escape folds it. A working bot's sidebar
-row shows the same step in place of its last message.
+While a verified step runs, the working line shows a stable label such as
+“Running a command” or “Searching the web.” A short authenticated automation
+operation can keep its label visible briefly. A later verified step or the
+turn ending clears that label. The active line and its tooltip contain status
+labels and elapsed time. The accepted person message supplies the status
+language when it identifies a supported language.
 
-A scripted call with `hold` stays running until `FAKE_CLAUDE_RELEASE` exists;
-`hold: "busy"`, `"idle"` or `"network"` also keeps a stand-in process that
-burns CPU, sleeps or holds a loopback connection, as the call's command would.
-The quiet-status knobs cross into the fixture, so the sign of life shows in
-seconds:
+A click on the line or Enter unfolds the **Now** card with the current ask's
+steps, a running command's last output and **Open activity**. A second click
+or Escape folds it.
+
+A scripted call with `hold` stays running until `FAKE_CLAUDE_RELEASE` exists.
+Print a disposable release path before launching the isolated browser:
 
 ```sh
-OMB_ACP_QUIET_NOTICE_MS=10000 OMB_ACP_QUIET_TICK_MS=2000 FAKE_CLAUDE_RELEASE=/tmp/release \
+release_dir="$(mktemp -d "${TMPDIR:-/tmp}/omb-status.XXXXXX")"
+printf '%s\n' "$release_dir/release"
+FAKE_CLAUDE_RELEASE="$release_dir/release" \
 node --experimental-strip-types scripts/control-omb.ts ui launch --tool-calls \
   '[{"name":"WebSearch","input":{"query":"Acme construction leads"},"ok":true},
-    {"name":"Bash","input":{"command":"cd ~/acme && python3 scrape.py --pages 40"},"hold":"busy"}]'
+    {"name":"Bash","input":{"command":"cd ~/acme && python3 scrape.py --pages 40"},"hold":true}]'
 ```
 
-Expected after a sent message: `Working · 15s · Running scrape.py · busy, no
-output yet`, the button `What Pepper is doing` with `aria-expanded="false"`,
-and, once clicked, a card listing `Searched the web for “Acme construction leads”` and
-`Running scrape.py`. Claude Code prints a command's output only when it ends,
-so streamed output needs an engine that sends it: `--engine codex` adds the
-fake Codex app-server, and `FAKE_CODEX_COMMAND`, `FAKE_CODEX_COMMAND_OUTPUT`
-(JSON chunks), `FAKE_CODEX_COMMAND_OUTPUT_MS` and `FAKE_CODEX_COMMAND_GATE`
-script its command. A bot moved to the `codex` instance then shows `last
-output just now` and the command's last two lines in the card.
+After sending a message, the held step shows `Running a command` and the
+collapsed `What Pepper is doing` button has `aria-expanded="false"`. Open
+the card to see the search and command steps. Create the printed release file
+from a second terminal and verify that the command label clears. Claude Code
+prints command output when it ends. To check streamed output in the card, add
+the fake Codex app-server with `--engine codex` and script it with
+`FAKE_CODEX_COMMAND`, `FAKE_CODEX_COMMAND_OUTPUT` (JSON chunks),
+`FAKE_CODEX_COMMAND_OUTPUT_MS` and `FAKE_CODEX_COMMAND_GATE`.
 
 ## A reply as it streams
 
