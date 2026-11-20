@@ -94,7 +94,7 @@ export function noteTurnEvent(event: RuntimeEvent): void {
       const status = live.status?.itemId && live.status.itemId === event.itemId ? live.status : null;
       if (event.itemType !== "tool") return put(threadId, { ...live, ended: false, status });
       const id = event.itemId ?? event.eventId;
-      const activity = event.step?.activity ?? (status && status.activity !== "reply" && status.activity !== "thinking" ? status.activity : "tool");
+      const activity = event.step?.activity ?? status?.activity ?? "tool";
       const startedTools = [...(live.startedTools ?? []).filter((step) => step.id !== id), { id, activity }];
       return put(threadId, { ...live, ended: false, status, waiting: undefined, startedTools });
     }

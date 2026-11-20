@@ -31,8 +31,7 @@ export function chatLiveStatusKey(live: TurnLive): LocaleKey | undefined {
   const tool = live.startedTools?.at(-1);
   if (!tool) return undefined;
   const progress = live.status;
-  const activity = progress?.itemId === tool.id && progress.activity !== "thinking" && progress.activity !== "reply"
-    ? progress.activity : tool.activity;
+  const activity = progress?.itemId === tool.id ? progress.activity : tool.activity;
   return Object.hasOwn(TOOL_LABEL, activity) ? TOOL_LABEL[activity] : "chat.activity.usingTool";
 }
 

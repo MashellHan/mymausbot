@@ -3,7 +3,7 @@ import { isTurnAutomationAction } from "../shared/turn-progress.ts";
 
 export type AutomationObserver = <T>(action: string, run: () => T) => T;
 
-type ChatTurnOwner = { generation: string; messageId?: string; turnId?: string; stopped?: boolean };
+type ChatTurnOwner = { generation: string; messageId?: string; turnId?: string | null; stopped?: boolean };
 
 export function activeChatTurn(turnId: string | undefined, owner: ChatTurnOwner | undefined, generation: string): string | undefined {
   return owner?.generation === generation && !owner.stopped && turnId === owner.turnId ? turnId : undefined;
