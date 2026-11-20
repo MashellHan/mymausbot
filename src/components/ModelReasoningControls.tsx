@@ -40,8 +40,8 @@ export function EffortRow({
     return <ModelVariantRow bot={bot} threadId={threadId} updateBotDefault={updateBotDefault} className={className} label={label} compact={compact} wide={wide} quiet={compact} />;
   }
   const levels = pickerModelEffortLevels(instance, selection.model);
-  if (!levels.length) return null;
   const effort = selection.effort;
+  if (!levels.length && effort === undefined) return null;
   const unavailable = effort !== undefined && !levels.includes(effort);
 
   if (compact) return (
