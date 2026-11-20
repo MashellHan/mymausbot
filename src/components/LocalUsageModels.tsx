@@ -56,7 +56,7 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
     models?.coverage === "ready" && rows.every((row) => row.estimatedCost.coverage === "ready" && usableCost(row.estimatedCost) !== null);
   const comparableTotal = rawTotal !== null && rawTotal > 0 && matchingScope &&
     Math.abs(rawTotal - modelCostTotal) <= rawTotal * Number.EPSILON * rows.length ? rawTotal : null;
-  const columns = [t("usage.history.byModel"), t("computer.usage.modelTotalTokens"), t("computer.usage.tokenShare"),
+  const columns = [t("usage.history.byModel"), t("computer.usage.modelTotalTokens"),
     t("computer.usage.cachedInput"), t("computer.usage.freshInput"), t("computer.usage.output"), t("computer.usage.estimatedCost")];
   return <UsagePeriodSection kind="models" heading={title} periods={shortUsagePeriods} period={period} onPeriodChange={setPeriod} window={window}
     open={open} onToggle={() => setOpen((current) => !current)}
@@ -85,9 +85,14 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
               ? "computer.usage.recordedCostShare" : "computer.usage.estimatedCostShare", { share: estimatedShare });
             return <tr key={row.model}>
               <th scope="row" dir="auto" className={cn(tableCell, "w-[22%] min-w-40 font-medium [overflow-wrap:anywhere]")}>{row.model}</th>
-              <td className={numericCell}>{metricText(row.totalTokens)}</td>
-              <td className={numericCell} data-usage-model-share>
-                {share === null ? t("computer.usage.shareUnavailable") : <>{percent.format(share)}<ShareBar share={share} /></>}
+              <td className={numericCell}>
+                {metricText(row.totalTokens)}
+                <div data-usage-model-share className="mt-0.5 text-ink-secondary">
+                  {share === null ? t("computer.usage.shareUnavailable") : <>
+                    <span className="sr-only">{t("computer.usage.tokenShare")}{" "}</span>{percent.format(share)}
+                    <ShareBar share={share} />
+                  </>}
+                </div>
               </td>
               <td className={numericCell}>{metricText(row.cacheRead)}</td>
               <td className={numericCell}>{metricText(row.input)}</td>

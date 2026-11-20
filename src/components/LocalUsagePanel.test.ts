@@ -142,9 +142,14 @@ describe("local Usage panel", () => {
     const tabs = [...model.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     const repo = host.querySelector('[data-usage-period="repositories"]')!;
     const modelRows = [...model.querySelectorAll<HTMLTableRowElement>("[data-usage-model-table] tbody tr")];
+    expect([...model.querySelectorAll("thead th")].map((cell) => cell.textContent)).toEqual([
+      "Model", "Total tokens", "Cached input", "Fresh input", "Output", "Estimated cost (USD)",
+    ]);
     expect(modelRows.map((row) => row.cells[0]?.textContent)).toEqual(["fixture-large", "activities-unpriced-fixture"]);
-    expect([...modelRows[0]!.cells].map((cell) => cell.textContent)).toEqual(["fixture-large", "75", "50%", "15", "50", "10", "<$0.001"]);
-    expect(modelRows[1]!.cells[2]?.textContent).toBe("16.7%");
+    expect([...modelRows[0]!.cells].map((cell) => cell.firstChild?.textContent)).toEqual(["fixture-large", "75", "15", "50", "10", "<$0.001"]);
+    const tokenShare = (row: HTMLTableRowElement) => row.cells[1]?.querySelector("[data-usage-model-share]");
+    expect(tokenShare(modelRows[0]!)?.textContent).toBe("Share 50%");
+    expect(tokenShare(modelRows[1]!)?.textContent).toBe("Share 16.7%");
     expect(model.querySelector("[data-usage-cost-share]")).toBeNull();
     expect(model.textContent).toContain("Share of recorded tokens");
     expect(model.textContent).toContain("<$0.001");
