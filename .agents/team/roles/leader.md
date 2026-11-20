@@ -28,8 +28,11 @@ Use the playbook's three-entry task brief before assigning implementation.
 Resolve scope changes in that record and act on ready/review/CI events without
 waiting for the scheduled checkpoint. Keep the original task clock through retries.
 Own the order of upstream integration and feature PR merges. The user has
-authorized reviewed merges into the personal repository; merge only after
-Reviewer has no unresolved findings and required checks pass. Resolve routine
+authorized reviewed merges into the personal repository; merge—or enable GitHub
+auto-merge (`gh pr merge --auto --merge`)—only after Reviewer has no unresolved
+findings or unresolved GitHub PR review threads, no applicable QA hold applies,
+and required checks pass. Record read-only reviewer verdicts on the PR review
+thread instead of keeping conclusions only in local chats. Resolve routine
 integration choices and escalate uncertain product choices through the user's
 assistant. Daily upstream sync does not automatically replace the live App.
 
