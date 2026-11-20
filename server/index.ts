@@ -403,7 +403,7 @@ import { connectedAppsForSetup, expandSetupTurnText, setupModeActive, setupSyste
 import { isSkillSwitchAction, type SkillRequestCardData } from "../shared/skill-request.ts"; import { createSkillSwitchHost } from "./host/skill-switch-host.ts";
 import { checkSoulDrift, readSoulDrift, soulFile, writeSoulMirror } from "./bot-folder.ts";
 import {
-  botPersona,
+  botPersona, botSessionConfigHash,
   buildSystemPrompt,
   userProfileSystemPrompt,
   cloudHomePrompt, syncedFolders,
@@ -7819,9 +7819,7 @@ async function beginTurn(
       // What a resumed session keeps from its launch; Codex reasserts model and provider on resume, but an in-flight turn and an omitted effort keep the prior selection.
       const persistentConfig = [bot.name, bot.title, bot.description, sectionContextSystemPrompt(bot.section), ...(cfg.everyBotRules?.trim() ? [cfg.everyBotRules.trim()] : []),
         ...(instance.driverKind === "codex" ? [model, effort ?? null] : [])];
-      const sessionConfig = (soul: string | undefined, agentInstructions: string) =>
-        createHash("sha256").update(JSON.stringify([...persistentConfig, soul, ...(agentInstructions ? [agentInstructions] : [])])).digest("hex").slice(0, 16);
-      const plannedConfig = sessionConfig(bot.soul, bot.agentInstructions?.trim() ?? "");
+      const plannedConfig = botSessionConfigHash(persistentConfig, bot.soul, bot.agentInstructions);
       const skillAuthoring = skillAuthoringEnabled(cfg) && agentsMounted;
       const skillCommandText = supportsWorkspaceFiles(instance.driverKind)
         ? skillsHost.expandSkillCommand(bot, threadId, providerText, instance, personLine ? activeMessages.filter((line) => skipTranscript.has(line.id)) : [], (personLine && !userMessage.relayed && !startedOutside(threadId)) || ["schedule", "manual", "startup"].includes(opts?.automationSource ?? ""), cloudGuestOpened(threadId) || botApiThread(threadId))
@@ -8347,7 +8345,7 @@ async function beginTurn(
       applyAgentsBridge(threadId, integrations, cfg, bot, turnEngine(instance, providerConfigs(), registry.lastSnapshot(instance.instanceId), cwd));
       const confined = proactive.fence.confines(threadId), apiFenced = botApiThread(threadId); if (confined || apiFenced) for (const key of Object.keys(integrations) as Array<keyof typeof integrations>) if (!(apiFenced ? BOT_API_TOOLS : READ_AND_DRAFT_TOOLS).has(key)) delete integrations[key];
       const selectionRulesStable = Boolean(integrations.agents) && bot.computer !== "off" && !inheritedTeamComputer(bot), memoryOpts = { managedWrites: Boolean(integrations.agents), fileTools: worksInWorkspace && !apiFenced, enabled: bot.memoryEnabled !== false, writesRefused: notesRefused };
-      const agentInstructions = liveBot?.agentInstructions?.trim() ?? "";
+      const agentInstructions = liveBot?.agentInstructions;
       const prompt = buildSystemPrompt(persona, liveBot?.soul ?? bot.soul ?? "", [
         { id: "user-profile", label: "About the user", text: userProfileSystemPrompt(teamHost.profileFor(threadId, cfg.profile)) }, { id: "people", label: "People", text: teamMessages.prompt(bot.id, threadId, Boolean(integrations.agents)) }, { id: "long-waits", label: "Waiting on the person", text: teammatePrompts.personBehind(bot.id, threadId) ? teamMessages.longWaits(threadId) : "" },
         { id: "setup", label: "Setup", text: setupSystemPrompt(setupMode, {
@@ -8411,7 +8409,7 @@ async function beginTurn(
       }
       runningTurnEngines.set(threadId, instance);
       // Re-decide from the instructions sent, except on an unattended continuation wake, so the session receipt describes the actual prompt.
-      const dispatchedConfig = sessionConfig(liveBot?.soul ?? bot.soul, agentInstructions);
+      const dispatchedConfig = botSessionConfigHash(persistentConfig, liveBot?.soul ?? bot.soul, agentInstructions);
       if (strictResume && !(opts?.cardContinuation && continuingRoutine) && dispatchedConfig !== plannedConfig) dispatchContext = decideContext(dispatchedConfig);
       // Before sendTurn: an adapter may emit the whole turn before it resolves.
       handoffs.dispatching(threadId, dispatchClaimId, dispatchContext.handoff);

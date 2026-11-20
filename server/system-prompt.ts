@@ -1,4 +1,5 @@
 // One builder for every turn's system prompt, so what a bot receives and the "what the model sees" preview are the same bytes.
+import { createHash } from "node:crypto";
 import { soulSystemPrompt } from "./bot-folder.ts";
 import { lentComputersLine, theirComputer } from "./lent-computers.ts";
 import { agentsToolBridged } from "./drivers/agents-bridge.ts";
@@ -11,6 +12,12 @@ import { REPLY_HABITS_PROMPT } from "./reply-habits.ts";
 
 export type PromptPart = { id: string; label: string; text: string };
 export type PromptSection = PromptPart & { bytes: number };
+
+export function botSessionConfigHash(config: readonly (string | null)[], soul?: string, agentInstructions?: string): string {
+  const instructions = agentInstructions?.trim();
+  const inputs = instructions ? [...config, soul, instructions] : [...config, soul];
+  return createHash("sha256").update(JSON.stringify(inputs)).digest("hex").slice(0, 16);
+}
 
 /** `person`: on a Team Cloud, the name of the member whose conversation this is (a team has no one "user"). */
 export function userProfileSystemPrompt(profile?: { aboutMe?: string; person?: string }): string {
