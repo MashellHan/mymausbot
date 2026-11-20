@@ -183,7 +183,9 @@ describe("bounded tool details", () => {
     const source = `text(${command});`;
     const detail = show(source);
     expect(detail).toEqual({ text: "cmd: API_TOKEN=«redacted 14 chars» git status --short", clipped: false, detailStatus: "available" });
+    expect(show(`text((${command}).output);`)).toEqual(detail);
     expect(show(`${command};`)).toEqual(detail);
+    expect(show(`const output = ${command}; text(output.output);`)).toMatchObject({ detailStatus: "withheld" });
     for (const hidden of [
       source + ' text({ cookie: "fixture-outer-cookie" });',
       source + ' text("<SYSTEM_NOTIFICATION>internal</SYSTEM_NOTIFICATION>");',
@@ -194,15 +196,57 @@ describe("bounded tool details", () => {
       source.replace('"API_TOKEN=fixture-secret git status --short"', 'build("API_TOKEN=fixture-secret git status --short")'),
       source.replace('max_output_tokens: 300', '...options'),
       source.replace('max_output_tokens: 300', 'max_output_tokens: 300, cmd: "echo different"'),
+      source.replace('max_output_tokens: 300', 'max_output_tokens: 300, cookie: "fixture-cookie"'),
       'const tools = fixtureObject; ' + source,
+      'if (false) { ' + source + ' }',
+      source + ' if (fixtureFlag) await tools.exec_command({ cmd: "echo hidden" });',
       source + ' await tools["exec_command"]({ cmd: buildCommand() });',
       source + ' const nested = tools; await nested.exec_command({ cmd: buildCommand() });',
       source + ' await globalThis["tools"]["exec_command"]({ cmd: buildCommand() });',
-      `await Promise.all([${command}, tools.exec_command({ cmd: "rg --files src" })]);`,
     ]) {
-      expect(show(hidden)).toMatchObject({ text: "[Arguments unavailable]", detailStatus: "withheld" });
+      expect(show(hidden), hidden).toMatchObject({ text: "[Arguments unavailable]", detailStatus: "withheld" });
     }
     expect(visibleToolDetail("tool-call", source, "codex", "other", "custom")).toMatchObject({ detailStatus: "withheld" });
+  });
+
+  it("recovers only finite literal exec batches and withholds dynamic portions", () => {
+    const show = (source: string) => visibleToolDetail("tool-call", source, "codex", "exec", "custom");
+    expect(show(`
+      const command = "git status --short";
+      const options = { cmd: command, max_output_tokens: 300 };
+      await tools.exec_command(options);
+    `)).toEqual({ text: "cmd: git status --short", clipped: false, detailStatus: "available" });
+    expect(show(`
+      const commands = ["printf one", "printf two"];
+      for (const command of commands) {
+        text((await tools.exec_command({ cmd: command })).output);
+      }
+    `)).toEqual({ text: "cmd: printf one; cmd: printf two", clipped: false, detailStatus: "available" });
+    expect(show(`
+      const options = [{ cmd: "rg --files src" }, { cmd: "git diff --stat" }];
+      for (const option of options) await tools.exec_command(option);
+    `)).toEqual({ text: "cmd: rg --files src; cmd: git diff --stat", clipped: false, detailStatus: "available" });
+    expect(show(`
+      await Promise.all([
+        tools.exec_command({ cmd: "rg --files src" }),
+        text((await tools.exec_command({ cmd: "git diff --stat" })).output)
+      ]);
+    `)).toEqual({ text: "cmd: rg --files src; cmd: git diff --stat", clipped: false, detailStatus: "available" });
+    const mixed = show(`
+      await tools.exec_command({ cmd: "git status --short" });
+      await tools.exec_command({ cmd: buildCommand() });
+      await tools.exec_command({ cmd: "git diff --stat", max_output_tokens: optionLimit });
+    `);
+    expect(mixed).toMatchObject({ text: "[Arguments unavailable]", detailStatus: "withheld" });
+    expect(show('const options = [{ cmd: "git status" }, dynamicOptions]; for (const option of options) await tools.exec_command(option);'))
+      .toEqual({ text: "cmd: git status", clipped: true, detailStatus: "available" });
+    for (const source of [
+      'let command = "git status"; await tools.exec_command({ cmd: command });',
+      'const command = "git status"; command = "git diff"; await tools.exec_command({ cmd: command });',
+      'const commands = sourceCommands(); for (const command of commands) await tools.exec_command({ cmd: command });',
+      'await tools.exec_command({ cmd: "git status", cookie: "fixture-cookie" });',
+      'await tools.exec_command({ cmd: "git status", max_output_tokens: optionLimit });',
+    ]) expect(show(source), source).toMatchObject({ detailStatus: "withheld" });
   });
 
   it("shows a verified Codex exec result envelope and ordinary redacted output", () => {
@@ -229,6 +273,30 @@ describe("bounded tool details", () => {
     expect(visibleToolDetail("tool-result", ordinary, "codex", "other")).toMatchObject({ detailStatus: "withheld" });
     expect(visibleToolDetail("tool-result", [header, { ...ordinary[1], encoding: "base64" }], "codex", "exec"))
       .toMatchObject({ detailStatus: "withheld" });
+    expect(visibleToolDetail("tool-result", [header, command("Ready"), command("Stored")], "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds Exit code: 0 Exit code: 0 Ready Stored", clipped: false, detailStatus: "available",
+    });
+    const mixedBlocks = visibleToolDetail("tool-result", [header, command("Ready"), command("A".repeat(80))], "codex", "exec");
+    expect(mixedBlocks).toEqual({
+      text: "Script completed Wall time 0.123 seconds Exit code: 0 Exit code: 0 · Output excerpt unavailable",
+      clipped: true, detailStatus: "available",
+    });
+    expect(mixedBlocks.text).not.toContain("Ready");
+    for (const output of [
+      '{"cookie":"fixture-secret\ncontinuation"}',
+      '{"name":\n"Cookie"}',
+      '{"authorization":"Bearer fixture-secret"}',
+    ]) {
+      const detail = visibleToolDetail("tool-result", [header, command(output)], "codex", "exec");
+      expect(detail).toMatchObject({ clipped: true, detailStatus: "available" });
+      expect(detail.text).not.toContain("fixture-secret");
+      expect(detail.text).toContain("Output excerpt unavailable");
+    }
+    const crossLinePrivate = [header, command('{"name":'), command('"Cookie"}')];
+    expect(visibleToolDetail("tool-result", crossLinePrivate, "codex", "exec")).toEqual({
+      text: "Script completed Wall time 0.123 seconds Exit code: 0 Exit code: 0 · Output excerpt unavailable",
+      clipped: true, detailStatus: "available",
+    });
     const splitPrivate = [header, command('{"content":"fixture-opaque-cookie",'), command('"name":"Cookie"}')];
     expect(visibleToolDetail("tool-result", splitPrivate, "codex", "exec")).toEqual({
       text: "Script completed Wall time 0.123 seconds Exit code: 0 Exit code: 0 · Output excerpt unavailable", clipped: true, detailStatus: "available",
