@@ -40,7 +40,7 @@ export async function launchMiniAppsFixture({ scripted = false, defaultApps = fa
     mkdirSync(providerHome, { recursive: true });
     server = spawn(process.execPath, ["--experimental-strip-types", fileURLToPath(new URL("../index.ts", import.meta.url))], {
       cwd: fileURLToPath(new URL("../..", import.meta.url)),
-      env: { ...verificationServerEnvironment({}, dataDir, Number(new URL(url).port)), OMB_TEST_INTERNAL_CAPABILITY_KEY: CAPABILITY_KEY,
+      env: { ...verificationServerEnvironment(process.env.OMB_TEST_MINI_APP_RELEASES_FILE ? { OMB_TEST_MINI_APP_RELEASES_FILE: process.env.OMB_TEST_MINI_APP_RELEASES_FILE } : {}, dataDir, Number(new URL(url).port)), OMB_TEST_INTERNAL_CAPABILITY_KEY: CAPABILITY_KEY,
         HOME: providerHome, USERPROFILE: providerHome, HERMES_HOME: join(providerHome, ".hermes"),
         APPDATA: join(providerHome, "AppData", "Roaming"), LOCALAPPDATA: join(providerHome, "AppData", "Local"),
         XDG_CONFIG_HOME: join(providerHome, ".config"), XDG_DATA_HOME: join(providerHome, ".local", "share"), XDG_CACHE_HOME: join(providerHome, ".cache") },

@@ -237,6 +237,10 @@ export function verificationServerEnvironment(parentEnv: NodeJS.ProcessEnv, data
   if (parentEnv.OMB_TEST_APPROVAL_CLOCK === "1") childEnv.OMB_TEST_APPROVAL_CLOCK = "1";
   // The stall watchdog fires on a marker file, not after 20 minutes of silence.
   if (parentEnv.OMB_TEST_STALL_CLOCK === "1") childEnv.OMB_TEST_STALL_CLOCK = "1";
+  // Synthetic Mini App releases manifest/asset catalog file for isolated verification servers.
+  if (parentEnv.OMB_TEST_MINI_APP_RELEASES_FILE) {
+    childEnv.OMB_TEST_MINI_APP_RELEASES_FILE = parentEnv.OMB_TEST_MINI_APP_RELEASES_FILE;
+  }
   // Date.now() jumps when a marker file says so, as it does when a suspended machine wakes; timers don't.
   if (parentEnv.OMB_TEST_RESUME_CLOCK === "1") childEnv.OMB_TEST_RESUME_CLOCK = "1";
   // The memory gate runs here too, on the memory a fixture file says this machine has.

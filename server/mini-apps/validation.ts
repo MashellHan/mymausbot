@@ -1,15 +1,18 @@
 import { z } from "zod";
-import type { MiniAppDashboardRead, MiniAppPublish, MiniAppQuery } from "../../shared/mini-apps.ts";
+import type { MiniAppDashboardRead, MiniAppPublish, MiniAppQuery, MiniAppUpdateApply } from "../../shared/mini-apps.ts";
 import { LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR } from "../../shared/local-dashboard.ts";
 
-const name = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/);
-const sourceName = z.string().min(1).max(200).refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32));
+export const bindingNameSchema = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,62}$/);
+const name = bindingNameSchema;
+export const sourceNameSchema = z.string().min(1).max(200).refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32));
+const sourceName = sourceNameSchema;
 const source = { column: sourceName, sourceType: z.string().min(1).max(100) };
-const field = z.discriminatedUnion("as", [
+export const bindingFieldSchema = z.discriminatedUnion("as", [
   z.object({ ...source, as: z.literal("text") }).strict(),
   z.object({ ...source, as: z.literal("date") }).strict(),
   z.object({ ...source, as: z.literal("decimal"), scale: z.number().int().min(0).max(18) }).strict(),
 ]);
+const field = bindingFieldSchema;
 const operation = z.enum(["eq", "lt", "lte", "gt", "gte"]);
 const filter = z.union([
   z.object({ field: name, op: operation, literal: z.string().max(500) }).strict(),
@@ -25,11 +28,12 @@ const plan = {
   orderBy: z.array(z.object({ field: name, direction: z.enum(["asc", "desc"]) }).strict()).max(4),
   pageSize: z.number().int().min(1).max(100),
 };
-const query = z.discriminatedUnion("kind", [
+export const namedQuerySchema = z.discriminatedUnion("kind", [
   z.object({ ...plan, kind: z.literal("rows"), columns: z.array(name).min(1).max(32) }).strict(),
   z.object({ ...plan, kind: z.literal("aggregate"), groupBy: z.array(name).max(4), measures: z.array(measure).min(1).max(12),
     timeBucket: z.object({ field: name, unit: z.enum(["day", "week", "month", "year"]), name }).strict().optional() }).strict(),
 ]);
+const query = namedQuerySchema;
 const binding = z.object({
   id: name, datasetId: z.uuid(), source: z.object({ schema: sourceName, table: sourceName }).strict(),
   fields: z.record(name, field), queries: z.record(name, query),
@@ -88,6 +92,21 @@ export function parsePublish(raw: unknown): MiniAppPublish {
 export function parseQuery(raw: unknown): MiniAppQuery {
   const parsed = querySchema.safeParse(raw);
   if (!parsed.success) throw appFailure(400, "Invalid Mini App named query.");
+  return parsed.data;
+}
+
+export const SEMVER_3_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+export const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
+
+export const releaseUpdateApplySchema = z.object({
+  ...mutationKey,
+  appVersion: z.string().regex(SEMVER_3_RE),
+  sourceCommit: z.string().regex(COMMIT_SHA_RE),
+}).strict();
+
+export function parseReleaseUpdateApply(raw: unknown): MiniAppUpdateApply {
+  const parsed = releaseUpdateApplySchema.safeParse(raw);
+  if (!parsed.success) throw appFailure(400, "Invalid Mini App release update request.");
   return parsed.data;
 }
 

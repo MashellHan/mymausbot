@@ -69,6 +69,13 @@ export class DefaultMiniApps {
     const existing = matches[0];
     if (existing?.status === "archived" && input.restore !== kind) return;
     const current = existing ? this.deps.apps.document(owner, existing.id) : null;
+    if (current && (current.app.release || current.versions.some((version) => Boolean(version.release)))) {
+      if (input.restore === kind && (current.app.status === "archived" || nativeKind(kind) && !current.app.dashboard
+          || kind === "hongguo" && !current.app.nativeKind)) {
+        await this.restore(owner, current, kind);
+      }
+      return;
+    }
     if (current && !this.waiting(current, kind)) {
       if (kind === "agent-team" && input.agentTeamHtml && this.deps.apps.canAdoptAgentTeamDefault(owner, current.app.id)) {
         await this.deps.apps.publish(owner, { requestKey: randomUUID(), expectedRevision: current.app.revision,
