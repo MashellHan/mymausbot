@@ -34,7 +34,9 @@ export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = tru
   if (preflightName !== undefined && !names.includes(preflightName)) throw new Error("Invalid workflow preflight");
   const jobs = [{ id: "static", name: preflightName ?? names[0], build: outputs.build,
     ...(outputs.fast_pr || outputs.focused_push ? { fast: true } : {}),
-    ...(outputs.settings_places ? { settingsPlaces: true } : {}), linux: Boolean(outputs.linux_lanes),
+    ...(outputs.settings_places ? { settingsPlaces: true } : {}),
+    ...(outputs.ci_verify === false ? { ciVerify: false } : {}),
+    linux: Boolean(outputs.linux_lanes),
     ...(outputs.focused_push ? { artifact: "qa-results-focused" }
       : outputs.linux_lanes?.vitest.length || outputs.linux_lanes?.evals ? { artifact: "qa-results-boat" } : {}) }];
   for (const id of outputs.jobs) {
@@ -94,6 +96,7 @@ export function executionComplete(expected, jobs, artifacts) {
     if (item.artifact && !artifacts.has(item.artifact)) return false;
     const steps = VALIDATION_STEPS[item.id].filter((step) => {
       if (item.id !== "static") return true;
+      if (step === "Verify CI selection and documentation references") return item.ciVerify !== false;
       if (step === "Security, data and dispatch core with bounded affected tests") return item.fast;
       if (step === "pnpm typecheck") return item.build;
       if (["pnpm check:electron", "production UI build"].includes(step)) return item.build && !item.fast;

@@ -58,5 +58,19 @@ it("rechecks changed source and imported types while keeping independent compile
     expect(bothBroken.stdout).toContain("server.ts");
     expect(bothBroken.stdout).toContain("phone.ts");
     expect(bothBroken.stdout.match(/fresh; exit 1/g)).toHaveLength(3);
+
+    write("ui.ts", "export const value: number = 1;\n");
+    write("model.ts", "export type Count = number;\n");
+    write("packages/phone-protocol/phone.ts", "export const version: number = 1;\n");
+    const ciIncremental = spawnSync(process.execPath, [script], {
+      cwd: root, encoding: "utf8", env: { ...process.env, CI: "true", OMB_TYPECHECK_INCREMENTAL: "1" },
+    });
+    expect(ciIncremental.status, ciIncremental.stdout + ciIncremental.stderr).toBe(0);
+    expect(ciIncremental.stdout).not.toContain("fresh; exit");
+    const ciForcedFresh = spawnSync(process.execPath, [script, "--fresh"], {
+      cwd: root, encoding: "utf8", env: { ...process.env, CI: "true", OMB_TYPECHECK_INCREMENTAL: "1" },
+    });
+    expect(ciForcedFresh.status, ciForcedFresh.stdout + ciForcedFresh.stderr).toBe(0);
+    expect(ciForcedFresh.stdout.match(/fresh; exit 0/g)).toHaveLength(3);
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
