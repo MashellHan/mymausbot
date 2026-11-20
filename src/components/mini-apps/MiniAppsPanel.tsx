@@ -26,15 +26,20 @@ import {
   MINI_APP_RUNTIME_READY_TIMEOUT_MS,
   clearPendingUpdateRecovery,
   hasAnnouncedUpdateVersion,
+  isPendingUpdateApplied,
   parseMiniAppUpdateInfo,
+  readAppPackageId,
   readAppReleaseMeta,
-  readPendingUpdateRecovery,
+  readPendingUpdate,
+  reconcilePendingUpdateWithSummary,
   rememberAnnouncedUpdateVersion,
   shortCommit,
-  writePendingUpdateRecovery,
+  writePendingUpdate,
   type MiniAppUpdateCandidate,
   type MiniAppUpdateInfo,
   type MiniAppUpdateRequest,
+  type PendingMiniAppUpdate,
+  type PendingMiniAppUpdateIntent,
   type PendingMiniAppUpdateRecovery,
 } from "./mini-app-update";
 import { hongguoText } from "./hongguo-copy";
@@ -123,9 +128,12 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const [frameEpochByApp, setFrameEpochByApp] = useState<Record<string, number>>({});
   const documentRef = useRef(document);
   const stateRef = useRef(appState);
+  const inventoryRef = useRef(inventory);
   const selectedRef = useRef(selectedId);
   const storageKeyRef = useRef(storageKey);
+  const environmentResolvedRef = useRef(environmentResolved);
   const ownerRef = useRef(owner);
+  const updatingAppIdRef = useRef(updatingAppId);
   const panelRef = useRef<HTMLDivElement>(null);
   const tabListRef = useRef<HTMLDivElement>(null);
   const focusAfter = useRef<string | null>(null);
@@ -135,16 +143,20 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const mountedRef = useRef(true);
   const manualRefreshRef = useRef(false);
   const updateCheckSeqRef = useRef(0);
-  const requestKeyRef = useRef<{ signature: string; key: string } | null>(null);
-  const pendingRecoveriesRef = useRef<Record<string, PendingMiniAppUpdateRecovery>>({});
+  const mutationEpochRef = useRef(0);
+  const pendingUpdatesRef = useRef<Record<string, PendingMiniAppUpdate>>({});
+  const unresolvedStorageAppsRef = useRef(new Set<string>());
   const recoveryTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const rollingBackAppsRef = useRef(new Set<string>());
   const runtimeReadySeenRef = useRef<Record<string, { revision: number; templateVersion: number }>>({});
   documentRef.current = document;
   stateRef.current = appState;
+  inventoryRef.current = inventory;
   selectedRef.current = selectedId;
   storageKeyRef.current = storageKey;
+  environmentResolvedRef.current = environmentResolved;
   ownerRef.current = owner;
+  updatingAppIdRef.current = updatingAppId;
   const selected = apps?.find((app) => app.id === selectedId) ?? null;
   const selectedUpdate = selected ? (updateByApp[selected.id] ?? null) : null;
   const dashboard = document?.app.dashboard;
@@ -224,9 +236,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
 
   const finishPendingRecovery = (appId: string) => {
     clearRecoveryTimer(appId);
-    delete pendingRecoveriesRef.current[appId];
+    delete pendingUpdatesRef.current[appId];
     clearPendingUpdateRecovery(storageKeyRef.current, appId);
-    if (storageKeyRef.current !== null) {
+    if (unresolvedStorageAppsRef.current.delete(appId) && storageKeyRef.current !== null) {
       clearPendingUpdateRecovery(null, appId);
     }
   };
@@ -237,6 +249,16 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       delete recoveryTimersRef.current[recovery.appId];
       void rollbackRecovery(recovery);
     }, Math.max(0, delayMs));
+  };
+
+  const updateInventoryEntry = (nextApp: MiniAppSummary) => {
+    inventoryRef.current = inventoryRef.current?.map((entry) => entry.id === nextApp.id ? nextApp : entry) ?? null;
+    setInventory((current) => current?.map((entry) => entry.id === nextApp.id ? nextApp : entry) ?? null);
+    setApps((current) => {
+      if (!current) return null;
+      const mapped = current.map((entry) => entry.id === nextApp.id ? nextApp : entry);
+      return mapped.filter((entry) => entry.status === "active");
+    });
   };
 
   const rollbackRecovery = async (recovery: PendingMiniAppUpdateRecovery, manual = false) => {
@@ -257,14 +279,10 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       });
       if (!mountedRef.current) return;
       if (result.app.id !== recovery.appId) throw new Error(t("computer.miniApps.changedDuringRead"));
+      mutationEpochRef.current += 1;
       finishPendingRecovery(recovery.appId);
       updateCheckSeqRef.current += 1;
-      setInventory((current) => current?.map((entry) => entry.id === recovery.appId ? result.app : entry) ?? null);
-      setApps((current) => {
-        if (!current) return null;
-        const mapped = current.map((entry) => entry.id === recovery.appId ? result.app : entry);
-        return mapped.filter((entry) => entry.status === "active");
-      });
+      updateInventoryEntry(result.app);
       setRollbackNotice({ appId: recovery.appId, message: t(manual ? "computer.miniApps.update.restored" : "computer.miniApps.update.rolledBack") });
       if (selectedRef.current === recovery.appId) {
         if (manual) focusAfter.current = "selected";
@@ -277,12 +295,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
             && nextDocument.app.id === recovery.appId
             && nextDocument.app.revision === nextState.revision
             && nextDocument.app.templateVersion === nextState.templateVersion) {
-            setInventory((current) => current?.map((entry) => entry.id === recovery.appId ? nextDocument.app : entry) ?? null);
-            setApps((current) => {
-              if (!current) return null;
-              const mapped = current.map((entry) => entry.id === recovery.appId ? nextDocument.app : entry);
-              return mapped.filter((entry) => entry.status === "active");
-            });
+            updateInventoryEntry(nextDocument.app);
             setFrameEpochByApp((prev) => ({ ...prev, [recovery.appId]: (prev[recovery.appId] ?? 0) + 1 }));
             documentRef.current = nextDocument;
             setDocument(nextDocument);
@@ -300,10 +313,13 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       if (!mountedRef.current) return;
       if (manual) setError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
       if (cause instanceof ApiError && (cause.status === 409 || cause.status === 400 || cause.status === 403 || cause.status === 404)) {
-        finishPendingRecovery(recovery.appId);
+        if (!manual || pendingUpdatesRef.current[recovery.appId]?.rollbackRequestKey === recovery.rollbackRequestKey) finishPendingRecovery(recovery.appId);
         setRefreshKey((current) => current + 1);
-      } else if (pendingRecoveriesRef.current[recovery.appId]?.rollbackRequestKey === recovery.rollbackRequestKey) {
-        scheduleRecoveryTimer(recovery, ROLLBACK_RETRY_MS);
+      } else {
+        const currentPending = pendingUpdatesRef.current[recovery.appId];
+        if (isPendingUpdateApplied(currentPending) && currentPending.rollbackRequestKey === recovery.rollbackRequestKey) {
+          scheduleRecoveryTimer(recovery, ROLLBACK_RETRY_MS);
+        }
       }
     } finally {
       rollingBackAppsRef.current.delete(recovery.appId);
@@ -312,15 +328,133 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
 
   const restorePreviousRelease = async () => {
     if (!selected || !previousReleaseTemplate || updatingAppId !== null || busyKind !== null) return;
-    const pending = pendingRecoveriesRef.current[selected.id];
+    const pending = pendingUpdatesRef.current[selected.id];
+    const requestKey = isPendingUpdateApplied(pending) && pending.candidateRevision === selected.revision
+      && pending.previousTemplateVersion === previousReleaseTemplate ? pending.rollbackRequestKey : randomUuid();
     setUpdatingAppId(selected.id);
     setUpdateSource(null);
     setError("");
     setRollbackNotice(null);
     try {
       await rollbackRecovery({ appId: selected.id, candidateRevision: selected.revision, candidateTemplateVersion: selected.templateVersion,
-        previousTemplateVersion: previousReleaseTemplate, rollbackRequestKey: pending?.rollbackRequestKey ?? randomUuid(), deadlineAt: Date.now() }, true);
+        previousTemplateVersion: previousReleaseTemplate, rollbackRequestKey: requestKey, deadlineAt: Date.now() }, true);
     } finally { if (mountedRef.current) setUpdatingAppId(null); }
+  };
+
+  const applyPromotedUiState = (promotedApps: Map<string, string>) => {
+    if (promotedApps.size === 0) return;
+    setUpdateByApp((prev) => {
+      const next = { ...prev };
+      for (const [appId, appVersion] of promotedApps) {
+        next[appId] = { installedVersion: appVersion, status: "current", available: null };
+      }
+      return next;
+    });
+    setToast((prev) => prev && promotedApps.has(prev.appId) ? null : prev);
+    if (selectedRef.current && promotedApps.has(selectedRef.current)) {
+      setUpdateError("");
+    }
+  };
+
+  const reconcileInventory = (inventoryApps: MiniAppSummary[]): {
+    staleAppIds: Set<string>;
+    promotedApps: Map<string, string>;
+  } => {
+    const staleAppIds = new Set<string>();
+    const promotedApps = new Map<string, string>();
+    if (!environmentResolvedRef.current || ownerRef.current !== true || !nativeGuard) {
+      return { staleAppIds, promotedApps };
+    }
+    const activeStorageKey = storageKeyRef.current;
+    const now = Date.now();
+    const seenIds = new Set<string>();
+
+    for (const entry of inventoryApps) {
+      seenIds.add(entry.id);
+      const currentInMemory = pendingUpdatesRef.current[entry.id];
+      if (currentInMemory && activeStorageKey !== null && unresolvedStorageAppsRef.current.delete(entry.id)) {
+        writePendingUpdate(activeStorageKey, currentInMemory);
+        clearPendingUpdateRecovery(null, entry.id);
+      }
+      const pending = currentInMemory ?? readPendingUpdate(activeStorageKey, entry.id);
+      if (!pending) continue;
+
+      const outcome = reconcilePendingUpdateWithSummary(
+        pending,
+        entry,
+        now,
+        updatingAppIdRef.current === entry.id,
+      );
+
+      if (outcome.action === "clear") {
+        finishPendingRecovery(entry.id);
+        continue;
+      }
+
+      if (outcome.action === "promote") {
+        const applied = outcome.record;
+        const seen = runtimeReadySeenRef.current[entry.id];
+        if (seen && seen.revision === applied.candidateRevision && seen.templateVersion === applied.candidateTemplateVersion) {
+          finishPendingRecovery(entry.id);
+        } else {
+          pendingUpdatesRef.current[entry.id] = applied;
+          writePendingUpdate(activeStorageKey, applied);
+          scheduleRecoveryTimer(applied, applied.deadlineAt - now);
+        }
+        if (pending.phase === "intent") {
+          promotedApps.set(entry.id, pending.appVersion);
+        }
+        continue;
+      }
+
+      if (outcome.olderRead) {
+        staleAppIds.add(entry.id);
+        if (!currentInMemory && isPendingUpdateApplied(outcome.record)) {
+          pendingUpdatesRef.current[entry.id] = outcome.record;
+          const remaining = outcome.record.deadlineAt - now;
+          if (remaining <= 0) {
+            if (!rollingBackAppsRef.current.has(entry.id)) void rollbackRecovery(outcome.record);
+          } else if (recoveryTimersRef.current[entry.id] === undefined && !rollingBackAppsRef.current.has(entry.id)) {
+            scheduleRecoveryTimer(outcome.record, remaining);
+          }
+        }
+        continue;
+      }
+
+      if (!isPendingUpdateApplied(outcome.record)) {
+        pendingUpdatesRef.current[entry.id] = outcome.record;
+        continue;
+      }
+
+      const applied = outcome.record;
+      const seen = runtimeReadySeenRef.current[entry.id];
+      if (seen && seen.revision === applied.candidateRevision && seen.templateVersion === applied.candidateTemplateVersion) {
+        finishPendingRecovery(entry.id);
+        continue;
+      }
+      if (!currentInMemory || currentInMemory.phase === "intent") {
+        pendingUpdatesRef.current[entry.id] = applied;
+      }
+      const remaining = applied.deadlineAt - now;
+      if (remaining <= 0) {
+        if (!rollingBackAppsRef.current.has(entry.id)) {
+          void rollbackRecovery(applied);
+        }
+      } else if (recoveryTimersRef.current[entry.id] === undefined && !rollingBackAppsRef.current.has(entry.id)) {
+        scheduleRecoveryTimer(applied, remaining);
+      }
+    }
+
+    for (const id of Object.keys(pendingUpdatesRef.current)) {
+      if (seenIds.has(id)) continue;
+      const pending = pendingUpdatesRef.current[id]!;
+      const outcome = reconcilePendingUpdateWithSummary(pending, undefined, now, updatingAppIdRef.current === id);
+      if (outcome.action === "clear") {
+        finishPendingRecovery(id);
+      }
+    }
+
+    return { staleAppIds, promotedApps };
   };
 
   const handleRuntimeReady = (info: { appId: string; revision: number; templateVersion: number }) => {
@@ -328,8 +462,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       revision: info.revision,
       templateVersion: info.templateVersion,
     };
-    const pending = pendingRecoveriesRef.current[info.appId];
-    if (!pending) return;
+    const pending = pendingUpdatesRef.current[info.appId];
+    if (!isPendingUpdateApplied(pending)) return;
     if (info.revision === pending.candidateRevision && info.templateVersion === pending.candidateTemplateVersion) {
       finishPendingRecovery(info.appId);
     }
@@ -360,33 +494,8 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
 
   useEffect(() => {
     if (!environmentResolved || owner !== true || !nativeGuard || !inventory) return;
-    for (const activeRecovery of Object.values(pendingRecoveriesRef.current)) {
-      writePendingUpdateRecovery(storageKey, activeRecovery);
-    }
-    for (const entry of inventory) {
-      const recovery = pendingRecoveriesRef.current[entry.id] ?? readPendingUpdateRecovery(storageKey, entry.id);
-      if (!recovery) continue;
-      if (entry.status !== "active"
-        || entry.revision !== recovery.candidateRevision
-        || entry.templateVersion !== recovery.candidateTemplateVersion) {
-        finishPendingRecovery(entry.id);
-        continue;
-      }
-      const seen = runtimeReadySeenRef.current[entry.id];
-      if (seen && seen.revision === recovery.candidateRevision && seen.templateVersion === recovery.candidateTemplateVersion) {
-        finishPendingRecovery(entry.id);
-        continue;
-      }
-      if (!pendingRecoveriesRef.current[entry.id]) {
-        pendingRecoveriesRef.current[entry.id] = recovery;
-        const remaining = recovery.deadlineAt - Date.now();
-        if (remaining <= 0) {
-          void rollbackRecovery(recovery);
-        } else {
-          scheduleRecoveryTimer(recovery, remaining);
-        }
-      }
-    }
+    const { promotedApps } = reconcileInventory(inventory);
+    applyPromotedUiState(promotedApps);
   }, [environmentResolved, storageKey, owner, nativeGuard, inventory]);
 
   useEffect(() => {
@@ -439,6 +548,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     const controller = new AbortController();
     const sync = async () => {
       const isManualCheck = manualRefreshRef.current;
+      const startMutationEpoch = mutationEpochRef.current;
       let readingInventory = true;
       setChecking(true);
       if (!apps) setLoading(true);
@@ -446,18 +556,19 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         const inventory = await api<Inventory>("/api/mini-apps", { background: true, signal: controller.signal, timeoutMs: 10_000 });
         if (!active || !Array.isArray(inventory.apps)) return;
         readingInventory = false;
-        setInventory(inventory.apps);
-        for (const [id, recovery] of Object.entries(pendingRecoveriesRef.current)) {
-          const entry = inventory.apps.find((item) => item.id === id);
-          if (!entry || entry.status !== "active"
-            || entry.revision !== recovery.candidateRevision
-            || entry.templateVersion !== recovery.candidateTemplateVersion) {
-            finishPendingRecovery(id);
-          } else if (Date.now() >= recovery.deadlineAt && !rollingBackAppsRef.current.has(id)) {
-            void rollbackRecovery(recovery);
-          }
-        }
-        const activeApps = inventory.apps.filter((app) => app.status === "active");
+        if (startMutationEpoch !== mutationEpochRef.current) return;
+        const { staleAppIds, promotedApps } = reconcileInventory(inventory.apps);
+        applyPromotedUiState(promotedApps);
+        const mergedInventory = staleAppIds.size === 0 || !inventoryRef.current
+          ? inventory.apps
+          : inventory.apps.map((entry) => {
+              if (!staleAppIds.has(entry.id)) return entry;
+              const existing = inventoryRef.current?.find((item) => item.id === entry.id);
+              return existing && existing.revision > entry.revision ? existing : entry;
+            });
+        inventoryRef.current = mergedInventory;
+        setInventory(mergedInventory);
+        const activeApps = mergedInventory.filter((app) => app.status === "active");
         setApps(activeApps);
         const target = selectedRef.current && activeApps.some((app) => app.id === selectedRef.current) ? selectedRef.current
           : activeApps[0]?.id ?? null;
@@ -478,13 +589,19 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
           setUpdateCheckError("");
           return;
         }
+        if (staleAppIds.has(target)) return;
         const currentDocument = documentRef.current;
         const listed = activeApps.find((app) => app.id === target)!;
         const lostHongguoGrant = currentDocument?.app.nativeIdentity === "hongguo"
           && (listed.nativeIdentity !== "hongguo" || listed.nativeKind !== "hongguo");
         if (lostHongguoGrant) forgetHongguoHome(storageKey, target);
         const nextState = await api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(target)}/state`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
-        if (!active || target !== selectedRef.current) return;
+        if (!active || target !== selectedRef.current || startMutationEpoch !== mutationEpochRef.current) return;
+        const pendingForTarget = pendingUpdatesRef.current[target];
+        if (isPendingUpdateApplied(pendingForTarget) && nextState.status === "active"
+          && nextState.revision < pendingForTarget.candidateRevision) {
+          return;
+        }
         const grantChanged = (currentDocument?.app.dashboard?.kind ?? null) !== (listed.dashboard?.kind ?? null)
           || (currentDocument?.app.dashboard?.renderer ?? null) !== (listed.dashboard?.renderer ?? null)
           || (currentDocument?.app.dashboardIdentity ?? null) !== (listed.dashboardIdentity ?? null)
@@ -494,10 +611,36 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
           if (!currentDocument || currentDocument.app.id !== target || currentDocument.app.revision !== nextState.revision
             || currentDocument.app.templateVersion !== nextState.templateVersion || grantChanged) {
             const nextDocument = await api<MiniAppDocument>(`/api/mini-apps/${encodeURIComponent(target)}`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
-            if (!active || target !== selectedRef.current) return;
+            if (!active || target !== selectedRef.current || startMutationEpoch !== mutationEpochRef.current) return;
             if (nextDocument.app.revision !== nextState.revision || nextDocument.app.templateVersion !== nextState.templateVersion) throw new Error(t("computer.miniApps.changedDuringRead"));
+            const latestPending = pendingUpdatesRef.current[target];
+            let promotedDuringDocRead = false;
+            if (latestPending) {
+              const docOutcome = reconcilePendingUpdateWithSummary(latestPending, nextDocument.app, Date.now(), updatingAppIdRef.current === target);
+              if (docOutcome.action === "keep" && docOutcome.olderRead) return;
+              if (docOutcome.action === "clear") {
+                finishPendingRecovery(target);
+              } else if (docOutcome.action === "promote") {
+                const applied = docOutcome.record;
+                const seen = runtimeReadySeenRef.current[target];
+                if (seen && seen.revision === applied.candidateRevision && seen.templateVersion === applied.candidateTemplateVersion) {
+                  finishPendingRecovery(target);
+                } else {
+                  pendingUpdatesRef.current[target] = applied;
+                  writePendingUpdate(storageKeyRef.current, applied);
+                  scheduleRecoveryTimer(applied, applied.deadlineAt - Date.now());
+                }
+                if (latestPending.phase === "intent") {
+                  promotedDuringDocRead = true;
+                  applyPromotedUiState(new Map([[target, latestPending.appVersion]]));
+                }
+              }
+            }
             if (lostHongguoGrant || currentDocument?.app.nativeIdentity === "hongguo"
               && (nextDocument.app.nativeIdentity !== "hongguo" || nextDocument.app.nativeKind !== "hongguo")) forgetHongguoHome(storageKey, target);
+            if (promotedApps.has(target) || promotedDuringDocRead) {
+              setFrameEpochByApp((prev) => ({ ...prev, [target]: (prev[target] ?? 0) + 1 }));
+            }
             documentRef.current = nextDocument;
             setDocument(nextDocument);
           }
@@ -603,6 +746,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       const result = await api<MiniAppDefaultsResult>("/api/mini-apps/defaults", {
         method: "POST", body: JSON.stringify({ bookkeepingHtml, agentTeamHtml, restore: kind }), timeoutMs: 30_000,
       });
+      mutationEpochRef.current += 1;
       setDefaultIssues(result.issues);
       setInventory(result.apps);
       setApps(result.apps.filter((app) => app.status === "active"));
@@ -632,6 +776,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         method: "POST", body: JSON.stringify(body), timeoutMs: 20_000,
       });
       if (result.app.id !== app.id || result.app.status !== "archived") throw new Error(t("computer.miniApps.changedDuringRead"));
+      mutationEpochRef.current += 1;
       if (kind === "hongguo") forgetHongguoHome(storageKey, app.id);
       finishPendingRecovery(app.id);
       setRollbackNotice((prev) => prev?.appId === app.id ? null : prev);
@@ -651,23 +796,52 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
 
   const performUpdate = async (targetApp: MiniAppSummary, candidate: MiniAppUpdateCandidate, source: "toast" | "library") => {
     if (owner !== true || !nativeGuard || updatingAppId !== null || busyKind !== null || targetApp.status !== "active") return;
-    if (pendingRecoveriesRef.current[targetApp.id]) return;
+    if (isPendingUpdateApplied(pendingUpdatesRef.current[targetApp.id])) return;
     const previousTemplateVersion = targetApp.templateVersion;
     const capturedStorageKey = storageKeyRef.current;
+    const targetPackageId = readAppPackageId(targetApp);
     setUpdatingAppId(targetApp.id);
+    updatingAppIdRef.current = targetApp.id;
     setUpdateSource(source);
     setUpdateError("");
     setUpdateCheckError("");
     setRollbackNotice((prev) => prev?.appId === targetApp.id ? null : prev);
-    const signature = `${targetApp.id}:${candidate.appVersion}:${candidate.sourceCommit}:${targetApp.revision}`;
-    if (!requestKeyRef.current || requestKeyRef.current.signature !== signature) {
-      requestKeyRef.current = { signature, key: randomUuid() };
+
+    const existingPending = pendingUpdatesRef.current[targetApp.id]
+      ?? (environmentResolvedRef.current ? readPendingUpdate(capturedStorageKey, targetApp.id) : null);
+    const matchingIntent = existingPending?.phase === "intent"
+      && existingPending.expectedRevision === targetApp.revision
+      && existingPending.previousTemplateVersion === previousTemplateVersion
+      && existingPending.appVersion === candidate.appVersion
+      && existingPending.sourceCommit === candidate.sourceCommit
+      && existingPending.packageId === targetPackageId
+      ? existingPending
+      : null;
+
+    const intent: PendingMiniAppUpdateIntent = matchingIntent ?? {
+      phase: "intent",
+      appId: targetApp.id,
+      expectedRevision: targetApp.revision,
+      previousTemplateVersion,
+      packageId: targetPackageId,
+      appVersion: candidate.appVersion,
+      sourceCommit: candidate.sourceCommit,
+      requestKey: randomUuid(),
+      rollbackRequestKey: randomUuid(),
+      createdAt: Date.now(),
+    };
+    delete runtimeReadySeenRef.current[targetApp.id];
+    pendingUpdatesRef.current[targetApp.id] = intent;
+    writePendingUpdate(capturedStorageKey, intent);
+    if (capturedStorageKey === null) {
+      unresolvedStorageAppsRef.current.add(targetApp.id);
     }
+
     const body: MiniAppUpdateRequest = {
       appVersion: candidate.appVersion,
       sourceCommit: candidate.sourceCommit,
       expectedRevision: targetApp.revision,
-      requestKey: requestKeyRef.current.key,
+      requestKey: intent.requestKey,
     };
     try {
       const result = await api<MiniAppMutationResult>(`/api/mini-apps/${encodeURIComponent(targetApp.id)}/update`, {
@@ -680,30 +854,49 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         || !Number.isSafeInteger(result.app.templateVersion)) {
         throw new Error(t("computer.miniApps.changedDuringRead"));
       }
+      const existingApplied = pendingUpdatesRef.current[targetApp.id];
+      const alreadyReady = runtimeReadySeenRef.current[targetApp.id];
       const recovery: PendingMiniAppUpdateRecovery | null = result.app.status === "active"
         && result.app.templateVersion !== previousTemplateVersion
         && Boolean((result.app as { release?: unknown }).release)
-        ? {
-            appId: targetApp.id,
-            previousTemplateVersion,
-            candidateRevision: result.app.revision,
-            candidateTemplateVersion: result.app.templateVersion,
-            rollbackRequestKey: randomUuid(),
-            deadlineAt: Date.now() + MINI_APP_RUNTIME_READY_TIMEOUT_MS,
-          }
+        && !(alreadyReady && alreadyReady.revision === result.app.revision && alreadyReady.templateVersion === result.app.templateVersion)
+        ? (isPendingUpdateApplied(existingApplied)
+          && existingApplied.candidateRevision === result.app.revision
+          && existingApplied.candidateTemplateVersion === result.app.templateVersion
+          ? existingApplied
+          : {
+              phase: "applied",
+              appId: targetApp.id,
+              previousTemplateVersion,
+              candidateRevision: result.app.revision,
+              candidateTemplateVersion: result.app.templateVersion,
+              rollbackRequestKey: intent.rollbackRequestKey,
+              deadlineAt: Date.now() + MINI_APP_RUNTIME_READY_TIMEOUT_MS,
+            })
         : null;
+      const targetStorageKey = capturedStorageKey ?? storageKeyRef.current;
       if (recovery) {
-        writePendingUpdateRecovery(capturedStorageKey ?? storageKeyRef.current, recovery);
+        writePendingUpdate(targetStorageKey, recovery);
+      } else {
+        clearPendingUpdateRecovery(targetStorageKey, targetApp.id);
+        if (unresolvedStorageAppsRef.current.delete(targetApp.id) && targetStorageKey !== null) {
+          clearPendingUpdateRecovery(null, targetApp.id);
+        }
       }
       if (!mountedRef.current) return;
-      requestKeyRef.current = null;
+      mutationEpochRef.current += 1;
       updateCheckSeqRef.current += 1;
       if (recovery) {
-        pendingRecoveriesRef.current[recovery.appId] = recovery;
+        pendingUpdatesRef.current[recovery.appId] = recovery;
         if (storageKeyRef.current !== null && capturedStorageKey === null) {
-          writePendingUpdateRecovery(storageKeyRef.current, recovery);
+          writePendingUpdate(storageKeyRef.current, recovery);
+          if (unresolvedStorageAppsRef.current.delete(recovery.appId)) {
+            clearPendingUpdateRecovery(null, recovery.appId);
+          }
         }
         scheduleRecoveryTimer(recovery, recovery.deadlineAt - Date.now());
+      } else {
+        finishPendingRecovery(targetApp.id);
       }
       setUpdateByApp((prev) => ({
         ...prev,
@@ -711,12 +904,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       }));
       setToast((prev) => prev?.appId === targetApp.id ? null : prev);
       setUpdateError("");
-      setInventory((current) => current?.map((entry) => entry.id === targetApp.id ? result.app : entry) ?? null);
-      setApps((current) => {
-        if (!current) return null;
-        const mapped = current.map((entry) => entry.id === targetApp.id ? result.app : entry);
-        return mapped.filter((entry) => entry.status === "active");
-      });
+      updateInventoryEntry(result.app);
       if (source === "library") {
         setLibraryOpen(false);
         focusAfter.current = "selected";
@@ -735,12 +923,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
             || nextDocument.app.templateVersion !== recovery.candidateTemplateVersion)) {
             finishPendingRecovery(targetApp.id);
           }
-          setInventory((current) => current?.map((entry) => entry.id === targetApp.id ? nextDocument.app : entry) ?? null);
-          setApps((current) => {
-            if (!current) return null;
-            const mapped = current.map((entry) => entry.id === targetApp.id ? nextDocument.app : entry);
-            return mapped.filter((entry) => entry.status === "active");
-          });
+          updateInventoryEntry(nextDocument.app);
           setFrameEpochByApp((prev) => ({ ...prev, [targetApp.id]: (prev[targetApp.id] ?? 0) + 1 }));
           documentRef.current = nextDocument;
           setDocument(nextDocument);
@@ -758,11 +941,18 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     } catch (cause) {
       if (!mountedRef.current) return;
       setUpdateError(cause instanceof Error && cause.message ? cause.message : t("computer.miniApps.update.failed"));
-      if (cause instanceof ApiError && cause.status === 409) {
-        setRefreshKey((current) => current + 1);
+      if (cause instanceof ApiError && (cause.status === 400 || cause.status === 403 || cause.status === 404
+        || cause.status === 409 || cause.status === 413 || cause.status === 422)) {
+        finishPendingRecovery(targetApp.id);
+        if (cause.status === 409) {
+          setRefreshKey((current) => current + 1);
+        }
       }
     } finally {
-      if (mountedRef.current) setUpdatingAppId(null);
+      if (mountedRef.current) {
+        updatingAppIdRef.current = null;
+        setUpdatingAppId(null);
+      }
     }
   };
 

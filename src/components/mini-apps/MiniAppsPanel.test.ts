@@ -37,10 +37,12 @@ const fixture = vi.hoisted(() => ({
   environmentId: "fixture-environment",
   environmentHold: null as Promise<void> | null,
   inventoryDenied: false,
+  onInventoryRead: null as (() => Promise<MiniAppSummary[] | void>) | null,
   updateByApp: {} as Record<string, MiniAppUpdateInfo>,
   failUpdateCheck: false as boolean | Error,
   failUpdateApply: null as Error | null,
   updateDeferred: null as Promise<void> | null,
+  updateResultHold: null as Promise<void> | null,
   updateRequests: [] as Array<{ appId: string; body: MiniAppUpdateRequest }>,
   onUpdateApply: null as ((appId: string, body: MiniAppUpdateRequest) => void) | null,
   suppressRuntimeReady: false,
@@ -183,10 +185,12 @@ beforeEach(() => {
   fixture.environmentId = "fixture-environment";
   fixture.environmentHold = null;
   fixture.inventoryDenied = false;
+  fixture.onInventoryRead = null;
   fixture.updateByApp = {};
   fixture.failUpdateCheck = false;
   fixture.failUpdateApply = null;
   fixture.updateDeferred = null;
+  fixture.updateResultHold = null;
   fixture.updateRequests = [];
   fixture.onUpdateApply = null;
   fixture.suppressRuntimeReady = false;
@@ -218,6 +222,10 @@ beforeEach(() => {
     }
     if (path === "/api/mini-apps" && (!init?.method || init.method === "GET")) {
       if (fixture.inventoryDenied) throw new ApiError("Forbidden", 403);
+      if (fixture.onInventoryRead) {
+        const override = await fixture.onInventoryRead();
+        if (override) return { apps: override };
+      }
       return { apps: fixture.apps };
     }
     if (path.endsWith("/archive") && init?.method === "POST") {
@@ -303,6 +311,7 @@ beforeEach(() => {
           : entry);
         fixture.updateByApp[id] = { installedVersion: body.appVersion, status: "current", available: null };
       }
+      await fixture.updateResultHold;
       return { app: fixture.apps.find((entry) => entry.id === id)!, replayed: false };
     }
     if (path.startsWith("/api/mini-apps/")) {
@@ -1614,6 +1623,270 @@ describe("Mini App independent release updates", () => {
       vi.advanceTimersByTime(MINI_APP_RUNTIME_READY_TIMEOUT_MS + 10);
       await render();
       await vi.waitFor(() => expect(stored.get(pendingKey) ?? "").toBe(""));
+      expect(fixture.rollbackRequests).toHaveLength(0);
+      expect(host.querySelector('[data-mini-app-update-rolled-back]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("persists pre-POST update intent, reconciles lost POST responses on reopen across ready/timeout/later-edit, and respects profile scope", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const pendingKey = "omb-mini-app-pending-update:omb-mini-app:fixture-environment:app_a";
+      const otherProfileKey = "omb-mini-app-pending-update:omb-mini-app:other-environment:app_a";
+
+      const resetState = (suppressReady: boolean) => {
+        fixture.apps = [app("app_a", "First report"), app("app_b", "Second report")];
+        fixture.htmlByApp = { app_a: "<p>vA</p>", app_b: "<p>appB</p>" };
+        fixture.updateRequests = [];
+        fixture.rollbackRequests = [];
+        fixture.updateResultHold = null;
+        fixture.suppressRuntimeReady = suppressReady;
+        fixture.updateByApp = {
+          app_a: { installedVersion: "1.1.0", status: "available", available: CANDIDATE },
+        };
+      };
+
+      // 1. Commit succeeds on server while response is never delivered to the original closure; reopen + readiness timeout rolls back.
+      resetState(true);
+      let resolveResult!: () => void;
+      fixture.updateResultHold = new Promise<void>((resolve) => { resolveResult = resolve; });
+      await render();
+      await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-app-update-toast"]')).not.toBeNull());
+      await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-update-action]')!.click(); });
+      await vi.waitFor(() => expect(fixture.updateRequests).toHaveLength(1));
+
+      // Intent was persisted synchronously before POST resolved, and server already committed rev 4.
+      const persistedIntent = JSON.parse(stored.get(pendingKey) ?? "null") as {
+        phase?: string;
+        expectedRevision?: number;
+        previousTemplateVersion?: number;
+        appVersion?: string;
+        sourceCommit?: string;
+        requestKey?: string;
+        rollbackRequestKey?: string;
+      } | null;
+      expect(persistedIntent).toMatchObject({
+        phase: "intent",
+        expectedRevision: 3,
+        previousTemplateVersion: 2,
+        appVersion: CANDIDATE.appVersion,
+        sourceCommit: CANDIDATE.sourceCommit,
+      });
+      expect(persistedIntent?.requestKey).toBe(fixture.updateRequests[0]!.body.requestKey);
+      expect(fixture.apps[0]?.revision).toBe(4);
+      expect(fixture.apps[0]?.templateVersion).toBe(3);
+
+      // Unmount before POST result ever arrives; resolveResult is never called for this closure.
+      await act(async () => { root.render(null); });
+      expect(JSON.parse(stored.get(pendingKey) ?? "{}")).toMatchObject({ phase: "intent" });
+      fixture.updateResultHold = null;
+      fixture.htmlByApp.app_a = "<p>vB-unready</p>";
+
+      // Different profile does not touch or reconcile another profile's pending intent.
+      fixture.environmentId = "other-environment";
+      await render();
+      await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_a"));
+      expect(JSON.parse(stored.get(pendingKey) ?? "{}")).toMatchObject({ phase: "intent" });
+      expect(stored.get(otherProfileKey)).toBeUndefined();
+      expect(fixture.rollbackRequests).toHaveLength(0);
+      await act(async () => { root.render(null); });
+
+      // Reopen original profile: reconciles intent -> applied and rolls back after bounded timeout.
+      fixture.environmentId = "fixture-environment";
+      await render();
+      await vi.waitFor(() => expect(JSON.parse(stored.get(pendingKey) ?? "{}")).toMatchObject({
+        phase: "applied",
+        candidateRevision: 4,
+        candidateTemplateVersion: 3,
+        previousTemplateVersion: 2,
+        rollbackRequestKey: persistedIntent?.rollbackRequestKey,
+      }));
+      expect(fixture.rollbackRequests).toHaveLength(0);
+
+      fixture.htmlByApp.app_a = "<p>vA</p>";
+      await act(async () => { await vi.advanceTimersByTimeAsync(MINI_APP_RUNTIME_READY_TIMEOUT_MS + 10); });
+      await vi.waitFor(() => expect(fixture.rollbackRequests).toHaveLength(1));
+      expect(fixture.rollbackRequests[0]).toMatchObject({
+        appId: "app_a",
+        body: {
+          expectedRevision: 4,
+          templateVersion: 2,
+          requestKey: persistedIntent?.rollbackRequestKey,
+        },
+      });
+      await vi.waitFor(() => expect(stored.get(pendingKey) ?? "").toBe(""));
+      expect(frame()?.getAttribute("data-html")).toBe("<p>vA</p>");
+      expect(host.querySelector('[data-mini-app-update-rolled-back]')?.textContent).toContain("restored the previous version");
+      resolveResult();
+
+      // 2. Lost POST response + reopen with current ready settles intent without rollback.
+      await act(async () => { root.render(null); });
+      stored.clear();
+      resetState(false);
+      let rejectLostResponse!: (err: Error) => void;
+      fixture.updateResultHold = new Promise<void>((_, reject) => { rejectLostResponse = reject; });
+      await render();
+      await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-app-update-toast"]')).not.toBeNull());
+      await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-update-action]')!.click(); });
+      await vi.waitFor(() => expect(fixture.apps[0]?.revision).toBe(4));
+      await act(async () => { root.render(null); });
+      rejectLostResponse(new Error("Connection closed"));
+      await Promise.resolve();
+      fixture.updateResultHold = null;
+      fixture.htmlByApp.app_a = "<p>vB-ready</p>";
+
+      await render();
+      await vi.waitFor(() => expect(frame()?.getAttribute("data-html")).toBe("<p>vB-ready</p>"));
+      await vi.waitFor(() => expect(stored.get(pendingKey) ?? "").toBe(""));
+      await act(async () => { await vi.advanceTimersByTimeAsync(MINI_APP_RUNTIME_READY_TIMEOUT_MS + 10); });
+      expect(fixture.rollbackRequests).toHaveLength(0);
+      expect(frame()?.getAttribute("data-html")).toBe("<p>vB-ready</p>");
+
+      // 3. Lost POST response + later owner edit before reopen clears intent without rollback and leaves the owner edit intact.
+      await act(async () => { root.render(null); });
+      stored.clear();
+      resetState(true);
+      fixture.updateResultHold = new Promise<void>(() => {});
+      await render();
+      await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-app-update-toast"]')).not.toBeNull());
+      await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-update-action]')!.click(); });
+      await vi.waitFor(() => expect(fixture.apps[0]?.revision).toBe(4));
+      await act(async () => { root.render(null); });
+      fixture.updateResultHold = null;
+
+      // Later owner edit advances revision to 5 and clears release provenance.
+      fixture.apps = fixture.apps.map((entry) => entry.id === "app_a"
+        ? { ...entry, revision: 5, templateVersion: 4, release: null }
+        : entry);
+      fixture.htmlByApp.app_a = "<p>owner-edit-rev5</p>";
+
+      await render();
+      await vi.waitFor(() => expect(frame()?.getAttribute("data-html")).toBe("<p>owner-edit-rev5</p>"));
+      await vi.waitFor(() => expect(stored.get(pendingKey) ?? "").toBe(""));
+      await act(async () => { await vi.advanceTimersByTimeAsync(MINI_APP_RUNTIME_READY_TIMEOUT_MS + 10); });
+      expect(fixture.rollbackRequests).toHaveLength(0);
+      expect(frame()?.getAttribute("data-html")).toBe("<p>owner-edit-rev5</p>");
+      expect(host.querySelector('[data-mini-app-update-rolled-back]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps recovery and its bounded deadline through delayed older inventory reads, while clearing on later-revision conflicts", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const pendingKey = "omb-mini-app-pending-update:omb-mini-app:fixture-environment:app_a";
+      fixture.suppressRuntimeReady = true;
+      fixture.htmlByApp = { app_a: "<p>vA</p>", app_b: "<p>appB</p>" };
+      fixture.updateByApp = {
+        app_a: { installedVersion: "1.1.0", status: "available", available: CANDIDATE },
+      };
+
+      await render();
+      await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-app-update-toast"]')).not.toBeNull());
+      await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+
+      // 1. Start a pre-update inventory read and hold its response until after POST /update succeeds.
+      const preUpdateSnapshot = fixture.apps.map((entry) => ({ ...entry }));
+      let releaseDelayedInventory!: (apps: MiniAppSummary[]) => void;
+      fixture.onInventoryRead = () => new Promise<MiniAppSummary[]>((resolve) => {
+        releaseDelayedInventory = resolve;
+      });
+      await act(async () => { refresh().click(); });
+      await vi.waitFor(() => expect(typeof releaseDelayedInventory).toBe("function"));
+      fixture.onInventoryRead = null;
+
+      // Apply update while the pre-update inventory read is still in flight.
+      fixture.htmlByApp.app_a = "<p>vB-candidate</p>";
+      await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-update-action]')!.click(); });
+      await vi.waitFor(() => expect(fixture.apps[0]?.revision).toBe(4));
+      await vi.waitFor(() => expect(frame()?.getAttribute("data-html")).toBe("<p>vB-candidate</p>"));
+
+      const initialRecord = JSON.parse(stored.get(pendingKey) ?? "{}") as { deadlineAt?: number };
+      expect(initialRecord.deadlineAt).toBeGreaterThan(Date.now());
+      const originalDeadline = initialRecord.deadlineAt!;
+
+      // Advance partway through the bounded window, then deliver the delayed pre-update inventory snapshot (rev 3).
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+      await act(async () => {
+        releaseDelayedInventory(preUpdateSnapshot);
+        await Promise.resolve();
+      });
+
+      // Recovery and its deadline are preserved, and UI stays on the vB candidate.
+      expect(JSON.parse(stored.get(pendingKey) ?? "{}")).toMatchObject({
+        phase: "applied",
+        candidateRevision: 4,
+        candidateTemplateVersion: 3,
+        deadlineAt: originalDeadline,
+      });
+      expect(frame()?.getAttribute("data-html")).toBe("<p>vB-candidate</p>");
+
+      // Even a subsequent stale inventory read returning rev 3 cannot clear recovery or reset its timer.
+      fixture.onInventoryRead = async () => preUpdateSnapshot;
+      await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+      await act(async () => { refresh().click(); });
+      await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+      fixture.onInventoryRead = null;
+
+      expect(JSON.parse(stored.get(pendingKey) ?? "{}")).toMatchObject({
+        phase: "applied",
+        candidateRevision: 4,
+        candidateTemplateVersion: 3,
+        deadlineAt: originalDeadline,
+      });
+      expect(frame()?.getAttribute("data-html")).toBe("<p>vB-candidate</p>");
+
+      // Advancing only the remaining ~7s (past the original deadline, < 10s since delayed polls) triggers rollback on time.
+      fixture.htmlByApp.app_a = "<p>vA</p>";
+      await act(async () => { await vi.advanceTimersByTimeAsync(MINI_APP_RUNTIME_READY_TIMEOUT_MS - 3_000 + 20); });
+      await vi.waitFor(() => expect(fixture.rollbackRequests).toHaveLength(1));
+      expect(fixture.rollbackRequests[0]).toMatchObject({
+        appId: "app_a",
+        body: { expectedRevision: 4, templateVersion: 2 },
+      });
+      await vi.waitFor(() => expect(stored.get(pendingKey) ?? "").toBe(""));
+
+      // 2. Later-revision conflict after a delayed older inventory read clears recovery without rollback.
+      await act(async () => { root.render(null); });
+      stored.clear();
+      fixture.apps = [app("app_a", "First report"), app("app_b", "Second report")];
+      fixture.htmlByApp = { app_a: "<p>vA</p>", app_b: "<p>appB</p>" };
+      fixture.updateRequests = [];
+      fixture.rollbackRequests = [];
+      fixture.updateByApp = {
+        app_a: { installedVersion: "1.1.0", status: "available", available: { appVersion: "1.3.0", sourceCommit: "9999999abcdef000" } },
+      };
+
+      await render();
+      await vi.waitFor(() => expect(host.querySelector('[data-testid="mini-app-update-toast"]')).not.toBeNull());
+      const staleSnapshot = fixture.apps.map((entry) => ({ ...entry }));
+      fixture.htmlByApp.app_a = "<p>vB-candidate-2</p>";
+      await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-update-action]')!.click(); });
+      await vi.waitFor(() => expect(fixture.apps[0]?.revision).toBe(4));
+
+      // Stale rev 3 poll keeps recovery; subsequent rev 5 poll clears recovery without rollback.
+      fixture.onInventoryRead = async () => staleSnapshot;
+      await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+      await act(async () => { refresh().click(); });
+      await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+      fixture.onInventoryRead = null;
+      expect(JSON.parse(stored.get(pendingKey) ?? "{}")).toMatchObject({
+        phase: "applied",
+        candidateRevision: 4,
+      });
+
+      fixture.apps = fixture.apps.map((entry) => entry.id === "app_a"
+        ? { ...entry, revision: 5, templateVersion: 4, release: null }
+        : entry);
+      fixture.htmlByApp.app_a = "<p>owner-edit-rev5</p>";
+      await act(async () => { refresh().click(); });
+      await vi.waitFor(() => expect(stored.get(pendingKey) ?? "").toBe(""));
+      await vi.waitFor(() => expect(frame()?.getAttribute("data-html")).toBe("<p>owner-edit-rev5</p>"));
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(MINI_APP_RUNTIME_READY_TIMEOUT_MS + 10); });
       expect(fixture.rollbackRequests).toHaveLength(0);
       expect(host.querySelector('[data-mini-app-update-rolled-back]')).toBeNull();
     } finally {

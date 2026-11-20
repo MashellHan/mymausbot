@@ -134,8 +134,23 @@ export function rememberAnnouncedUpdateVersion(storageKey: string | null, appId:
 }
 
 export const MINI_APP_RUNTIME_READY_TIMEOUT_MS = 10_000;
+export const PENDING_UPDATE_INTENT_TTL_MS = 10 * 60_000;
+
+export interface PendingMiniAppUpdateIntent {
+  phase: "intent";
+  appId: string;
+  expectedRevision: number;
+  previousTemplateVersion: number;
+  packageId: string | null;
+  appVersion: string;
+  sourceCommit: string;
+  requestKey: string;
+  rollbackRequestKey: string;
+  createdAt: number;
+}
 
 export interface PendingMiniAppUpdateRecovery {
+  phase?: "applied";
   appId: string;
   previousTemplateVersion: number;
   candidateRevision: number;
@@ -144,20 +159,67 @@ export interface PendingMiniAppUpdateRecovery {
   deadlineAt: number;
 }
 
+export type PendingMiniAppUpdate = PendingMiniAppUpdateIntent | PendingMiniAppUpdateRecovery;
+
+export type PendingUpdateReconcileResult =
+  | { action: "keep"; record: PendingMiniAppUpdate; olderRead: boolean }
+  | { action: "promote"; record: PendingMiniAppUpdateRecovery }
+  | { action: "clear" };
+
+export function isPendingUpdateApplied(
+  value: PendingMiniAppUpdate | null | undefined,
+): value is PendingMiniAppUpdateRecovery {
+  return Boolean(value && value.phase !== "intent");
+}
+
 export function pendingUpdateRecoveryStorageKey(storageKey: string | null, appId: string): string {
   return `omb-mini-app-pending-update:${updateProfileKey(storageKey)}:${appId}`;
 }
 
-export function readPendingUpdateRecovery(storageKey: string | null, appId: string): PendingMiniAppUpdateRecovery | null {
+export function readPendingUpdate(storageKey: string | null, appId: string): PendingMiniAppUpdate | null {
   try {
     const raw = localStorage.getItem(pendingUpdateRecoveryStorageKey(storageKey, appId));
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed)) return null;
+    if (!isRecord(parsed) || parsed.appId !== appId) return null;
+    if (parsed.phase === "intent") {
+      const appVersion = nonEmptyString(parsed.appVersion);
+      const sourceCommit = nonEmptyString(parsed.sourceCommit);
+      const requestKey = nonEmptyString(parsed.requestKey);
+      const rollbackRequestKey = nonEmptyString(parsed.rollbackRequestKey);
+      const packageId = parsed.packageId === null || parsed.packageId === undefined
+        ? null
+        : nonEmptyString(parsed.packageId);
+      if (
+        !appVersion
+        || !sourceCommit
+        || !requestKey
+        || !rollbackRequestKey
+        || (parsed.packageId !== null && parsed.packageId !== undefined && !packageId)
+        || !Number.isSafeInteger(parsed.expectedRevision)
+        || Number(parsed.expectedRevision) < 0
+        || !Number.isSafeInteger(parsed.previousTemplateVersion)
+        || !Number.isSafeInteger(parsed.createdAt)
+        || Number(parsed.createdAt) <= 0
+      ) {
+        return null;
+      }
+      return {
+        phase: "intent",
+        appId: parsed.appId,
+        expectedRevision: Number(parsed.expectedRevision),
+        previousTemplateVersion: Number(parsed.previousTemplateVersion),
+        packageId,
+        appVersion,
+        sourceCommit,
+        requestKey,
+        rollbackRequestKey,
+        createdAt: Number(parsed.createdAt),
+      };
+    }
+    if (parsed.phase !== undefined && parsed.phase !== "applied") return null;
     if (
-      typeof parsed.appId !== "string"
-      || parsed.appId !== appId
-      || typeof parsed.rollbackRequestKey !== "string"
+      typeof parsed.rollbackRequestKey !== "string"
       || !parsed.rollbackRequestKey
       || !Number.isSafeInteger(parsed.previousTemplateVersion)
       || !Number.isSafeInteger(parsed.candidateRevision)
@@ -168,6 +230,7 @@ export function readPendingUpdateRecovery(storageKey: string | null, appId: stri
       return null;
     }
     return {
+      phase: "applied",
       appId: parsed.appId,
       previousTemplateVersion: Number(parsed.previousTemplateVersion),
       candidateRevision: Number(parsed.candidateRevision),
@@ -180,10 +243,22 @@ export function readPendingUpdateRecovery(storageKey: string | null, appId: stri
   }
 }
 
-export function writePendingUpdateRecovery(storageKey: string | null, recovery: PendingMiniAppUpdateRecovery): void {
+export function writePendingUpdate(storageKey: string | null, update: PendingMiniAppUpdate): void {
   try {
-    localStorage.setItem(pendingUpdateRecoveryStorageKey(storageKey, recovery.appId), JSON.stringify(recovery));
+    const payload = update.phase === "intent"
+      ? update
+      : { ...update, phase: "applied" as const };
+    localStorage.setItem(pendingUpdateRecoveryStorageKey(storageKey, update.appId), JSON.stringify(payload));
   } catch {}
+}
+
+export function readPendingUpdateRecovery(storageKey: string | null, appId: string): PendingMiniAppUpdateRecovery | null {
+  const parsed = readPendingUpdate(storageKey, appId);
+  return isPendingUpdateApplied(parsed) ? parsed : null;
+}
+
+export function writePendingUpdateRecovery(storageKey: string | null, recovery: PendingMiniAppUpdateRecovery): void {
+  writePendingUpdate(storageKey, { ...recovery, phase: "applied" });
 }
 
 export function clearPendingUpdateRecovery(storageKey: string | null, appId: string): void {
@@ -195,6 +270,100 @@ export function clearPendingUpdateRecovery(storageKey: string | null, appId: str
       localStorage.setItem(key, "");
     }
   } catch {}
+}
+
+export function readAppPackageId(app: MiniAppSummary): string | null {
+  const extra = app as MiniAppSummary & { release?: { packageId?: unknown } | null };
+  return extra.release ? nonEmptyString(extra.release.packageId) : null;
+}
+
+function readEntryReleaseProvenance(
+  app: MiniAppSummary,
+): { packageId: string | null; appVersion: string; sourceCommit: string } | null {
+  const extra = app as MiniAppSummary & {
+    release?: { packageId?: unknown; appVersion?: unknown; sourceCommit?: unknown } | null;
+  };
+  if (!isRecord(extra.release)) return null;
+  const appVersion = nonEmptyString(extra.release.appVersion);
+  const sourceCommit = nonEmptyString(extra.release.sourceCommit);
+  if (!appVersion || !sourceCommit) return null;
+  return {
+    packageId: nonEmptyString(extra.release.packageId),
+    appVersion,
+    sourceCommit,
+  };
+}
+
+export function matchesAppliedUpdateIntent(
+  entry: MiniAppSummary,
+  intent: PendingMiniAppUpdateIntent,
+): boolean {
+  if (
+    entry.id !== intent.appId
+    || entry.status !== "active"
+    || entry.revision !== intent.expectedRevision + 1
+    || entry.templateVersion === intent.previousTemplateVersion
+  ) {
+    return false;
+  }
+  const provenance = readEntryReleaseProvenance(entry);
+  if (!provenance) return false;
+  if (provenance.appVersion !== intent.appVersion || provenance.sourceCommit !== intent.sourceCommit) {
+    return false;
+  }
+  return intent.packageId === null || provenance.packageId === intent.packageId;
+}
+
+export function reconcilePendingUpdateWithSummary(
+  pending: PendingMiniAppUpdate,
+  entry: MiniAppSummary | undefined,
+  now = Date.now(),
+  inFlight = false,
+): PendingUpdateReconcileResult {
+  if (pending.phase === "intent") {
+    if (!entry) return { action: "clear" };
+    if (entry.status === "active" && entry.revision < pending.expectedRevision) {
+      return { action: "keep", record: pending, olderRead: true };
+    }
+    if (
+      entry.status === "active"
+      && entry.revision === pending.expectedRevision
+      && entry.templateVersion === pending.previousTemplateVersion
+    ) {
+      if (!inFlight && now - pending.createdAt > PENDING_UPDATE_INTENT_TTL_MS) {
+        return { action: "clear" };
+      }
+      return { action: "keep", record: pending, olderRead: false };
+    }
+    if (matchesAppliedUpdateIntent(entry, pending)) {
+      return {
+        action: "promote",
+        record: {
+          phase: "applied",
+          appId: pending.appId,
+          previousTemplateVersion: pending.previousTemplateVersion,
+          candidateRevision: entry.revision,
+          candidateTemplateVersion: entry.templateVersion,
+          rollbackRequestKey: pending.rollbackRequestKey,
+          deadlineAt: now + MINI_APP_RUNTIME_READY_TIMEOUT_MS,
+        },
+      };
+    }
+    return { action: "clear" };
+  }
+
+  if (!entry) return { action: "clear" };
+  if (entry.status === "active" && entry.revision < pending.candidateRevision) {
+    return { action: "keep", record: pending, olderRead: true };
+  }
+  if (
+    entry.status === "active"
+    && entry.revision === pending.candidateRevision
+    && entry.templateVersion === pending.candidateTemplateVersion
+  ) {
+    return { action: "keep", record: pending, olderRead: false };
+  }
+  return { action: "clear" };
 }
 
 export function shortCommit(commit: string): string {
