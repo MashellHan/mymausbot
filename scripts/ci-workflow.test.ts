@@ -492,6 +492,9 @@ describe("trusted CI follow-up", () => {
   });
 
   it("retains real QA hold release events and scoped trusted-main permissions", () => {
+    expect(interpolate(listener["run-name"], { github: { event: { issue: { number: 88 } } } })).toBe("QA report hold-88");
+    expect(interpolate(listener["run-name"], { github: { event: { workflow_run: { id: 44657511451 } } } })).toBe("QA report 44657511451");
+    expect(interpolate(listener["run-name"], { inputs: { run_id: "44657511451" } })).toBe("QA report 44657511451");
     const issue = { labels: [{ name: "qa" }] };
     expect(jobs("issues", { action: "closed", issue })).toEqual(["reconcile"]);
     expect(jobs("issues", { action: "labeled", issue, label: { name: "qa:scope:usage" } })).toEqual(["reconcile"]);

@@ -1,5 +1,5 @@
 name: QA report
-run-name: QA report ${{ github.event.workflow_run.id || inputs.run_id || format('hold #{0}', github.event.issue.number) }}
+run-name: QA report ${{ github.event.workflow_run.id || inputs.run_id || format('hold-{0}', github.event.issue.number) }}
 
 on:
   workflow_run:
