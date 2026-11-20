@@ -553,7 +553,11 @@ describe("Pi ask_user tool", () => {
     expect(await load({})).toBeUndefined();
     expect(await load({ askUser: true, toolScope: { allow: ["native:read"] } })).toBeUndefined();
     const tool = await load({ askUser: true, toolScope: { allow: ["native:ask_user"] } });
-    expect(tool).toMatchObject({ name: "ask_user", exposure: "model-only" });
+    expect(tool).toMatchObject({
+      name: "ask_user",
+      exposure: "model-only",
+      description: expect.stringContaining("do not repeat them in chat text"),
+    });
   });
 
   it("asks each question in turn and returns the answers in the shared Q:/A: form", async () => {

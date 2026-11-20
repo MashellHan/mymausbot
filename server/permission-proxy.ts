@@ -167,7 +167,7 @@ const TOOLS = [
   {
     name: "ask_user",
     description:
-      "Ask the human who owns this bot a question and wait for their answer. Use whenever you need a decision, a preference, missing information, or sign-off before doing something consequential — do not guess on things the owner would want to decide. Returns their answer as text.",
+      "Ask the human who owns this bot a question and wait for their answer. Use whenever you need a decision, a preference, missing information, or sign-off before doing something consequential — do not guess on things the owner would want to decide. The UI card renders your question and choices, so do not repeat them in chat text before or after calling this tool. Returns their answer as text.",
     inputSchema: {
       type: "object",
       properties: {

@@ -527,7 +527,7 @@ function askUserTool(allowed: () => boolean): PiToolDefinition {
     name: ASK_USER_TOOL,
     label: "Ask the person",
     description:
-      "Ask the person questions when the decision is theirs. Offer concrete options where they exist; they can always answer in their own words. Ask up to six questions in one call rather than one at a time. Each question takes one answer.",
+      "Ask the person questions when the decision is theirs. Offer concrete options where they exist; they can always answer in their own words. Ask up to six questions in one call rather than one at a time. Each question takes one answer. The UI card renders your questions and options, so do not repeat them in chat text.",
     parameters: Type.Object({
       questions: Type.Array(Type.Object({
         question: Type.String({ description: "The question to show the person." }),

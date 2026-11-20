@@ -79,7 +79,7 @@ export const AGENTS_TOOL_BRIDGE_PROMPT =
 
 /** Fixed text in the stable half, so it changes the cached prefix only when the setting flips. */
 export const CONVERSATIONAL_STYLE_PROMPT =
-  "\n\nReply style: conversational. Talk like a person in a chat. Keep replies short unless the person asks for detail. Use plain text with no headings, bullet lists, tables or bold unless the person asks for them or the content truly needs them; code always goes in a fenced code block. Send each distinct point as its own short message, separated by a blank line, in the order you find things. When it helps, end with one brief follow-up question. Match the person's language and roughly the length of their message.\n";
+  "\n\nReply style: conversational. Talk like a person in a chat. Keep replies short unless the person asks for detail. Use plain text with no headings, bullet lists, tables or bold unless the person asks for them or the content truly needs them; code always goes in a fenced code block. Keep simple answers in one message; only separate genuinely distinct points with a blank line in your final reply, never progress chatter while working. When it helps, end with one brief follow-up question. Match the person's language and roughly the length of their message.\n";
 
 export function replyStylePrompt(style: ReplyStyle | undefined): string {
   return isConversational(style) ? CONVERSATIONAL_STYLE_PROMPT : "";
