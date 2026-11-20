@@ -1,4 +1,4 @@
-import { parse, type CallExpression } from "acorn";
+import { parse, type CallExpression, type Expression, type Literal, type ObjectExpression, type Statement } from "acorn";
 import type { LocalAgentActivityEvent, LocalAgentToolDetailStatus } from "../shared/local-dashboard.ts";
 import { mask, redactSecretsInText } from "../shared/redact.ts";
 import { escapeNotes } from "./peer-provenance.ts";
@@ -9,7 +9,7 @@ const INTERNAL_ENVELOPE = /<\/?(?:SYSTEM_(?:MESSAGE|NOTIFICATION)|(?:teammate|ag
 const TOOL_KEY = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
 const PRIVATE_TOOL_KEY = /(?:auth|base64|binary|body|cookie|credential|data|env|header|image|key|passwd|password|private|secret|session|token)|^sid$/i;
 const TOOL_ASSIGNMENT = /"([^"\n]{1,128})"\s*[:=]|\b([A-Za-z][A-Za-z0-9_.-]*(?:[ \t]+(?:id|key|token|data|value))?)['"]?\s*[:=]/gi;
-const TOOL_FIELD_VALUE = /^\s*(?:"([^"\n]{1,128})"|'([^'\n]{1,128})'|([A-Za-z0-9_-]+))/;
+const TOOL_FIELD_VALUE = /^\s*(?:"([^"]{1,256})"|'([^']{1,256})'|([A-Za-z0-9_-]+))/;
 const EXEC_COMPOUND_ASSIGNMENT = /(?:\?\?|\|\||&&|>>>?|<<|\*\*|[-+*/%&|^])=/;
 const EXEC_COMMENT_BEFORE_ASSIGNMENT = /(?:\*\/|\/\/[^\r\n\u2028\u2029]*[\r\n\u2028\u2029])\s*[:=]/;
 const EXEC_DECLARATION_LITERAL = /^\s*(["'`])([A-Za-z0-9 ._-]{1,128})\1\s*(?=$|[,;}\])])/;
@@ -18,6 +18,8 @@ const BASE64_ENCODING = /^base64(?:-?url)?$/i;
 const ENCODED_TOOL_TEXT = /data:[^\s,]{0,100};base64,|[A-Za-z0-9+/_-]{64,}={0,2}/i;
 const MAX_TOOL_SOURCE = 16 * 1024;
 const MAX_TOOL_FIELDS = 8;
+const MAX_STATIC_EXEC_WORK = 128;
+const STATIC_WRAPPER_NAMES = new Set(["tools", "text", "Promise"]);
 const TOOL_RESULT_UNAVAILABLE = "[Result details unavailable]";
 const EXEC_RUN_STATUS = /^Script (?:completed|failed)\r?\nWall time:? \d{1,5}(?:\.\d{1,12})? seconds\r?\nOutput:\r?\n?$/;
 const EXEC_COMMAND_FIELDS = new Set(["chunk_id", "wall_time_seconds", "exit_code", "session_id", "original_token_count", "output"]);
@@ -56,7 +58,9 @@ function privateToolDeclaration(key: string, value: string): boolean {
 }
 
 function normalizedToolLabels(value: string): string {
-  return value.replace(/\\u([\da-f]{4})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+  return value.replace(/\\x([\da-f]{2})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/\\u\{([\da-f]{1,6})\}/gi, (_escape, hex: string) => String.fromCodePoint(Math.min(Number.parseInt(hex, 16), 0x10ffff)))
+    .replace(/\\u([\da-f]{4})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
     .replace(/\\+(?=["'])/g, "");
 }
 
@@ -304,53 +308,287 @@ function safeShellCommandText(value: string): { text: string | null; clipped: bo
   return redactedAgentText(redacted.replaceAll(SHELL_MASK_PREFIX, ""), SHELL_COMMAND_LIMIT);
 }
 
-function literalExecCommand(call: CallExpression): { start: number; end: number; value: string } | null {
+type StaticExecCommand = { start: number; end: number; value: string };
+type StaticExecEnvironment = ReadonlyMap<string, Expression>;
+type StaticExecScan = { commands: StaticExecCommand[]; parsedTexts: { start: number; end: number; value: string }[];
+  calls: number; work: number; failed: boolean; clipped: boolean };
+
+function spendExecWork(scan: StaticExecScan): boolean {
+  if (scan.failed || scan.work <= 0) { scan.failed = true; return false; }
+  scan.work--;
+  return true;
+}
+
+function staticIdentifier(node: Expression): string | null {
+  return node.type === "Identifier" ? node.name : null;
+}
+
+function staticLiteral(node: Expression, env: StaticExecEnvironment, scan: StaticExecScan,
+  seen = new Set<string>()): Literal | null {
+  if (!spendExecWork(scan)) return null;
+  if (node.type === "Literal") return node;
+  const name = staticIdentifier(node);
+  if (!name || seen.has(name)) return null;
+  const value = env.get(name);
+  return value ? staticLiteral(value, env, scan, new Set([...seen, name])) : null;
+}
+
+function staticObject(node: Expression, env: StaticExecEnvironment, scan: StaticExecScan,
+  seen = new Set<string>()): ObjectExpression | null {
+  if (!spendExecWork(scan)) return null;
+  if (node.type === "ObjectExpression") return node;
+  const name = staticIdentifier(node);
+  if (!name || seen.has(name)) return null;
+  const value = env.get(name);
+  return value ? staticObject(value, env, scan, new Set([...seen, name])) : null;
+}
+
+function inertStaticValue(node: Expression, env: StaticExecEnvironment, scan: StaticExecScan,
+  seen = new Set<string>()): boolean {
+  if (!spendExecWork(scan)) return false;
+  if (node.type === "Literal") return true;
+  if (node.type === "Identifier") {
+    if (seen.has(node.name)) return false;
+    const value = env.get(node.name);
+    return Boolean(value && inertStaticValue(value, env, scan, new Set([...seen, node.name])));
+  }
+  if (node.type === "ArrayExpression") {
+    return node.elements.length <= MAX_TOOL_FIELDS && node.elements.every(element =>
+      element !== null && element.type !== "SpreadElement" && inertStaticValue(element, env, scan, seen));
+  }
+  if (node.type === "ObjectExpression") {
+    return node.properties.length <= MAX_TOOL_FIELDS && node.properties.every(property =>
+      property.type === "Property" && !property.computed && !property.method && property.kind === "init" &&
+      inertStaticValue(property.value, env, scan, seen));
+  }
+  return false;
+}
+
+function recordStaticTextNodes(node: Expression, scan: StaticExecScan): boolean {
+  if (!spendExecWork(scan)) return false;
+  if (node.type === "Literal") {
+    if (typeof node.value === "string") scan.parsedTexts.push({ start: node.start, end: node.end, value: node.value });
+    return true;
+  }
+  if (node.type === "Identifier") return true;
+  if (node.type === "ArrayExpression") {
+    return node.elements.every(element => element !== null && element.type !== "SpreadElement" &&
+      recordStaticTextNodes(element, scan));
+  }
+  if (node.type === "ObjectExpression") {
+    return node.properties.every(property => {
+      if (property.type !== "Property" || property.computed || property.method || property.kind !== "init") return false;
+      const key = property.key.type === "Literal" && typeof property.key.value === "string"
+        ? property.key.value : null;
+      if (key !== null) scan.parsedTexts.push({ start: property.key.start, end: property.key.end, value: key });
+      return recordStaticTextNodes(property.value, scan);
+    });
+  }
+  return false;
+}
+
+function literalExecCommand(call: CallExpression, env: StaticExecEnvironment,
+  scan: StaticExecScan): StaticExecCommand | null {
+  if (!spendExecWork(scan)) return null;
   const { callee } = call;
   if (call.optional || callee.type !== "MemberExpression" || callee.computed || callee.optional ||
-      callee.object.type !== "Identifier" || callee.object.name !== "tools" ||
+      callee.object.type !== "Identifier" || callee.object.name !== "tools" || env.has("tools") ||
       callee.property.type !== "Identifier" || callee.property.name !== "exec_command") return null;
   const [argument] = call.arguments;
-  if (call.arguments.length !== 1 || argument?.type !== "ObjectExpression") return null;
+  if (call.arguments.length !== 1 || !argument || argument.type === "SpreadElement") return null;
+  const object = staticObject(argument, env, scan);
+  if (!object || !inertStaticValue(object, env, scan)) return null;
   const seen = new Set<string>();
-  let command: { start: number; end: number; value: string } | null = null;
-  for (const property of argument.properties) {
-    if (property.type !== "Property" || property.computed || property.kind !== "init" || property.method) return null;
+  let command: StaticExecCommand | null = null;
+  for (const property of object.properties) {
+    if (!spendExecWork(scan) || property.type !== "Property" || property.computed || property.kind !== "init" || property.method) return null;
     const key = property.key.type === "Identifier" ? property.key.name : property.key.type === "Literal" ? property.key.value : null;
-    const input = property.value;
-    if (typeof key !== "string" || seen.has(key) || input.type !== "Literal" ||
-        EXEC_COMMAND_OPTIONS.get(key) !== typeof input.value) return null;
+    if (typeof key !== "string" || seen.has(key) || !EXEC_COMMAND_OPTIONS.has(key) ||
+        (property.value.type !== "Literal" && property.value.type !== "Identifier")) return null;
     seen.add(key);
+    const input = staticLiteral(property.value, env, scan);
+    if (!input || EXEC_COMMAND_OPTIONS.get(key) !== typeof input.value) return null;
     if (typeof input.value !== "string") continue;
     if (key === "cmd") command = { start: input.start, end: input.end, value: input.value };
     else if (input.value.trim() && (!safeToolText(input.value, true).text ||
-        INTERNAL_ENVELOPE.test(input.value.replace(/[\p{Cc}\p{Cf}]/gu, "")))) return null;
+        INTERNAL_ENVELOPE.test(normalizedToolLabels(input.value).replace(/[\p{Cc}\p{Cf}]/gu, "")))) return null;
   }
   return command;
 }
 
+function isExecCall(node: CallExpression): boolean {
+  const { callee } = node;
+  return !node.optional && callee.type === "MemberExpression" && !callee.computed && !callee.optional &&
+    callee.object.type === "Identifier" && callee.object.name === "tools" &&
+    callee.property.type === "Identifier" && callee.property.name === "exec_command";
+}
+
+function exactExecExpression(node: Expression): CallExpression | null {
+  if (node.type === "AwaitExpression" && node.argument.type === "CallExpression" && isExecCall(node.argument)) return node.argument;
+  if (node.type === "MemberExpression" && !node.computed && !node.optional &&
+      node.property.type === "Identifier" && node.property.name === "output" &&
+      node.object.type === "AwaitExpression" && node.object.argument.type === "CallExpression" &&
+      isExecCall(node.object.argument)) return node.object.argument;
+  if (node.type === "CallExpression" && isExecCall(node)) return node;
+  return null;
+}
+
+function execCallsInExpression(node: Expression, env: StaticExecEnvironment,
+  scan: StaticExecScan): CallExpression[] | null {
+  if (!spendExecWork(scan)) return null;
+  const exact = exactExecExpression(node);
+  if (exact) return env.has("tools") ? null : [exact];
+  if (node.type === "AwaitExpression") return execCallsInExpression(node.argument, env, scan);
+  if (node.type === "CallExpression" && !node.optional) {
+    const { callee } = node;
+    const isText = callee.type === "Identifier" && callee.name === "text" && !env.has("text");
+    const isPromiseAll = callee.type === "MemberExpression" && !callee.computed && !callee.optional &&
+      callee.object.type === "Identifier" && callee.object.name === "Promise" && !env.has("Promise") &&
+      callee.property.type === "Identifier" && callee.property.name === "all";
+    if (isText && node.arguments.length === 1) {
+      const argument = node.arguments[0];
+      return argument && argument.type !== "SpreadElement" ? execCallsInExpression(argument, env, scan) : null;
+    }
+    if (isPromiseAll && node.arguments.length === 1 && node.arguments[0]?.type === "ArrayExpression") {
+      const calls: CallExpression[] = [];
+      for (const element of node.arguments[0].elements) {
+        if (!spendExecWork(scan) || !element || element.type === "SpreadElement") return null;
+        const found = execCallsInExpression(element, env, scan);
+        if (!found) return null;
+        calls.push(...found);
+      }
+      return calls;
+    }
+  }
+  return null;
+}
+function recordExecCalls(calls: CallExpression[], env: StaticExecEnvironment, scan: StaticExecScan): boolean {
+  scan.calls += calls.length;
+  if (scan.calls > MAX_TOOL_FIELDS || scan.failed) { scan.failed = true; return false; }
+  for (const call of calls) {
+    const command = literalExecCommand(call, env, scan);
+    if (!command) { scan.failed = true; return false; }
+    scan.commands.push(command);
+  }
+  return !scan.failed;
+}
+
+function arrayValues(node: Expression, env: StaticExecEnvironment, scan: StaticExecScan): Expression[] | null {
+  if (!spendExecWork(scan)) return null;
+  if (node.type === "Identifier") {
+    const binding = env.get(node.name);
+    if (binding?.type !== "ArrayExpression") return null;
+    node = binding;
+  }
+  if (node.type !== "ArrayExpression" || node.elements.length > MAX_TOOL_FIELDS ||
+      !inertStaticValue(node, env, scan)) return null;
+  return node.elements.flatMap(element => element && element.type !== "SpreadElement" ? [element] : []);
+}
+
+function scanExecStatement(statement: Statement, source: string, env: StaticExecEnvironment, names: Set<string>, scan: StaticExecScan): boolean {
+  if (!spendExecWork(scan)) return false;
+  if (statement.type === "BlockStatement") {
+    for (const child of statement.body) if (!scanExecStatement(child, source, env, names, scan)) return false;
+    return true;
+  }
+  if (statement.type === "EmptyStatement") return true;
+  if (statement.type === "ExpressionStatement") {
+    if (statement.expression.type === "AssignmentExpression" || statement.expression.type === "UpdateExpression") return false;
+    const calls = execCallsInExpression(statement.expression, env, scan);
+    if (calls) return recordExecCalls(calls, env, scan);
+    const { expression } = statement;
+    if (expression.type !== "CallExpression" || expression.optional ||
+        expression.callee.type !== "Identifier" || expression.callee.name !== "text" || env.has("text") ||
+        expression.arguments.length !== 1 || expression.arguments[0]?.type !== "Literal" ||
+        typeof expression.arguments[0].value !== "string") return false;
+    const decoded = expression.arguments[0].value;
+    const normalized = normalizedToolLabels(decoded).replace(/[\p{Cc}\p{Cf}]/gu, "");
+    return Boolean(safeToolText(decoded, true).text) && Boolean(safeToolText(normalized, true).text) &&
+      !INTERNAL_ENVELOPE.test(decoded) && !INTERNAL_ENVELOPE.test(normalized) &&
+      !/\bexec_command\b/.test(source.slice(statement.start, statement.end));
+  }
+  if (statement.type === "VariableDeclaration") {
+    if (statement.kind !== "const") return false;
+    for (const declaration of statement.declarations) {
+      if (declaration.id.type !== "Identifier" || STATIC_WRAPPER_NAMES.has(declaration.id.name) || names.has(declaration.id.name) || !declaration.init) return false;
+      names.add(declaration.id.name);
+      const calls = execCallsInExpression(declaration.init, env, scan);
+      if (calls) {
+        if (!recordExecCalls(calls, env, scan)) return false;
+        continue;
+      }
+      const init = declaration.init;
+      if (!inertStaticValue(init, env, scan) || !recordStaticTextNodes(init, scan)) return false;
+      env = new Map([...env, [declaration.id.name, init]]);
+    }
+    return true;
+  }
+  if (statement.type === "ForOfStatement" && statement.await === false && statement.left.type === "VariableDeclaration" &&
+      statement.left.kind === "const" && statement.left.declarations.length === 1) {
+    const declaration = statement.left.declarations[0]!;
+    if (declaration.id.type !== "Identifier" || STATIC_WRAPPER_NAMES.has(declaration.id.name) || declaration.init || names.has(declaration.id.name)) return false;
+    const values = arrayValues(statement.right, env, scan);
+    if (!values?.length) return false;
+    for (const value of values) {
+      if (!spendExecWork(scan)) return false;
+      const local = new Map([...env, [declaration.id.name, value]]);
+      if (!scanExecStatement(statement.body, source, local, new Set([...names, declaration.id.name]), scan)) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
 function staticExecCommandDetail(source: string): { text: string; clipped: boolean } | null {
+  if (source.length > MAX_TOOL_SOURCE) return null;
   let program;
   try {
     program = parse(source, { ecmaVersion: "latest", sourceType: "module" });
   } catch {
     return null;
   }
-  const [statement] = program.body;
-  if (program.body.length !== 1 || statement?.type !== "ExpressionStatement") return null;
-  let { expression } = statement;
-  if (expression.type === "CallExpression" && !expression.optional && expression.callee.type === "Identifier" &&
-      expression.callee.name === "text" && expression.arguments.length === 1 && expression.arguments[0]?.type === "AwaitExpression") {
-    expression = expression.arguments[0];
+  const scan: StaticExecScan = { commands: [], parsedTexts: [], calls: 0, work: MAX_STATIC_EXEC_WORK, failed: false, clipped: false };
+  let env: StaticExecEnvironment = new Map();
+  for (const declaration of program.body) {
+    if (declaration.type === "ImportDeclaration" || declaration.type.startsWith("Export") ||
+        !spendExecWork(scan)) return null;
+    const statement = declaration as Statement;
+    if (!scanExecStatement(statement, source, env, new Set(env.keys()), scan)) return null;
+    if (statement.type === "VariableDeclaration") {
+      for (const declaration of statement.declarations) {
+        if (declaration.id.type === "Identifier" && declaration.init) env = new Map([...env, [declaration.id.name, declaration.init]]);
+      }
+    }
   }
-  if (expression.type !== "AwaitExpression" || expression.argument.type !== "CallExpression") return null;
-  const command = literalExecCommand(expression.argument);
-  if (!command) return null;
-  const context = source.slice(0, command.start) + '""' + source.slice(command.end);
-  if (!safeToolText(context, true).text || INTERNAL_ENVELOPE.test(context.replace(/[\p{Cc}\p{Cf}]/gu, ""))) return null;
-  const detail = safeShellCommandText(command.value);
-  if (!detail.text) return null;
-  const chars = Array.from(`cmd: ${detail.text}`);
-  return { text: chars.slice(0, SHELL_COMMAND_LIMIT).join(""), clipped: detail.clipped || chars.length > SHELL_COMMAND_LIMIT };
+  if (scan.failed || !scan.commands.length) return null;
+  const unique = new Map(scan.commands.map(command => [`${command.start}:${command.end}`, command]));
+  const replacements = new Map([...unique.values()].map(command =>
+    [`${command.start}:${command.end}`, { ...command, value: '""' }]));
+  for (const literal of scan.parsedTexts) {
+    const key = `${literal.start}:${literal.end}`;
+    if (!replacements.has(key)) replacements.set(key, { ...literal, value: JSON.stringify(literal.value) });
+  }
+  const decodedContext = [...replacements.values()].sort((left, right) => right.start - left.start)
+    .reduce((value, replacement) => value.slice(0, replacement.start) + replacement.value +
+      value.slice(replacement.end), source);
+  const context = [...unique.values()].sort((left, right) => right.start - left.start)
+    .reduce((value, command) => value.slice(0, command.start) + '""' + value.slice(command.end), source);
+  const normalizedContext = normalizedToolLabels(context).replace(/[\p{Cc}\p{Cf}]/gu, "");
+  const normalizedDecodedContext = normalizedToolLabels(decodedContext).replace(/[\p{Cc}\p{Cf}]/gu, "");
+  if (!safeToolText(context, true).text || !safeToolText(normalizedContext, true).text ||
+      !safeToolText(decodedContext, true).text || !safeToolText(normalizedDecodedContext, true).text ||
+      INTERNAL_ENVELOPE.test(context) || INTERNAL_ENVELOPE.test(normalizedContext) ||
+      INTERNAL_ENVELOPE.test(decodedContext) || INTERNAL_ENVELOPE.test(normalizedDecodedContext)) return null;
+  const details: string[] = [];
+  let clipped = scan.clipped;
+  for (const command of scan.commands) {
+    const safe = safeShellCommandText(command.value);
+    if (safe.text) details.push(`cmd: ${safe.text}`);
+    else clipped = true;
+  }
+  if (!details.length) return null;
+  const chars = Array.from(details.join("; "));
+  return { text: chars.slice(0, SHELL_COMMAND_LIMIT).join(""), clipped: clipped || chars.length > SHELL_COMMAND_LIMIT };
 }
 
 function shellCommandDetail(value: unknown, runtime: "codex" | "pi", tool: string): { text: string | null; clipped: boolean } | null {
@@ -418,11 +656,12 @@ function codexExecResult(value: unknown): { text: string | null; clipped: boolea
     return { text: redactedAgentText(status + " · Output excerpt unavailable").text, clipped: true };
   }
   const stdout = commands.map(command => command.output).join(" ");
-  const output = safeToolText(stdout);
+  const whole = safeToolText(stdout);
   const exitCodes = commands.flatMap(command => command.exitCode === undefined ? [] : [`Exit code: ${command.exitCode}`]);
-  const omitted = stdout.trim() !== "" && output.text === null;
-  const detail = redactedAgentText([status, ...exitCodes, omitted ? "· Output excerpt unavailable" : output.text].filter(Boolean).join(" "));
-  return { text: detail.text, clipped: detail.clipped || output.clipped || omitted };
+  const omitted = stdout.trim() !== "" && whole.text === null;
+  const detail = redactedAgentText([status, ...exitCodes, whole.text, omitted ? "· Output excerpt unavailable" : ""]
+    .filter(Boolean).join(" "));
+  return { text: detail.text, clipped: detail.clipped || whole.clipped || omitted };
 }
 
 export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unknown, runtime?: "codex" | "pi", tool?: string | null, family?: "function" | "custom"): {
@@ -436,9 +675,10 @@ export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unkn
   const recorded = execEnvelope ?? shellDetail ?? (result
     ? redactedAgentToolResult(value, runtime === "codex" ? "codex" : undefined)
     : redactedAgentToolArguments(value, isCustomExecCall));
-  const projection = isCustomExecCall && family === "custom" && typeof value === "string" && !recorded.text && !recorded.clipped
+  const projection = isCustomExecCall && family === "custom" && typeof value === "string"
     ? staticExecCommandDetail(value) : null;
-  const detail = projection ?? recorded;
+  const detail = projection ?? (isCustomExecCall && family === "custom" && typeof value === "string"
+    ? { text: null, clipped: false } : recorded);
   const emptyText = typeof value === "string" && (!value.trim() || (!result && /^\s*\{\s*\}\s*$/.test(value)));
   const emptyArguments = !result && value !== null && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length;
   const emptyBlocks = Array.isArray(value) && (value.length === 0 || result && !detail.clipped &&
