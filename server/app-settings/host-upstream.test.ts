@@ -125,7 +125,9 @@ describe("upstream app_settings additions", () => {
     expect(JSON.parse(String(owner.body.text))).toMatchObject({ where: "Settings → Phone & devices → Pair a phone", change: "only the person, in Settings → Phone & devices → Pair a phone" });
     const none = await host.handle({ action: "find", query: "invoice" }, turn);
     expect(none.body.text).toMatch(/^No setting you can change matches "invoice"\. Where the person finds it in the app: Settings → Plan & billing/);
-    expect((await host.handle({ action: "places", query: "spending" }, turn)).body.text).toMatch(/^Settings → Spending \(shown in Advanced mode only/);
+    const spending = (await host.handle({ action: "places", query: "spending" }, turn)).body.text;
+    expect(spending).toMatch(/^Settings → Spending(?:\n|$)/);
+    expect(spending).not.toContain("Settings → Spending (shown in Advanced mode only");
     const every = String((await host.handle({ action: "places" }, turn)).body.text).split("\n");
     expect(every[0]).toMatch(/^Settings opens from/);
     expect(every).toContain("Settings → AI → Other services");
