@@ -370,6 +370,7 @@ export const CLIENT_ALLOW: ReadonlyArray<{ methods: readonly string[]; path: Reg
   { methods: ["POST", "PATCH", "DELETE"], path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+$/ },
   { methods: ["POST"], path: /^\/api\/bots\/[\w-]+\/tasks\/[\w-]+\/title$/ },
   { methods: ["PATCH"], path: /^\/api\/bots\/[\w-]+\/profile$/ },
+  { methods: ["GET", "PUT"], path: /^\/api\/bots\/[\w-]+\/documents\/(?:agents|soul)$/ },
   { methods: ["PATCH"], path: /^\/api\/bots\/[\w-]+$/ }, // display fields only: see clientBotPatchViolation
   // A Team Cloud member makes a bot of their own and deletes it while nobody else can use it: the handlers refuse every
   // other session without the admin scope, and a member's bot takes only what memberBotCreateViolation allows.
