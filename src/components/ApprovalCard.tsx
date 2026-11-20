@@ -1,6 +1,8 @@
 import { useContext, useState, type ReactNode } from "react";
 import { Check, Clock3, ShieldCheck, Undo2, X } from "lucide-react";
-import { api, ApiError, StoreContext, type Bot, type Message, type OptionCardData } from "@/state/store";
+import { api, ApiError, StoreContext, useStore, type Bot, type Message, type OptionCardData } from "@/state/store";
+import { rememberComputerPanelOpen } from "@/lib/computer-panel-focus";
+import { requestUpcomingRoutines } from "@/lib/computer-panel-view";
 import { shareLearnedSkillsMode } from "@/lib/feature-flags";
 import { cn } from "@/lib/cn";
 import { activeLocale, t, tFromServer } from "@/lib/i18n";
@@ -11,7 +13,7 @@ import { niceDate, niceTime, scheduleLabel } from "@/lib/schedule-label";
 import { cronPresetText, cronText } from "@/lib/cron-text";
 import { PROFILE_REQUEST_FIELDS, type ProfileRequestField } from "../../shared/profile-request";
 import { RESERVED_MCP_NAMES } from "../../shared/mcp-name";
-import type { RoutineRequestSchedule } from "../../shared/routine-request";
+import type { RoutineRequestCardData, RoutineRequestSchedule } from "../../shared/routine-request";
 import { isSkillSwitchAction, type SkillShareRecord } from "../../shared/skill-request";
 import { cardAutomation } from "@/lib/automations";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
@@ -106,6 +108,40 @@ export function approvalCardOutcome(card: OptionCardData): string | undefined {
   if (card.routineRequest) return t("approval.status.routineConfirmed");
   if (card.skillRequest) return t("approval.status.skillConfirmed");
   return t("approval.status.allowed");
+}
+
+const COMPACT_RECEIPT = "flex w-full min-w-0 flex-wrap items-baseline justify-center gap-x-2 gap-y-1 px-2 text-center text-[12px] leading-5 text-ink-secondary";
+
+function CompactRoutineReceipt({ request, card }: { request: RoutineRequestCardData; card: OptionCardData }) {
+  const { state, dispatch } = useStore();
+  const operation = request.operation;
+  const routineId = operation.action === "create" ? request.resultId : operation.routineId;
+  const routine = state.routines.find((candidate) => candidate.id === routineId);
+  const botId = routine?.botId ?? operation.forBot?.botId ?? request.botId;
+  const bot = state.bots.find((candidate) => candidate.id === botId && !candidate.hidden);
+  const title = request.undo?.name ?? (operation.action === "create" ? operation.routine.name : routine?.name ?? card.title);
+  const label = t(card.undone ? "approval.status.undone" : ROUTINE_SETTLED_LABEL[operation.action]);
+  return (
+    <div data-routine-receipt={operation.action} className={COMPACT_RECEIPT}>
+      <span>{label}</span>
+      {bot ? (
+        <button type="button" className="inline-flex min-w-0 max-w-full items-baseline gap-1 rounded px-1 text-start hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+          onClick={(event) => {
+            if (window.ogb?.remoteClient?.active) {
+              dispatch({ type: "showRoutines", section: "schedule", view: "list", botId, routineId: routine?.id });
+              return;
+            }
+            rememberComputerPanelOpen({ botId, opener: event.currentTarget, tabs: false });
+            requestUpcomingRoutines(botId);
+            if (state.selectedId !== botId) dispatch({ type: "select", id: botId });
+            dispatch({ type: "toggleComputer", open: true });
+          }}>
+          <Clock3 size={12} aria-hidden="true" className="shrink-0 self-center" />
+          <span className="min-w-0 [overflow-wrap:anywhere]">{title}</span>
+        </button>
+      ) : <span className="min-w-0 [overflow-wrap:anywhere]">{title}</span>}
+    </div>
+  );
 }
 
 export function toolLabel(tool?: string): string {
@@ -451,13 +487,23 @@ export function ApprovalCard({
   bot,
   message,
   threadId,
+  compact,
 }: {
   bot?: Pick<Bot, "name">;
   message: Message;
   threadId?: string;
+  compact?: boolean;
 }) {
   const card = message.card;
   if (!card) return null;
+  if (compact && card.answered === "allow" && !card.held && !card.expired && !card.pendingAnswer) {
+    if (card.routineRequest && (card.autoApplied || card.routineRequest.appliedAt !== undefined || card.routineRequest.resultId)) {
+      return <CompactRoutineReceipt request={card.routineRequest} card={card} />;
+    }
+    if (card.profileRequest && (card.autoApplied || card.profileRequest.appliedAt !== undefined)) {
+      return <div data-profile-receipt="" className={COMPACT_RECEIPT}>{t(card.undone ? "approval.status.undone" : "approval.status.profileUpdated")}</div>;
+    }
+  }
   if (cardAutomation(card)) return <TriggerCard card={card} threadId={threadId} />;
   const applied = card.autoApplied === true && card.answered === "allow" && !card.held
     ? appliedChange(card, bot?.name ?? t("approval.someone"))
