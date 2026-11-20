@@ -605,4 +605,99 @@ describe("persistent Mini App frame", () => {
     expect(posted.mock.calls.find(([answer]) => (answer as { id?: string }).id === "guarded")?.[0]).toMatchObject({ error: expect.stringContaining("guarded desktop window") });
     mount.retire();
   });
+
+  it("exposes window.mausApp.markReady only for active managed releases and validates runtime-ready messages", async () => {
+    const release = {
+      packageId: "mashellhan.demo",
+      appVersion: "1.2.0",
+      sourceCommit: "a".repeat(40),
+      tag: "mini-app/demo/v1.2.0",
+      requires: [],
+      htmlSha256: "b".repeat(64),
+      htmlBytes: 12,
+      queriesSha256: "c".repeat(64),
+      queriesBytes: 2,
+    };
+    const managedDoc = { ...document, app: { ...app, release } } as MiniAppDocument;
+
+    // Unmanaged and archived docs do not expose markReady.
+    for (const candidateDoc of [document, { ...managedDoc, app: { ...managedDoc.app, status: "archived" as const } }]) {
+      const child = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+      Object.defineProperty(child, "parent", { value: { postMessage: () => {} } });
+      child.eval(/<script>([\s\S]*?)<\/script>/.exec(miniAppFrameDocument(candidateDoc, false).srcdoc)![1]!);
+      const sdk = (child as unknown as { mausApp: { markReady?: () => Promise<void> } }).mausApp;
+      expect(sdk.markReady).toBeUndefined();
+      await child.happyDOM.abort();
+    }
+
+    // Active managed doc exposes markReady, waits for initialized, and posts exact { mausMiniApp: 1, type: "runtime-ready" } once.
+    const child = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+    const sent: Array<Record<string, unknown>> = [];
+    const parent = { postMessage: (message: Record<string, unknown>) => sent.push(message) };
+    Object.defineProperty(child, "parent", { value: parent });
+    child.eval(/<script>([\s\S]*?)<\/script>/.exec(miniAppFrameDocument(managedDoc, false).srcdoc)![1]!);
+    const sdk = (child as unknown as { mausApp: { markReady?: () => Promise<void> } }).mausApp;
+    expect(typeof sdk.markReady).toBe("function");
+    const firstMark = sdk.markReady!();
+    const secondMark = sdk.markReady!();
+    expect(sent.some((m) => m.type === "runtime-ready")).toBe(false);
+    const init = sent.find((m) => m.method === "ui/initialize")!;
+    child.dispatchEvent(new child.MessageEvent("message", { source: parent as unknown as HappyWindow,
+      data: { jsonrpc: "2.0", id: init.id, result: { hostCapabilities: {} } } }));
+    await Promise.all([firstMark, secondMark]);
+    const readyIdx = sent.findIndex((m) => m.type === "runtime-ready");
+    const initializedIdx = sent.findIndex((m) => m.method === "ui/notifications/initialized");
+    expect(initializedIdx).toBeGreaterThanOrEqual(0);
+    expect(readyIdx).toBeGreaterThan(initializedIdx);
+    expect(sent.filter((m) => m.type === "runtime-ready")).toEqual([{ mausMiniApp: 1, type: "runtime-ready" }]);
+    await child.happyDOM.abort();
+
+    // Receiver binds to current frame WindowProxy, opaque origin "null", exact shape, initialized, and matching appId/revision/templateVersion.
+    const onRuntimeReady = vi.fn();
+    const unmanagedReady = vi.fn();
+    const unmanagedMount = mountMiniAppFrame({ container, document, state, onRevoked: vi.fn(), onRuntimeReady: unmanagedReady });
+    window.dispatchEvent(new MessageEvent("message", {
+      source: unmanagedMount.iframe.contentWindow!,
+      origin: "null",
+      data: { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} },
+    }));
+    window.dispatchEvent(new MessageEvent("message", {
+      source: unmanagedMount.iframe.contentWindow!,
+      origin: "null",
+      data: { mausMiniApp: 1, type: "runtime-ready" },
+    }));
+    expect(unmanagedReady).not.toHaveBeenCalled();
+    unmanagedMount.retire();
+
+    const mount = mountMiniAppFrame({ container, document: managedDoc, state, onRevoked: vi.fn(), onRuntimeReady });
+    const view = mount.iframe.contentWindow!;
+    // Reject before initialized, wrong source, non-opaque origin, and extra keys.
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "null", data: { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} } }));
+    window.dispatchEvent(new MessageEvent("message", { source: window, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "https://example.com", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready", extra: true } }));
+    expect(onRuntimeReady).not.toHaveBeenCalled();
+
+    // Reject if state revision diverged before readiness arrived.
+    mount.update({ ...state, revision: 99 });
+    window.dispatchEvent(new MessageEvent("message", { source: view, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    expect(onRuntimeReady).not.toHaveBeenCalled();
+    mount.retire();
+
+    // Valid runtime-ready fires once with exact appId, revision, templateVersion, even after data-only or synchronized revision bumps.
+    const validMount = mountMiniAppFrame({ container, document: managedDoc, state, onRevoked: vi.fn(), onRuntimeReady });
+    const validView = validMount.iframe.contentWindow!;
+    validMount.update({ ...state, data: [{ datasetId: "dataset_demo", revision: 8 }] });
+    validMount.update(
+      { ...state, revision: 4, data: [{ datasetId: "dataset_demo", revision: 8 }] },
+      { ...managedDoc, app: { ...managedDoc.app, revision: 4 } },
+    );
+    window.dispatchEvent(new MessageEvent("message", { source: validView, origin: "null", data: { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} } }));
+    window.dispatchEvent(new MessageEvent("message", { source: validView, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    window.dispatchEvent(new MessageEvent("message", { source: validView, origin: "null", data: { mausMiniApp: 1, type: "runtime-ready" } }));
+    expect(onRuntimeReady).toHaveBeenCalledTimes(1);
+    expect(onRuntimeReady).toHaveBeenCalledWith({ appId: app.id, revision: 4, templateVersion: state.templateVersion });
+    validMount.retire();
+  });
 });

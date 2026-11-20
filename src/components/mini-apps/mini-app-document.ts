@@ -20,7 +20,7 @@ export const MINI_APP_CSP = [
   "form-action 'none'",
 ].join("; ");
 
-function buildMiniAppSdkSource(githubActivity: boolean): string {
+function buildMiniAppSdkSource(githubActivity: boolean, managedRelease: boolean): string {
   return `(function () {
   "use strict";
   var parent = window.parent;
@@ -32,6 +32,7 @@ function buildMiniAppSdkSource(githubActivity: boolean): string {
   var currentHostSelection = null;
   var sequence = 0;
   var closed = false;
+  var markedReady = false;
   var canOpenSources = false;
   function post(message) { parent.postMessage(message, "*"); }
   function request(message) {
@@ -166,13 +167,23 @@ function buildMiniAppSdkSource(githubActivity: boolean): string {
       });
     };
   }
+  if (${managedRelease ? "true" : "false"}) {
+    base.markReady = function () {
+      if (markedReady) return ready;
+      markedReady = true;
+      return ready.then(function () {
+        if (!closed) post({ mausMiniApp: 1, type: "runtime-ready" });
+      });
+    };
+  }
   var api = Object.freeze(base);
   Object.defineProperty(window, "mausApp", { value: api, enumerable: true });
 })();`;
 }
 
 export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean): AppDocument {
-  const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document));
+  const managedRelease = document.app.status === "active" && Boolean((document.app as { release?: unknown }).release);
+  const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document), managedRelease);
   const html = `<style>${APP_THEME_STYLE}</style><script>${sdk}</script>${stripDocumentPreamble(document.html)}`;
   return {
     v: 1,

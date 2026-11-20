@@ -96,7 +96,7 @@ function parseFrameMediaRead(value: unknown): FrameMediaRead | null {
 
 export interface MiniAppFrameMount {
   readonly iframe: HTMLIFrameElement;
-  update(state: MiniAppState): void;
+  update(state: MiniAppState, document?: MiniAppDocument): void;
   setGithubSelection(selection: GithubActivitySelection | null): void;
   contextChanged(width: number): void;
   retire(): void;
@@ -108,14 +108,17 @@ export function mountMiniAppFrame(options: {
   state: MiniAppState;
   onRevoked(): void;
   onChanged?(): void;
+  onRuntimeReady?(info: { appId: string; revision: number; templateVersion: number }): void;
   githubSelection?: GithubActivitySelection | null;
   onGithubSelectionChange?(selection: GithubActivitySelection): void;
 }): MiniAppFrameMount {
   if (!miniAppNativeFrameGuard()) throw new Error("This Mini App requires the guarded desktop window.");
-  const { container, document } = options;
+  const { container } = options;
+  let document = options.document;
   let state = options.state;
   let currentGithubSelection = options.githubSelection ?? null;
   let frameInitialized = false;
+  let runtimeReadyNotified = false;
   let active = true;
   let host: AppFrameHost | null = null;
   const frameDocument = miniAppFrameDocument(document, typeof window.ogb?.openExternal === "function");
@@ -173,10 +176,27 @@ export function mountMiniAppFrame(options: {
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "media-result", id, ...(error ? { error } : payload) }, "*");
   };
   const handle = (event: MessageEvent) => {
-    if (!active || !host || event.source !== host.iframe.contentWindow) return;
+    if (!active || !host || !host.iframe.contentWindow || event.source !== host.iframe.contentWindow) return;
     if (record(event.data) && event.data.jsonrpc === "2.0" && event.data.method === "ui/notifications/initialized") {
       frameInitialized = true;
       postHostSelection(currentGithubSelection);
+      return;
+    }
+    if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "runtime-ready") {
+      if (event.origin !== "null" || Object.keys(event.data).length !== 2) return;
+      if (runtimeReadyNotified || !miniAppNativeFrameGuard() || !frameInitialized
+        || state.status !== "active" || document.app.status !== "active"
+        || state.appId !== document.app.id || state.revision !== document.app.revision
+        || state.templateVersion !== document.app.templateVersion
+        || !(document.app as { release?: unknown }).release) {
+        return;
+      }
+      runtimeReadyNotified = true;
+      options.onRuntimeReady?.({
+        appId: document.app.id,
+        revision: document.app.revision,
+        templateVersion: document.app.templateVersion,
+      });
       return;
     }
     if (record(event.data) && event.data.mausMiniApp === 1 && event.data.type === "selection") {
@@ -334,11 +354,19 @@ export function mountMiniAppFrame(options: {
   });
   return {
     iframe: host.iframe,
-    update(next) {
-      if (!active || (next.appId === state.appId && next.revision === state.revision && next.templateVersion === state.templateVersion
-        && next.status === state.status && next.data.length === state.data.length
-        && next.data.every((entry, index) => entry.datasetId === state.data[index]?.datasetId && entry.revision === state.data[index]?.revision))) return;
+    update(next, nextDocument) {
+      const nextDoc = nextDocument && nextDocument.app.id === document.app.id ? nextDocument : undefined;
+      const docChanged = !!nextDoc && (
+        nextDoc.app.revision !== document.app.revision
+        || nextDoc.app.templateVersion !== document.app.templateVersion
+        || nextDoc.app.status !== document.app.status
+      );
+      const stateChanged = next.appId !== state.appId || next.templateVersion !== state.templateVersion || next.revision !== state.revision || next.status !== state.status || next.data.length !== state.data.length
+        || next.data.some((entry, index) => entry.datasetId !== state.data[index]?.datasetId || entry.revision !== state.data[index]?.revision);
+      if (!active || (!docChanged && !stateChanged)) return;
       state = next;
+      if (nextDoc) document = nextDoc;
+      if (!stateChanged) return;
       for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "Data changed while this report was being read. Refresh and try again."); }
       cancelDashboardReads("This dashboard changed. Refresh and try again.");
       for (const [controller, id] of mediaControllers) { controller.abort(); replyMedia(id, undefined, "Data changed while this media was being read. Refresh and try again."); }
@@ -365,11 +393,12 @@ export function mountMiniAppFrame(options: {
   };
 }
 
-export function MiniAppFrame({ document, state, onRevoked, onChanged, githubSelection, onGithubSelectionChange }: {
+export function MiniAppFrame({ document, state, onRevoked, onChanged, onRuntimeReady, githubSelection, onGithubSelectionChange }: {
   document: MiniAppDocument;
   state: MiniAppState;
   onRevoked(): void;
   onChanged?(): void;
+  onRuntimeReady?(info: { appId: string; revision: number; templateVersion: number }): void;
   githubSelection?: GithubActivitySelection | null;
   onGithubSelectionChange?(selection: GithubActivitySelection): void;
 }) {
@@ -377,10 +406,12 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, githubSele
   const mount = useRef<MiniAppFrameMount | null>(null);
   const revoked = useRef(onRevoked);
   const dashboardChanged = useRef(onChanged);
+  const runtimeReadyRef = useRef(onRuntimeReady);
   const selectionRef = useRef(githubSelection ?? null);
   const selectionChangeRef = useRef(onGithubSelectionChange);
   revoked.current = onRevoked;
   dashboardChanged.current = onChanged;
+  runtimeReadyRef.current = onRuntimeReady;
   selectionRef.current = githubSelection ?? null;
   selectionChangeRef.current = onGithubSelectionChange;
   const bindings = JSON.stringify(document.bindings);
@@ -394,6 +425,7 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, githubSele
       state,
       onRevoked: () => revoked.current(),
       onChanged: () => dashboardChanged.current?.(),
+      onRuntimeReady: (info) => runtimeReadyRef.current?.(info),
       githubSelection: selectionRef.current,
       onGithubSelectionChange: (selection) => selectionChangeRef.current?.(selection),
     });
@@ -407,7 +439,7 @@ export function MiniAppFrame({ document, state, onRevoked, onChanged, githubSele
     return () => { skin?.disconnect(); sized?.disconnect(); window.removeEventListener("resize", changed); current.retire(); if (mount.current === current) mount.current = null; };
   }, [document.app.id, document.app.templateVersion, document.html, bindings, nativeGuard]);
 
-  useEffect(() => { mount.current?.update(state); }, [state]);
+  useEffect(() => { mount.current?.update(state, document); }, [state, document]);
   useEffect(() => { mount.current?.setGithubSelection(githubSelection ?? null); }, [githubSelection?.editionKey, githubSelection?.repo]);
   return nativeGuard ? <div ref={box} className="min-h-0 min-w-0 flex-1" data-testid="mini-app-frame" /> : null;
 }

@@ -6,7 +6,7 @@ import { randomUuid } from "@/lib/random-uuid";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { api, ApiError } from "@/state/store";
 import type { DefaultMiniAppKind, MiniAppArchive, MiniAppDefaultsResult, MiniAppDocument,
-  MiniAppMutationResult, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
+  MiniAppMutationResult, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
 import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?raw";
 import agentTeamHtml from "../../../examples/mini-apps/agent-team/index.html?raw";
 import { revealSelectedTab, scrollTabsWithWheel } from "../computer-panel-tabs";
@@ -18,9 +18,25 @@ import { ensureMiniAppDefaults } from "./MiniAppDefaultsBootstrap";
 import { MiniAppFrame } from "./MiniAppFrame";
 import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
 import { MiniAppLibraryPopover } from "./MiniAppLibraryPopover";
+import { MiniAppUpdateToast } from "./MiniAppUpdateToast";
 import { MojoWholePage } from "./MojoWholePage";
 import { HongguoView, forgetHongguoHome } from "./HongguoView";
 import { miniAppDisplayDescription, miniAppDisplayName } from "./mini-app-display";
+import {
+  MINI_APP_RUNTIME_READY_TIMEOUT_MS,
+  clearPendingUpdateRecovery,
+  hasAnnouncedUpdateVersion,
+  parseMiniAppUpdateInfo,
+  readAppReleaseMeta,
+  readPendingUpdateRecovery,
+  rememberAnnouncedUpdateVersion,
+  shortCommit,
+  writePendingUpdateRecovery,
+  type MiniAppUpdateCandidate,
+  type MiniAppUpdateInfo,
+  type MiniAppUpdateRequest,
+  type PendingMiniAppUpdateRecovery,
+} from "./mini-app-update";
 import { hongguoText } from "./hongguo-copy";
 import { miniAppNativeFrameGuard } from "./native-frame-guard";
 import { mojoHostEligible } from "./mojo-host";
@@ -28,6 +44,7 @@ import { dailyXHostEligible } from "./daily-x-host";
 import { githubActivityHostEligible } from "./github-activity-host";
 
 const REFRESH_MS = 15_000;
+const ROLLBACK_RETRY_MS = 5_000;
 const DEFAULT_BAR_COLLAPSED_KEY = "omb-mini-apps-bar-collapsed";
 type Inventory = { apps: MiniAppSummary[] };
 
@@ -79,6 +96,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const [inventory, setInventory] = useState<MiniAppSummary[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [storageKey, setStorageKey] = useState<string | null>(null);
+  const [environmentResolved, setEnvironmentResolved] = useState(false);
   const [barCollapsed, setBarCollapsed] = useState(() => savedBarCollapsed(null));
   const [document, setDocument] = useState<MiniAppDocument | null>(null);
   const [appState, setAppState] = useState<MiniAppState | null>(null);
@@ -93,19 +111,40 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const [stale, setStale] = useState(false);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [updateByApp, setUpdateByApp] = useState<Record<string, MiniAppUpdateInfo>>({});
+  const [toast, setToast] = useState<{ appId: string; appVersion: string; sourceCommit: string } | null>(null);
+  const [updatingAppId, setUpdatingAppId] = useState<string | null>(null);
+  const [updateSource, setUpdateSource] = useState<"toast" | "library" | null>(null);
+  const [updateError, setUpdateError] = useState("");
+  const [updateCheckError, setUpdateCheckError] = useState("");
+  const [rollbackNotice, setRollbackNotice] = useState<{ appId: string; message: string } | null>(null);
+  const [frameEpochByApp, setFrameEpochByApp] = useState<Record<string, number>>({});
   const documentRef = useRef(document);
   const stateRef = useRef(appState);
   const selectedRef = useRef(selectedId);
+  const storageKeyRef = useRef(storageKey);
+  const ownerRef = useRef(owner);
   const panelRef = useRef<HTMLDivElement>(null);
   const tabListRef = useRef<HTMLDivElement>(null);
   const focusAfter = useRef<string | null>(null);
   const defaultsStarted = useRef(false);
   const restored = useRef(false);
   const openedRequest = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+  const manualRefreshRef = useRef(false);
+  const updateCheckSeqRef = useRef(0);
+  const requestKeyRef = useRef<{ signature: string; key: string } | null>(null);
+  const pendingRecoveriesRef = useRef<Record<string, PendingMiniAppUpdateRecovery>>({});
+  const recoveryTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const rollingBackAppsRef = useRef(new Set<string>());
+  const runtimeReadySeenRef = useRef<Record<string, { revision: number; templateVersion: number }>>({});
   documentRef.current = document;
   stateRef.current = appState;
   selectedRef.current = selectedId;
+  storageKeyRef.current = storageKey;
+  ownerRef.current = owner;
   const selected = apps?.find((app) => app.id === selectedId) ?? null;
+  const selectedUpdate = selected ? (updateByApp[selected.id] ?? null) : null;
   const dashboard = document?.app.dashboard;
   const currentHead = !!document && !!appState && !!selected && document.app.status === "active" && appState.status === "active"
     && appState.appId === document.app.id && appState.revision === document.app.revision
@@ -165,6 +204,121 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     return () => observer.disconnect();
   }, [selectedId, apps?.length, barCollapsed]);
 
+  const clearRecoveryTimer = (appId: string) => {
+    const timer = recoveryTimersRef.current[appId];
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      delete recoveryTimersRef.current[appId];
+    }
+  };
+
+  const finishPendingRecovery = (appId: string) => {
+    clearRecoveryTimer(appId);
+    delete pendingRecoveriesRef.current[appId];
+    clearPendingUpdateRecovery(storageKeyRef.current, appId);
+    if (storageKeyRef.current !== null) {
+      clearPendingUpdateRecovery(null, appId);
+    }
+  };
+
+  const scheduleRecoveryTimer = (recovery: PendingMiniAppUpdateRecovery, delayMs: number) => {
+    clearRecoveryTimer(recovery.appId);
+    recoveryTimersRef.current[recovery.appId] = setTimeout(() => {
+      delete recoveryTimersRef.current[recovery.appId];
+      void rollbackRecovery(recovery);
+    }, Math.max(0, delayMs));
+  };
+
+  const rollbackRecovery = async (recovery: PendingMiniAppUpdateRecovery) => {
+    if (!mountedRef.current || ownerRef.current !== true || !nativeGuard) return;
+    if (rollingBackAppsRef.current.has(recovery.appId)) return;
+    rollingBackAppsRef.current.add(recovery.appId);
+    clearRecoveryTimer(recovery.appId);
+    try {
+      const body: MiniAppRollback = {
+        requestKey: recovery.rollbackRequestKey,
+        expectedRevision: recovery.candidateRevision,
+        templateVersion: recovery.previousTemplateVersion,
+      };
+      const result = await api<MiniAppMutationResult>(`/api/mini-apps/${encodeURIComponent(recovery.appId)}/rollback`, {
+        method: "POST",
+        body: JSON.stringify(body),
+        timeoutMs: 20_000,
+      });
+      if (!mountedRef.current) return;
+      if (result.app.id !== recovery.appId) throw new Error(t("computer.miniApps.changedDuringRead"));
+      finishPendingRecovery(recovery.appId);
+      updateCheckSeqRef.current += 1;
+      setInventory((current) => current?.map((entry) => entry.id === recovery.appId ? result.app : entry) ?? null);
+      setApps((current) => {
+        if (!current) return null;
+        const mapped = current.map((entry) => entry.id === recovery.appId ? result.app : entry);
+        return mapped.filter((entry) => entry.status === "active");
+      });
+      setRollbackNotice({ appId: recovery.appId, message: t("computer.miniApps.update.rolledBack") });
+      if (selectedRef.current === recovery.appId) {
+        try {
+          const nextState = await api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(recovery.appId)}/state`, { timeoutMs: 10_000 });
+          if (!mountedRef.current) return;
+          const nextDocument = await api<MiniAppDocument>(`/api/mini-apps/${encodeURIComponent(recovery.appId)}`, { timeoutMs: 10_000 });
+          if (!mountedRef.current) return;
+          if (selectedRef.current === recovery.appId
+            && nextDocument.app.id === recovery.appId
+            && nextDocument.app.revision === nextState.revision
+            && nextDocument.app.templateVersion === nextState.templateVersion) {
+            setInventory((current) => current?.map((entry) => entry.id === recovery.appId ? nextDocument.app : entry) ?? null);
+            setApps((current) => {
+              if (!current) return null;
+              const mapped = current.map((entry) => entry.id === recovery.appId ? nextDocument.app : entry);
+              return mapped.filter((entry) => entry.status === "active");
+            });
+            setFrameEpochByApp((prev) => ({ ...prev, [recovery.appId]: (prev[recovery.appId] ?? 0) + 1 }));
+            documentRef.current = nextDocument;
+            setDocument(nextDocument);
+            stateRef.current = nextState;
+            setAppState(nextState);
+            setStale(false);
+            setError("");
+          }
+        } catch {
+          // Next refresh cycle will synchronize the rolled-back state and document.
+        }
+      }
+      if (mountedRef.current) setRefreshKey((current) => current + 1);
+    } catch (cause) {
+      if (!mountedRef.current) return;
+      if (cause instanceof ApiError && (cause.status === 409 || cause.status === 400 || cause.status === 403 || cause.status === 404)) {
+        finishPendingRecovery(recovery.appId);
+        setRefreshKey((current) => current + 1);
+      } else if (pendingRecoveriesRef.current[recovery.appId]?.rollbackRequestKey === recovery.rollbackRequestKey) {
+        scheduleRecoveryTimer(recovery, ROLLBACK_RETRY_MS);
+      }
+    } finally {
+      rollingBackAppsRef.current.delete(recovery.appId);
+    }
+  };
+
+  const handleRuntimeReady = (info: { appId: string; revision: number; templateVersion: number }) => {
+    runtimeReadySeenRef.current[info.appId] = {
+      revision: info.revision,
+      templateVersion: info.templateVersion,
+    };
+    const pending = pendingRecoveriesRef.current[info.appId];
+    if (!pending) return;
+    if (info.revision === pending.candidateRevision && info.templateVersion === pending.candidateTemplateVersion) {
+      finishPendingRecovery(info.appId);
+    }
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      Object.values(recoveryTimersRef.current).forEach((timer) => clearTimeout(timer));
+      recoveryTimersRef.current = {};
+    };
+  }, []);
+
   useEffect(() => {
     let active = true;
     void api<{ environmentId?: string }>("/.well-known/openmausbot/environment", { timeoutMs: 5_000 }).then((environment) => {
@@ -173,9 +327,42 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         setStorageKey(nextKey);
         setBarCollapsed(savedBarCollapsed(nextKey));
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => {
+      if (active) setEnvironmentResolved(true);
+    });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!environmentResolved || owner !== true || !nativeGuard || !inventory) return;
+    for (const activeRecovery of Object.values(pendingRecoveriesRef.current)) {
+      writePendingUpdateRecovery(storageKey, activeRecovery);
+    }
+    for (const entry of inventory) {
+      const recovery = pendingRecoveriesRef.current[entry.id] ?? readPendingUpdateRecovery(storageKey, entry.id);
+      if (!recovery) continue;
+      if (entry.status !== "active"
+        || entry.revision !== recovery.candidateRevision
+        || entry.templateVersion !== recovery.candidateTemplateVersion) {
+        finishPendingRecovery(entry.id);
+        continue;
+      }
+      const seen = runtimeReadySeenRef.current[entry.id];
+      if (seen && seen.revision === recovery.candidateRevision && seen.templateVersion === recovery.candidateTemplateVersion) {
+        finishPendingRecovery(entry.id);
+        continue;
+      }
+      if (!pendingRecoveriesRef.current[entry.id]) {
+        pendingRecoveriesRef.current[entry.id] = recovery;
+        const remaining = recovery.deadlineAt - Date.now();
+        if (remaining <= 0) {
+          void rollbackRecovery(recovery);
+        } else {
+          scheduleRecoveryTimer(recovery, remaining);
+        }
+      }
+    }
+  }, [environmentResolved, storageKey, owner, nativeGuard, inventory]);
 
   useEffect(() => {
     if (!storageKey || !apps || restored.current) return;
@@ -226,6 +413,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     const sync = async () => {
+      const isManualCheck = manualRefreshRef.current;
       let readingInventory = true;
       setChecking(true);
       if (!apps) setLoading(true);
@@ -234,6 +422,16 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         if (!active || !Array.isArray(inventory.apps)) return;
         readingInventory = false;
         setInventory(inventory.apps);
+        for (const [id, recovery] of Object.entries(pendingRecoveriesRef.current)) {
+          const entry = inventory.apps.find((item) => item.id === id);
+          if (!entry || entry.status !== "active"
+            || entry.revision !== recovery.candidateRevision
+            || entry.templateVersion !== recovery.candidateTemplateVersion) {
+            finishPendingRecovery(id);
+          } else if (Date.now() >= recovery.deadlineAt && !rollingBackAppsRef.current.has(id)) {
+            void rollbackRecovery(recovery);
+          }
+        }
         const activeApps = inventory.apps.filter((app) => app.status === "active");
         setApps(activeApps);
         const target = selectedRef.current && activeApps.some((app) => app.id === selectedRef.current) ? selectedRef.current
@@ -244,9 +442,17 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
           setDocument(null);
           setAppState(null);
           setError("");
+          setUpdateCheckError("");
           return;
         }
-        if (!target) { setDocument(null); setAppState(null); setStale(false); setError(""); return; }
+        if (!target) {
+          setDocument(null);
+          setAppState(null);
+          setStale(false);
+          setError("");
+          setUpdateCheckError("");
+          return;
+        }
         const currentDocument = documentRef.current;
         const listed = activeApps.find((app) => app.id === target)!;
         const lostHongguoGrant = currentDocument?.app.nativeIdentity === "hongguo"
@@ -275,6 +481,34 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         }
         setStale(false);
         setError("");
+        if (owner === true && nativeGuard && listed.status === "active") {
+          const checkSeq = ++updateCheckSeqRef.current;
+          try {
+            const rawUpdate = await api<unknown>(`/api/mini-apps/${encodeURIComponent(target)}/update`, {
+              background: true, signal: controller.signal, timeoutMs: 10_000,
+            });
+            if (!active || controller.signal.aborted || target !== selectedRef.current || checkSeq !== updateCheckSeqRef.current) return;
+            const parsed = parseMiniAppUpdateInfo(rawUpdate);
+            if (!parsed) throw new Error(t("computer.miniApps.update.checkFailed"));
+            setUpdateByApp((prev) => ({ ...prev, [target]: parsed }));
+            if (parsed.status !== "available") {
+              setToast((prev) => prev?.appId === target ? null : prev);
+              setUpdateError("");
+            }
+            if (parsed.status === "unavailable") {
+              setUpdateCheckError(isManualCheck ? t("computer.miniApps.update.unavailable") : "");
+            } else {
+              setUpdateCheckError("");
+            }
+          } catch (updateCause) {
+            if (!active || controller.signal.aborted || target !== selectedRef.current) return;
+            if (isManualCheck) {
+              setUpdateCheckError(updateCause instanceof Error && updateCause.message
+                ? updateCause.message
+                : t("computer.miniApps.update.checkFailed"));
+            }
+          }
+        }
       } catch (cause) {
         if (!active || controller.signal.aborted) return;
         if (cause instanceof ApiError && (cause.status === 401 || cause.status === 403)) {
@@ -283,12 +517,14 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
           stateRef.current = null;
           setDocument(null);
           setAppState(null);
+          setToast(null);
           setError(t("computer.miniApps.accessEnded"));
         } else {
           setStale(Boolean(documentRef.current));
           setError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
         }
       } finally {
+        if (!controller.signal.aborted) manualRefreshRef.current = false;
         if (active) {
           setChecking(false);
           setLoading(false);
@@ -300,6 +536,27 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     return () => { active = false; controller.abort(); clearTimeout(timer); };
   }, [selectedId, refreshKey, visible, owner, nativeGuard, defaultsReady, storageKey]);
 
+  useEffect(() => {
+    if (!environmentResolved || owner !== true || !nativeGuard || !selected || selected.status !== "active"
+      || document?.app.id !== selected.id) {
+      setToast(null);
+      return;
+    }
+    const info = updateByApp[selected.id];
+    if (!info || info.status !== "available" || !info.available) {
+      setToast((prev) => prev?.appId === selected.id ? null : prev);
+      return;
+    }
+    const candidate = info.available;
+    if (!hasAnnouncedUpdateVersion(storageKey, selected.id, candidate.appVersion)) {
+      rememberAnnouncedUpdateVersion(storageKey, selected.id, candidate.appVersion);
+      setUpdateError("");
+      setToast({ appId: selected.id, appVersion: candidate.appVersion, sourceCommit: candidate.sourceCommit });
+      return;
+    }
+    setToast((prev) => prev && (prev.appId !== selected.id || prev.appVersion !== candidate.appVersion) ? null : prev);
+  }, [environmentResolved, storageKey, owner, nativeGuard, selected?.id, selected?.status, document?.app.id, updateByApp]);
+
   const choose = (id: string) => {
     rememberApp(storageKey, id);
     if (id === selectedRef.current) return;
@@ -308,6 +565,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     setAppState(null);
     setError("");
     setStale(false);
+    setUpdateError("");
+    setUpdateCheckError("");
+    setToast(null);
   };
 
   const addDefault = async (kind: DefaultMiniAppKind) => {
@@ -338,7 +598,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
 
   const removeDefault = async (app: MiniAppSummary) => {
     const kind = iconKindForApp(app);
-    if (!kind || owner !== true || !nativeGuard || busyKind || app.status !== "active") return;
+    if (!kind || owner !== true || !nativeGuard || busyKind || updatingAppId !== null || app.status !== "active") return;
     setBusyKind(kind);
     setError("");
     try {
@@ -348,6 +608,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       });
       if (result.app.id !== app.id || result.app.status !== "archived") throw new Error(t("computer.miniApps.changedDuringRead"));
       if (kind === "hongguo") forgetHongguoHome(storageKey, app.id);
+      finishPendingRecovery(app.id);
+      setRollbackNotice((prev) => prev?.appId === app.id ? null : prev);
+      setToast((prev) => prev?.appId === app.id ? null : prev);
       setInventory((current) => current?.map((entry) => entry.id === app.id ? result.app : entry) ?? null);
       setApps((current) => current?.filter((entry) => entry.id !== app.id) ?? null);
       if (selectedRef.current === app.id) {
@@ -359,6 +622,132 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
     } finally { setBusyKind(null); }
+  };
+
+  const performUpdate = async (targetApp: MiniAppSummary, candidate: MiniAppUpdateCandidate, source: "toast" | "library") => {
+    if (owner !== true || !nativeGuard || updatingAppId !== null || busyKind !== null || targetApp.status !== "active") return;
+    if (pendingRecoveriesRef.current[targetApp.id]) return;
+    const previousTemplateVersion = targetApp.templateVersion;
+    const capturedStorageKey = storageKeyRef.current;
+    setUpdatingAppId(targetApp.id);
+    setUpdateSource(source);
+    setUpdateError("");
+    setUpdateCheckError("");
+    setRollbackNotice((prev) => prev?.appId === targetApp.id ? null : prev);
+    const signature = `${targetApp.id}:${candidate.appVersion}:${candidate.sourceCommit}:${targetApp.revision}`;
+    if (!requestKeyRef.current || requestKeyRef.current.signature !== signature) {
+      requestKeyRef.current = { signature, key: randomUuid() };
+    }
+    const body: MiniAppUpdateRequest = {
+      appVersion: candidate.appVersion,
+      sourceCommit: candidate.sourceCommit,
+      expectedRevision: targetApp.revision,
+      requestKey: requestKeyRef.current.key,
+    };
+    try {
+      const result = await api<MiniAppMutationResult>(`/api/mini-apps/${encodeURIComponent(targetApp.id)}/update`, {
+        method: "POST",
+        body: JSON.stringify(body),
+        timeoutMs: 30_000,
+      });
+      if (!result?.app || result.app.id !== targetApp.id
+        || !Number.isSafeInteger(result.app.revision)
+        || !Number.isSafeInteger(result.app.templateVersion)) {
+        throw new Error(t("computer.miniApps.changedDuringRead"));
+      }
+      const recovery: PendingMiniAppUpdateRecovery | null = result.app.status === "active"
+        && result.app.templateVersion !== previousTemplateVersion
+        && Boolean((result.app as { release?: unknown }).release)
+        ? {
+            appId: targetApp.id,
+            previousTemplateVersion,
+            candidateRevision: result.app.revision,
+            candidateTemplateVersion: result.app.templateVersion,
+            rollbackRequestKey: randomUuid(),
+            deadlineAt: Date.now() + MINI_APP_RUNTIME_READY_TIMEOUT_MS,
+          }
+        : null;
+      if (recovery) {
+        writePendingUpdateRecovery(capturedStorageKey ?? storageKeyRef.current, recovery);
+      }
+      if (!mountedRef.current) return;
+      requestKeyRef.current = null;
+      updateCheckSeqRef.current += 1;
+      if (recovery) {
+        pendingRecoveriesRef.current[recovery.appId] = recovery;
+        if (storageKeyRef.current !== null && capturedStorageKey === null) {
+          writePendingUpdateRecovery(storageKeyRef.current, recovery);
+        }
+        scheduleRecoveryTimer(recovery, recovery.deadlineAt - Date.now());
+      }
+      setUpdateByApp((prev) => ({
+        ...prev,
+        [targetApp.id]: { installedVersion: candidate.appVersion, status: "current", available: null },
+      }));
+      setToast((prev) => prev?.appId === targetApp.id ? null : prev);
+      setUpdateError("");
+      setInventory((current) => current?.map((entry) => entry.id === targetApp.id ? result.app : entry) ?? null);
+      setApps((current) => {
+        if (!current) return null;
+        const mapped = current.map((entry) => entry.id === targetApp.id ? result.app : entry);
+        return mapped.filter((entry) => entry.status === "active");
+      });
+      if (source === "library") {
+        setLibraryOpen(false);
+        focusAfter.current = "selected";
+      }
+      if (selectedRef.current === targetApp.id) {
+        try {
+          const nextState = await api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(targetApp.id)}/state`, { timeoutMs: 10_000 });
+          if (!mountedRef.current || selectedRef.current !== targetApp.id) return;
+          const nextDocument = await api<MiniAppDocument>(`/api/mini-apps/${encodeURIComponent(targetApp.id)}`, { timeoutMs: 10_000 });
+          if (!mountedRef.current || selectedRef.current !== targetApp.id) return;
+          if (nextDocument.app.id !== targetApp.id || nextDocument.app.revision !== nextState.revision
+            || nextDocument.app.templateVersion !== nextState.templateVersion) {
+            throw new Error(t("computer.miniApps.changedDuringRead"));
+          }
+          if (recovery && (nextDocument.app.revision !== recovery.candidateRevision
+            || nextDocument.app.templateVersion !== recovery.candidateTemplateVersion)) {
+            finishPendingRecovery(targetApp.id);
+          }
+          setInventory((current) => current?.map((entry) => entry.id === targetApp.id ? nextDocument.app : entry) ?? null);
+          setApps((current) => {
+            if (!current) return null;
+            const mapped = current.map((entry) => entry.id === targetApp.id ? nextDocument.app : entry);
+            return mapped.filter((entry) => entry.status === "active");
+          });
+          setFrameEpochByApp((prev) => ({ ...prev, [targetApp.id]: (prev[targetApp.id] ?? 0) + 1 }));
+          documentRef.current = nextDocument;
+          setDocument(nextDocument);
+          stateRef.current = nextState;
+          setAppState(nextState);
+          setStale(false);
+          setError("");
+        } catch (reloadCause) {
+          if (!mountedRef.current || selectedRef.current !== targetApp.id) return;
+          setStale(Boolean(documentRef.current));
+          setError(reloadCause instanceof Error ? reloadCause.message : t("computer.miniApps.loadFailed"));
+          setRefreshKey((current) => current + 1);
+        }
+      }
+    } catch (cause) {
+      if (!mountedRef.current) return;
+      setUpdateError(cause instanceof Error && cause.message ? cause.message : t("computer.miniApps.update.failed"));
+      if (cause instanceof ApiError && cause.status === 409) {
+        setRefreshKey((current) => current + 1);
+      }
+    } finally {
+      if (mountedRef.current) setUpdatingAppId(null);
+    }
+  };
+
+  const dismissToast = () => {
+    setToast(null);
+    setUpdateError("");
+    const tab = [...panelRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []]
+      .find((entry) => entry.dataset.appId === selectedRef.current);
+    const fallback = panelRef.current?.querySelector<HTMLButtonElement>("[data-mini-app-collapsed-current], [data-mini-app-all]");
+    (tab ?? fallback)?.focus();
   };
 
   const installed = (id: string) => {
@@ -409,8 +798,11 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const libraryPopover = (
     <MiniAppLibraryPopover open={libraryOpen} inventory={inventory ?? []} issues={defaultIssues} busyKind={busyKind}
       focusKind={libraryFocus} owner={owner} nativeGuard={nativeGuard}
+      selectedId={selectedId} selectedUpdate={selectedUpdate} updatingAppId={updatingAppId} updateError={updateError}
+      restoreFocusOnError={updateSource === "library"}
       onToggle={() => { setLibraryFocus(null); setLibraryOpen((current) => !current); }} onClose={() => setLibraryOpen(false)}
-      onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)} />
+      onOpen={installed} onAdd={(kind) => void addDefault(kind)} onRemove={(app) => void removeDefault(app)}
+      onUpdate={(app, candidate) => void performUpdate(app, candidate, "library")} />
   );
 
   return (
@@ -431,7 +823,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               && <button type="button" data-mini-app-add className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
                 onClick={() => { setLibraryFocus(iconKindForApp(inventory.find((app) => app.status === "archived" && iconKindForApp(app))!)); setLibraryOpen(true); }}>{t("computer.miniApps.add")}</button>}
             {apps && barCollapsed && libraryPopover}
-            <button type="button" disabled={checking || busyKind !== null} aria-label={t("computer.miniApps.refresh")} title={t("computer.miniApps.refresh")} onClick={() => setRefreshKey((current) => current + 1)} className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"><RotateCw size={15} aria-hidden="true" /></button>
+            <button type="button" disabled={checking || busyKind !== null || updatingAppId !== null} aria-label={t("computer.miniApps.refresh")} title={t("computer.miniApps.refresh")} onClick={() => { manualRefreshRef.current = true; setRollbackNotice(null); setRefreshKey((current) => current + 1); }} className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"><RotateCw size={15} aria-hidden="true" /></button>
             {apps && <button type="button" data-mini-app-bar-toggle aria-expanded={!barCollapsed} aria-controls="mini-apps-bar"
               aria-label={t(barCollapsed ? "computer.miniApps.expandApps" : "computer.miniApps.collapseApps")}
               title={t(barCollapsed ? "computer.miniApps.expandApps" : "computer.miniApps.collapseApps")}
@@ -449,10 +841,17 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               className={`flex w-full flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-[11px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${app.id === selectedId ? "bg-control text-ink" : "text-ink-secondary hover:bg-inset hover:text-ink"}`}>
                 <MiniAppIcon kind={iconKindForApp(app)} app={app} launcher /><span className="line-clamp-2 min-h-8 w-full text-center leading-4">{miniAppDisplayName(app)}</span>
               </button>
-              {app.id === selectedId && <InfoHint className="absolute end-0 top-1" label={`${miniAppDisplayName(app)}: ${t("app.info")}`}>
-                <p>{miniAppDisplayDescription(app)}</p>
-                <p className="tabular-nums text-ink-secondary">{t("computer.miniApps.published", { time: stamp(app.updatedAt) })}</p>
-              </InfoHint>}
+              {app.id === selectedId && (() => {
+                const release = readAppReleaseMeta(app, selectedUpdate);
+                return <InfoHint className="absolute end-0 top-1" label={`${miniAppDisplayName(app)}: ${t("app.info")}`}>
+                  <p>{miniAppDisplayDescription(app)}</p>
+                  {release.version && <p data-mini-app-release-version className="tabular-nums text-ink-secondary">{t("computer.miniApps.update.installedVersion", { version: release.version })}</p>}
+                  {release.sourceCommit && <p data-mini-app-source-commit title={release.sourceCommit} className="tabular-nums text-ink-secondary">{t("computer.miniApps.update.sourceCommit", { commit: shortCommit(release.sourceCommit) })}</p>}
+                  {selectedUpdate?.status === "incompatible" && <p className="text-ink-secondary">{t("computer.miniApps.update.incompatible")}</p>}
+                  {selectedUpdate?.status === "custom" && <p className="text-ink-secondary">{t("computer.miniApps.update.custom")}</p>}
+                  <p className="tabular-nums text-ink-secondary">{t("computer.miniApps.published", { time: stamp(app.updatedAt) })}</p>
+                </InfoHint>;
+              })()}
             </div>)}
           </div> : <div className="min-w-0 flex-1" />}
           {libraryPopover}
@@ -462,6 +861,19 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         {defaultsError && <p role="alert" className="mx-4 mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{defaultsError}</p>}
         {stale && <p role="status" className="mx-4 mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t("computer.miniApps.stale")}</p>}
         {error && <p role="alert" className="mx-4 mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{error}</p>}
+        {updateCheckError && <p role="alert" data-mini-app-update-check-error className="mx-4 mt-3 rounded-lg bg-danger/10 px-3 py-2 text-[12px] text-danger">{updateCheckError}</p>}
+        {rollbackNotice && selected?.id === rollbackNotice.appId && <p role="alert" data-mini-app-update-rolled-back className="mx-4 mt-3 rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{rollbackNotice.message}</p>}
+        {toast && selected && toast.appId === selected.id && selectedUpdate?.status === "available" && selectedUpdate.available && (
+          <MiniAppUpdateToast
+            appName={miniAppDisplayName(selected)}
+            version={toast.appVersion}
+            updating={updatingAppId === selected.id}
+            error={updateError}
+            restoreFocusOnError={updateSource === "toast"}
+            onUpdate={() => void performUpdate(selected, selectedUpdate.available!, "toast")}
+            onDismiss={dismissToast}
+          />
+        )}
         {loading && apps === null && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.loading")}</p>}
         {selected && <div id="mini-app-content" role="tabpanel" aria-labelledby={`mini-app-tab-${selected.id}`} tabIndex={0} className="flex min-h-0 min-w-0 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-accent">
           {document && appState ? <>
@@ -476,7 +888,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
               : appState.status === "active" && nativeGuard && dashboardInstalled ? dashboardCurrent
               ? <MiniAppDashboard key={`${document.app.id}:${document.app.revision}`} document={document} state={appState} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
-              : teamHtmlCurrent || usageHtmlCurrent ? <MiniAppFrame document={document} state={appState} onRevoked={revoked} onChanged={changed} />
+              : teamHtmlCurrent || usageHtmlCurrent ? <MiniAppFrame key={`${document.app.id}:${frameEpochByApp[document.app.id] ?? 0}`} document={document} state={appState} onRevoked={revoked} onChanged={changed} onRuntimeReady={handleRuntimeReady} />
               : recoveryKind && owner === true ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="dashboard-recovery">
                 <p>{t("computer.miniApps.dashboard.recovery")}</p>
                 <button type="button" onClick={() => void addDefault(recoveryKind)} className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.dashboard.reauthorize")}</button>
@@ -489,7 +901,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
                   document={document} state={appState} onRevoked={revoked} />
                 : githubActivityCurrent ? <GitHubActivityWholePage key={`${document.app.id}:${document.app.revision}:${document.app.templateVersion}`}
                   document={document} state={appState} onRevoked={revoked} />
-                : <MiniAppFrame document={document} state={appState} onRevoked={revoked} />
+                : <MiniAppFrame key={`${document.app.id}:${frameEpochByApp[document.app.id] ?? 0}`} document={document} state={appState} onRevoked={revoked} onRuntimeReady={handleRuntimeReady} />
               : appState.status === "active" ? <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t("computer.miniApps.desktopRequired")}</p>
               : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t("computer.miniApps.archivedContent")}</p>}
           </> : !error && <p role="status" className="flex items-center gap-2 px-4 py-8 text-[13px] text-ink-secondary"><Loader2 size={15} className="animate-spin" aria-hidden="true" />{t("computer.miniApps.opening")}</p>}
