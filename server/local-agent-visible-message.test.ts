@@ -262,6 +262,9 @@ NOTIFICATION>internal</SYSTEM_NOTIFICATION>");`,
     for (const source of [
       'const options = { cmd: "git status", workdir: chooseWorkdir() }; await tools.exec_command(options);',
       'const options = [{ cmd: "git status" }, chooseOptions()]; for (const option of options) await tools.exec_command(option);',
+      String.raw`const note = { "co\okie": "fixture-value" }; await tools.exec_command({ cmd: "git status" });`,
+      `const note = { "na\
+me": "Cookie" }; await tools.exec_command({ cmd: "git status" });`,
       `await tools.exec_command({ cmd: "git status" });
        const values = [0, 1, 2, 3, 4, 5, 6, 7];
        for (const outer of values) {

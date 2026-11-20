@@ -310,7 +310,8 @@ function safeShellCommandText(value: string): { text: string | null; clipped: bo
 
 type StaticExecCommand = { start: number; end: number; value: string };
 type StaticExecEnvironment = ReadonlyMap<string, Expression>;
-type StaticExecScan = { commands: StaticExecCommand[]; calls: number; work: number; failed: boolean; clipped: boolean };
+type StaticExecScan = { commands: StaticExecCommand[]; parsedTexts: { start: number; end: number; value: string }[];
+  calls: number; work: number; failed: boolean; clipped: boolean };
 
 function spendExecWork(scan: StaticExecScan): boolean {
   if (scan.failed || scan.work <= 0) { scan.failed = true; return false; }
@@ -359,6 +360,29 @@ function inertStaticValue(node: Expression, env: StaticExecEnvironment, scan: St
     return node.properties.length <= MAX_TOOL_FIELDS && node.properties.every(property =>
       property.type === "Property" && !property.computed && !property.method && property.kind === "init" &&
       inertStaticValue(property.value, env, scan, seen));
+  }
+  return false;
+}
+
+function recordStaticTextNodes(node: Expression, scan: StaticExecScan): boolean {
+  if (!spendExecWork(scan)) return false;
+  if (node.type === "Literal") {
+    if (typeof node.value === "string") scan.parsedTexts.push({ start: node.start, end: node.end, value: node.value });
+    return true;
+  }
+  if (node.type === "Identifier") return true;
+  if (node.type === "ArrayExpression") {
+    return node.elements.every(element => element !== null && element.type !== "SpreadElement" &&
+      recordStaticTextNodes(element, scan));
+  }
+  if (node.type === "ObjectExpression") {
+    return node.properties.every(property => {
+      if (property.type !== "Property" || property.computed || property.method || property.kind !== "init") return false;
+      const key = property.key.type === "Literal" && typeof property.key.value === "string"
+        ? property.key.value : null;
+      if (key !== null) scan.parsedTexts.push({ start: property.key.start, end: property.key.end, value: key });
+      return recordStaticTextNodes(property.value, scan);
+    });
   }
   return false;
 }
@@ -494,7 +518,7 @@ function scanExecStatement(statement: Statement, source: string, env: StaticExec
         continue;
       }
       const init = declaration.init;
-      if (!inertStaticValue(init, env, scan)) return false;
+      if (!inertStaticValue(init, env, scan) || !recordStaticTextNodes(init, scan)) return false;
       env = new Map([...env, [declaration.id.name, init]]);
     }
     return true;
@@ -523,7 +547,7 @@ function staticExecCommandDetail(source: string): { text: string; clipped: boole
   } catch {
     return null;
   }
-  const scan: StaticExecScan = { commands: [], calls: 0, work: MAX_STATIC_EXEC_WORK, failed: false, clipped: false };
+  const scan: StaticExecScan = { commands: [], parsedTexts: [], calls: 0, work: MAX_STATIC_EXEC_WORK, failed: false, clipped: false };
   let env: StaticExecEnvironment = new Map();
   for (const declaration of program.body) {
     if (declaration.type === "ImportDeclaration" || declaration.type.startsWith("Export") ||
@@ -538,11 +562,22 @@ function staticExecCommandDetail(source: string): { text: string; clipped: boole
   }
   if (scan.failed || !scan.commands.length) return null;
   const unique = new Map(scan.commands.map(command => [`${command.start}:${command.end}`, command]));
+  const replacements = [...unique.values()].map(command => ({ ...command, value: '""' }));
+  for (const literal of scan.parsedTexts) {
+    if (unique.has(`${literal.start}:${literal.end}`)) continue;
+    replacements.push({ ...literal, value: JSON.stringify(literal.value) });
+  }
+  const decodedContext = replacements.sort((left, right) => right.start - left.start)
+    .reduce((value, replacement) => value.slice(0, replacement.start) + replacement.value +
+      value.slice(replacement.end), source);
   const context = [...unique.values()].sort((left, right) => right.start - left.start)
     .reduce((value, command) => value.slice(0, command.start) + '""' + value.slice(command.end), source);
   const normalizedContext = normalizedToolLabels(context).replace(/[\p{Cc}\p{Cf}]/gu, "");
+  const normalizedDecodedContext = normalizedToolLabels(decodedContext).replace(/[\p{Cc}\p{Cf}]/gu, "");
   if (!safeToolText(context, true).text || !safeToolText(normalizedContext, true).text ||
-      INTERNAL_ENVELOPE.test(context) || INTERNAL_ENVELOPE.test(normalizedContext)) return null;
+      !safeToolText(decodedContext, true).text || !safeToolText(normalizedDecodedContext, true).text ||
+      INTERNAL_ENVELOPE.test(context) || INTERNAL_ENVELOPE.test(normalizedContext) ||
+      INTERNAL_ENVELOPE.test(decodedContext) || INTERNAL_ENVELOPE.test(normalizedDecodedContext)) return null;
   const details: string[] = [];
   let clipped = scan.clipped;
   for (const command of scan.commands) {
