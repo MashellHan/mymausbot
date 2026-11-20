@@ -120,7 +120,6 @@ export interface RoutineRequestServiceOptions {
   validateTarget?: (proposerBotId: string, target: { botId: string; name: string }) => string | null;
   engines?: LimitResetEngines;
 }
-
 export interface ProposeRoutineRequestArgs {
   botId: string;
   threadId: string;
@@ -131,7 +130,6 @@ export interface ProposeRoutineRequestArgs {
   canCommit?: () => boolean;
   startAutomation?: StartAutomationStatus;
 }
-
 export interface RoutineProposalResult {
   requestId: string;
   messageId: string;
@@ -141,7 +139,6 @@ export interface RoutineProposalResult {
   nextRunAt: number | null;
   timeZone: string;
 }
-
 interface RoutineCardCopy {
   title: string;
   summary: string;
@@ -149,7 +146,6 @@ interface RoutineCardCopy {
   nextRunAt: number | null;
   tool: "schedule_routine" | "manage_routine";
 }
-
 export type ResolveRoutineRequestResult =
   | { claimed: false; state: "not_found" }
   | { claimed: true; state: "invalid"; error: string; status: number }
@@ -163,7 +159,6 @@ export type ResolveRoutineRequestResult =
       settlementPending?: true;
       message?: string;
     };
-
 export type UndoRoutineRequestResult =
   | { claimed: false }
   | { claimed: true; state: "already_undone" }

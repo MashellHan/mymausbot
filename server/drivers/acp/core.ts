@@ -895,7 +895,6 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
           // A call still running (its kind, file and diff so far) feeds the chat's status line.
           for (const live of [acpToolProgress(u), acpToolOutput(u)]) if (live) emit({ ...base(threadId, current.turnId), ...live });
         };
-
         const session: AcpSession = {
           child: host.child,
           host,
