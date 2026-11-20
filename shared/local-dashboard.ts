@@ -240,6 +240,15 @@ export interface LocalUsageWindow<Days extends 1 | 7 | 30 | 60 = 1 | 7 | 30> {
   comparison: LocalUsageComparison;
 }
 
+/** Per-day verified member usage reconciled to the day's collected totalTokens; native session IDs stay server-local. */
+export interface LocalUsageAgentTokenRow {
+  id: string;
+  name: string;
+  teamId: string;
+  teamName: string;
+  totalTokens: number;
+}
+
 /** Missing dates have null metrics. Token-unavailable dates have null token metrics. */
 export interface LocalUsageTrendDay {
   day: string;
@@ -249,6 +258,8 @@ export interface LocalUsageTrendDay {
   tokenStatus: LocalUsageTokenStatus;
   /** Absent when the daily token total lacks a qualified fresh-input/output split. */
   tokenDetails?: LocalUsageTokenDetails & { cacheRead: number | null };
+  /** Verified member token buckets reconciled to totalTokens; absent or empty means unattributed. */
+  agentTokens?: LocalUsageAgentTokenRow[];
   prs: number | null;
   knownPrs: number | null;
   commits: number | null;
