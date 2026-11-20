@@ -19,12 +19,21 @@ export interface LocalAgentMember {
   taskHint: string | null;
   /** Latest visible assistant commentary or final response for the verified occupant, redacted and bounded. */
   messagePreview?: string | null;
+  /** Rolling 24-hour verified member usage and estimated USD cost; absent on legacy hosts. */
+  tokenUsage24h?: LocalAgentMemberTokenUsageWindow;
+  /** Rolling 7-day verified member usage and estimated USD cost; absent on legacy hosts. */
+  tokenUsage7d?: LocalAgentMemberTokenUsageWindow;
 }
 
 /** A partial count is a lower bound from verified current-team sessions; null never means zero. */
 export interface LocalAgentTokenUsageWindow {
   coverage: "ready" | "partial" | "unavailable";
   knownTokens: number | null;
+}
+
+/** Member usage over the rolling window; cost coverage is tracked independently from token coverage. */
+export interface LocalAgentMemberTokenUsageWindow extends LocalAgentTokenUsageWindow {
+  estimatedCost: LocalUsageEstimatedCost;
 }
 
 export interface LocalAgentTeam {

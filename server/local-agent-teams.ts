@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
 import { augmentedPath } from "./env-path.ts";
-import { codexSessionId, createLocalAgentSessionReader, dashboardText } from "./local-agent-session.ts";
+import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailableMemberUsage } from "./local-agent-session.ts";
 import { PI_CONTEXT_KEY, parsePiContext, readPiProcessStart, type PiProcessStart } from "./local-agent-pi-context.ts";
 import { createPiSessionReader, type PiSessionView } from "./local-agent-pi-message.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
@@ -90,6 +90,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
   let lastAttempt = -Infinity;
   let pending: Promise<LocalAgentTeamsResponse> | null = null;
   let revision = 0;
+  const paneBindings = new Map<string, { key: string | null; switchedAt: number | null }>();
 
   async function refresh(current: () => boolean): Promise<LocalAgentTeamsResponse> {
     try {
@@ -101,6 +102,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       const [workspaceOutput, agentOutput] = responses.map((response) => (response as PromiseFulfilledResult<string>).value);
       const workspaces = herdrRows(workspaceOutput, "workspaces");
       const agents = herdrRows(agentOutput, "agents");
+      const sampledAt = now();
       const teams = new Map<string, LocalAgentTeam>();
       for (const workspace of workspaces) {
         const id = workspace.workspace_id;
@@ -113,6 +115,17 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
       ]);
       const piContexts = await observePiContexts(verified, piSessions, run, readProcessStart, now);
+      const sessionTeams = new Map<string, Set<string>>();
+      const sessionClaims = new Map<string, number>();
+      for (const agent of agents) {
+        const session = codexSessionId(agent);
+        if (!session) continue;
+        sessionClaims.set(session, (sessionClaims.get(session) ?? 0) + 1);
+        const owners = sessionTeams.get(session) ?? new Set<string>();
+        owners.add(String(agent.workspace_id));
+        sessionTeams.set(session, owners);
+      }
+      const nextBindings = new Map<string, { key: string | null; switchedAt: number | null }>();
       const seen = new Set<string>();
       for (const agent of agents) {
         const id = agent.pane_id;
@@ -120,10 +133,20 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         if (typeof id !== "string" || !id || seen.has(id) || !team) throw new Error("Invalid agent identity");
         seen.add(id);
         const sessionId = codexSessionId(agent);
+        const verifiedCodexMember = verifiedIds.has(id) && sessionId !== null && sessionClaims.get(sessionId) === 1;
         const observation = sessionId ? observations.get(sessionId) : null;
         const pi = verifiedIds.has(id) ? piSessions.get(id) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
         const occupantId = localAgentOccupantId(agent, id);
+        const bindingKey = verifiedCodexMember
+          ? JSON.stringify([agent.agent, occupantId, sessionId])
+          : JSON.stringify([agent.agent ?? null, occupantId ?? agent.name ?? null, null]);
+        const previous = paneBindings.get(id);
+        const switchedAt = previous && previous.key === bindingKey ? previous.switchedAt : sampledAt;
+        nextBindings.set(id, { key: bindingKey, switchedAt });
+        const usage = verifiedCodexMember && observation
+          ? observation.memberUsage(switchedAt)
+          : { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
           ...(occupantId ? { occupantId } : {}),
@@ -132,20 +155,25 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
           contextWindow: observation?.contextWindow ?? (current() ? piContexts.get(id) : undefined) ?? null,
           state: state(agent.agent_status), taskHint: observation?.taskHint ?? null,
           messagePreview: verifiedIds.has(id) ? observation?.messagePreview ?? pi?.preview ?? null : null,
+          tokenUsage24h: usage.tokenUsage24h,
+          tokenUsage7d: usage.tokenUsage7d,
         };
         team.agents.push(member);
+      }
+      if (current()) {
+        for (const [pane, binding] of paneBindings) {
+          if (seen.has(pane)) continue;
+          const absentSince = binding.key === null ? binding.switchedAt : sampledAt;
+          if (absentSince !== null && sampledAt - absentSince <= 7 * 24 * 60 * 60 * 1000) {
+            nextBindings.set(pane, { key: null, switchedAt: absentSince });
+          }
+        }
+        paneBindings.clear();
+        for (const [pane, binding] of nextBindings) paneBindings.set(pane, binding);
       }
       for (const team of teams.values()) {
         team.agentCount = team.agents.length;
         team.activeAgentCount = team.agents.filter((member) => member.state === "working").length;
-      }
-      const sessionTeams = new Map<string, Set<string>>();
-      for (const agent of agents) {
-        const session = codexSessionId(agent);
-        if (!session) continue;
-        const owners = sessionTeams.get(session) ?? new Set<string>();
-        owners.add(String(agent.workspace_id));
-        sessionTeams.set(session, owners);
       }
       for (const team of teams.values()) {
         const totals = { tokenUsage24h: { known: 0, covered: 0, missing: false, partial: false },
