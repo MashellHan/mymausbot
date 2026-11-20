@@ -265,6 +265,10 @@ NOTIFICATION>internal</SYSTEM_NOTIFICATION>");`,
       String.raw`const note = { "co\okie": "fixture-value" }; await tools.exec_command({ cmd: "git status" });`,
       `const note = { "na\
 me": "Cookie" }; await tools.exec_command({ cmd: "git status" });`,
+      String.raw`const values = [1, 2]; for (const value of values) {
+        const note = { "co\okie": "fixture-value" };
+        await tools.exec_command({ cmd: "git status" });
+      }`,
       `await tools.exec_command({ cmd: "git status" });
        const values = [0, 1, 2, 3, 4, 5, 6, 7];
        for (const outer of values) {

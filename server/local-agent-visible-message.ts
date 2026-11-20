@@ -562,12 +562,13 @@ function staticExecCommandDetail(source: string): { text: string; clipped: boole
   }
   if (scan.failed || !scan.commands.length) return null;
   const unique = new Map(scan.commands.map(command => [`${command.start}:${command.end}`, command]));
-  const replacements = [...unique.values()].map(command => ({ ...command, value: '""' }));
+  const replacements = new Map([...unique.values()].map(command =>
+    [`${command.start}:${command.end}`, { ...command, value: '""' }]));
   for (const literal of scan.parsedTexts) {
-    if (unique.has(`${literal.start}:${literal.end}`)) continue;
-    replacements.push({ ...literal, value: JSON.stringify(literal.value) });
+    const key = `${literal.start}:${literal.end}`;
+    if (!replacements.has(key)) replacements.set(key, { ...literal, value: JSON.stringify(literal.value) });
   }
-  const decodedContext = replacements.sort((left, right) => right.start - left.start)
+  const decodedContext = [...replacements.values()].sort((left, right) => right.start - left.start)
     .reduce((value, replacement) => value.slice(0, replacement.start) + replacement.value +
       value.slice(replacement.end), source);
   const context = [...unique.values()].sort((left, right) => right.start - left.start)
