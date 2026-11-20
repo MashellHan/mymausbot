@@ -1373,6 +1373,30 @@ describe("Mini App independent release updates", () => {
     expect(popover.className).toContain("max-h-[min(70vh,560px)]");
   });
 
+  it("restores the selected Mini App's recorded previous version through the page action", async () => {
+    fixture.apps = [{ ...app("app_a", "First report"), release: {
+      packageId: "mashellhan.app-a", appVersion: "1.2.0", sourceCommit: CANDIDATE.sourceCommit, tag: "mini-app/app-a/v1.2.0",
+      requires: [], htmlSha256: "b".repeat(64), htmlBytes: 12, queriesSha256: "c".repeat(64), queriesBytes: 2, previousTemplateVersion: 1,
+    } }, app("app_b", "Second report")];
+    fixture.htmlByApp = { app_a: "<p>New release</p>", app_b: "<p>Other app</p>" };
+    fixture.onRollback = (id, body) => {
+      fixture.apps = fixture.apps.map((entry) => entry.id === id
+        ? { ...entry, revision: entry.revision + 1, templateVersion: body.templateVersion, release: null } : entry);
+      fixture.htmlByApp[id] = "<p>Prior template</p>";
+    };
+    await render();
+    const selector = "[data-mini-app-restore-version]";
+    await vi.waitFor(() => expect(host.querySelector(selector)?.getAttribute("aria-label")).toBe("Restore previous version"));
+    const installed = fixture.apps[0]!;
+    await act(async () => host.querySelector<HTMLButtonElement>(selector)!.click());
+    await vi.waitFor(() => expect(fixture.rollbackRequests).toEqual([{ appId: installed.id, body: {
+      expectedRevision: installed.revision, templateVersion: 1, requestKey: expect.any(String),
+    } }]));
+    expect(host.querySelector(selector)).toBeNull();
+    expect(host.querySelector('[data-mini-app-update-rolled-back]')?.textContent).toBe("Restored the previous version.");
+    expect(fixture.htmlByApp.app_b).toBe("<p>Other app</p>");
+  });
+
   it("rolls back a candidate that times out without runtime-ready, restores InfoHint, and ignores mismatched readiness", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {

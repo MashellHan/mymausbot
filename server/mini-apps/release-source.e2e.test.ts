@@ -149,6 +149,9 @@ it("proves #45, #48, custom-HTML protection, upgrade/rollback, restart persisten
       sourceCommit: COMMIT_A,
     });
     expect(adopted45.app.publisherBotIds).toEqual([bot.id]);
+    expect(adopted45.app.dashboard).toMatchObject({ renderer: "html", resources: installed45.app.dashboard?.resources });
+    await api("POST", `/api/mini-apps/${installed45.app.id}/dashboard`, { resource: "configuration",
+      expectedRevision: adopted45.app.revision, agentId: "w6:p1", occupantId: "o1234567890abcdef" }, 403);
 
     // Idempotent replay + stale revision
     expect(await api<MiniAppMutationResult>("POST", `/api/mini-apps/${installed45.app.id}/update`, {

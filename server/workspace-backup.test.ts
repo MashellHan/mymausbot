@@ -162,6 +162,8 @@ describe("encrypted full workspace backups", () => {
   it("round-trips WAL conversations, binary files, drafts and IDs; preserves destination identity and connections", async () => {
     const source = directory();
     const db = fixture(source);
+    db.exec(`CREATE TABLE mini_apps (id TEXT PRIMARY KEY, publishers TEXT, dashboard_kind TEXT, native_kind TEXT, agent_team_detail_grant INTEGER);
+      INSERT INTO mini_apps VALUES ('team', '["bot"]', 'agent-team', NULL, 1), ('video', '[]', NULL, 'hongguo', 0);`);
     // Production closes its sole message handle after draining writes, while the maintenance gate is held.
     db.close();
     try {
@@ -238,6 +240,9 @@ describe("encrypted full workspace backups", () => {
         expect(message.text).toContain(`<attached-image path="${join(target, "attachments", "image.png")}" name="image.png" />`);
         expect(message.text).toContain(`\`\`\`\n<attached-image path="${join(source, "attachments", "image.png")}" />\n\`\`\``);
         expect(restoredDb.prepare("SELECT active_leaf_id FROM thread_state").get()?.active_leaf_id).toBe("message");
+        expect(restoredDb.prepare("SELECT * FROM mini_apps ORDER BY id").all()).toEqual(["team", "video"].map((id) => ({
+          id, publishers: "[]", dashboard_kind: null, native_kind: null, agent_team_detail_grant: 0,
+        })));
         expect(restoredDb.prepare("SELECT id, status FROM chat_followups ORDER BY rowid").all()).toEqual([
           { id: "pending", status: "interrupted" }, { id: "dispatching", status: "interrupted" }, { id: "cancelled", status: "cancelled" },
         ]);

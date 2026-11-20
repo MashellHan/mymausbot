@@ -7,6 +7,7 @@ export const MINI_APP_DASHBOARD_RESOURCES = {
   "agent-team": ["teams", "activity", "configuration", "team-rules", "skill"],
   usage: ["usage"],
 } as const;
+export const MINI_APP_AGENT_TEAM_BASE_RESOURCES = ["teams", "activity"] as const;
 export type MiniAppDashboardKind = keyof typeof MINI_APP_DASHBOARD_RESOURCES;
 export type MiniAppDashboardResource = "teams" | "activity" | "configuration" | "team-rules" | "skill" | "usage";
 export const MINI_APP_SHIPPED_TEMPLATE_KINDS = ["bookkeeping", "x_ai_digest", "github_activity", "mojo"] as const;
@@ -29,9 +30,9 @@ export interface MiniAppDefaultsResult {
 /** A native dashboard grant belongs to the installed app, independent of its HTML template. */
 export type MiniAppDashboardDeclaration =
   | { kind: "agent-team"; renderer: "native"; htmlRole: "fallback-only";
-    editableFields: readonly ["title", "description"]; resources: readonly ["teams", "activity"] }
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_AGENT_TEAM_BASE_RESOURCES }
   | { kind: "agent-team"; renderer: "html"; htmlRole: "primary";
-    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["agent-team"] }
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_AGENT_TEAM_BASE_RESOURCES | typeof MINI_APP_DASHBOARD_RESOURCES["agent-team"] }
   | { kind: "usage"; renderer: "html"; htmlRole: "primary";
     editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["usage"] }
   | { kind: "usage"; renderer: "native"; htmlRole: "fallback-only";
@@ -98,6 +99,7 @@ export interface MiniAppReleaseProvenance {
   htmlBytes: number;
   queriesSha256: string;
   queriesBytes: number;
+  previousTemplateVersion?: number;
 }
 
 export type MiniAppUpdateStatus = "available" | "current" | "unavailable" | "incompatible" | "custom";

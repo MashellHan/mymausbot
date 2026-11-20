@@ -3790,6 +3790,8 @@
   "computer.miniApps.update.incompatible": "此更新需要更高版本的 {app}。",
   "computer.miniApps.update.installedVersion": "版本 {version}",
   "computer.miniApps.update.rolledBack": "更新未能正常加载，已恢复到上一版本。",
+  "computer.miniApps.update.restorePrevious": "恢复上一版本",
+  "computer.miniApps.update.restored": "已恢复上一版本。",
   "computer.miniApps.update.sourceCommit": "源码 {commit}",
   "computer.miniApps.update.unavailable": "更新暂时不可用。",
   "computer.miniApps.update.updating": "正在更新…",

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronDown, ChevronUp, Loader2, RotateCw } from "lucide-react";
+import { ChevronDown, ChevronUp, History, Loader2, RotateCw } from "lucide-react";
 import { activeLocale, t } from "@/lib/i18n";
 import { usePageVisible } from "@/lib/page-visible";
 import { randomUuid } from "@/lib/random-uuid";
@@ -152,6 +152,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     && appState.appId === document.app.id && appState.revision === document.app.revision
     && selected.id === document.app.id && selected.revision === document.app.revision
     && selected.templateVersion === document.app.templateVersion && appState.templateVersion === document.app.templateVersion;
+  const previousReleaseTemplate = currentHead && !stale && owner === true && nativeGuard
+    && window.ogb?.app?.ownPage === true && window.ogb?.remoteClient?.active !== true
+    ? document.app.release?.previousTemplateVersion : undefined;
   const dashboardCurrent = currentHead && !!selected && !!dashboard && owner === true && nativeGuard
     && selected.dashboard?.kind === dashboard.kind && dashboard.renderer === "native" && dashboard.htmlRole === "fallback-only";
   const teamHtmlCurrent = currentHead && owner === true && nativeGuard && selected?.dashboard?.kind === "agent-team"
@@ -236,7 +239,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     }, Math.max(0, delayMs));
   };
 
-  const rollbackRecovery = async (recovery: PendingMiniAppUpdateRecovery) => {
+  const rollbackRecovery = async (recovery: PendingMiniAppUpdateRecovery, manual = false) => {
     if (!mountedRef.current || ownerRef.current !== true || !nativeGuard) return;
     if (rollingBackAppsRef.current.has(recovery.appId)) return;
     rollingBackAppsRef.current.add(recovery.appId);
@@ -262,8 +265,9 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         const mapped = current.map((entry) => entry.id === recovery.appId ? result.app : entry);
         return mapped.filter((entry) => entry.status === "active");
       });
-      setRollbackNotice({ appId: recovery.appId, message: t("computer.miniApps.update.rolledBack") });
+      setRollbackNotice({ appId: recovery.appId, message: t(manual ? "computer.miniApps.update.restored" : "computer.miniApps.update.rolledBack") });
       if (selectedRef.current === recovery.appId) {
+        if (manual) focusAfter.current = "selected";
         try {
           const nextState = await api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(recovery.appId)}/state`, { timeoutMs: 10_000 });
           if (!mountedRef.current) return;
@@ -294,6 +298,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
       if (mountedRef.current) setRefreshKey((current) => current + 1);
     } catch (cause) {
       if (!mountedRef.current) return;
+      if (manual) setError(cause instanceof Error ? cause.message : t("computer.miniApps.loadFailed"));
       if (cause instanceof ApiError && (cause.status === 409 || cause.status === 400 || cause.status === 403 || cause.status === 404)) {
         finishPendingRecovery(recovery.appId);
         setRefreshKey((current) => current + 1);
@@ -303,6 +308,19 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
     } finally {
       rollingBackAppsRef.current.delete(recovery.appId);
     }
+  };
+
+  const restorePreviousRelease = async () => {
+    if (!selected || !previousReleaseTemplate || updatingAppId !== null || busyKind !== null) return;
+    const pending = pendingRecoveriesRef.current[selected.id];
+    setUpdatingAppId(selected.id);
+    setUpdateSource(null);
+    setError("");
+    setRollbackNotice(null);
+    try {
+      await rollbackRecovery({ appId: selected.id, candidateRevision: selected.revision, candidateTemplateVersion: selected.templateVersion,
+        previousTemplateVersion: previousReleaseTemplate, rollbackRequestKey: pending?.rollbackRequestKey ?? randomUuid(), deadlineAt: Date.now() }, true);
+    } finally { if (mountedRef.current) setUpdatingAppId(null); }
   };
 
   const handleRuntimeReady = (info: { appId: string; revision: number; templateVersion: number }) => {
@@ -830,6 +848,13 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               && <button type="button" data-mini-app-add className="rounded-lg px-2.5 py-1.5 text-[12px] text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
                 onClick={() => { setLibraryFocus(iconKindForApp(inventory.find((app) => app.status === "archived" && iconKindForApp(app))!)); setLibraryOpen(true); }}>{t("computer.miniApps.add")}</button>}
             {apps && barCollapsed && libraryPopover}
+            {previousReleaseTemplate && selected && <button type="button" data-mini-app-restore-version
+              disabled={updatingAppId !== null || busyKind !== null}
+              aria-label={t("computer.miniApps.update.restorePrevious")} title={t("computer.miniApps.update.restorePrevious")}
+              onClick={() => void restorePreviousRelease()}
+              className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50">
+              <History size={15} aria-hidden="true" />
+            </button>}
             <button type="button" disabled={checking || busyKind !== null || updatingAppId !== null} aria-label={t("computer.miniApps.refresh")} title={t("computer.miniApps.refresh")} onClick={() => { manualRefreshRef.current = true; setRollbackNotice(null); setRefreshKey((current) => current + 1); }} className="rounded-lg p-1.5 text-ink-secondary hover:bg-inset hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"><RotateCw size={15} aria-hidden="true" /></button>
             {apps && <button type="button" data-mini-app-bar-toggle aria-expanded={!barCollapsed} aria-controls="mini-apps-bar"
               aria-label={t(barCollapsed ? "computer.miniApps.expandApps" : "computer.miniApps.collapseApps")}

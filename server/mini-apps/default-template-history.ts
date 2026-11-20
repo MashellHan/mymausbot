@@ -37,9 +37,13 @@ export const AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256 = [
 /** Exact legacy installed HTML snapshots from Mini inventory adoptable only with equivalent reviewed bindings. */
 export const ADOPTABLE_LEGACY_TEMPLATE_SHA256: Record<Exclude<MiniAppShippedTemplateKind, "mojo">, readonly string[]> = {
   bookkeeping: ["6cab8df9d0c2d2d90694c0e3202a4a9075bed84260f48467e4a6e1991e1465ce"],
-  x_ai_digest: ["a25effe6fffb0f09d6833a3dd9d4ed331be1d4a34cfd889af628428718b320d3"],
-  github_activity: [],
+  x_ai_digest: ["a25effe6fffb0f09d6833a3dd9d4ed331be1d4a34cfd889af628428718b320d3",
+    "23273e544f833bce23ad4e43ab260b727e6c853d9d19ec9d2d242ad4426b74fb"],
+  github_activity: ["3362b06c09fe5540b01eea5f4ba7a02db61d63ac0248ac0840ae4bdf54dd3a01"],
 };
 
 /** Exact documented legacy Mojo HTML build adoptable without marker heuristics. */
 export const MOJO_LEGACY_HTML_SHA256 = "c7e3e34ae380dc585c41e57588908cd48858c49c00118a372902d1d79e1356f6";
+
+/** GitHub Activity's reviewed Daily10 catalog template with its existing deep-dive catalog binding. */
+export const GITHUB_ACTIVITY_CATALOG_TEMPLATE_SHA256 = "3bead12bf073f6c25f17d722cdfd58c18745efd7d6eec2180d3368ab9f832203";

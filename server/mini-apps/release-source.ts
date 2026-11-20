@@ -12,7 +12,7 @@ import {
 import { findCliCandidates, sealedFixture, whichWin } from "../env-path.ts";
 import { matchesPendingDefaultHtml, NATIVE_DEFAULT_HTML } from "./default-documents.ts";
 import {
-  ADOPTABLE_LEGACY_TEMPLATE_SHA256, AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256,
+  ADOPTABLE_LEGACY_TEMPLATE_SHA256, AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256, GITHUB_ACTIVITY_CATALOG_TEMPLATE_SHA256,
   MOJO_LEGACY_HTML_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256, SHIPPED_TEMPLATE_SHA256,
 } from "./default-template-history.ts";
 import { bundledBookkeepingBinding } from "./default-updates.ts";
@@ -190,14 +190,15 @@ export function isCustomAppTemplate(
       || app.id === LEGACY_MINI_APP_IDS.mojo && hash === MOJO_LEGACY_HTML_SHA256);
   }
   if (bindings.length === 0) return !matchesPendingDefaultHtml(mapping.kind, html);
+  const githubCatalog = mapping.kind === "github_activity" && hash === GITHUB_ACTIVITY_CATALOG_TEMPLATE_SHA256;
   const adoptable = (SHIPPED_TEMPLATE_SHA256[mapping.kind] as readonly string[]).includes(hash)
-    || (ADOPTABLE_LEGACY_TEMPLATE_SHA256[mapping.kind] as readonly string[]).includes(hash);
+    || (ADOPTABLE_LEGACY_TEMPLATE_SHA256[mapping.kind] as readonly string[]).includes(hash) || githubCatalog;
   if (!adoptable) return true;
   if (mapping.kind === "bookkeeping") {
     return bindings.length !== 1 || !bundledBookkeepingBinding(bindings[0]!);
   }
   if (mapping.kind === "x_ai_digest") return !acceptsOptionalDailyXEditorial(bindings);
-  return !hasReportBindingForProducer(bindings, bindings[0]!.datasetId, mapping.kind);
+  return !hasReportBindingForProducer(bindings, bindings[0]!.datasetId, mapping.kind) || (githubCatalog && !bindings[1]?.queries.deep_dive_catalog);
 }
 
 export function isReleaseCompatible(app: MiniAppSummary, mapping: MiniAppReleaseMapping, requires: readonly string[]): boolean {

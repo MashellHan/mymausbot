@@ -7,6 +7,7 @@ import * as DuckDB from "@duckdb/node-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalUsageResponse } from "../../shared/local-dashboard.ts";
 import type { MiniAppPublish, MiniAppReleaseManifestV1, MiniAppSummary } from "../../shared/mini-apps.ts";
+import { reportMiniAppBinding } from "../../shared/report-mini-app.ts";
 import { createReportTemplate } from "../../shared/report-mini-app-template.ts";
 import { AppDocs } from "../app-docs.ts";
 import { DATA_DIR } from "../config.ts";
@@ -177,6 +178,67 @@ function agentTeamInstall(extra: Partial<MiniAppPublish> = {}): MiniAppPublish {
     ...extra,
   };
 }
+
+describe("managed Mini App authorization", () => {
+  afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
+
+  it("retains the installed Agent Team resources when activating or rolling back a package", async () => {
+    const { apps, database } = createRegistryFixture(syntheticReader([buildValidRelease({ appVersion: "1.0.0" })]));
+    const { app: narrow } = await apps.publish(owner, agentTeamInstall({ html: NATIVE_DEFAULT_HTML }));
+    const { app: detailed } = await apps.publish(owner, agentTeamInstall({ slug: "agent-team-with-details" }), undefined, true);
+    const { appVersion, sourceCommit } = { appVersion: "1.0.0", sourceCommit: COMMIT_A };
+    for (const installed of [narrow, detailed]) {
+      const { app } = await apps.applyUpdate(owner, installed.id, { appVersion, sourceCommit, expectedRevision: 1, requestKey: "apply" });
+      expect(app.dashboard).toMatchObject({ renderer: "html", resources: installed.dashboard!.resources });
+      expect(app.release?.previousTemplateVersion).toBe(1);
+      if (installed === narrow) {
+        await expect(apps.dashboardRead(owner, app.id, { resource: "configuration", expectedRevision: app.revision,
+          agentId: "w6:p1", occupantId: "o1234567890abcdef" })).rejects.toMatchObject({ status: 403 });
+      }
+      const { app: restored } = await apps.rollback(owner, app.id, { templateVersion: 1, expectedRevision: app.revision, requestKey: "restore" });
+      expect(restored.dashboard).toEqual(installed.dashboard);
+    }
+    database.prepare("UPDATE mini_app_versions SET dashboard_html = 0 WHERE app_id = ? AND version = 1").run(detailed.id);
+    const { app: fallback } = await apps.rollback(owner, detailed.id, { templateVersion: 1, expectedRevision: 3, requestKey: "native-fallback" });
+    expect(fallback.dashboard).toMatchObject({ renderer: "native", resources: ["teams", "activity"] });
+    const { app: migrated } = await apps.applyUpdate(owner, detailed.id, { appVersion, sourceCommit, expectedRevision: fallback.revision, requestKey: "migrate-again" });
+    expect(migrated.dashboard).toEqual(detailed.dashboard);
+    const { app: revoked } = await apps.publish(owner, agentTeamInstall({ slug: detailed.slug, dashboardKind: null, requestKey: "revoke", expectedRevision: migrated.revision }), detailed.id);
+    const { app: restored } = await apps.rollback(owner, detailed.id, { templateVersion: 2, expectedRevision: revoked.revision, requestKey: "restore-released" });
+    expect(restored.dashboard).toBeNull();
+  });
+
+  it("preserves current owner metadata and declines managed rollback across different Data bindings", async () => {
+    const { datasetId: _datasetId, ...report } = reportMiniAppBinding("", "x_ai_digest");
+    const release = buildValidRelease({ slug: "x-ai-digest", packageId: "mashellhan.x-ai-digest", appVersion: "1.0.0", requires: ["daily-x-site-v1"],
+      queries: makeQueriesJson([report]) });
+    const { apps, data } = createRegistryFixture(syntheticReader([release]));
+    const reports = new ReportStore(data, createReportTemplate);
+    const first = await reports.prepare("publisher", "x_ai_digest");
+    const second = await reports.prepare("secondary", "x_ai_digest");
+    const { app: installed } = await apps.publish(owner, { ...first.publication, shippedTemplateKind: "x_ai_digest" });
+    const { app: before } = await apps.publish(owner, { ...second.publication, requestKey: "rebind", expectedRevision: 1 }, installed.id);
+    const { app: applied } = await apps.applyUpdate(owner, installed.id, { appVersion: "1.0.0", sourceCommit: COMMIT_A,
+      expectedRevision: before.revision, requestKey: "apply" });
+    expect(applied.release?.previousTemplateVersion).toBe(before.templateVersion);
+    const current = apps.document(owner, installed.id);
+    await expect(apps.rollback(owner, installed.id, { templateVersion: installed.templateVersion,
+      expectedRevision: applied.revision, requestKey: "wrong-binding" })).rejects.toMatchObject({ status: 409 });
+    expect(apps.document(owner, installed.id)).toEqual(current);
+    const { app: renamed } = await apps.publish(owner, { ...second.publication, html: current.html, title: "My current title", description: "My current description",
+      requestKey: "rename", expectedRevision: applied.revision }, installed.id);
+    const { app: restored } = await apps.rollback(owner, installed.id, { templateVersion: before.templateVersion,
+      expectedRevision: renamed.revision, requestKey: "restore" });
+    expect(restored).toMatchObject({ title: renamed.title, description: renamed.description, templateVersion: before.templateVersion, release: null });
+    expect(apps.document(owner, installed.id).bindings).toEqual(second.publication.bindings);
+    const { app: rebound } = await apps.publish(owner, { ...first.publication, requestKey: "rebind-again", expectedRevision: restored.revision }, installed.id);
+    await expect(apps.rollback(owner, installed.id, { templateVersion: applied.templateVersion, expectedRevision: rebound.revision,
+      requestKey: "restore-managed-to-wrong-binding" })).rejects.toMatchObject({ status: 409 });
+    await expect(apps.rollback(owner, installed.id, { templateVersion: before.templateVersion, expectedRevision: rebound.revision,
+      requestKey: "restore-stock-to-wrong-binding" })).rejects.toMatchObject({ status: 409 });
+    expect(apps.document(owner, installed.id).bindings).toEqual(first.publication.bindings);
+  });
+});
 
 describe("Activities versioned capability", () => {
   afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });

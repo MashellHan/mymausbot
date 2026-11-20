@@ -4072,6 +4072,8 @@
   "computer.miniApps.update.incompatible": "This update requires a newer version of {app}.",
   "computer.miniApps.update.installedVersion": "Version {version}",
   "computer.miniApps.update.rolledBack": "Update failed to load; restored the previous version.",
+  "computer.miniApps.update.restorePrevious": "Restore previous version",
+  "computer.miniApps.update.restored": "Restored the previous version.",
   "computer.miniApps.update.sourceCommit": "Source {commit}",
   "computer.miniApps.update.unavailable": "Updates are temporarily unavailable.",
   "computer.miniApps.update.updating": "Updating…",
