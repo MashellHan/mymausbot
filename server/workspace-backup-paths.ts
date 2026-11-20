@@ -8,7 +8,7 @@ const FOLDER_KEYS = new Set(["cwd", "pinnedCwd"]);
 const FILE_KEYS = new Set(["path", "filePath", "localPath"]);
 const MAX_LEFT_BEHIND = 20;
 /** Standing instructions and memory, which name paths in prose. */
-export const INSTRUCTION_FILE = /^(?:bots\/[^/]+\/SOUL\.md|workspaces\/[^/]+\/(?:MEMORY\.md|memory\/.+\.md))$/;
+export const INSTRUCTION_FILE = /^(?:bots\/[^/]+\/(?:SOUL|AGENTS)\.md|workspaces\/[^/]+\/(?:MEMORY\.md|memory\/.+\.md))$/;
 const WINDOWS_ROOT = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
 const WINDOWS_PATH = /(?<![\w\\/])(?:[A-Za-z]:|\\\\[^\s"'`<>|\\/]+)[\\/][^\s"'`<>|]+/g;
 const TRAILING_PUNCTUATION = /[.,;:!?)\]}]+$/;

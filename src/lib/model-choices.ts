@@ -27,7 +27,9 @@ export function choiceIsSelected(choice: ModelChoice, selection: ModelSelection)
 
 export function pickerModelEffortLevels(instance: InstanceInfo | undefined, model: string) {
   const option = instance?.models.options.find((candidate) => candidate.id === model);
-  if (instance?.driverKind === "codex" && option?.custom) return option.effortLevels ?? [];
+  if (instance?.driverKind === "codex" && option?.custom && option.providerRoute?.provenance !== "configured") {
+    return option.effortLevels ?? [];
+  }
   return modelEffortLevels(instance?.models.options, model, instance?.capabilities?.effortLevels);
 }
 
