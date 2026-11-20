@@ -22,6 +22,7 @@ export interface TurnLive {
   requestMessageId?: string;
   startedTools?: readonly StartedTool[];
   automation?: readonly { id: string; action: TurnAutomationAction }[];
+  recentAutomation?: { id: string; action: TurnAutomationAction; expiresAt: number };
   waiting?: "resource" | "retry";
   /** The newest turn this thread showed has completed, failed or stopped. */
   ended: boolean;
@@ -30,6 +31,7 @@ export interface TurnLive {
 
 const UNKNOWN: TurnLive = { ended: false, status: null };
 const MAX_THREADS = 500;
+const AUTOMATION_LABEL_MIN_MS = 500;
 const threads = new Map<string, TurnLive>();
 const lastFrames = new Map<string, number>();
 const listeners = new Map<string, Set<() => void>>();
@@ -44,7 +46,8 @@ function put(threadId: string, next: TurnLive): void {
   const current = threads.get(threadId);
   if (current && current.turnId === next.turnId && current.ended === next.ended && sameStatus(current.status, next.status) &&
       current.requestMessageId === next.requestMessageId && current.startedTools === next.startedTools &&
-      current.automation === next.automation && current.waiting === next.waiting) return;
+      current.automation === next.automation && current.recentAutomation === next.recentAutomation &&
+      current.waiting === next.waiting) return;
   threads.delete(threadId);
   threads.set(threadId, next);
   if (threads.size > MAX_THREADS) threads.delete(threads.keys().next().value!);
@@ -81,23 +84,30 @@ export function noteTurnEvent(event: RuntimeEvent): void {
         const actions = live.automation ?? [];
         const active = actions.find(({ id }) => id === itemId);
         if (automation.phase === "started" && !active) {
-          put(threadId, { ...live, automation: [...actions, { id: itemId, action: automation.action }] });
+          const action = { id: itemId, action: automation.action };
+          put(threadId, { ...live, automation: [...actions, action],
+            recentAutomation: { ...action, expiresAt: Date.now() + AUTOMATION_LABEL_MIN_MS } });
         } else if (automation.phase === "finished" && active?.action === automation.action) {
-          put(threadId, { ...live, automation: actions.filter(({ id }) => id !== itemId) });
+          const remaining = actions.filter(({ id }) => id !== itemId);
+          const recentAutomation = remaining.length && live.recentAutomation?.id === itemId ? undefined : live.recentAutomation;
+          put(threadId, { ...live, automation: remaining, recentAutomation });
         }
         return;
       }
       const startedTools = itemId && event.toolState === "running" ? startTool(live.startedTools, itemId, activity)
         : itemId && event.toolState === "pending" ? live.startedTools?.filter((step) => step.id !== itemId) : live.startedTools;
-      return put(threadId, { ...live, startedTools, ended: false, status: {
+      const newTool = itemId && event.toolState === "running" && !live.startedTools?.some((step) => step.id === itemId);
+      return put(threadId, { ...live, startedTools, recentAutomation: newTool ? undefined : live.recentAutomation, ended: false, status: {
         activity, ...(tool ? { tool } : {}), ...(file ? { file } : {}), ...(bytes !== undefined ? { bytes } : {}), ...(itemId ? { itemId } : {}),
         ...(target ? { target } : {}), ...(detail ? { detail } : {}), ...(quiet ? { quiet } : {}), ...(tail?.length ? { tail } : {}),
       } });
     }
-    case "content.delta":
-      return put(threadId, { ...live, waiting: undefined, ended: false,
-        status: event.streamKind === "assistant_text" && !event.synthetic ? { activity: "reply" }
+    case "content.delta": {
+      const reply = event.streamKind === "assistant_text" && !event.synthetic;
+      return put(threadId, { ...live, waiting: undefined, ended: false, recentAutomation: reply ? undefined : live.recentAutomation,
+        status: reply ? { activity: "reply" }
           : event.streamKind === "reasoning_text" ? { activity: "thinking" } : null });
+    }
     case "item.started": {
       const status = live.status?.itemId && live.status.itemId === event.itemId ? live.status : null;
       if (event.itemType !== "tool") return put(threadId, { ...live, ended: false, status });
@@ -105,21 +115,24 @@ export function noteTurnEvent(event: RuntimeEvent): void {
       const activity = event.step?.activity ?? status?.activity ?? "tool";
       const startedTools = event.toolState === "pending" ? live.startedTools?.filter((step) => step.id !== id)
         : startTool(live.startedTools, id, activity);
-      return put(threadId, { ...live, ended: false, status, waiting: undefined, startedTools });
+      const newTool = event.toolState !== "pending" && !live.startedTools?.some((step) => step.id === id);
+      return put(threadId, { ...live, ended: false, status, waiting: undefined, startedTools,
+        recentAutomation: newTool ? undefined : live.recentAutomation });
     }
     case "item.completed": {
       const startedTools = event.itemType !== "tool" ? live.startedTools
         : event.itemId ? live.startedTools?.filter((step) => step.id !== event.itemId) : undefined;
-      return put(threadId, { ...live, status: null, startedTools });
+      return put(threadId, { ...live, status: null, startedTools,
+        recentAutomation: event.itemType === "assistant_text" && !event.synthetic ? undefined : live.recentAutomation });
     }
     case "request.opened":
-      return put(threadId, { ...live, status: null, startedTools: undefined, automation: undefined, waiting: undefined });
+      return put(threadId, { ...live, status: null, startedTools: undefined, automation: undefined, recentAutomation: undefined, waiting: undefined });
     case "turn.wait_started":
-      return put(threadId, { ...live, waiting: "resource" });
+      return put(threadId, { ...live, waiting: "resource", recentAutomation: undefined });
     case "turn.wait_ended":
       return put(threadId, { ...live, waiting: undefined });
     case "turn.retrying":
-      return put(threadId, { ...live, status: null, startedTools: undefined, automation: undefined, waiting: "retry" });
+      return put(threadId, { ...live, status: null, startedTools: undefined, automation: undefined, recentAutomation: undefined, waiting: "retry" });
     default:
       if (live !== current) put(threadId, live);
   }

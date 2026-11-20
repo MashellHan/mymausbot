@@ -175,10 +175,13 @@ export function createAppTriggerHost(deps: AppTriggerHostDeps) {
     if (!context.ownsThread(context.from.id, context.threadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
     if (path === "/api/internal/trigger-events") {
       if (context.guestDriven) return json(res, 403, { error: GUEST_REFUSAL });
+      const finish = context.startAutomation?.("view");
       try {
         return json(res, 200, await catalog(context.from, url.searchParams.get("app") ?? undefined, url.searchParams.get("search") ?? undefined));
       } catch (error) {
         return json(res, 200, { error: `The events could not be listed: ${error instanceof Error ? error.message : String(error)}` });
+      } finally {
+        finish?.();
       }
     }
     const target = triggerTarget(context.from, url.searchParams.get("forBotId") ?? undefined, (id) => deps.store.bot(id));

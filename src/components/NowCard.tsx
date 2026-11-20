@@ -5,7 +5,7 @@ import { useStoreDispatch } from "@/state/store-select";
 import type { TurnLive } from "@/state/turn-status";
 import { cn } from "@/lib/cn";
 import { focusActivityRun } from "@/lib/activity-focus";
-import { chatLiveStatusKey, useTurnStatusLanguage } from "@/lib/chat-live-status";
+import { useChatLiveStatusKey, useTurnStatusLanguage } from "@/lib/chat-live-status";
 import { t } from "@/lib/i18n";
 import { nowSteps, type NowStep, type NowStepState } from "@/lib/now-steps";
 
@@ -46,7 +46,7 @@ export function NowCard({ steps, tail, onOpenActivity }: { steps: readonly NowSt
 export function useTurnNow(bot: Pick<Bot, "id" | "name" | "threadId">, messages: readonly Message[], lastMessage: Message | undefined, live: TurnLive) {
   const dispatch = useStoreDispatch();
   const { language, pack } = useTurnStatusLanguage(messages, live.requestMessageId);
-  const phase = chatLiveStatusKey(live);
+  const phase = useChatLiveStatusKey(live);
   const status = live.status?.itemId && live.startedTools?.some((tool) => tool.id === live.status?.itemId) ? live.status : null;
   const steps = useMemo(() => nowSteps(messages, status), [messages, status]);
   const tail = status?.activity === "command" && "tail" in status ? status.tail : undefined;

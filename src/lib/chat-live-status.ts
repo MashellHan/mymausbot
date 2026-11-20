@@ -27,6 +27,7 @@ export function chatLiveStatusKey(live: TurnLive): LocaleKey | undefined {
   if (live.waiting === "retry") return "chat.activity.waitingToRetry";
   const action = live.automation?.at(-1)?.action;
   if (action) return AUTOMATION_LABEL[action];
+  if (live.recentAutomation && live.recentAutomation.expiresAt > Date.now()) return AUTOMATION_LABEL[live.recentAutomation.action];
   if (live.status?.activity === "reply") return "chat.activity.reply";
   const tool = live.startedTools?.at(-1);
   if (!tool) return undefined;
@@ -35,11 +36,23 @@ export function chatLiveStatusKey(live: TurnLive): LocaleKey | undefined {
   return Object.hasOwn(TOOL_LABEL, activity) ? TOOL_LABEL[activity] : "chat.activity.usingTool";
 }
 
+export function useChatLiveStatusKey(live: TurnLive): LocaleKey | undefined {
+  const expiresAt = live.automation?.length ? undefined : live.recentAutomation?.expiresAt;
+  const [, refresh] = useState(0);
+  useEffect(() => {
+    if (expiresAt === undefined) return;
+    const timer = setTimeout(() => refresh((count) => count + 1), Math.max(0, expiresAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
+  return chatLiveStatusKey(live);
+}
+
 function messageLanguage(messages: readonly Message[], requestMessageId: string | undefined, app: string): string {
   const message = requestMessageId && messages.find((row) => row.id === requestMessageId);
   if (!message || message.role !== "user" || message.kind !== "text" || message.automated || message.queued || message.reaction ||
       message.id.startsWith("optimistic-") || peerLine(message)) return app;
   const text = message.text?.replace(/```[\s\S]*?```|`[^`]*`/g, "") ?? "";
+  if (/^\s*(?:check|create|update|rename|pause|resume|run|delete)\s+(?:(?:this|the|my)\s+)?automations?[.!?]?\s*$/i.test(text)) return "en";
   const han = text.match(/\p{Script=Han}/gu)?.length ?? 0;
   const latin = text.match(/\p{Script=Latin}/gu)?.length ?? 0;
   const kana = text.match(/[\p{Script=Hiragana}\p{Script=Katakana}]/gu)?.length ?? 0;

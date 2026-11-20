@@ -298,6 +298,7 @@ describe("verified automation updates in the accepted turn language", () => {
       expect(statusLine()).toBe(label);
       engine({ type: "turn.progress", activity: "tool", itemId: "other", automation: { action, phase: "finished" } });
       expect(statusLine()).toBe(label);
+      act(() => vi.advanceTimersByTime(600));
       engine({ type: "turn.progress", activity: "tool", itemId: action, automation: { action, phase: "finished" } });
       expect(statusLine()).toBe("");
     }
@@ -308,14 +309,48 @@ describe("verified automation updates in the accepted turn language", () => {
     expect(statusLine()).toBe("Writing a reply");
   });
 
+  it("renders a verified operation when start and finish are batched before paint", () => {
+    mode.advanced = false;
+    engine({ type: "turn.started", requestMessageId: ask.id });
+    render(busyBot([ask]));
+    const fast = (id: string, action: "view" | "update" | "pause") => act(() => {
+      engine({ type: "turn.progress", activity: "tool", itemId: id, automation: { action, phase: "started" } });
+      engine({ type: "turn.progress", activity: "tool", itemId: id, automation: { action, phase: "finished" } });
+    });
+    fast("update", "update");
+    expect(statusLine()).toBe("Updating automation");
+    act(() => vi.advanceTimersByTime(400));
+    expect(statusLine()).toBe("Updating automation");
+    act(() => vi.advanceTimersByTime(101));
+    expect(statusLine()).toBe("");
+
+    fast("view", "view");
+    expect(statusLine()).toBe("Checking automations");
+    fast("pause", "pause");
+    expect(statusLine()).toBe("Pausing automation");
+    engine({ type: "item.started", itemType: "tool", itemId: "read", step: { activity: "read", target: "private-path" } });
+    expect(statusLine()).toBe("Reading a file");
+    expect(mascot()?.outerHTML).not.toContain("private-path");
+
+    fast("last-update", "update");
+    expect(statusLine()).toBe("Updating automation");
+    engine({ type: "turn.completed", ok: false });
+    expect(statusLine() ?? "").not.toContain("Updating automation");
+    engine({ type: "turn.started", turnId: "t2" });
+    expect(statusLine()).toBe("");
+  });
+
   it.each([
     { app: "en", language: "zh", text: "请更新这条自动化的运行时间。", status: "正在更新自动化" },
     { app: "zh", language: "en", text: "Please update when this automation runs.", status: "Updating automation" },
     { app: "zh", language: "en", text: "Update the daily automation schedule tomorrow.", status: "Updating automation" },
+    { app: "zh", language: "en", text: "Update automation.", status: "Updating automation" },
+    { app: "zh", language: "en", text: "Rename this automation.", status: "Updating automation" },
     { app: "en", language: "ja", text: "この自動化を更新してください。", status: "自動化を更新中" },
     { app: "en", language: "ko", text: "이 자동화를 업데이트해 주세요.", status: "자동화 업데이트 중" },
     { app: "zh", language: "zh", text: "OK", status: "正在更新自动化" },
     { app: "en", language: "en", text: "好", status: "Updating automation" },
+    { app: "fr", language: "fr", text: "Modifier cette automatisation.", status: "Mise à jour de l’automatisation" },
   ])("localizes the checked update from $language in the $app app", async ({ app, language, text, status }) => {
     await Promise.all([loadLocalePack(app), loadLocalePack(language)]);
     setLocale(app);
