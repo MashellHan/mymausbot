@@ -49,7 +49,7 @@ export type RuntimeEvent = RuntimeEventBase &
       }
     | { type: "session.model-variants"; model: string; variants: ModelVariantState }
     | { type: "session.exited"; reason?: string }
-    | { type: "turn.started" }
+    | { type: "turn.started"; requestMessageId?: string }
     | {
         type: "turn.retrying";
         /** 1-based: the retry about to be launched (1 = first relaunch). */

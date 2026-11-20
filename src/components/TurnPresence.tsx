@@ -89,6 +89,8 @@ function SilencePart({ threadId }: { threadId: string }) {
 export function TurnPresence({
   avatar,
   visible,
+  strictStatus = false,
+  lang,
   label,
   phrases,
   phase,
@@ -107,6 +109,8 @@ export function TurnPresence({
 }: {
   avatar: ReactNode;
   visible: boolean;
+  strictStatus?: boolean;
+  lang?: string;
   label?: string;
   phrases?: readonly string[];
   phase?: string;
@@ -172,35 +176,35 @@ export function TurnPresence({
     document.addEventListener("keydown", fold);
     return () => document.removeEventListener("keydown", fold);
   }, [open]);
-  const lead = label ?? t("chat.activity.working");
+  const lead = label ?? (strictStatus ? undefined : t("chat.activity.working"));
   const now = phrases && phrases.length > 0 ? phrases : null;
   const { current, previous } = useRotatingPhrase(now ?? NOTHING, phase ?? now?.[0] ?? "", seed, mounted && showWorking && now !== null);
   if (!mounted) return null;
   const status = showWorking && simple ? (
-    <span id={statusId} className="flex min-w-0 items-baseline gap-x-1.5 text-[14px] leading-[22px] text-ink-tertiary" data-turn-status>
-      <span className="turn-phrase turn-phrase-quiet relative grid min-w-0" title={hover} data-turn-now={now ? "" : undefined}>
+    <span id={statusId} lang={lang} className="flex min-w-0 items-baseline gap-x-1.5 text-[14px] leading-[22px] text-ink-tertiary" data-turn-status>
+      <span className="turn-phrase turn-phrase-quiet relative grid min-w-0" title={strictStatus ? undefined : hover} data-turn-now={now ? "" : undefined}>
         {now ? (
           <ShimmerPhrase key={`in:${current}`} text={label ? `${label} · ${current}` : current} className={cn("truncate", previous !== null && "turn-phrase-in")} />
         ) : (
-          <span>{label ?? t("chat.typing")}</span>
+          <span>{label ?? (strictStatus ? null : t("chat.typing"))}</span>
         )}
       </span>
       {now && quiet && <QuietPart quiet={quiet} />}
     </span>
   ) : showWorking ? (
-    <span id={statusId} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-1 leading-none" data-turn-status>
-      {now ? <span className="text-[13px] text-ink-secondary">{lead}</span> : <ShimmerPhrase text={lead} className="text-[13px]" />}
+    <span id={statusId} lang={lang} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-1 leading-none" data-turn-status>
+      {lead && (now ? <span className="text-[13px] text-ink-secondary">{lead}</span> : <ShimmerPhrase text={lead} className="text-[13px]" />)}
       {since !== null && (
         <>
-          <Dot />
+          {lead && <Dot />}
           <WorkingTimer since={since} className="text-[12px] text-ink-tertiary" />
         </>
       )}
       {now && (
         <>
-          <Dot />
+          {(lead || since !== null) && <Dot />}
           {/* One phrase at a time: a fading old phrase sat out of flow and a longer one drew over the size beside it. */}
-          <span className="turn-phrase relative grid min-w-0 max-w-full text-[13px]" title={hover} data-turn-now>
+          <span className="turn-phrase relative grid min-w-0 max-w-full text-[13px]" title={strictStatus ? undefined : hover} data-turn-now>
             <ShimmerPhrase
               key={`in:${current}`}
               text={current}
@@ -222,7 +226,8 @@ export function TurnPresence({
   return (
     <div ref={root} className={cn("turn-presence flex min-w-0 max-w-full flex-col items-start", className)}>
       <div
-        title={simple && showWorking ? [lead, since !== null ? formatElapsed(Date.now() - since) : null, detail ?? (now ? current : null), size].filter(Boolean).join(" · ") : undefined}
+        title={simple && showWorking ? [lead, since !== null ? formatElapsed(Date.now() - since) : null,
+          (strictStatus ? undefined : detail) ?? (now ? current : null), strictStatus ? undefined : size].filter(Boolean).join(" · ") : undefined}
         className={cn(
           simple ? "flex h-9 min-w-0 max-w-full items-center gap-2 ps-2" : "flex min-w-0 max-w-full items-center gap-2",
           presencePhase === "think" && "turn-mascot-in",

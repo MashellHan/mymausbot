@@ -5,9 +5,8 @@ import { useStoreDispatch } from "@/state/store-select";
 import type { TurnLive } from "@/state/turn-status";
 import { cn } from "@/lib/cn";
 import { focusActivityRun } from "@/lib/activity-focus";
-import { friendlyNowPhrases } from "@/lib/friendly-activity";
+import { chatLiveStatusKey, useTurnStatusLanguage } from "@/lib/chat-live-status";
 import { t } from "@/lib/i18n";
-import { turnNowPhrases } from "@/lib/live-activity";
 import { nowSteps, type NowStep, type NowStepState } from "@/lib/now-steps";
 
 const MARK: Record<NowStepState, string> = { done: "✓", failed: "✕", now: "●" };
@@ -21,7 +20,7 @@ export function NowCard({ steps, tail, onOpenActivity }: { steps: readonly NowSt
           {steps.map((step) => (
             <li key={step.id} className="flex min-w-0 items-baseline gap-2 text-[13px] leading-5" data-now-step={step.state}>
               <span aria-hidden="true" className="w-3 shrink-0 text-center text-[11px] text-ink-tertiary">{MARK[step.state]}</span>
-              <span dir="auto" title={step.hover} className={cn("min-w-0 truncate", step.state === "now" ? "text-ink" : "text-ink-secondary")}>{step.label}</span>
+              <span dir="auto" className={cn("min-w-0 truncate", step.state === "now" ? "text-ink" : "text-ink-secondary")}>{step.label}</span>
               <span className="sr-only">{t(STATE[step.state])}</span>
             </li>
           ))}
@@ -44,13 +43,12 @@ export function NowCard({ steps, tail, onOpenActivity }: { steps: readonly NowSt
 
 /** Everything the working line of a bot's chat shows: what is happening now, in each mode's words, how a long step is
  * doing, and the card it unfolds. */
-export function useTurnNow(bot: Pick<Bot, "id" | "name" | "threadId">, messages: readonly Message[], lastMessage: Message | undefined, live: TurnLive, advanced: boolean) {
+export function useTurnNow(bot: Pick<Bot, "id" | "name" | "threadId">, messages: readonly Message[], lastMessage: Message | undefined, live: TurnLive) {
   const dispatch = useStoreDispatch();
-  const status = live.status;
-  const exact = turnNowPhrases(status, lastMessage);
-  const shown = advanced ? exact : friendlyNowPhrases(status, lastMessage);
+  const { language, pack } = useTurnStatusLanguage(messages, live.requestMessageId);
+  const phase = chatLiveStatusKey(live);
+  const status = live.status?.itemId && live.startedTools?.some((tool) => tool.id === live.status?.itemId) ? live.status : null;
   const steps = useMemo(() => nowSteps(messages, status), [messages, status]);
-  const quiet = status && "quiet" in status ? status.quiet : undefined;
   const tail = status?.activity === "command" && "tail" in status ? status.tail : undefined;
   const turnId = live.turnId ?? lastMessage?.turnId;
   const remote = typeof window !== "undefined" && window.ogb?.remoteClient?.active === true;
@@ -59,12 +57,10 @@ export function useTurnNow(bot: Pick<Bot, "id" | "name" | "threadId">, messages:
     dispatch({ type: "toggleActivity", open: true });
   };
   return {
-    phrases: shown?.phrases,
-    phase: shown?.phase,
-    size: shown?.size,
-    detail: advanced ? undefined : exact?.phrases[0],
-    hover: exact?.hover,
-    quiet,
+    phrases: phase && pack ? [t(phase, undefined, pack)] : undefined,
+    phase,
+    lang: language,
+    pack,
     cardLabel: t("chat.now.title", { name: bot.name }),
     card: steps.length > 0 || tail?.length ? <NowCard steps={steps} tail={tail} onOpenActivity={openActivity} /> : undefined,
   };

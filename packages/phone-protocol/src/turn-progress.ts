@@ -4,6 +4,12 @@
 /** What a tool call is doing, in the status line's words: writing or changing a file, running a command, searching the
  * web, reading a file or a page, searching files, or any other tool. */
 export type TurnProgressActivity = "write" | "edit" | "command" | "web" | "read" | "fetch" | "search" | "tool";
+const automationActions = ["view", "create", "update", "pause", "resume", "run_now", "delete"] as const;
+export type TurnAutomationAction = typeof automationActions[number];
+
+export function isTurnAutomationAction(value: unknown): value is TurnAutomationAction {
+  return automationActions.some((action) => action === value);
+}
 
 /** What one tool call works on, in the words the status line, its chip and the sidebar use: a command's program and
  * main target ("scrape.py", "pnpm test"), a web search's query, a page's site, a file's name. Server-made from redacted
@@ -24,6 +30,8 @@ export type StepQuiet = { kind: "output"; at: number } | { kind: "network" | "bu
 export interface TurnProgressFields {
   type: "turn.progress";
   activity: TurnProgressActivity;
+  /** The authorized host's automation operation, paired by itemId and turnId. */
+  automation?: { action: TurnAutomationAction; phase: "started" | "finished" };
   /** The engine's own tool name, for a tool the activity does not name. */
   tool?: string;
   /** The bare file name the call works on, once the engine has said it. */
