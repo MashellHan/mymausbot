@@ -191,6 +191,10 @@ describe("bounded tool details", () => {
       source + ' text("<SYSTEM_NOTIFICATION>internal</SYSTEM_NOTIFICATION>");',
       source + String.raw` text("\x3cSYSTEM_NOTIFICATION>internal\x3e");`,
       source + ' text(`' + String.raw`\u003cSYSTEM_NOTIFICATION>internal` + '`);',
+      source + ' text(`' + String.raw`\u{3c}SYSTEM_NOTIFICATION>internal\u{3e}` + '`);',
+      source.replace('max_output_tokens: 300', String.raw`workdir: "{\"co\u{6f}kie\":\"fixture-value\"}"`),
+      'const text = replacement; ' + source,
+      'const Promise = replacement; await Promise.all([' + command + ']);',
       source.replace('max_output_tokens: 300', String.raw`workdir: "{\"co\x6fkie\":\"fixture-value\"}"`),
       source + ' text("' + "a".repeat(90) + '");',
       source.replace('"API_TOKEN=fixture-secret git status --short"', 'build("API_TOKEN=fixture-secret git status --short")'),
@@ -223,6 +227,12 @@ describe("bounded tool details", () => {
       }
     `)).toEqual({ text: "cmd: printf one; cmd: printf two", clipped: false, detailStatus: "available" });
     expect(show(`
+      const leaf = "git status --short";
+      const command = leaf;
+      const options = { cmd: command, max_output_tokens: 300 };
+      await tools.exec_command(options);
+    `)).toEqual({ text: "cmd: git status --short", clipped: false, detailStatus: "available" });
+    expect(show(`
       const options = [{ cmd: "rg --files src" }, { cmd: "git diff --stat" }];
       for (const option of options) await tools.exec_command(option);
     `)).toEqual({ text: "cmd: rg --files src; cmd: git diff --stat", clipped: false, detailStatus: "available" });
@@ -239,8 +249,15 @@ describe("bounded tool details", () => {
     `);
     expect(mixed).toMatchObject({ text: "[Arguments unavailable]", detailStatus: "withheld" });
     expect(show('const options = [{ cmd: "git status" }, dynamicOptions]; for (const option of options) await tools.exec_command(option);'))
-      .toEqual({ text: "cmd: git status", clipped: true, detailStatus: "available" });
+      .toMatchObject({ detailStatus: "withheld" });
     for (const source of [
+      'const options = { cmd: "git status", workdir: chooseWorkdir() }; await tools.exec_command(options);',
+      'const options = [{ cmd: "git status" }, chooseOptions()]; for (const option of options) await tools.exec_command(option);',
+      `await tools.exec_command({ cmd: "git status" });
+       const values = [0, 1, 2, 3, 4, 5, 6, 7];
+       for (const outer of values) {
+         for (const inner of values) text("safe");
+       }`,
       'let command = "git status"; await tools.exec_command({ cmd: command });',
       'const command = "git status"; command = "git diff"; await tools.exec_command({ cmd: command });',
       'const commands = sourceCommands(); for (const command of commands) await tools.exec_command({ cmd: command });',
@@ -276,6 +293,19 @@ describe("bounded tool details", () => {
     expect(visibleToolDetail("tool-result", [header, command("Ready"), command("Stored")], "codex", "exec")).toEqual({
       text: "Script completed Wall time 0.123 seconds Exit code: 0 Exit code: 0 Ready Stored", clipped: false, detailStatus: "available",
     });
+    const masked = visibleToolDetail("tool-result", [header, command("prefix ghp_abcdefghijklmnopqrstuv"), command("suffix")], "codex", "exec");
+    expect(masked).toEqual({
+      text: "Script completed Wall time 0.123 seconds Exit code: 0 Exit code: 0 prefix «redacted 26 chars» suffix",
+      clipped: false, detailStatus: "available",
+    });
+    expect(masked.text).not.toContain("abcdefghijklmnopqrstuv");
+    const splitMask = visibleToolDetail("tool-result", [
+      header,
+      command("-----BEGIN TEST PRIVATE KEY-----\nfixture-cross-block-secret"),
+      command("-----END TEST PRIVATE KEY-----"),
+    ], "codex", "exec");
+    expect(splitMask.text).toContain("«redacted");
+    expect(splitMask.text).not.toContain("fixture-cross-block-secret");
     const mixedBlocks = visibleToolDetail("tool-result", [header, command("Ready"), command("A".repeat(80))], "codex", "exec");
     expect(mixedBlocks).toEqual({
       text: "Script completed Wall time 0.123 seconds Exit code: 0 Exit code: 0 · Output excerpt unavailable",

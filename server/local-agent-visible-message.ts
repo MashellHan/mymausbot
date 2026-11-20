@@ -18,6 +18,8 @@ const BASE64_ENCODING = /^base64(?:-?url)?$/i;
 const ENCODED_TOOL_TEXT = /data:[^\s,]{0,100};base64,|[A-Za-z0-9+/_-]{64,}={0,2}/i;
 const MAX_TOOL_SOURCE = 16 * 1024;
 const MAX_TOOL_FIELDS = 8;
+const MAX_STATIC_EXEC_WORK = 128;
+const STATIC_WRAPPER_NAMES = new Set(["tools", "text", "Promise"]);
 const TOOL_RESULT_UNAVAILABLE = "[Result details unavailable]";
 const EXEC_RUN_STATUS = /^Script (?:completed|failed)\r?\nWall time:? \d{1,5}(?:\.\d{1,12})? seconds\r?\nOutput:\r?\n?$/;
 const EXEC_COMMAND_FIELDS = new Set(["chunk_id", "wall_time_seconds", "exit_code", "session_id", "original_token_count", "output"]);
@@ -57,6 +59,7 @@ function privateToolDeclaration(key: string, value: string): boolean {
 
 function normalizedToolLabels(value: string): string {
   return value.replace(/\\x([\da-f]{2})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/\\u\{([\da-f]{1,6})\}/gi, (_escape, hex: string) => String.fromCodePoint(Math.min(Number.parseInt(hex, 16), 0x10ffff)))
     .replace(/\\u([\da-f]{4})/gi, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
     .replace(/\\+(?=["'])/g, "");
 }
@@ -307,51 +310,84 @@ function safeShellCommandText(value: string): { text: string | null; clipped: bo
 
 type StaticExecCommand = { start: number; end: number; value: string };
 type StaticExecEnvironment = ReadonlyMap<string, Expression>;
-type StaticExecScan = { commands: StaticExecCommand[]; calls: number; clipped: boolean };
+type StaticExecScan = { commands: StaticExecCommand[]; calls: number; work: number; failed: boolean; clipped: boolean };
+
+function spendExecWork(scan: StaticExecScan): boolean {
+  if (scan.failed || scan.work <= 0) { scan.failed = true; return false; }
+  scan.work--;
+  return true;
+}
 
 function staticIdentifier(node: Expression): string | null {
   return node.type === "Identifier" ? node.name : null;
 }
 
-function staticLiteral(node: Expression, env: StaticExecEnvironment): Literal | null {
+function staticLiteral(node: Expression, env: StaticExecEnvironment, scan: StaticExecScan,
+  seen = new Set<string>()): Literal | null {
+  if (!spendExecWork(scan)) return null;
   if (node.type === "Literal") return node;
   const name = staticIdentifier(node);
-  if (!name) return null;
+  if (!name || seen.has(name)) return null;
   const value = env.get(name);
-  return value?.type === "Literal" ? value : null;
+  return value ? staticLiteral(value, env, scan, new Set([...seen, name])) : null;
 }
 
-function staticObject(node: Expression, env: StaticExecEnvironment): ObjectExpression | null {
+function staticObject(node: Expression, env: StaticExecEnvironment, scan: StaticExecScan,
+  seen = new Set<string>()): ObjectExpression | null {
+  if (!spendExecWork(scan)) return null;
   if (node.type === "ObjectExpression") return node;
   const name = staticIdentifier(node);
-  if (!name) return null;
+  if (!name || seen.has(name)) return null;
   const value = env.get(name);
-  return value?.type === "ObjectExpression" ? value : null;
+  return value ? staticObject(value, env, scan, new Set([...seen, name])) : null;
 }
 
-function literalExecCommand(call: CallExpression, env: StaticExecEnvironment): StaticExecCommand | null {
+function inertStaticValue(node: Expression, env: StaticExecEnvironment, scan: StaticExecScan,
+  seen = new Set<string>()): boolean {
+  if (!spendExecWork(scan)) return false;
+  if (node.type === "Literal") return true;
+  if (node.type === "Identifier") {
+    if (seen.has(node.name)) return false;
+    const value = env.get(node.name);
+    return Boolean(value && inertStaticValue(value, env, scan, new Set([...seen, node.name])));
+  }
+  if (node.type === "ArrayExpression") {
+    return node.elements.length <= MAX_TOOL_FIELDS && node.elements.every(element =>
+      element !== null && element.type !== "SpreadElement" && inertStaticValue(element, env, scan, seen));
+  }
+  if (node.type === "ObjectExpression") {
+    return node.properties.length <= MAX_TOOL_FIELDS && node.properties.every(property =>
+      property.type === "Property" && !property.computed && !property.method && property.kind === "init" &&
+      inertStaticValue(property.value, env, scan, seen));
+  }
+  return false;
+}
+
+function literalExecCommand(call: CallExpression, env: StaticExecEnvironment,
+  scan: StaticExecScan): StaticExecCommand | null {
+  if (!spendExecWork(scan)) return null;
   const { callee } = call;
   if (call.optional || callee.type !== "MemberExpression" || callee.computed || callee.optional ||
-      callee.object.type !== "Identifier" || callee.object.name !== "tools" ||
+      callee.object.type !== "Identifier" || callee.object.name !== "tools" || env.has("tools") ||
       callee.property.type !== "Identifier" || callee.property.name !== "exec_command") return null;
   const [argument] = call.arguments;
   if (call.arguments.length !== 1 || !argument || argument.type === "SpreadElement") return null;
-  const object = staticObject(argument, env);
-  if (!object) return null;
+  const object = staticObject(argument, env, scan);
+  if (!object || !inertStaticValue(object, env, scan)) return null;
   const seen = new Set<string>();
   let command: StaticExecCommand | null = null;
   for (const property of object.properties) {
-    if (property.type !== "Property" || property.computed || property.kind !== "init" || property.method) return null;
+    if (!spendExecWork(scan) || property.type !== "Property" || property.computed || property.kind !== "init" || property.method) return null;
     const key = property.key.type === "Identifier" ? property.key.name : property.key.type === "Literal" ? property.key.value : null;
     if (typeof key !== "string" || seen.has(key) || !EXEC_COMMAND_OPTIONS.has(key) ||
         (property.value.type !== "Literal" && property.value.type !== "Identifier")) return null;
     seen.add(key);
-    const input = staticLiteral(property.value, env);
+    const input = staticLiteral(property.value, env, scan);
     if (!input || EXEC_COMMAND_OPTIONS.get(key) !== typeof input.value) return null;
     if (typeof input.value !== "string") continue;
     if (key === "cmd") command = { start: input.start, end: input.end, value: input.value };
     else if (input.value.trim() && (!safeToolText(input.value, true).text ||
-        INTERNAL_ENVELOPE.test(input.value.replace(/[\p{Cc}\p{Cf}]/gu, "")))) return null;
+        INTERNAL_ENVELOPE.test(normalizedToolLabels(input.value).replace(/[\p{Cc}\p{Cf}]/gu, "")))) return null;
   }
   return command;
 }
@@ -373,25 +409,27 @@ function exactExecExpression(node: Expression): CallExpression | null {
   return null;
 }
 
-function execCallsInExpression(node: Expression): CallExpression[] | null {
+function execCallsInExpression(node: Expression, env: StaticExecEnvironment,
+  scan: StaticExecScan): CallExpression[] | null {
+  if (!spendExecWork(scan)) return null;
   const exact = exactExecExpression(node);
-  if (exact) return [exact];
-  if (node.type === "AwaitExpression") return execCallsInExpression(node.argument);
+  if (exact) return env.has("tools") ? null : [exact];
+  if (node.type === "AwaitExpression") return execCallsInExpression(node.argument, env, scan);
   if (node.type === "CallExpression" && !node.optional) {
     const { callee } = node;
-    const isText = callee.type === "Identifier" && callee.name === "text";
+    const isText = callee.type === "Identifier" && callee.name === "text" && !env.has("text");
     const isPromiseAll = callee.type === "MemberExpression" && !callee.computed && !callee.optional &&
-      callee.object.type === "Identifier" && callee.object.name === "Promise" &&
+      callee.object.type === "Identifier" && callee.object.name === "Promise" && !env.has("Promise") &&
       callee.property.type === "Identifier" && callee.property.name === "all";
     if (isText && node.arguments.length === 1) {
       const argument = node.arguments[0];
-      return argument && argument.type !== "SpreadElement" ? execCallsInExpression(argument) : null;
+      return argument && argument.type !== "SpreadElement" ? execCallsInExpression(argument, env, scan) : null;
     }
     if (isPromiseAll && node.arguments.length === 1 && node.arguments[0]?.type === "ArrayExpression") {
       const calls: CallExpression[] = [];
       for (const element of node.arguments[0].elements) {
-        if (!element || element.type === "SpreadElement") return null;
-        const found = execCallsInExpression(element);
+        if (!spendExecWork(scan) || !element || element.type === "SpreadElement") return null;
+        const found = execCallsInExpression(element, env, scan);
         if (!found) return null;
         calls.push(...found);
       }
@@ -400,35 +438,31 @@ function execCallsInExpression(node: Expression): CallExpression[] | null {
   }
   return null;
 }
-
-function recordExecCalls(calls: CallExpression[], env: StaticExecEnvironment, scan: StaticExecScan): void {
+function recordExecCalls(calls: CallExpression[], env: StaticExecEnvironment, scan: StaticExecScan): boolean {
   scan.calls += calls.length;
-  if (scan.calls > MAX_TOOL_FIELDS) { scan.clipped = true; return; }
+  if (scan.calls > MAX_TOOL_FIELDS || scan.failed) { scan.failed = true; return false; }
   for (const call of calls) {
-    const command = literalExecCommand(call, env);
+    const command = literalExecCommand(call, env, scan);
     if (command) scan.commands.push(command);
     else scan.clipped = true;
   }
+  return !scan.failed;
 }
 
-function arrayValues(node: Expression, env: StaticExecEnvironment): Expression[] | null {
-  if (node.type !== "ArrayExpression") {
-    const name = staticIdentifier(node);
-    if (!name) return null;
-    const binding = env.get(name);
+function arrayValues(node: Expression, env: StaticExecEnvironment, scan: StaticExecScan): Expression[] | null {
+  if (!spendExecWork(scan)) return null;
+  if (node.type === "Identifier") {
+    const binding = env.get(node.name);
     if (binding?.type !== "ArrayExpression") return null;
     node = binding;
   }
-  if (node.type !== "ArrayExpression" || node.elements.length > MAX_TOOL_FIELDS) return null;
-  const values: Expression[] = [];
-  for (const element of node.elements) {
-    if (!element || element.type === "SpreadElement") return null;
-    values.push(element);
-  }
-  return values;
+  if (node.type !== "ArrayExpression" || node.elements.length > MAX_TOOL_FIELDS ||
+      !inertStaticValue(node, env, scan)) return null;
+  return node.elements.flatMap(element => element && element.type !== "SpreadElement" ? [element] : []);
 }
 
 function scanExecStatement(statement: Statement, source: string, env: StaticExecEnvironment, names: Set<string>, scan: StaticExecScan): boolean {
+  if (!spendExecWork(scan)) return false;
   if (statement.type === "BlockStatement") {
     for (const child of statement.body) if (!scanExecStatement(child, source, env, names, scan)) return false;
     return true;
@@ -436,11 +470,11 @@ function scanExecStatement(statement: Statement, source: string, env: StaticExec
   if (statement.type === "EmptyStatement") return true;
   if (statement.type === "ExpressionStatement") {
     if (statement.expression.type === "AssignmentExpression" || statement.expression.type === "UpdateExpression") return false;
-    const calls = execCallsInExpression(statement.expression);
-    if (calls) { recordExecCalls(calls, env, scan); return true; }
+    const calls = execCallsInExpression(statement.expression, env, scan);
+    if (calls) return recordExecCalls(calls, env, scan);
     const { expression } = statement;
     return expression.type === "CallExpression" && !expression.optional &&
-      expression.callee.type === "Identifier" && expression.callee.name === "text" &&
+      expression.callee.type === "Identifier" && expression.callee.name === "text" && !env.has("text") &&
       expression.arguments.length === 1 && expression.arguments[0]?.type === "Literal" &&
       typeof expression.arguments[0].value === "string" &&
       !/\bexec_command\b/.test(source.slice(statement.start, statement.end));
@@ -448,15 +482,15 @@ function scanExecStatement(statement: Statement, source: string, env: StaticExec
   if (statement.type === "VariableDeclaration") {
     if (statement.kind !== "const") return false;
     for (const declaration of statement.declarations) {
-      if (declaration.id.type !== "Identifier" || declaration.id.name === "tools" || names.has(declaration.id.name) || !declaration.init) return false;
+      if (declaration.id.type !== "Identifier" || STATIC_WRAPPER_NAMES.has(declaration.id.name) || names.has(declaration.id.name) || !declaration.init) return false;
       names.add(declaration.id.name);
-      const calls = execCallsInExpression(declaration.init);
+      const calls = execCallsInExpression(declaration.init, env, scan);
       if (calls) {
-        recordExecCalls(calls, env, scan);
+        if (!recordExecCalls(calls, env, scan)) return false;
         continue;
       }
       const init = declaration.init;
-      if (init.type !== "Literal" && init.type !== "ObjectExpression" && init.type !== "ArrayExpression") return false;
+      if (!inertStaticValue(init, env, scan)) return false;
       env = new Map([...env, [declaration.id.name, init]]);
     }
     return true;
@@ -464,12 +498,13 @@ function scanExecStatement(statement: Statement, source: string, env: StaticExec
   if (statement.type === "ForOfStatement" && statement.await === false && statement.left.type === "VariableDeclaration" &&
       statement.left.kind === "const" && statement.left.declarations.length === 1) {
     const declaration = statement.left.declarations[0]!;
-    if (declaration.id.type !== "Identifier" || declaration.id.name === "tools" || declaration.init || names.has(declaration.id.name)) return false;
-    const values = arrayValues(statement.right, env);
+    if (declaration.id.type !== "Identifier" || STATIC_WRAPPER_NAMES.has(declaration.id.name) || declaration.init || names.has(declaration.id.name)) return false;
+    const values = arrayValues(statement.right, env, scan);
     if (!values?.length) return false;
     for (const value of values) {
+      if (!spendExecWork(scan)) return false;
       const local = new Map([...env, [declaration.id.name, value]]);
-      if (!scanExecStatement(statement.body, source, local, new Set(names), scan)) return false;
+      if (!scanExecStatement(statement.body, source, local, new Set([...names, declaration.id.name]), scan)) return false;
     }
     return true;
   }
@@ -484,10 +519,11 @@ function staticExecCommandDetail(source: string): { text: string; clipped: boole
   } catch {
     return null;
   }
-  const scan: StaticExecScan = { commands: [], calls: 0, clipped: false };
+  const scan: StaticExecScan = { commands: [], calls: 0, work: MAX_STATIC_EXEC_WORK, failed: false, clipped: false };
   let env: StaticExecEnvironment = new Map();
   for (const declaration of program.body) {
-    if (declaration.type === "ImportDeclaration" || declaration.type.startsWith("Export")) return null;
+    if (declaration.type === "ImportDeclaration" || declaration.type.startsWith("Export") ||
+        !spendExecWork(scan)) return null;
     const statement = declaration as Statement;
     if (!scanExecStatement(statement, source, env, new Set(env.keys()), scan)) return null;
     if (statement.type === "VariableDeclaration") {
@@ -496,12 +532,12 @@ function staticExecCommandDetail(source: string): { text: string; clipped: boole
       }
     }
   }
-  if (!scan.commands.length) return null;
+  if (scan.failed || !scan.commands.length) return null;
   const unique = new Map(scan.commands.map(command => [`${command.start}:${command.end}`, command]));
   const context = [...unique.values()].sort((left, right) => right.start - left.start)
     .reduce((value, command) => value.slice(0, command.start) + '""' + value.slice(command.end), source);
   const normalizedContext = normalizedToolLabels(context).replace(/[\p{Cc}\p{Cf}]/gu, "");
-  if (!safeToolText(context, true).text || INTERNAL_ENVELOPE.test(normalizedContext)) return null;
+  if (!safeToolText(normalizedContext, true).text || INTERNAL_ENVELOPE.test(normalizedContext)) return null;
   const details: string[] = [];
   let clipped = scan.clipped;
   for (const command of scan.commands) {
@@ -580,14 +616,11 @@ function codexExecResult(value: unknown): { text: string | null; clipped: boolea
   }
   const stdout = commands.map(command => command.output).join(" ");
   const whole = safeToolText(stdout);
-  const outputs = commands.map(command => safeToolText(command.output));
-  const crossBlockUnsafe = whole.text === null;
-  const excerpts = crossBlockUnsafe ? [] : outputs.flatMap(output => output.text ? [output.text] : []);
   const exitCodes = commands.flatMap(command => command.exitCode === undefined ? [] : [`Exit code: ${command.exitCode}`]);
-  const omitted = stdout.trim() !== "" && (crossBlockUnsafe || outputs.some(output => output.text === null));
-  const detail = redactedAgentText([status, ...exitCodes, ...excerpts, omitted ? "· Output excerpt unavailable" : ""]
+  const omitted = stdout.trim() !== "" && whole.text === null;
+  const detail = redactedAgentText([status, ...exitCodes, whole.text, omitted ? "· Output excerpt unavailable" : ""]
     .filter(Boolean).join(" "));
-  return { text: detail.text, clipped: detail.clipped || whole.clipped || outputs.some(output => output.clipped) || omitted };
+  return { text: detail.text, clipped: detail.clipped || whole.clipped || omitted };
 }
 
 export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unknown, runtime?: "codex" | "pi", tool?: string | null, family?: "function" | "custom"): {
