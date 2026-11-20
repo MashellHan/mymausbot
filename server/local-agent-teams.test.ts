@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdtemp, mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -691,6 +691,68 @@ describe("local Agent Team provider", () => {
       coverage: "partial", knownTokens: 70, estimatedCost: { coverage: "partial" },
     });
     expect(afterRecovery.tokenUsage24h!.estimatedCost.usd).toBeCloseTo(0.0003, 12);
+  });
+
+  it("refuses ready zero when a same-size replacement inode keeps only outside-24h tokens", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-member-inode-swap-"));
+    folders.push(home);
+    const directory = join(home, "sessions", "2026", "11", "01");
+    await mkdir(directory, { recursive: true });
+    const file = join(directory, `rollout-2026-11-01-${SESSION}.jsonl`);
+    const initialContent = [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: SESSION } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T09:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T09:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+    ].join("\n") + "\n";
+    await writeFile(file, initialContent);
+    const originalStat = await stat(file);
+    let time = Date.UTC(2026, 10, 2, 12);
+    const provider = createLocalAgentTeamsProvider({ codexHome: home, now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents: [{
+        pane_id: "w6:p1", workspace_id: "w6", name: "seat-one", agent: "codex", agent_status: "working",
+        agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION },
+      }] } }) });
+    await provider.get();
+
+    time = Date.UTC(2026, 10, 9, 12);
+    const beforeSwap = (await provider.get()).teams[0]!.agents[0]!;
+    expect(beforeSwap.tokenUsage24h).toMatchObject({ coverage: "ready", knownTokens: 130 });
+    expect(beforeSwap.tokenUsage7d).toMatchObject({ coverage: "ready", knownTokens: 130 });
+
+    const swappedContent = [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: SESSION } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-05T09:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-05T09:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+    ].join("\n") + "\n";
+    expect(Buffer.byteLength(swappedContent)).toBe(Buffer.byteLength(initialContent));
+    const replacement = join(directory, "replacement.tmp");
+    await writeFile(replacement, swappedContent);
+    await rename(replacement, file);
+    const swappedStat = await stat(file);
+    expect(swappedStat.ino).not.toBe(originalStat.ino);
+    expect(swappedStat.size).toBe(originalStat.size);
+
+    time = Date.UTC(2026, 10, 9, 12, 1);
+    const afterSwapTeam = (await provider.get()).teams[0]!;
+    expect(afterSwapTeam.agents[0]!.tokenUsage24h).toEqual({
+      coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
+    });
+    expect(afterSwapTeam.agents[0]!.tokenUsage7d).toMatchObject({
+      coverage: "partial", knownTokens: 130, estimatedCost: { coverage: "partial" },
+    });
+    expect(afterSwapTeam.agents[0]!.tokenUsage7d!.estimatedCost.usd).toBeCloseTo(0.0006, 12);
+    expect(afterSwapTeam.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 0 });
+    expect(afterSwapTeam.tokenUsage7d).toEqual({ coverage: "ready", knownTokens: 130 });
   });
 
   it("excludes ambiguous intra-team claims for members while keeping non-Codex roster unavailable", async () => {

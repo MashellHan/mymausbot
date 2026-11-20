@@ -28,7 +28,11 @@ export type SessionObservation = Observation & {
 };
 type TokenSplit = { input: number; output: number; cacheRead: number };
 type TokenSample = { at: number | null; tokens: number | null; total: number | null; gap: boolean; model: string | null; split: TokenSplit | null };
-type PriorHistory = { size: number; highestTotal: number | null; hadTokens: boolean; lostAt: number | null };
+type PriorSample = { at: number; tokens: number; total: number | null };
+type PriorHistory = {
+  identity: string; size: number; highestTotal: number | null; hadTokens: boolean; lostAt: number | null;
+  recentSamples: PriorSample[];
+};
 type Cached = {
   signature: string; identity: string; size: number; offset: number; observation: Observation; pendingLine: boolean;
   scanStart: number; firstAt: number | null; sessionStartedAt: number | null; firstEventAt: number | null;
@@ -289,10 +293,16 @@ async function readObservation(
       const recent = tokenSamples.filter((sample) => sample.at === null || sample.at > cutoff);
       let lostAt = incremental ? cached.lostAt : (prior?.lostAt ?? null);
       if (prior && !incremental) {
+        const identityChanged = identity !== prior.identity;
         const shrunk = info.size < prior.size;
         const regressedTotal = prior.highestTotal !== null && (highestTotal === null || highestTotal < prior.highestTotal);
         const lostObservedTokens = prior.hadTokens && !tokenSamples.some((sample) => (sample.tokens ?? 0) > 0);
-        if (shrunk || regressedTotal || lostObservedTokens) lostAt = now;
+        const missingPriorSample = prior.recentSamples.some((expected) =>
+          expected.at > cutoff && !tokenSamples.some((actual) =>
+            actual.at === expected.at && actual.tokens === expected.tokens && actual.total === expected.total,
+          ),
+        );
+        if (identityChanged || shrunk || regressedTotal || lostObservedTokens || missingPriorSample) lostAt = now;
       }
       return { identity, signature, size: info.size, offset: end >= 0 ? start + end + 1 : start, observation,
         scanStart: incremental ? cached.scanStart : start, firstAt, sessionStartedAt, firstEventAt, highestTotal,
@@ -326,10 +336,15 @@ export function createLocalAgentSessionReader(codexHome: string, now: () => numb
       if (value) {
         cache.set(id, value);
         history.set(id, {
+          identity: value.identity,
           size: value.size,
           highestTotal: value.highestTotal,
           hadTokens: Boolean(prior?.hadTokens || value.tokenSamples.some((sample) => (sample.tokens ?? 0) > 0)),
           lostAt: value.lostAt,
+          recentSamples: value.tokenSamples
+            .filter((sample): sample is TokenSample & { at: number; tokens: number } =>
+              sample.at !== null && sample.tokens !== null && sample.at > at - WEEK_MS)
+            .map((sample) => ({ at: sample.at, tokens: sample.tokens, total: sample.total })),
         });
       } else {
         cache.delete(id);
