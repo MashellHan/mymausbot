@@ -1642,7 +1642,7 @@ describe("Mini App independent release updates", () => {
     await act(async () => host.querySelector<HTMLButtonElement>(action)!.click());
     expect(fixture.updateRequests).toHaveLength(0);
     expect(frame()?.getAttribute("data-html")).toBe("<p>Previous page</p>");
-    expect(host.textContent).toContain("Could not save update recovery for this workspace");
+    expect(host.textContent).toContain("Could not save this app's update recovery record.");
     storage.mockImplementation(() => {});
     await act(async () => host.querySelector<HTMLButtonElement>(action)!.click());
     expect(fixture.updateRequests).toHaveLength(0);
