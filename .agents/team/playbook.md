@@ -47,7 +47,7 @@ as recorded in [roles/reviewer3.md](roles/reviewer3.md) (catalog window
 Codex with `gpt-6.2-astra` and `xhigh` effort, preserving their source-review
 duties and inherited `--profile raven --yolo` pane alias.
 
-`mausbot-mini-review` remains the supplemental Mini App reviewer on Codex with
+`mausbot-mini-review` uses [roles/mini-reviewer.md](roles/mini-reviewer.md) on Codex with
 `gpt-6.2-astra`/`xhigh`. This update adds no agent, grants, QA-owner labels or
 approval requirement. The general review pool remains `mausbot-review`,
 `mausbot-review2` and `mausbot-review3`.
