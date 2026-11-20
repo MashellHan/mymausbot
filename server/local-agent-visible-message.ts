@@ -1,3 +1,4 @@
+import { parse, type AnyNode, type CallExpression } from "acorn";
 import type { LocalAgentActivityEvent, LocalAgentToolDetailStatus } from "../shared/local-dashboard.ts";
 import { mask, redactSecretsInText } from "../shared/redact.ts";
 import { escapeNotes } from "./peer-provenance.ts";
@@ -25,6 +26,7 @@ const SHELL_COMMAND_TOOLS = new Map<string, string>([
   ["codex:functions.exec_command", "cmd"],
   ["pi:bash", "command"],
 ]);
+const EXEC_COMMAND_OPTIONS = new Set(["cmd", "workdir", "yield_time_ms", "max_output_tokens", "tty", "login", "shell"]);
 const SHELL_COMMAND_LIMIT = 600;
 const SHELL_HEADER_PREFIX = /(^|[\s"'`=])((?:authorization|proxy-authorization|(?:set-)?cookie|x-(?:api-key|auth-token|access-token|session-id))[ \t]*:[ \t]*)/gi;
 const SHELL_CREDENTIAL_PREFIX = /\b(?:[A-Za-z0-9_.-]*_)?(?:api[_-]?key|apikey|secret|token|password|passwd|authorization|auth[_-]?token|access[_-]?key|private[_-]?key|cookie|session(?:_?id)?|credential)s?[ \t]*=[ \t]*|(?<![A-Za-z0-9_-])--(?:token|password|passwd|api-key|apikey|secret|access-key|auth-token)["']?(?:=[ \t]*|[ \t]+)/gi;
@@ -299,6 +301,54 @@ function safeShellCommandText(value: string): { text: string | null; clipped: bo
   return redactedAgentText(redacted.replaceAll(SHELL_MASK_PREFIX, ""), SHELL_COMMAND_LIMIT);
 }
 
+function literalExecCommand(call: CallExpression): { start: number; end: number; value: string } | null {
+  const [argument] = call.arguments;
+  if (call.arguments.length !== 1 || argument?.type !== "ObjectExpression") return null;
+  let command: { start: number; end: number; value: string } | null = null;
+  for (const property of argument.properties) {
+    if (property.type !== "Property" || property.computed || property.kind !== "init" || property.method) return null;
+    const key = property.key.type === "Identifier" ? property.key.name : property.key.type === "Literal" ? property.key.value : null;
+    if (typeof key !== "string" || !EXEC_COMMAND_OPTIONS.has(key)) return null;
+    if (key !== "cmd") continue;
+    const input = property.value;
+    if (command || input.type !== "Literal" || typeof input.value !== "string") return null;
+    command = { start: input.start, end: input.end, value: input.value };
+  }
+  return command;
+}
+
+function staticExecCommandDetail(source: string): { text: string; clipped: boolean } | null {
+  let pending: AnyNode[];
+  try {
+    pending = [parse(source, { ecmaVersion: "latest", sourceType: "module", allowReturnOutsideFunction: true })];
+  } catch {
+    return null;
+  }
+  const commands: NonNullable<ReturnType<typeof literalExecCommand>>[] = [];
+  while (pending.length) {
+    const node = pending.pop()!;
+    if (node.type === "CallExpression" && !node.optional && node.callee.type === "MemberExpression" &&
+        !node.callee.computed && !node.callee.optional && node.callee.object.type === "Identifier" && node.callee.object.name === "tools" &&
+        node.callee.property.type === "Identifier" && node.callee.property.name === "exec_command") {
+      const command = literalExecCommand(node);
+      if (!command || commands.length === MAX_TOOL_FIELDS) return null;
+      commands.push(command);
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) pending.push(...child.filter(item => item && typeof item.type === "string"));
+      else if (child && typeof child.type === "string") pending.push(child);
+    }
+  }
+  if (!commands.length) return null;
+  commands.sort((a, b) => b.start - a.start);
+  const context = commands.reduce((text, command) => text.slice(0, command.start) + '""' + text.slice(command.end), source);
+  if (!safeToolText(context, true).text || INTERNAL_ENVELOPE.test(context)) return null;
+  const details = commands.reverse().map(command => safeShellCommandText(command.value));
+  if (details.some(detail => !detail.text)) return null;
+  const chars = Array.from(details.map(detail => `cmd: ${detail.text}`).join("\n"));
+  return { text: chars.slice(0, SHELL_COMMAND_LIMIT).join(""), clipped: details.some(detail => detail.clipped) || chars.length > SHELL_COMMAND_LIMIT };
+}
+
 function shellCommandDetail(value: unknown, runtime: "codex" | "pi", tool: string): { text: string | null; clipped: boolean } | null {
   const field = SHELL_COMMAND_TOOLS.get(`${runtime}:${tool}`);
   if (!field) return null;
@@ -379,9 +429,12 @@ export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unkn
   const isCustomExecCall = codexExec && !result && (family === "custom" || (family === undefined && typeof value === "string" && !/^\s*\{(?:\s*"|\s*\})/.test(value)));
   const execEnvelope = result && codexExec ? codexExecResult(value) : null;
   const shellDetail = !result && runtime && tool ? shellCommandDetail(value, runtime, tool) : null;
-  const detail = execEnvelope ?? shellDetail ?? (result
+  const recorded = execEnvelope ?? shellDetail ?? (result
     ? redactedAgentToolResult(value, runtime === "codex" ? "codex" : undefined)
     : redactedAgentToolArguments(value, isCustomExecCall));
+  const projection = isCustomExecCall && family === "custom" && typeof value === "string" && !recorded.text && !recorded.clipped
+    ? staticExecCommandDetail(value) : null;
+  const detail = projection ?? recorded;
   const emptyText = typeof value === "string" && (!value.trim() || (!result && /^\s*\{\s*\}\s*$/.test(value)));
   const emptyArguments = !result && value !== null && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length;
   const emptyBlocks = Array.isArray(value) && (value.length === 0 || result && !detail.clipped &&
