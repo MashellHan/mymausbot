@@ -78,15 +78,87 @@ class LocalGitOnly:
         raise ValueError("Background Git fetch and SSH are unavailable in scheduled Usage")
 
 
+def _safe_codex_lines(lines):
+    for line in lines:
+        if not isinstance(line, str):
+            continue
+        if not any(marker in line[:1024] for marker in ('"session_meta"', '"turn_context"', '"token_count"')):
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        payload = entry.get("payload")
+        if payload is not None and not isinstance(payload, dict):
+            continue
+        event_type = entry.get("type")
+        if isinstance(payload, dict):
+            if event_type == "session_meta":
+                sid = payload.get("id")
+                cwd = payload.get("cwd")
+                if (sid is not None and not isinstance(sid, str)) or (cwd is not None and not isinstance(cwd, str)):
+                    continue
+            elif event_type == "turn_context":
+                cwd = payload.get("cwd")
+                model = payload.get("model")
+                if (cwd is not None and not isinstance(cwd, str)) or (model is not None and not isinstance(model, str)):
+                    continue
+            elif event_type == "event_msg" and payload.get("type") == "token_count":
+                info = payload.get("info")
+                if info is not None and not isinstance(info, dict):
+                    continue
+        yield line
+
+
+class _SafeCollectJson:
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def loads(self, raw, *args, **kwargs):
+        parsed = self._wrapped.loads(raw, *args, **kwargs)
+        if not isinstance(parsed, dict):
+            return {}
+        payload = parsed.get("payload")
+        if payload is not None and not isinstance(payload, dict):
+            sanitized = dict(parsed)
+            sanitized["payload"] = {}
+            return sanitized
+        return parsed
+
+
 def protect_collector(collector):
     collector.subprocess = LocalGitOnly()
     if hasattr(collector, "fetch_origins"):
         collector.fetch_origins = lambda repos: ([{"source": "git-fetch", "code": "DisabledByAuthBoundary"}]
             if any(repo.get("remote") for repo in repos) else [])
+    if not getattr(collector, "_omb_codex_guarded", False):
+        original_codex_events = getattr(collector, "codex_events", None)
+        if callable(original_codex_events):
+            def guarded_codex_events(lines, *args, **kwargs):
+                return original_codex_events(_safe_codex_lines(lines), *args, **kwargs)
+
+            collector.codex_events = guarded_codex_events
+        original_collect = getattr(collector, "collect", None)
+        if callable(original_collect) and hasattr(collector, "json"):
+            def guarded_collect(*args, **kwargs):
+                original_json = collector.json
+                collector.json = _SafeCollectJson(original_json)
+                try:
+                    return original_collect(*args, **kwargs)
+                finally:
+                    collector.json = original_json
+
+            collector.collect = guarded_collect
+        collector._omb_codex_guarded = True
     return collector
 
 
-def retain_token_history(snapshot, previous, model_days=None, saved=None):
+def retain_token_history(snapshot, previous, model_days=None, saved=None, agent_days=None):
     at = snapshot.get("updatedAt")
     if type(at) is not int:
         return snapshot
@@ -98,19 +170,22 @@ def retain_token_history(snapshot, previous, model_days=None, saved=None):
         if not isinstance(rows, list) or len(rows) > local_usage_merged.MAX_HISTORY_DAYS:
             return
         for row in rows:
+            if not isinstance(row, dict):
+                continue
             try:
                 day = dt.date.fromisoformat(row["day"])
                 status = row["tokenStatus"]
                 if day.isoformat() != row["day"] or not first <= day <= end or status not in ("ready", "partial", "unavailable"):
                     continue
                 known = records.get(row["day"])
-                split, models = {}, None
+                split, models, agents = {}, None, None
                 if status == "unavailable":
                     new, cache = None, None
                 elif projected:
                     new, cache = row["newTokens"], row["cacheRead"]
                     if row["totalTokens"] != new + cache:
                         continue
+                    agents = row.get("agentTokens")
                     inputs = [row.get(key) for key in ("input", "output")]
                     if all(type(value) is int and value >= 0 for value in inputs) and sum(inputs) == new:
                         split = dict(zip(("input", "output"), inputs))
@@ -128,16 +203,21 @@ def retain_token_history(snapshot, previous, model_days=None, saved=None):
                     cache = sum(value["cacheRead"] for value in categories)
                     if fresh and model_days is not None:
                         models = model_days.get(row["day"])
+                    if fresh and agent_days is not None:
+                        agents = agent_days.get(row["day"])
                 if status != "unavailable" and any(type(value) is not int or not 0 <= value <= 2**53 - 1 for value in (new, cache, new + cache)):
                     continue
                 if status == "unavailable" and known and known["tokenStatus"] != "unavailable":
                     records[row["day"]] = {**known, "tokenStatus": "partial"}
                 else:
                     details = local_usage_models.validate_models(models, {**split, "cacheRead": cache}) if split else None
+                    agent_rows = local_usage_models.validate_agents(agents, new + cache) if status != "unavailable" and agents else None
                     records[row["day"]] = {"day": row["day"], "tokenStatus": status, **split,
                         "newTokens": new, "cacheRead": cache, "totalTokens": None if new is None else new + cache}
                     if details:
                         records[row["day"]]["models"] = details
+                    if agent_rows:
+                        records[row["day"]]["agentTokens"] = agent_rows
             except (KeyError, TypeError, ValueError, OverflowError):
                 continue
 
@@ -866,13 +946,14 @@ def refresh_primary(collector_path, config, azure_config_dir, *, publish=False, 
 
 
 def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api=False, reuse_sources=False,
-            force_legacy=False, legacy_diagnostics=True):
+            force_legacy=False, legacy_diagnostics=True, herdr_runner=None):
     if publish:
         raise ValueError("Scheduled Usage publication requires a separately reviewed transport")
     if config.get("primaryContributionSource") == "contributions-v2" and not force_legacy:
         if skip_api:
             return refresh(collector_path, config, azure_config_dir, publish=publish,
-                           skip_api=True, reuse_sources=reuse_sources, force_legacy=True, legacy_diagnostics=False)
+                           skip_api=True, reuse_sources=reuse_sources, force_legacy=True,
+                           legacy_diagnostics=False, herdr_runner=herdr_runner)
         return refresh_primary(collector_path, config, azure_config_dir, publish=publish, reuse_sources=reuse_sources)
     collector = load_collector(collector_path)
     original_run = collector.run
@@ -900,6 +981,13 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
     storage = Path(config["storageDir"]).expanduser() if "storageDir" in config else None
     latest = storage / "latest.json" if storage is not None else None
     retained = storage / "token-history.json" if storage is not None else None
+    continuity_path = storage / "agent-continuity.json" if storage is not None else None
+    pending_continuity = None
+    try:
+        pre_at = collector.now() if callable(getattr(collector, "now", None)) else None
+        pre_herdr = local_usage_models.sample_herdr(config, at=pre_at, herdr_runner=herdr_runner)
+    except Exception:
+        pre_herdr = None
     original_write = getattr(collector, "write_json", None)
     if latest is not None and original_write is not None:
         def write_json(path, value):
@@ -909,6 +997,11 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
                     original_write(retained, {key: value[key] for key in ("version", "timeZone", "updatedAt", "trendHistory")})
                 except OSError:
                     print("usage stage=token-history status=unavailable", file=sys.stderr, flush=True)
+                if pending_continuity is not None and continuity_path is not None:
+                    try:
+                        original_write(continuity_path, pending_continuity)
+                    except OSError:
+                        print("usage stage=agent-continuity status=unavailable", file=sys.stderr, flush=True)
 
         collector.write_json = write_json
 
@@ -984,7 +1077,26 @@ def refresh(collector_path, config, azure_config_dir, *, publish=False, skip_api
             previous = collector.read_json(latest, {}) if latest is not None else {}
             saved = collector.read_json(retained, {}) if retained is not None else {}
             models = local_usage_models.daily_models(collector, machines, snapshot)
-            return retain_token_history(snapshot, previous, models, saved)
+            nonlocal pending_continuity
+            agents = {}
+            try:
+                prior_continuity = local_usage_models.load_continuity(continuity_path)
+                at_ref = collector.instant(at.isoformat() if isinstance(at, dt.datetime) else at)
+                try:
+                    post_at = collector.now() if callable(getattr(collector, "now", None)) else at_ref
+                    post_herdr = local_usage_models.sample_herdr(config, at=post_at, herdr_runner=herdr_runner)
+                except Exception:
+                    post_herdr = None
+                pending_continuity, intervals = local_usage_models.reconcile_continuity(
+                    prior_continuity, pre_herdr, post_herdr, now=at_ref
+                )
+                agents = local_usage_models.daily_agents(
+                    collector, machines, snapshot, config=config, intervals=intervals
+                )
+            except Exception:
+                agents = {}
+                print("usage stage=agent-attribution status=unavailable", file=sys.stderr, flush=True)
+            return retain_token_history(snapshot, previous, models, saved, agents)
 
         collector.aggregate = aggregate
 

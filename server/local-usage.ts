@@ -3,13 +3,14 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type {
-  LocalUsageCategory, LocalUsageCoverage, LocalUsagePrSourceCoverage, LocalUsageResponse,
+  LocalUsageAgentTokenRow, LocalUsageCategory, LocalUsageCoverage, LocalUsagePrSourceCoverage, LocalUsageResponse,
   LocalUsageSourceCoverage, LocalUsageTokenStatus, LocalUsageTrendDay, LocalUsageWindow,
   LocalUsageComparison, LocalUsageCountComparison, LocalUsageCounts, LocalUsageRepositories, LocalUsageWeekChange,
 } from "../shared/local-dashboard.ts";
 import { redactSecretsInText } from "../shared/redact.ts";
 import { createLocalUsageMergedReader } from "./local-usage-merged.ts";
 import { createLocalUsageGithubReader } from "./local-usage-github.ts";
+import { retainedAgentTokens } from "./local-usage-agents.ts";
 import {
   createLocalTokenProjector, retainedTokenObservation, sameTokenAmounts, type DailyTokenObservation,
 } from "./local-usage-models.ts";
@@ -484,7 +485,7 @@ function project(raw: unknown, now: number): LocalUsageResponse {
   const recentTrend = trend(windows["30"], daily, sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories, 30, repositories);
   const baseline = trend({ ...windows["30"], startDay: offsetDay(endDay, -59) }, comparisonDaily,
     sources, activityScopeReady, tokenScopeReady, prs, prComplete, prCoverage, observedCategories, 60, comparisonRepositories);
-  const { history, retained } = tokenHistory(snapshot.trendHistory, endDay, recentTrend, baseline);
+  const { history, retained, retainedAgents } = tokenHistory(snapshot.trendHistory, endDay, recentTrend, baseline);
   const projectTokens = createLocalTokenProjector(new Date(now));
   const recentObservations = new Map<string, DailyTokenObservation>();
 
@@ -500,15 +501,31 @@ function project(raw: unknown, now: number): LocalUsageResponse {
     if (saved && matches(saved)) return saved;
   }
 
+  function attachAgentTokens(row: LocalUsageTrendDay, rawDay: DailyRow | undefined) {
+    if (row.agentTokens || row.tokenStatus === "unavailable" || row.totalTokens === null) return;
+    const saved = retainedAgents.get(row.day);
+    if (!saved) return;
+    if (saved.newTokens !== row.newTokens || saved.cacheRead !== row.cacheRead || saved.totalTokens !== row.totalTokens) return;
+    if (rawDay && rawDay.tokenStatus !== "unavailable" && saved.input !== undefined && saved.output !== undefined) {
+      const { input, output, cacheRead } = totals(rawDay);
+      if (input !== saved.input || output !== saved.output || cacheRead !== saved.cacheRead) return;
+    }
+    row.agentTokens = saved.agentTokens;
+  }
+
   for (const row of recentTrend) {
-    const observation = observe(row, daily.get(row.day));
+    const rawDay = daily.get(row.day);
+    attachAgentTokens(row, rawDay);
+    const observation = observe(row, rawDay);
     if (!observation) continue;
     recentObservations.set(row.day, observation);
     row.tokenDetails = { ...projectTokens([observation], row.tokenStatus), cacheRead: observation.cacheRead };
   }
   for (const row of history) {
+    const rawDay = daily.get(row.day) ?? comparisonDaily.get(row.day);
+    attachAgentTokens(row, rawDay);
     if (row.tokenDetails) continue;
-    const observation = observe(row, daily.get(row.day) ?? comparisonDaily.get(row.day));
+    const observation = observe(row, rawDay);
     if (observation) row.tokenDetails = { ...projectTokens([observation], row.tokenStatus), cacheRead: observation.cacheRead };
   }
   for (const window of Object.values(windows)) {
@@ -523,9 +540,19 @@ function project(raw: unknown, now: number): LocalUsageResponse {
     prCoverage, windows, trend: recentTrend, history, sixtyDayRepositories: { startDay: sixty.startDay, endDay: sixty.endDay, repositories: sixty.repositories } };
 }
 
+interface RetainedAgentDay {
+  input?: number;
+  output?: number;
+  newTokens: number;
+  cacheRead: number;
+  totalTokens: number;
+  agentTokens: LocalUsageAgentTokenRow[];
+}
+
 function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[], baseline: LocalUsageTrendDay[]) {
   const result = new Map<string, LocalUsageTrendDay>();
   const retained = new Map<string, DailyTokenObservation>();
+  const retainedAgents = new Map<string, RetainedAgentDay>();
   try {
     if (raw !== undefined) {
       const data = object(raw);
@@ -544,6 +571,13 @@ function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[]
         if (newTokens !== null && cacheRead !== null) {
           const observation = retainedTokenObservation(row, newTokens, cacheRead);
           if (observation) retained.set(day, observation);
+          if (totalTokens !== null) {
+            const agentTokens = retainedAgentTokens(row.agentTokens, totalTokens);
+            if (agentTokens) {
+              const split = observation ? { input: observation.input, output: observation.output } : {};
+              retainedAgents.set(day, { ...split, newTokens, cacheRead, totalTokens, agentTokens });
+            }
+          }
         }
         const empty = () => ({ prs: null, knownPrs: null, commits: null });
         result.set(day, { day, coverage: "unavailable", tokenStatus: row.tokenStatus as LocalUsageTokenStatus,
@@ -551,7 +585,7 @@ function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[]
           wow: { prs: null, commits: null, newTokens: null, totalTokens: null } });
       }
     }
-  } catch { result.clear(); retained.clear(); }
+  } catch { result.clear(); retained.clear(); retainedAgents.clear(); }
   for (const row of [...baseline, ...recent]) {
     const known = result.get(row.day);
     result.set(row.day, row.tokenStatus === "unavailable" && known && known.tokenStatus !== "unavailable"
@@ -564,7 +598,7 @@ function tokenHistory(raw: unknown, endDay: string, recent: LocalUsageTrendDay[]
     if (row.tokenStatus === "ready" && previous?.tokenStatus === "ready") row.wow = { ...row.wow,
       newTokens: weekChange(row.newTokens, previous.newTokens), totalTokens: weekChange(row.totalTokens, previous.totalTokens) };
   }
-  return { history: [...result.values()].sort((a, b) => a.day.localeCompare(b.day)), retained };
+  return { history: [...result.values()].sort((a, b) => a.day.localeCompare(b.day)), retained, retainedAgents };
 }
 
 const unavailable: LocalUsageResponse = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",

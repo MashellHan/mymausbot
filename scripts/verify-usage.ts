@@ -22,7 +22,16 @@ const missingCategories = {
   unclassified: { prs: null, knownPrs: null, commits: null },
 };
 
-function snapshot(scenario: string | null): LocalUsageResponse {
+const fixtureAgentTokens: Partial<Record<string, LocalUsageTrendDay["agentTokens"]>> = {
+  "2026-11-02": [{ id: "summarizer", name: "Summarizer", teamId: "research", teamName: "Research", totalTokens: 50 }],
+  "2026-11-03": [
+    { id: "summarizer", name: "Summarizer", teamId: "research", teamName: "Research", totalTokens: 58 },
+    { id: "fact-check", name: "Fact checker", teamId: "research", teamName: "Research", totalTokens: 35 },
+    { id: "prep", name: "Planning", teamId: "operations", teamName: "Operations", totalTokens: 25 },
+  ],
+};
+
+function snapshot(scenario: string | null, includeAgentTokens = false): LocalUsageResponse {
   if (scenario === "unavailable") return { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai",
     sourceCoverage: null, prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
 
@@ -94,6 +103,12 @@ function snapshot(scenario: string | null): LocalUsageResponse {
   };
   if (modelCost || zero) {
     for (const day of trend) day.tokenDetails = tokenDetails(day.newTokens ?? 0, day.cacheRead ?? 0);
+  }
+  if (includeAgentTokens && modelCost) {
+    for (const day of trend) {
+      const rows = fixtureAgentTokens[day.day];
+      if (rows) day.agentTokens = rows;
+    }
   }
   const history: LocalUsageTrendDay[] | undefined = modelCost ? [
     ...Array.from({ length: 60 }, (_, index) => {
@@ -172,9 +187,10 @@ try {
         res.end(JSON.stringify(bot));
       } },
       { path: "/api/local-dashboard/usage", handler: (req, res) => {
-        const scenario = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams.get("scenario");
+        const params = new URL(req.headers.referer ?? "http://127.0.0.1/").searchParams;
+        const scenario = params.get("scenario");
         res.setHeader("content-type", "application/json");
-        const value = withGithubUsageFixture(snapshot(scenario));
+        const value = withGithubUsageFixture(snapshot(scenario, params.has("tokenAgents")));
         if (scenario === "remote-only") res.end(JSON.stringify({ ...snapshot("unavailable"), github: value.github }));
         else if (scenario === "legacy-only") res.end(JSON.stringify(snapshot("ready")));
         else res.end(JSON.stringify({ ...value, contributions: scenario === "unavailable"
