@@ -12,8 +12,8 @@ import {
 import { findCliCandidates, sealedFixture, whichWin } from "../env-path.ts";
 import { matchesPendingDefaultHtml, NATIVE_DEFAULT_HTML } from "./default-documents.ts";
 import {
-  ADOPTABLE_LEGACY_TEMPLATE_SHA256, AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256, GITHUB_ACTIVITY_CATALOG_TEMPLATE_SHA256,
-  MOJO_LEGACY_HTML_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256, SHIPPED_TEMPLATE_SHA256,
+  ADOPTABLE_LEGACY_TEMPLATE_SHA256, ADOPTABLE_MOJO_LEGACY_HTML_SHA256, AGENT_TEAM_NATIVE_PLACEHOLDER_SHA256,
+  GITHUB_ACTIVITY_CATALOG_TEMPLATE_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256, SHIPPED_TEMPLATE_SHA256,
 } from "./default-template-history.ts";
 import { bundledBookkeepingBinding } from "./default-updates.ts";
 import { hasReportBindingForProducer } from "./report-apps.ts";
@@ -187,7 +187,7 @@ export function isCustomAppTemplate(
   }
   if (mapping.kind === "mojo") {
     return bindings.length > 0 || !(app.shippedTemplateKind === "mojo" && matchesPendingDefaultHtml("mojo", html)
-      || app.id === LEGACY_MINI_APP_IDS.mojo && hash === MOJO_LEGACY_HTML_SHA256);
+      || app.id === LEGACY_MINI_APP_IDS.mojo && (ADOPTABLE_MOJO_LEGACY_HTML_SHA256 as readonly string[]).includes(hash));
   }
   if (bindings.length === 0) return !matchesPendingDefaultHtml(mapping.kind, html);
   const githubCatalog = mapping.kind === "github_activity" && hash === GITHUB_ACTIVITY_CATALOG_TEMPLATE_SHA256;

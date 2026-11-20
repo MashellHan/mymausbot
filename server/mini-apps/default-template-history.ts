@@ -42,8 +42,14 @@ export const ADOPTABLE_LEGACY_TEMPLATE_SHA256: Record<Exclude<MiniAppShippedTemp
   github_activity: ["3362b06c09fe5540b01eea5f4ba7a02db61d63ac0248ac0840ae4bdf54dd3a01"],
 };
 
-/** Exact documented legacy Mojo HTML build adoptable without marker heuristics. */
+/** MashellHan/mymausbotminiapps 9bfcd7b50d85571d0807a648edae0d4a5de24588, apps/mojo/index.html (284431 bytes). */
 export const MOJO_LEGACY_HTML_SHA256 = "c7e3e34ae380dc585c41e57588908cd48858c49c00118a372902d1d79e1356f6";
+
+/** Exact documented legacy Mojo HTML builds adoptable without marker heuristics (0890d61b106b98bb6deea56b084ff078bba48a52 and 9bfcd7b50d85571d0807a648edae0d4a5de24588). */
+export const ADOPTABLE_MOJO_LEGACY_HTML_SHA256 = [
+  "4a3fa256b33f752ffc72cae1b1319fcc0d1600f4d5123f5df69482e809858986",
+  MOJO_LEGACY_HTML_SHA256,
+] as const;
 
 /** GitHub Activity's reviewed Daily10 catalog template with its existing deep-dive catalog binding. */
 export const GITHUB_ACTIVITY_CATALOG_TEMPLATE_SHA256 = "3bead12bf073f6c25f17d722cdfd58c18745efd7d6eec2180d3368ab9f832203";
