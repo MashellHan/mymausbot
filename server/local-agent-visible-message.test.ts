@@ -180,16 +180,16 @@ describe("bounded tool details", () => {
   it("recovers literal exec commands through shell redaction without exposing wrapper source", () => {
     const show = (source: string) => visibleToolDetail("tool-call", source, "codex", "exec", "custom");
     const command = 'await tools.exec_command({ cmd: "API_TOKEN=fixture-secret git status --short", max_output_tokens: 300 })';
-    const source = `const result = ${command}; text(result);`;
+    const source = `text(${command});`;
     const detail = show(source);
     expect(detail).toEqual({ text: "cmd: API_TOKEN=«redacted 14 chars» git status --short", clipped: false, detailStatus: "available" });
-    expect(show(`await Promise.all([${command}, tools.exec_command({ "cmd": "rg --files src", tty: false })]);`).text)
-      .toBe("cmd: API_TOKEN=«redacted 14 chars» git status --short\ncmd: rg --files src");
+    expect(show(`${command};`)).toEqual(detail);
     for (const hidden of [
       source + ' text({ cookie: "fixture-outer-cookie" });',
       source + ' text("<SYSTEM_NOTIFICATION>internal</SYSTEM_NOTIFICATION>");',
       source + String.raw` text("\x3cSYSTEM_NOTIFICATION>internal\x3e");`,
       source + ' text(`' + String.raw`\u003cSYSTEM_NOTIFICATION>internal` + '`);',
+      source.replace('max_output_tokens: 300', String.raw`workdir: "{\"co\x6fkie\":\"fixture-value\"}"`),
       source + ' text("' + "a".repeat(90) + '");',
       source.replace('"API_TOKEN=fixture-secret git status --short"', 'build("API_TOKEN=fixture-secret git status --short")'),
       source.replace('max_output_tokens: 300', '...options'),
@@ -197,6 +197,8 @@ describe("bounded tool details", () => {
       'const tools = fixtureObject; ' + source,
       source + ' await tools["exec_command"]({ cmd: buildCommand() });',
       source + ' const nested = tools; await nested.exec_command({ cmd: buildCommand() });',
+      source + ' await globalThis["tools"]["exec_command"]({ cmd: buildCommand() });',
+      `await Promise.all([${command}, tools.exec_command({ cmd: "rg --files src" })]);`,
     ]) {
       expect(show(hidden)).toMatchObject({ text: "[Arguments unavailable]", detailStatus: "withheld" });
     }
