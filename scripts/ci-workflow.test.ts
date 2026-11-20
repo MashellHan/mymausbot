@@ -380,7 +380,7 @@ describe("CI concurrency", () => {
     const fast = steps.find((step) => step.name === "Security, data and dispatch core with bounded affected tests")!;
     expect(fast.if).toBe("steps.scope.outputs.fast_pr == 'true' || steps.scope.outputs.focused_push == 'true'");
     expect(fast.run).toBe("mkdir -p qa-results\nnode scripts/testing/fast-static-overlap.mjs run\n");
-    expect(fast.env).toMatchObject({ OMB_VITEST_E2E: "all", OMB_VITEST_WORKERS: 2,
+    expect(fast.env).toMatchObject({ OMB_VITEST_E2E: "all", OMB_VITEST_WORKERS: 4,
       OMB_VITEST_RETRY_LOG: "${{ github.workspace }}/qa-results/vitest-retries.jsonl",
       OMB_VITEST_SUBSET: "${{ steps.scope.outputs.fast_files }}", OMB_FAST_TYPECHECK: "${{ steps.scope.outputs.build }}" });
     expect(steps[steps.indexOf(fast) + 1]?.with?.name).toContain("'focused' || 'fast'");

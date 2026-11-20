@@ -20,10 +20,11 @@ Lead assigns one review owner per PR or coherent batch from mausbot-review,
 mausbot-review2 and mausbot-review3. You are an alternative owner, never an
 additional approval gate. Do not duplicate assigned or accepted reviews.
 Return one compact exact-SHA verdict to Lead with actionable findings and pending
-verification. Retain correction ownership or explicitly transfer findings and
-accepted evidence. Review alongside independent development; consolidate
-findings at Lead's batch boundary without postponing blockers or QA holds.
-Do not edit source, reconfigure runtimes or take App/GUI/provider/Cloud actions.
+verification so Lead can post it to the GitHub PR review thread. Retain
+correction ownership or explicitly transfer findings and accepted evidence.
+Review alongside independent development; consolidate findings at Lead's batch
+boundary without postponing blockers or QA holds. Do not edit source,
+reconfigure runtimes or take App/GUI/provider/Cloud actions.
 
 Follow the playbook's [authentication boundary](../playbook.md#authentication-login-keychain-boundary)
 in full: normal native authentication within existing scope is allowed even

@@ -115,12 +115,23 @@ jobs:
       - name: Validate generated Settings places
         if: steps.scope.outputs.settings_places == 'true'
         run: pnpm exec vitest run src/components/settings/settings-places.test.ts
+      - name: Restore typecheck incremental cache
+        if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr == 'true'
+        id: typecheck-cache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .omb-scratch/typecheck
+          key: typecheck-v1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'packages/*/tsconfig.json') }}-${{ github.sha }}
+          restore-keys: |
+            typecheck-v1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'packages/*/tsconfig.json') }}-
       - name: Security, data and dispatch core with bounded affected tests
         id: fast
         if: steps.scope.outputs.fast_pr == 'true' || steps.scope.outputs.focused_push == 'true'
         env:
           OMB_VITEST_E2E: all
-          OMB_VITEST_WORKERS: 2
+          OMB_VITEST_WORKERS: 4
+          OMB_TYPECHECK_INCREMENTAL: ${{ steps.scope.outputs.fast_pr == 'true' && '1' || '0' }}
           OMB_VITEST_SUBSET: ${{ steps.scope.outputs.fast_files }}
           OMB_FAST_TYPECHECK: ${{ steps.scope.outputs.build }}
           OMB_VITEST_RETRY_LOG: ${{ github.workspace }}/qa-results/vitest-retries.jsonl
@@ -139,7 +150,17 @@ jobs:
         run: node scripts/testing/fast-static-overlap.mjs typecheck-result
       - if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true' && steps.scope.outputs.focused_push != 'true'
         run: pnpm typecheck
+      - name: Save typecheck incremental cache
+        if: ${{ steps.scope.outputs.build == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (steps.scope.outputs.fast_pr == 'true' && steps.typecheck-cache-restore.outputs.cache-hit != 'true')) }}
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .omb-scratch/typecheck
+          key: typecheck-v1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'packages/*/tsconfig.json') }}-${{ github.sha }}
       - name: Verify CI selection and documentation references
+        if: steps.scope.outputs.ci_verify == 'true'
+        env:
+          OMB_VITEST_WORKERS: 4
         run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/*.test.ts scripts/release-ci.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
@@ -158,6 +179,8 @@ jobs:
       - name: Source guards
         # The tests that only read the source: seconds here, and they stay in the shards. On Nov 3-4 2026 one of them was
         # red on main for 11 hours, and each PR heard about it after about 70 minutes, once its shards had found a runner.
+        env:
+          OMB_VITEST_WORKERS: 4
         run: pnpm exec vitest run src/locales/ scripts/testing/file-size-ratchet.test.ts scripts/testing/index-route-ratchet.test.ts scripts/testing/tighten-ratchets.test.ts scripts/testing/comment-history.test.ts scripts/testing/lazy-server-modules.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/host-e2e.test.ts scripts/testing/ci-retry-list.test.ts src/lib/copy-text.guard.test.ts src/components/Select.guard.test.ts --reporter=default --reporter=github-actions
       - if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true' && steps.scope.outputs.focused_push != 'true'
         run: pnpm check:electron

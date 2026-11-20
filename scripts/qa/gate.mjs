@@ -60,7 +60,7 @@ export async function verifyGate(outputs, { api = github, runId = process.env.GI
     }
     if (now() - started >= deadlineMs) throw new Error(`Incomplete required validation: ${[...result.missing, ...result.pending].join(", ")}`);
     console.log(`Waiting for required validation: ${result.missing.length} missing, ${result.pending.length} pending`);
-    await wait(15_000);
+    await wait(outputs.fast_pr && now() - started < 2 * 60_000 ? 3_000 : 15_000);
   }
 }
 
@@ -105,7 +105,7 @@ export async function gateRun({ api = github, readArtifact = artifactFiles, runI
       if (!Array.isArray(pr.labels) || pr.labels.some((label) => typeof label.name !== "string")) throw new Error("Invalid current PR controls");
     }
     console.log("Waiting for the current run's validation plan");
-    await wait(15_000);
+    await wait(event === "pull_request" && now() - started < 2 * 60_000 ? 3_000 : 15_000);
   }
 }
 
