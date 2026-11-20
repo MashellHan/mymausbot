@@ -63,6 +63,9 @@ importers:
       '@trycua/cua-driver':
         specifier: 0.45.4
         version: 0.45.4
+      acorn:
+        specifier: 8.18.0
+        version: 8.18.0
       ag-grid-community:
         specifier: 36.2.0
         version: 36.2.0
