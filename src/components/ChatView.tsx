@@ -60,7 +60,7 @@ import { normalizeState, stateForBot } from "@/lib/mascot";
 import { peerLine, peerPreview, peerRequest, type PeerLine } from "@/lib/peer-message"; import { PEER_HOW, PeerCompactRow, PeerMessagesContext, PeerOpenedActions } from "./PeerExchange";
 import { showWorkingDots } from "@/lib/turn-tail";
 import { lastNonReceipt } from "@/lib/receipts";
-import { useTurnLive } from "@/state/turn-status"; import { isLiveReply, StreamingReplyContext, streamedReply, useHasLiveReply, useLiveTranscript } from "@/state/live-reply"; import { useTurnNow } from "./NowCard"; import { useThreadRoutineRun } from "@/state/older-routine-runs";
+import { useTurnLive } from "@/state/turn-status"; import { isLiveReply, StreamingReplyContext, streamedReply, useHasLiveReply, useLiveRow, useLiveTranscriptLayout } from "@/state/live-reply"; import { useTurnNow } from "./NowCard"; import { useThreadRoutineRun } from "@/state/older-routine-runs";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { LiveToolsContext, useLiveToolIds } from "@/hooks/use-live-tool-ids";
 import { VoiceNoteBubble, type VoiceNoteAttachment } from "./VoiceNoteBubble";
@@ -292,7 +292,7 @@ export function FailedTurnRow({ tool, engine, onRetry, botId, threadId, messageA
 export { MessageBoundary };
 
 const Bubble = memo(function Bubble({
-  message,
+  message: row,
   emerging = false,
   eagerAttachments = false,
   joinAbove = false,
@@ -327,6 +327,7 @@ const Bubble = memo(function Bubble({
   onReply: (message: Message) => void;
 }) {
   const { botId, threadId, botName, voiceId, tts, localVoice, bots, mentionPeers, mentionPerson, focus, dispatch, onBranch, bubbleStyle, conversational, simple, raw, canReact, openedAt, speakerViewer, phone } = useChatRows(), busy = use(ChatBusyContext);
+  const message = useLiveRow(threadId, row);
   const forkAction = !phone && message.kind === "text" && !message.id.startsWith("optimistic-")
     ? [forkMessageItem({ kind: "bot", ownerId: botId, threadId, messageId: message.id }, dispatch, busy)] : [];
   const remoteClient = window.ogb?.remoteClient?.active === true;
@@ -670,7 +671,7 @@ const MessagesList = memo(function MessagesList({
   onReply: (message: Message) => void;
 }) {
   const { botId, threadId, botName, botColor, bots, hasMore, focus, showToolCalls, locale, dispatch, canReact, simple = false } = useChatRows(), busy = use(ChatBusyContext);
-  const messages = useLiveTranscript(threadId, saved, transcript);
+  const messages = useLiveTranscriptLayout(threadId, saved, transcript);
   // A finished turn keeps the bot's progress lines and folds only its tool steps under "Worked for", in both modes.
   const items = useMemo(() => groupTranscript(messages), [messages, locale]);
   const newestMessageId = messages.at(-1)?.id;
@@ -682,8 +683,8 @@ const MessagesList = memo(function MessagesList({
   const unreadIds = useMemo(() => unreadMessageIds(messages, unreadDividerId), [messages, unreadDividerId]);
   let dividerPlaced = false;
   const layout = useMemo(() => simple ? simpleRowLayout(items, { botId, showToolCalls, unreadIds }) : null, [simple, items, unreadIds, showToolCalls, botId]);
-  const joins = layout?.joins;
   const durations = useMemo(() => simple ? turnDurations(messages) : null, [messages, simple]);
+  const stepChip = useCallback((step: Message) => <div key={step.id} className="contents" data-mid={step.id}><ActivityChip message={step} place={place} /></div>, [place]);
   const dividerAbove = (rows: readonly Message[]) => {
     if (!unreadIds || dividerPlaced || !rows.some((row) => unreadIds.has(row.id))) return null;
     dividerPlaced = true;
@@ -700,14 +701,13 @@ const MessagesList = memo(function MessagesList({
         if (item.kind === "turn" || item.kind === "run") {
           if (!showToolCalls) return divider && <div key={item.id} className="contents">{divider}</div>;
           const forceOpen = item.messages.some((step) => step.id === focusedId);
-          const steps = item.messages.map((step) => <div key={step.id} className="contents" data-mid={step.id}><ActivityChip message={step} place={place} /></div>);
           return (
             <div key={item.id} className="contents">
               {newDay && <DaySeparator at={first.at} today={today} simple={simple} />}
               {divider}
               {item.kind === "turn"
-                ? <TurnNarrationRun label={item.label} title={t("chat.run.showSteps")} forceOpen={forceOpen}>{steps}</TurnNarrationRun>
-                : <ActivityRun messages={item.messages} forceOpen={forceOpen}>{steps}</ActivityRun>}
+                ? <TurnNarrationRun label={item.label} title={t("chat.run.showSteps")} forceOpen={forceOpen} steps={item.messages} step={stepChip} />
+                : <ActivityRun messages={item.messages} forceOpen={forceOpen}>{item.messages.map(stepChip)}</ActivityRun>}
             </div>
           );
         }
@@ -728,7 +728,7 @@ const MessagesList = memo(function MessagesList({
             case "connector":
               return m.connector ? <ConnectorCard botId={botId} color={botColor} threadId={threadId} message={m} /> : null;
             case "options":
-              return optionsCardRow({ message: m, transcript, botId, botName, botColor: bots.find((one) => one.id === m.inbox?.from.botId)?.color ?? botColor, threadId, asker: bots.find((one) => one.id === (m.inbox?.from.botId ?? botId)) });
+              return optionsCardRow({ message: m, transcript, botId, botName, botColor: bots.find((one) => one.id === m.inbox?.from.botId)?.color ?? botColor, threadId, asker: bots.find((one) => one.id === (m.inbox?.from.botId ?? botId)), compact: simple });
             case "widget":
             case "app":
               return <RichMessageRow botId={botId} botName={botName} threadId={threadId} message={m} />;
@@ -769,8 +769,8 @@ const MessagesList = memo(function MessagesList({
                   message={m}
                   emerging={m.id === emergingId}
                   eagerAttachments={m.id === newestMessageId || m.id === newestUserMessageId}
-                  joinAbove={joins?.[i]?.above}
-                  joinBelow={joins?.[i]?.below}
+                  joinAbove={layout?.joins[i]?.above}
+                  joinBelow={layout?.joins[i]?.below}
                   workedFor={durations?.get(m.id)}
                   editing={editingId === m.id}
                   pinned={m.id === pinnedMessageId}
@@ -999,7 +999,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
 
   return (
     <ThreadLinkContext value={threadLink}>
-    <main data-look="chat" data-raw-chat={raw ? "" : undefined} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
+    <main data-look="chat" data-direct-chat="" data-raw-chat={raw ? "" : undefined} className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
       <CallOverlay bot={bot} />
       <GlassScrollFrame className="flex-1 [--glass-tint:var(--color-app)]">
       {/* z-[25]: above the room set-up card (z-20), below the CallOverlay (z-30). */}

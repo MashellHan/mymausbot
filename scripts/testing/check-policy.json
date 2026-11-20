@@ -2,21 +2,14 @@
   "version": 1,
   "core": [
     "server/request-auth.test.ts",
-    "server/request-auth.e2e.test.ts",
     "shared/pairing-link.test.ts",
     "server/guarded-requests.test.ts",
     "server/safety-floor.test.ts",
     "server/safety-floor-gate.test.ts",
-    "server/safety-floor.e2e.test.ts",
-    "server/full-access-default.e2e.test.ts",
     "shared/system-message-guard.test.ts",
-    "server/store.test.ts",
     "server/message-db.test.ts",
     "server/turn-dispatch-guard.test.ts",
     "shared/client-cancel.test.ts",
-    "server/cancelled-turn.e2e.test.ts",
-    "server/bot-continuity.e2e.test.ts",
-    "server/quote-context.e2e.test.ts",
     "scripts/control-omb.test.ts",
     "server/local-agent-teams.test.ts",
     "src/components/AgentTeamPanel.test.ts",
@@ -28,16 +21,30 @@
     "src/components/SidebarSectionHeader.naming.dom.test.ts",
     "src/components/ChatView.reply.test.ts"
   ],
+  "serverCore": [
+    "server/request-auth.e2e.test.ts",
+    "server/safety-floor.e2e.test.ts",
+    "server/full-access-default.e2e.test.ts",
+    "server/store.test.ts",
+    "server/cancelled-turn.e2e.test.ts",
+    "server/bot-continuity.e2e.test.ts",
+    "server/quote-context.e2e.test.ts"
+  ],
   "guards": [
     "scripts/ci-scope.test.ts",
-    "scripts/ci-linux-lanes.test.ts",
     "scripts/ci-workflow.test.ts",
     "scripts/testing/verification-docs.test.ts",
     "scripts/check.test.ts",
     "scripts/typecheck.test.ts",
     "scripts/check-electron-entrypoints.test.ts",
     "scripts/check-local-app.test.ts",
-    "scripts/qa/qa.test.ts"
+    "scripts/qa/qa.test.ts",
+    "scripts/qa/github.test.ts",
+    "scripts/qa/hold-release.test.ts",
+    "scripts/qa/label-gate.test.ts",
+    "scripts/qa/repair-recovery.test.ts",
+    "scripts/qa/scan.test.ts",
+    "scripts/release-ci.test.ts"
   ],
   "areas": [
     {

@@ -18,13 +18,14 @@ function typedPast(card: Message, transcript: Message[]): boolean {
   return index >= 0 && transcript.slice(index + 1).some((later) => later.role === "user" && later.kind === "text");
 }
 
-export function optionsCardRow({ message: m, transcript, botId, botName, botColor, threadId, asker }: {
+export function optionsCardRow({ message: m, transcript, botId, botName, botColor, threadId, asker, compact }: {
   message: Message;
   transcript: Message[];
   botId: string;
   botName: string;
   botColor?: Bot["color"];
   threadId: string;
+  compact?: boolean;
   /** The bot that asks: this conversation's, or for an inbox's copy the one that asked where it came from. */
   asker?: Asker;
 }): ReactNode {
@@ -36,7 +37,7 @@ export function optionsCardRow({ message: m, transcript, botId, botName, botColo
   ) : isQuestionCard(m.card) ? (
     <QuestionCard threadId={threadId} asker={asker ?? (botColor ? { name: botName, color: botColor } : undefined)} message={m} typedPast={typedPast(m, transcript)} />
   ) : m.card?.requestId && m.card.tool ? (
-    <ApprovalCard bot={{ name: botName }} message={m} threadId={threadId} />
+    <ApprovalCard bot={{ name: botName }} message={m} threadId={threadId} compact={compact} />
   ) : shouldHideOnboardingCard(m, transcript) ? null : (
     <OptionCard botId={botId} threadId={threadId} message={m} />
   );

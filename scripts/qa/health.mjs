@@ -25,7 +25,7 @@ export async function qaHealth({ api = github, readArtifact = artifactFiles, now
         || !["workflow_run", "workflow_dispatch"].includes(owner.event) || owner.conclusion !== "success") continue;
       const candidate = JSON.parse((await readArtifact(artifact, api))["qa-report.json"]);
       if (candidate.runId === run.id && candidate.attempt === run.run_attempt && candidate.version === 1
-        && candidate.sha === run.head_sha && candidate.deliveryComplete === true
+        && candidate.sha === run.head_sha && candidate.deliveryComplete === true && candidate.coverage !== "focused-main"
         && typeof candidate.executionComplete === "boolean" && Number.isFinite(Date.parse(candidate.finishedAt))
         && Date.parse(candidate.finishedAt) <= now + 60_000) { report = candidate; break; }
     }

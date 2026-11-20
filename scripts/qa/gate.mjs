@@ -3,7 +3,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
-import { expectedJobs, holdsFor, inspectJobs, preflightJob } from "./contracts.mjs";
+import { expectedJobs, holdsFor, inspectJobs, narrowPushPlan, preflightJob } from "./contracts.mjs";
+import { verifyCurrentExecution } from "./pr-execution.mjs";
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -16,7 +17,7 @@ function failedRequiredStep(expected, jobs) {
   return null;
 }
 
-export async function verifyGate(outputs, { api = github, runId = process.env.GITHUB_RUN_ID, attempt = process.env.GITHUB_RUN_ATTEMPT || 1, deadlineMs = 85 * 60_000, createdAt = NaN, now = Date.now, wait = pause } = {}) {
+export async function verifyGate(outputs, { api = github, runId = process.env.GITHUB_RUN_ID, attempt = process.env.GITHUB_RUN_ATTEMPT || 1, deadlineMs = 85 * 60_000, createdAt = NaN, now = Date.now, wait = pause, verifySource } = {}) {
   const areas = outputs.qa_areas;
   const expected = outputs.expected_jobs;
   if (!Array.isArray(areas) || !areas.length || !Array.isArray(expected) || !expected.some((item) => item.id === "static")
@@ -36,10 +37,8 @@ export async function verifyGate(outputs, { api = github, runId = process.env.GI
     if (outputs.pr_number) {
       const pr = await api(`/pulls/${outputs.pr_number}`);
       if (pr.head.sha !== outputs.pr_head) throw new Error("PR head changed; wait for its current CI run");
-      const labels = pr.labels.map((label) => label.name);
-      if ((labels.includes("ci:full") || labels.includes("qa:repair")) && !outputs.full_required
-        || labels.includes("upstream-sync") && !outputs.full_required
-        || labels.includes("windows") && outputs.fast_pr) throw new Error("Current PR controls require a fresh full CI run");
+      const labels = pr.labels.map((label) => label.name.toLowerCase());
+      if (labels.some((label) => ["ci:full", "qa:repair", "windows"].includes(label)) && !outputs.full_required) throw new Error("Current PR controls require a fresh full CI run");
       if (outputs.full_required && labels.includes("qa:repair")) repairs = [...String(pr.body ?? "").matchAll(/^QA-Repair:\s*#(\d+)\s*$/gm)].map((hit) => Number(hit[1]));
     }
     const issues = (await pages("/issues?state=open&labels=qa", null, api)).filter((issue) => !issue.pull_request);
@@ -55,16 +54,18 @@ export async function verifyGate(outputs, { api = github, runId = process.env.GI
     const failedStep = failedRequiredStep(expected, observed);
     if (failedStep) throw new Error(`Required validation failed: ${failedStep}`);
     if (result.passed) {
+      await verifySource?.();
       await checkControls();
       return;
     }
     if (now() - started >= deadlineMs) throw new Error(`Incomplete required validation: ${[...result.missing, ...result.pending].join(", ")}`);
     console.log(`Waiting for required validation: ${result.missing.length} missing, ${result.pending.length} pending`);
-    await wait(15_000);
+    await wait(outputs.fast_pr && now() - started < 2 * 60_000 ? 3_000 : 15_000);
   }
 }
 
-export async function gateRun({ api = github, readArtifact = artifactFiles, runId = process.env.GITHUB_RUN_ID, attempt = process.env.GITHUB_RUN_ATTEMPT || 1, sha = process.env.GITHUB_SHA, event = process.env.GITHUB_EVENT_NAME, eventPath = process.env.GITHUB_EVENT_PATH, eventPayload, deadlineMs = 175 * 60_000, now = Date.now, wait = pause, ...options } = {}) {
+export async function gateRun({ api = github, readArtifact = artifactFiles, runId = process.env.GITHUB_RUN_ID, attempt = process.env.GITHUB_RUN_ATTEMPT || 1, sha = process.env.GITHUB_SHA, event = process.env.GITHUB_EVENT_NAME, eventPath = process.env.GITHUB_EVENT_PATH, eventPayload,
+  bindExecution = process.env.OMB_CI_EXECUTION_BINDING === "1", repository = process.env.GITHUB_REPOSITORY, deadlineMs = 175 * 60_000, now = Date.now, wait = pause, ...options } = {}) {
   const started = now();
   let createdAt = NaN, originalCreatedAt = NaN, prNumber = null, prHead = null;
   if (event === "pull_request") {
@@ -89,7 +90,13 @@ export async function gateRun({ api = github, readArtifact = artifactFiles, runI
     const artifacts = await pages(`/actions/runs/${runId}/artifacts`, "artifacts", api);
     const plan = await runPlan({ id: Number(runId), run_attempt: Number(attempt), head_sha: sha }, jobs, artifacts, { api, readArtifact, artifactHead: prHead ?? sha });
     if (plan) {
-      return verifyGate(plan.outputs, { ...options, api, runId, attempt, wait, now, createdAt, deadlineMs: Math.max(0, deadlineMs - (now() - started)) });
+      if ((event === "push" && bindExecution || plan.outputs.focused_push)
+        && (event !== "push" || plan.outputs.focused_push !== true || !narrowPushPlan(plan))) {
+        throw new Error("Missing valid focused integration plan");
+      }
+      const verifySource = prNumber && (bindExecution || plan.execution?.tree !== undefined)
+        ? () => verifyCurrentExecution({ plan, sha, number: prNumber, head: prHead, repository, api }) : undefined;
+      return verifyGate(plan.outputs, { ...options, api, runId, attempt, wait, now, createdAt, verifySource, deadlineMs: Math.max(0, deadlineMs - (now() - started)) });
     }
     if (preflight?.conclusion === "success" || now() - started >= deadlineMs) throw new Error("Missing current-run validation plan; rerun all jobs for this revision");
     if (prNumber) {
@@ -98,7 +105,7 @@ export async function gateRun({ api = github, readArtifact = artifactFiles, runI
       if (!Array.isArray(pr.labels) || pr.labels.some((label) => typeof label.name !== "string")) throw new Error("Invalid current PR controls");
     }
     console.log("Waiting for the current run's validation plan");
-    await wait(15_000);
+    await wait(event === "pull_request" && now() - started < 2 * 60_000 ? 3_000 : 15_000);
   }
 }
 

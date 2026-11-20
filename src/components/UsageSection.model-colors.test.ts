@@ -5,7 +5,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { modelColor } from "@/lib/model-color";
 import { setLocale } from "@/lib/i18n";
+import type { UsageInsights } from "../../shared/usage-insights";
 import { SettingsLook } from "./SettingsPrimitives";
+import type { UsageCapView } from "./UsageCaps";
 
 const calls = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", async (original) => {
@@ -52,6 +54,7 @@ describe("model colours in the usage breakdown", () => {
     ];
     calls.api.mockImplementation(async (path: string) => {
       if (path.startsWith("/api/usage/traces?")) return { roots: [], totals: { costUsd: 0, errors: 0, durationMs: 0 } };
+      if (path.startsWith("/api/usage/insights?")) throw new Error("Insights unavailable in the bars fixture");
       const by = new URL(path, "http://localhost").searchParams.get("groupBy");
       return { groupBy: by, groups: by === "bot" ? [{ ...group("bot:b1", "Scout", 1_000), segments: models }] : models };
     });
@@ -72,41 +75,54 @@ describe("model colours in the usage breakdown", () => {
     }
   });
 
-  it("colors model rows in the actual Settings Usage route while leaving bot rows neutral", async () => {
+  it("colors Spending model rows, keeps bot rows neutral and shows owner caps and cost caveats", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     setLocale("en");
     const models = [
       group("model:codex/gpt-6.1-sol", "gpt-6.1-sol", 1_000),
       group("model:codex/gpt-6-luna", "gpt-6-luna", 800),
     ];
+    const counts = { cachedInput: 0, output: 0, reasoning: 0, errors: 0, durationMs: 0, timedTurns: 0 };
+    const totals = { ...counts, input: 1_800, turns: 2, costUsd: 1.8, unpriced: 0, tools: 0, activeDays: 1, days: 1 };
+    const insights: UsageInsights = {
+      from: "2026-11-19", to: "2026-11-19", timeZone: "UTC", unit: "day", totals, previous: totals,
+      buckets: [], hours: Array.from({ length: 7 }, () => Array<number>(24).fill(0)),
+      models: models.map((model) => ({ ...counts, ...model, costUsd: model.input / 1_000 })),
+      bots: [{ ...counts, ...group("bot:b1", "Scout", 1_800), costUsd: 1.8 }],
+      engines: [], people: [], routines: [], departments: [],
+    };
+    const caps: UsageCapView = { stops: "unattended", server: { dailyUsd: 5 }, bots: {}, env: { stops: false, server: [] },
+      caps: [{ id: "fixture-server", scope: "server", period: "day", unit: "usd", limit: 5, used: 1.8, percent: 36, warn: false, reached: false, resetsAt: 1 }] };
     calls.api.mockImplementation(async (path: string) => {
       if (path.startsWith("/api/usage/traces?")) return { roots: [], totals: { costUsd: 0, errors: 0, durationMs: 0 } };
-      if (!path.startsWith("/api/usage?")) throw new Error(`Unexpected API request: ${path}`);
-      const by = new URL(path, "http://localhost").searchParams.get("groupBy");
-      return { groupBy: by, groups: by === "model" ? models : [group("bot:b1", "Scout", 500)] };
+      if (path.startsWith("/api/usage/insights?")) return insights;
+      if (path.startsWith("/api/usage?")) return { groupBy: "bot", groups: [], caps, total: { turns: 2, unpriced: 0 }, notBilled: { usd: 1, turns: 1 } };
+      throw new Error(`Unexpected API request: ${path}`);
     });
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
     try {
       await act(async () => root.render(createElement(SettingsLook.Provider, { value: true }, createElement(UsageSection))));
-      const where = host.querySelector<HTMLElement>('[data-settings-block="where"]')!;
-      const rows = () => [...where.querySelectorAll<HTMLElement>("[data-setting-row]")];
-      expect(rows()).toHaveLength(1);
-      expect(rows()[0]!.textContent).toContain("Scout");
-      expect(rows()[0]!.querySelector("[data-model-color]")).toBeNull();
-      const select = where.querySelector<HTMLSelectElement>("select")!;
-      await act(async () => { select.value = "model"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      const breakdown = host.querySelector<HTMLElement>('[data-testid="insight-breakdown"]')!;
+      const rows = () => [...breakdown.querySelectorAll<HTMLElement>('[role="row"]')].filter((row) => row.querySelector('[role="cell"]'));
+      const tones = (row: HTMLElement) => [...row.querySelectorAll<HTMLElement>('[role="cell"] span[style*="background-color"]')]
+        .map((node) => node.style.backgroundColor);
+      expect(calls.api).toHaveBeenCalledWith(expect.stringContaining("/api/usage/insights?"));
+      expect(host.querySelector('[data-cap="fixture-server"]')).not.toBeNull();
+      expect(host.querySelector('[data-testid="usage-caveats"]')?.textContent).toContain("estimated, not billed");
       expect(rows()).toHaveLength(2);
-      expect(calls.api).toHaveBeenCalledWith(expect.stringContaining("groupBy=model"));
       for (const [index, model] of models.entries()) {
         const row = rows()[index]!;
         expect(row.textContent).toContain(model.label);
-        expect(row.querySelector("[data-settings-slot]")).toBeNull();
-        const shade = row.querySelector<HTMLElement>("[data-model-color]")!;
-        expect(shade.getAttribute("data-model-color")).toBe(modelColor(model.key));
-        expect(shade.style.backgroundColor).toBe(modelColor(model.key));
+        const color = modelColor(model.key);
+        expect(tones(row)).toEqual([color, color]);
       }
+      const select = breakdown.parentElement!.querySelector<HTMLSelectElement>('select[aria-label="Group by"]')!;
+      await act(async () => { select.value = "bots"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]!.textContent).toContain("Scout");
+      expect(tones(rows()[0]!)).toEqual(["var(--color-accent)"]);
     } finally {
       await act(async () => root.unmount());
       host.remove();

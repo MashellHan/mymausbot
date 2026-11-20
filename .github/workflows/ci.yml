@@ -1,11 +1,5 @@
-# Boat (https://docs.boat.dev/ci): while the repository variable BOAT_CI is "on", a run from this repository's own
-# branches (a push to main or a merge group) that the repository owner both authored and started does its
-# static work on one 16 vCPU Boat VM, one Boat start per run. Full platform tests use macOS runners.
-# Boat runs a public repository's job only for the users
-# on its allow-list (`boat ci public`) and fails any other at once, so every other run, a fork's, the nightly and manual
-# runs (the release lane among them), and every run while BOAT_CI is anything else run on GitHub's runners exactly as
-# before. Pull requests use the hosted Ubuntu fast path. `boat ci` and the dashboard's CI on Boat VMs tab list the Boat jobs (docs/ci.md).
 name: CI
+run-name: ${{ github.event_name == 'push' && format('Focused main integration {0}', github.sha) || '' }}
 
 on:
   workflow_dispatch:
@@ -45,7 +39,7 @@ concurrency:
     && contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
     && github.event.pull_request.number && github.event.pull_request.base.sha && github.event.pull_request.head.sha
     && github.event.label.name
-    && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)
+    && !contains(fromJSON('["ci:full","qa:repair","windows"]'), github.event.label.name)
     && format('metadata-{0}-{1}', github.event.pull_request.number, github.run_id)
     || github.event_name == 'merge_group' && github.event.merge_group.head_ref
     || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)
@@ -55,7 +49,7 @@ concurrency:
     && !(contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
     && github.event.pull_request.number && github.event.pull_request.base.sha && github.event.pull_request.head.sha
     && github.event.label.name
-    && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)) }}
+    && !contains(fromJSON('["ci:full","qa:repair","windows"]'), github.event.label.name)) }}
 
 jobs:
   # ── The test leg, in pieces ──────────────────────────────────────────────
@@ -68,27 +62,13 @@ jobs:
       && contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
       && github.event.pull_request.number && github.event.pull_request.base.sha && github.event.pull_request.head.sha
       && github.event.label.name
-      && !contains(fromJSON('["ci:full","qa:repair","windows","upstream-sync"]'), github.event.label.name)) }}
-    name: >-
-      ${{ vars.BOAT_CI == 'on' && contains(fromJSON('["push", "merge_group"]'), github.event_name)
-      && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
-      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-      && github.event.pull_request.user.login == github.repository_owner)
-      && 'typecheck + lint (Boat)' || 'typecheck + lint' }}
-    runs-on: >-
-      ${{ vars.BOAT_CI == 'on' && contains(fromJSON('["push", "merge_group"]'), github.event_name)
-      && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
-      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-      && github.event.pull_request.user.login == github.repository_owner)
-      && 'boat-xlarge' || 'ubuntu-latest' }}
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 15 || vars.BOAT_CI == 'on' && 45 || 15 }}
+      && !contains(fromJSON('["ci:full","qa:repair","windows"]'), github.event.label.name)) }}
+    name: typecheck + lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-      # ci-scope reads whether the commit before a push got its own green run,
-      # and whether the pushed commit already passed the merge queue
       actions: read
-      # and a pull request's labels as they are when the run starts
-      pull-requests: read
       issues: read
     outputs:
       jobs: ${{ steps.scope.outputs.jobs }}
@@ -110,8 +90,7 @@ jobs:
         with:
           # Full history lets PR selection use the merge base, including deletes
           # and both sides of renames, without GitHub's changed-file page limit.
-          # Its trees are enough for that; git fetches an old file's contents
-          # when one is read. The whole history took 2m41s to reach a Boat VM.
+          # Its trees are enough for that; Git fetches an old blob only on demand.
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
@@ -125,7 +104,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MAUSBOT_CI_MODE: ${{ vars.MAUSBOT_CI_MODE }}
-          OMB_CI_LINUX_IN_STATIC: ${{ runner.environment == 'self-hosted' }}
           OMB_CI_EXECUTION_BINDING: "1"
         run: node scripts/ci-scope.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -134,119 +112,81 @@ jobs:
           path: qa-plan.json
           retention-days: 7
       - run: pnpm install --frozen-lockfile
+      - name: Validate generated Settings places
+        if: steps.scope.outputs.settings_places == 'true'
+        run: pnpm exec vitest run src/components/settings/settings-places.test.ts
+      - name: Restore typecheck incremental cache
+        if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr == 'true'
+        id: typecheck-cache-restore
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .omb-scratch/typecheck
+          key: typecheck-v1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'packages/*/tsconfig.json') }}-${{ github.sha }}
+          restore-keys: |
+            typecheck-v1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'packages/*/tsconfig.json') }}-
+      - name: Security, data and dispatch core with bounded affected tests
+        id: fast
+        if: steps.scope.outputs.fast_pr == 'true' || steps.scope.outputs.focused_push == 'true'
+        env:
+          OMB_VITEST_E2E: all
+          OMB_VITEST_WORKERS: 4
+          OMB_TYPECHECK_INCREMENTAL: ${{ steps.scope.outputs.fast_pr == 'true' && '1' || '0' }}
+          OMB_VITEST_SUBSET: ${{ steps.scope.outputs.fast_files }}
+          OMB_FAST_TYPECHECK: ${{ steps.scope.outputs.build }}
+          OMB_VITEST_RETRY_LOG: ${{ github.workspace }}/qa-results/vitest-retries.jsonl
+        run: |
+          mkdir -p qa-results
+          node scripts/testing/fast-static-overlap.mjs run
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() && contains(fromJSON('["success","failure"]'), steps.fast.outcome) }}
+        with:
+          name: qa-results-${{ steps.scope.outputs.focused_push == 'true' && 'focused' || 'fast' }}-attempt-${{ github.run_attempt }}
+          path: qa-results/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: pnpm typecheck (parallel result)
+        if: ${{ !cancelled() && steps.scope.outputs.build == 'true' && contains(fromJSON('["success","failure"]'), steps.fast.outcome) }}
+        run: node scripts/testing/fast-static-overlap.mjs typecheck-result
+      - if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true' && steps.scope.outputs.focused_push != 'true'
+        run: pnpm typecheck
+      - name: Save typecheck incremental cache
+        if: ${{ steps.scope.outputs.build == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (steps.scope.outputs.fast_pr == 'true' && steps.typecheck-cache-restore.outputs.cache-hit != 'true')) }}
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .omb-scratch/typecheck
+          key: typecheck-v1-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'packages/*/tsconfig.json') }}-${{ github.sha }}
       - name: Verify CI selection and documentation references
-        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/qa.test.ts
+        if: steps.scope.outputs.ci_verify == 'true'
+        env:
+          OMB_VITEST_WORKERS: 4
+        run: pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/*.test.ts scripts/release-ci.test.ts
       - name: Validate locale catalogs
         run: pnpm i18n:check
       - name: Validate the model manifest
         # Installs download this file from main within hours of a change, so a bad edit must not land.
         env:
-          MANIFEST_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          MANIFEST_BASE: ${{ steps.scope.outputs.comparison_base }}
         run: node scripts/check-model-manifest.mjs --against "$MANIFEST_BASE"
       - run: pnpm check:contrast
       - run: pnpm lint
       - name: Validate the announcements file
         # Installs download it from main within the hour (docs/announcements.md), so a bad edit must not land.
         env:
-          ANNOUNCEMENTS_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          ANNOUNCEMENTS_BASE: ${{ steps.scope.outputs.comparison_base }}
         run: node scripts/check-announcements.mjs --against "$ANNOUNCEMENTS_BASE"
       - name: Source guards
         # The tests that only read the source: seconds here, and they stay in the shards. On Nov 3-4 2026 one of them was
         # red on main for 11 hours, and each PR heard about it after about 70 minutes, once its shards had found a runner.
-        run: pnpm exec vitest run src/locales/ scripts/testing/file-size-ratchet.test.ts scripts/testing/index-route-ratchet.test.ts scripts/testing/tighten-ratchets.test.ts scripts/testing/comment-history.test.ts scripts/testing/lazy-server-modules.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/host-e2e.test.ts scripts/testing/ci-retry-list.test.ts src/lib/copy-text.guard.test.ts src/components/Select.guard.test.ts --reporter=default --reporter=github-actions
-      - name: Security, data and dispatch core with bounded affected tests
-        if: steps.scope.outputs.fast_pr == 'true'
         env:
-          OMB_VITEST_E2E: all
-          OMB_VITEST_WORKERS: 2
-          OMB_VITEST_SUBSET: ${{ steps.scope.outputs.fast_files }}
-          OMB_FAST_TYPECHECK: ${{ steps.scope.outputs.build }}
-        run: node scripts/testing/fast-static-overlap.mjs run
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always() && steps.scope.outputs.fast_pr == 'true'
-        with:
-          name: qa-results-fast-attempt-${{ github.run_attempt }}
-          path: qa-results/
-          if-no-files-found: warn
-          retention-days: 7
-      # A pull request that changes only docs, tests under scripts/ or the
-      # control plane cannot change what these three check.
-      - name: pnpm typecheck (parallel result)
-        if: always() && steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr == 'true'
-        run: node scripts/testing/fast-static-overlap.mjs typecheck-result
-      - if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'
-        run: pnpm typecheck
-      - if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'
+          OMB_VITEST_WORKERS: 4
+        run: pnpm exec vitest run src/locales/ scripts/testing/file-size-ratchet.test.ts scripts/testing/index-route-ratchet.test.ts scripts/testing/tighten-ratchets.test.ts scripts/testing/comment-history.test.ts scripts/testing/lazy-server-modules.test.ts scripts/testing/duration-sequencer.test.ts scripts/testing/host-e2e.test.ts scripts/testing/ci-retry-list.test.ts src/lib/copy-text.guard.test.ts src/components/Select.guard.test.ts --reporter=default --reporter=github-actions
+      - if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true' && steps.scope.outputs.focused_push != 'true'
         run: pnpm check:electron
       - name: production UI build
-        if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'
+        if: steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true' && steps.scope.outputs.focused_push != 'true'
         run: pnpm exec vite build
-      # The rest runs only on a Boat VM, where ci-scope moved the Linux jobs' work into this job.
-      - name: Remove what Boat installs and GitHub's runners lack
-        if: steps.scope.outputs.linux_lanes
-        # The server starts an engine it finds on PATH: Boat's Hermes then downloads its own Python, Node and tools
-        # into each test's home, about nine seconds for every test that adds a bot. A Team Cloud runs its turns in a
-        # bubblewrap box wherever bwrap works: here, once the step below drops the capability bwrap refuses to start
-        # with, and never on a GitHub runner.
-        run: sudo rm -f /usr/bin/bwrap /usr/local/bin/{agent,claude,codex,cua-driver,cursor-agent,hermes,hermes-acp,hermes-agent,kimi,openclaw,opencode,pi,prime-agent,vibe,vibe-acp}
-      - name: Resolve Electron archive cache
-        if: steps.scope.outputs.linux_lanes
-        id: electron-cache
-        run: node scripts/prepare-electron-ci.mjs --plan
-      - name: Restore Electron archive cache
-        if: steps.scope.outputs.linux_lanes && steps.electron-cache.outputs.eligible == 'true'
-        id: electron-cache-restore
-        continue-on-error: true
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ steps.electron-cache.outputs.path }}
-          key: ${{ steps.electron-cache.outputs.key }}
-      - name: Prepare Electron test runtime
-        if: steps.scope.outputs.linux_lanes
-        id: electron-cache-prepare
-        env:
-          OMB_ELECTRON_CACHE_ROOT: ${{ runner.temp }}/openmausbot-electron-cache
-        run: node scripts/prepare-electron-ci.mjs
-      - name: Save Electron archive cache
-        if: steps.scope.outputs.linux_lanes && steps.electron-cache.outputs.eligible == 'true' && steps.electron-cache-restore.outputs.cache-hit != 'true' && steps.electron-cache-prepare.outputs.cache-ready == 'true'
-        continue-on-error: true
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ steps.electron-cache.outputs.path }}
-          key: ${{ steps.electron-cache.outputs.key }}
-      - name: Linux tests (vitest shards, behavior evals, packaged server), side by side
-        if: steps.scope.outputs.linux_lanes
-        env:
-          OMB_CI_LINUX_LANES: ${{ steps.scope.outputs.linux_lanes }}
-          # Boat's image sets en_US.UTF-8, whose collation is Intl's default; GitHub's runners use C.UTF-8 and UTC.
-          LANG: C.UTF-8
-          LC_ALL: C.UTF-8
-          TZ: UTC
-        # Boat's runner gives every process cap_dac_read_search as an ambient capability, so a test can still read a
-        # file it set to mode 000, and Boat's desktop sets DISPLAY. GitHub's runners have neither.
-        shell: setpriv --inh-caps=-all --ambient-caps=-all -- env -u DISPLAY -u XAUTHORITY bash --noprofile --norc -eo pipefail {0}
-        run: node scripts/ci-linux-lanes.mjs
-      - name: Report flaky tests that needed a retry
-        if: ${{ !cancelled() && steps.scope.outputs.linux_lanes }}
-        env:
-          OMB_VITEST_RETRY_LOG: ${{ github.workspace }}/qa-results/vitest-retries.jsonl
-        run: node scripts/testing/ci-retry-summary.mjs
-      - name: Upload eval run reports on failure
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: failure() && steps.scope.outputs.linux_lanes
-        with:
-          name: behavior-evals-reports-${{ github.sha }}-${{ github.run_attempt }}
-          path: evals/reports/runs/
-          if-no-files-found: warn
-          retention-days: 7
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always() && steps.scope.outputs.linux_lanes
-        with:
-          name: qa-results-boat-attempt-${{ github.run_attempt }}
-          path: qa-results/
-          if-no-files-found: warn
-          retention-days: 7
 
   vitest:
     # Admit the expensive runner fan-out only after the quick checks pass.
@@ -503,6 +443,7 @@ jobs:
       - name: Enforce current PR controls, QA holds and required validation
         env:
           GH_TOKEN: ${{ github.token }}
+          OMB_CI_EXECUTION_BINDING: "1"
         run: node scripts/qa/label-gate.mjs
 
   foss:

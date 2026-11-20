@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY, readCheckPolicy, selectCheckPlan } from "../ci-scope.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, MAIN_SCOPE, PLATFORM_POLICY, readCheckPolicy, selectCheckPlan } from "../ci-scope.mjs";
 import { executionComplete, expectedJobs, fullPushPlan, inspectJobs, eligibleRun, holdsFor, MERGE_JOBS, narrowPushPlan, triageOf } from "./contracts.mjs";
 import { artifactFiles, fullRunEvidence, github, runJobs } from "./github.mjs";
 import { qaHealth } from "./health.mjs";
@@ -172,14 +172,20 @@ describe("complete CI and trusted QA health", () => {
     const observed = [{ name: staticJob.name, status: "completed", conclusion: "success", steps: names.map((name) => ({ name, conclusion: "success" })) }];
     expect(executionComplete([staticJob], observed, new Set())).toBe(true);
     expect(executionComplete([staticJob], [{ ...observed[0], steps: observed[0].steps.slice(0, -2) }], new Set())).toBe(false);
+    const noVerifyJob = expectedJobs({ ...selection, ci_verify: false }, false)[0];
+    expect(executionComplete([noVerifyJob], [{
+      name: noVerifyJob.name, status: "completed", conclusion: "success",
+      steps: names.filter((name) => name !== "Verify CI selection and documentation references").map((name) => ({ name, conclusion: "success" })),
+    }], new Set())).toBe(true);
   });
 
   it("requires the broker owning lane for a broad source-only fast PR", async () => {
     const policy = readCheckPolicy();
+    const allCore = [...policy.core, ...(policy.serverCore ?? [])].sort();
     const selected = selectCheckPlan({ files: ["cloudflare/composio-broker/src/triggers.ts", "package.json"], policy, fastPr: true });
     expect(selected.areas).toEqual(["everything"]);
     expect(selected.scope.checks).toEqual(["build", "control-plane"]);
-    expect(selected.fastFiles).toEqual([...policy.core].sort());
+    expect(selected.fastFiles).toEqual(allCore);
     const ci = ciOutputs(selected.scope, ["ubuntu-latest"]);
     const prHead = "b".repeat(40);
     const outputs = { ...ci, fast_pr: true, full_required: false, reduced: false, required_jobs: ci.jobs,
@@ -355,7 +361,7 @@ describe("complete CI and trusted QA health", () => {
     expect(plan.outputs.expected_jobs).toHaveLength(19);
     expect(plan.outputs.platform_policy).toEqual(PLATFORM_POLICY);
     expect(fullPushPlan(plan)).toBe(true);
-    expect(fullPushPlan(pushPlan(moveLinuxIntoStatic(ciOutputs(FULL_SCOPE, ALL_OS))))).toBe(true);
+    expect(fullPushPlan(pushPlan({ ...ciOutputs(FULL_SCOPE, ALL_OS), boat_static: true }))).toBe(true);
     expect(narrowPushPlan(narrow)).toBe(true);
     expect(narrowPushPlan(plan)).toBe(false);
     expect(narrowPushPlan({ ...narrow, plan: { ...narrow.plan, scope: FULL_SCOPE } })).toBe(false);
@@ -372,6 +378,41 @@ describe("complete CI and trusted QA health", () => {
       { ...plan, plan: { ...plan.plan, admitted: true } },
       { ...plan, plan: { ...plan.plan, scope: { areas: ["main"], checks: [] } } },
     ]) expect(fullPushPlan(candidate)).toBe(false);
+  });
+
+  it("keeps a focused main report separate from full QA and suppresses verification writes", async () => {
+    const source = { ...pushRun, status: "completed", conclusion: "success" };
+    const base = "b".repeat(40), skipped = "c".repeat(40);
+    const selection = { ...ciOutputs({ checks: ["build"] }, ["ubuntu-latest"]), focused_push: true, settings_places: true, fast_pr: false,
+      deferred_files: ["server/browser/changed.e2e.test.ts"], deferred_checks: ["host-tests"] };
+    const plan = { ...narrowPlan(source), integration: { base, head: source.head_sha, pushBefore: skipped, baselineRunId: 31, baselineAttempt: 1, cumulative: [skipped] },
+      plan: { full: false, reduced: false, focusedPush: true, scope: { areas: ["server"], checks: ["build"] } },
+      outputs: { ...selection, full_required: false, reduced: false, qa_areas: ["global"], required_jobs: [], expected_jobs: expectedJobs(selection, false) } };
+    const preflight = passedPreflight("typecheck + lint");
+    const steps = ["Validate generated Settings places", "Security, data and dispatch core with bounded affected tests", "pnpm typecheck (parallel result)"];
+    preflight.steps.push(...steps.map((name) => ({ name, conclusion: "success" })));
+    const artifacts = ["qa-plan-attempt-1", "qa-results-focused-attempt-1"].map((name) => ({ name, workflow_run: { id: source.id, head_sha: source.head_sha } }));
+    const api = vi.fn(async (path: string) => {
+      if (path === `/actions/runs/${source.id}`) return source;
+      if (path.includes("/jobs?")) return { jobs: [preflight] };
+      if (path.includes("/artifacts?")) return { artifacts };
+      if (path.includes("ci.yml/runs?")) return { workflow_runs: [] };
+      throw new Error(`Unexpected issue read or write: ${path}`);
+    });
+    const readArtifact = async (item: { name: string }) => item.name.startsWith("qa-plan") ? { "qa-plan.json": JSON.stringify(plan) } : result("passed");
+    expect(await fullRunEvidence(source, { api, readArtifact, repository })).toBe("ineligible");
+    expect(await reportRun(source.id, { api, readArtifact, repository })).toMatchObject({ coverage: "focused-main", executionComplete: true,
+      deliveryComplete: true, integration: plan.integration, deferredFiles: selection.deferred_files, deferredChecks: selection.deferred_checks });
+    expect(fullPushPlan(plan)).toBe(false);
+    expect(narrowPushPlan({ ...plan, integration: { ...plan.integration, head: base } })).toBe(false);
+    expect(executionComplete(plan.outputs.expected_jobs, [{ ...preflight, steps: preflight.steps.filter((step) => !step.name.includes("Settings places")) }],
+      new Set(["qa-results-focused"]))).toBe(false);
+    expect(executionComplete(plan.outputs.expected_jobs, [preflight], new Set())).toBe(false);
+    const incident = issueApi();
+    const failing = makeReport({ run: source, jobs: [job], expected, results: [{ ...testFindings(result(), "linux"), name: expected[0].artifact }] });
+    await deliverReport({ ...failing, coverage: "focused-main" }, incident);
+    expect(incident.issues).toHaveLength(1);
+    expect(incident.issues[0].labels.some((label: { name: string }) => label.name === "qa:verified")).toBe(false);
   });
 
   it("reports a historical scheduled or manual full plan from its own bound 38 jobs", async () => {
@@ -539,8 +580,9 @@ describe("complete CI and trusted QA health", () => {
     }
     const workflow = parse(readFileSync(".github/workflows/qa-report.yml", "utf8"));
     expect(workflow.on).not.toHaveProperty("pull_request_target");
-    expect(workflow.jobs.report.steps[0].with.ref).toBe("main");
-    expect(workflow.permissions).toEqual({ contents: "read", actions: "read", issues: "write" });
+    expect(workflow.jobs.report.steps[0].with.ref).toBe("${{ github.sha }}");
+    expect(workflow.permissions).toEqual({});
+    expect(workflow.jobs.report.permissions).toEqual({ contents: "read", actions: "read", issues: "write" });
   });
 
   it("falls back for stale, missing, incomplete, untrusted or unreadable reports", async () => {

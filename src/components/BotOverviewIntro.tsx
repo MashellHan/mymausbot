@@ -4,11 +4,14 @@ import type { MiniAppSuggestionReason, MiniAppSuggestionsRequest, MiniAppSuggest
 import type { Routine, RoutineRun, RoutineRunOn } from "@/lib/routines";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
+import { pickerModelEffortLevels } from "@/lib/model-choices";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { usePageVisible } from "@/lib/page-visible";
+import { useAdvancedMode } from "@/lib/interface-mode";
 import { api, useStore, type Bot } from "@/state/store";
 import { BotAvatar } from "./Avatar";
 import { ModelPicker } from "./ModelPicker";
+import { effortLabel } from "./ModelReasoningControls";
 import { modelName } from "@/lib/simple-model-menu";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { RowIcon } from "./bot-panel/rows";
@@ -21,7 +24,11 @@ function OverviewModel({ bot }: { bot: Bot }) {
   const [expanded, setExpanded] = useState(false);
   const selection = bot.modelSelection;
   const instance = state.instances.find((candidate) => candidate.instanceId === selection.instanceId);
-  const summary = modelName(instance, selection.model, selection.variant);
+  const model = modelName(instance, selection.model, selection.variant);
+  const levels = pickerModelEffortLevels(instance, selection.model);
+  const effort = selection.effort ? effortLabel(selection.effort, Boolean(instance) && !levels.includes(selection.effort)) : t("settings.newBotEffort.default");
+  const reasoning = selection.model && (levels.length || selection.effort) && !instance?.capabilities?.modelVariants
+    ? `${t("model.simple.reasoning")} · ${effort}` : null;
 
   return <section data-panel-card="model">
     <button type="button" aria-expanded={expanded} aria-controls="bot-overview-model-content" onClick={() => setExpanded((open) => !open)}
@@ -29,7 +36,10 @@ function OverviewModel({ bot }: { bot: Bot }) {
       <RowIcon icon={Sparkles} />
       <span className="min-w-0 flex-1">
         <span data-panel-model-title="" className="block text-[15px] font-semibold text-ink">{t("model.simple.model")}</span>
-        <span className="block truncate text-[12px] text-ink-secondary" title={summary}>{summary}</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-secondary">
+          <span className="min-w-0 truncate" title={model}>{model}</span>
+          {reasoning && <span className="shrink-0">· {reasoning}</span>}
+        </span>
       </span>
       <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform", expanded && "rotate-180")} aria-hidden="true" />
     </button>
@@ -57,6 +67,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
   onOpenApps: (id?: string) => void;
 }) {
   const owner = useOwnerOrAdmin();
+  const advanced = useAdvancedMode();
   const nativeGuard = miniAppNativeFrameGuard();
   const visible = usePageVisible();
   const waitingForTask = Boolean(bot.switchingTo || bot.awaitingThreadSnapshot);
@@ -103,7 +114,7 @@ export function BotOverviewIntro({ bot, routines, runs, defaultRunOn, onOpenApps
       <h1 className="min-w-0 truncate text-[19px] font-semibold leading-7 text-ink" title={bot.name}>{bot.name}</h1>
     </header>
     <OverviewModel key={`model:${bot.id}`} bot={bot} />
-    <RoutinesSection key={bot.id} bot={bot} routines={routines} runs={runs} defaultRunOn={defaultRunOn} compact />
+    <RoutinesSection key={bot.id} bot={bot} routines={routines} runs={runs} defaultRunOn={defaultRunOn} compact upcoming={!advanced} />
     <section aria-label={t("model.suggested")}>
       <div className="mb-3 flex items-center gap-3 px-1">
         <Lightbulb size={17} className="shrink-0 text-ink-secondary" aria-hidden="true" />

@@ -24,7 +24,7 @@ export function bubbleReplyMenus(onReply: () => void, text: string, { simple, re
   };
 }
 
-export function roomPin(group: Group, message: Message, dispatch: ReturnType<typeof useStore>["dispatch"]): PinAction | undefined {
+export function roomPin(group: Pick<Group, "id" | "pinnedMessageId">, message: Message, dispatch: ReturnType<typeof useStore>["dispatch"]): PinAction | undefined {
   if (window.ogb?.remoteClient?.active) return undefined;
   const pinned = group.pinnedMessageId === message.id;
   return {

@@ -747,6 +747,36 @@ describe("inline overview model settings", () => {
     expect(select("Reasoning effort")).toBeNull();
   });
 
+  it("keeps Codex reasoning available on a configured route when its catalog omits effort levels", async () => {
+    const model = "raven::gpt-6.2-sol";
+    const option: Option = { id: model, label: "GPT 6.2 Sol", custom: true,
+      providerRoute: { id: "configured:fixture", label: "Raven", provenance: "configured" } };
+    const instance: InstanceInfo = { ...claude([option]), instanceId: "codex", driverKind: "codex", displayName: "Codex" };
+    fixture.instances = [instance];
+    const bot: Bot = { ...scout(), modelSelection: { instanceId: "codex", model, effort: "high" } };
+    render(bot, options);
+    await settle();
+    expect([...select("Reasoning effort").options].map(({ value }) => value)).toEqual(["", "low", "medium", "high"]);
+    expect(select("Reasoning effort").value).toBe("high");
+    choose(select("Reasoning effort"), "medium");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
+      selection: { instanceId: "codex", model, effort: "medium" } }));
+    render({ ...bot, modelSelection: { ...bot.modelSelection, effort: "none" } }, options);
+    await settle();
+    expect(select("Reasoning effort").selectedOptions[0]).toMatchObject({ value: "none", disabled: true, textContent: "None (unavailable)" });
+    fixture.instances = [{ ...instance, models: { default: model, options: [{ ...option, effortLevels: [] }] } }];
+    render(bot, options);
+    await settle();
+    expect([...select("Reasoning effort").options].map(({ value }) => value)).toEqual(["", "high"]);
+    expect(select("Reasoning effort").selectedOptions[0]).toMatchObject({ value: "high", disabled: true, textContent: "High (unavailable)" });
+    choose(select("Reasoning effort"), "");
+    expect(fixture.dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setModel",
+      selection: { instanceId: "codex", model, effort: undefined } }));
+    render({ ...bot, modelSelection: { instanceId: "codex", model } }, options);
+    await settle();
+    expect(select("Reasoning effort")).toBeNull();
+  });
+
   it("keeps the saved OpenCode provider and model selected when reasoning uses a native variant", async () => {
     const option: Option = { id: "provider/model", label: "Provider model",
       providerRoute: { id: "configured:route", label: "Example", provenance: "configured" },

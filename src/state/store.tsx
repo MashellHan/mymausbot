@@ -1,6 +1,6 @@
 import { cloudAsleep, onCloudPower } from "../lib/cloud-power";
 import { api, ApiError, retryRequest, snapshotArrays } from "./api";
-import { MESSAGE_PAGE_SIZE, reduceOlderMessages } from "./message-history";
+import { MESSAGE_PAGE_SIZE, reduceOlderMessages, reduceTrimHeldMessages } from "./message-history";
 export { MESSAGE_PAGE_SIZE } from "./message-history";
 import { use, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createAppStore } from "./app-store"; import { readOneBot } from "./bot-read"; import { StoreContext, StoreSourceContext } from "./store-context";
@@ -677,7 +677,8 @@ export type Action =
   | { type: "switchBranch"; botId: string; messageId: string; threadId?: string }
   | { type: "threadActive"; threadId: string; activeLeafId: string }
   | { type: "loadOlderMessages"; threadId: string; onError?: (error: Error) => void }
-  | { type: "olderMessages"; threadId: string; generation: number; messages: Message[]; hasMore: boolean }
+  | { type: "trimHeldMessages"; threadId: string; keepFromId?: string }
+  | { type: "olderMessages"; threadId: string; generation: number; before?: string; messages: Message[]; hasMore: boolean }
   | { type: "answerCard"; botId: string; messageId: string; answer: string; threadId?: string; groupId?: string }
   | { type: "answerCardFailed"; botId: string; messageId: string; answer: string; threadId?: string; groupId?: string }
   | { type: "dismissCard"; botId: string; messageId: string; threadId?: string; groupId?: string }
@@ -922,8 +923,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return state.loadingOlder[action.threadId]
         ? state
         : { ...state, loadingOlder: { ...state.loadingOlder, [action.threadId]: true } };
-    case "olderMessages":
-      return reduceOlderMessages(state, action);
+    case "olderMessages": return reduceOlderMessages(state, action);
+    case "trimHeldMessages": return reduceTrimHeldMessages(state, action);
     case "sectionDeleted":
       return {
         ...state, sections: action.sections,

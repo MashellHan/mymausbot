@@ -15,6 +15,7 @@ import {
   type UsageRow,
   type UsageSplitBy,
 } from "../usage-ledger.ts";
+import { insightReadRange, localUsageRange, summarizeInsights, validTimeZone } from "../usage-insights.ts";
 import { DETAIL_MAX, ERROR_MAX } from "../usage-trace/detail.ts";
 import type { ToolReceipt, TraceRecorder } from "../usage-trace/recorder.ts";
 import { createTraceService, PAGE_MAX, type TraceServiceDeps } from "../usage-trace/service.ts";
@@ -39,6 +40,20 @@ export interface UsageRouteDeps {
 }
 
 const TRACE = /^\/api\/usage\/traces\/([^/]{1,600})$/;
+const INVALID_RANGE = "from and to must be YYYY-MM-DD, from no later than to, at most a year apart";
+const INVALID_ZONE = "tz must be an IANA time zone";
+
+const utcDay = (date: Date) => date.toISOString().slice(0, 10);
+
+function usageRange(query: URLSearchParams) {
+  const from = query.get("from"), to = query.get("to"), zone = query.get("tz");
+  const range = parseUsageRange(from, to);
+  if (!range) return { error: INVALID_RANGE };
+  if (zone === null) return { range, from: utcDay(range.from), to: utcDay(range.to) };
+  if (!from || !to || utcDay(range.from) !== from || utcDay(range.to) !== to) return { error: INVALID_RANGE };
+  const timeZone = validTimeZone(zone);
+  return timeZone ? { range: localUsageRange(from, to, timeZone), from, to } : { error: INVALID_ZONE };
+}
 
 const whole = (raw: string | null, fallback: number, max: number): number | null => {
   if (raw === null) return fallback;
@@ -65,8 +80,8 @@ export function createUsageRoutes(deps: UsageRouteDeps): RouteHandler {
   const traces = createTraceService({ dataDir: deps.dataDir, recorder: deps.recorder, messages: deps.messages, liveBot: deps.liveBot });
   return async ({ res, url, path, method, auth, json }) => {
     if (method === "GET" && path === "/api/usage/traces") {
-      const range = parseUsageRange(url.searchParams.get("from"), url.searchParams.get("to"));
-      if (!range) return json(res, 400, { error: "from and to must be YYYY-MM-DD, from no later than to, at most a year apart" });
+      const { range, error } = usageRange(url.searchParams);
+      if (!range) return json(res, 400, { error });
       const offset = whole(url.searchParams.get("offset"), 0, 10_000_000);
       const limit = whole(url.searchParams.get("limit"), 50, PAGE_MAX);
       if (offset === null || !limit) return json(res, 400, { error: `offset must be a whole number and limit 1 to ${PAGE_MAX}` });
@@ -85,17 +100,28 @@ export function createUsageRoutes(deps: UsageRouteDeps): RouteHandler {
       res.setHeader("cache-control", "no-store");
       return found ? json(res, 200, found) : json(res, 404, { error: "no such trace" });
     }
+    if (method === "GET" && path === "/api/usage/insights") {
+      const from = url.searchParams.get("from");
+      const to = url.searchParams.get("to");
+      const range = parseUsageRange(from, to);
+      if (!range || !from || !to || utcDay(range.from) !== from || utcDay(range.to) !== to) return json(res, 400, { error: INVALID_RANGE });
+      const timeZone = validTimeZone(url.searchParams.get("tz") ?? "UTC");
+      if (!timeZone) return json(res, 400, { error: INVALID_ZONE });
+      await flushUsageLedger(deps.dataDir);
+      const rows = readUsage(deps.dataDir, insightReadRange(from, to)).map(deps.rowFor(auth));
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, summarizeInsights(rows, { from, to }, timeZone));
+    }
     if (!(method === "GET" && (path === "/api/usage" || path === "/api/usage.csv"))) return PASS;
-    const range = parseUsageRange(url.searchParams.get("from"), url.searchParams.get("to"));
-    if (!range) return json(res, 400, { error: "from and to must be YYYY-MM-DD, from no later than to, at most a year apart" });
+    const { range, error, from, to } = usageRange(url.searchParams);
+    if (!range) return json(res, 400, { error });
     await flushUsageLedger(deps.dataDir);
     const rows = readUsage(deps.dataDir, range).map(deps.rowFor(auth));
     const prices = deps.prices();
     if (path === "/api/usage.csv") {
-      const stamp = (date: Date) => date.toISOString().slice(0, 10);
       res.writeHead(200, {
         "content-type": "text/csv; charset=utf-8",
-        "content-disposition": `attachment; filename="usage-${stamp(range.from)}-${stamp(range.to)}.csv"`,
+        "content-disposition": `attachment; filename="usage-${from}-${to}.csv"`,
         "cache-control": "no-store",
       });
       res.end(usageCsv(rows, prices));

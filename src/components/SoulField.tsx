@@ -7,8 +7,26 @@ import { useStore, type Bot } from "@/state/store";
 import { useBotEditor } from "./bot-settings/BotEditorContext";
 import { inputCls } from "./bot-settings/field";
 import { intlLocale, t } from "@/lib/i18n";
+import { SOUL_PATH } from "@/lib/memory";
+import { MarkdownTextEditor } from "./bot-panel/MemoryTextEditor";
+import type { BotDocument, BotDocumentWrite } from "@/lib/bot-documents";
 
 type SoulRead = { soul: string; revision: string; bytes: number; limit: number; file: string; drift: boolean; fileText?: string };
+
+export function SoulDocumentField({ document, save, onSaved }: {
+  document: BotDocument;
+  save: (text: string, expectedHash: string) => Promise<BotDocumentWrite>;
+  onSaved: () => void;
+}) {
+  return <MarkdownTextEditor
+    file={SOUL_PATH}
+    doc={document}
+    document
+    maxBytes={BOT_PROFILE_LIMITS.soul}
+    save={save}
+    onDone={(saved) => { if (saved) onSaved(); }}
+  />;
+}
 
 export function SoulField({
   bot,

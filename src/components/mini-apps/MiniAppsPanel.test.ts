@@ -56,6 +56,7 @@ import { MiniAppsPanel } from "./MiniAppsPanel";
 import { MiniAppsHost, MiniAppsSlot } from "./MiniAppsHost";
 import { HongguoView, forgetHongguoHome } from "./HongguoView";
 import { DAILY_X_APP_ID } from "./daily-x-host";
+import { GITHUB_ACTIVITY_APP_ID } from "./github-activity-host";
 
 const dashboard = { kind: "agent-team", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["teams", "activity"] } as const;
 const usageDashboard = { kind: "usage", renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["usage"] } as const;
@@ -919,4 +920,23 @@ it("restores the manual app choice after closing instead of replaying an old lau
   expect(frame()).toBeNull();
   await mount(true);
   await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_b"));
+});
+
+it("mounts GitHubActivityWholePage only when the current local github-activity app is eligible", async () => {
+  fixture.apps = [{
+    id: GITHUB_ACTIVITY_APP_ID,
+    slug: "github-activity",
+    title: "Github Rending",
+    description: "",
+    status: "active",
+    revision: 3,
+    templateVersion: 1,
+    shippedTemplateKind: "github_activity",
+    publisherBotIds: [],
+    createdAt: 1,
+    updatedAt: 1,
+  }];
+  await render();
+  await vi.waitFor(() => expect(host.querySelector('[data-testid="github-activity-whole-page"]')).not.toBeNull());
+  expect(host.querySelector('[data-testid="daily-x-whole-page"]')).toBeNull();
 });

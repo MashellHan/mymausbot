@@ -9,6 +9,7 @@ import { localChange, localVitestWorkers } from "./check.mjs";
 import { holdsFor } from "./qa/contracts.mjs";
 
 const policy = JSON.parse(readFileSync("scripts/testing/check-policy.json", "utf8"));
+const allCore = [...policy.core, ...(policy.serverCore ?? [])].sort();
 const admitted = { ...policy, areas: policy.areas.map((area: object) => ({ ...area, admitted: true })) };
 const temporary: string[] = [];
 afterEach(() => { for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -59,7 +60,7 @@ describe("shared local and CI check policy", () => {
   it("defers Electron and real-browser fixtures without dropping the fixed core", () => {
     const expensive = ["electron/updater-handoff.electron.test.mjs", "server/browser/cdp/s4-identity.e2e.test.ts"];
     const selected = plan(expensive, { policy, fastPr: true });
-    expect(selected.fastFiles).toEqual([...policy.core].sort());
+    expect(selected.fastFiles).toEqual(allCore);
     expect(selected.deferred).toEqual(expensive.sort());
   });
 
@@ -67,9 +68,11 @@ describe("shared local and CI check policy", () => {
     const broker = "cloudflare/composio-broker/src/app-events.test.ts";
     const portable = "server/forwarded-json.e2e.test.ts";
     const selected = plan([broker, portable], { policy, fastPr: true });
-    expect(selected.fastFiles).toEqual([...policy.core, portable].sort());
+    expect(selected.fastFiles).toEqual([...allCore, portable].sort());
     expect(selected.deferred).toEqual([]);
     for (const files of [selected.edit, selected.ready, selected.core]) expect(files).not.toContain(broker);
+    expect(plan(["cloudflare/composio-broker/src/triggers.ts"], { policy, fastPr: true }).fastFiles)
+      .toEqual([...policy.core].sort());
     expect(selected.scope.checks).toEqual(["build", "control-plane"]);
     expect(ciOutputs(selected.scope, ["ubuntu-latest"]).jobs).toEqual(["control-plane"]);
     expect(plan(["cloudflare/composio-broker/src/triggers.ts"], { policy, fastPr: true }).scope.checks)
@@ -77,12 +80,12 @@ describe("shared local and CI check policy", () => {
     const broad = plan([broker, portable, "unknown/runtime.conf"], { policy, fastPr: true });
     expect(broad.areas).toEqual(["everything"]);
     expect(broad.scope.checks).toEqual(["build", "control-plane"]);
-    expect(broad.fastFiles).toEqual([...policy.core, portable].sort());
+    expect(broad.fastFiles).toEqual([...allCore, portable].sort());
     for (const extra of ["package.json", "unknown/runtime.conf"]) {
       const sourceOnly = plan(["cloudflare/composio-broker/src/triggers.ts", extra], { policy, fastPr: true });
       expect(sourceOnly.areas).toEqual(["everything"]);
       expect(sourceOnly.scope.checks).toEqual(["build", "control-plane"]);
-      expect(sourceOnly.fastFiles).toEqual([...policy.core].sort());
+      expect(sourceOnly.fastFiles).toEqual(allCore);
       expect(ciOutputs(sourceOnly.scope, ["ubuntu-latest"]).jobs).toEqual(["control-plane"]);
       for (const files of [sourceOnly.edit, sourceOnly.ready, sourceOnly.core]) expect(files).not.toContain(broker);
     }
@@ -103,7 +106,7 @@ describe("shared local and CI check policy", () => {
     const files = ["docs/verification/tailscale.md", "server/forwarded-json.e2e.test.ts", "server/index.ts"];
     const present = (file: string) => file === "server/forwarded-json.e2e.test.ts" || existsSync(file);
     const selected = plan(files, { policy, fastPr: true, present });
-    expect(selected.fastFiles).toEqual([...policy.core, "server/forwarded-json.e2e.test.ts"].sort());
+    expect(selected.fastFiles).toEqual([...allCore, "server/forwarded-json.e2e.test.ts"].sort());
     expect(selected.deferred).toEqual(["server/index.test.ts"]);
     expect(selected.core).toContain("server/index.test.ts");
     expect(selected.ready).toContain("server/index.test.ts");
@@ -187,7 +190,8 @@ describe("shared local and CI check policy", () => {
     const stable = run("edit", "0");
     expect(stable.status, stable.stderr).toBe(0);
     expect(stable.stdout).toContain("fixture-workers:1");
-    expect(stable.stdout).toContain("ordinary PR CI runs the Ubuntu core and bounded affected tests");
+    expect(stable.stdout).toContain("ordinary PR and focused integration CI run the Ubuntu core and bounded affected tests");
+    expect(stable.stdout).toContain("scheduled, manual and release lanes retain full validation");
     expect(stable.stdout).not.toContain("full CI required");
     const ready = run("ready", "0");
     expect(ready.status, ready.stderr).toBe(0);

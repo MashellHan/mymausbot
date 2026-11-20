@@ -1249,6 +1249,12 @@
 [data-chat-bubble="simple"] .chat-md > * + * {
   margin-top: 10px;
 }
+[data-direct-chat] [data-chat-bubble="simple"][data-look="bot-bubble"] :is(.chat-md, .chat-text) {
+  line-height: 21px;
+}
+[data-direct-chat] [data-chat-bubble="simple"][data-look="bot-bubble"] .chat-md > p + p {
+  margin-top: 8px;
+}
 /* No lone last word in a bubble or a reply's paragraphs. */
 [data-chat-bubble="simple"],
 .chat-md :is(p, li, blockquote) {

@@ -4,10 +4,13 @@ import { fileURLToPath } from "node:url";
 import { preflightJob } from "./contracts.mjs";
 import { gateRun, verifyGate } from "./gate.mjs";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
+import { currentMerge } from "./pr-execution.mjs";
+
+export { currentMerge };
 
 const SHA = /^[a-f\d]{40}$/i;
 const BRANCH = /^[a-z\d][a-z\d._/-]{0,199}$/i;
-const CONTROLS = new Set(["ci:full", "qa:repair", "windows", "upstream-sync"]);
+const CONTROLS = new Set(["ci:full", "qa:repair", "windows"]);
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
 export function ordinaryMetadata(event) {
@@ -24,19 +27,6 @@ function exactPr(pr, request, repository) {
     && Array.isArray(pr.labels) && pr.labels.every((label) => typeof label.name === "string");
 }
 
-export async function currentMerge(request, api) {
-  const branch = await api(`/branches/${encodeURIComponent(request.baseRef)}`);
-  const base = branch?.commit?.sha;
-  if (!SHA.test(base ?? "")) throw new Error("Current PR base ref is unavailable");
-  const ref = await api(`/git/ref/pull/${request.number}/merge`);
-  if (!SHA.test(ref?.object?.sha ?? "")) throw new Error("Current PR merge ref is unavailable");
-  const merge = await api(`/commits/${ref.object.sha}`);
-  if (merge?.sha !== ref.object.sha || merge.parents?.length !== 2
-    || merge.parents[0]?.sha !== base || merge.parents[1]?.sha !== request.head
-    || !SHA.test(merge.commit?.tree?.sha ?? "")) throw new Error("Current PR merge does not match its live base and head");
-  return { base, merge };
-}
-
 export const prControls = (pr) => JSON.stringify({ labels: pr.labels.map((label) => label.name.toLowerCase())
   .filter((name) => CONTROLS.has(name)).sort(), repairs: pr.labels.some((label) => label.name.toLowerCase() === "qa:repair")
     ? [...String(pr.body ?? "").matchAll(/^QA-Repair:\s*#\d+\s*$/gm)].map((hit) => hit[0]).sort() : [] });
@@ -46,7 +36,8 @@ export function executionMatches(plan, commit, request, current) {
   return execution && SHA.test(execution.merge ?? "") && execution.base === request.base && execution.head === request.head
     && commit?.sha === execution.merge && Array.isArray(commit.parents) && commit.parents.length === 2
     && commit.parents[0]?.sha === request.base && commit.parents[1]?.sha === request.head
-    && SHA.test(commit.commit?.tree?.sha ?? "") && commit.commit.tree.sha === current.merge.commit.tree.sha;
+    && SHA.test(commit.commit?.tree?.sha ?? "") && commit.commit.tree.sha === current.merge.commit.tree.sha
+    && (execution.tree === undefined || execution.tree === commit.commit.tree.sha);
 }
 
 async function sourceRun(request, currentRunId, api, loadJobs) {
@@ -91,7 +82,7 @@ export async function reattestMetadata({ event, repository = process.env.GITHUB_
   const started = now();
   while (run.status !== "completed") {
     if (now() - started >= maxWaitMs) throw new Error("Source CI did not complete before metadata gate deadline");
-    await wait(15_000);
+    await wait(now() - started < 2 * 60_000 ? 3_000 : 15_000);
     run = await api(`/actions/runs/${run.id}`);
     if (run.head_sha !== request.head || run.event !== "pull_request" || run.run_attempt !== attempt) throw new Error("Source CI identity changed");
   }

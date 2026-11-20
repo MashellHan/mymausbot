@@ -8,10 +8,12 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
-  ALL_OS, AREA_CHECKS, ciOutputs, FAST_AFFECTED_LIMIT, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY, QUEUED_SCOPE, readCheckPolicy, SELECTABLE_JOBS,
+  ALL_OS, AREA_CHECKS, ciOutputs, FAST_AFFECTED_LIMIT, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, PLATFORM_POLICY, readCheckPolicy, SELECTABLE_JOBS,
   selectCheckPlan, selectCiScope,
-  pullRequestControls, selectPushScope, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_LABEL, WINDOWS_OS, windowsReason,
+  pullRequestControls, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_LABEL, WINDOWS_OS, windowsReason,
 } from "./ci-scope.mjs";
+import { MAIN_EVIDENCE_QUERY } from "./ci-integration.mjs";
+import { fullPushPlan, narrowPushPlan } from "./qa/contracts.mjs";
 import { HOST_E2E } from "./testing/host-e2e.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -71,7 +73,7 @@ function run(directory: string, event: string, payload: unknown) {
 function outputs(text: string) {
   const parsed = Object.fromEntries(text.trimEnd().split("\n").map((line) => {
     const at = line.indexOf("=");
-    return [line.slice(0, at), line.slice(0, at) === "fast_files" ? line.slice(at + 1) : JSON.parse(line.slice(at + 1))];
+    return [line.slice(0, at), ["fast_files", "comparison_base"].includes(line.slice(0, at)) ? line.slice(at + 1) : JSON.parse(line.slice(at + 1))];
   }));
   expect(typeof parsed.full_required).toBe("boolean");
   expect(parsed.expected_jobs).toEqual(expect.arrayContaining([expect.objectContaining({ id: "static" })]));
@@ -408,10 +410,6 @@ describe("CI outputs", () => {
     expect(WINDOWS_OS).toEqual(["ubuntu-latest", "windows-latest"]);
   });
 
-  it("runs only the broker's control-plane checks for a commit the merge queue already tested", () => {
-    expect(ciOutputs(QUEUED_SCOPE, MAIN)).toEqual({ ...staticOnly(MAIN, false), jobs: ["control-plane"] });
-  });
-
   it("names each event's lane: pull request, main and full macOS", () => {
     expect(laneOf("pull_request")).toBe("pr");
     expect(laneOf("push")).toBe("main");
@@ -419,43 +417,6 @@ describe("CI outputs", () => {
     for (const event of FULL_LANE_EVENTS) expect(laneOf(event), event).toBe("full");
     expect(FULL_LANE_EVENTS).toEqual(["schedule", "workflow_dispatch"]);
     expect(ALL_OS).toEqual(ALL);
-  });
-});
-
-describe("Boat static and ordinary Ubuntu subsets", () => {
-  it("keeps full Mac work in its jobs when static runs on Boat", () => {
-    const out = moveLinuxIntoStatic(ciOutputs(FULL_SCOPE, ALL));
-    expect(out).toEqual({ ...everything(ALL), boat_static: true });
-    expect(out.linux_lanes).toBeUndefined();
-  });
-
-  it("keeps macOS main behavior evals and full shards outside Boat static", () => {
-    const out = moveLinuxIntoStatic(ciOutputs(MAIN_SCOPE, MAIN));
-    expect(out.jobs).toEqual(MAIN_JOBS);
-    expect(out.boat_static).toBe(true);
-  });
-
-  it("runs a docs or translation change's subset there, and nothing when nothing is selected", () => {
-    const docs = moveLinuxIntoStatic(ciOutputs({ checks: ["docs-tests"] }, LINUX));
-    expect(docs.jobs).toEqual([]);
-    expect(docs.linux_lanes).toEqual({ vitest: ciOutputs({ checks: ["docs-tests"] }, LINUX).vitest_matrix.include, evals: false, packaged_server: false });
-    expect(moveLinuxIntoStatic(ciOutputs({ checks: [] }, LINUX))).toEqual({ ...staticOnly(LINUX, false), boat_static: true });
-  });
-
-  it("keeps selected Mac work outside Boat static in a wider PR", () => {
-    const { directory, git, base } = fixture("src/App.tsx");
-    writeFileSync(join(directory, "src/App.tsx"), "changed\n");
-    git("commit", "--quiet", "-am", "renderer");
-    const eventPath = join(directory, "event.json");
-    const outputPath = join(directory, "output.txt");
-    writeFileSync(eventPath, JSON.stringify({ pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } } }));
-    const result = spawnSync(process.execPath, scopeWithEventControls, {
-      cwd: directory, encoding: "utf8", timeout: 5_000,
-      env: { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, OMB_CI_LINUX_IN_STATIC: "true" },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(outputs(readFileSync(outputPath, "utf8"))).toEqual(moveLinuxIntoStatic(ciOutputs(selectCiScope(["src/App.tsx"]), ALL)));
-    expect(result.stdout).not.toContain("Linux vitest lane");
   });
 });
 
@@ -730,171 +691,90 @@ describe("version-only package.json", () => {
     expect(versionOnlyPackageJson(before, after)).toBe(false);
   });
 
-  it("scopes a push by its own files", () => {
-    const show = (rev: string) => (rev === "before" ? pkg("0.1.100") : pkg("0.1.101"));
-    expect(selectPushScope(["package.json"], show)).toEqual({ runtime: false });
-    expect(selectPushScope(["docs/ci.md", "README.md"], show)).toEqual({ runtime: false });
-    expect(selectPushScope(["package.json", "pnpm-lock.yaml"], show)).toEqual({ runtime: true });
-    expect(selectPushScope(["package.json", "docs/ci.md"], show)).toEqual({ runtime: true });
-    expect(selectPushScope(["server/index.ts"], show)).toEqual({ runtime: true });
-    expect(selectPushScope(["package.json"], () => pkg("0.1.100"))).toEqual({ runtime: true });
-    expect(selectPushScope(["package.json"], () => { throw new Error("missing"); })).toEqual({ runtime: true });
-  });
-
-  it("never narrows a push the way it narrows a pull request", () => {
-    const show = () => pkg("0.1.100");
-    for (const file of ["apps/docs/content/index.mdx", "src/locales/de.json", "src/App.tsx", "cloudflare/control-plane/src/index.ts", "server/index.ts"]) {
-      expect(selectPushScope([file], show), file).toEqual({ runtime: true });
-    }
-    expect(selectPushScope([], show)).toEqual({ runtime: true });
-  });
 });
 
-type FakeRun = { id?: number; event: string; status: string; conclusion: string | null };
+const pushSeed = (sha: string, patch: Record<string, unknown> = {}) => ({
+  id: 77, run_attempt: 1, head_sha: sha, path: ".github/workflows/ci.yml", head_branch: "main",
+  head_repository: { full_name: "o/r" }, event: "push", status: "completed", conclusion: "success", ...patch,
+});
 
-/** A GitHub that answers the CI runs of one commit and the jobs of one run; the
- * script under test runs asynchronously so this server can answer it. */
-async function fakeRunsApi(runs: Record<string, FakeRun[]>, jobs: Record<number, Array<{ name: string; conclusion: string | null }>> = {}) {
+async function runPush(directory: string, before: string, after: string, runs: ReturnType<typeof pushSeed>[]) {
   const requests: string[] = [];
   const server = createServer((request, response) => {
-    requests.push(`${request.method} ${request.url} ${request.headers.authorization}`);
-    const url = new URL(request.url!, "http://x");
-    const sha = url.searchParams.get("head_sha") ?? "";
-    const runId = /^\/repos\/o\/r\/actions\/runs\/(\d+)\/jobs$/.exec(url.pathname)?.[1];
+    requests.push(`${request.method} ${request.url}`);
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify(runId ? { jobs: jobs[Number(runId)] ?? [] } : { workflow_runs: runs[sha] ?? [] }));
+    response.end(JSON.stringify({ workflow_runs: runs }));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { url, requests, close: () => new Promise((resolve) => server.close(resolve)) };
-}
-
-async function runPush(directory: string, payload: unknown, env: Record<string, string | undefined>) {
   const eventPath = join(directory, "event.json");
   const outputPath = join(directory, "output.txt");
-  writeFileSync(eventPath, JSON.stringify(payload));
-  const childEnv: Record<string, string | undefined> = { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath, ...env };
-  for (const [key, value] of Object.entries(childEnv)) if (value === undefined) delete childEnv[key];
-  const stderr = await new Promise<string>((resolve, reject) => {
-    execFile(process.execPath, [script], { cwd: directory, env: childEnv as NodeJS.ProcessEnv, encoding: "utf8", timeout: 10_000 },
-      (error, _stdout, stderr) => (error ? reject(new Error(`${error.message}\n${stderr}`)) : resolve(stderr)));
-  });
-  return { output: outputs(readFileSync(outputPath, "utf8")), stderr };
+  writeFileSync(eventPath, JSON.stringify({ before, after }));
+  const env = { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputPath,
+    GITHUB_SHA: after, GITHUB_RUN_ID: "100", GH_TOKEN: "t", GITHUB_REPOSITORY: "o/r",
+    GITHUB_API_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+  try {
+    const result = await new Promise<{ code: number | string | null, stderr: string }>((resolve) => {
+      execFile(process.execPath, [script], { cwd: directory, env, encoding: "utf8", timeout: 10_000 },
+        (error, _stdout, stderr) => resolve({ code: error?.code ?? (error ? null : 0), stderr }));
+    });
+    return { ...result, requests, receipt: result.code === 0 ? JSON.parse(readFileSync(join(directory, "qa-plan.json"), "utf8")) : null };
+  } finally { await new Promise((resolve) => server.close(resolve)); }
 }
 
-describe("CI scope CLI on a push to main", () => {
-  function pushFixture(change: (directory: string) => void) {
-    const { directory, git } = fixture("server/index.ts");
-    writeFileSync(join(directory, "package.json"), pkg("0.1.100"));
-    git("add", "--", "package.json");
-    git("commit", "--quiet", "-m", "package");
+describe("focused main integration", () => {
+  function cumulativeFixture() {
+    const dependency = "src/components/settings/settings-index.ts";
+    const { directory, git, base } = fixture(dependency);
+    writeFileSync(join(directory, dependency), "Spending is now visible in Simple mode\n");
+    mkdirSync(join(directory, "server/browser"), { recursive: true });
+    writeFileSync(join(directory, "server/touched.test.ts"), "test\n");
+    writeFileSync(join(directory, "server/browser/changed.e2e.test.ts"), "deferred\n");
+    git("add", "--", "src", "server");
+    git("commit", "-qm", "code whose run was superseded");
     const before = git("rev-parse", "HEAD");
-    change(directory);
-    git("add", "--all");
-    git("commit", "--quiet", "-m", "change");
-    return { directory, before, after: git("rev-parse", "HEAD") };
+    writeFileSync(join(directory, "docs/guide.md"), "docs\n");
+    git("add", "--", "docs/guide.md");
+    git("commit", "-qm", "newest main push");
+    return { directory, base, before, after: git("rev-parse", "HEAD"), dependency };
   }
-  const bump = (directory: string) => writeFileSync(join(directory, "package.json"), pkg("0.1.101"));
-  const docs = (directory: string) => writeFileSync(join(directory, "docs/guide.md"), "guide\n");
-  const code = (directory: string) => writeFileSync(join(directory, "server/index.ts"), "changed\n");
-  const green = [{ event: "push", status: "completed", conclusion: "success" }];
-  const runsOf = (sha: string) => `GET /repos/o/r/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=100 Bearer t`;
-  const github = (api: { url: string }) => ({ GITHUB_API_URL: api.url, GH_TOKEN: "t", GITHUB_REPOSITORY: "o/r" });
 
-  it.each([["the version bump", bump], ["a docs-only merge", docs]])("skips the runtime jobs for %s after a green commit", async (_, change) => {
-    const { directory, before, after } = pushFixture(change);
-    const api = await fakeRunsApi({ [before]: [{ event: "pull_request", status: "completed", conclusion: "failure" }, ...green] });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(staticOnly(MAIN, true));
-      expect(stderr).toBe("");
-      expect(api.requests).toEqual([runsOf(after), runsOf(before)]);
-    } finally {
-      await api.close();
-    }
+  it("diffs the newest tree against the closest green first parent, not just the docs push", async () => {
+    const { directory, base, before, after, dependency } = cumulativeFixture();
+    const result = await runPush(directory, before, after, [pushSeed(before, { conclusion: "cancelled", id: 90 }),
+      pushSeed(base, { id: 99, head_repository: { full_name: "fork/r" } }), pushSeed(base)]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.requests).toEqual([`GET /repos/o/r${MAIN_EVIDENCE_QUERY}`]);
+    expect(result.receipt).toMatchObject({ sha: after, integration: { base, head: after, pushBefore: before, baselineRunId: 77,
+      baselineAttempt: 1, cumulative: [before] }, plan: { files: ["docs/guide.md", "server/browser/changed.e2e.test.ts", "server/touched.test.ts", dependency], full: false },
+      outputs: { comparison_base: base, fast_pr: false, focused_push: true, full_required: false, settings_places: true, jobs: [],
+        fast_files: "server/core.test.ts server/touched.test.ts", deferred_files: ["server/browser/changed.e2e.test.ts"] } });
+    expect(result.receipt.outputs.deferred_checks).toContain("host-tests");
+    expect(narrowPushPlan(result.receipt)).toBe(true);
+    expect(fullPushPlan(result.receipt)).toBe(false);
   });
 
-  it.each([["a code change", code, everything(ALL)], ["the version bump", bump, ciOutputs(QUEUED_SCOPE, MAIN)]])("retains postmerge coverage for %s the merge queue already passed", async (_, change, selection) => {
-    const { directory, before, after } = pushFixture(change);
-    // The queue lands its group's commit once the gate passes, before the run's last job has finished.
-    const api = await fakeRunsApi({ [after]: [{ id: 77, event: "merge_group", status: "in_progress", conclusion: null }] }, {
-      77: [{ name: "vitest (ubuntu-latest, shard 1/8)", conclusion: "success" }, { name: "CI", conclusion: "success" }],
-    });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(selection);
-      expect(stderr).toBe("");
-    } finally {
-      await api.close();
-    }
+  it("does not repeat covered source when the immediate predecessor has exact green evidence", async () => {
+    const { directory, before, after } = cumulativeFixture();
+    const result = await runPush(directory, before, after, [pushSeed(before, { event: "schedule" })]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.receipt).toMatchObject({ integration: { base: before, cumulative: [] }, plan: { files: ["docs/guide.md"] },
+      outputs: { focused_push: true, settings_places: false, fast_files: "server/core.test.ts" } });
   });
 
-  it.each([
-    ["failed its gate", [{ name: "CI", conclusion: "failure" }]],
-    ["has not passed its gate yet", [{ name: "CI", conclusion: null }]],
-  ])("runs main's checks for a commit whose merge-group run %s", async (_, gateJobs) => {
-    const { directory, before, after } = pushFixture(code);
-    const api = await fakeRunsApi({ [after]: [{ id: 78, event: "merge_group", status: "completed", conclusion: "failure" }] }, { 78: gateJobs });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(everything(ALL));
-      expect(stderr).toBe("");
-      expect(api.requests).toEqual([runsOf(after), "GET /repos/o/r/actions/runs/78/jobs?per_page=100 Bearer t"]);
-    } finally {
-      await api.close();
-    }
+  it("fails closed rather than inventing full coverage or dropping the cumulative diff", async () => {
+    const { directory, before, after } = cumulativeFixture();
+    const result = await runPush(directory, before, after, [pushSeed(before, { event: "pull_request" }), pushSeed(after)]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("No trusted green main CI baseline");
+    expect(result.receipt).toBeNull();
   });
 
-  it.each([
-    ["was replaced by this push", [{ event: "push", status: "completed", conclusion: "cancelled" }]],
-    ["failed", [{ event: "push", status: "completed", conclusion: "failure" }]],
-    ["never ran", []],
-    ["only passed as a pull request", [{ event: "pull_request", status: "completed", conclusion: "success" }]],
-  ])("runs main's checks for a version bump when the commit before it %s", async (_, runs) => {
-    const { directory, before, after } = pushFixture(bump);
-    const api = await fakeRunsApi({ [before]: runs });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(mainLane());
-      expect(stderr).toContain("has no green CI run of its own");
-    } finally {
-      await api.close();
-    }
-  });
-
-  it("runs main's checks when the pushed commit's CI cannot be read", async () => {
-    const { directory, before, after } = pushFixture(bump);
-    const { output, stderr } = await runPush(directory, { before, after }, { GH_TOKEN: undefined, GITHUB_REPOSITORY: undefined });
-    expect(output).toEqual(mainLane());
-    expect(stderr).toContain("using main's checks");
-  });
-
-  it.each([
-    ["a code change", code],
-    ["a version bump with a dependency", (directory: string) => writeFileSync(join(directory, "package.json"), pkg("0.1.101", { dependencies: { zod: "4" } }))],
-    ["a version bump with code", (directory: string) => { bump(directory); code(directory); }],
-  ])("selects main or full checks for %s without reading predecessor CI", async (kind, change) => {
-    const { directory, before, after } = pushFixture(change);
-    const api = await fakeRunsApi({ [before]: green });
-    try {
-      const { output, stderr } = await runPush(directory, { before, after }, github(api));
-      expect(output).toEqual(everything(ALL));
-      expect(stderr).toBe("");
-      expect(api.requests).toEqual([runsOf(after)]);
-    } finally {
-      await api.close();
-    }
-  });
-
-  it.each([
-    ["a missing payload", {}],
-    ["a new branch", { before: "0".repeat(40), after: "f".repeat(40) }],
-    ["an unknown commit", { before: "f".repeat(40), after: "e".repeat(40) }],
-  ])("falls back loudly to full checks for %s", async (_, payload) => {
-    const { directory } = fixture();
-    const { output, stderr } = await runPush(directory, payload, {});
-    expect(output).toEqual(everything(ALL));
-    expect(stderr).toContain("using all checks");
+  it("rejects a push payload that does not match the actual checkout", async () => {
+    const { directory, before } = cumulativeFixture();
+    const result = await runPush(directory, before, "f".repeat(40), [pushSeed(before)]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Push checkout differs from the workflow revision");
+    expect(result.requests).toEqual([]);
   });
 });
 
@@ -951,10 +831,10 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     git("merge", "--quiet", "--no-ff", "--no-edit", "feature");
     const merge = git("rev-parse", "HEAD");
     const payload = { pull_request: { number: 7, base: { sha: eventBase }, head: { sha: head } } };
-    const { output, plan, stderr } = await runPullRequest(directory, payload, { OMB_CI_EXECUTION_BINDING: "1" });
+    const { output, plan, stderr } = await runPullRequest(directory, payload, { OMB_CI_EXECUTION_BINDING: "1", GITHUB_SHA: merge });
     expect(stderr).toBe("");
     expect(output).toEqual(serverJobs());
-    expect(plan.execution).toEqual({ merge, base: currentBase, head });
+    expect(plan.execution).toEqual({ merge, base: currentBase, head, tree: git("rev-parse", "HEAD^{tree}") });
   });
 
   it("runs wider macOS validation for a changed line that names Windows", async () => {
@@ -985,15 +865,17 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
 
   it("selects both Room contracts for either file or their shared fixture", () => {
     const policy = readCheckPolicy();
+    const allCore = [...policy.core, ...(policy.serverCore ?? [])];
     const fixture = "server/testing/room-coordination-fixture.ts";
     const rooms = ["server/room-coordination.e2e.test.ts", "server/room-coordination-followon.e2e.test.ts"];
-    expect(policy.core).toHaveLength(26);
+    expect(policy.core).toHaveLength(19);
+    expect(policy.serverCore).toHaveLength(7);
     expect(policy.areas.find((area) => area.id === "room-coordination"))
       .toMatchObject({ sources: [fixture, ...rooms], tests: rooms, admitted: false });
     for (const source of [fixture, ...rooms]) {
       const plan = selectCheckPlan({ files: [source], policy, fastPr: true });
       expect(plan.edit).toEqual([...rooms].sort());
-      expect(plan.fastFiles).toEqual([...new Set([...policy.core, ...rooms])].sort());
+      expect(plan.fastFiles).toEqual([...new Set([...allCore, ...rooms])].sort());
       expect(plan.deferred).toEqual([]);
     }
     const combined = selectCheckPlan({
@@ -1002,9 +884,29 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
       policy,
       fastPr: true,
     });
-    expect(combined.fastFiles).toEqual([...new Set([...policy.core, "scripts/ci-scope.test.ts", "scripts/ci-workflow.test.ts", ...rooms])].sort());
-    expect(combined.fastFiles).toHaveLength(policy.core.length + FAST_AFFECTED_LIMIT);
+    expect(combined.fastFiles).toEqual([...new Set([...allCore, ...rooms])].sort());
+    expect(combined.fastFiles).toHaveLength(allCore.length + rooms.length);
     expect(combined.deferred).toEqual([]);
+  });
+
+  it("prioritizes direct tests, caps affected tests and checks relevant Settings inputs separately", () => {
+    const policy = { version: 1, core: ["server/core.test.ts"], guards: ["scripts/guard.test.ts"], areas: [{
+      id: "agents", sources: ["src/source.ts"], admitted: false,
+      tests: ["server/a.test.ts", "server/b.test.ts", "server/c.test.ts", "server/d.test.ts"],
+    }] };
+    const direct = "server/z.test.ts";
+    const files = ["src/source.ts", direct, "src/locales/en.json", "scripts/guard.test.ts"];
+    const plan = selectCheckPlan({ files, policy, fastPr: true, present: (file) => [...files, ...policy.core, ...policy.areas[0].tests].includes(file) });
+    expect(plan.fastFiles).toHaveLength(policy.core.length + FAST_AFFECTED_LIMIT);
+    expect(plan.fastFiles).toContain(direct);
+    expect(plan.fastFiles).not.toContain("scripts/guard.test.ts");
+    expect(plan.deferred).toEqual(["server/d.test.ts"]);
+    expect(plan.settingsPlaces).toBe(true);
+    expect(plan.ciVerify).toBe(true);
+    expect(selectCheckPlan({ files: ["src/source.ts"], policy, fastPr: true, present: () => true }).ciVerify).toBe(false);
+    expect(selectCheckPlan({ files: ["src/locales/pt-br.json"], policy, fastPr: true, present: () => true }).settingsPlaces).toBe(false);
+    expect(selectCheckPlan({ files: ["src/locales/pt-br.json"], policy, fastPr: true, present: () => true }).ciVerify).toBe(true);
+    expect(selectCheckPlan({ files: ["scripts/ci-scope.mjs"], policy, fastPr: true, present: () => true }).ciVerify).toBe(true);
   });
 
   it("runs every platform for the sensitive desktop app", async () => {
@@ -1025,21 +927,21 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     }
   });
 
-  it("selects full validation for upstream-sync alone and restores the normal plan after removal", async () => {
+  it("keeps upstream-sync on the ordinary fast path", async () => {
     const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
-    for (const [action, labels, full] of [
-      ["labeled", ["upstream-sync"], true],
-      ["unlabeled", [], false],
+    for (const [action, labels] of [
+      ["labeled", ["upstream-sync"]],
+      ["unlabeled", []],
     ] as const) {
       const api = await fakeLabelsApi([...labels]);
       try {
         const event = { ...payload, action, label: { name: "upstream-sync" } };
         const { output, plan, stderr } = await runPullRequest(directory, event, api.env, true);
         expect(stderr).toBe("");
-        expect(plan.outputs.full_required).toBe(full);
-        expect(plan.outputs.fast_pr).toBe(!full);
-        expect(plan.plan.full).toBe(full);
-        expect(output.vitest_os).toEqual(full ? ALL : LINUX);
+        expect(plan.outputs.full_required).toBe(false);
+        expect(plan.outputs.fast_pr).toBe(true);
+        expect(plan.plan.full).toBe(false);
+        expect(output.vitest_os).toEqual(LINUX);
         expect(api.requests).toEqual(["GET /repos/o/r/issues/7 Bearer t"]);
       } finally { await api.close(); }
     }

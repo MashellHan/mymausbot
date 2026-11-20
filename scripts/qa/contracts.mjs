@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { ALL_OS, ciOutputs, FULL_SCOPE, moveLinuxIntoStatic, PLATFORM_POLICY } from "../ci-scope.mjs";
+import { ALL_OS, ciOutputs, FULL_SCOPE, PLATFORM_POLICY } from "../ci-scope.mjs";
+import { validIntegration } from "../ci-integration.mjs";
 
 export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "control-plane", "relay"];
 const PREFLIGHT_NAMES = {
@@ -32,8 +33,12 @@ export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = tru
   const names = outputs.boat_static ? PREFLIGHT_NAMES.boatStatic : outputs.linux_lanes ? PREFLIGHT_NAMES.boat : PREFLIGHT_NAMES.hosted;
   if (preflightName !== undefined && !names.includes(preflightName)) throw new Error("Invalid workflow preflight");
   const jobs = [{ id: "static", name: preflightName ?? names[0], build: outputs.build,
-    ...(outputs.fast_pr ? { fast: true } : {}), linux: Boolean(outputs.linux_lanes),
-    ...(outputs.linux_lanes?.vitest.length || outputs.linux_lanes?.evals ? { artifact: "qa-results-boat" } : {}) }];
+    ...(outputs.fast_pr || outputs.focused_push ? { fast: true } : {}),
+    ...(outputs.settings_places ? { settingsPlaces: true } : {}),
+    ...(outputs.ci_verify === false ? { ciVerify: false } : {}),
+    linux: Boolean(outputs.linux_lanes),
+    ...(outputs.focused_push ? { artifact: "qa-results-focused" }
+      : outputs.linux_lanes?.vitest.length || outputs.linux_lanes?.evals ? { artifact: "qa-results-boat" } : {}) }];
   for (const id of outputs.jobs) {
     if (!full && !MERGE_JOBS.includes(id)) continue;
     if (id === "vitest") {
@@ -91,11 +96,13 @@ export function executionComplete(expected, jobs, artifacts) {
     if (item.artifact && !artifacts.has(item.artifact)) return false;
     const steps = VALIDATION_STEPS[item.id].filter((step) => {
       if (item.id !== "static") return true;
+      if (step === "Verify CI selection and documentation references") return item.ciVerify !== false;
       if (step === "Security, data and dispatch core with bounded affected tests") return item.fast;
       if (step === "pnpm typecheck") return item.build;
       if (["pnpm check:electron", "production UI build"].includes(step)) return item.build && !item.fast;
       return true;
     });
+    if (item.settingsPlaces) steps.push("Validate generated Settings places");
     if (item.linux) steps.push("Linux tests (vitest shards, behavior evals, packaged server), side by side");
     if (item.broker) steps.push("pnpm broker:check", "pnpm broker:test");
     if (item.nodeTests) steps.push(item.electronOnly ? "Electron unit tests" : "Broker and Electron unit tests");
@@ -111,7 +118,7 @@ export function eligibleRun(run, repository, fullOnly = true) {
 }
 
 const fullSelection = ciOutputs(FULL_SCOPE, ALL_OS);
-const fullSelections = [fullSelection, moveLinuxIntoStatic(fullSelection)];
+const fullSelections = [fullSelection, { ...fullSelection, boat_static: true }];
 const sameSelection = (outputs, selection) => ["build", "jobs", "vitest_os", "packaged_server_os", "vitest_matrix", "linux_lanes", "boat_static", "platform_policy"]
   .every((key) => isDeepStrictEqual(outputs[key], selection[key]));
 
@@ -120,8 +127,8 @@ export function fullRunPlan(plan) {
   const outputs = plan?.outputs;
   if (plan?.version !== 1 || outputs?.full_required !== true || outputs.reduced !== false
     || !isDeepStrictEqual(outputs.qa_areas, ["global"])) return false;
-  return fullSelections.some((selection) => sameSelection(outputs, selection)
-    && isDeepStrictEqual(outputs.expected_jobs, expectedJobs(selection))
+  return outputs.focused_push !== true && outputs.fast_pr !== true && fullSelections.some((selection) => sameSelection(outputs, selection)
+    && isDeepStrictEqual(outputs.expected_jobs, expectedJobs({ ...selection, settings_places: outputs.settings_places }))
     && isDeepStrictEqual(outputs.required_jobs, selection.jobs.filter((id) => MERGE_JOBS.includes(id))));
 }
 
@@ -135,6 +142,10 @@ export function fullPushPlan(plan) {
 /** A bound, internally consistent narrow plan can be skipped when finding the latest full execution. */
 export function narrowPushPlan(plan) {
   const outputs = plan?.outputs;
+  if (outputs?.focused_push && (!validIntegration(plan.integration, plan.sha) || plan.plan?.focusedPush !== true
+    || outputs.fast_pr !== false || outputs.build !== true || outputs.reduced !== false || outputs.platform_policy !== undefined
+    || outputs.boat_static || outputs.linux_lanes || !Array.isArray(outputs.deferred_files) || !Array.isArray(outputs.deferred_checks)
+    || !(isDeepStrictEqual(outputs.jobs, []) || isDeepStrictEqual(outputs.jobs, ["control-plane"])))) return false;
   if (plan?.version !== 1 || (plan.plan !== null && (plan.plan?.full !== false
     || !Array.isArray(plan.plan?.scope?.areas) || !Array.isArray(plan.plan?.scope?.checks)
     || isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE)))

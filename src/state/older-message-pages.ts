@@ -25,12 +25,12 @@ export function createOlderMessagesLoader(
       return;
     }
     void loadPage(threadId, before)
-      .then((page) => dispatch({ type: "olderMessages", threadId, generation,
+      .then((page) => dispatch({ type: "olderMessages", threadId, generation, before,
         messages: page.messages ?? [], hasMore: Boolean(page.hasMore) }))
       .catch((error) => {
         const report = inFlight.get(threadId) === request && selectionRevision() === selection
           && (state().transcriptGeneration[threadId] ?? 0) === generation;
-        dispatch({ type: "olderMessages", threadId, generation, messages: [], hasMore: true });
+        dispatch({ type: "olderMessages", threadId, generation, before, messages: [], hasMore: true });
         if (report) {
           action.onError?.(error instanceof Error ? error : new Error(String(error)));
           showError(error);
