@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, InstanceInfo, Message } from "@/state/store";
 import type { RuntimeEvent } from "../../shared/runtime-events";
+import { loadLocalePack } from "@/locales";
+import { activeLocale, setLocale } from "@/lib/i18n";
 import type { ApprovalModeSelector } from "./ApprovalModeSelector";
 import type { ModelPicker } from "./ModelPicker";
 
@@ -82,6 +84,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   mode.advanced = true;
+  setLocale("en");
   act(() => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
@@ -89,16 +92,32 @@ afterEach(() => {
 });
 
 describe("Simple mode's working line", () => {
-  it("is the bot's 28px avatar and one quiet friendly phrase, with the timer and size kept in its tooltip", () => {
+  it("shows ACP execution only after a running signal and clears it for permission waits", () => {
+    mode.advanced = false;
+    engine({ type: "turn.started", requestMessageId: ask.id });
+    render(busyBot([ask]));
+    engine({ type: "item.started", itemType: "tool", itemId: "acp", title: "Command", toolState: "pending" });
+    engine({ type: "turn.progress", activity: "command", itemId: "acp", toolState: "pending", target: "fixture-private-command" });
+    expect(statusLine()).toBe("");
+    engine({ type: "turn.progress", activity: "command", itemId: "acp", toolState: "running" });
+    expect(statusLine()).toBe("Running a command");
+    engine({ type: "request.opened", requestType: "permission", requestId: "permission", tool: "Command", summary: "fixture-private-approval" });
+    expect(statusLine()).toBe("");
+    engine({ type: "item.completed", itemType: "tool", itemId: "acp", ok: false });
+    expect(statusLine()).toBe("");
+    expect(mascot()?.outerHTML).not.toContain("fixture-private");
+  });
+
+  it("keeps the existing avatar and shows a safe phrase only after a tool starts", () => {
     mode.advanced = false;
     engine({ type: "turn.started" });
     render(busyBot([ask]));
     expect(mascot()).not.toBeNull();
-    expect(statusLine()).toBe("Thinking it through");
+    expect(statusLine()).toBe("");
     expect(mascot()!.innerHTML).toContain('width="28px"');
     const row = mascot()!.firstElementChild as HTMLElement;
     expect([...row.classList]).toEqual(expect.arrayContaining(["h-9", "ps-2", "gap-2"]));
-    expect(row.title).toMatch(/^Working · /);
+    expect(row.title).toBe("1m 12s");
     expect(mascot()!.querySelector("[data-turn-status]")!.classList).toContain("text-ink-tertiary");
     expect(mascot()!.classList).not.toContain("-mt-3");
 
@@ -108,7 +127,10 @@ describe("Simple mode's working line", () => {
     // The reply that just arrived pops in first; the line comes back once it has.
     act(() => void vi.advanceTimersByTime(600));
     engine({ type: "turn.progress", activity: "write", itemId: "toolu_write", file: "index.html", bytes: 14 * 1024 + 300 } as Partial<RuntimeEvent>);
-    expect(statusLine()).toBe("Writing some code");
+    expect(statusLine()).toBe("");
+    engine({ type: "item.started", itemType: "tool", itemId: "toolu_write", title: "Write" });
+    expect(statusLine()).toBe("Writing a file");
+    expect(row.title).not.toContain("index.html");
   });
 
   it("says Teammates working while the bot waits on its teammates", () => {
@@ -120,21 +142,22 @@ describe("Simple mode's working line", () => {
 });
 
 describe("the mascot and its status line through a long turn", () => {
-  it("stays after the bot's words while the engine writes a file, saying what and how much", () => {
+  it("stays after the bot's words while a started file tool runs", () => {
     engine({ type: "turn.started" });
     engine({ type: "item.completed", itemType: "assistant_text", text: intro.text! } as Partial<RuntimeEvent>);
     render(busyBot([ask, intro]));
     expect(mascot(), "the bot said a sentence mid-turn: the mascot must not vanish").not.toBeNull();
-    expect(statusLine()).toBe("Working · 1m 12s");
+    expect(statusLine()).toBe("1m 12s");
 
     engine({ type: "turn.progress", activity: "write", itemId: "toolu_write", bytes: 0 } as Partial<RuntimeEvent>);
     engine({ type: "turn.progress", activity: "write", itemId: "toolu_write", file: "index.html", bytes: 14 * 1024 + 300 } as Partial<RuntimeEvent>);
-    expect(statusLine()).toBe("Working · 1m 12s · Writing index.html · 14 KB");
+    expect(statusLine()).toBe("1m 12s");
+    engine({ type: "item.started", itemType: "tool", itemId: "toolu_write", title: "Write" });
+    expect(statusLine()).toBe("1m 12s · Writing a file");
 
-    // Ten silent minutes: no frame, no row. Nothing times the mascot out; the line says how long it has been quiet.
     act(() => void vi.advanceTimersByTime(10 * 60_000));
     expect(mascot()).not.toBeNull();
-    expect(statusLine()).toBe("Working · 11m 12s · Writing index.html · 14 KB · nothing new for 10 min");
+    expect(statusLine()).toBe("11m 12s · Writing a file");
   });
 
   it("stays through a long silent tool, keeping the call's own words while it runs", () => {
@@ -142,18 +165,17 @@ describe("the mascot and its status line through a long turn", () => {
     engine({ type: "turn.progress", activity: "command", itemId: "toolu_bash", bytes: 20 } as Partial<RuntimeEvent>);
     engine({ type: "item.started", itemType: "tool", itemId: "toolu_bash", title: "Bash" } as Partial<RuntimeEvent>);
     render(busyBot([ask, intro, bash]));
-    expect(statusLine()).toBe("Working · 1m 12s · Running a command");
+    expect(statusLine()).toBe("1m 12s · Running a command");
     for (let beat = 0; beat < 20; beat++) {
       act(() => void vi.advanceTimersByTime(30_000));
       engine({ type: "item.updated", itemType: "tool" } as Partial<RuntimeEvent>);
     }
     expect(mascot()).not.toBeNull();
-    // The phrase may rest on its alternate by now; the call is still the one running.
-    expect(statusLine()).toMatch(/^Working · 11m 12s · (Running a command|Checking the output)$/);
+    expect(statusLine()).toBe("11m 12s · Running a command");
 
     engine({ type: "item.completed", itemType: "tool", itemId: "toolu_bash", ok: true } as Partial<RuntimeEvent>);
     render(busyBot([ask, intro, { ...bash, tool: { ...bash.tool!, ok: true } }]));
-    expect(statusLine(), "with nothing reported, the line is its timer alone").toBe("Working · 11m 12s");
+    expect(statusLine(), "with nothing reported, the line is its timer alone").toBe("11m 12s");
   });
 
   it("clears when the turn ends, even before busy winds down", () => {
@@ -184,10 +206,16 @@ describe("the mascot and its status line through a long turn", () => {
     engine({ type: "turn.completed", ok: true } as Partial<RuntimeEvent>);
     const next: Message = { id: "next", role: "user", kind: "text", at: started + 90_000, text: "Add a chart" };
     render(busyBot([ask, intro, next]));
-    expect(statusLine(), "a new prompt shows the line before the new turn's first frame").toBe("Working · 1m 12s");
+    expect(statusLine(), "the timer can show before the new turn's first frame").toBe("1m 12s");
     engine({ type: "turn.started", turnId: "t2" } as Partial<RuntimeEvent>);
     engine({ type: "content.delta", turnId: "t2", streamKind: "reasoning_text", delta: "Plan the chart" } as Partial<RuntimeEvent>);
-    expect(statusLine()).toBe("Working · 1m 12s · Thinking");
+    expect(statusLine()).toBe("1m 12s");
+    expect(mascot()?.textContent).not.toContain("Plan the chart");
+    engine({ type: "turn.wait_started", turnId: "t2", resource: "browser:private-seat", holder: { name: "private-holder" } });
+    expect(statusLine()).toBe("1m 12s · Waiting for computer access");
+    expect(mascot()?.outerHTML).not.toContain("private-");
+    engine({ type: "turn.wait_ended", turnId: "t2", resource: "browser:private-seat", outcome: "acquired", waitedMs: 200 });
+    expect(statusLine()).toBe("1m 12s");
   });
 });
 
@@ -199,18 +227,20 @@ describe("what the bot is doing right now", () => {
   const toggle = () => host.querySelector<HTMLButtonElement>(".turn-presence button[aria-expanded]");
   const steps = () => [...host.querySelectorAll("[data-now-step]")].map((step) => `${step.getAttribute("data-now-step")}: ${step.querySelector("[dir=auto]")?.textContent}`);
 
-  it("names the step, says how it is doing, and unfolds the ask's steps with a way into the Activity panel at this run", () => {
+  it("keeps raw step details in the explicit activity card and opens the Activity panel for this run", () => {
     engine({ type: "turn.started" });
     engine({ type: "item.started", itemType: "tool", itemId: "b1", title: "Bash" } as Partial<RuntimeEvent>);
     engine({ type: "turn.progress", activity: "command", itemId: "b1", target: "scrape.py", detail: "python3 scrape.py --pages 40", quiet: { kind: "busy" } } as Partial<RuntimeEvent>);
     render(busyBot([ask, search, bash]));
-    expect(statusLine()).toBe("Working · 1m 12s · Running scrape.py · busy, no output yet");
-    expect(host.querySelector("[data-turn-now]")?.getAttribute("title")).toBe("python3 scrape.py --pages 40");
+    expect(statusLine()).toBe("1m 12s · Running a command");
+    expect(host.querySelector("[data-turn-now]")?.getAttribute("title")).toBeNull();
+    expect(mascot()?.outerHTML).not.toContain("scrape.py");
     expect(toggle()?.getAttribute("aria-label")).toBe("What Pepper is doing");
     expect(host.querySelector("[data-now-card]")).toBeNull();
 
     act(() => toggle()!.click());
     expect(steps()).toEqual(["done: Searched the web for “Acme construction leads”", "now: Running scrape.py"]);
+    expect(host.querySelector("[data-now-step] [title]")).toBeNull();
     const seen: Array<ReturnType<typeof useActivityFocus>> = [];
     const probe = createRoot(document.createElement("div"));
     act(() => probe.render(createElement(() => { seen.push(useActivityFocus("bot")); return null; })));
@@ -220,13 +250,13 @@ describe("what the bot is doing right now", () => {
     act(() => probe.unmount());
   });
 
-  it("shows a running command's last lines of output in the card, and the time since they came on the line", () => {
+  it("shows running command output in the opened card", () => {
     engine({ type: "turn.started" });
     engine({ type: "item.started", itemType: "tool", itemId: "b1", title: "Bash" } as Partial<RuntimeEvent>);
     engine({ type: "turn.progress", activity: "command", itemId: "b1", target: "scrape.py", quiet: { kind: "output", at: started + 72_000 - 125_000 },
       tail: ["page 39 of 40", "page 40 of 40"] } as Partial<RuntimeEvent>);
     render(busyBot([ask, bash]));
-    expect(statusLine()).toBe("Working · 1m 12s · Running scrape.py · last output 2 min ago");
+    expect(statusLine()).toBe("1m 12s · Running a command");
     act(() => toggle()!.click());
     expect(host.querySelector("[data-now-output]")?.textContent).toBe("page 39 of 40\npage 40 of 40");
   });
@@ -237,8 +267,126 @@ describe("what the bot is doing right now", () => {
     engine({ type: "item.started", itemType: "tool", itemId: "b1", title: "Bash" } as Partial<RuntimeEvent>);
     engine({ type: "turn.progress", activity: "command", itemId: "b1", target: "scrape.py", quiet: { kind: "idle" } } as Partial<RuntimeEvent>);
     render(busyBot([ask, search, bash]));
-    expect(statusLine()).toBe("Running scrape.py · idle, no output yet");
+    expect(statusLine()).toBe("Running a command");
     act(() => toggle()!.click());
     expect(steps()).toEqual(["done: Searched the web for “Acme construction leads”", "now: Running scrape.py"]);
+  });
+});
+
+describe("verified automation updates in the accepted turn language", () => {
+  it("uses the app language for guarded relay text, even when a host frame names that row", async () => {
+    await loadLocalePack("zh");
+    setLocale("zh");
+    mode.advanced = false;
+    const relay = { ...ask, relayed: true, text: "Update automation." };
+    engine({ type: "turn.started", requestMessageId: relay.id });
+    render(busyBot([relay]));
+    engine({ type: "turn.progress", activity: "tool", itemId: "update", automation: { action: "update", phase: "started" } });
+    expect(statusLine()).toBe("正在更新自动化");
+    expect(host.querySelector("[data-turn-status]")?.getAttribute("lang")).toBe("zh");
+  });
+
+  it("uses the app language for a routine-generated user-role row", async () => {
+    await loadLocalePack("zh");
+    setLocale("zh");
+    mode.advanced = false;
+    const routine = { ...ask, automated: true, text: "Update the daily automation schedule tomorrow." };
+    engine({ type: "turn.started", requestMessageId: routine.id });
+    render(busyBot([routine]));
+    engine({ type: "turn.progress", activity: "tool", itemId: "update", automation: { action: "update", phase: "started" } });
+    expect(statusLine()).toBe("正在更新自动化");
+    expect(host.querySelector("[data-turn-status]")?.getAttribute("lang")).toBe("zh");
+  });
+
+  it("uses the current operation and ignores a different finish or a retired turn", () => {
+    mode.advanced = false;
+    engine({ type: "turn.started", requestMessageId: ask.id });
+    render(busyBot([ask]));
+    for (const [action, label] of [
+      ["view", "Checking automations"], ["create", "Creating automation"],
+      ["update", "Updating automation"], ["pause", "Pausing automation"],
+    ] as const) {
+      engine({ type: "turn.progress", activity: "tool", itemId: action, automation: { action, phase: "started" } });
+      expect(statusLine()).toBe(label);
+      engine({ type: "turn.progress", activity: "tool", itemId: "other", automation: { action, phase: "finished" } });
+      expect(statusLine()).toBe(label);
+      act(() => vi.advanceTimersByTime(600));
+      engine({ type: "turn.progress", activity: "tool", itemId: action, automation: { action, phase: "finished" } });
+      expect(statusLine()).toBe("");
+    }
+    engine({ type: "turn.started", turnId: "t2" });
+    engine({ type: "turn.progress", activity: "tool", itemId: "late", automation: { action: "update", phase: "started" } });
+    expect(statusLine()).toBe("");
+    engine({ type: "content.delta", streamKind: "assistant_text", turnId: "t2", delta: "Replying" });
+    expect(statusLine()).toBe("Writing a reply");
+  });
+
+  it("renders a verified operation when start and finish are batched before paint", () => {
+    mode.advanced = false;
+    engine({ type: "turn.started", requestMessageId: ask.id });
+    render(busyBot([ask]));
+    const fast = (id: string, action: "view" | "update" | "pause") => act(() => {
+      engine({ type: "turn.progress", activity: "tool", itemId: id, automation: { action, phase: "started" } });
+      engine({ type: "turn.progress", activity: "tool", itemId: id, automation: { action, phase: "finished" } });
+    });
+    fast("update", "update");
+    expect(statusLine()).toBe("Updating automation");
+    act(() => vi.advanceTimersByTime(400));
+    expect(statusLine()).toBe("Updating automation");
+    act(() => vi.advanceTimersByTime(101));
+    expect(statusLine()).toBe("");
+
+    fast("view", "view");
+    expect(statusLine()).toBe("Checking automations");
+    fast("pause", "pause");
+    expect(statusLine()).toBe("Pausing automation");
+    engine({ type: "item.started", itemType: "tool", itemId: "read", step: { activity: "read", target: "private-path" } });
+    expect(statusLine()).toBe("Reading a file");
+    expect(mascot()?.outerHTML).not.toContain("private-path");
+
+    fast("last-update", "update");
+    expect(statusLine()).toBe("Updating automation");
+    engine({ type: "turn.completed", ok: false });
+    expect(statusLine() ?? "").not.toContain("Updating automation");
+    engine({ type: "turn.started", turnId: "t2" });
+    expect(statusLine()).toBe("");
+  });
+
+  it.each([
+    { app: "en", language: "zh", text: "请更新这条自动化的运行时间。", status: "正在更新自动化" },
+    { app: "zh", language: "en", text: "Please update when this automation runs.", status: "Updating automation" },
+    { app: "zh", language: "en", text: "Update the daily automation schedule tomorrow.", status: "Updating automation" },
+    { app: "zh", language: "en", text: "Update automation.", status: "Updating automation" },
+    { app: "zh", language: "en", text: "Rename this automation.", status: "Updating automation" },
+    { app: "zh", language: "en", text: "Rename yesterday’s automation schedule, keeping Monday mornings unchanged.", status: "Updating automation" },
+    { app: "en", language: "ja", text: "この自動化を更新してください。", status: "自動化を更新中" },
+    { app: "en", language: "ko", text: "이 자동화를 업데이트해 주세요.", status: "자동화 업데이트 중" },
+    { app: "zh", language: "zh", text: "OK", status: "正在更新自动化" },
+    { app: "en", language: "en", text: "好", status: "Updating automation" },
+    { app: "fr", language: "fr", text: "Modifier cette automatisation.", status: "Mise à jour de l’automatisation" },
+  ])("localizes the checked update from $language in the $app app", async ({ app, language, text, status }) => {
+    await Promise.all([loadLocalePack(app), loadLocalePack(language)]);
+    setLocale(app);
+    mode.advanced = false;
+    const person = { ...ask, text };
+    const peer: Message = { ...ask, id: "peer", text: app === "zh" ? "另一个请求" : "Another request", peerAsk: { botId: "other", name: "Other" } };
+    engine({ type: "turn.started", requestMessageId: person.id });
+    render(busyBot([person, peer]));
+    engine({ type: "item.started", itemType: "tool", itemId: "bare", title: "trigger", input: '{"action":"update","private":"raw-secret"}' });
+    expect(statusLine()).not.toContain(status);
+    engine({ type: "turn.progress", activity: "tool", itemId: "old", turnId: "old", automation: { action: "update", phase: "started" } });
+    expect(statusLine()).not.toContain(status);
+    engine({ type: "turn.progress", activity: "tool", itemId: "authorized", automation: { action: "update", phase: "started" },
+      target: "private-target", detail: "private-tool-input" });
+    expect(statusLine()).toBe(status);
+    expect(host.querySelector("[data-turn-status]")?.getAttribute("lang")).toBe(language);
+    expect(mascot()?.outerHTML).not.toMatch(/raw-secret|private-target|private-tool-input/);
+    expect(activeLocale()).toBe(app);
+    act(() => void vi.advanceTimersByTime(15_000));
+    expect(statusLine()).toBe(status);
+    engine({ type: "turn.progress", activity: "tool", itemId: "authorized", automation: { action: "update", phase: "finished" } });
+    expect(statusLine()).not.toContain(status);
+    engine({ type: "item.completed", itemType: "tool", itemId: "bare", ok: true });
+    expect(statusLine()).toBe("");
   });
 });

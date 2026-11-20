@@ -924,7 +924,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
   }, [lastTypedMessage]);
 
   const lastMessage = lastNonReceipt(messages);
-  const live = useTurnLive(bot.threadId), now = useTurnNow(bot, messages, lastMessage, live, advanced);
+  const live = useTurnLive(bot.threadId), now = useTurnNow(bot, messages, lastMessage, live);
   const toolInFlight = (lastMessage?.kind === "activity" && lastMessage.tool?.ok === undefined) || Boolean(live.status && live.status.activity !== "thinking" && live.status.activity !== "reply");
   // The mascot and its status line stay for the whole turn; only its end hides them, never a timer.
   const waiting = Boolean(bot.busy && bot.activity !== "waiting-on-you" && showWorkingDots(bot.busy, lastMessage, undefined, live.ended));
@@ -954,7 +954,7 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
     }, 520);
   }, [lastMessage?.id, lastMessage?.role, lastMessage?.kind]);
   const teammatesWorking = !advanced && !bot.busy && Boolean(bot.waitingForTeammates);
-  const presenceVisible = waiting || popping !== null || teammatesWorking, sharedRun = useSharedRun(bot, advanced);
+  const presenceVisible = waiting || popping !== null || teammatesWorking, sharedRun = useSharedRun(bot, advanced, now.pack);
   const lastShownRow = windowedMessages.findLast((message) => !quietRow(message, showToolCalls));
   const presenceUnderBubble = useHasLiveReply(bot.threadId) || Boolean(lastShownRow && isBotTextRow(lastShownRow, bot.id));
   const announcement = useMemo((): TranscriptSnapshot => {
@@ -1207,8 +1207,8 @@ export const ChatView = memo(function ChatView({ bot: profile, inForkPanel = fal
             }
             simple={!advanced}
             className={cn(!advanced && presenceUnderBubble && SIMPLE_STACKED)}
-            label={teammatesWorking ? t("chat.teammatesWorking") : sharedRun.label}
-            visible={presenceVisible} threadId={bot.threadId}
+            label={teammatesWorking ? t("chat.teammatesWorking", undefined, now.pack) : sharedRun.label}
+            visible={presenceVisible} strictStatus
             {...now}
             phrases={teammatesWorking ? undefined : now.phrases}
             seed={`${bot.id}:${bot.threadId ?? ""}:${busySince ?? ""}`}

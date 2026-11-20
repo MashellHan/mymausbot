@@ -9,6 +9,7 @@ import { brokerClient, type AppTriggerBroker, type BrokerAccess } from "./app-tr
 import { AppTriggerRequestService, type AppTriggerRequestStore } from "./app-trigger-requests.ts";
 import { AppTriggerError, AppTriggerManager, type AppTriggerPatch } from "./app-triggers.ts";
 import { managedComposioBrokerOff } from "./composio-broker-access.ts";
+import type { StartAutomationStatus } from "./chat-live-status.ts";
 import type { RosterMember } from "./peer-roster.ts";
 import type { RequestAuth } from "./request-auth.ts";
 import type { Routine, RoutineManager } from "./routines.ts";
@@ -51,6 +52,7 @@ export interface InternalTriggerContext {
   /** A run a webhook or app event started, or work one handed on. */
   outsideDriven: () => boolean;
   canCommit: () => boolean;
+  startAutomation?: StartAutomationStatus;
   /** Whether this turn may know of the routine: on a Team Cloud one that lives in someone's private chat only in theirs. */
   routineShown?: (routine: Routine) => boolean;
 }
@@ -173,19 +175,28 @@ export function createAppTriggerHost(deps: AppTriggerHostDeps) {
     if (!context.ownsThread(context.from.id, context.threadId)) return json(res, 403, { error: "source conversation does not belong to sender" });
     if (path === "/api/internal/trigger-events") {
       if (context.guestDriven) return json(res, 403, { error: GUEST_REFUSAL });
+      const finish = context.startAutomation?.("view");
       try {
         return json(res, 200, await catalog(context.from, url.searchParams.get("app") ?? undefined, url.searchParams.get("search") ?? undefined));
       } catch (error) {
         return json(res, 200, { error: `The events could not be listed: ${error instanceof Error ? error.message : String(error)}` });
+      } finally {
+        finish?.();
       }
     }
     const target = triggerTarget(context.from, url.searchParams.get("forBotId") ?? undefined, (id) => deps.store.bot(id));
     if ("error" in target) return json(res, target.status, { error: target.error });
     const ownerId = target.forBot?.botId ?? context.from.id;
-    const listing = listTriggers({
-      botId: ownerId, triggerId: url.searchParams.get("triggerId") ?? undefined, routines: deps.routines().listRoutines().filter((routine) => context.routineShown?.(routine) ?? true),
-      webhooks: deps.webhooks.list(), appTriggers: manager.list(), runs: deps.routines().listRuns(), timeZone: deps.timeZone(), now: Date.now(),
-    });
+    const finish = context.startAutomation?.("view");
+    let listing: ReturnType<typeof listTriggers>;
+    try {
+      listing = listTriggers({
+        botId: ownerId, triggerId: url.searchParams.get("triggerId") ?? undefined, routines: deps.routines().listRoutines().filter((routine) => context.routineShown?.(routine) ?? true),
+        webhooks: deps.webhooks.list(), appTriggers: manager.list(), runs: deps.routines().listRuns(), timeZone: deps.timeZone(), now: Date.now(),
+      });
+    } finally {
+      finish?.();
+    }
     const shown = listing.trigger;
     if (url.searchParams.get("includeAddress") !== "1" || !shown) return json(res, 200, listing);
     if (shown.kind !== "webhook") return json(res, 200, { ...listing, trigger: { ...shown, addressRefused: "Only an automation another app sends to (a webhook) has an address." } });
@@ -209,7 +220,8 @@ export function createAppTriggerHost(deps: AppTriggerHostDeps) {
       return json(res, 403, { error: `${owner.name} has not been given access to ${appLabel(app)}. Ask the person to allow it under the bot's Access settings; do not retry until they have.` });
     }
     try {
-      const applied = await requests.submit({ botId: input.from.id, threadId: input.threadId, operation: { ...input.operation, forBot: input.forBot }, from: input.sender, canCommit: input.canCommit });
+      const applied = await requests.submit({ botId: input.from.id, threadId: input.threadId, operation: { ...input.operation, forBot: input.forBot },
+        from: input.sender, canCommit: input.canCommit, startAutomation: input.startAutomation });
       deps.audit({ threadId: input.threadId, requestId: applied.requestId, botId: input.from.id, botName: input.from.name,
         tool: applied.action === "create" ? "create_trigger" : "manage_trigger", summary: applied.summary });
       return json(res, 201, applied);

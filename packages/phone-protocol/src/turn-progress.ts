@@ -4,6 +4,12 @@
 /** What a tool call is doing, in the status line's words: writing or changing a file, running a command, searching the
  * web, reading a file or a page, searching files, or any other tool. */
 export type TurnProgressActivity = "write" | "edit" | "command" | "web" | "read" | "fetch" | "search" | "tool";
+const automationActions = ["view", "create", "update", "pause", "resume", "run_now", "delete"] as const;
+export type TurnAutomationAction = typeof automationActions[number];
+
+export function isTurnAutomationAction(value: unknown): value is TurnAutomationAction {
+  return automationActions.some((action) => action === value);
+}
 
 /** What one tool call works on, in the words the status line, its chip and the sidebar use: a command's program and
  * main target ("scrape.py", "pnpm test"), a web search's query, a page's site, a file's name. Server-made from redacted
@@ -24,6 +30,10 @@ export type StepQuiet = { kind: "output"; at: number } | { kind: "network" | "bu
 export interface TurnProgressFields {
   type: "turn.progress";
   activity: TurnProgressActivity;
+  /** The authorized host's automation operation, paired by itemId and turnId. */
+  automation?: { action: TurnAutomationAction; phase: "started" | "finished" };
+  /** Explicit execution state from an engine that separates tool announcement from execution. */
+  toolState?: "pending" | "running";
   /** The engine's own tool name, for a tool the activity does not name. */
   tool?: string;
   /** The bare file name the call works on, once the engine has said it. */
@@ -63,6 +73,6 @@ export function progressFile(path: unknown): string | undefined {
 export function progressKey(event: Omit<TurnProgressFields, "type" | "activity"> & { activity: string; turnId?: string }): string {
   const size = progressSize(event.bytes);
   const quiet = event.quiet ? `${event.quiet.kind}${event.quiet.kind === "output" ? `@${event.quiet.at}` : ""}` : "";
-  return [event.turnId ?? "", event.itemId ?? "", event.activity, event.tool ?? "", event.file ?? "", size ? `${size.count}${size.unit}` : "",
+  return [event.turnId ?? "", event.itemId ?? "", event.activity, event.toolState ?? "", event.tool ?? "", event.file ?? "", size ? `${size.count}${size.unit}` : "",
     event.target ?? "", event.detail ?? "", quiet, (event.tail ?? []).join("\n")].join("|");
 }

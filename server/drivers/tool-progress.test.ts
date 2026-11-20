@@ -94,16 +94,17 @@ describe("ACP: a tool call still running", () => {
     expect(acpToolProgress({
       sessionUpdate: "tool_call", toolCallId: "w1", title: "WriteFile", kind: "edit", status: "pending",
       locations: [{ path: "/work/index.html" }], content: [{ type: "diff", path: "/work/index.html", oldText: null, newText: "y".repeat(2048) }],
-    })).toEqual({ type: "turn.progress", activity: "write", bytes: 2048, file: "index.html", itemId: "w1" });
+    })).toEqual({ type: "turn.progress", activity: "write", bytes: 2048, file: "index.html", itemId: "w1", toolState: "pending" });
     expect(acpToolProgress({ sessionUpdate: "tool_call", toolCallId: "c1", title: "npm test", kind: "execute", status: "in_progress" }))
-      .toEqual({ type: "turn.progress", activity: "command", itemId: "c1" });
+      .toEqual({ type: "turn.progress", activity: "command", itemId: "c1", toolState: "running" });
     expect(acpToolProgress({ sessionUpdate: "tool_call_update", toolCallId: "e1", status: "in_progress",
       content: [{ type: "diff", path: "a.ts", oldText: "old", newText: "new" }] })).toMatchObject({ activity: "edit", file: "a.ts", bytes: 3 });
   });
 
-  it("says nothing for a finished call, a bare update or a thought", () => {
+  it("reports bare execution updates and ignores finished calls and thoughts", () => {
     expect(acpToolProgress({ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "completed", kind: "execute" })).toBeNull();
-    expect(acpToolProgress({ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "in_progress" })).toBeNull();
+    expect(acpToolProgress({ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "in_progress" }))
+      .toMatchObject({ type: "turn.progress", activity: "tool", itemId: "c1", toolState: "running" });
     expect(acpToolProgress({ sessionUpdate: "tool_call", toolCallId: "t1", kind: "think" })).toBeNull();
     expect(acpToolProgress({ sessionUpdate: "agent_message_chunk", content: { text: "hi" } })).toBeNull();
   });
