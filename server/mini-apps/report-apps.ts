@@ -12,7 +12,8 @@ export function hasReportBindingForProducer(bindings: readonly MiniAppDataBindin
   if (!bindings.length || !isDeepStrictEqual(bindings[0], reportMiniAppBinding(datasetId, kind))) return false;
   if (bindings.length === 1) return true;
   if (kind !== "github_activity" || bindings.length !== 2) return false;
-  return isDeepStrictEqual(bindings[1], githubDeepDiveBinding(datasetId));
+  return isDeepStrictEqual(bindings[1], githubDeepDiveBinding(datasetId))
+    || isDeepStrictEqual(bindings[1], githubDeepDiveBinding(datasetId, { catalog: true }));
 }
 
 export async function reportAppsForBot(deps: {

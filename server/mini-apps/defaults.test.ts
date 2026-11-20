@@ -545,3 +545,184 @@ it("keeps reportAppsForBot, chunked deep_dive reads, and the Automation prompt c
   });
   expect((await reportAppsForBot(deps, "reports")).find((entry) => entry.slug === xApp.slug)?.reportBoundToProducer).toBe(false);
 });
+
+it("admits the exact dual-query deepDive catalog binding, paginates catalog >16 with pinned revisions, and enforces strict rejection in dispatchRoutineReportTurn", async () => {
+  const { apps, data, bots } = fixture();
+  const deps = { apps, data, bots: () => bots, localEnabled: () => true };
+  const source = await new ReportStore(data, createReportTemplate).prepare("reports", "github_activity");
+  const botDb = await data.forBot("reports");
+  await botDb.run(`CREATE TABLE main.github_deep_dive_v1 (
+    edition_key VARCHAR NOT NULL,
+    repo VARCHAR NOT NULL,
+    schema_version INTEGER NOT NULL,
+    part_index INTEGER NOT NULL,
+    part_count INTEGER NOT NULL,
+    payload_chunk VARCHAR NOT NULL,
+    PRIMARY KEY (edition_key, repo, schema_version, part_index)
+  )`, { connection: "bot", businessMutation: true });
+
+  // 19 distinct repos (sorted repo-00..repo-18) plus multi-part rows and schema v2 / other edition rows to prove exact catalog filtering and cursor >16.
+  const rows: string[] = [];
+  for (let i = 18; i >= 0; i--) {
+    const slug = `org/repo-${String(i).padStart(2, "0")}`;
+    rows.push(`('2026-11-20', '${slug}', 1, 0, ${i === 0 ? 2 : 1}, 'chunk-0-${i}')`);
+  }
+  rows.push("('2026-11-20', 'org/repo-00', 1, 1, 2, 'chunk-1-0')");
+  rows.push("('2026-11-20', 'org/schema-two', 2, 0, 1, 'ignored-v2')");
+  rows.push("('2026-11-19', 'org/other-day', 1, 0, 1, 'ignored-day')");
+  await botDb.run(`INSERT INTO main.github_deep_dive_v1 VALUES ${rows.join(", ")}`, { connection: "bot", businessMutation: true });
+
+  const reportBinding = reportMiniAppBinding(source.dataset.datasetId, "github_activity");
+  expect(hasReportBindingForProducer([reportBinding], source.dataset.datasetId, "github_activity")).toBe(true);
+  expect(hasReportBindingForProducer([reportBinding, githubDeepDiveBinding(source.dataset.datasetId)], source.dataset.datasetId, "github_activity")).toBe(true);
+  const catalogDeepDive = githubDeepDiveBinding(source.dataset.datasetId, { catalog: true });
+  expect(hasReportBindingForProducer([reportBinding, catalogDeepDive], source.dataset.datasetId, "github_activity")).toBe(true);
+  const { app } = await apps.publish(owner, {
+    ...source.publication,
+    requestKey: "github-daily10-catalog-positive",
+    slug: "github-activity",
+    shippedTemplateKind: "github_activity",
+    publisherBotIds: ["reports"],
+    bindings: [reportMiniAppBinding(source.dataset.datasetId, "github_activity"), catalogDeepDive],
+  });
+  expect(await reportAppsForBot(deps, "reports")).toEqual([{
+    slug: app.slug, status: "active", shippedTemplateKind: "github_activity",
+    publisherBotIds: ["reports"], reportBoundToProducer: true,
+  }]);
+  expect(await reportAppsForBot(deps, "ledger")).toEqual([]);
+  expect(await reportAppsForBot({ ...deps, localEnabled: () => false }, "reports")).toEqual([]);
+
+  // Catalog cursor >16 pinned to the same expectedRevision and expectedDataRevision.
+  const catPage1 = await apps.query(owner, app.id, {
+    queryId: "deep_dive_catalog",
+    parameters: { editionKey: "2026-11-20" },
+    expectedRevision: app.revision,
+  });
+  expect(catPage1.columns.map((col) => col.name)).toEqual(["repo"]);
+  expect(catPage1.rows).toHaveLength(16);
+  expect(catPage1.nextCursor).toBeTruthy();
+
+  const catPage2 = await apps.query(owner, app.id, {
+    queryId: "deep_dive_catalog",
+    parameters: { editionKey: "2026-11-20" },
+    expectedRevision: app.revision,
+    expectedDataRevision: catPage1.revision,
+    cursor: catPage1.nextCursor!,
+  });
+  expect(catPage2.revision).toBe(catPage1.revision);
+  expect(catPage2.rows).toHaveLength(3);
+  expect(catPage2.nextCursor).toBeUndefined();
+  expect([...catPage1.rows, ...catPage2.rows].map((r) => r[0])).toEqual(
+    Array.from({ length: 19 }, (_, i) => `org/repo-${String(i).padStart(2, "0")}`),
+  );
+
+  // Wrong expectedDataRevision is refused by the generic reader.
+  await expect(apps.query(owner, app.id, {
+    queryId: "deep_dive_catalog",
+    parameters: { editionKey: "2026-11-20" },
+    expectedRevision: app.revision,
+    expectedDataRevision: catPage1.revision + 1,
+    cursor: catPage1.nextCursor!,
+  })).rejects.toThrow();
+
+  // Existing deep_dive read still reconstructs chunked payload for a discovered repo.
+  const deepPage = await apps.query(owner, app.id, {
+    queryId: "deep_dive",
+    parameters: { editionKey: "2026-11-20", repo: "org/repo-00" },
+    expectedRevision: app.revision,
+  });
+  expect(deepPage.rows).toEqual([
+    ["2026-11-20", "org/repo-00", "1", "0", "2", "chunk-0-0"],
+    ["2026-11-20", "org/repo-00", "1", "1", "2", "chunk-1-0"],
+  ]);
+
+  // Real dispatchRoutineReportTurn positive: injects [Installed report edition].
+  const basePrompt = "[Scheduled routine \"GitHub discovery report\" — do this now:]\nCollect open-source updates.";
+  const run = { id: "run-gh-10", routineId: "routine-gh", botId: "reports", target: "bot" as const, runOn: "maus" as const, status: "running" as const, triggerSource: "schedule" as const };
+  const routine: Routine = { id: "routine-gh", botId: "reports", name: "GitHub discovery report", prompt: "Collect open-source updates.",
+    enabled: true, target: "bot", runOn: "maus", schedule: { type: "interval", everyMinutes: 1440, anchorAt: 1 }, durationMinutes: 0, nextRunAt: null, createdAt: 1, updatedAt: 1 };
+  const routineDeps = {
+    routines: { runForThread: () => run, listRoutines: () => [routine] },
+    botForId: (id: string) => (id === "reports" ? { id: "reports" } : null),
+    reportAppsForBot: (botId: string) => reportAppsForBot(deps, botId),
+    localEnabled: () => true,
+    writeAllowed: () => true,
+    stopped: () => false,
+  };
+  const positiveDispatched: string[] = [];
+  await dispatchRoutineReportTurn(basePrompt, "reports", "thread-gh-10", routineDeps, async (prompt) => { positiveDispatched.push(prompt); });
+  expect(positiveDispatched).toHaveLength(1);
+  expect(positiveDispatched[0]).toContain("[Installed report edition]");
+  expect(positiveDispatched[0]).toContain('mini_app_report with action "publish", kind "github_activity"');
+
+  // Strict admission rejections for altered catalog, table, extra query/binding, foreign producer, X, and unapproved app.
+  const cloneCatalog = () => structuredClone(githubDeepDiveBinding(source.dataset.datasetId, { catalog: true }));
+  expect(hasReportBindingForProducer([catalogDeepDive, reportBinding], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const wrongTable = cloneCatalog();
+  wrongTable.source.table = "github_deep_dive_v2";
+  expect(hasReportBindingForProducer([reportBinding, wrongTable], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const wrongFilter = cloneCatalog();
+  wrongFilter.queries.deep_dive_catalog!.filters = [
+    { field: "editionKey", op: "eq", parameter: "editionKey" },
+    { field: "schemaVersion", op: "eq", literal: "1" },
+  ];
+  expect(hasReportBindingForProducer([reportBinding, wrongFilter], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const wrongPageSize = cloneCatalog();
+  wrongPageSize.queries.deep_dive_catalog!.pageSize = 17;
+  expect(hasReportBindingForProducer([reportBinding, wrongPageSize], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const wrongColumns = cloneCatalog();
+  wrongColumns.queries.deep_dive_catalog = { ...wrongColumns.queries.deep_dive_catalog!, kind: "rows", columns: ["repo", "editionKey"] };
+  expect(hasReportBindingForProducer([reportBinding, wrongColumns], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const wrongOrder = cloneCatalog();
+  wrongOrder.queries.deep_dive_catalog!.orderBy = [{ field: "repo", direction: "desc" }];
+  expect(hasReportBindingForProducer([reportBinding, wrongOrder], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const wrongParam = cloneCatalog();
+  wrongParam.queries.deep_dive_catalog!.parameters = { editionKey: { type: "text" }, repo: { type: "text" } };
+  expect(hasReportBindingForProducer([reportBinding, wrongParam], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const extraQuery = cloneCatalog();
+  extraQuery.queries.deep_dive_extra = structuredClone(extraQuery.queries.deep_dive!);
+  expect(hasReportBindingForProducer([reportBinding, extraQuery], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const catalogOnly = cloneCatalog();
+  delete catalogOnly.queries.deep_dive;
+  expect(hasReportBindingForProducer([reportBinding, catalogOnly], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const extraThird = { ...cloneCatalog(), id: "deepDiveExtra", queries: { extra_read: structuredClone(cloneCatalog().queries.deep_dive_catalog!) } };
+  expect(hasReportBindingForProducer([reportBinding, cloneCatalog(), extraThird], source.dataset.datasetId, "github_activity")).toBe(false);
+
+  const ledgerDb = await data.forBot("ledger");
+  await ledgerDb.run(`CREATE TABLE main.github_deep_dive_v1 (
+    edition_key VARCHAR NOT NULL, repo VARCHAR NOT NULL, schema_version INTEGER NOT NULL,
+    part_index INTEGER NOT NULL, part_count INTEGER NOT NULL, payload_chunk VARCHAR NOT NULL
+  )`, { connection: "bot", businessMutation: true });
+  const foreignDataset = (await data.promoteForBot("ledger", "workspace-owner")).datasetId;
+  expect(hasReportBindingForProducer([reportBinding, githubDeepDiveBinding(foreignDataset, { catalog: true })], source.dataset.datasetId, "github_activity")).toBe(false);
+  expect(hasReportBindingForProducer([reportMiniAppBinding(source.dataset.datasetId, "x_ai_digest"), cloneCatalog()], source.dataset.datasetId, "x_ai_digest")).toBe(false);
+
+  // Publish rejected altered catalog app -> reportBoundToProducer: false and dispatchRoutineReportTurn keeps basePrompt untouched.
+  await apps.publish(owner, {
+    ...publication(apps.document(owner, app.id)),
+    requestKey: "github-daily10-catalog-rejected",
+    bindings: [reportBinding, wrongPageSize],
+  }, app.id);
+  expect((await reportAppsForBot(deps, "reports"))[0]?.reportBoundToProducer).toBe(false);
+  const rejectedDispatched: string[] = [];
+  await dispatchRoutineReportTurn(basePrompt, "reports", "thread-gh-10", routineDeps, async (prompt) => { rejectedDispatched.push(prompt); });
+  expect(rejectedDispatched).toEqual([basePrompt]);
+
+  // Revoking publisher approval removes the app from reportAppsForBot.
+  await apps.publish(owner, {
+    ...publication(apps.document(owner, app.id)),
+    requestKey: "github-daily10-catalog-revoked",
+    publisherBotIds: [],
+    bindings: [reportBinding, catalogDeepDive],
+  }, app.id);
+  expect(await reportAppsForBot(deps, "reports")).toEqual([]);
+});
