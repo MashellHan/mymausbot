@@ -13,11 +13,14 @@ checks. Prioritize data safety, remote access boundaries, true agent model/state
 aggregate deduplication, five-minute recovery, accessibility and existing behavior.
 Separate blocking defects from suggestions. When GitHub PR access is
 available, post findings directly as GitHub PR review comments/threads on the
-reviewed SHA (using `COMMENT` on single-account PRs rather than `APPROVE`), and
-resolve addressed threads after verifying correction deltas instead of leaving
-findings only in local chat. Give one compact batch with file references and
-reproduction. Review corrected deltas promptly; no redundant full review for
-unchanged code. Findings need evidence, not stylistic churn.
+reviewed SHA (using `COMMENT` on single-account PRs rather than `APPROVE`),
+resolve addressed threads after verifying correction deltas, and directly enable
+`gh pr merge --auto --merge` (or merge if required `CI` is already green) once
+no unresolved threads or explicit Lead holds remain—do not wait for Lead on
+ordinary merges or leave findings only in local chat. Give one compact batch
+with file references and reproduction. Review corrected deltas promptly; no
+redundant full review for unchanged code. Findings need evidence, not stylistic
+churn.
 
 Accept the PRs or batches assigned to you by Lead. The three general reviewers
 have the same authority; one owns each review and its correction deltas.
