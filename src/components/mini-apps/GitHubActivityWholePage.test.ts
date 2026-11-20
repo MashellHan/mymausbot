@@ -144,8 +144,59 @@ it("times out silently, retries on request, and retains Saved editions fallback"
   message("ready", "/github/media/bad.png");
   expect(host.querySelector('[data-testid="github-activity-failed"]')).not.toBeNull();
 
-  act(() => host.querySelectorAll<HTMLButtonElement>('[data-testid="github-activity-failed"] button')[1]!.click());
+  const fallbackButton = host.querySelectorAll<HTMLButtonElement>('[data-testid="github-activity-failed"] button')[1]!;
+  expect(fallbackButton.textContent).toBe("Open Native");
+  act(() => fallbackButton.click());
   expect(host.querySelector('[data-testid="saved-report"]')?.getAttribute("data-revision")).toBe("6");
   act(() => host.querySelector<HTMLButtonElement>('[data-testid="saved-report"]')!.click());
   expect(revoked).toHaveBeenCalledOnce();
+});
+
+it("uses explicit Web/网页版 and Native tab, tabpanel aria, and failure fallback labels with keyboard roving focus", () => {
+  vi.useFakeTimers();
+  render();
+  expect(tab("web").textContent).toBe("Web");
+  expect(tab("saved").textContent).toBe("Native");
+  expect(panel("web").getAttribute("aria-labelledby")).toBe(tab("web").id);
+  expect(panel("saved").getAttribute("aria-labelledby")).toBe(tab("saved").id);
+  expect(tab("web").getAttribute("aria-selected")).toBe("true");
+  expect(tab("saved").getAttribute("aria-selected")).toBe("false");
+  expect(tab("web").tabIndex).toBe(0);
+  expect(tab("saved").tabIndex).toBe(-1);
+  expect(panel("web").hidden).toBe(false);
+  expect(panel("saved").hidden).toBe(true);
+
+  // Modified key should be ignored
+  act(() => tab("web").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true, cancelable: true })));
+  expect(tab("web").getAttribute("aria-selected")).toBe("true");
+
+  // Roving focus via ArrowRight / ArrowLeft / End / Home
+  press("web", "ArrowRight");
+  expect(window.document.activeElement).toBe(tab("saved"));
+  expect(tab("saved").getAttribute("aria-selected")).toBe("true");
+  expect(tab("saved").tabIndex).toBe(0);
+  expect(tab("web").tabIndex).toBe(-1);
+  expect(panel("saved").hidden).toBe(false);
+  expect(panel("web").hidden).toBe(true);
+
+  press("saved", "ArrowLeft");
+  expect(window.document.activeElement).toBe(tab("web"));
+  expect(panel("web").hidden).toBe(false);
+
+  press("web", "End");
+  expect(window.document.activeElement).toBe(tab("saved"));
+  press("saved", "Home");
+  expect(window.document.activeElement).toBe(tab("web"));
+
+  // Chinese locale uses explicit 网页版 / Native / 打开 Native (not Daily X labels)
+  act(() => setLocale("zh"));
+  render();
+  expect(tab("web").textContent).toBe("网页版");
+  expect(tab("saved").textContent).toBe("Native");
+  expect(tab("saved").textContent).not.toContain("已保存的报告");
+
+  act(() => vi.advanceTimersByTime(10_000));
+  const buttons = host.querySelectorAll<HTMLButtonElement>('[data-testid="github-activity-failed"] button');
+  expect(buttons[1]!.textContent).toBe("打开 Native");
+  expect(buttons[1]!.textContent).not.toContain("打开报告");
 });

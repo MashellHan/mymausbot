@@ -8,6 +8,7 @@ import { isPublicDomainAddress } from "../custom-domain.ts";
 import { appFailure } from "../mini-apps/validation.ts";
 
 export const GITHUB_ACTIVITY_APP_ID = "0643df6c-24ea-4076-87b6-572d3637a4d9";
+export const GITHUB_MEDIA_POLICY_DENIED = "github_media_policy_denied";
 export const MAX_GITHUB_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_GITHUB_VIDEO_BYTES = 32 * 1024 * 1024;
 
@@ -82,7 +83,7 @@ export async function githubMediaRequest(rawUrl: string, options: {
     }),
   ]).finally(() => clearTimeout(dnsTimer));
   if (!addresses.length || addresses.some(({ address }) => !isPublicDomainAddress(address))) {
-    throw appFailure(403, "The GitHub Activity media host is unavailable.");
+    throw appFailure(403, "The GitHub Activity media host is unavailable.", GITHUB_MEDIA_POLICY_DENIED);
   }
   const address = addresses.find((item) => item.family === 4) ?? addresses[0]!;
   const pinnedLookup: LookupFunction = (_host, lookupOptions, callback) => {
@@ -124,15 +125,18 @@ export async function fetchGithubActivityMedia(rawUrl: string, expectedSha256: s
   if (!expectedMime || !isValidMediaSha256(expectedSha256)) {
     throw appFailure(400, "Invalid GitHub Activity media request.");
   }
-  const maxBytes = expectedMime.startsWith("video/") ? MAX_GITHUB_VIDEO_BYTES : MAX_GITHUB_IMAGE_BYTES;
   let currentUrl = rawUrl;
   for (let hop = 0; hop < 4; hop++) {
     const hopMime = expectedMediaMimeType(currentUrl);
-    if (!hopMime) throw appFailure(403, "Redirected GitHub Activity media address is not allowed.");
-    const result = await requestFn(currentUrl, { maxBytes, signal });
+    if (!hopMime) throw appFailure(403, "Redirected GitHub Activity media address is not allowed.", GITHUB_MEDIA_POLICY_DENIED);
+    const hopMaxBytes = hopMime.startsWith("video/") ? MAX_GITHUB_VIDEO_BYTES : MAX_GITHUB_IMAGE_BYTES;
+    const result = await requestFn(currentUrl, { maxBytes: hopMaxBytes, signal });
     if ([301, 302, 303, 307, 308].includes(result.status) && result.headers.location) {
       currentUrl = new URL(result.headers.location, currentUrl).href;
       continue;
+    }
+    if (result.body.length > hopMaxBytes) {
+      throw appFailure(413, "This GitHub Activity media asset is too large.");
     }
     if (result.status === 404) throw appFailure(404, "This GitHub Activity media asset was not found.");
     if (result.status !== 200) throw appFailure(502, "This GitHub Activity media asset is unavailable.");

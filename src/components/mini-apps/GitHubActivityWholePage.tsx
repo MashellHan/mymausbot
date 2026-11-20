@@ -102,7 +102,7 @@ export function GitHubActivityWholePage({ document, state, onRevoked }: {
     <p className="text-[14px] font-medium text-ink">{t("webPanels.page.pageGone")}</p>
     <div className="flex flex-wrap justify-center gap-2">
       <button type="button" className="ui-button ui-button-primary" onClick={retry}>{t("webPanels.page.reload")}</button>
-      <button type="button" className="ui-button" onClick={() => choose("saved")}>{t("computer.miniApps.report.open")}</button>
+      <button type="button" className="ui-button" onClick={() => choose("saved")}>{t("computer.miniApps.report.githubOpenNative")}</button>
     </div>
   </div> : <div className="relative min-h-0 min-w-0 flex-1 bg-panel" data-testid="github-activity-web">
     <iframe key={attempt} ref={frame} data-github-activity-frame="" src={webUrl} name={GITHUB_ACTIVITY_FRAME_NAME}
@@ -121,7 +121,7 @@ export function GitHubActivityWholePage({ document, state, onRevoked }: {
         tabIndex={view === name ? 0 : -1} onClick={() => choose(name)}
         className={`min-h-10 border-b-2 px-3 text-[13px] font-medium focus-visible:outline-2 focus-visible:outline-accent ${view === name
           ? "border-accent text-ink" : "border-transparent text-ink-secondary hover:bg-ink/[0.06] hover:text-ink"}`}>
-        {t(name === "web" ? "computer.miniApps.report.webReport" : "computer.miniApps.report.savedEditions")}
+        {t(name === "web" ? "computer.miniApps.report.githubWeb" : "computer.miniApps.report.githubNative")}
       </button>)}
     </div>
     {views.map((name) => <section key={name} id={`${tabId}-panel-${name}`} role="tabpanel" aria-labelledby={`${tabId}-tab-${name}`} tabIndex={0}

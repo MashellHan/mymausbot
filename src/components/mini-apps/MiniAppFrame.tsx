@@ -183,9 +183,10 @@ export function mountMiniAppFrame(options: {
         ? AbortSignal.any([controller.signal, timeoutSignal]) : controller.signal;
       void fetch(mediaEndpoint, { method: "GET", signal }).then(async (response) => {
         if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({})) as { error?: unknown };
-          const message = typeof errorBody.error === "string" ? errorBody.error : `${response.status} ${response.statusText}`;
-          throw new ApiError(message, response.status);
+          const rawBody: unknown = await response.json().catch(() => null);
+          const errorBody = record(rawBody) ? rawBody : undefined;
+          const message = typeof errorBody?.error === "string" ? errorBody.error : `${response.status} ${response.statusText}`;
+          throw new ApiError(message, response.status, errorBody);
         }
         const mimeType = (response.headers.get("content-type") ?? "").split(";", 1)[0]!.trim().toLowerCase();
         if (!ALLOWED_GITHUB_MEDIA_MIME.has(mimeType)) throw new Error("Unsupported media content type.");
@@ -195,7 +196,11 @@ export function mountMiniAppFrame(options: {
         replyMedia(request.id, { mimeType, bytes, sha256: request.sha256 });
       }).catch((error: unknown) => {
         if (!active || controller.signal.aborted) return;
-        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) options.onRevoked();
+        const policyDenied = error instanceof ApiError && error.status === 403
+          && error.body?.code === "github_media_policy_denied";
+        if (error instanceof ApiError && (error.status === 401 || (error.status === 403 && !policyDenied))) {
+          options.onRevoked();
+        }
         replyMedia(request.id, undefined, error instanceof Error ? error.message : "The media read failed. Try again.");
       }).finally(() => mediaControllers.delete(controller));
       return;

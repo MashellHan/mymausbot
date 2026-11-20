@@ -84,8 +84,10 @@ export function miniAppError(error: unknown): { status: number; error: string; c
     return { status, error: error.message, code: error.error.code };
   }
   const status = error && typeof error === "object" && "status" in error ? Number(error.status) : 500;
+  const code = error && typeof error === "object" && "status" in error && "code" in error && typeof error.code === "string"
+    ? error.code : undefined;
   return { status: Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500,
-    error: error instanceof Error ? error.message : "Mini Apps are unavailable." };
+    error: error instanceof Error ? error.message : "Mini Apps are unavailable.", ...(code ? { code } : {}) };
 }
 
 async function datasetInfo(data: DataEngine, datasetId: string): Promise<MiniAppDataset> {

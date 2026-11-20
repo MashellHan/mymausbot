@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 
 import type { RequestAuth } from "../request-auth.ts";
 import { HongguoCovers } from "../hongguo/cover.ts";
+import { appFailure } from "../mini-apps/validation.ts";
 import { createMiniAppRoutes, createMiniAppsInternalRoutes } from "./mini-apps.ts";
 
 it("rejects local Mini App writes before reading a write-disallowed turn", async () => {
@@ -309,8 +310,20 @@ it("gates GitHub Activity media behind owner loopback auth, exact app revision, 
 
   const denied = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png&sha256=${digest}`,
     { kind: "loopback", scopes: ["admin"], companionDevice: { id: "c1" } } as unknown as RequestAuth);
-  expect(denied.json).toHaveBeenCalledWith(expect.any(ServerResponse), 403, expect.any(Object));
+  expect(denied.json).toHaveBeenCalledWith(expect.any(ServerResponse), 403, { error: "Mini Apps are available only to this local workspace's owner." });
   expect(fetchMedia).not.toHaveBeenCalled();
+
+  requireGithubActivity.mockImplementationOnce(() => { throw appFailure(403, "This Mini App has no GitHub Activity media grant."); });
+  const revokedApp = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png&sha256=${digest}`);
+  expect(revokedApp.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 403, { error: "This Mini App has no GitHub Activity media grant." });
+
+  fetchMedia.mockRejectedValueOnce(appFailure(403, "Redirected GitHub Activity media address is not allowed.", githubMediaModule.GITHUB_MEDIA_POLICY_DENIED));
+  const policyDenied = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png&sha256=${digest}`);
+  expect(policyDenied.json).toHaveBeenLastCalledWith(expect.any(ServerResponse), 403, {
+    error: "Redirected GitHub Activity media address is not allowed.",
+    code: githubMediaModule.GITHUB_MEDIA_POLICY_DENIED,
+  });
+  requireGithubActivity.mockClear();
 
   const badQuery = await sendReq(`/api/mini-apps/${id}/github-activity/media?expectedRevision=6&url=https://mxhan.com/github/media/a.png`);
   expect(badQuery.json).toHaveBeenCalledWith(expect.any(ServerResponse), 400, expect.any(Object));

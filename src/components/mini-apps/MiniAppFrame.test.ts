@@ -10,7 +10,7 @@ import type { MiniAppDocument, MiniAppQueryResult, MiniAppState } from "../../..
 const fixture = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => ({
   api: fixture.api,
-  ApiError: class ApiError extends Error { constructor(message: string, readonly status: number) { super(message); } },
+  ApiError: class ApiError extends Error { constructor(message: string, readonly status: number, readonly body?: Record<string, unknown>) { super(message); } },
 }));
 
 import { mountMiniAppFrame } from "./MiniAppFrame";
@@ -445,6 +445,65 @@ describe("persistent Mini App frame", () => {
     expect(posted.mock.calls.find(([msg]) => (msg as { id?: string }).id === "m1")?.[0]).toMatchObject({
       mausMiniApp: 1, type: "media-result", id: "m1", mimeType: "image/png", sha256: "c".repeat(64),
     });
+    mount.retire();
+  });
+
+  it("fails only the individual media-read on media policy 403 while still invoking onRevoked for real revocation 401/403", async () => {
+    const githubDoc: MiniAppDocument = {
+      ...document,
+      app: {
+        ...app,
+        id: "0643df6c-24ea-4076-87b6-572d3637a4d9",
+        slug: "github-activity",
+        shippedTemplateKind: "github_activity" as const,
+      },
+    };
+    const ghState: MiniAppState = { ...state, appId: githubDoc.app.id };
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+    const onRevoked = vi.fn();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "Redirected GitHub Activity media address is not allowed.",
+        code: "github_media_policy_denied",
+      }), { status: 403, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(pngBytes, { status: 200, headers: { "content-type": "image/png" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "This Mini App has no GitHub Activity media grant.",
+      }), { status: 403, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { "content-type": "application/json" },
+      }));
+
+    const mount = mountMiniAppFrame({ container, document: githubDoc, state: ghState, onRevoked });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+
+    // 1. Media/DNS/redirect policy 403 fails only that single media-read and preserves frame + retry.
+    send(view, { mausMiniApp: 1, type: "media-read", id: "policy-403", url: "https://mxhan.com/github/media/20261120/blocked.png", sha256: "a".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "policy-403")).toBe(true));
+    expect(onRevoked).not.toHaveBeenCalled();
+    expect(posted.mock.calls.find(([msg]) => (msg as { id?: string }).id === "policy-403")?.[0]).toMatchObject({
+      mausMiniApp: 1, type: "media-result", id: "policy-403", error: "Redirected GitHub Activity media address is not allowed.",
+    });
+
+    // Per-item retry and subsequent reads still succeed.
+    send(view, { mausMiniApp: 1, type: "media-read", id: "retry-ok", url: "https://mxhan.com/github/media/20261120/ok.png", sha256: "b".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "retry-ok")).toBe(true));
+    expect(onRevoked).not.toHaveBeenCalled();
+    expect(posted.mock.calls.find(([msg]) => (msg as { id?: string }).id === "retry-ok")?.[0]).toMatchObject({
+      mausMiniApp: 1, type: "media-result", id: "retry-ok", mimeType: "image/png", sha256: "b".repeat(64),
+    });
+
+    // 2. Owner/App revocation 403 (no policy code) triggers onRevoked().
+    send(view, { mausMiniApp: 1, type: "media-read", id: "revoked-403", url: "https://mxhan.com/github/media/20261120/revoked.png", sha256: "c".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "revoked-403")).toBe(true));
+    expect(onRevoked).toHaveBeenCalledTimes(1);
+
+    // 3. Auth 401 triggers onRevoked().
+    send(view, { mausMiniApp: 1, type: "media-read", id: "auth-401", url: "https://mxhan.com/github/media/20261120/auth.png", sha256: "d".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "auth-401")).toBe(true));
+    expect(onRevoked).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     mount.retire();
   });
 
