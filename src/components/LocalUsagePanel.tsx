@@ -148,11 +148,12 @@ function tokenSeriesTone(series: TokenTrendSeries, index: number) {
   return seriesTones[index];
 }
 
-function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucket[]; metric: Metric; weekly: boolean; tokenDays?: UsageTrendDay[] }) {
+function TrendChart({ days, metric, weekly, range, tokenDays }: { days: UsageTrendBucket[]; metric: Metric; weekly: boolean; range: UsageTrendRange; tokenDays?: UsageTrendDay[] }) {
   const usageMetricHint = useUsageMetricHint();
   const [mode, setMode] = useState<TokenTrendMode>("models");
   const stack = useMemo(() => tokenDays && tokenTrendStacks(tokenDays, days, mode), [tokenDays, days, mode]);
   const [activeDay, setActiveDay] = useState<string | null>(null);
+  const [hoveredSegment, setHoveredSegment] = useState<{ day: string; series: TokenTrendSeries } | null>(null);
   const [focusDay, setFocusDay] = useState<string | null>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const focusedButton = useRef<HTMLButtonElement | null>(null);
@@ -164,6 +165,16 @@ function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucke
   const max = Math.max(1, ...values.filter((value): value is number => value !== null));
   const activeIndex = days.findIndex((day) => day.day === activeDay);
   const active = days[activeIndex];
+  const modelTotal = active?.totalTokens ?? 0;
+  const modelRows = stack && mode === "models" && modelTotal > 0 ? stack.series.flatMap((series, index) => {
+    const amount = stack.points[activeIndex]?.[index];
+    return amount ? [{ series, amount, index }] : [];
+  }).sort((a, b) => b.amount - a.amount) : [];
+  const showDay = (day: string) => {
+    setActiveDay(day);
+    setHoveredSegment((segment) => segment?.day === day ? segment : null);
+  };
+  useLayoutEffect(() => { setHoveredSegment(null); }, [range]);
   const rovingDay = days.some((day) => day.day === focusDay) ? focusDay : days[0]?.day;
   const showUnclassified = metric !== "totalTokens" && days.some((day) => (categoryValue(day, metric, "unclassified") ?? 0) > 0);
   useLayoutEffect(() => {
@@ -172,7 +183,7 @@ function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucke
     return () => document.removeEventListener("focusin", rememberFocus);
   }, []);
   useLayoutEffect(() => {
-    if (activeDay && !active) setActiveDay(null);
+    if (activeDay && !active) { setActiveDay(null); setHoveredSegment(null); }
     if (focusDay && focusDay !== rovingDay) {
       const restore = focusedButton.current?.dataset.usageDay === focusDay && lastFocused.current === focusedButton.current;
       setFocusDay(rovingDay ?? null);
@@ -190,7 +201,7 @@ function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucke
       <div className="relative flex flex-wrap items-center justify-between gap-1">
         <h4 title={usageMetricHint(metric)} className="text-[13px] font-medium text-ink-secondary">{t(`computer.usage.metric.${metric}`)}</h4>
         {stack && <div role="group" aria-label={t("computer.usage.tokenBreakdown")} className="flex rounded-lg p-0.5">
-          {tokenTrendModes.map((key) => <button key={key} type="button" aria-pressed={mode === key} onClick={() => setMode(key)}
+          {tokenTrendModes.map((key) => <button key={key} type="button" aria-pressed={mode === key} onClick={() => { setMode(key); setHoveredSegment(null); }}
             className={cn("min-h-7 rounded-md px-2 text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
               mode === key ? "bg-card font-medium text-ink" : "text-ink-secondary hover:bg-ink/[0.06]")}>
             {t(key === "types" ? "computer.usage.tokenTypes" : "computer.usage.tokenModels")}
@@ -214,11 +225,13 @@ function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucke
             tabIndex={day.day === rovingDay ? 0 : -1}
             aria-label={t("computer.usage.trendPoint", { day: weekly ? `${day.day} – ${day.endDay}` : `${day.day} ${weekdayFormat.format(date)}`, metric: t(`computer.usage.metric.${metric}`), value: label })}
             aria-describedby={activeDay === day.day ? tooltipId : undefined}
-            onMouseEnter={() => setActiveDay(day.day)} onMouseLeave={(event) => { if (document.activeElement !== event.currentTarget) setActiveDay(null); }}
-            onFocus={(event) => { focusedButton.current = event.currentTarget; setFocusDay(day.day); setActiveDay(day.day); }}
-            onBlur={(event) => { setActiveDay(null); if (event.currentTarget.isConnected) focusedButton.current = null; }} onClick={() => setActiveDay(day.day)}
+            onMouseEnter={() => showDay(day.day)}
+            onMouseLeave={(event) => { setHoveredSegment(null); if (document.activeElement !== event.currentTarget) setActiveDay(null); }}
+            onFocus={(event) => { focusedButton.current = event.currentTarget; setFocusDay(day.day); showDay(day.day); }}
+            onBlur={(event) => { setActiveDay(null); setHoveredSegment(null); if (event.currentTarget.isConnected) focusedButton.current = null; }}
+            onClick={() => showDay(day.day)}
             onKeyDown={(event) => {
-              if (event.key === "Escape") { setActiveDay(null); return; }
+              if (event.key === "Escape") { setActiveDay(null); setHoveredSegment(null); return; }
               const next = event.key === "ArrowRight" ? (index + 1) % days.length : event.key === "ArrowLeft" ? (index + days.length - 1) % days.length
                 : event.key === "Home" ? 0 : event.key === "End" ? days.length - 1 : null;
               if (next === null) return;
@@ -231,6 +244,8 @@ function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucke
                 {stack ? stack.series.map((series, seriesIndex) => {
                   const part = stack.points[index]?.[seriesIndex];
                   return !!part && <span key={seriesIndex} data-usage-token-segment={series.key}
+                    onMouseEnter={mode === "models" ? () => setHoveredSegment({ day: day.day, series }) : undefined}
+                    onMouseLeave={mode === "models" ? () => setHoveredSegment(null) : undefined}
                     className={tokenSeriesTone(series, seriesIndex)} style={{ height: `${part / value * 100}%` }} />;
                 })
                   : segmentTotal ? segments.map(({ category, value: part, partial }) => <span key={category} data-usage-category={category}
@@ -254,23 +269,46 @@ function TrendChart({ days, metric, weekly, tokenDays }: { days: UsageTrendBucke
           <time dateTime={active.day} className="block font-medium tabular-nums">
             {active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}
           </time>
-          {active.tokenStatus === "partial" && <p className="mt-0.5 text-ink-secondary">{t("computer.usage.tokensPartial")}</p>}
-          <dl className="mt-1.5 grid grid-cols-1 gap-y-0.5 tabular-nums">
+          {active.tokenStatus === "partial" && <p className={mode === "models" ? "sr-only" : "mt-0.5 text-ink-secondary"}>{t("computer.usage.tokensPartial")}</p>}
+          {mode === "types" && <dl className="mt-1.5 grid grid-cols-1 gap-y-0.5 tabular-nums">
             <div className="flex min-w-0 items-baseline justify-between gap-3">
               <dt className="text-ink-secondary">{t("computer.usage.metric.totalTokens")}</dt>
               <dd className="shrink-0 text-right font-medium text-ink">{metricText(active.totalTokens)}</dd>
             </div>
             {active.totalTokens !== null && stack.series.map((series, index) => {
               const amount = stack.points[activeIndex]?.[index] ?? null;
-              const total = active.totalTokens ?? 0;
-              const share = (series.kind === "model" || series.kind === "other") && amount !== null && total > 0
-                ? percent.format(amount / total) : null;
               return (series.kind === "type" || !!amount) && <div key={index} className="flex min-w-0 items-baseline justify-between gap-3">
                 <dt dir="auto" className="min-w-0 [overflow-wrap:anywhere] text-ink-secondary">{tokenSeriesLabel(series, mode)}</dt>
-                <dd className="shrink-0 text-right text-ink">{metricText(amount)}{share && ` · ${share}`}</dd>
+                <dd className="shrink-0 text-right text-ink">{metricText(amount)}</dd>
               </div>;
             })}
-          </dl>
+          </dl>}
+          {mode === "models" && <table className="mt-1.5 w-full tabular-nums">
+            <thead className="text-ink-secondary"><tr>
+              <th scope="col" className="w-full pb-1 pe-3 text-start font-normal">{t("usage.history.byModel")}</th>
+              <th scope="col" className="whitespace-nowrap pb-1 pe-3 text-start font-normal">{t("computer.usage.metric.totalTokens")}</th>
+              <th scope="col" className="whitespace-nowrap pb-1 text-start font-normal">{t("computer.usage.tokenShare")}</th>
+            </tr></thead>
+            <tbody>
+              <tr data-usage-token-total>
+                <th scope="row" className="py-0.5 pe-3 text-start align-top font-medium">{t("computer.usage.modelTotalTokens")}</th>
+                <td className="whitespace-nowrap py-0.5 pe-3 text-start align-top font-medium">{metricText(active.totalTokens)}</td>
+                <td />
+              </tr>
+              {modelRows.map(({ series, amount, index }) => {
+                const highlighted = hoveredSegment?.day === active.day
+                  && hoveredSegment.series.kind === series.kind && hoveredSegment.series.key === series.key;
+                return <tr key={index} data-usage-token-row={series.key} data-usage-token-highlighted={highlighted || undefined}
+                  className={highlighted ? "bg-raised" : undefined}>
+                  <th scope="row" dir="auto" className="py-0.5 pe-3 text-start align-top font-normal [overflow-wrap:anywhere] text-ink-secondary">{tokenSeriesLabel(series, mode)}</th>
+                  <td className="whitespace-nowrap py-0.5 pe-3 text-start align-top text-ink">{metricText(amount)}</td>
+                  <td className="whitespace-nowrap py-0.5 text-start align-top text-ink">
+                    {series.kind === "model" || series.kind === "other" ? percent.format(amount / modelTotal) : "—"}
+                  </td>
+                </tr>;
+              })}
+            </tbody>
+          </table>}
         </> : <>
           <div className="flex flex-wrap items-baseline justify-between gap-x-2 tabular-nums">
             <time dateTime={active.day} className="font-medium">{active.day}{weekly ? ` – ${active.endDay}` : ` · ${weekdayFormat.format(new Date(`${active.day}T00:00:00Z`))}`}</time>
@@ -340,7 +378,7 @@ export function LocalUsageView({ snapshot }: { snapshot: LocalUsageResponse | nu
             </span>)}
           </div>
           <div className="mt-2 grid grid-cols-1 gap-3">
-            {metrics.map((metric) => <TrendChart key={metric} days={chartDays} metric={metric} weekly={range === "6m"} tokenDays={metric === "totalTokens" ? view.trend : undefined} />)}
+            {metrics.map((metric) => <TrendChart key={metric} days={chartDays} metric={metric} weekly={range === "6m"} range={range} tokenDays={metric === "totalTokens" ? view.trend : undefined} />)}
           </div>
           <UsageDailyTable days={view.trend} />
         </section>

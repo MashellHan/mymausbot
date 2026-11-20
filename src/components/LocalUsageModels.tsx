@@ -25,20 +25,19 @@ export function costText(estimate?: Cost) {
   return t("computer.usage.costAtLeast", { cost: formatUsd(bound) });
 }
 
-export function UsageTokenBreakdown({ cacheRead, input, output, estimatedCost, asRows = false }: {
-  cacheRead: number | null; input: number | null; output: number | null; estimatedCost?: Cost; asRows?: boolean;
-}) {
-  const metrics = [
-    ["cachedInput", metricText(cacheRead)], ["freshInput", metricText(input)],
-    ["output", metricText(output)], ["estimatedCost", costText(estimatedCost)],
-  ] as const;
-  return <dl data-usage-token-breakdown className={cn("grid min-w-0 gap-x-3 gap-y-1 text-[13px] tabular-nums", asRows ? "grid-cols-1" : "grid-cols-2")}>
-    {metrics.map(([key, value]) => <div key={key} className={cn("min-w-0 [overflow-wrap:anywhere]", asRows && "flex items-baseline justify-between gap-x-3")}>
-      <dt className="text-ink-secondary">{t(`computer.usage.${key}`)}</dt>
-      <dd className={cn("text-ink", asRows && "text-end")}>{value}</dd>
-    </div>)}
-  </dl>;
+function usableCost(estimate?: Cost): number | null {
+  const usd = estimate?.usd;
+  return estimate?.coverage !== "unavailable" && typeof usd === "number" && Number.isFinite(usd) && usd >= 0 ? usd : null;
 }
+
+function ShareBar({ share }: { share: number }) {
+  return <div aria-hidden="true" className="mt-1 h-1 min-w-16 overflow-hidden rounded-sm bg-inset">
+    <div className="h-full bg-accent/75" style={{ width: `${share * 100}%` }} />
+  </div>;
+}
+
+const tableCell = "px-2 py-2 text-start align-top";
+const numericCell = `${tableCell} whitespace-nowrap`;
 
 type ShortPeriod = typeof shortUsagePeriods[number];
 
@@ -50,33 +49,60 @@ export function UsageModelPanel({ windows }: { windows: Record<ShortPeriod, Usag
   const rows = models?.coverage === "unavailable" ? [] : models?.rows.toSorted((a, b) => b.totalTokens - a.totalTokens || a.model.localeCompare(b.model, activeLocale())) ?? [];
   const percent = new Intl.NumberFormat(activeLocale(), { style: "percent", maximumFractionDigits: 1 });
   const title = t("computer.usage.modelUsage");
+  const estimate = window.tokenDetails?.estimatedCost;
+  const rawTotal = usableCost(estimate);
+  const modelCostTotal = rows.reduce((total, row) => total + (usableCost(row.estimatedCost) ?? 0), 0);
+  const matchingScope = estimate?.coverage === "partial" ||
+    models?.coverage === "ready" && rows.every((row) => row.estimatedCost.coverage === "ready" && usableCost(row.estimatedCost) !== null);
+  const comparableTotal = rawTotal !== null && rawTotal > 0 && matchingScope &&
+    Math.abs(rawTotal - modelCostTotal) <= rawTotal * Number.EPSILON * rows.length ? rawTotal : null;
+  const columns = [t("usage.history.byModel"), t("computer.usage.modelTotalTokens"), t("computer.usage.tokenShare"),
+    t("computer.usage.cachedInput"), t("computer.usage.freshInput"), t("computer.usage.output"), t("computer.usage.estimatedCost")];
   return <UsagePeriodSection kind="models" heading={title} periods={shortUsagePeriods} period={period} onPeriodChange={setPeriod} window={window}
     open={open} onToggle={() => setOpen((current) => !current)}
     hint={<InfoHint label={t("computer.usage.costHelp")}>{t("computer.usage.costHint")}</InfoHint>}>
-    {models?.coverage === "partial" && <p className="mb-2 text-[13px] text-ink-secondary">{t("computer.usage.modelsPartial")}</p>}
     {rows.length === 0 ? <p className="text-[14px] text-ink-secondary">
       {t(models?.coverage === "ready" && window.totalTokens === 0 ? "computer.usage.modelsEmpty" : "computer.usage.modelsUnavailable")}
-    </p> : <>
-      {window.tokenCoverage === "partial" && <p className="mb-2 text-[13px] text-ink-secondary">{t("computer.usage.recordedShare")}</p>}
-      <ul className="divide-y divide-hairline/60 rounded-lg border border-hairline/60">
-        {rows.map((row) => {
-          const total = window.totalTokens;
-          const share = window.tokenCoverage !== "unavailable" && total !== null && total > 0 && row.totalTokens <= total ? row.totalTokens / total : null;
-          return <li key={row.model} className="grid min-w-0 gap-2 px-3 py-2.5 @min-[42rem]/usage:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] @min-[42rem]/usage:gap-4">
-            <div className="min-w-0 text-[13px] tabular-nums">
-              <p dir="auto" className="font-medium text-ink [overflow-wrap:anywhere]">{row.model}</p>
-              <div className="flex flex-wrap justify-between gap-x-2 text-ink-secondary">
-                <span>{t("computer.usage.modelTokenTotal", { total: metricText(row.totalTokens) })}</span>
-                <span>{share === null ? t("computer.usage.shareUnavailable") : percent.format(share)}</span>
-              </div>
-              {share !== null && <div aria-hidden="true" className="mt-1 h-1 overflow-hidden rounded-sm bg-inset">
-                <div className="h-full bg-accent/75" style={{ width: `${share * 100}%` }} />
-              </div>}
-            </div>
-            <UsageTokenBreakdown {...row} asRows />
-          </li>;
-        })}
-      </ul>
-    </>}
+    </p> : <div role="region" aria-label={title} tabIndex={0} data-usage-model-table-region
+      className="overflow-x-auto rounded-lg border border-hairline/60 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/60">
+      <table className="w-full text-[13px] tabular-nums" data-usage-model-table>
+        <caption className="sr-only">
+          {title}
+          {models?.coverage === "partial" && ` · ${t("computer.usage.modelsPartial")}`}
+          {window.tokenCoverage === "partial" && ` · ${t("computer.usage.recordedShare")}`}
+        </caption>
+        <thead className="bg-inset text-ink-secondary"><tr>
+          {columns.map((label) => <th key={label} scope="col" className={cn(numericCell, "font-medium")}>{label}</th>)}
+        </tr></thead>
+        <tbody className="divide-y divide-hairline/60 text-ink">
+          {rows.map((row) => {
+            const total = window.totalTokens;
+            const share = window.tokenCoverage !== "unavailable" && total !== null && total > 0 && row.totalTokens <= total ? row.totalTokens / total : null;
+            const usd = usableCost(row.estimatedCost);
+            const costShare = comparableTotal !== null && usd !== null ? Math.min(1, usd / comparableTotal) : null;
+            const estimatedShare = costShare === null ? null : percent.format(costShare);
+            const costShareLabel = estimatedShare === null ? undefined : t(estimate?.coverage === "partial"
+              ? "computer.usage.recordedCostShare" : "computer.usage.estimatedCostShare", { share: estimatedShare });
+            return <tr key={row.model}>
+              <th scope="row" dir="auto" className={cn(tableCell, "w-full min-w-40 font-medium [overflow-wrap:anywhere]")}>{row.model}</th>
+              <td className={numericCell}>{metricText(row.totalTokens)}</td>
+              <td className={numericCell} data-usage-model-share>
+                {share === null ? t("computer.usage.shareUnavailable") : <>{percent.format(share)}<ShareBar share={share} /></>}
+              </td>
+              <td className={numericCell}>{metricText(row.cacheRead)}</td>
+              <td className={numericCell}>{metricText(row.input)}</td>
+              <td className={numericCell}>{metricText(row.output)}</td>
+              <td className={numericCell}>
+                {costText(row.estimatedCost)}
+                {costShare !== null && <div data-usage-cost-share title={costShareLabel} className="mt-0.5 text-ink-secondary">
+                  <span aria-hidden="true">{estimatedShare}</span><span className="sr-only">{costShareLabel}</span>
+                  <ShareBar share={costShare} />
+                </div>}
+              </td>
+            </tr>;
+          })}
+        </tbody>
+      </table>
+    </div>}
   </UsagePeriodSection>;
 }
