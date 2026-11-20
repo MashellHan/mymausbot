@@ -100,6 +100,7 @@ export interface MiniAppReleaseProvenance {
   queriesSha256: string;
   queriesBytes: number;
   previousTemplateVersion?: number;
+  updateRequestKey?: string;
 }
 
 export type MiniAppUpdateStatus = "available" | "current" | "unavailable" | "incompatible" | "custom";

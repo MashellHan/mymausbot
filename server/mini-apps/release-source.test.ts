@@ -607,6 +607,10 @@ describe("MiniAppReleaseSource and MiniApps release lifecycle", () => {
         appVersion: "0.1.1", sourceCommit: COMMIT_A, expectedRevision: 1, requestKey: "req-1",
       })).toEqual({ app: first.app, replayed: true });
       await expect(apps.applyUpdate(owner, app.id, {
+        appVersion: "0.1.1", sourceCommit: COMMIT_A, expectedRevision: 1, requestKey: "same-release-loser",
+      })).rejects.toMatchObject({ status: 409 });
+      expect(apps.list(owner).find((entry) => entry.id === app.id)?.release?.updateRequestKey).toBe("req-1");
+      await expect(apps.applyUpdate(owner, app.id, {
         appVersion: "0.1.2", sourceCommit: COMMIT_B, expectedRevision: 1, requestKey: "req-1",
       })).rejects.toMatchObject({ status: 409 });
       await expect(apps.applyUpdate(owner, app.id, {

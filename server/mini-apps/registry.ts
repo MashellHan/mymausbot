@@ -575,7 +575,7 @@ export class MiniApps {
       const now = Date.now();
       const last = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM mini_app_versions WHERE app_id = ?").get(id) as { version: number };
       const dashboardHtml = current.dashboard?.kind === "agent-team" || current.dashboard?.kind === "usage";
-      const release = { ...verified.provenance, previousTemplateVersion: current.templateVersion };
+      const release = { ...verified.provenance, previousTemplateVersion: current.templateVersion, updateRequestKey: input.requestKey };
       const releaseProvenanceJson = JSON.stringify(release);
       const app: MiniAppSummary = {
         ...current,
