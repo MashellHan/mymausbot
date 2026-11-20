@@ -118,6 +118,7 @@
     "@resvg/resvg-js": "2.6.2",
     "@tanstack/react-virtual": "^3.14.13",
     "@trycua/cua-driver": "0.45.4",
+    "acorn": "8.18.0",
     "ag-grid-community": "36.2.0",
     "ag-grid-react": "36.2.0",
     "ajv": "8.20.0",
