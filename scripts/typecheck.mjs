@@ -12,7 +12,8 @@ const configs = {
 const args = process.argv.slice(2);
 let projects = Object.keys(configs);
 const ci = Boolean(process.env.CI && process.env.CI !== "false");
-let fresh = ci;
+const incremental = process.env.OMB_TYPECHECK_INCREMENTAL === "1" && !args.includes("--fresh");
+let fresh = ci && !incremental;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--fresh") fresh = true;
   else if (args[i] === "--project" && Object.hasOwn(configs, args[i + 1])) projects = [args[++i]];

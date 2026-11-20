@@ -82,7 +82,7 @@ export async function reattestMetadata({ event, repository = process.env.GITHUB_
   const started = now();
   while (run.status !== "completed") {
     if (now() - started >= maxWaitMs) throw new Error("Source CI did not complete before metadata gate deadline");
-    await wait(15_000);
+    await wait(now() - started < 2 * 60_000 ? 3_000 : 15_000);
     run = await api(`/actions/runs/${run.id}`);
     if (run.head_sha !== request.head || run.event !== "pull_request" || run.run_attempt !== attempt) throw new Error("Source CI identity changed");
   }
