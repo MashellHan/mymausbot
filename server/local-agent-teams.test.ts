@@ -65,6 +65,8 @@ describe("local Agent Team provider", () => {
     expect(commands.sort()).toEqual(["--session default agent list", "--session default workspace list"]);
     expect(snapshot).toEqual({ status: "ready", updatedAt: 1000, teamCount: 1, teams: [{ id: "w6", name: "MausBot", agentCount: 1, activeAgentCount: 0, lastActivityAt: Date.UTC(2026, 10, 3, 8), agents: [{
       id: "w6:p1", name: "mausbot-front", kind: "codex", role: null, model: "gpt-6-sol", reasoningEffort: "xhigh", contextUsed: 150, contextWindow: 256000, state: "done", taskHint: "latest synthetic instruction", messagePreview: null,
+      tokenUsage24h: { coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } },
+      tokenUsage7d: { coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } },
     }], tokenUsage24h: { coverage: "partial", knownTokens: null },
       tokenUsage7d: { coverage: "partial", knownTokens: null } }] });
     expect(JSON.stringify(snapshot)).not.toMatch(/private conversation|private\/workspace|session_meta|terminal_title|900000/);
@@ -278,5 +280,239 @@ describe("local Agent Team provider", () => {
     resetPathCache();
     const provider = createLocalAgentTeamsProvider({ codexHome: join(home, ".codex") });
     expect(await provider.get()).toMatchObject({ status: "ready", teamCount: 1, teams: [{ id: "fixture-team", agentCount: 0 }] });
+  });
+
+  it("computes per-member 24h and 7d tokens and sub-cent USD cost across turn_context model switches", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-member-cost-"));
+    folders.push(home);
+    const directory = join(home, "sessions", "2026", "11", "01");
+    await mkdir(directory, { recursive: true });
+    const file = join(directory, `rollout-2026-11-01-${SESSION}.jsonl`);
+    await writeFile(file, [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: SESSION, timestamp: "2026-11-01T10:00:00Z" } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-05T10:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-05T10:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T10:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T10:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 260 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T11:00:00Z", payload: { model: "gpt-6.1-sol" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T11:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 330 },
+          last_token_usage: { input_tokens: 50, cached_input_tokens: 0, output_tokens: 20, total_tokens: 70 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    let time = Date.UTC(2026, 10, 9, 12);
+    const provider = createLocalAgentTeamsProvider({ codexHome: home, now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : agents() });
+    const first = (await provider.get()).teams[0]!.agents[0]!;
+    expect(first.tokenUsage24h).toMatchObject({ coverage: "ready", knownTokens: 200, estimatedCost: { coverage: "ready" } });
+    expect(first.tokenUsage24h!.estimatedCost.usd).toBeCloseTo(0.0009, 12);
+    expect(first.tokenUsage24h!.estimatedCost.usd!).toBeGreaterThan(0);
+    expect(first.tokenUsage24h!.estimatedCost.usd!).toBeLessThan(0.01);
+    expect(first.tokenUsage7d).toMatchObject({ coverage: "ready", knownTokens: 330, estimatedCost: { coverage: "ready" } });
+    expect(first.tokenUsage7d!.estimatedCost.usd).toBeCloseTo(0.0015, 12);
+
+    await appendFile(file, JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T11:10:00Z", payload: {
+      type: "token_count", info: {
+        total_token_usage: { total_tokens: 380 },
+        last_token_usage: { input_tokens: 40, cached_input_tokens: 0, output_tokens: 10, total_tokens: 50 },
+      },
+    } }) + "\n");
+    time += 2_000;
+    const after = (await provider.get()).teams[0]!.agents[0]!;
+    expect(after.tokenUsage24h!.knownTokens).toBe(250);
+    expect(after.tokenUsage24h!.estimatedCost.usd).toBeCloseTo(0.00108, 12);
+  });
+
+  it("degrades member cost coverage independently when cached_input_tokens, split or model price is missing", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-member-split-"));
+    folders.push(home);
+    const directory = join(home, "sessions", "2026", "11", "01");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, `rollout-2026-11-01-${SESSION}.jsonl`), [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: SESSION } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T09:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T09:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T10:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 190 },
+          last_token_usage: { input_tokens: 50, output_tokens: 10, total_tokens: 60 },
+        },
+      } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T10:15:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 230 },
+          last_token_usage: { input_tokens: 0, output_tokens: 0, total_tokens: 40 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    await writeFile(join(directory, `rollout-2026-11-01-${OTHER}.jsonl`), [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: OTHER } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T09:00:00Z", payload: { model: "unknown-private-model" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T09:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 50 },
+          last_token_usage: { input_tokens: 40, cached_input_tokens: 0, output_tokens: 10, total_tokens: 50 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    const provider = createLocalAgentTeamsProvider({ codexHome: home, now: () => Date.UTC(2026, 10, 9, 12),
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents: [
+        { pane_id: "w6:p1", workspace_id: "w6", name: "missing-split", agent: "codex", agent_status: "done", agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION } },
+        { pane_id: "w6:p2", workspace_id: "w6", name: "unknown-price", agent: "codex", agent_status: "done", agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: OTHER } },
+      ] } }) });
+    const [missingSplit, unknownPrice] = (await provider.get()).teams[0]!.agents;
+    expect(missingSplit!.tokenUsage24h).toMatchObject({ coverage: "ready", knownTokens: 230, estimatedCost: { coverage: "partial" } });
+    expect(missingSplit!.tokenUsage24h!.estimatedCost.usd).toBeCloseTo(0.0006, 12);
+    expect(unknownPrice!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 50, estimatedCost: { coverage: "unavailable", usd: null } });
+  });
+
+  it("distinguishes known zero from short-session unavailability and partial lower bounds", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-member-short-"));
+    folders.push(home);
+    const directory = join(home, "sessions", "2026", "11", "01");
+    await mkdir(directory, { recursive: true });
+    const third = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    await writeFile(join(directory, `rollout-2026-11-01-${SESSION}.jsonl`), [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: SESSION } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-05T10:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-05T10:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    await writeFile(join(directory, `rollout-2026-11-01-${OTHER}.jsonl`), [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-09T10:00:00Z", payload: { id: OTHER } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T10:01:00Z", payload: { model: "gpt-6.2-astra" } }),
+    ].join("\n") + "\n");
+    await writeFile(join(directory, `rollout-2026-11-01-${third}.jsonl`), [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-09T10:00:00Z", payload: { id: third } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T10:01:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T10:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    const provider = createLocalAgentTeamsProvider({ codexHome: home, now: () => Date.UTC(2026, 10, 9, 12),
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents: [
+        { pane_id: "w6:p1", workspace_id: "w6", name: "known-zero", agent: "codex", agent_status: "idle", agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION } },
+        { pane_id: "w6:p2", workspace_id: "w6", name: "short-empty", agent: "codex", agent_status: "idle", agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: OTHER } },
+        { pane_id: "w6:p3", workspace_id: "w6", name: "short-partial", agent: "codex", agent_status: "done", agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: third } },
+      ] } }) });
+    const [knownZero, shortEmpty, shortPartial] = (await provider.get()).teams[0]!.agents;
+    expect(knownZero!.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 0, estimatedCost: { coverage: "ready", usd: 0 } });
+    expect(knownZero!.tokenUsage7d).toMatchObject({ coverage: "ready", knownTokens: 130, estimatedCost: { coverage: "ready" } });
+    expect(shortEmpty!.tokenUsage24h).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
+    expect(shortPartial!.tokenUsage24h).toMatchObject({ coverage: "partial", knownTokens: 130, estimatedCost: { coverage: "partial" } });
+    expect(shortPartial!.tokenUsage24h!.estimatedCost.usd).toBeCloseTo(0.0006, 12);
+  });
+
+  it("filters pre-switch events when a pane switches from session A to an existing session B and preserves team aggregate", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-member-switch-"));
+    folders.push(home);
+    const directory = join(home, "sessions", "2026", "11", "01");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, `rollout-2026-11-01-${SESSION}.jsonl`), [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: SESSION } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T08:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T08:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    const fileB = join(directory, `rollout-2026-11-01-${OTHER}.jsonl`);
+    await writeFile(fileB, [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: OTHER } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T09:00:00Z", payload: { model: "gpt-6.1-sol" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T09:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 500 },
+          last_token_usage: { input_tokens: 400, cached_input_tokens: 0, output_tokens: 100, total_tokens: 500 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    let currentSession = SESSION;
+    let time = Date.UTC(2026, 10, 9, 10, 0);
+    const provider = createLocalAgentTeamsProvider({ codexHome: home, now: () => time,
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents: [{
+        pane_id: "w6:p1", workspace_id: "w6", name: "seat-one", agent: "codex", agent_status: "working",
+        agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: currentSession },
+      }] } }) });
+    expect((await provider.get()).teams[0]!.agents[0]!.tokenUsage24h).toMatchObject({ coverage: "ready", knownTokens: 130 });
+
+    currentSession = OTHER;
+    time = Date.UTC(2026, 10, 9, 11, 0);
+    const afterSwitch = (await provider.get()).teams[0]!;
+    expect(afterSwitch.agents[0]!.tokenUsage24h).toEqual({
+      coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null },
+    });
+    expect(afterSwitch.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 500 });
+
+    await appendFile(fileB, JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T11:05:00Z", payload: {
+      type: "token_count", info: {
+        total_token_usage: { total_tokens: 570 },
+        last_token_usage: { input_tokens: 50, cached_input_tokens: 0, output_tokens: 20, total_tokens: 70 },
+      },
+    } }) + "\n");
+    time = Date.UTC(2026, 10, 9, 11, 10);
+    const afterAppend = (await provider.get()).teams[0]!;
+    expect(afterAppend.agents[0]!.tokenUsage24h).toMatchObject({
+      coverage: "partial", knownTokens: 70, estimatedCost: { coverage: "partial" },
+    });
+    expect(afterAppend.agents[0]!.tokenUsage24h!.estimatedCost.usd).toBeCloseTo(0.0003, 12);
+    expect(afterAppend.tokenUsage24h).toEqual({ coverage: "ready", knownTokens: 570 });
+  });
+
+  it("excludes ambiguous intra-team claims for members while keeping non-Codex roster unavailable", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mausbot-member-ambiguous-"));
+    folders.push(home);
+    const directory = join(home, "sessions", "2026", "11", "01");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, `rollout-2026-11-01-${SESSION}.jsonl`), [
+      JSON.stringify({ type: "session_meta", timestamp: "2026-11-01T10:00:00Z", payload: { id: SESSION } }),
+      JSON.stringify({ type: "turn_context", timestamp: "2026-11-09T09:00:00Z", payload: { model: "gpt-6.2-astra" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T09:05:00Z", payload: {
+        type: "token_count", info: {
+          total_token_usage: { total_tokens: 130 },
+          last_token_usage: { input_tokens: 120, cached_input_tokens: 100, output_tokens: 10, total_tokens: 130 },
+        },
+      } }),
+    ].join("\n") + "\n");
+    const provider = createLocalAgentTeamsProvider({ codexHome: home, now: () => Date.UTC(2026, 10, 9, 12),
+      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents: [
+        { pane_id: "w6:p1", workspace_id: "w6", name: "dup-a", agent: "codex", agent_status: "done", agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION } },
+        { pane_id: "w6:p2", workspace_id: "w6", name: "dup-b", agent: "codex", agent_status: "done", agent_session: { kind: "id", agent: "codex", source: "herdr:codex", value: SESSION.toUpperCase() } },
+        { pane_id: "w6:p3", workspace_id: "w6", name: "opencode-seat", agent: "opencode", agent_status: "idle", cwd: "/private/workspace", tokens: { model: "gpt-6.2-astra" } },
+        { pane_id: "w6:p4", workspace_id: "w6", name: "pi-seat", agent: "pi", agent_status: "idle", agent_session: { kind: "path", agent: "pi", source: "herdr:pi", value: join(home, "missing.jsonl") } },
+      ] } }) });
+    const team = (await provider.get()).teams[0]!;
+    expect(team.agents).toHaveLength(4);
+    for (const member of team.agents) {
+      expect(member.tokenUsage24h).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
+      expect(member.tokenUsage7d).toEqual({ coverage: "unavailable", knownTokens: null, estimatedCost: { coverage: "unavailable", usd: null } });
+    }
+    expect(team.tokenUsage24h).toEqual({ coverage: "partial", knownTokens: 130 });
   });
 });
