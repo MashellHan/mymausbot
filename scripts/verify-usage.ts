@@ -84,7 +84,7 @@ function snapshot(scenario: string | null): LocalUsageResponse {
       const rowCached = Math.floor(cacheRead * share / 100);
       return { model: names[index]!, input: rowInput, output: rowOutput, cacheRead: rowCached,
         totalTokens: rowInput + rowOutput + rowCached,
-        estimatedCost: index === 0 ? { coverage: "ready" as const, usd: 0.003 }
+        estimatedCost: index === 0 ? { coverage: "ready" as const, usd: 0.0366 }
           : index === 1 ? { coverage: "partial" as const, usd: 0 }
           : index === 2 ? { coverage: "ready" as const, usd: 0.0004 }
           : { coverage: "unavailable" as const, usd: null } };
