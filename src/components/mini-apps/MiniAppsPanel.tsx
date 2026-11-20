@@ -5,6 +5,7 @@ import { usePageVisible } from "@/lib/page-visible";
 import { randomUuid } from "@/lib/random-uuid";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { api, ApiError } from "@/state/store";
+import { LEGACY_MINI_APP_IDS } from "../../../shared/mini-app-release-packages";
 import type { DefaultMiniAppKind, MiniAppArchive, MiniAppDefaultsResult, MiniAppDocument,
   MiniAppMutationResult, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
 import bookkeepingHtml from "../../../examples/mini-apps/bookkeeping/index.html?raw";
@@ -151,7 +152,11 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const previousReleaseTemplate = currentHead && !stale && owner === true && nativeGuard
     && window.ogb?.app?.ownPage === true && window.ogb?.remoteClient?.active !== true
     ? document.app.release?.previousTemplateVersion : undefined;
-  const archived = owner === true && nativeGuard ? inventory?.find((app) => app.status === "archived" && iconKindForApp(app)) : undefined;
+  const legacyMojoActive = apps?.some((app) => app.id === LEGACY_MINI_APP_IDS.mojo && iconKindForApp(app) === "mojo");
+  const archived = owner === true && nativeGuard ? inventory?.find((app) => {
+    const kind = iconKindForApp(app);
+    return app.status === "archived" && kind !== null && !(legacyMojoActive && kind === "mojo");
+  }) : undefined;
   const archivedKind = archived ? iconKindForApp(archived) : null;
 
   useEffect(() => {

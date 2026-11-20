@@ -15,7 +15,8 @@ const icons: Record<Exclude<MiniAppIconKind, "mojo">, { Icon: LucideIcon; tone: 
 };
 
 export function iconKindForApp(app: MiniAppSummary): MiniAppIconKind | null {
-  return app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind ?? null;
+  return app.dashboardIdentity ?? app.nativeIdentity ?? app.shippedTemplateKind
+    ?? (app.id === LEGACY_MINI_APP_IDS.mojo && app.slug === "mojo" ? "mojo" : null);
 }
 
 export function MiniAppIcon({ kind, app, large = false, launcher = false }: { kind: MiniAppIconKind | null; app?: MiniAppSummary; large?: boolean; launcher?: boolean }) {

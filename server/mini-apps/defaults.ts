@@ -9,7 +9,7 @@ import { reportKindForRoutine } from "../../shared/report-routine.ts";
 import type { DataEngine } from "../data/types.ts";
 import type { Routine } from "../routines.ts";
 import { DEFAULT_APPS, matchesPendingDefaultHtml, NATIVE_DEFAULT_HTML, pendingDefaultHtml, updatedDefaultAppTitle } from "./default-documents.ts";
-import { MOJO_LEGACY_HTML_SHA256, REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
+import { REVIEWED_AGENT_TEAM_HTML_SHA256 } from "./default-template-history.ts";
 import { existingBookkeepingSource } from "./default-sources.ts";
 import { defaultMiniAppUpdate } from "./default-updates.ts";
 import type { MiniAppActor, MiniApps } from "./registry.ts";
@@ -63,16 +63,37 @@ export class DefaultMiniApps {
     return { apps: this.deps.apps.list(owner), issues };
   }
 
-  private async ensureKind(owner: MiniAppActor, kind: DefaultMiniAppKind, input: MiniAppDefaultsInput): Promise<void> {
-    const apps = this.deps.apps.list(owner);
-    const matches = apps.filter((app) => identity(app) === kind);
-    if (kind === "mojo" && !matches.length) {
-      const legacy = apps.find((app) => app.id === LEGACY_MINI_APP_IDS.mojo && !identity(app));
-      if (legacy) {
-        const document = this.deps.apps.document(owner, legacy.id);
-        if (!document.bindings.length && createHash("sha256").update(document.html).digest("hex") === MOJO_LEGACY_HTML_SHA256) matches.push(legacy);
+  private isPristineMojoPlaceholder(owner: MiniAppActor, app: MiniAppSummary): boolean {
+    if (app.id === LEGACY_MINI_APP_IDS.mojo || app.status !== "active" || app.revision !== 1 || app.templateVersion !== 1) return false;
+    if (!/^mojo-included-\d+$/.test(app.slug)) return false;
+    if (app.shippedTemplateKind !== "mojo" || app.dashboard || app.dashboardIdentity || app.nativeKind || app.nativeIdentity) return false;
+    if (app.title !== DEFAULT_APPS.mojo.title || app.description !== DEFAULT_APPS.mojo.description) return false;
+    if (app.publisherBotIds.length || app.responsibleBotId !== null || app.capabilities?.length || app.release !== null) return false;
+    const document = this.deps.apps.document(owner, app.id);
+    return document.bindings.length === 0
+      && document.versions.length === 1
+      && document.versions[0]?.version === 1
+      && document.versions[0].release === null
+      && document.html === pendingDefaultHtml("mojo");
+  }
+
+  private matchesForKind(owner: MiniAppActor, kind: DefaultMiniAppKind, apps: MiniAppSummary[]): MiniAppSummary[] {
+    if (kind !== "mojo") return apps.filter((app) => identity(app) === kind);
+    const canonicalLegacy = apps.find((app) => app.id === LEGACY_MINI_APP_IDS.mojo && (!identity(app) || identity(app) === "mojo"));
+    if (!canonicalLegacy) return apps.filter((app) => identity(app) === "mojo");
+    if (canonicalLegacy.status === "active") {
+      for (const candidate of apps) {
+        if (candidate.id !== canonicalLegacy.id && identity(candidate) === "mojo" && this.isPristineMojoPlaceholder(owner, candidate)) {
+          this.deps.apps.archive(owner, candidate.id, { requestKey: randomUUID(), expectedRevision: candidate.revision });
+        }
       }
     }
+    return [canonicalLegacy];
+  }
+
+  private async ensureKind(owner: MiniAppActor, kind: DefaultMiniAppKind, input: MiniAppDefaultsInput): Promise<void> {
+    const apps = this.deps.apps.list(owner);
+    const matches = this.matchesForKind(owner, kind, apps);
     if (matches.length > 1) throw appFailure(409, "More than one copy of this included app exists. Your apps were kept unchanged.");
     const existing = matches[0];
     if (existing?.status === "archived" && input.restore !== kind) return;

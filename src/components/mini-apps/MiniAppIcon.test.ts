@@ -6,8 +6,9 @@ import { MiniAppIcon, iconKindForApp } from "./MiniAppIcon";
 
 const mojo = { id: "01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7", slug: "mojo" } as MiniAppSummary;
 
-it("marks only the existing Mojo app without changing its custom-app classification", () => {
-  expect(iconKindForApp(mojo)).toBeNull();
+it("identifies the existing Mojo without classifying unrelated app IDs as Mojo", () => {
+  expect(iconKindForApp(mojo)).toBe("mojo");
+  expect(iconKindForApp({ ...mojo, id: "other" })).toBeNull();
   expect(renderToStaticMarkup(createElement(MiniAppIcon, { kind: iconKindForApp(mojo), app: mojo }))).toContain('data-mini-app-icon="mojo"');
   expect(renderToStaticMarkup(createElement(MiniAppIcon, { kind: null, app: { ...mojo, id: "other" } }))).toContain('data-mini-app-icon="custom"');
   expect(renderToStaticMarkup(createElement(MiniAppIcon, { kind: null, app: { ...mojo, slug: "other" } }))).toContain('data-mini-app-icon="custom"');

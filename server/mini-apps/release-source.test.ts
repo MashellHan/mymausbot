@@ -14,7 +14,7 @@ import { DATA_DIR } from "../config.ts";
 import { createDataEngine } from "../data/engine.ts";
 import { resetPathCacheForTests } from "../env-path.ts";
 import { closeMessageDb } from "../message-db.ts";
-import { ADOPTABLE_LEGACY_TEMPLATE_SHA256, MOJO_LEGACY_HTML_SHA256 } from "./default-template-history.ts";
+import { ADOPTABLE_LEGACY_TEMPLATE_SHA256, ADOPTABLE_MOJO_LEGACY_HTML_SHA256, MOJO_LEGACY_HTML_SHA256 } from "./default-template-history.ts";
 import type { LocalDashboardProviders } from "../routes/local-dashboard.ts";
 import { NATIVE_DEFAULT_HTML } from "./default-documents.ts";
 import { DefaultMiniApps } from "./defaults.ts";
@@ -848,6 +848,10 @@ process.exit(1);
     expect(mojoMapping?.packageId).toBe("mashellhan.mojo");
     expect(isCustomAppTemplate(mojoApp, mojoMapping, '<meta name="openmausbot:mojo-view" content="quotes-v1"><p>fake</p>', [])).toBe(true);
     expect(MOJO_LEGACY_HTML_SHA256).toBe("c7e3e34ae380dc585c41e57588908cd48858c49c00118a372902d1d79e1356f6");
+    expect(ADOPTABLE_MOJO_LEGACY_HTML_SHA256).toEqual([
+      "4a3fa256b33f752ffc72cae1b1319fcc0d1600f4d5123f5df69482e809858986",
+      "c7e3e34ae380dc585c41e57588908cd48858c49c00118a372902d1d79e1356f6",
+    ]);
     expect(ADOPTABLE_LEGACY_TEMPLATE_SHA256.bookkeeping).toContain("6cab8df9d0c2d2d90694c0e3202a4a9075bed84260f48467e4a6e1991e1465ce");
     expect(ADOPTABLE_LEGACY_TEMPLATE_SHA256.x_ai_digest).toContain("a25effe6fffb0f09d6833a3dd9d4ed331be1d4a34cfd889af628428718b320d3");
 
@@ -900,5 +904,46 @@ process.exit(1);
     }, abort.signal)).rejects.toMatchObject({ status: 503 });
     expect(abortApps.document(owner, abortApp.id).app.revision).toBe(1);
     expect(abortApps.document(owner, abortApp.id).versions).toHaveLength(1);
+  });
+
+  it("blocks release adoption on owner-edited or bound canonical Mojo while mapping canonical identity", async () => {
+    const mojoRelease = buildValidRelease({
+      slug: "mojo",
+      packageId: "mashellhan.mojo",
+      appVersion: "0.1.1",
+      sourceCommit: COMMIT_A,
+      requires: ["mojo-poetry-v1"],
+      html: "<!doctype html><html><meta charset=utf-8><body><h1>Mojo 0.1.1</h1></body></html>",
+      queries: makeQueriesJson([]),
+    });
+    const canonicalMojo: MiniAppSummary = {
+      id: "01d8d54b-5b1c-4e8d-be21-e60aa6e42fc7",
+      slug: "mojo",
+      title: "Mojo",
+      description: "Quotes and poetry.",
+      status: "active",
+      revision: 6,
+      templateVersion: 6,
+      publisherBotIds: ["publisher"],
+      responsibleBotId: null,
+      capabilities: [],
+      dashboard: null,
+      dashboardIdentity: null,
+      nativeKind: null,
+      nativeIdentity: null,
+      shippedTemplateKind: null,
+      release: null,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const mapping = miniAppReleaseMapping(canonicalMojo);
+    expect(mapping).toMatchObject({ kind: "mojo", packageId: "mashellhan.mojo" });
+    expect(isCustomAppTemplate(canonicalMojo, mapping, "<!doctype html><html><body><h1>Edited</h1></body></html>", [])).toBe(true);
+    const source = new MiniAppReleaseSource({ reader: syntheticReader([mojoRelease]) });
+    expect(await source.checkUpdate(canonicalMojo, "<!doctype html><html><body><h1>Edited</h1></body></html>", [])).toEqual({
+      installedVersion: null,
+      status: "custom",
+      available: null,
+    });
   });
 });
