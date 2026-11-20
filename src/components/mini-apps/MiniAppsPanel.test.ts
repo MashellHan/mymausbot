@@ -3,7 +3,7 @@
 import { act, createElement, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadLocale, setLocale } from "@/lib/i18n";
+import { loadLocale, setLocale, t } from "@/lib/i18n";
 import type { LocalUsageResponse } from "../../../shared/local-dashboard";
 import { withGithubUsageFixture, withMergedUsageFixture } from "../../../scripts/testing/merged-usage-fixture";
 import type { MiniAppDocument, MiniAppRollback, MiniAppState, MiniAppSummary } from "../../../shared/mini-apps";
@@ -469,9 +469,12 @@ describe("Mini Apps panel", () => {
     const mojo = { ...app(MOJO_ID, "Mojo"), slug: "mojo" };
     const duplicate = { ...app("duplicate", "Mojo"), slug: "mojo-included-1", status: "archived", shippedTemplateKind: "mojo" } as const;
     const edited = { ...app("edited-mojo", "My verse collection"), shippedTemplateKind: "mojo" } as const;
-    fixture.apps = [mojo, duplicate, edited, app("other", "A deliberately long title")];
+    const archivedEdited = { ...app("archived-edited-mojo", "Archived verse"), status: "archived", shippedTemplateKind: "mojo" } as const;
+    fixture.apps = [mojo, duplicate, edited, archivedEdited, app("other", "A deliberately long title")];
     await render();
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe(mojo.id));
+    expect(host.querySelector('[role="tablist"] [data-app-id="duplicate"]')).toBeNull();
+    expect(host.querySelector('[role="tablist"] [data-app-id="archived-edited-mojo"]')).toBeNull();
     expect(selected()?.querySelector('[data-mini-app-icon="mojo"]')).not.toBeNull();
     expect(selected()?.querySelector(".line-clamp-2")?.classList.contains("pr-6")).toBe(false);
     const hint = host.querySelector<HTMLButtonElement>('[role="tablist"] [data-info-hint]')!;
@@ -482,8 +485,12 @@ describe("Mini Apps panel", () => {
     expect(selected()?.querySelector(".line-clamp-2")?.classList.contains("pr-6")).toBe(false);
     await act(async () => { host.querySelector<HTMLButtonElement>('[data-mini-app-all]')!.click(); });
     expect(host.querySelector('[data-mini-app-add]')).toBeNull();
+    expect(host.querySelectorAll('[data-mini-app-catalog="mojo"]')).toHaveLength(1);
     expect(host.querySelector('[data-mini-app-catalog="mojo"][data-mini-app-state="active"] [data-mini-app-icon="mojo"]')).not.toBeNull();
     expect(host.querySelector('[data-mini-app-custom="edited-mojo"]')).not.toBeNull();
+    expect(host.querySelector('[data-mini-app-custom="duplicate"]')?.textContent).toContain(t("computer.miniApps.archived"));
+    expect(host.querySelector('[data-mini-app-custom="archived-edited-mojo"]')?.textContent).toContain(t("computer.miniApps.archived"));
+    expect(host.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="archived-edited-mojo"]')?.disabled).toBe(true);
     expect(host.querySelector('[data-mini-app-custom="other"] [data-mini-app-icon="custom"]')).not.toBeNull();
     await act(async () => host.querySelector<HTMLButtonElement>('[data-mini-app-grid-item="mojo"]')!.click());
     await vi.waitFor(() => expect(frame()?.dataset.id).toBe(mojo.id));

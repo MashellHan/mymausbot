@@ -64,7 +64,7 @@ export function MiniAppLibraryEntries({
   const legacyMojo = inventory.find((app) => app.id === LEGACY_MINI_APP_IDS.mojo && iconKindForApp(app) === "mojo");
   const defaultApps = new Set(inventory.filter((app) => {
     const kind = iconKindForApp(app);
-    return kind !== null && (!legacyMojo || kind !== "mojo" || app.id === legacyMojo.id || app.status === "archived");
+    return kind !== null && (!legacyMojo || kind !== "mojo" || app.id === legacyMojo.id);
   }).map((app) => app.id));
   const custom = inventory.filter((app) => !defaultApps.has(app.id));
   const actionDisabled = busyKind !== null || updatingAppId !== null;
