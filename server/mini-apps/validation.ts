@@ -70,8 +70,8 @@ export const dashboardReadSchema = z.discriminatedUnion("resource", [
   z.object({ resource: z.literal("usage"), expectedRevision: dashboardRevision }).strict(),
 ]);
 
-export function appFailure(status: number, message: string): Error & { status: number } {
-  return Object.assign(new Error(message), { status });
+export function appFailure(status: number, message: string, code?: string): Error & { status: number; code?: string } {
+  return Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
 }
 
 export function parsePublish(raw: unknown): MiniAppPublish {

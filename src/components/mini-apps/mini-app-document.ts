@@ -3,6 +3,7 @@ import { APP_PROTOCOL_VERSION } from "../../../shared/app";
 import { buildSrcdoc, stripDocumentPreamble } from "../../../shared/app-frame/document";
 import { APP_THEME_STYLE } from "../../../shared/app-frame/helper";
 import type { MiniAppDocument } from "../../../shared/mini-apps";
+import { isEligibleGithubActivityDocument } from "./github-activity-host";
 
 export const MINI_APP_CSP = [
   "default-src 'none'",
@@ -19,12 +20,16 @@ export const MINI_APP_CSP = [
   "form-action 'none'",
 ].join("; ");
 
-const MINI_APP_SDK_SOURCE = `(function () {
+function buildMiniAppSdkSource(githubActivity: boolean): string {
+  return `(function () {
   "use strict";
   var parent = window.parent;
   var root = document.documentElement;
   var pending = new Map();
   var listeners = new Set();
+  var selectionListeners = new Set();
+  var createdBlobUrls = new Set();
+  var currentHostSelection = null;
   var sequence = 0;
   var closed = false;
   var canOpenSources = false;
@@ -56,6 +61,9 @@ const MINI_APP_SDK_SOURCE = `(function () {
     pending.forEach(function (entry) { entry.reject(new Error("This app was closed.")); });
     pending.clear();
     listeners.clear();
+    selectionListeners.clear();
+    createdBlobUrls.forEach(function (url) { try { URL.revokeObjectURL(url); } catch (e) {} });
+    createdBlobUrls.clear();
   }
   window.addEventListener("message", function (event) {
     if (event.source !== parent || !event.data || typeof event.data !== "object") return;
@@ -75,7 +83,26 @@ const MINI_APP_SDK_SOURCE = `(function () {
     }
     if (message.mausMiniApp !== 1) return;
     if (message.type === "data-changed") listeners.forEach(function (listener) { listener(); });
-    else if ((message.type === "query-result" || message.type === "dashboard-result") && pending.has(message.id)) {
+    else if (message.type === "host-selection") {
+      currentHostSelection = {
+        editionKey: typeof message.editionKey === "string" ? message.editionKey : null,
+        repo: typeof message.repo === "string" ? message.repo : null
+      };
+      selectionListeners.forEach(function (listener) {
+        listener({ editionKey: currentHostSelection.editionKey, repo: currentHostSelection.repo });
+      });
+    } else if (message.type === "media-result" && pending.has(message.id)) {
+      var mediaAnswer = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) mediaAnswer.reject(new Error(String(message.error)));
+      else if (!message.bytes || (!(message.bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(message.bytes) && Object.prototype.toString.call(message.bytes) !== "[object ArrayBuffer]") || typeof message.mimeType !== "string" || typeof message.sha256 !== "string") {
+        mediaAnswer.reject(new Error("Invalid media response."));
+      } else {
+        var blobUrl = URL.createObjectURL(new Blob([message.bytes], { type: message.mimeType }));
+        createdBlobUrls.add(blobUrl);
+        mediaAnswer.resolve({ blobUrl: blobUrl, mimeType: message.mimeType, sha256: message.sha256 });
+      }
+    } else if ((message.type === "query-result" || message.type === "dashboard-result") && pending.has(message.id)) {
       var answer = pending.get(message.id);
       pending.delete(message.id);
       if (message.error) answer.reject(new Error(String(message.error)));
@@ -93,7 +120,7 @@ const MINI_APP_SDK_SOURCE = `(function () {
   function openSource(url) {
     return ready.then(function () { return request({ jsonrpc: "2.0", method: "ui/open-link", params: { url: url } }); }).then(function () {});
   }
-  var api = Object.freeze({
+  var base = {
     query: function (queryId, parameters, options) {
       return ready.then(function () { return request({ mausMiniApp: 1, type: "query", queryId: queryId, parameters: parameters, options: options }); });
     },
@@ -106,12 +133,47 @@ const MINI_APP_SDK_SOURCE = `(function () {
       return function () { listeners.delete(listener); };
     },
     get openSource() { return canOpenSources ? openSource : undefined; }
-  });
+  };
+  if (${githubActivity ? "true" : "false"}) {
+    base.setSelection = function (selection) {
+      return ready.then(function () {
+        post({
+          mausMiniApp: 1,
+          type: "selection",
+          editionKey: selection && typeof selection.editionKey === "string" ? selection.editionKey : null,
+          repo: selection && typeof selection.repo === "string" ? selection.repo : null
+        });
+      });
+    };
+    base.onSelectionChanged = function (listener) {
+      if (typeof listener !== "function") throw new TypeError("A listener is required.");
+      selectionListeners.add(listener);
+      if (currentHostSelection) {
+        Promise.resolve().then(function () {
+          if (!closed && selectionListeners.has(listener) && currentHostSelection) {
+            listener({ editionKey: currentHostSelection.editionKey, repo: currentHostSelection.repo });
+          }
+        });
+      }
+      return function () { selectionListeners.delete(listener); };
+    };
+    base.readMedia = function (input) {
+      if (!input || typeof input !== "object" || typeof input.url !== "string" || typeof input.sha256 !== "string") {
+        return Promise.reject(new TypeError("Media url and sha256 are required."));
+      }
+      return ready.then(function () {
+        return request({ mausMiniApp: 1, type: "media-read", url: input.url, sha256: input.sha256 });
+      });
+    };
+  }
+  var api = Object.freeze(base);
   Object.defineProperty(window, "mausApp", { value: api, enumerable: true });
 })();`;
+}
 
 export function miniAppFrameDocument(document: MiniAppDocument, desktopOpenerAvailable: boolean): AppDocument {
-  const html = `<style>${APP_THEME_STYLE}</style><script>${MINI_APP_SDK_SOURCE}</script>${stripDocumentPreamble(document.html)}`;
+  const sdk = buildMiniAppSdkSource(isEligibleGithubActivityDocument(document));
+  const html = `<style>${APP_THEME_STYLE}</style><script>${sdk}</script>${stripDocumentPreamble(document.html)}`;
   return {
     v: 1,
     messageId: document.app.id,

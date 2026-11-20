@@ -10,7 +10,7 @@ import type { MiniAppDocument, MiniAppQueryResult, MiniAppState } from "../../..
 const fixture = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("@/state/store", () => ({
   api: fixture.api,
-  ApiError: class ApiError extends Error { constructor(message: string, readonly status: number) { super(message); } },
+  ApiError: class ApiError extends Error { constructor(message: string, readonly status: number, readonly body?: Record<string, unknown>) { super(message); } },
 }));
 
 import { mountMiniAppFrame } from "./MiniAppFrame";
@@ -352,6 +352,159 @@ describe("persistent Mini App frame", () => {
     expect(() => mountMiniAppFrame({ container, document, state, onRevoked: vi.fn() })).toThrow(/guarded desktop window/);
     expect(container.querySelector("iframe")).toBeNull();
     expect(fixture.api).not.toHaveBeenCalled();
+  });
+
+  it("exposes selection sync and readMedia only on the eligible github-activity app and revokes blob URLs on teardown", async () => {
+    const githubApp = {
+      ...app,
+      id: "0643df6c-24ea-4076-87b6-572d3637a4d9",
+      slug: "github-activity",
+      shippedTemplateKind: "github_activity" as const,
+    };
+    const githubDoc: MiniAppDocument = { ...document, app: githubApp };
+
+    // 1. Non-github-activity app does NOT receive setSelection / onSelectionChanged / readMedia.
+    const plainChild = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+    const plainSent: Array<Record<string, unknown>> = [];
+    Object.defineProperty(plainChild, "parent", { value: { postMessage: (m: Record<string, unknown>) => plainSent.push(m) } });
+    plainChild.eval(/<script>([\s\S]*?)<\/script>/.exec(miniAppFrameDocument(document, false).srcdoc)![1]!);
+    const plainSdk = (plainChild as unknown as { mausApp: Record<string, unknown> }).mausApp;
+    expect(plainSdk.setSelection).toBeUndefined();
+    expect(plainSdk.onSelectionChanged).toBeUndefined();
+    expect(plainSdk.readMedia).toBeUndefined();
+    await plainChild.happyDOM.abort();
+
+    // 2. Eligible github-activity app receives SDK methods, handles host-selection, and creates/revokes blob URLs.
+    const ghChild = new HappyWindow({ settings: { enableJavaScriptEvaluation: true, suppressInsecureJavaScriptEnvironmentWarning: true } });
+    const ghSent: Array<Record<string, unknown>> = [];
+    const ghParent = { postMessage: (m: Record<string, unknown>) => ghSent.push(m) };
+    Object.defineProperty(ghChild, "parent", { value: ghParent });
+    const createObjUrl = vi.spyOn(ghChild.URL, "createObjectURL").mockReturnValue("blob:null/gh-media-1");
+    const revokeObjUrl = vi.spyOn(ghChild.URL, "revokeObjectURL").mockImplementation(() => {});
+    ghChild.eval(/<script>([\s\S]*?)<\/script>/.exec(miniAppFrameDocument(githubDoc, true).srcdoc)![1]!);
+    const init = ghSent.find((m) => m.method === "ui/initialize")!;
+    ghChild.dispatchEvent(new ghChild.MessageEvent("message", { source: ghParent as unknown as HappyWindow,
+      data: { jsonrpc: "2.0", id: init.id, result: { hostCapabilities: { openLinks: {} } } } }));
+    await Promise.resolve();
+    const ghSdk = (ghChild as unknown as {
+      mausApp: {
+        setSelection(s: { editionKey: string | null; repo: string | null }): Promise<void>;
+        onSelectionChanged(fn: (s: { editionKey: string | null; repo: string | null }) => void): () => void;
+        readMedia(input: { url: string; sha256: string }): Promise<{ blobUrl: string; mimeType: string; sha256: string }>;
+      };
+    }).mausApp;
+    const seenSelections: Array<{ editionKey: string | null; repo: string | null }> = [];
+    ghSdk.onSelectionChanged((sel) => seenSelections.push(sel));
+    ghChild.dispatchEvent(new ghChild.MessageEvent("message", { source: ghParent as unknown as HappyWindow,
+      data: { mausMiniApp: 1, type: "host-selection", editionKey: "2026-11-20", repo: "dream-num/univer" } }));
+    expect(seenSelections).toEqual([{ editionKey: "2026-11-20", repo: "dream-num/univer" }]);
+    await ghSdk.setSelection({ editionKey: "2026-11-21", repo: "vuejs/core" });
+    expect(ghSent.some((m) => m.type === "selection" && m.editionKey === "2026-11-21" && m.repo === "vuejs/core")).toBe(true);
+
+    const mediaPromise = ghSdk.readMedia({ url: "https://mxhan.com/github/media/20261120/demo.png", sha256: "b".repeat(64) });
+    await vi.waitFor(() => expect(ghSent.some((m) => m.type === "media-read")).toBe(true));
+    const mediaReq = ghSent.find((m) => m.type === "media-read")!;
+    const mediaBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+    ghChild.dispatchEvent(new ghChild.MessageEvent("message", { source: ghParent as unknown as HappyWindow,
+      data: { mausMiniApp: 1, type: "media-result", id: mediaReq.id, mimeType: "image/png", bytes: mediaBytes, sha256: "b".repeat(64) } }));
+    await expect(mediaPromise).resolves.toEqual({ blobUrl: "blob:null/gh-media-1", mimeType: "image/png", sha256: "b".repeat(64) });
+    expect(createObjUrl).toHaveBeenCalledTimes(1);
+    ghChild.dispatchEvent(new ghChild.Event("pagehide"));
+    expect(revokeObjUrl).toHaveBeenCalledWith("blob:null/gh-media-1");
+    await ghChild.happyDOM.abort();
+
+    // 3. Host mount relays media-read through /github-activity/media and syncs selection bidirectionally.
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(pngBytes, {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    }));
+    const onSelectionChange = vi.fn();
+    const mount = mountMiniAppFrame({
+      container,
+      document: githubDoc,
+      state: { ...state, appId: githubApp.id },
+      onRevoked: vi.fn(),
+      githubSelection: { editionKey: "2026-11-20", repo: "dream-num/univer" },
+      onGithubSelectionChange: onSelectionChange,
+    });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    send(view, { jsonrpc: "2.0", id: "init-gh", method: "ui/initialize", params: {} });
+    send(view, { jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
+    expect(posted.mock.calls.some(([msg]) => (msg as { type?: string }).type === "host-selection"
+      && (msg as { repo?: string }).repo === "dream-num/univer")).toBe(true);
+    send(view, { mausMiniApp: 1, type: "selection", editionKey: "2026-11-20", repo: "anomalyco/opencode" });
+    expect(onSelectionChange).toHaveBeenCalledWith({ editionKey: "2026-11-20", repo: "anomalyco/opencode" });
+    send(view, { mausMiniApp: 1, type: "media-read", id: "m1", url: "https://mxhan.com/github/media/20261120/demo.png", sha256: "c".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "m1")).toBe(true));
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/mini-apps/${githubApp.id}/github-activity/media?expectedRevision=3&url=https%3A%2F%2Fmxhan.com%2Fgithub%2Fmedia%2F20261120%2Fdemo.png&sha256=${"c".repeat(64)}`,
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(posted.mock.calls.find(([msg]) => (msg as { id?: string }).id === "m1")?.[0]).toMatchObject({
+      mausMiniApp: 1, type: "media-result", id: "m1", mimeType: "image/png", sha256: "c".repeat(64),
+    });
+    mount.retire();
+  });
+
+  it("fails only the individual media-read on media policy 403 while still invoking onRevoked for real revocation 401/403", async () => {
+    const githubDoc: MiniAppDocument = {
+      ...document,
+      app: {
+        ...app,
+        id: "0643df6c-24ea-4076-87b6-572d3637a4d9",
+        slug: "github-activity",
+        shippedTemplateKind: "github_activity" as const,
+      },
+    };
+    const ghState: MiniAppState = { ...state, appId: githubDoc.app.id };
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+    const onRevoked = vi.fn();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "Redirected GitHub Activity media address is not allowed.",
+        code: "github_media_policy_denied",
+      }), { status: 403, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(pngBytes, { status: 200, headers: { "content-type": "image/png" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "This Mini App has no GitHub Activity media grant.",
+      }), { status: 403, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { "content-type": "application/json" },
+      }));
+
+    const mount = mountMiniAppFrame({ container, document: githubDoc, state: ghState, onRevoked });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+
+    // 1. Media/DNS/redirect policy 403 fails only that single media-read and preserves frame + retry.
+    send(view, { mausMiniApp: 1, type: "media-read", id: "policy-403", url: "https://mxhan.com/github/media/20261120/blocked.png", sha256: "a".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "policy-403")).toBe(true));
+    expect(onRevoked).not.toHaveBeenCalled();
+    expect(posted.mock.calls.find(([msg]) => (msg as { id?: string }).id === "policy-403")?.[0]).toMatchObject({
+      mausMiniApp: 1, type: "media-result", id: "policy-403", error: "Redirected GitHub Activity media address is not allowed.",
+    });
+
+    // Per-item retry and subsequent reads still succeed.
+    send(view, { mausMiniApp: 1, type: "media-read", id: "retry-ok", url: "https://mxhan.com/github/media/20261120/ok.png", sha256: "b".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "retry-ok")).toBe(true));
+    expect(onRevoked).not.toHaveBeenCalled();
+    expect(posted.mock.calls.find(([msg]) => (msg as { id?: string }).id === "retry-ok")?.[0]).toMatchObject({
+      mausMiniApp: 1, type: "media-result", id: "retry-ok", mimeType: "image/png", sha256: "b".repeat(64),
+    });
+
+    // 2. Owner/App revocation 403 (no policy code) triggers onRevoked().
+    send(view, { mausMiniApp: 1, type: "media-read", id: "revoked-403", url: "https://mxhan.com/github/media/20261120/revoked.png", sha256: "c".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "revoked-403")).toBe(true));
+    expect(onRevoked).toHaveBeenCalledTimes(1);
+
+    // 3. Auth 401 triggers onRevoked().
+    send(view, { mausMiniApp: 1, type: "media-read", id: "auth-401", url: "https://mxhan.com/github/media/20261120/auth.png", sha256: "d".repeat(64) });
+    await vi.waitFor(() => expect(posted.mock.calls.some(([msg]) => (msg as { id?: string }).id === "auth-401")).toBe(true));
+    expect(onRevoked).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    mount.retire();
   });
 
   it("does not deliver a successful read if the native guard disappears before the response", async () => {
