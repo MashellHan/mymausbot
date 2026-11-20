@@ -4,11 +4,13 @@ import type { MiniAppSuggestionReason, MiniAppSuggestionsRequest, MiniAppSuggest
 import type { Routine, RoutineRun, RoutineRunOn } from "@/lib/routines";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
+import { pickerModelEffortLevels } from "@/lib/model-choices";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
 import { usePageVisible } from "@/lib/page-visible";
 import { api, useStore, type Bot } from "@/state/store";
 import { BotAvatar } from "./Avatar";
 import { ModelPicker } from "./ModelPicker";
+import { effortLabel } from "./ModelReasoningControls";
 import { modelName } from "@/lib/simple-model-menu";
 import { RoutinesSection } from "./bot-settings/RoutinesSection";
 import { RowIcon } from "./bot-panel/rows";
@@ -21,7 +23,12 @@ function OverviewModel({ bot }: { bot: Bot }) {
   const [expanded, setExpanded] = useState(false);
   const selection = bot.modelSelection;
   const instance = state.instances.find((candidate) => candidate.instanceId === selection.instanceId);
-  const summary = modelName(instance, selection.model, selection.variant);
+  const model = modelName(instance, selection.model, selection.variant);
+  const levels = pickerModelEffortLevels(instance, selection.model);
+  const effort = selection.effort && levels.includes(selection.effort) ? effortLabel(selection.effort) : t("settings.newBotEffort.default");
+  const summary = selection.model && levels.length && !instance?.capabilities?.modelVariants
+    ? `${model} · ${t("model.simple.reasoning")} · ${effort}`
+    : model;
 
   return <section data-panel-card="model">
     <button type="button" aria-expanded={expanded} aria-controls="bot-overview-model-content" onClick={() => setExpanded((open) => !open)}

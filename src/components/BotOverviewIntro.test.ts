@@ -3,11 +3,11 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MiniAppSuggestion, MiniAppSuggestionsResult } from "../../shared/mini-apps";
-import type { Bot } from "@/state/store";
+import type { Bot, InstanceInfo } from "@/state/store";
 import { setLocale } from "@/lib/i18n";
 
-const fixture = vi.hoisted(() => ({ api: vi.fn(), owner: true, visible: true }));
-vi.mock("@/state/store", () => ({ api: fixture.api, useStore: () => ({ state: { instances: [] } }) }));
+const fixture = vi.hoisted(() => ({ api: vi.fn(), owner: true, visible: true, instances: [] as InstanceInfo[] }));
+vi.mock("@/state/store", () => ({ api: fixture.api, useStore: () => ({ state: { instances: fixture.instances } }) }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.owner }));
 vi.mock("@/lib/page-visible", () => ({ usePageVisible: () => fixture.visible }));
 vi.mock("./Avatar", () => ({ BotAvatar: () => null }));
@@ -46,6 +46,7 @@ beforeEach(() => {
   fixture.api.mockReset();
   fixture.owner = true;
   fixture.visible = true;
+  fixture.instances = [];
   onOpenApps.mockReset();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ogb", { app: { blocksOpaqueFrameNavigation: true } });
@@ -58,6 +59,24 @@ afterEach(async () => {
   host.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("shows the configured reasoning or provider default on the collapsed Model row", async () => {
+  const model = "raven::gpt-6.2-sol";
+  fixture.instances = [{
+    instanceId: "codex", displayName: "Codex", driverKind: "codex", access: "subscription",
+    snapshot: { state: "available", version: "0.169.0" }, capabilities: { effortLevels: ["high", "xhigh"] },
+    models: { default: model, options: [{ id: model, label: "GPT 6.2 Sol", custom: true,
+      providerRoute: { id: "configured:fixture", label: "Raven", provenance: "configured" } }] },
+  }];
+  const selected: Bot = { ...bot(), modelSelection: { instanceId: "codex", model, effort: "xhigh" } };
+  fixture.api.mockResolvedValue(response(selected));
+  await render(selected);
+  const modelRow = host.querySelector('[data-panel-card="model"] button')!;
+  expect(modelRow.getAttribute("aria-expanded")).toBe("false");
+  expect(modelRow.textContent).toContain("Reasoning · X-High");
+  await render({ ...selected, modelSelection: { instanceId: "codex", model } });
+  expect(modelRow.textContent).toContain("Reasoning · Provider default");
 });
 
 describe("Bot overview suggestions", () => {
