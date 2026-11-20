@@ -187,7 +187,8 @@ describe("shared local and CI check policy", () => {
     const stable = run("edit", "0");
     expect(stable.status, stable.stderr).toBe(0);
     expect(stable.stdout).toContain("fixture-workers:1");
-    expect(stable.stdout).toContain("ordinary PR CI runs the Ubuntu core and bounded affected tests");
+    expect(stable.stdout).toContain("ordinary PR and focused integration CI run the Ubuntu core and bounded affected tests");
+    expect(stable.stdout).toContain("scheduled, manual and release lanes retain full validation");
     expect(stable.stdout).not.toContain("full CI required");
     const ready = run("ready", "0");
     expect(ready.status, ready.stderr).toBe(0);

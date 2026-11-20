@@ -1,11 +1,14 @@
 # CI job selection
 
-An ordinary PR runs one cached Ubuntu `static` setup/check job and the
-current-head `CI` gate. Applicable typecheck, locale validation, lint and
-source guards run beside the fixed 26-file security/data/dispatch core and at
-most four portable affected test files. `qa-plan.json` and the log list
-additional affected files deferred to full validation, including browser,
-Electron and expensive E2E tests. QA holds and independent review still apply.
+An ordinary PR, including `upstream-sync`, runs the cached Ubuntu `static`
+setup/check job and the required `CI` gate. Static runs the existing Settings
+places byte-equality test when the English catalog, Settings index, generator,
+checked-in artifact or their toolchain changes. Typecheck starts with the fixed
+26-file security/data/dispatch core; at most four additional portable affected
+files are selected, with direct tests ahead of mapped tests. Locale validation,
+lint and source guards still run. The separate control-plane job remains
+required for affected control-plane or broker changes. `qa-plan.json` lists the
+other affected files and checks deferred to full QA; QA holds and review apply.
 
 Static also validates the announcement cards and bundled pictures with
 `scripts/check-announcements.mjs` before installs can download them from main.
@@ -23,8 +26,8 @@ checks and platform builds/publication retain their separate boundaries.
 The legacy `windows` label requests wider macOS validation, as do `ci:full`
 and `qa:repair`; it does not select Windows runners.
 
-`scripts/ci-scope.mjs` maps the full merge-base diff, including deletions and
-both paths of renames, to affected contracts. Several areas select the union
+`scripts/ci-scope.mjs` maps the tested PR merge tree against its executed base,
+including deletions and both paths of renames, to affected contracts. Several areas select the union
 of their checks; explicit full requests use `FULL_SCOPE`.
 
 | Area | Paths | Mapped contracts |
@@ -57,19 +60,24 @@ installs read that manifest from main.
 | --- | --- | --- |
 | Ordinary `pull_request` | fast | cached Ubuntu static checks, fixed core and bounded affected files, plus required `CI` |
 | Explicit wider PR request | full | selected full macOS validation with current-head review and QA holds |
-| Runtime `push` to main | full | `FULL_SCOPE`, including ten macOS all-E2E shards and specialist jobs |
+| `push` to main | focused integration | cached Ubuntu static, fixed core and bounded affected files for the cumulative source diff; control plane when affected |
 | `merge_group` | main or full | combined-source macOS validation selected for the integration |
-| Guarded docs-only or version-only main push | scoped | smaller selection only with the existing prior-commit or exact merge-group evidence |
 | Daily schedule or `workflow_dispatch` | full | complete macOS selection; the daily schedule is `0 21 * * *` UTC, 05:00 Asia/Shanghai |
 
-Runtime main pushes retain full validation even after a merge-group gate.
-Docs/version-only guards prevent a coalesced main push from hiding untested
-runtime changes. Missing diffs or unreadable CI evidence widen the selection;
-unreadable PR controls cannot produce a fast pass.
+A main push compares the checked-out event head with the nearest first-parent
+revision at or before the push's `before` that has successful same-repository
+main CI evidence. The plan records the baseline run/attempt and intervening
+revisions, so pending, cancelled or failed pushes cannot hide changes still in
+the newest tree. The selector checks at most 101 first-parent revisions and
+100 successful run records. If it cannot prove a baseline, it fails rather
+than inventing an affected diff; the existing full main lane can establish one.
+Focused runs retain actual failures and selected/deferred coverage in their own
+artifacts. A manually replayed focused report neither stands in for full QA nor
+marks historical issues verified.
 
 The required `CI` job binds its selection artifact to the same run, revision
-and producing attempt. It checks current PR controls, applicable QA holds and
-every selected required job. Failed-job reruns retain valid successful
+and producing attempt. For PRs it verifies the live head, base and merge tree,
+as well as current controls, applicable QA holds and every required job. Failed-job reruns retain valid successful
 execution from the same immutable run, with each job's newest attempt taking
 precedence. PR pushes supersede that PR's older checks. The independent
 process scan records timing overruns without failing or cancelling the gate.
@@ -204,8 +212,8 @@ its own ref, and the nightly run and each manual run (the release branch's CI
 and the release lane among them) by their event and branch.
 
 `release.yml` requires full macOS CI evidence for the pinned release source,
-while platform builds proceed independently. A passing gate and all four
-`vitest (macos-latest, all shard N/4)` jobs establish the Vitest coverage.
+while platform builds proceed independently. A passing gate and all ten
+`vitest (macos-latest, all shard N/10)` jobs establish the Vitest coverage.
 Scoped runs, missing shards and the historical macOS `host` selection do not.
 The script accepts, in order:
 
@@ -252,18 +260,16 @@ the ordinary PR's advisory five-minute performance target. Collect measured
 macOS all-E2E durations before tuning shard balance or execution limits.
 A timing scan case does not erase the actual result or close a useful PR.
 
-## Linux on Boat
+## Trusted CI follow-up
 
-While `BOAT_CI=on`, eligible owner-authored and owner-started main/merge-group
-runs can use one `boat-xlarge` VM for `static`, named `typecheck + lint (Boat)`.
-Ordinary PRs remain on hosted Ubuntu. Daily/manual runs and ineligible actors
-use GitHub-hosted static checks. Full tests remain separate macOS jobs;
-Boat does not absorb Linux full-test lanes under this policy.
-
-The existing allow-list, owner checks and one-start boundary remain in the
-workflow. `boat ci` and the Boat dashboard expose job logs. Set `BOAT_CI` to
-`off` to select hosted runners for subsequent eligible runs; classify an
-existing runner outage separately from test failures.
+`qa-report.yml` is the single CI-completion listener. The exact focused push
+run-name marker keeps those runs out of automatic reporting without suppressing
+legacy main runs or manual replay. The advisory scan uses the scheduled or
+manual boundary. A green PR starts no follow-up job. Same-repository PR
+failures can wake hold reconciliation and bounded runner acquisition recovery;
+real QA issue changes can independently wake reconciliation. Each job runs
+trusted default-branch code with its own permissions and concurrency scope.
+Historical runner names, plans and artifacts remain readable.
 
 ## Required check
 
@@ -287,8 +293,8 @@ review, test or package build.
 A hosted GitHub merge queue requires repository support and an explicit
 configuration decision. Its concurrency must fit the shared macOS capacity;
 old Linux/Windows job counts are not a capacity estimate for this policy.
-Runtime pushes retain full validation, and closed-PR cleanup touches only that
-PR's own concurrency group.
+Main pushes use focused integration; closed-PR cleanup touches only that PR's
+own concurrency group.
 
 ## MausBot fork validation rhythm
 

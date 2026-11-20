@@ -141,9 +141,11 @@ describe("local Usage panel", () => {
     const model = host.querySelector('[data-usage-period="models"]')!;
     const tabs = [...model.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     const repo = host.querySelector('[data-usage-period="repositories"]')!;
-    expect([...model.querySelectorAll("li p")].map((row) => row.textContent)).toEqual(["fixture-large", "activities-unpriced-fixture"]);
-    expect(model.textContent).toContain("75 tokens50%");
-    expect(model.textContent).toContain("25 tokens16.7%");
+    const modelRows = [...model.querySelectorAll<HTMLTableRowElement>("[data-usage-model-table] tbody tr")];
+    expect(modelRows.map((row) => row.cells[0]?.textContent)).toEqual(["fixture-large", "activities-unpriced-fixture"]);
+    expect([...modelRows[0]!.cells].map((cell) => cell.textContent)).toEqual(["fixture-large", "75", "50%", "15", "50", "10", "<$0.001"]);
+    expect(modelRows[1]!.cells[2]?.textContent).toBe("16.7%");
+    expect(model.querySelector("[data-usage-cost-share]")).toBeNull();
     expect(model.textContent).toContain("Share of recorded tokens");
     expect(model.textContent).toContain("<$0.001");
     expect(model.textContent).toContain("Unavailable");
@@ -155,7 +157,6 @@ describe("local Usage panel", () => {
     ]);
     expect(host.querySelector("section")?.textContent).not.toContain("Recorded tokens only");
     expect(host.querySelector('section [aria-description="Recorded tokens only"]')).not.toBeNull();
-    expect(model.querySelector("[data-usage-token-breakdown]")?.textContent).toBe("Cached input15Fresh input50Output10Estimated cost (USD)<$0.001");
     await act(async () => tabs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
     expect(document.activeElement).toBe(tabs[1]);
     expect(model.textContent).toContain("Model usage is unavailable for this period.");
@@ -178,10 +179,45 @@ describe("local Usage panel", () => {
     ]);
   });
 
+  it("uses raw reconciled estimates for Model usage cost shares", async () => {
+    const snapshot = structuredClone(sample);
+    const window = snapshot.windows!["1"];
+    const row = { input: 10, output: 0, cacheRead: 0, totalTokens: 10 };
+    window.tokenDetails = {
+      input: 40, output: 0, estimatedCost: { coverage: "partial", usd: 0.0153 },
+      models: { coverage: "partial", rows: [
+        { ...row, model: "fixture-large", estimatedCost: { coverage: "partial", usd: 0.0149 } },
+        { ...row, model: "fixture-small", estimatedCost: { coverage: "ready", usd: 0.0004 } },
+        { ...row, model: "fixture-zero", estimatedCost: { coverage: "ready", usd: 0 } },
+        { ...row, model: "activities-unpriced-fixture", estimatedCost: { coverage: "unavailable", usd: null } },
+      ] },
+    };
+    await renderRaw(snapshot);
+    const model = host.querySelector('[data-usage-period="models"]')!;
+    const costShare = (name: string) => [...model.querySelectorAll("[data-usage-model-table] tbody tr")]
+      .find((row) => row.querySelector("th")?.textContent === name)?.querySelector("[data-usage-cost-share]");
+    expect(costShare("fixture-large")?.getAttribute("title")).toBe("97.4% of recorded estimated cost");
+    expect(costShare("fixture-large")?.parentElement?.textContent).toContain("At least $0.01");
+    expect(costShare("fixture-small")?.getAttribute("title")).toBe("2.6% of recorded estimated cost");
+    expect(costShare("fixture-zero")?.getAttribute("title")).toBe("0% of recorded estimated cost");
+    expect(costShare("activities-unpriced-fixture")).toBeNull();
+    for (const estimate of [
+      { coverage: "unavailable", usd: null },
+      { coverage: "partial", usd: 0 },
+      { coverage: "partial", usd: 0.02 },
+      { coverage: "ready", usd: 0.0153 },
+    ] as const) {
+      window.tokenDetails.estimatedCost = estimate;
+      await renderRaw(snapshot);
+      expect(model.querySelector("[data-usage-cost-share]")).toBeNull();
+    }
+  });
+
   it("defaults to By model, supports Token types, and ranks models across the selected range", async () => {
     const snapshot = structuredClone(sample);
     const ranked = ["A", "B", "C", "D", "E", "F"];
     const day = snapshot.trend.at(-1)!;
+    day.tokenStatus = "partial";
     day.tokenDetails = { cacheRead: 10, input: 65, output: 35, estimatedCost: { coverage: "unavailable", usd: null },
       models: { coverage: "partial", rows: [...ranked].reverse().map((model) => ({ model, totalTokens: 10,
         cacheRead: 0, input: 7, output: 3, estimatedCost: { coverage: "unavailable", usd: null } })) } };
@@ -195,20 +231,39 @@ describe("local Usage panel", () => {
     const [types, models] = chart.querySelectorAll<HTMLButtonElement>('[role="group"] button');
     const legend = () => chart.querySelector("[data-usage-token-legend]")?.textContent;
     const tooltip = () => chart.querySelector('[role="tooltip"]')?.textContent;
+    const modelRows = () => [...chart.querySelectorAll<HTMLTableRowElement>("[data-usage-token-row]")]
+      .map((row) => [...row.cells].map((cell) => cell.textContent));
+    const highlighted = () => chart.querySelector('[data-usage-token-highlighted="true"]')?.getAttribute("data-usage-token-row");
+    const segment = (button: HTMLButtonElement, key: string) => button.querySelector(`[data-usage-token-segment="${key}"]`)!;
+    const hover = (button: HTMLButtonElement, key: string) =>
+      act(async () => segment(button, key).dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     expect(types!.getAttribute("aria-pressed")).toBe("false");
     expect(models!.getAttribute("aria-pressed")).toBe("true");
     expect(legend()).toContain("ABCDEOther modelsUnattributed tokens");
     await act(async () => bar.focus());
     expect(tooltip()).toContain("2026-11-03 · Tue");
-    expect(tooltip()).toContain("Tokens110");
-    expect(tooltip()).toContain("A10 · 9.1%");
-    expect(tooltip()).toContain("Other models10 · 9.1%Unattributed tokens50");
+    expect(tooltip()).toContain("Total tokens110");
+    expect(modelRows().map(([name]) => name)).toEqual(["Unattributed tokens", "A", "B", "C", "D", "E", "Other models"]);
+    expect(modelRows()[0]).toEqual(["Unattributed tokens", "50", "—"]);
+    expect(modelRows()[1]).toEqual(["A", "10", "9.1%"]);
+    expect(modelRows().at(-1)).toEqual(["Other models", "10", "9.1%"]);
+    expect(chart.querySelector('[role="tooltip"] p.sr-only')?.textContent).toBe("Recorded tokens only");
+    expect(bar.getAttribute("aria-label")).toContain("Partial coverage");
     expect(bar.getAttribute("aria-describedby")).toBe(chart.querySelector('[role="tooltip"]')?.id);
+    expect(highlighted()).toBeUndefined();
+    await hover(bar, "A");
+    expect(highlighted()).toBe("A");
+    await act(async () => segment(bar, "A").dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: bar })));
+    expect(highlighted()).toBeUndefined();
+    await hover(bar, "other");
+    expect(highlighted()).toBe("other");
     await act(async () => types!.click());
     expect(types!.getAttribute("aria-pressed")).toBe("true");
     expect(models!.getAttribute("aria-pressed")).toBe("false");
     expect(tooltip()).toContain("Tokens110Cached input10Fresh input65Output35");
     expect(chart.querySelectorAll('[role="tooltip"] dt').length).toBeGreaterThanOrEqual(4);
+    expect(chart.querySelector('[role="tooltip"] p:not(.sr-only)')?.textContent).toBe("Recorded tokens only");
+    expect(highlighted()).toBeUndefined();
     expect(chart.querySelector('[data-usage-token-segment="unknown"]')).not.toBeNull();
     const range = host.querySelector<HTMLSelectElement>('select[aria-label="Trend range"]')!;
     await act(async () => { range.value = "60"; range.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -216,13 +271,22 @@ describe("local Usage panel", () => {
     await act(async () => models!.click());
     expect(range.value).toBe("60");
     expect(legend()).toContain("PastABCDOther modelsUnattributed tokens");
+    expect(highlighted()).toBeUndefined();
+    await hover(bar, "A");
+    expect(highlighted()).toBe("A");
+    await act(async () => { range.value = "90"; range.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(tooltip()).toContain("Total tokens110");
+    expect(highlighted()).toBeUndefined();
     await act(async () => { range.value = "6m"; range.dispatchEvent(new Event("change", { bubbles: true })); });
     const first = chart.querySelector<HTMLButtonElement>('[data-usage-day]')!;
     await act(async () => { first.focus(); first.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })); });
     expect(tooltip()).toContain("2026-11-02 – 2026-11-03");
-    expect(tooltip()).toContain("Tokens220");
-    expect(tooltip()).toContain("Other models20 · 9.1%Unattributed tokens160");
-    await act(async () => (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(tooltip()).toContain("Total tokens220");
+    expect(modelRows().slice(0, 2)).toEqual([["Unattributed tokens", "160", "—"], ["Other models", "20", "9.1%"]]);
+    const last = document.activeElement as HTMLButtonElement;
+    await hover(last, "other");
+    expect(highlighted()).toBe("other");
+    await act(async () => last.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(tooltip()).toBeUndefined();
   });
 
@@ -273,7 +337,7 @@ describe("local Usage panel", () => {
     const bars = [...tokenChart.querySelectorAll<HTMLButtonElement>("[data-usage-day]")];
     await act(async () => bars[0]!.focus());
     expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("2026-05-04 – 2026-05-10");
-    expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("Tokens770");
+    expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("Total tokens770");
     await act(async () => bars[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement).toBe(bars.at(-1));
     expect(tokenChart.querySelector("[role=tooltip]")?.textContent).toContain("2026-11-02 – 2026-11-03");
@@ -551,7 +615,7 @@ describe("local Usage panel", () => {
     expect(host.querySelector('[data-usage-daily] tbody tr:first-child td:nth-child(4)')?.textContent).toBe("110");
     const last = host.querySelectorAll<HTMLButtonElement>('[data-usage-trend="totalTokens"] [data-usage-day]')[29]!;
     await act(async () => last.focus());
-    expect(host.querySelector('[data-usage-trend="totalTokens"] [role="tooltip"]')?.textContent).toContain("Tokens110");
+    expect(host.querySelector('[data-usage-trend="totalTokens"] [role="tooltip"]')?.textContent).toContain("Total tokens110");
     expect(last.getAttribute("title")).toBeNull();
   });
 

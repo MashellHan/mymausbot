@@ -135,9 +135,9 @@ describe("hosted runner recovery for global repairs", () => {
   });
 
   it("executes default-branch code on completed CI events with a per-run lock", () => {
-    const workflow = parse(readFileSync(".github/workflows/qa-repair-recovery.yml", "utf8"));
-    expect(workflow.on).toEqual({ workflow_run: { workflows: ["CI"], types: ["completed"] } });
-    expect(workflow.concurrency.group).toContain("github.event.workflow_run.id");
+    const workflow = parse(readFileSync(".github/workflows/qa-report.yml", "utf8"));
+    expect(workflow.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
+    expect(workflow.jobs.recover.concurrency.group).toContain("github.event.workflow_run.id");
     expect(workflow.jobs.recover.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
     expect(workflow.jobs.recover.permissions).toEqual({ actions: "write", contents: "read", checks: "read", issues: "read", "pull-requests": "read" });
   });
