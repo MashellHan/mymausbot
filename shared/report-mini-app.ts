@@ -1,4 +1,4 @@
-import type { MiniAppDataBinding, MiniAppField, MiniAppFilter } from "./mini-app-data.ts";
+import type { MiniAppDataBinding, MiniAppField, MiniAppFilter, MiniAppNamedQuery } from "./mini-app-data.ts";
 import type { MiniAppDataset, MiniAppPublish } from "./mini-apps.ts";
 
 export const REPORT_APPS = {
@@ -152,7 +152,32 @@ export function reportPublicationDraft(kind: ReportKind, datasetId: string, html
 
 export const GITHUB_DEEP_DIVE_TABLE = "github_deep_dive_v1";
 
-export function githubDeepDiveBinding(datasetId: string): MiniAppDataBinding {
+/** Builds the scoped github_deep_dive_v1 binding with legacy deep_dive and optional deep_dive_catalog. */
+export function githubDeepDiveBinding(datasetId: string, options?: { catalog?: boolean }): MiniAppDataBinding {
+  const deepDiveQuery: MiniAppNamedQuery = {
+    kind: "rows",
+    columns: ["editionKey", "repo", "schemaVersion", "partIndex", "partCount", "payloadChunk"],
+    parameters: { editionKey: { type: "text" }, repo: { type: "text" } },
+    filters: [
+      { field: "editionKey", op: "eq", parameter: "editionKey" },
+      { field: "repo", op: "eq", parameter: "repo" },
+      { field: "schemaVersion", op: "eq", literal: "1" },
+    ],
+    orderBy: [{ field: "partIndex", direction: "asc" }],
+    pageSize: 16,
+  };
+  const catalogQuery: MiniAppNamedQuery = {
+    kind: "rows",
+    columns: ["repo"],
+    parameters: { editionKey: { type: "text" } },
+    filters: [
+      { field: "editionKey", op: "eq", parameter: "editionKey" },
+      { field: "schemaVersion", op: "eq", literal: "1" },
+      { field: "partIndex", op: "eq", literal: "0" },
+    ],
+    orderBy: [{ field: "repo", direction: "asc" }],
+    pageSize: 16,
+  };
   return {
     id: "deepDive",
     datasetId,
@@ -165,19 +190,8 @@ export function githubDeepDiveBinding(datasetId: string): MiniAppDataBinding {
       partCount: { column: "part_count", sourceType: "INTEGER", as: "decimal", scale: 0 },
       payloadChunk: { column: "payload_chunk", sourceType: "VARCHAR", as: "text" },
     },
-    queries: {
-      deep_dive: {
-        kind: "rows",
-        columns: ["editionKey", "repo", "schemaVersion", "partIndex", "partCount", "payloadChunk"],
-        parameters: { editionKey: { type: "text" }, repo: { type: "text" } },
-        filters: [
-          { field: "editionKey", op: "eq", parameter: "editionKey" },
-          { field: "repo", op: "eq", parameter: "repo" },
-          { field: "schemaVersion", op: "eq", literal: "1" },
-        ],
-        orderBy: [{ field: "partIndex", direction: "asc" }],
-        pageSize: 16,
-      },
-    },
+    queries: options?.catalog
+      ? { deep_dive: deepDiveQuery, deep_dive_catalog: catalogQuery }
+      : { deep_dive: deepDiveQuery },
   };
 }

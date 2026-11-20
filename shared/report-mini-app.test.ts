@@ -68,5 +68,28 @@ describe("report Mini App contract", () => {
       bindings: [reportMiniAppBinding(DATASET, "github_activity"), binding],
     };
     expect(parsePublish(combined)).toEqual(combined);
+
+    const catalogBinding = githubDeepDiveBinding(DATASET, { catalog: true });
+    expect(catalogBinding.source).toEqual({ schema: "main", table: GITHUB_DEEP_DIVE_TABLE });
+    expect(catalogBinding.fields).toEqual(binding.fields);
+    expect(Object.keys(catalogBinding.queries)).toEqual(["deep_dive", "deep_dive_catalog"]);
+    expect(catalogBinding.queries.deep_dive).toEqual(binding.queries.deep_dive);
+    expect(catalogBinding.queries.deep_dive_catalog).toEqual({
+      kind: "rows",
+      columns: ["repo"],
+      parameters: { editionKey: { type: "text" } },
+      filters: [
+        { field: "editionKey", op: "eq", parameter: "editionKey" },
+        { field: "schemaVersion", op: "eq", literal: "1" },
+        { field: "partIndex", op: "eq", literal: "0" },
+      ],
+      orderBy: [{ field: "repo", direction: "asc" }],
+      pageSize: 16,
+    });
+    const combinedWithCatalog = {
+      ...reportPublicationDraft("github_activity", DATASET, "<main>Fixture</main>"),
+      bindings: [reportMiniAppBinding(DATASET, "github_activity"), catalogBinding],
+    };
+    expect(parsePublish(combinedWithCatalog)).toEqual(combinedWithCatalog);
   });
 });
