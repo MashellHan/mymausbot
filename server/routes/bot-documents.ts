@@ -63,12 +63,15 @@ export function createBotDocumentRoutes({ store, levelOf, changed }: {
     const { doc, mirror } = documentState(bot, kind);
     const mirrorDrift = mirror !== undefined && mirror !== doc.text;
     const soulDrift = kind === "soul" && mirrorDrift;
-    if (doc.hash !== expectedHash || soulDrift) {
+    const currentHash = kind === "agents" && mirrorDrift
+      ? soulHash(`agent-mirror-overwrite:${doc.hash}`)
+      : doc.hash;
+    if (currentHash !== expectedHash || soulDrift) {
       return json(res, 409, {
         error: soulDrift ? "SOUL.md has external edits. Resolve them in Bot settings before saving." : "The document changed since you opened it.",
         code: "conflict",
         current: kind === "agents" ? mirror ?? doc.text : doc.text,
-        currentHash: doc.hash,
+        currentHash,
         ...(soulDrift ? { mirrorDrift: true } : {}),
       });
     }

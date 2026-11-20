@@ -64,8 +64,17 @@ it("saves private bot documents with a checked basis and uses the approved instr
     expect(JSON.stringify(preview)).not.toContain("External agent draft.");
     const stale = await api("PUT", agents, { text: "Draft", expectedHash: first.hash }, 409);
     expect(stale).toMatchObject({ code: "conflict", current: "External agent draft.", currentHash: expect.any(String) });
+    const reopened = await api("GET", agents);
+    expect(reopened.text).toBe(first.text);
+    expect(reopened.hash).not.toBe(stale.currentHash);
+    expect(await api("PUT", agents, { text: "Draft", expectedHash: reopened.hash }, 409)).toEqual(stale);
     expect(readFileSync(agentsFile, "utf8")).toBe("External agent draft.");
-    const second = await api("PUT", agents, { text: "Record the roses.", expectedHash: stale.currentHash });
+    writeFileSync(agentsFile, "Newer external agent draft.");
+    const newer = await api("PUT", agents, { text: "Record the roses.", expectedHash: stale.currentHash }, 409);
+    expect(newer).toMatchObject({ code: "conflict", current: "Newer external agent draft." });
+    expect(newer.currentHash).not.toBe(stale.currentHash);
+    expect(readFileSync(agentsFile, "utf8")).toBe(newer.current);
+    const second = await api("PUT", agents, { text: "Record the roses.", expectedHash: newer.currentHash });
     const resumed = await direct("And what should you record now?");
     expect(resumed.argv).toContain("--resume");
     expect(resumed.systemPrompt).toContain(second.text);
