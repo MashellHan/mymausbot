@@ -59,15 +59,20 @@ function agentTokenStacks(byDay: ReadonlyMap<string, UsageTrendDay>, buckets: Us
     const assigned = new Map<string, { series: AgentSeries; total: number }>();
     for (const day of daysInBucket(byDay, bucket)) {
       const rows = day.agentTokens ?? [];
-      const keys = rows.map((row) => JSON.stringify([row.teamId, row.id]));
       const total = rows.reduce((count, row) => count + row.totalTokens, 0);
-      if (day.totalTokens === null || total > day.totalTokens || new Set(keys).size !== rows.length ||
+      if (day.totalTokens === null || total > day.totalTokens ||
         rows.some(({ totalTokens }) => !Number.isSafeInteger(totalTokens) || totalTokens < 0)) continue;
-      rows.forEach(({ name, teamId, teamName, totalTokens }, index) => {
-        const key = keys[index]!;
+      const distinct = new Map<string, (typeof rows)[number] | null>();
+      for (const row of rows) {
+        const key = JSON.stringify([row.teamId, row.id, row.name]);
+        distinct.set(key, distinct.has(key) ? null : row);
+      }
+      for (const [key, row] of distinct) {
+        if (!row) continue;
+        const { name, teamId, teamName, totalTokens } = row;
         assigned.set(key, { series: { kind: "agent", key, name, teamId, teamName },
           total: (assigned.get(key)?.total ?? 0) + totalTokens });
-      });
+      }
     }
     const total = [...assigned.values()].reduce((count, row) => count + row.total, 0);
     if (bucket.totalTokens === null || total > bucket.totalTokens) {

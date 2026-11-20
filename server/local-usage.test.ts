@@ -963,8 +963,10 @@ describe("daily model attribution and Activities list estimates", () => {
           { ...baseRow(day(endDay, -1), { agentTokens: [agent("w6:p1", "mausbot-back", 64)] }), input: 4, output: 10 },
           // Overflow sum (> 64) -> discard.
           baseRow(day(endDay, -2), { agentTokens: [agent("w6:p1", "mausbot-back", 65)] }),
-          // Duplicate (teamId, id) -> discard.
-          baseRow(day(endDay, -3), { agentTokens: [agent("w6:p1", "a", 10), agent("w6:p1", "b", 10)] }),
+          // Same-day historical pane reuse: two distinct verified names sharing (teamId, id) are retained.
+          baseRow(day(endDay, -5), { agentTokens: [agent("w6:p1", "alice", 20), agent("w6:p1", "bob", 15)] }),
+          // Duplicate (teamId, id, name) -> discard.
+          baseRow(day(endDay, -3), { agentTokens: [agent("w6:p1", "a", 10), agent("w6:p1", "a", 10)] }),
           // Secret-bearing label -> discard and never leak.
           baseRow(day(endDay, -4), { agentTokens: [agent("w6:p1", unsafe, 10)] }),
         ],
@@ -974,6 +976,10 @@ describe("daily model attribution and Activities list estimates", () => {
     expect(response.trend.at(-1)?.agentTokens).toEqual([
       agent("w6:p1", "mausbot-back", 32),
       agent("w6:p2", "mausbot-front", 18),
+    ]);
+    expect(response.history?.find((row) => row.day === day(endDay, -5))?.agentTokens).toEqual([
+      agent("w6:p1", "alice", 20),
+      agent("w6:p1", "bob", 15),
     ]);
     expect(response.history?.find((row) => row.day === older)?.agentTokens).toEqual([
       agent("w6:p1", "mausbot-back", 40),

@@ -182,8 +182,10 @@ def sample_herdr(config=None, *, at=None, herdr_runner=None):
     sampled_at = _utc_instant(at) if at is not None else dt.datetime.now(dt.timezone.utc)
     if sampled_at is None:
         return None
+    sock_before = _herdr_sock_generation(home) if herdr_runner is None else None
     ws_raw = _run_herdr(home, ["--session", "default", "workspace", "list"], herdr_runner)
     ag_raw = _run_herdr(home, ["--session", "default", "agent", "list"], herdr_runner)
+    sock_after = _herdr_sock_generation(home) if herdr_runner is None else None
     if not isinstance(ws_raw, str) or not isinstance(ag_raw, str) or not ws_raw or not ag_raw:
         return None
     try:
@@ -202,9 +204,27 @@ def sample_herdr(config=None, *, at=None, herdr_runner=None):
     if not isinstance(workspaces, list) or not isinstance(agents, list) or len(workspaces) > 100 or len(agents) > 200:
         return None
 
-    generation = _clean_label(ws_doc.get("server_generation")) or _clean_label(ag_doc.get("server_generation"))
-    if generation is None and herdr_runner is None:
-        generation = _herdr_sock_generation(home)
+    if herdr_runner is None and sock_before != sock_after:
+        return None
+    ws_raw_gen = ws_doc.get("server_generation")
+    ag_raw_gen = ag_doc.get("server_generation")
+    if ws_raw_gen is not None or ag_raw_gen is not None:
+        ws_gen = _clean_label(ws_raw_gen)
+        ag_gen = _clean_label(ag_raw_gen)
+        if ws_gen is None or ag_gen is None or ws_gen != ag_gen:
+            return None
+        if herdr_runner is None:
+            if sock_before is None:
+                generation = None
+            else:
+                digest = hashlib.sha256(f"{ws_gen}\x00{sock_before}".encode("utf-8")).hexdigest()[:32]
+                generation = f"gen:{digest}"
+        else:
+            generation = ws_gen
+    elif herdr_runner is None:
+        generation = sock_before
+    else:
+        generation = None
 
     team_names = {}
     for workspace in workspaces:
@@ -836,7 +856,7 @@ def daily_agents(collector, machines, snapshot, config=None, intervals=None, *, 
                 for owner, total in members.items()
                 if total > 0
             ),
-            key=lambda row: (-row["totalTokens"], row["teamId"], row["id"]),
+            key=lambda row: (-row["totalTokens"], row["teamId"], row["id"], row["name"]),
         )[:MAX_DAILY_AGENTS]
         for day, members in day_totals.items()
         if any(total > 0 for total in members.values())
@@ -861,7 +881,7 @@ def validate_agents(rows, total_tokens):
         tokens = row.get("totalTokens")
         if not row_id or not name or not team_id or not team_name or type(tokens) is not int or not 0 <= tokens <= MAX_COUNT:
             return None
-        key = (team_id, row_id)
+        key = (team_id, row_id, name)
         if key in seen:
             return None
         seen.add(key)

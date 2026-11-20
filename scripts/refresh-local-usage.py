@@ -78,11 +78,83 @@ class LocalGitOnly:
         raise ValueError("Background Git fetch and SSH are unavailable in scheduled Usage")
 
 
+def _safe_codex_lines(lines):
+    for line in lines:
+        if not isinstance(line, str):
+            continue
+        if not any(marker in line[:1024] for marker in ('"session_meta"', '"turn_context"', '"token_count"')):
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        payload = entry.get("payload")
+        if payload is not None and not isinstance(payload, dict):
+            continue
+        event_type = entry.get("type")
+        if isinstance(payload, dict):
+            if event_type == "session_meta":
+                sid = payload.get("id")
+                cwd = payload.get("cwd")
+                if (sid is not None and not isinstance(sid, str)) or (cwd is not None and not isinstance(cwd, str)):
+                    continue
+            elif event_type == "turn_context":
+                cwd = payload.get("cwd")
+                model = payload.get("model")
+                if (cwd is not None and not isinstance(cwd, str)) or (model is not None and not isinstance(model, str)):
+                    continue
+            elif event_type == "event_msg" and payload.get("type") == "token_count":
+                info = payload.get("info")
+                if info is not None and not isinstance(info, dict):
+                    continue
+        yield line
+
+
+class _SafeCollectJson:
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def loads(self, raw, *args, **kwargs):
+        parsed = self._wrapped.loads(raw, *args, **kwargs)
+        if not isinstance(parsed, dict):
+            return {}
+        payload = parsed.get("payload")
+        if payload is not None and not isinstance(payload, dict):
+            sanitized = dict(parsed)
+            sanitized["payload"] = {}
+            return sanitized
+        return parsed
+
+
 def protect_collector(collector):
     collector.subprocess = LocalGitOnly()
     if hasattr(collector, "fetch_origins"):
         collector.fetch_origins = lambda repos: ([{"source": "git-fetch", "code": "DisabledByAuthBoundary"}]
             if any(repo.get("remote") for repo in repos) else [])
+    if not getattr(collector, "_omb_codex_guarded", False):
+        original_codex_events = getattr(collector, "codex_events", None)
+        if callable(original_codex_events):
+            def guarded_codex_events(lines, *args, **kwargs):
+                return original_codex_events(_safe_codex_lines(lines), *args, **kwargs)
+
+            collector.codex_events = guarded_codex_events
+        original_collect = getattr(collector, "collect", None)
+        if callable(original_collect) and hasattr(collector, "json"):
+            def guarded_collect(*args, **kwargs):
+                original_json = collector.json
+                collector.json = _SafeCollectJson(original_json)
+                try:
+                    return original_collect(*args, **kwargs)
+                finally:
+                    collector.json = original_json
+
+            collector.collect = guarded_collect
+        collector._omb_codex_guarded = True
     return collector
 
 

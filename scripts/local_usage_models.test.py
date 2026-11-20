@@ -309,6 +309,123 @@ assert.equal(Object.hasOwn(published, "trendHistory"), false);
             self.assertFalse(broken_continuity["healthy"])
             self.assertEqual(broken_continuity["active"], {})
 
+    def test_real_non_reuse_worker_survives_malformed_codex_first_and_mid_lines(self):
+        collector_path = Path(os.environ["OMB_ACTIVITY_COLLECTOR_FIXTURE"])
+        sid_root = "11111111-1111-4111-8111-111111111111"
+        workspaces = [{"workspace_id": "w6", "label": "MausBot"}]
+        runner = _herdr_payload(workspaces, [_agent_row("w6:p1", "w6", "mausbot-back", session_id=sid_root)], generation="gen-worker")
+
+        def token_line(stamp_at):
+            return json.dumps({
+                "type": "event_msg",
+                "timestamp": stamp_at,
+                "payload": {
+                    "type": "token_count",
+                    "info": {"total_token_usage": {
+                        "input_tokens": 10,
+                        "cached_input_tokens": 3,
+                        "cache_write_input_tokens": 0,
+                        "output_tokens": 2,
+                        "reasoning_output_tokens": 0,
+                    }},
+                },
+            })
+
+        def run_non_reuse(home, storage, now_dt):
+            collector = usage.load_collector(collector_path)
+            cfg = {
+                "azureCli": "/fixture/az",
+                "authorEmails": ["owner@example.test"],
+                "home": str(home),
+                "repoRoots": [],
+                "machines": [{"id": "mini-2", "mode": "local"}],
+                "githubProfiles": [],
+                "adoRemotes": [],
+                "storageDir": str(storage),
+            }
+            with patch.object(usage, "load_collector", return_value=collector), \
+                 patch.object(collector, "now", return_value=now_dt), \
+                 patch.object(collector, "ado_prs", return_value=[]), \
+                 patch.object(collector, "github_prs", return_value=[]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                usage.refresh(collector_path, cfg, storage, reuse_sources=False, legacy_diagnostics=False, herdr_runner=runner)
+            latest = json.loads((storage / "latest.json").read_text(encoding="utf-8"))
+            retained = json.loads((storage / "token-history.json").read_text(encoding="utf-8"))
+            return latest, retained
+
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root) / "home"
+            storage = Path(root) / "storage"
+            codex_dir = home / ".codex" / "sessions" / "2026" / "11" / "19"
+            codex_dir.mkdir(parents=True, exist_ok=True)
+            rollout = codex_dir / f"rollout-2026-11-19-{sid_root}.jsonl"
+            rollout.write_text("\n".join([
+                json.dumps({"type": "session_meta", "payload": {"id": sid_root, "cwd": str(home)}}),
+                json.dumps({"type": "turn_context", "payload": {"cwd": str(home), "model": "gpt-6.2-sol"}}),
+                token_line("2026-11-19T01:02:00Z"),
+            ]) + "\n", encoding="utf-8")
+
+            t0 = dt.datetime.fromisoformat("2026-11-19T01:00:00+00:00")
+            t1 = dt.datetime.fromisoformat("2026-11-19T01:05:00+00:00")
+            t2 = dt.datetime.fromisoformat("2026-11-19T01:10:00+00:00")
+
+            run_non_reuse(home, storage, t0)
+            latest1, retained1 = run_non_reuse(home, storage, t1)
+            self.assertNotEqual(latest1["today"]["tokenStatus"], "unavailable")
+            self.assertEqual(latest1["today"]["categories"]["unclassified"]["totalTokens"], 12)
+            self.assertEqual(retained1["trendHistory"]["daily"][-1]["totalTokens"], 12)
+
+            # Append JSON array, scalar, and non-object payload/info lines to the same rollout,
+            # plus first-line malformed Codex files in the same home.
+            with rollout.open("a", encoding="utf-8") as stream:
+                stream.write("\n".join([
+                    '["token_count"]',
+                    '123',
+                    '"\\"token_count\\""',
+                    json.dumps({"type": "event_msg", "payload": ["not-a-dict"]}),
+                    json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": ["not-a-dict"]}}),
+                    json.dumps({"type": "turn_context", "payload": 42}),
+                ]) + "\n")
+            (codex_dir / "rollout-first-array.jsonl").write_text('["token_count"]\n', encoding="utf-8")
+            (codex_dir / "rollout-first-scalar.jsonl").write_text("123\n", encoding="utf-8")
+            (codex_dir / "rollout-first-nonobj-payload.jsonl").write_text(
+                json.dumps({"type": "session_meta", "payload": ["not-a-dict"]}) + "\n",
+                encoding="utf-8",
+            )
+
+            latest2, retained2 = run_non_reuse(home, storage, t2)
+            self.assertEqual(latest2["today"], latest1["today"])
+            self.assertEqual(latest2["trendHistory"]["daily"][-1]["totalTokens"], 12)
+            self.assertEqual(latest2["trendHistory"]["daily"][-1]["agentTokens"], [{
+                "id": "w6:p1", "name": "mausbot-back", "teamId": "w6", "teamName": "MausBot", "totalTokens": 12,
+            }])
+            self.assertEqual(retained2["trendHistory"]["daily"][-1]["tokenStatus"], retained1["trendHistory"]["daily"][-1]["tokenStatus"])
+            self.assertEqual(retained2["trendHistory"]["daily"][-1]["totalTokens"], 12)
+            self.assertEqual(retained2["trendHistory"]["daily"][-1]["agentTokens"], [{
+                "id": "w6:p1", "name": "mausbot-back", "teamId": "w6", "teamName": "MausBot", "totalTokens": 12,
+            }])
+
+            # First-line malformed session_meta payload in the token-bearing file itself still keeps daily total 12
+            # and degrades only agent attribution for that file.
+            bad_header_home = Path(root) / "bad_header_home"
+            bad_header_storage = Path(root) / "bad_header_storage"
+            bad_dir = bad_header_home / ".codex" / "sessions" / "2026" / "11" / "19"
+            bad_dir.mkdir(parents=True, exist_ok=True)
+            (bad_dir / f"rollout-2026-11-19-{sid_root}.jsonl").write_text("\n".join([
+                json.dumps({"type": "session_meta", "payload": ["not-a-dict"]}),
+                json.dumps({"type": "turn_context", "payload": {"cwd": str(bad_header_home), "model": "gpt-6.2-sol"}}),
+                token_line("2026-11-19T01:02:00Z"),
+            ]) + "\n", encoding="utf-8")
+
+            run_non_reuse(bad_header_home, bad_header_storage, t0)
+            bad_latest, bad_retained = run_non_reuse(bad_header_home, bad_header_storage, t1)
+            self.assertNotEqual(bad_latest["today"]["tokenStatus"], "unavailable")
+            self.assertEqual(bad_latest["today"]["categories"]["unclassified"]["totalTokens"], 12)
+            self.assertEqual(bad_latest["trendHistory"]["daily"][-1]["totalTokens"], 12)
+            self.assertNotIn("agentTokens", bad_latest["trendHistory"]["daily"][-1])
+            self.assertEqual(bad_retained["trendHistory"]["daily"][-1]["totalTokens"], 12)
+            self.assertNotIn("agentTokens", bad_retained["trendHistory"]["daily"][-1])
+
 
 def _digest(*values):
     return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -624,6 +741,207 @@ class AgentAttributionTests(unittest.TestCase):
                 unk_event = models._utc_instant("2026-11-19T01:12:00Z")
                 self.assertFalse(any(iv["startAt"] <= unk_event <= iv["endAt"] for iv in iv_unk2))
 
+    def test_mixed_generation_and_socket_pre_post_atomicity(self):
+        agents = [_agent_row("w6:p1", "w6", "mausbot-back", session_id=self.SID_A)]
+        ws_json = json.dumps({"result": {"workspaces": self.WORKSPACES}})
+        ag_json = json.dumps({"result": {"agents": agents}})
+
+        def make_doc(key_ws, gen_ws, key_ag, gen_ag):
+            ws_obj = {"result": {"workspaces": self.WORKSPACES}}
+            ag_obj = {"result": {"agents": agents}}
+            if key_ws:
+                ws_obj["server_generation"] = gen_ws
+            if key_ag:
+                ag_obj["server_generation"] = gen_ag
+            return lambda args: json.dumps(ws_obj if args[-2] == "workspace" else ag_obj)
+
+        # 1. Mixed workspace.list vs agent.list server_generation MUST be rejected.
+        mixed_cases = [
+            make_doc(True, "gen-1", True, "gen-2"),
+            make_doc(True, "gen-1", False, None),
+            make_doc(False, None, True, "gen-2"),
+            make_doc(True, "gen-1", True, ""),
+            make_doc(True, "gen-1", True, 123),
+        ]
+        good_runner = _herdr_payload(self.WORKSPACES, agents, generation="gen-1")
+        t0 = "2026-11-19T01:00:00Z"
+        t0_end = "2026-11-19T01:00:05Z"
+        st_good, _ = models.reconcile_continuity(
+            None,
+            models.sample_herdr(at=t0, herdr_runner=good_runner),
+            models.sample_herdr(at=t0_end, herdr_runner=good_runner),
+            now=t0_end,
+        )
+        self.assertTrue(st_good["healthy"])
+
+        for bad_runner in mixed_cases:
+            self.assertIsNone(models.sample_herdr(at="2026-11-19T01:05:05Z", herdr_runner=bad_runner))
+            st_bad, iv_bad = models.reconcile_continuity(
+                st_good,
+                models.sample_herdr(at="2026-11-19T01:05:05Z", herdr_runner=bad_runner),
+                models.sample_herdr(at="2026-11-19T01:05:10Z", herdr_runner=good_runner),
+                now="2026-11-19T01:05:10Z",
+            )
+            self.assertFalse(st_bad["healthy"])
+            self.assertEqual(st_bad["active"], {})
+            self.assertEqual(len(iv_bad), 1)
+            self.assertEqual(iv_bad[0]["endAt"], models._utc_instant(t0_end))
+
+        # 2. Native Unix socket pre/post atomicity with real AF_UNIX socket mutations.
+        with tempfile.TemporaryDirectory() as sock_home:
+            sock_dir = Path(sock_home) / ".config" / "herdr"
+            sock_dir.mkdir(parents=True, exist_ok=True)
+            sock_path = sock_dir / "herdr.sock"
+            cfg_sock = {"home": sock_home}
+
+            def run_with_hook(hook, *, with_gen=False, at="2026-11-19T01:05:05Z"):
+                def side_effect(_h, args, _r=None):
+                    if args[-2] == "agent" and hook is not None:
+                        hook()
+                    if with_gen:
+                        payload = make_doc(True, "gen-1", True, "gen-1")(args)
+                        return payload
+                    return ws_json if args[-2] == "workspace" else ag_json
+
+                with patch.object(models, "_run_herdr", side_effect=side_effect):
+                    return models.sample_herdr(cfg_sock, at=at)
+
+            def establish_baseline():
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv, \
+                     patch.object(models, "_run_herdr", side_effect=lambda _h, args, _r=None: ws_json if args[-2] == "workspace" else ag_json):
+                    srv.bind(str(sock_path))
+                    sp_pre = models.sample_herdr(cfg_sock, at=t0)
+                    sp_post = models.sample_herdr(cfg_sock, at=t0_end)
+                    st, _ = models.reconcile_continuity(None, sp_pre, sp_post, now=t0_end)
+                    self.assertTrue(st["healthy"])
+                    return st, srv
+
+            # 2a. Mid-query restart/rebind (unlink + bind new AF_UNIX socket between workspace.list and agent.list).
+            srv1 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                srv1.bind(str(sock_path))
+                with patch.object(models, "_run_herdr", side_effect=lambda _h, args, _r=None: ws_json if args[-2] == "workspace" else ag_json):
+                    st_base, _ = models.reconcile_continuity(
+                        None,
+                        models.sample_herdr(cfg_sock, at=t0),
+                        models.sample_herdr(cfg_sock, at=t0_end),
+                        now=t0_end,
+                    )
+                self.assertTrue(st_base["healthy"])
+
+                def rebind_hook():
+                    sock_path.unlink()
+                    srv2.bind(str(sock_path))
+
+                rebound_sample = run_with_hook(rebind_hook)
+                self.assertIsNone(rebound_sample)
+                # Even when both queries report matching server_generation, mid-query socket rebind is rejected.
+                if sock_path.exists():
+                    sock_path.unlink()
+                srv3 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    srv3.bind(str(sock_path))
+                    def rebind_with_gen_hook():
+                        sock_path.unlink()
+                        srv3.close()
+                        rebound_srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                        rebound_srv.bind(str(sock_path))
+                        self._extra_sockets = getattr(self, "_extra_sockets", [])
+                        self._extra_sockets.append(rebound_srv)
+                    self.assertIsNone(run_with_hook(rebind_with_gen_hook, with_gen=True))
+                finally:
+                    for extra in getattr(self, "_extra_sockets", []):
+                        extra.close()
+                    self._extra_sockets = []
+                    srv3.close()
+            finally:
+                srv1.close()
+                srv2.close()
+                if sock_path.exists():
+                    sock_path.unlink()
+
+            # 2b. Mid-query rename (updates ctime_ns / identity between workspace.list and agent.list).
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
+                srv.bind(str(sock_path))
+                with patch.object(models, "_run_herdr", side_effect=lambda _h, args, _r=None: ws_json if args[-2] == "workspace" else ag_json):
+                    st_ren_base, _ = models.reconcile_continuity(
+                        None,
+                        models.sample_herdr(cfg_sock, at=t0),
+                        models.sample_herdr(cfg_sock, at=t0_end),
+                        now=t0_end,
+                    )
+                backup = sock_dir / "herdr.sock.bak"
+
+                def rename_hook():
+                    os.rename(sock_path, backup)
+                    os.rename(backup, sock_path)
+
+                renamed_sample = run_with_hook(rename_hook)
+                self.assertIsNone(renamed_sample)
+                st_ren, iv_ren = models.reconcile_continuity(
+                    st_ren_base,
+                    renamed_sample,
+                    models.sample_herdr(cfg_sock, at="2026-11-19T01:05:10Z") if False else None,
+                    now="2026-11-19T01:05:10Z",
+                )
+                self.assertFalse(st_ren["healthy"])
+                self.assertEqual(len(iv_ren), 1)
+                self.assertEqual(iv_ren[0]["endAt"], models._utc_instant(t0_end))
+                if sock_path.exists():
+                    sock_path.unlink()
+
+            # 2c. Mid-query unavailable (socket unlinked between workspace.list and agent.list).
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
+                srv.bind(str(sock_path))
+                with patch.object(models, "_run_herdr", side_effect=lambda _h, args, _r=None: ws_json if args[-2] == "workspace" else ag_json):
+                    st_unavail_base, _ = models.reconcile_continuity(
+                        None,
+                        models.sample_herdr(cfg_sock, at=t0),
+                        models.sample_herdr(cfg_sock, at=t0_end),
+                        now=t0_end,
+                    )
+                unavail_sample = run_with_hook(lambda: sock_path.unlink())
+                self.assertIsNone(unavail_sample)
+                st_unavail, iv_unavail = models.reconcile_continuity(
+                    st_unavail_base, unavail_sample, None, now="2026-11-19T01:05:10Z"
+                )
+                self.assertFalse(st_unavail["healthy"])
+                self.assertEqual(len(iv_unavail), 1)
+                self.assertEqual(iv_unavail[0]["endAt"], models._utc_instant(t0_end))
+
+            # 2d. Mid-query appear (missing before workspace.list, bound before agent.list finishes).
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
+                appear_sample = run_with_hook(lambda: srv.bind(str(sock_path)))
+                self.assertIsNone(appear_sample)
+                if sock_path.exists():
+                    sock_path.unlink()
+
+            # 2e. Cross-round socket rebind even with identical server_generation ("gen-1") breaks continuity.
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv_a:
+                srv_a.bind(str(sock_path))
+                pre_a = run_with_hook(None, with_gen=True, at=t0)
+                post_a = run_with_hook(None, with_gen=True, at=t0_end)
+                self.assertIsNotNone(pre_a["generation"])
+                st_round1, _ = models.reconcile_continuity(None, pre_a, post_a, now=t0_end)
+                self.assertTrue(st_round1["healthy"])
+                sock_path.unlink()
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv_b:
+                    srv_b.bind(str(sock_path))
+                    pre_b = run_with_hook(None, with_gen=True, at="2026-11-19T01:05:05Z")
+                    post_b = run_with_hook(None, with_gen=True, at="2026-11-19T01:05:10Z")
+                    self.assertNotEqual(pre_a["generation"], pre_b["generation"])
+                    st_round2, iv_round2 = models.reconcile_continuity(
+                        st_round1, pre_b, post_b, now="2026-11-19T01:05:10Z"
+                    )
+                    # Generation changed across socket rebind -> prior closed at t0_end, no bridged [t0_end, 01:05:05Z] interval.
+                    self.assertEqual(len(iv_round2), 2)
+                    self.assertEqual(iv_round2[0]["endAt"], models._utc_instant(t0_end))
+                    self.assertEqual(iv_round2[1]["startAt"], models._utc_instant("2026-11-19T01:05:05Z"))
+                    self.assertEqual(iv_round2[1]["endAt"], models._utc_instant("2026-11-19T01:05:10Z"))
+                    gap_mid = models._utc_instant("2026-11-19T01:02:30Z")
+                    self.assertFalse(any(iv["startAt"] <= gap_mid <= iv["endAt"] for iv in iv_round2))
+
     def test_daily_agents_exact_events_subagent_move_rebind_and_jsonl_hardening(self):
         collector = self._collector()
         with tempfile.TemporaryDirectory() as root:
@@ -782,6 +1100,29 @@ class AgentAttributionTests(unittest.TestCase):
         fallback = usage.retain_token_history(snapshot([daily(TODAY, "unavailable")]), first, None, saved=first, agent_days={})
         self.assertEqual(fallback["trendHistory"]["daily"][0]["tokenStatus"], "partial")
         self.assertEqual(fallback["trendHistory"]["daily"][0]["agentTokens"], [agent_a])
+
+        # Historical pane reuse on the same day: two distinct verified names on the same (teamId, id) pass both
+        # validate_agents and retain_token_history, while a true duplicate (teamId, id, name) triple is rejected.
+        reuse_old = {"id": "w6:p1", "name": "alice", "teamId": "w6", "teamName": "MausBot", "totalTokens": 9}
+        reuse_new = {"id": "w6:p1", "name": "bob", "teamId": "w6", "teamName": "MausBot", "totalTokens": 6}
+        self.assertEqual(models.validate_agents([reuse_old, reuse_new], 15), [reuse_old, reuse_new])
+        self.assertIsNone(models.validate_agents([reuse_old, {**reuse_old, "totalTokens": 6}], 15))
+        reused_retained = usage.retain_token_history(
+            snapshot([daily(TODAY)]),
+            None,
+            None,
+            agent_days={TODAY: [reuse_old, reuse_new]},
+        )
+        self.assertEqual(reused_retained["trendHistory"]["daily"][0]["agentTokens"], [reuse_old, reuse_new])
+        # Retained saved history with same-day dual names on the same pane stays intact on unavailable fallback.
+        reused_fallback = usage.retain_token_history(
+            snapshot([daily(TODAY, "unavailable")]),
+            reused_retained,
+            None,
+            saved=reused_retained,
+            agent_days={},
+        )
+        self.assertEqual(reused_fallback["trendHistory"]["daily"][0]["agentTokens"], [reuse_old, reuse_new])
 
 
 if __name__ == "__main__":

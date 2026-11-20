@@ -307,12 +307,16 @@ describe("local Usage panel", () => {
     const research = { teamId: "research", teamName: "Research" };
     const operations = { teamId: "operations", teamName: "Operations" };
     const editor = { ...research, id: "shared-label", name: "Editor" };
+    const checker = { ...editor, name: "Fact checker" };
+    const ambiguous = { ...research, id: "duplicate", name: "Unverified duplicate" };
     zero.agentTokens = [{ ...editor, totalTokens: 0 }];
-    previousDay.agentTokens = [{ ...editor, totalTokens: 30 }];
+    previousDay.agentTokens = [{ ...checker, totalTokens: 30 }];
     lastDay.agentTokens = [
       { ...editor, totalTokens: 35 },
-      { ...research, id: "checker", name: "Fact checker", totalTokens: 20 },
+      { ...checker, totalTokens: 20 },
       { ...operations, id: "shared-label", name: "Editor", totalTokens: 15 },
+      { ...ambiguous, totalTokens: 4 },
+      { ...ambiguous, totalTokens: 6 },
     ];
     const retained = "2026-09-10";
     snapshot.history = [{ ...snapshot.trend[0]!, day: retained, agentTokens: [{ ...editor, totalTokens: 42 }] }];
@@ -345,7 +349,8 @@ describe("local Usage panel", () => {
     ]);
     const segments = [...bar.querySelectorAll<HTMLElement>("[data-usage-token-segment]")];
     expect(segments.reduce((sum, segment) => sum + parseFloat(segment.style.height), 0)).toBeCloseTo(100);
-    await act(async () => segments[0]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    const editorSegment = segments.find((segment) => segment.dataset.usageTokenSegment === JSON.stringify([research.teamId, editor.id, editor.name]))!;
+    await act(async () => editorSegment.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
     expect(tooltip()?.querySelector('[data-usage-token-highlighted="true"]')?.textContent).toContain("Editor35");
     const old = dates().find((button) => button.dataset.usageDay === "2026-11-01")!;
     await act(async () => old.focus());
@@ -365,7 +370,11 @@ describe("local Usage panel", () => {
     expect(tooltip()?.querySelector("time")?.textContent).toBe(`${previous} – ${last}`);
     expect(tableRows("[data-usage-token-total]")).toEqual([["Total tokens", "220", ""]]);
     expect(tableRows("[data-usage-token-team]")).toEqual([["Team total · Research", "≥ 85", ""], ["Team total · Operations", "≥ 15", ""]]);
-    expect(tableRows('[data-usage-token-row="unknown"]')[0]?.slice(0, 2)).toEqual(["Unattributed", "120"]);
+    expect(tableRows("[data-usage-token-row]").map(([name, count]) => [name, count])).toEqual([
+      ["Fact checker", "50"], ["Editor", "35"], ["Editor", "15"], ["Unattributed", "120"],
+    ]);
+    const weeklySegments = [...week.querySelectorAll<HTMLElement>("[data-usage-token-segment]")];
+    expect(weeklySegments.reduce((sum, segment) => sum + parseFloat(segment.style.height), 0)).toBeCloseTo(100);
     await act(async () => week.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(tooltip()).toBeNull();
   });

@@ -31,7 +31,7 @@ export function retainedAgentTokens(raw: unknown, dayTotalTokens: number): Local
     if (!id || !name || !teamId || !teamName || !Number.isSafeInteger(totalTokens) || (totalTokens as number) < 0) {
       return undefined;
     }
-    const key = JSON.stringify([teamId, id]);
+    const key = JSON.stringify([teamId, id, name]);
     if (seen.has(key)) return undefined;
     seen.add(key);
     sum += totalTokens as number;
