@@ -1,9 +1,9 @@
 // GitHub Actions' expression language, the part ci.yml uses: literals, property paths, ! == != && || and
-// parentheses, contains(), fromJSON() and format(). As GitHub evaluates them: && and || return an operand, string
+// parentheses, object filters, contains(), startsWith(), fromJSON() and format(). As GitHub evaluates them: && and || return an operand, string
 // comparison ignores case, and a missing property is null.
 type Value = string | number | boolean | null | Value[] | { [key: string]: Value };
 
-const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|&&|\|\||[!().,[\]])|([A-Za-z_][\w-]*))/y;
+const TOKEN = /\s*(?:('(?:[^']|'')*')|(\d+(?:\.\d+)?)|(==|!=|&&|\|\||[!<*().,[\]])|([A-Za-z_][\w-]*))/y;
 
 function tokenize(source: string): string[] {
   const tokens: string[] = [];
@@ -24,6 +24,7 @@ const text = (value: Value): string => (value === null ? "" : typeof value === "
 const FUNCTIONS: Record<string, (...args: Value[]) => Value> = {
   contains: (search, item) => Array.isArray(search) ? search.some((entry) => equal(entry, item))
     : text(search).toLowerCase().includes(text(item).toLowerCase()),
+  startsWith: (search, item) => text(search).toLowerCase().startsWith(text(item).toLowerCase()),
   fromJSON: (json) => JSON.parse(text(json)) as Value,
   format: (template, ...args) => text(template).replace(/\{(\d+)\}/g, (_, index: string) => text(args[Number(index)] ?? null)),
 };
@@ -50,7 +51,10 @@ export function evaluate(expression: string, context: Record<string, Value>): Va
   };
   const comparison = (): Value => {
     let left = unary();
-    while (peek() === "==" || peek() === "!=") { const op = take(); const right = unary(); left = op === "==" ? equal(left, right) : !equal(left, right); }
+    while (["==", "!=", "<"].includes(peek())) {
+      const op = take(); const right = unary();
+      left = op === "<" ? Number(left) < Number(right) : op === "==" ? equal(left, right) : !equal(left, right);
+    }
     return left;
   };
   const unary = (): Value => {
@@ -75,9 +79,12 @@ export function evaluate(expression: string, context: Record<string, Value>): Va
       return fn(...args);
     }
     let value: Value = context[token] ?? null;
+    let projection = false;
+    const field = (item: Value, key: string): Value => item !== null && typeof item === "object" ? (item as Record<string, Value>)[key] ?? null : null;
     while (peek() === "." || peek() === "[") {
       const key = take() === "." ? take() : (() => { const index = or(); take("]"); return text(index); })();
-      value = value !== null && typeof value === "object" ? (value as Record<string, Value>)[key] ?? null : null;
+      if (key === "*") { projection = true; value = value && typeof value === "object" ? Object.values(value) : []; }
+      else value = projection && Array.isArray(value) ? value.map((item) => field(item, key)) : field(value, key);
     }
     return value;
   };

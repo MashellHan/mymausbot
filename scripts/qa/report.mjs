@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { artifactFiles, github, pages, runJobs, runPlan } from "./github.mjs";
-import { eligibleRun, executionComplete, expectedJobs, inspectJobs, issueLabels, preflightJob } from "./contracts.mjs";
+import { eligibleRun, executionComplete, expectedJobs, fullPushPlan, fullRunPlan, inspectJobs, issueLabels, narrowPushPlan, preflightJob } from "./contracts.mjs";
 import { generatedSections, issueKey, previousCoverage, stateRecord, withState } from "./issue-state.mjs";
 import { qaGroups, refreshQaGroups } from "./groups.mjs";
 import { combineTextFindings, textCaseEvidence } from "./text-cases.mjs";
@@ -255,6 +255,10 @@ function findingBody(finding, report, state, scopeBasis, previous = "") {
 }
 
 export async function deliverReport(report, { api = github, policy = JSON.parse(readFileSync("scripts/testing/check-policy.json", "utf8")) } = {}) {
+  if (report.coverage === "focused-main" && !report.findings.length) {
+    report.deliveryComplete = true;
+    return report;
+  }
   const issues = (await pages("/issues?state=all&labels=qa", null, api)).filter((issue) => !issue.pull_request);
   const { groups, byKey } = qaGroups(issues), changedKeys = new Set();
   const staleCasesByIssue = new Map();
@@ -381,7 +385,7 @@ export async function deliverReport(report, { api = github, policy = JSON.parse(
       });
       continue;
     }
-    if (staleCases || state.coverageUnknown || !report.executionComplete) continue;
+    if (staleCases || state.coverageUnknown || !report.executionComplete || report.coverage === "focused-main") continue;
     const required = [...(state.caseKeys ?? []), ...(state.verificationJobs ?? []).map((name) => signature(`job:${name} > execution`, "job"))];
     const contractPassed = required.length ? required.every((key) => report.passed.includes(key)) : report.passed.includes(state.key);
     if (!contractPassed || report.findings.some((finding) => finding.key === state.key)) continue;
@@ -417,6 +421,9 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
   if (run.event !== "push" && !plan) throw new Error("Trusted validation plan unavailable; historical coverage cannot be reconstructed");
   const expected = plan ? expectedJobs(plan.outputs, plan.outputs.full_required, producer?.name)
     : expectedJobs(undefined, true, producer?.name);
+  if (plan?.outputs?.focused_push && (run.event !== "push" || !narrowPushPlan(plan))) {
+    throw new Error("Trusted focused integration plan is inconsistent with its bound source or selected jobs");
+  }
   if (run.event !== "push" && (plan.outputs?.full_required !== true || !isDeepStrictEqual(plan.outputs.expected_jobs, expected))) {
     throw new Error("Trusted full validation plan is inconsistent with its selected jobs");
   }
@@ -454,6 +461,14 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
     }
   }
   const report = makeReport({ run, jobs, results, expected, infrastructure, supersededBy });
+  if (plan?.outputs?.focused_push) {
+    report.coverage = "focused-main";
+    report.integration = plan.integration;
+    report.deferredFiles = plan.outputs.deferred_files;
+    report.deferredChecks = plan.outputs.deferred_checks;
+  } else {
+    report.coverage = (run.event === "push" ? fullPushPlan(plan) : fullRunPlan(plan)) ? "full" : "unclassified";
+  }
   if (plan?.outputs?.platform_policy) report.platformPolicy = plan.outputs.platform_policy;
   const recent = await api("/actions/workflows/ci.yml/runs?branch=main&status=success&per_page=100");
   report.lastGreenSha = recent.workflow_runs.find((item) => eligibleRun(item, repository) && item.id < run.id)?.head_sha ?? null;
@@ -464,5 +479,5 @@ export async function reportRun(id, { api = github, readArtifact = artifactFiles
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const report = await reportRun(process.env.QA_RUN_ID);
   writeFileSync("qa-report.json", JSON.stringify(report, null, 2) + "\n");
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `QA ${report.runId}: execution ${report.executionComplete ? "complete" : "incomplete"}; ${report.findings.length} findings; delivery complete. Tested ${report.sha}.\n`);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `QA ${report.runId} (${report.coverage}): selected execution ${report.executionComplete ? "complete" : "incomplete"}; ${report.findings.length} findings; delivery complete. Tested ${report.sha}.\n`);
 }

@@ -89,7 +89,7 @@ function main() {
   console.log(`Validation receipt: ${directory}/receipt.json`);
   console.log(`Local ${action}: ${(durationMs / 1000).toFixed(1)}s; target ${budgetMs / 1000}s. Global typecheck belongs in CI; pnpm build includes its own typecheck.`);
   if (durationMs > budgetMs) console.error("Local feedback exceeded its target; record and fix the expensive phase instead of repeating unchanged checks.");
-  console.log(`Local validation: ${files.length} Vitest files${nativeRelay ? " and the Relay native suite" : ""}; ordinary PR CI runs the Ubuntu core and bounded affected tests, with full validation after integration and on the daily/release lanes. Normal push hooks and independent review still apply.`);
+  console.log(`Local validation: ${files.length} Vitest files${nativeRelay ? " and the Relay native suite" : ""}; ordinary PR and focused integration CI run the Ubuntu core and bounded affected tests; scheduled, manual and release lanes retain full validation. Normal push hooks and independent review still apply.`);
   if (!inputsStable) console.error("Source inputs changed during validation; this receipt cannot mark the current source ready.");
   process.exitCode = inputsStable ? exitCode : 1;
 }

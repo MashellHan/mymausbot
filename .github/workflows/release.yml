@@ -132,6 +132,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             scripts/release-ci.mjs
+            scripts/ci-integration.mjs
             scripts/ci-scope.mjs
             scripts/qa/contracts.mjs
             scripts/qa/github.mjs

@@ -121,8 +121,9 @@ describe("released QA holds", () => {
   });
 
   it("serializes trusted issue/CI wakeups and limits write permission to rerunning Actions", () => {
-    const workflow = parse(readFileSync(".github/workflows/qa-hold-release.yml", "utf8"));
-    expect(workflow.on).toEqual({ issues: { types: ["closed", "labeled", "unlabeled"] }, workflow_run: { workflows: ["CI"], types: ["completed"] } });
+    const workflow = parse(readFileSync(".github/workflows/qa-report.yml", "utf8"));
+    expect(workflow.on.issues).toEqual({ types: ["closed", "labeled", "unlabeled"] });
+    expect(workflow.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
     expect(workflow.jobs.reconcile.concurrency).toEqual({ group: "qa-hold-release-reconcile", "cancel-in-progress": false });
     expect(workflow.jobs.reconcile.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
     expect(workflow.jobs.reconcile.permissions).toEqual({ contents: "read", actions: "write", issues: "read", "pull-requests": "read" });
