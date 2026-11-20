@@ -102,6 +102,7 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       const [workspaceOutput, agentOutput] = responses.map((response) => (response as PromiseFulfilledResult<string>).value);
       const workspaces = herdrRows(workspaceOutput, "workspaces");
       const agents = herdrRows(agentOutput, "agents");
+      const sampledAt = now();
       const teams = new Map<string, LocalAgentTeam>();
       for (const workspace of workspaces) {
         const id = workspace.workspace_id;
@@ -114,7 +115,6 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         observationsFor(agents), localAgentRoles(verified, home), piSessionsFor(verified),
       ]);
       const piContexts = await observePiContexts(verified, piSessions, run, readProcessStart, now);
-      const sampledAt = now();
       const sessionTeams = new Map<string, Set<string>>();
       const sessionClaims = new Map<string, number>();
       for (const agent of agents) {
@@ -133,22 +133,18 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         if (typeof id !== "string" || !id || seen.has(id) || !team) throw new Error("Invalid agent identity");
         seen.add(id);
         const sessionId = codexSessionId(agent);
-        const sessionRecord = agent.agent_session && typeof agent.agent_session === "object" && !Array.isArray(agent.agent_session)
-          ? agent.agent_session as Record<string, unknown>
-          : null;
-        const trustedCodexSource = sessionRecord?.source === undefined || sessionRecord.source === "herdr:codex";
-        const unambiguousSession = sessionId !== null && trustedCodexSource && sessionClaims.get(sessionId) === 1;
+        const verifiedCodexMember = verifiedIds.has(id) && sessionId !== null && sessionClaims.get(sessionId) === 1;
         const observation = sessionId ? observations.get(sessionId) : null;
         const pi = verifiedIds.has(id) ? piSessions.get(id) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
         const occupantId = localAgentOccupantId(agent, id);
-        const bindingKey = unambiguousSession
-          ? JSON.stringify([agent.agent, occupantId ?? agent.name ?? null, sessionId])
+        const bindingKey = verifiedCodexMember
+          ? JSON.stringify([agent.agent, occupantId, sessionId])
           : JSON.stringify([agent.agent ?? null, occupantId ?? agent.name ?? null, null]);
         const previous = paneBindings.get(id);
-        const switchedAt = !previous ? null : previous.key === bindingKey ? previous.switchedAt : sampledAt;
+        const switchedAt = previous && previous.key === bindingKey ? previous.switchedAt : sampledAt;
         nextBindings.set(id, { key: bindingKey, switchedAt });
-        const usage = unambiguousSession && observation
+        const usage = verifiedCodexMember && observation
           ? observation.memberUsage(switchedAt)
           : { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
         const member: LocalAgentMember = {

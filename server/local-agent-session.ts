@@ -28,10 +28,11 @@ export type SessionObservation = Observation & {
 };
 type TokenSplit = { input: number; output: number; cacheRead: number };
 type TokenSample = { at: number | null; tokens: number | null; total: number | null; gap: boolean; model: string | null; split: TokenSplit | null };
+type PriorHistory = { size: number; highestTotal: number | null; hadTokens: boolean; lostAt: number | null };
 type Cached = {
   signature: string; identity: string; size: number; offset: number; observation: Observation; pendingLine: boolean;
   scanStart: number; firstAt: number | null; sessionStartedAt: number | null; firstEventAt: number | null;
-  highestTotal: number | null; tokenSamples: TokenSample[];
+  highestTotal: number | null; lostAt: number | null; tokenSamples: TokenSample[];
 };
 
 export function dashboardText(value: unknown, limit: number): string | null {
@@ -143,6 +144,7 @@ function memberTokenUsage(
     ? startAt !== null && startAt <= cutoff
     : cached.firstAt !== null && cached.firstAt <= cutoff;
   const seatContinuous = switchedAt === null || switchedAt <= cutoff;
+  const logContinuous = cached.lostAt === null || cached.lostAt <= cutoff;
   let known = 0;
   let invalid = cached.pendingLine;
   let hasUnattributed = false;
@@ -175,7 +177,7 @@ function memberTokenUsage(
       }
     }
   }
-  const windowCovered = !invalid && continuousFromCutoff && seatContinuous;
+  const windowCovered = !invalid && continuousFromCutoff && seatContinuous && logContinuous;
   const coverage = windowCovered ? "ready" as const : known > 0 ? "partial" as const : "unavailable" as const;
   const knownTokens = coverage === "unavailable" ? null : known;
   if (coverage === "unavailable") return unavailableMemberUsage();
@@ -232,7 +234,9 @@ export async function discoverCodexSessionFiles(codexHome: string, ids: Set<stri
   return found;
 }
 
-async function readObservation(file: string, id: string, cached: Cached | undefined, now: number): Promise<Cached | null> {
+async function readObservation(
+  file: string, id: string, cached: Cached | undefined, prior: PriorHistory | undefined, now: number,
+): Promise<Cached | null> {
   try {
     const handle = await open(file, "r");
     try {
@@ -283,9 +287,16 @@ async function readObservation(file: string, id: string, cached: Cached | undefi
       const cutoff = now - WEEK_MS;
       const baseline = tokenSamples.filter((sample) => sample.at !== null && sample.at <= cutoff).at(-1);
       const recent = tokenSamples.filter((sample) => sample.at === null || sample.at > cutoff);
+      let lostAt = incremental ? cached.lostAt : (prior?.lostAt ?? null);
+      if (prior && !incremental) {
+        const shrunk = info.size < prior.size;
+        const regressedTotal = prior.highestTotal !== null && (highestTotal === null || highestTotal < prior.highestTotal);
+        const lostObservedTokens = prior.hadTokens && !tokenSamples.some((sample) => (sample.tokens ?? 0) > 0);
+        if (shrunk || regressedTotal || lostObservedTokens) lostAt = now;
+      }
       return { identity, signature, size: info.size, offset: end >= 0 ? start + end + 1 : start, observation,
         scanStart: incremental ? cached.scanStart : start, firstAt, sessionStartedAt, firstEventAt, highestTotal,
-        pendingLine: end < bytesRead - 1, tokenSamples: baseline ? [baseline, ...recent] : recent };
+        lostAt, pendingLine: end < bytesRead - 1, tokenSamples: baseline ? [baseline, ...recent] : recent };
     } finally { await handle.close(); }
   } catch { return null; }
 }
@@ -293,6 +304,7 @@ async function readObservation(file: string, id: string, cached: Cached | undefi
 export function createLocalAgentSessionReader(codexHome: string, now: () => number) {
   let paths = new Map<string, string | null>();
   const cache = new Map<string, Cached>();
+  const history = new Map<string, PriorHistory>();
   let discoveredAt = -Infinity;
   let requested = "";
   return async (agents: Record<string, unknown>[]): Promise<Map<string, SessionObservation>> => {
@@ -303,13 +315,26 @@ export function createLocalAgentSessionReader(codexHome: string, now: () => numb
       discoveredAt = now(); requested = key;
     }
     for (const id of cache.keys()) if (!ids.has(id)) cache.delete(id);
+    for (const id of history.keys()) if (!ids.has(id)) history.delete(id);
     const result = new Map<string, SessionObservation>();
     const at = now();
     const projectTokens = createLocalTokenProjector(new Date(at));
     for (const id of ids) {
       const file = paths.get(id);
-      const value = file ? await readObservation(file, id, cache.get(id), at) : null;
-      if (value) cache.set(id, value); else cache.delete(id);
+      const prior = history.get(id);
+      const value = file ? await readObservation(file, id, cache.get(id), prior, at) : null;
+      if (value) {
+        cache.set(id, value);
+        history.set(id, {
+          size: value.size,
+          highestTotal: value.highestTotal,
+          hadTokens: Boolean(prior?.hadTokens || value.tokenSamples.some((sample) => (sample.tokens ?? 0) > 0)),
+          lostAt: value.lostAt,
+        });
+      } else {
+        cache.delete(id);
+        if (prior) history.set(id, { ...prior, lostAt: at });
+      }
       result.set(id, value ? {
         ...value.observation,
         tokenUsage24h: tokenUsage(value, at, DAY_MS),
