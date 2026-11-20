@@ -127,8 +127,9 @@ function declaration(kind: MiniAppDashboardKind | null, html = false): MiniAppDa
   if (kind === "agent-team") return html
     ? { kind, renderer: "html", htmlRole: "primary", editableFields: ["title", "description"], resources: MINI_APP_DASHBOARD_RESOURCES[kind] }
     : { kind, renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: ["teams", "activity"] };
-  if (kind === "usage") return { kind, renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"],
-    resources: MINI_APP_DASHBOARD_RESOURCES[kind] };
+  if (kind === "usage") return html
+    ? { kind, renderer: "html", htmlRole: "primary", editableFields: ["title", "description"], resources: MINI_APP_DASHBOARD_RESOURCES[kind] }
+    : { kind, renderer: "native", htmlRole: "fallback-only", editableFields: ["title", "description"], resources: MINI_APP_DASHBOARD_RESOURCES[kind] };
   throw appFailure(503, "The Mini App dashboard grant is invalid.");
 }
 const summary = (row: AppRow): MiniAppSummary => ({
@@ -350,7 +351,7 @@ export class MiniApps {
   private requireDashboardTemplateWrite(actor: MiniAppActor, app: MiniAppSummary | undefined, html: string): void {
     if (!actor.botId || app?.dashboard?.renderer !== "html") return;
     const current = this.docs.read(this.version(app.id, app.templateVersion).doc);
-    if (!current || current.html !== html) throw appFailure(403, "Only the owner can change the Agent Team dashboard page.");
+    if (!current || current.html !== html) throw appFailure(403, "Only the owner can change this dashboard page.");
   }
 
   async publish(actor: MiniAppActor, raw: unknown, id?: string, trustedAgentTeamHtml = false): Promise<MiniAppMutationResult> {
@@ -433,7 +434,8 @@ export class MiniApps {
       }
       this.requireNativeBindings(Boolean(dashboardIdentity || nativeIdentity), input.bindings);
       const previousVersion = current && this.version(appId, current.templateVersion);
-      const dashboardHtml = dashboardKind === "agent-team" && (trustedAgentTeamHtml || previousVersion?.dashboard_html === 1);
+      const dashboardHtml = dashboardKind === "agent-team" && (trustedAgentTeamHtml || previousVersion?.dashboard_html === 1)
+        || dashboardIdentity === "usage" && previousVersion?.dashboard_html === 1 && previousVersion.doc === stored.doc;
       const developed = !current || previousVersion?.doc !== stored.doc ||
         !isDeepStrictEqual(JSON.parse(previousVersion.bindings) as MiniAppDataBinding[], input.bindings);
       const app: MiniAppSummary = { id: appId, slug: input.slug, title: input.title, description: input.description,
@@ -466,14 +468,13 @@ export class MiniApps {
     const current = this.require(actor, id, true);
     this.authorizeTemplate(actor, current);
     if (actor.botId && current.dashboard?.renderer === "html") {
-      throw appFailure(403, "Only the owner can change the Agent Team dashboard page.");
+      throw appFailure(403, "Only the owner can change this dashboard page.");
     }
     const replay = this.replay(actor, id, "rollback", input.data);
     if (replay) return replay;
     const version = this.version(id, input.data.templateVersion);
-    if (actor.botId && current.dashboardIdentity === "agent-team" &&
-      (current.dashboard?.renderer === "html" || version.dashboard_html === 1)) {
-      throw appFailure(403, "Only the owner can change the Agent Team dashboard page.");
+    if (actor.botId && current.dashboardIdentity && version.dashboard_html === 1) {
+      throw appFailure(403, "Only the owner can change this dashboard page.");
     }
     if (!this.docs.read(version.doc)) throw appFailure(503, "The requested template is unavailable.");
     const bindings = JSON.parse(version.bindings) as MiniAppDataBinding[];

@@ -13,6 +13,7 @@ vi.mock("@/state/store", () => ({
   ApiError: class ApiError extends Error { constructor(message: string, readonly status: number, readonly body?: Record<string, unknown>) { super(message); } },
 }));
 
+import { ApiError } from "@/state/store";
 import { mountMiniAppFrame } from "./MiniAppFrame";
 import { miniAppFrameDocument, MINI_APP_CSP } from "./mini-app-document";
 import { AppDocs } from "../../../server/app-docs";
@@ -36,6 +37,9 @@ const page: MiniAppQueryResult = { columns: [{ name: "amount", type: "decimal" }
 const teamDocument: MiniAppDocument = { ...document, app: { ...app, dashboardIdentity: "agent-team",
   dashboard: { kind: "agent-team", renderer: "html", htmlRole: "primary", editableFields: ["title", "description"],
     resources: ["teams", "activity", "configuration", "team-rules", "skill"] } }, bindings: [] };
+const usageDocument: MiniAppDocument = { ...document, app: { ...app, title: "Activities", dashboardIdentity: "usage",
+  dashboard: { kind: "usage", renderer: "html", htmlRole: "primary", editableFields: ["title", "description"], resources: ["usage"] } }, bindings: [] };
+const usageState: MiniAppState = { ...state, data: [] };
 let container: HTMLDivElement;
 
 function send(view: Window, data: unknown) {
@@ -176,6 +180,87 @@ describe("persistent Mini App frame", () => {
     expect(fixture.api).toHaveBeenCalledTimes(1);
     fallback.retire();
   });
+  it("uses only the current owner Activities frame to read the existing usage resource", async () => {
+    vi.spyOn(container, "clientWidth", "get").mockReturnValue(400);
+    vi.spyOn(container, "clientHeight", "get").mockReturnValue(720);
+    vi.spyOn(container.ownerDocument, "visibilityState", "get").mockReturnValue("visible");
+    const revoked = vi.fn(), changed = vi.fn();
+    const snapshot = { status: "unavailable", asOf: null, timeZone: "Asia/Shanghai", sourceCoverage: null,
+      prSourceCoverage: null, prCoverage: null, windows: null, trend: [] };
+    const result = { appId: app.id, revision: 3, resource: "usage", snapshot };
+    fixture.api.mockResolvedValue(result);
+    const mount = mountMiniAppFrame({ container, document: usageDocument, state: usageState, onRevoked: revoked, onChanged: changed });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    const request = { mausMiniApp: 1, type: "dashboard-read", id: "fixture-usage", selection: { resource: "usage" } };
+    const initialize = (view: Window) => send(view, { jsonrpc: "2.0", method: "ui/notifications/initialized" });
+    try {
+      send(view, request);
+      expect(fixture.api).not.toHaveBeenCalled();
+      initialize(view);
+      send(window, request);
+      send(view, { ...request, selection: { resource: "usage", expectedRevision: 3 } });
+      send(view, { ...request, selection: { resource: "usage", appId: app.id } });
+      send(view, { ...request, selection: { resource: "teams" } });
+      expect(fixture.api).not.toHaveBeenCalled();
+      send(view, request);
+      await vi.waitFor(() => expect(posted).toHaveBeenCalledWith(
+        { mausMiniApp: 1, type: "dashboard-result", id: request.id, result }, "*"));
+      expect(fixture.api).toHaveBeenCalledWith("/api/mini-apps/app_demo/dashboard",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ resource: "usage", expectedRevision: 3 }) }));
+      fixture.api.mockRejectedValueOnce(new ApiError("Outdated", 409));
+      send(view, request);
+      await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce());
+      fixture.api.mockRejectedValueOnce(new ApiError("Denied", 403));
+      send(view, request);
+      await vi.waitFor(() => expect(revoked).toHaveBeenCalledOnce());
+
+      mount.update({ ...usageState, appId: "another" });
+      send(view, request);
+      mount.update({ ...usageState, revision: 4 });
+      send(view, request);
+      mount.update({ ...usageState, templateVersion: 2 });
+      send(view, request);
+      expect(fixture.api).toHaveBeenCalledTimes(3);
+    } finally { mount.retire(); }
+
+    for (const denied of [document, teamDocument, { ...usageDocument, app: { ...usageDocument.app, dashboard: null } },
+      { ...usageDocument, bindings: document.bindings }]) {
+      const wrong = mountMiniAppFrame({ container, document: denied, state: usageState, onRevoked: vi.fn() });
+      initialize(wrong.iframe.contentWindow!);
+      send(wrong.iframe.contentWindow!, request);
+      wrong.retire();
+    }
+    expect(fixture.api).toHaveBeenCalledTimes(3);
+  });
+
+  it("cancels a pending Activities read when the owner window hides and never replies with that snapshot", async () => {
+    vi.spyOn(container, "clientWidth", "get").mockReturnValue(400);
+    vi.spyOn(container, "clientHeight", "get").mockReturnValue(720);
+    const visibility = vi.spyOn(container.ownerDocument, "visibilityState", "get").mockReturnValue("visible");
+    let resolve!: (value: unknown) => void;
+    fixture.api.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    const mount = mountMiniAppFrame({ container, document: usageDocument, state: usageState, onRevoked: vi.fn() });
+    const view = mount.iframe.contentWindow!;
+    const posted = vi.spyOn(view, "postMessage");
+    try {
+      send(view, { jsonrpc: "2.0", method: "ui/notifications/initialized" });
+      send(view, { mausMiniApp: 1, type: "dashboard-read", id: "pending", selection: { resource: "usage" } });
+      const signal = fixture.api.mock.calls[0]?.[1].signal as AbortSignal;
+      visibility.mockReturnValue("hidden");
+      container.ownerDocument.dispatchEvent(new Event("visibilitychange"));
+      expect(signal.aborted).toBe(true);
+      resolve({ appId: app.id, revision: 3, resource: "usage", snapshot: { status: "ready" } });
+      await Promise.resolve();
+      expect(posted).toHaveBeenCalledWith(
+        { mausMiniApp: 1, type: "dashboard-result", id: "pending", error: "This Activities frame is hidden." }, "*");
+      expect(posted.mock.calls.some(([message]) => (message as { id?: string; result?: unknown }).id === "pending"
+        && (message as { result?: unknown }).result)).toBe(false);
+      send(view, { mausMiniApp: 1, type: "dashboard-read", id: "hidden", selection: { resource: "usage" } });
+      expect(fixture.api).toHaveBeenCalledTimes(1);
+    } finally { mount.retire(); }
+  });
+
   it("starts with an opaque document and no generic app capability", () => {
     const doc = miniAppFrameDocument(document, false);
     expect(doc.srcdoc).toMatch(/^<!DOCTYPE html><meta http-equiv="Content-Security-Policy"/);

@@ -841,6 +841,29 @@ describe("Mini Apps panel", () => {
     expect(fixture.frameMounts).toBe(0);
   });
 
+  it("mounts managed Activities in an owner frame and keeps the native fallback and grant recovery", async () => {
+    const usage = { ...app("app_usage", "Activities"), slug: "usage", dashboardIdentity: "usage" as const };
+    const managedUsage = { ...usageDashboard, renderer: "html" as const, htmlRole: "primary" as const };
+    fixture.apps = [{ ...usage, dashboard: managedUsage }];
+    await render();
+    await vi.waitFor(() => expect(frame()?.dataset.id).toBe("app_usage"));
+    expect(host.querySelector('[data-testid="local-usage-panel"]')).toBeNull();
+    expect(fixture.dashboardReads).toEqual([]);
+
+    fixture.apps = [{ ...usage, dashboard: null, revision: 4 }];
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="dashboard-recovery"]')).not.toBeNull());
+    expect(frame()).toBeNull();
+
+    fixture.apps = [{ ...usage, dashboard: usageDashboard, revision: 5 }];
+    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await act(async () => refresh().click());
+    await vi.waitFor(() => expect(host.querySelector('[data-testid="local-usage-panel"] section dd > span')?.textContent).toBe("1"));
+    expect(frame()).toBeNull();
+    expect(fixture.dashboardReads).toEqual(["usage"]);
+  });
+
   it("refreshes a same-revision Usage snapshot immediately, cancelling the old read and staying quiet while hidden", async () => {
     fixture.apps = [{ ...app("app_usage", "Usage"), slug: "usage", dashboardIdentity: "usage", dashboard: usageDashboard }];
     await render();

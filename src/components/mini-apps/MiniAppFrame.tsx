@@ -5,7 +5,7 @@ import { api, ApiError } from "@/state/store";
 import { utf8Bytes } from "../../../shared/app";
 import { LOCAL_AGENT_ACTIVITY_HISTORY_CURSOR } from "../../../shared/local-dashboard";
 import type { MiniAppDataBinding, MiniAppNamedQuery } from "../../../shared/mini-app-data";
-import type { MiniAppDashboardReadResult, MiniAppDashboardRequest, MiniAppDocument, MiniAppQuery, MiniAppQueryOptions,
+import type { MiniAppDashboardReadResult, MiniAppDashboardRequest, MiniAppDashboardResource, MiniAppDocument, MiniAppQuery, MiniAppQueryOptions,
   MiniAppQueryResult, MiniAppState } from "../../../shared/mini-apps";
 import { mountAppFrame, type AppFrameHost } from "../app/app-frame-host";
 import { appHostContext, appMaxHeight, appThemeContext } from "../app/app-host-context";
@@ -66,7 +66,7 @@ function parseFrameDashboard(value: unknown): FrameDashboard | null {
     }
   }
   const fields: Record<string, string[]> = {
-    teams: ["resource"], activity: activityFields,
+    teams: ["resource"], usage: ["resource"], activity: activityFields,
     configuration: ["resource", "agentId", "occupantId"], "team-rules": ["resource", "teamId"],
     skill: ["resource", "agentId", "occupantId", "skillId"],
   };
@@ -107,6 +107,7 @@ export function mountMiniAppFrame(options: {
   document: MiniAppDocument;
   state: MiniAppState;
   onRevoked(): void;
+  onChanged?(): void;
   githubSelection?: GithubActivitySelection | null;
   onGithubSelectionChange?(selection: GithubActivitySelection): void;
 }): MiniAppFrameMount {
@@ -121,6 +122,9 @@ export function mountMiniAppFrame(options: {
   const controllers = new Map<AbortController, string>();
   const dashboardControllers = new Map<AbortController, string>();
   const mediaControllers = new Map<AbortController, string>();
+  const usageFrame = document.app.dashboard?.kind === "usage" && document.app.dashboard.renderer === "html";
+  const usageFrameVisible = () => container.ownerDocument.visibilityState === "visible"
+    && container.clientWidth > 0 && container.clientHeight > 0;
   let recentReads: number[] = [];
   const postHostSelection = (selection: GithubActivitySelection | null) => {
     if (!active || !frameInitialized || !selection || !isEligibleGithubActivityDocument(document) || !miniAppNativeFrameGuard()) return;
@@ -135,10 +139,35 @@ export function mountMiniAppFrame(options: {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "query-result", id, ...(error ? { error } : { result }) }, "*");
   };
+  const acceptsDashboardRequest = (resource: MiniAppDashboardResource) => {
+    const { app, bindings } = document;
+    const dashboard = app.dashboard;
+    return miniAppNativeFrameGuard() && state.appId === app.id && state.status === "active"
+      && app.status === "active" && state.revision === app.revision && state.templateVersion === app.templateVersion
+      && dashboard?.renderer === "html" && dashboard.kind === app.dashboardIdentity
+      && (dashboard.resources as readonly MiniAppDashboardResource[]).includes(resource)
+      && (resource !== "usage" || frameInitialized && usageFrameVisible() && bindings.length === 0 && state.data.length === 0
+        && window.ogb?.app?.ownPage === true && window.ogb?.remoteClient?.active !== true);
+  };
   const replyDashboard = (id: string, result?: MiniAppDashboardReadResult, error?: string) => {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "dashboard-result", id, ...(error ? { error } : { result }) }, "*");
   };
+  const cancelDashboardReads = (error: string) => {
+    for (const [controller, id] of dashboardControllers) {
+      dashboardControllers.delete(controller);
+      controller.abort();
+      replyDashboard(id, undefined, error);
+    }
+  };
+  const cancelHiddenUsageReads = () => {
+    if (!usageFrameVisible()) cancelDashboardReads("This Activities frame is hidden.");
+  };
+  const usageFrameSize = usageFrame && typeof ResizeObserver !== "undefined" ? new ResizeObserver(cancelHiddenUsageReads) : null;
+  if (usageFrame) {
+    usageFrameSize?.observe(container);
+    container.ownerDocument.addEventListener("visibilitychange", cancelHiddenUsageReads);
+  }
   const replyMedia = (id: string, payload?: { mimeType: string; bytes: ArrayBuffer; sha256: string }, error?: string) => {
     if (!active) return;
     host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "media-result", id, ...(error ? { error } : payload) }, "*");
@@ -211,10 +240,7 @@ export function mountMiniAppFrame(options: {
         if (typeof event.data.id === "string") replyDashboard(event.data.id, undefined, "This dashboard resource or its parameters are unavailable.");
         return;
       }
-      if (!miniAppNativeFrameGuard() || state.appId !== document.app.id || state.status !== "active"
-        || document.app.status !== "active" || state.revision !== document.app.revision
-        || document.app.dashboardIdentity !== "agent-team" || document.app.dashboard?.kind !== "agent-team"
-        || document.app.dashboard.renderer !== "html") {
+      if (!acceptsDashboardRequest(request.selection.resource)) {
         return replyDashboard(request.id, undefined, "This dashboard is unavailable. Refresh and try again.");
       }
       const now = Date.now();
@@ -228,14 +254,17 @@ export function mountMiniAppFrame(options: {
         method: "POST", body: JSON.stringify({ ...request.selection, expectedRevision: revision }), signal: controller.signal, timeoutMs: 15_000,
       }).then((result) => {
         if (!active || state.revision !== revision || controller.signal.aborted) return;
-        if (!miniAppNativeFrameGuard() || result.appId !== document.app.id || result.revision !== revision
+        if (!acceptsDashboardRequest(request.selection.resource) || result.appId !== document.app.id || result.revision !== revision
           || result.resource !== request.selection.resource || utf8Bytes(JSON.stringify(result)) > MAX_RESULT_BYTES) {
           return replyDashboard(request.id, undefined, "This dashboard changed while its data was being read.");
         }
         replyDashboard(request.id, result);
       }).catch((error: unknown) => {
         if (!active || controller.signal.aborted) return;
-        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) options.onRevoked();
+        if (error instanceof ApiError) {
+          if (error.status === 401 || error.status === 403 || (usageFrame && error.status === 404)) options.onRevoked();
+          else if (usageFrame && error.status === 409) options.onChanged?.();
+        }
         replyDashboard(request.id, undefined, error instanceof Error ? error.message : "The dashboard read failed. Try again.");
       }).finally(() => dashboardControllers.delete(controller));
       return;
@@ -306,11 +335,12 @@ export function mountMiniAppFrame(options: {
   return {
     iframe: host.iframe,
     update(next) {
-      if (!active || (next.revision === state.revision && next.status === state.status && next.data.length === state.data.length
+      if (!active || (next.appId === state.appId && next.revision === state.revision && next.templateVersion === state.templateVersion
+        && next.status === state.status && next.data.length === state.data.length
         && next.data.every((entry, index) => entry.datasetId === state.data[index]?.datasetId && entry.revision === state.data[index]?.revision))) return;
       state = next;
       for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "Data changed while this report was being read. Refresh and try again."); }
-      for (const [controller, id] of dashboardControllers) { controller.abort(); replyDashboard(id, undefined, "This dashboard changed. Refresh and try again."); }
+      cancelDashboardReads("This dashboard changed. Refresh and try again.");
       for (const [controller, id] of mediaControllers) { controller.abort(); replyMedia(id, undefined, "Data changed while this media was being read. Refresh and try again."); }
       host?.iframe.contentWindow?.postMessage({ mausMiniApp: 1, type: "data-changed" }, "*");
     },
@@ -324,7 +354,9 @@ export function mountMiniAppFrame(options: {
     retire() {
       if (!active) return;
       for (const [controller, id] of controllers) { controller.abort(); reply(id, undefined, "This app was closed."); }
-      for (const [controller, id] of dashboardControllers) { controller.abort(); replyDashboard(id, undefined, "This app was closed."); }
+      cancelDashboardReads("This app was closed.");
+      usageFrameSize?.disconnect();
+      if (usageFrame) container.ownerDocument.removeEventListener("visibilitychange", cancelHiddenUsageReads);
       for (const [controller, id] of mediaControllers) { controller.abort(); replyMedia(id, undefined, "This app was closed."); }
       active = false;
       window.removeEventListener("message", handle);
@@ -333,19 +365,22 @@ export function mountMiniAppFrame(options: {
   };
 }
 
-export function MiniAppFrame({ document, state, onRevoked, githubSelection, onGithubSelectionChange }: {
+export function MiniAppFrame({ document, state, onRevoked, onChanged, githubSelection, onGithubSelectionChange }: {
   document: MiniAppDocument;
   state: MiniAppState;
   onRevoked(): void;
+  onChanged?(): void;
   githubSelection?: GithubActivitySelection | null;
   onGithubSelectionChange?(selection: GithubActivitySelection): void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const mount = useRef<MiniAppFrameMount | null>(null);
   const revoked = useRef(onRevoked);
+  const dashboardChanged = useRef(onChanged);
   const selectionRef = useRef(githubSelection ?? null);
   const selectionChangeRef = useRef(onGithubSelectionChange);
   revoked.current = onRevoked;
+  dashboardChanged.current = onChanged;
   selectionRef.current = githubSelection ?? null;
   selectionChangeRef.current = onGithubSelectionChange;
   const bindings = JSON.stringify(document.bindings);
@@ -358,6 +393,7 @@ export function MiniAppFrame({ document, state, onRevoked, githubSelection, onGi
       document,
       state,
       onRevoked: () => revoked.current(),
+      onChanged: () => dashboardChanged.current?.(),
       githubSelection: selectionRef.current,
       onGithubSelectionChange: (selection) => selectionChangeRef.current?.(selection),
     });

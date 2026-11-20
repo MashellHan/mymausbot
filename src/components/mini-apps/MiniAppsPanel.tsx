@@ -115,6 +115,11 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
   const teamHtmlCurrent = currentHead && owner === true && nativeGuard && selected?.dashboard?.kind === "agent-team"
     && selected.dashboard.renderer === "html" && document?.app.dashboard?.kind === "agent-team"
     && document.app.dashboard.renderer === "html" && document.app.dashboardIdentity === "agent-team";
+  const usageHtmlCurrent = currentHead && owner === true && nativeGuard && window.ogb?.app?.ownPage === true
+    && window.ogb?.remoteClient?.active !== true && selected?.dashboardIdentity === "usage"
+    && selected.dashboard?.kind === "usage" && selected.dashboard.renderer === "html"
+    && document?.app.dashboardIdentity === "usage" && dashboard?.kind === "usage" && dashboard.renderer === "html"
+    && document.bindings.length === 0 && appState.data.length === 0;
   const recoveryKind = currentHead && selected && document && !dashboard && !selected.dashboard && selected.dashboardIdentity
     && document.app.dashboardIdentity === selected.dashboardIdentity ? selected.dashboardIdentity : null;
   const dashboardInstalled = !!(selected?.dashboardIdentity || document?.app.dashboardIdentity || selected?.dashboard || dashboard);
@@ -250,6 +255,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
         const nextState = await api<MiniAppState>(`/api/mini-apps/${encodeURIComponent(target)}/state`, { background: true, signal: controller.signal, timeoutMs: 10_000 });
         if (!active || target !== selectedRef.current) return;
         const grantChanged = (currentDocument?.app.dashboard?.kind ?? null) !== (listed.dashboard?.kind ?? null)
+          || (currentDocument?.app.dashboard?.renderer ?? null) !== (listed.dashboard?.renderer ?? null)
           || (currentDocument?.app.dashboardIdentity ?? null) !== (listed.dashboardIdentity ?? null)
           || (currentDocument?.app.nativeKind ?? null) !== (listed.nativeKind ?? null)
           || (currentDocument?.app.nativeIdentity ?? null) !== (listed.nativeIdentity ?? null);
@@ -470,7 +476,7 @@ export function MiniAppsPanel({ requestedApp }: { requestedApp?: { id: string; n
               : <p role="status" className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary">{t(owner === true ? "computer.miniApps.changedDuringRead" : "computer.miniApps.accessEnded")}</p>
               : appState.status === "active" && nativeGuard && dashboardInstalled ? dashboardCurrent
               ? <MiniAppDashboard key={`${document.app.id}:${document.app.revision}`} document={document} state={appState} refreshKey={refreshKey} onRevoked={revoked} onChanged={changed} />
-              : teamHtmlCurrent ? <MiniAppFrame document={document} state={appState} onRevoked={revoked} />
+              : teamHtmlCurrent || usageHtmlCurrent ? <MiniAppFrame document={document} state={appState} onRevoked={revoked} onChanged={changed} />
               : recoveryKind && owner === true ? <section className="mx-4 mt-4 rounded-lg bg-inset px-3 py-3 text-[13px] text-ink-secondary" data-testid="dashboard-recovery">
                 <p>{t("computer.miniApps.dashboard.recovery")}</p>
                 <button type="button" onClick={() => void addDefault(recoveryKind)} className="mt-3 rounded-lg bg-control px-3 py-1.5 font-medium text-ink hover:bg-raised-hover focus-visible:outline-2 focus-visible:outline-accent">{t("computer.miniApps.dashboard.reauthorize")}</button>

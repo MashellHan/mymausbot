@@ -31,6 +31,8 @@ export type MiniAppDashboardDeclaration =
     editableFields: readonly ["title", "description"]; resources: readonly ["teams", "activity"] }
   | { kind: "agent-team"; renderer: "html"; htmlRole: "primary";
     editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["agent-team"] }
+  | { kind: "usage"; renderer: "html"; htmlRole: "primary";
+    editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["usage"] }
   | { kind: "usage"; renderer: "native"; htmlRole: "fallback-only";
     editableFields: readonly ["title", "description"]; resources: typeof MINI_APP_DASHBOARD_RESOURCES["usage"] };
 export interface MiniAppDashboardDiscovery {
