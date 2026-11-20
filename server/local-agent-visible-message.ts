@@ -1,3 +1,4 @@
+import { parse, type CallExpression } from "acorn";
 import type { LocalAgentActivityEvent, LocalAgentToolDetailStatus } from "../shared/local-dashboard.ts";
 import { mask, redactSecretsInText } from "../shared/redact.ts";
 import { escapeNotes } from "./peer-provenance.ts";
@@ -24,6 +25,10 @@ const SHELL_COMMAND_TOOLS = new Map<string, string>([
   ["codex:exec_command", "cmd"],
   ["codex:functions.exec_command", "cmd"],
   ["pi:bash", "command"],
+]);
+const EXEC_COMMAND_OPTIONS: ReadonlyMap<string, string> = new Map([
+  ["cmd", "string"], ["workdir", "string"], ["shell", "string"], ["yield_time_ms", "number"],
+  ["max_output_tokens", "number"], ["tty", "boolean"], ["login", "boolean"],
 ]);
 const SHELL_COMMAND_LIMIT = 600;
 const SHELL_HEADER_PREFIX = /(^|[\s"'`=])((?:authorization|proxy-authorization|(?:set-)?cookie|x-(?:api-key|auth-token|access-token|session-id))[ \t]*:[ \t]*)/gi;
@@ -299,6 +304,55 @@ function safeShellCommandText(value: string): { text: string | null; clipped: bo
   return redactedAgentText(redacted.replaceAll(SHELL_MASK_PREFIX, ""), SHELL_COMMAND_LIMIT);
 }
 
+function literalExecCommand(call: CallExpression): { start: number; end: number; value: string } | null {
+  const { callee } = call;
+  if (call.optional || callee.type !== "MemberExpression" || callee.computed || callee.optional ||
+      callee.object.type !== "Identifier" || callee.object.name !== "tools" ||
+      callee.property.type !== "Identifier" || callee.property.name !== "exec_command") return null;
+  const [argument] = call.arguments;
+  if (call.arguments.length !== 1 || argument?.type !== "ObjectExpression") return null;
+  const seen = new Set<string>();
+  let command: { start: number; end: number; value: string } | null = null;
+  for (const property of argument.properties) {
+    if (property.type !== "Property" || property.computed || property.kind !== "init" || property.method) return null;
+    const key = property.key.type === "Identifier" ? property.key.name : property.key.type === "Literal" ? property.key.value : null;
+    const input = property.value;
+    if (typeof key !== "string" || seen.has(key) || input.type !== "Literal" ||
+        EXEC_COMMAND_OPTIONS.get(key) !== typeof input.value) return null;
+    seen.add(key);
+    if (typeof input.value !== "string") continue;
+    if (key === "cmd") command = { start: input.start, end: input.end, value: input.value };
+    else if (input.value.trim() && (!safeToolText(input.value, true).text ||
+        INTERNAL_ENVELOPE.test(input.value.replace(/[\p{Cc}\p{Cf}]/gu, "")))) return null;
+  }
+  return command;
+}
+
+function staticExecCommandDetail(source: string): { text: string; clipped: boolean } | null {
+  let program;
+  try {
+    program = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+  } catch {
+    return null;
+  }
+  const [statement] = program.body;
+  if (program.body.length !== 1 || statement?.type !== "ExpressionStatement") return null;
+  let { expression } = statement;
+  if (expression.type === "CallExpression" && !expression.optional && expression.callee.type === "Identifier" &&
+      expression.callee.name === "text" && expression.arguments.length === 1 && expression.arguments[0]?.type === "AwaitExpression") {
+    expression = expression.arguments[0];
+  }
+  if (expression.type !== "AwaitExpression" || expression.argument.type !== "CallExpression") return null;
+  const command = literalExecCommand(expression.argument);
+  if (!command) return null;
+  const context = source.slice(0, command.start) + '""' + source.slice(command.end);
+  if (!safeToolText(context, true).text || INTERNAL_ENVELOPE.test(context.replace(/[\p{Cc}\p{Cf}]/gu, ""))) return null;
+  const detail = safeShellCommandText(command.value);
+  if (!detail.text) return null;
+  const chars = Array.from(`cmd: ${detail.text}`);
+  return { text: chars.slice(0, SHELL_COMMAND_LIMIT).join(""), clipped: detail.clipped || chars.length > SHELL_COMMAND_LIMIT };
+}
+
 function shellCommandDetail(value: unknown, runtime: "codex" | "pi", tool: string): { text: string | null; clipped: boolean } | null {
   const field = SHELL_COMMAND_TOOLS.get(`${runtime}:${tool}`);
   if (!field) return null;
@@ -379,9 +433,12 @@ export function visibleToolDetail(kind: "tool-call" | "tool-result", value: unkn
   const isCustomExecCall = codexExec && !result && (family === "custom" || (family === undefined && typeof value === "string" && !/^\s*\{(?:\s*"|\s*\})/.test(value)));
   const execEnvelope = result && codexExec ? codexExecResult(value) : null;
   const shellDetail = !result && runtime && tool ? shellCommandDetail(value, runtime, tool) : null;
-  const detail = execEnvelope ?? shellDetail ?? (result
+  const recorded = execEnvelope ?? shellDetail ?? (result
     ? redactedAgentToolResult(value, runtime === "codex" ? "codex" : undefined)
     : redactedAgentToolArguments(value, isCustomExecCall));
+  const projection = isCustomExecCall && family === "custom" && typeof value === "string" && !recorded.text && !recorded.clipped
+    ? staticExecCommandDetail(value) : null;
+  const detail = projection ?? recorded;
   const emptyText = typeof value === "string" && (!value.trim() || (!result && /^\s*\{\s*\}\s*$/.test(value)));
   const emptyArguments = !result && value !== null && typeof value === "object" && !Array.isArray(value) && !Object.keys(value).length;
   const emptyBlocks = Array.isArray(value) && (value.length === 0 || result && !detail.clipped &&
