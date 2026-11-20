@@ -185,7 +185,7 @@ export const ASK_USER_TOOL_DEFINITION = {
   function: {
     name: ASK_USER_TOOL,
     description:
-      "Ask the person questions when the decision is theirs. Offer concrete options where they exist; they can always answer in their own words. Ask up to six questions in one call rather than one at a time.",
+      "Ask the person questions when the decision is theirs. Offer concrete options where they exist; they can always answer in their own words. Ask up to six questions in one call rather than one at a time. The UI card renders your questions and options, so do not repeat them in chat text.",
     parameters: {
       type: "object",
       properties: {

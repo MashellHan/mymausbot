@@ -88,7 +88,7 @@ function askLine(a: Assignment, person: string, askTool: string | undefined): st
   const typed = "end your reply with `NEEDS INPUT:` and the exact question.";
   const tool = quote(askTool, NAME_MAX);
   if (!tool) return `${needs}, ${typed}`;
-  return `${needs}: when the answer is one of a few set choices (yes or no, or "only this / also that / no"), ask it with ${tool}, not show_widget, and write each choice yourself as a short answer in ${person}'s language; their pick comes back to you and you carry on. For any other question, ${typed}`;
+  return `${needs}: when the answer is one of a few set choices (yes or no, or "only this / also that / no"), ask it with ${tool}, not show_widget, and write each choice yourself as a short answer in ${person}'s language; do not repeat the question or choices in chat text; their pick comes back to you and you carry on. For any other question, ${typed}`;
 }
 
 function replyLine(a: Assignment, requester: string, parent?: Assignment): string {

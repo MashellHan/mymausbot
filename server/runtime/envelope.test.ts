@@ -48,7 +48,7 @@ describe("composeEnvelope: assignment with person lineage", () => {
     const asks = composeEnvelope(base, { ...names, askTool: "ask_user" });
     expect(asks).toContain("If something genuinely needs Milind (a credential, a decision only they can make, a step their request does not cover): "
       + "when the answer is one of a few set choices (yes or no, or \"only this / also that / no\"), ask it with ask_user, not show_widget, "
-      + "and write each choice yourself as a short answer in Milind's language; their pick comes back to you and you carry on. "
+      + "and write each choice yourself as a short answer in Milind's language; do not repeat the question or choices in chat text; their pick comes back to you and you carry on. "
       + "For any other question, end your reply with `NEEDS INPUT:` and the exact question.");
     expect(composeEnvelope(assignment({ origin: { kind: "outside", source: "webhook" } }), { ...names, askTool: "request_user_input" }))
       .toContain("a step with consequences nobody authorised): when the answer is one of a few set choices");
