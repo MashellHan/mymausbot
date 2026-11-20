@@ -26,9 +26,8 @@ function OverviewModel({ bot }: { bot: Bot }) {
   const model = modelName(instance, selection.model, selection.variant);
   const levels = pickerModelEffortLevels(instance, selection.model);
   const effort = selection.effort && levels.includes(selection.effort) ? effortLabel(selection.effort) : t("settings.newBotEffort.default");
-  const summary = selection.model && levels.length && !instance?.capabilities?.modelVariants
-    ? `${model} · ${t("model.simple.reasoning")} · ${effort}`
-    : model;
+  const reasoning = selection.model && levels.length && !instance?.capabilities?.modelVariants
+    ? `${t("model.simple.reasoning")} · ${effort}` : null;
 
   return <section data-panel-card="model">
     <button type="button" aria-expanded={expanded} aria-controls="bot-overview-model-content" onClick={() => setExpanded((open) => !open)}
@@ -36,7 +35,10 @@ function OverviewModel({ bot }: { bot: Bot }) {
       <RowIcon icon={Sparkles} />
       <span className="min-w-0 flex-1">
         <span data-panel-model-title="" className="block text-[15px] font-semibold text-ink">{t("model.simple.model")}</span>
-        <span className="block truncate text-[12px] text-ink-secondary" title={summary}>{summary}</span>
+        <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-secondary">
+          <span className="min-w-0 truncate" title={model}>{model}</span>
+          {reasoning && <span className="shrink-0">· {reasoning}</span>}
+        </span>
       </span>
       <ChevronDown size={16} className={cn("shrink-0 text-ink-secondary transition-transform", expanded && "rotate-180")} aria-hidden="true" />
     </button>
