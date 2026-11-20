@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import { t } from "@/lib/i18n";
+import { LEGACY_MINI_APP_IDS } from "../../../shared/mini-app-release-packages";
 import { DEFAULT_MINI_APP_KINDS, type DefaultMiniAppKind, type MiniAppDefaultsResult, type MiniAppSummary } from "../../../shared/mini-apps";
 import { REPORT_APPS } from "../../../shared/report-mini-app";
 import { DASHBOARD_APPS } from "./DashboardInstall";
@@ -60,7 +61,11 @@ export function MiniAppLibraryEntries({
     wasUpdatingRef.current = updatingAppId !== null;
   }, [updatingAppId, updateError, restoreFocusOnError]);
 
-  const defaultApps = new Set(inventory.filter((app) => iconKindForApp(app) !== null).map((app) => app.id));
+  const legacyMojo = inventory.find((app) => app.id === LEGACY_MINI_APP_IDS.mojo && iconKindForApp(app) === "mojo");
+  const defaultApps = new Set(inventory.filter((app) => {
+    const kind = iconKindForApp(app);
+    return kind !== null && (!legacyMojo || kind !== "mojo" || app.id === legacyMojo.id || app.status === "archived");
+  }).map((app) => app.id));
   const custom = inventory.filter((app) => !defaultApps.has(app.id));
   const actionDisabled = busyKind !== null || updatingAppId !== null;
   const availableCandidate = selectedUpdate?.status === "available" ? selectedUpdate.available : null;
@@ -69,7 +74,7 @@ export function MiniAppLibraryEntries({
     <ul className="grid grid-cols-[repeat(auto-fit,minmax(78px,1fr))] gap-2" aria-label={t("computer.miniApps.catalog.included") }>
       {DEFAULT_MINI_APP_KINDS.map((kind) => {
         const text = kind === "hongguo" ? hongguoText : t;
-        const matches = inventory.filter((app) => iconKindForApp(app) === kind);
+        const matches = kind === "mojo" && legacyMojo ? [legacyMojo] : inventory.filter((app) => iconKindForApp(app) === kind);
         const app = matches.length === 1 ? matches[0] : null;
         const name = app ? miniAppDisplayName(app) : shippedAppDetails(kind).name;
         const nativeNeedsGrant = app && (kind === "hongguo" ? app.nativeKind !== "hongguo"
