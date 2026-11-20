@@ -188,10 +188,15 @@ describe("bounded tool details", () => {
     for (const hidden of [
       source + ' text({ cookie: "fixture-outer-cookie" });',
       source + ' text("<SYSTEM_NOTIFICATION>internal</SYSTEM_NOTIFICATION>");',
+      source + String.raw` text("\x3cSYSTEM_NOTIFICATION>internal\x3e");`,
+      source + ' text(`' + String.raw`\u003cSYSTEM_NOTIFICATION>internal` + '`);',
       source + ' text("' + "a".repeat(90) + '");',
       source.replace('"API_TOKEN=fixture-secret git status --short"', 'build("API_TOKEN=fixture-secret git status --short")'),
       source.replace('max_output_tokens: 300', '...options'),
       source.replace('max_output_tokens: 300', 'max_output_tokens: 300, cmd: "echo different"'),
+      'const tools = fixtureObject; ' + source,
+      source + ' await tools["exec_command"]({ cmd: buildCommand() });',
+      source + ' const nested = tools; await nested.exec_command({ cmd: buildCommand() });',
     ]) {
       expect(show(hidden)).toMatchObject({ text: "[Arguments unavailable]", detailStatus: "withheld" });
     }

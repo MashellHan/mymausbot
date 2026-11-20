@@ -325,6 +325,7 @@ function staticExecCommandDetail(source: string): { text: string; clipped: boole
     return null;
   }
   const commands: NonNullable<ReturnType<typeof literalExecCommand>>[] = [];
+  const toolReceivers = new Set<AnyNode>();
   while (pending.length) {
     const node = pending.pop()!;
     if (node.type === "CallExpression" && !node.optional && node.callee.type === "MemberExpression" &&
@@ -333,7 +334,11 @@ function staticExecCommandDetail(source: string): { text: string; clipped: boole
       const command = literalExecCommand(node);
       if (!command || commands.length === MAX_TOOL_FIELDS) return null;
       commands.push(command);
+      toolReceivers.add(node.callee.object);
     }
+    if (node.type === "Identifier" && node.name === "tools" && !toolReceivers.has(node)) return null;
+    const literal = node.type === "Literal" ? node.value : node.type === "TemplateElement" ? node.value.cooked : null;
+    if (typeof literal === "string" && (ENCODED_TOOL_TEXT.test(literal) || INTERNAL_ENVELOPE.test(literal.replace(/[\p{Cc}\p{Cf}]/gu, "")))) return null;
     for (const child of Object.values(node)) {
       if (Array.isArray(child)) pending.push(...child.filter(item => item && typeof item.type === "string"));
       else if (child && typeof child.type === "string") pending.push(child);
