@@ -578,26 +578,43 @@ function GaugeBar({ label, share, fill }: { label: string; share: number; fill: 
 
 export function ConflictNotice({
   botName,
+  reason,
+  current,
   busy,
+  overwriteDisabled,
   onReload,
   onOverwrite,
 }: {
-  botName: string;
+  botName?: string;
+  reason?: string;
+  current?: string;
   busy: boolean;
+  overwriteDisabled?: boolean;
   onReload: () => void;
   onOverwrite: () => void;
 }) {
   return (
     <div className="mt-2 rounded-lg border border-warning/25 bg-warning/10 p-3 text-[13px] leading-relaxed text-ink">
-      <div className="font-medium">{t("memory.conflict.title", { name: botName })}</div>
+      <div className="font-medium" role="alert">{reason ?? (botName ? t("memory.conflict.title", { name: botName }) : t("botDocuments.changed"))}</div>
       <div className="mt-0.5 text-ink-secondary">
-        {t("memory.conflict.help", { name: botName })}
+        {botName ? t("memory.conflict.help", { name: botName }) : t("botDocuments.conflictHelp")}
       </div>
-      <div className="mt-2 flex gap-2">
+      {current !== undefined && <div className="mt-2">
+        <div className="text-[12px] text-ink-secondary">{t("botDocuments.currentFile")}</div>
+        <pre
+          tabIndex={0}
+          aria-label={t("botDocuments.currentFile")}
+          dir="auto"
+          className="mt-1 min-h-8 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-inset p-2 text-[12px]"
+        >
+          {current}
+        </pre>
+      </div>}
+      <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" className={buttonCls} disabled={busy} onClick={onReload}>
           {t("memory.reload")}
         </button>
-        <button type="button" className={buttonCls} disabled={busy} onClick={onOverwrite}>
+        <button type="button" className={buttonCls} disabled={busy || overwriteDisabled} onClick={onOverwrite}>
           {t("memory.overwrite")}
         </button>
       </div>

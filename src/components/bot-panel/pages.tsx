@@ -1,10 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { FileText, FolderOpen, Maximize2, Minimize2, Plus, Server } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { FileText, FolderOpen, Plus, Server } from "lucide-react";
 
 import { appSwitchPatch } from "@/lib/bot-app-access";
-import { cn } from "@/lib/cn";
-import { useModalDialog } from "@/hooks/use-modal-dialog";
 import { skillsLibraryEnabled } from "@/lib/feature-flags";
 import { t } from "@/lib/i18n";
 import { mcpServersForBot, mcpServersOfBot, mcpSwitch, useMcpServers } from "@/lib/mcp-servers";
@@ -21,8 +18,6 @@ import { ServiceIcon } from "../ServiceIcon";
 import { RoutineEditor } from "../RoutinesPage";
 import { useWorkingFolder } from "../bot-settings/AccessSection";
 import { useBotEditor } from "../bot-settings/BotEditorContext";
-import { inputCls } from "../bot-settings/field";
-import { ConflictNotice } from "../bot-settings/MemorySection";
 import { OrgSkillsCard } from "../bot-settings/OrgSkillsCard";
 import { SkillReviewDialog, skillSwitchOn, useManagedSkills, type ManagedSkill } from "../bot-settings/SkillsSection";
 import { useBotApps, type BotApp } from "../bot-settings/useBotApps";
@@ -34,7 +29,8 @@ import { useOpenComputer, WherePage } from "./ComputerTab";
 import { SettingsPage } from "./SettingsPage";
 import { panelMemoryNotes, withMemoryNote, withoutMemoryNote, type PanelMemoryNote } from "./memory-notes";
 import type { SimplePageId } from "./page-registry";
-import { BotSwitch, buttonCls, Card, ColRow, ItemRow, LinkRow, NoteRow, RadioRow, RowIcon, rowCls, RowText, SwitchRow, TextRow, TrashButton } from "./rows";
+import { BotSwitch, buttonCls, Card, ItemRow, LinkRow, NoteRow, RadioRow, RowIcon, rowCls, RowText, SwitchRow, TextRow, TrashButton } from "./rows";
+import { MemoryTextEditor } from "./MemoryTextEditor";
 import { MemoryUpkeepCards } from "./MemoryUpkeepCards";
 import { useMemoryDoc } from "./use-memory-doc";
 import { useTeamMemoryEntries } from "../conversation-share/conversation-share";
@@ -285,129 +281,6 @@ export function MemoryPage({ bot }: PageContext) {
       )}
       {memoryOn && !memory.mine && <MemoryUpkeepCards bot={bot} onChanged={memory.reload} />}
     </>
-  );
-}
-
-/** The whole MEMORY.md as text, saved against the hash it was opened at, so a note the bot writes meanwhile is a
- * conflict to settle, never silently lost: Reload shows the bot's version and keeps what the person typed beside it. */
-function MemoryTextEditor({ bot, doc, mine, onDone }: {
-  bot: Bot;
-  doc: MemoryDoc;
-  mine: boolean;
-  onDone: (saved: MemoryDoc | null) => void;
-}) {
-  // A file not written yet has the empty file's hash, so the bot creating it meanwhile is a conflict too.
-  const [base, setBase] = useState({ text: doc.text, hash: doc.hash });
-  const [text, setText] = useState(doc.text);
-  const [conflict, setConflict] = useState<{ current: string; currentHash: string } | null>(null);
-  const [savedDraft, setSavedDraft] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Full window shows the same text over the whole app; going in or out keeps what was typed.
-  const [wide, setWide] = useState(false);
-  const field = useRef<HTMLTextAreaElement>(null);
-  const firstRender = useRef(true);
-  useEffect(() => {
-    if (firstRender.current) firstRender.current = false;
-    else field.current?.focus();
-  }, [wide]);
-  // The file is saved either way; a save that lands after the person moved to another bot must not show in that bot's list.
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
-
-  const save = async (expectedHash: string) => {
-    setSaving(true);
-    setError(null);
-    try {
-      const result = await saveMemoryDoc(bot.id, doc.path, text, expectedHash, mine);
-      if (!mounted.current) return;
-      if (result.ok) onDone(result.doc);
-      else setConflict({ current: result.current, currentHash: result.currentHash });
-    } catch (cause) {
-      setError(errorText(cause, t("botPanel.library.memoryError")));
-    } finally {
-      setSaving(false);
-    }
-  };
-  const reload = () => {
-    if (!conflict) return;
-    // A second Reload keeps the first kept draft too.
-    setSavedDraft((kept) => (kept === null || kept === text ? text : `${kept}\n\n${text}`));
-    setBase({ text: conflict.current, hash: conflict.currentHash });
-    setText(conflict.current);
-    setConflict(null);
-  };
-
-  const body = (
-    <>
-        {conflict && <ConflictNotice botName={bot.name} busy={saving} onReload={reload} onOverwrite={() => void save(conflict.currentHash)} />}
-        <textarea
-          ref={field}
-          data-memory-text=""
-          className={cn(inputCls, wide ? "min-h-0 flex-1 resize-none" : "min-h-[280px] resize-y", "font-mono text-[13px] leading-relaxed")}
-          value={text}
-          placeholder={t("memory.indexPlaceholder")}
-          aria-label={t("memory.botMemory")}
-          readOnly={saving}
-          onChange={(event) => setText(event.target.value)}
-        />
-        {error && <div className="text-[13px] text-warning">{error}</div>}
-        {savedDraft !== null && (
-          <div data-memory-draft="">
-            <div className="mb-1 text-[12px] text-ink-secondary">{t("memory.unsavedDraft")}</div>
-            <pre className="max-h-[160px] overflow-auto whitespace-pre-wrap rounded-lg border border-hairline/40 bg-inset p-3 font-mono text-[12px] leading-relaxed text-ink">
-              {savedDraft}
-            </pre>
-            <button type="button" className={cn(buttonCls, "mt-1")} onClick={() => setSavedDraft(null)}>{t("memory.dismissDraft")}</button>
-          </div>
-        )}
-        <div className="flex justify-end gap-2">
-          <button type="button" data-memory-wide="" className={cn(buttonCls, "mr-auto inline-flex items-center gap-1.5")} onClick={() => setWide(!wide)}>
-            {wide ? <Minimize2 size={14} aria-hidden="true" /> : <Maximize2 size={14} aria-hidden="true" />}
-            {t(wide ? "botPanel.memory.exitFullWindow" : "botPanel.memory.fullWindow")}
-          </button>
-          <button type="button" className={buttonCls} disabled={saving} onClick={() => onDone(null)}>{t("common.cancel")}</button>
-          <button
-            type="button"
-            data-panel-done="memory-text"
-            className={buttonCls}
-            disabled={saving || text === base.text}
-            onClick={() => void save(base.hash)}
-          >
-            {saving ? t("memory.saving") : t("memory.save")}
-          </button>
-        </div>
-    </>
-  );
-
-  if (wide) return <MemoryFullWindow label={t("memory.botMemory")} onClose={() => setWide(false)}>{body}</MemoryFullWindow>;
-  return (
-    <Card>
-      <ColRow data-panel-row="memory-text">{body}</ColRow>
-    </Card>
-  );
-}
-
-/** The memory text over the whole app window, so a long MEMORY.md is easy to read and edit; Escape goes back to the panel. */
-function MemoryFullWindow({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useModalDialog(dialogRef, onClose);
-  return createPortal(
-    <div
-      ref={dialogRef}
-      tabIndex={-1}
-      role="dialog"
-      aria-modal="true"
-      aria-label={label}
-      data-memory-full-window=""
-      className="fixed inset-0 z-[65] flex flex-col gap-3 bg-app p-4 outline-none"
-    >
-      {children}
-    </div>,
-    document.body,
   );
 }
 

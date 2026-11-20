@@ -740,6 +740,7 @@ function prepareRestore(dataDir: string, id: string, manifest: Manifest): string
     for (const bot of value) if (record(bot)) {
       paths.definitions(bot, String(bot.id));
       if (typeof bot.soul === "string") bot.soul = paths.text(bot.soul);
+      if (typeof bot.agentInstructions === "string") bot.agentInstructions = paths.text(bot.agentInstructions);
       delete bot.voice;
     }
   });

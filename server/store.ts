@@ -8,7 +8,7 @@ import { reorderInPlace } from "../shared/bot-order.ts"; import { trimOutboundPo
 import { botOwner, chiefConflict, chiefScope, ownerEmail } from "../shared/bot-owner.ts"; import { reshowWhenMoved } from "../shared/default-bot.ts";
 import { ensureSections, readSections, changeEmptySection } from "./section-context.ts";
 import type { TeamComputers } from "./team-computers.ts";
-import { removeBotFolder, soulFile, soulHash, writeSoulMirror } from "./bot-folder.ts";
+import { removeBotFolder, soulFile, soulHash, writeAgentMirror, writeSoulMirror } from "./bot-folder.ts";
 import type { BotProfilePatch } from "./bot-profile.ts";
 import { peerAllowKey, type PeerAction } from "./peer-approval-key.ts";
 import { DATA_DIR, EVENTS_DIR, NATIVE_DIR, loadBrowserProfileIdAliases } from "./config.ts";
@@ -153,9 +153,10 @@ export interface BotRecord extends Omit<WireBot, "avatarUrl" | "tasks"> {
   lastTeamSetupReceipt?: { requestId: string; result: TeamSetupResult };
   packageBase?: Partial<Record<AgentPart, PartPair>>;
   assignedSkills?: string[];
+  agentInstructions?: string;
 }
 
-export type BotWirePrivateKeys = "resumeCursors" | "home" | "mainThreadChoice" | "tasks" | "avatarUrl" | "approvalGrant" | "lastProfileRequestId" | "lastTeamSetupReceipt" | "packageBase" | "assignedSkills";
+export type BotWirePrivateKeys = "resumeCursors" | "home" | "mainThreadChoice" | "tasks" | "avatarUrl" | "approvalGrant" | "lastProfileRequestId" | "lastTeamSetupReceipt" | "packageBase" | "assignedSkills" | "agentInstructions";
 export type BotWireProjection = Pick<BotRecord, Exclude<keyof BotRecord, BotWirePrivateKeys>>;
 export type BotWireProjectionIsExact = AssertExact<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection> & AssertSameKeys<Omit<WireBot, "avatarUrl" | "tasks">, BotWireProjection>;
 export const botWireProjectionIsExact: BotWireProjectionIsExact = true;
@@ -1475,6 +1476,18 @@ export class Store {
 
   setSoul(id: string, soul: string): BotRecord | null {
     return this.patchBotProfile(id, { soul });
+  }
+
+  setAgentInstructions(id: string, text: string): BotRecord | null {
+    const bot = this.own(id);
+    if (!bot) return null;
+    const next = { ...bot, agentInstructions: text || undefined };
+    this.saveBots(this.bots.map((candidate) => candidate === bot ? next : candidate));
+    bot.agentInstructions = next.agentInstructions;
+    try { writeAgentMirror(id, text); } catch (error) {
+      console.warn(`[bot-folder] could not write AGENTS.md mirror for ${id}: ${(error as Error).message}`);
+    }
+    return bot;
   }
 
   setBotsSection(
