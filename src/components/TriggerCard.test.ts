@@ -47,11 +47,11 @@ const webhookCard = card({ tool: "create_trigger", webhookRequest: { ...base, re
 const render = (message: Message) => renderToStaticMarkup(createElement(ApprovalCard, { bot: { name: "Scout" }, message, threadId: "thread-1" }));
 let root: Root | null = null;
 /** Mounts the card for real and clicks the button with this label, so the click runs through React as a person's would. */
-function click(message: Message, label: string) {
+function click(message: Message, label: string, compact = false) {
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
-  flushSync(() => root!.render(createElement(ApprovalCard, { bot: { name: "Scout" }, message, threadId: "thread-1" })));
+  flushSync(() => root!.render(createElement(ApprovalCard, { bot: { name: "Scout" }, message, threadId: "thread-1", compact })));
   const button = [...container.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === label);
   if (!button) throw new Error(`no ${label} button in ${container.innerHTML}`);
   flushSync(() => button.click());
@@ -128,6 +128,22 @@ describe("the chat card a bot-made automation leaves", () => {
   it("opens the automation's panel on the Automations page from the sentence itself", () => {
     click(scheduleCard, `Set up: ${sentence}`);
     expect(fixture.dispatch).toHaveBeenCalledWith({ type: "showRoutines", view: "list", routineId: "routine-1" });
+  });
+
+  it("opens the routine owner's Bot overview from the compact title", () => {
+    fixture.state = { ...fixture.state, selectedId: bot.id, bots: [bot, { id: "owner", name: "Ledger" }], routines: [{ ...routine, botId: "owner" }] };
+    const saved = new Map([["omb-computer-panel-view:owner", "data"]]);
+    vi.stubGlobal("localStorage", { setItem: (key: string, value: string) => saved.set(key, value) });
+    try {
+      click(scheduleCard, "Morning brief", true);
+      const receipt = document.querySelector('[data-routine-receipt="create"]');
+      expect(receipt?.textContent).toContain("Routine scheduled");
+      expect(receipt?.querySelectorAll("button")).toHaveLength(1);
+      expect(fixture.dispatch.mock.calls).toEqual([[{ type: "select", id: "owner" }], [{ type: "toggleComputer", open: true }]]);
+      expect(saved.get("omb-computer-panel-view:owner")).toBe("computer");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("says when another app sends something, offers Copy address, and shows no address or secret on the card", () => {
