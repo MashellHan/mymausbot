@@ -224,12 +224,12 @@ describe("advisory process scan", () => {
   it("keeps scan failure outside required checks and uses trusted main code", () => {
     const workflow = parse(readFileSync(".github/workflows/qa-report.yml", "utf8"));
     expect(workflow.jobs.scan["continue-on-error"]).toBe(true);
-    expect(workflow.jobs.scan.steps[0].with.ref).toBe("main");
+    expect(workflow.jobs.scan.steps[0].with.ref).toBe("${{ github.sha }}");
     expect(workflow.jobs.scan.permissions).toEqual({ contents: "read", actions: "read", issues: "read", "pull-requests": "read" });
     expect(workflow.jobs.report.needs).toBeUndefined();
     expect(workflow.on).not.toHaveProperty("pull_request_target");
     expect(workflow.jobs.scan.steps.find((step: { with?: { path?: string } }) => step.with?.path === "process-scan.json").if).toBe("always()");
     const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
-    expect(ci.jobs.static.steps.find((step: { name?: string }) => step.name === "Security, data and dispatch core with bounded affected tests").if).toBe("steps.scope.outputs.fast_pr == 'true'");
+    expect(ci.jobs.static.steps.find((step: { name?: string }) => step.name === "Security, data and dispatch core with bounded affected tests").if).toBe("steps.scope.outputs.fast_pr == 'true' || steps.scope.outputs.focused_push == 'true'");
   });
 });

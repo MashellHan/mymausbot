@@ -400,17 +400,18 @@ check:plan, check:edit and check:ready for the small local loop; retain normal
 push hooks and avoid repeating identical checks immediately before them.
 An ordinary PR targets five minutes from run creation, including queue time; a rerun uses its current attempt start, with the original
 age kept as diagnostic. One cached Ubuntu static/setup path retains typecheck,
-lint and source guards, then runs the 26-file security/data/dispatch core and
-at most four portable affected files. Record deferred affected files, including
-expensive browser and Electron tests. The `ci:full`, `qa:repair` and `windows`
-labels request full macOS checks; `windows` is a legacy request name and
-selects no Windows test runner. Full validation uses eight macOS all-E2E shards
-and macOS specialist jobs, collecting portable contracts previously covered on
-Ubuntu. Windows/Ubuntu full tests and platform smokes are retired; platform
-build/resource/signing/publication integrity checks retain their own boundaries.
+lint, source guards and the relevant generated Settings places equality check.
+It runs the 26-file security/data/dispatch core and at most four portable
+affected files, including on `upstream-sync` PRs. Record deferred files and
+checks. Ordinary main pushes validate the cumulative source from a proven green
+main baseline and report focused coverage, not full QA. The `ci:full`,
+`qa:repair` and `windows` labels request wider macOS checks; `windows` selects
+no Windows runner. Full validation uses ten macOS all-E2E shards and specialist
+jobs. Windows/Ubuntu full tests and platform smokes are retired; platform
+build/resource/signing/publication checks keep their separate boundaries.
 Electron unit checks precede the long Vitest block, and broker tests run once
-in the control-plane job. Long checks belong to the applicable post-integration,
-daily 05:00 and release lanes. Actual failed required work remains a quality incident. Timing overruns and
+in the control-plane job. Long checks belong to the daily 05:00, manual and
+release lanes and explicit escalations. Actual failed required work remains a quality incident. Timing overruns and
 other process targets are advisory scan cases; successful validation remains
 green. Use the independent process scan and Lead checkpoint, without
 blocking merges or delivery on process metadata or elapsed time. Current-head

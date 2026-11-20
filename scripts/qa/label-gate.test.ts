@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { executedPullRequest } from "../ci-scope.mjs";
-import { verifyGate } from "./gate.mjs";
+import { gateRun, verifyGate } from "./gate.mjs";
 import { runPlan } from "./github.mjs";
 import { executionMatches, labelGate, ordinaryMetadata, reattestMetadata } from "./label-gate.mjs";
 
@@ -62,7 +62,8 @@ describe("required CI decision for label events", () => {
     expect(runRequired).not.toHaveBeenCalled();
     await labelGate({ eventName: "pull_request", event: event("upstream-sync", "unlabeled"), reattest, runRequired });
     await labelGate({ eventName: "pull_request", event: event(""), reattest, runRequired });
-    expect(runRequired).toHaveBeenCalledTimes(2);
+    expect(reattest).toHaveBeenCalledTimes(2);
+    expect(runRequired).toHaveBeenCalledOnce();
   });
 
   it("records the checked-out merge parents and reattests only a matching successful source attempt", async () => {
@@ -168,10 +169,30 @@ describe("required CI decision for label events", () => {
       loadJobs: unreadable.loadJobs, loadPlan: unreadable.loadPlan, verify: unreadable.verify })).rejects.toThrow("GitHub unavailable");
   });
 
-  it("requires full validation for a current upstream-sync control", async () => {
+  it("binds a normal source gate to the tested head, live base and merge tree", async () => {
+    const sourcePlan = { ...plan, execution: { ...plan.execution, tree }, outputs: { ...plan.outputs,
+      qa_areas: ["global"], expected_jobs: [{ id: "static", name: "typecheck + lint" }], required_jobs: [] } };
+    const run = (receipt = sourcePlan, current = fixture()) => gateRun({ event: "pull_request", eventPayload: event(), repository,
+      bindExecution: true, runId: source.id, attempt: 1, sha: merge, deadlineMs: 0,
+      readArtifact: async () => ({ "qa-plan.json": JSON.stringify(receipt) }),
+      api: async (path) => path.startsWith("/issues?") ? [] : path.includes("/jobs?") ? { jobs } : current.api(path) });
+    await expect(run()).resolves.toBeUndefined();
+    await expect(run({ ...sourcePlan, execution: { ...plan.execution, tree: "f".repeat(40) } }))
+      .rejects.toThrow("PR base or merge tree changed");
+    await expect(run(sourcePlan, fixture({ liveBase: "f".repeat(40), liveMergeSha: "d".repeat(40) })))
+      .rejects.toThrow("PR base or merge tree changed");
+    await expect(run({ ...sourcePlan, execution: { ...plan.execution, tree: "" } })).rejects.toThrow("Missing exact PR checkout binding");
+  });
+
+  it("treats upstream-sync as metadata while preserving explicit full controls", async () => {
     const outputs = { qa_areas: ["global"], expected_jobs: [{ id: "static", name: "typecheck + lint" }], required_jobs: [],
       full_required: false, fast_pr: false, pr_number: 134, pr_head: head };
-    const api = vi.fn(async (path: string) => path === "/pulls/134" ? pr(["upstream-sync"]) : []);
-    await expect(verifyGate(outputs, { api, runId: 50, attempt: 1, deadlineMs: 0 })).rejects.toThrow("Current PR controls require a fresh full CI run");
+    const api = vi.fn(async (path: string) => path === "/pulls/134" ? pr(["upstream-sync"]) : path.startsWith("/issues?") ? []
+      : { jobs: [{ name: "typecheck + lint", run_attempt: 1, status: "completed", conclusion: "success" }] });
+    await expect(verifyGate(outputs, { api, runId: 50, attempt: 1, deadlineMs: 0 })).resolves.toBeUndefined();
+    for (const label of ["ci:full", "qa:repair", "windows"]) {
+      await expect(verifyGate(outputs, { api: async (path) => path === "/pulls/134" ? pr([label]) : api(path), deadlineMs: 0 }))
+        .rejects.toThrow("Current PR controls require a fresh full CI run");
+    }
   });
 });

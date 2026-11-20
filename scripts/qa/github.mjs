@@ -145,6 +145,7 @@ export async function fullRunEvidence(run, { api = github, readArtifact = artifa
     || !/^[a-f\d]{40}$/i.test(run.head_sha)) return "unknown";
   try {
     const jobs = await runJobs(run.id, run.run_attempt, api);
+    if (run.status === "completed" && run.conclusion === "cancelled" && jobs.length === 0) return "ineligible";
     const artifacts = await pages(`/actions/runs/${run.id}/artifacts`, "artifacts", api);
     const preflight = preflightJob(jobs);
     if (artifacts.some((artifact) => artifact.name === `qa-plan-attempt-${preflight?.run_attempt}` && artifact.expired)) return "unknown";

@@ -30,14 +30,19 @@
   ],
   "guards": [
     "scripts/ci-scope.test.ts",
-    "scripts/ci-linux-lanes.test.ts",
     "scripts/ci-workflow.test.ts",
     "scripts/testing/verification-docs.test.ts",
     "scripts/check.test.ts",
     "scripts/typecheck.test.ts",
     "scripts/check-electron-entrypoints.test.ts",
     "scripts/check-local-app.test.ts",
-    "scripts/qa/qa.test.ts"
+    "scripts/qa/qa.test.ts",
+    "scripts/qa/github.test.ts",
+    "scripts/qa/hold-release.test.ts",
+    "scripts/qa/label-gate.test.ts",
+    "scripts/qa/repair-recovery.test.ts",
+    "scripts/qa/scan.test.ts",
+    "scripts/release-ci.test.ts"
   ],
   "areas": [
     {

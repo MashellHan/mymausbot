@@ -31,8 +31,8 @@ task clock. These records guide optimization and never fail a passing check.
 All three commands accept `--base <revision>`; the default is `origin/main`.
 For changes under `relay/`, local edit and ready checks run the Relay package's
 native `pnpm test` in addition to their selected Vitest files. Relay tests are
-listed as deferred by an ordinary PR's fast selector and run in the full
-integration, daily and release lanes.
+listed as deferred by the focused selector and run in the applicable full
+lanes.
 Keep the base current. The current push hook leaves the global typecheck and
 suite in CI. Run additional local static checks when the changed contract or
 verification recipe requires them, with one recorded owner for each check.
@@ -110,9 +110,11 @@ Permission and consent checks still apply to actual screen use.
 ## Coverage boundaries
 
 `scripts/ci-scope.mjs` maps the full changed-file diff to contracts. An ordinary
-PR uses one cached Ubuntu static/setup path: applicable typecheck, lint, locale
-and source guards, the fixed 26-file security/data/dispatch core, and at most
-four portable affected test files. The selection artifact and log list
+PR (including `upstream-sync`) uses one cached Ubuntu static/setup path:
+applicable typecheck, lint, locale and source guards, the fixed 26-file
+security/data/dispatch core, and at most four portable affected test files.
+Relevant Settings index, catalog, generator and toolchain changes run the
+existing generated Settings places equality check early. The selection artifact and log list
 additional affected files deferred to full validation, including browser and
 Electron tests and expensive E2E files under `scripts/testing/` and
 `server/browser/`. Missing or unsafe required tests fail selection; the bound
@@ -122,7 +124,8 @@ does not silently turn a failed test into a skip.
 | --- | --- |
 | Ordinary PR | One Ubuntu fast path and the current-head `CI` gate; first attempt includes queue time in its five-minute target |
 | Explicit `ci:full`, `qa:repair` or `windows` label | Full macOS validation; the legacy `windows` label selects no Windows test runner; holds and review still apply |
-| Main integration, daily 05:00 full QA, release | Ten macOS all-E2E shards and macOS specialist checks in their applicable lanes; platform builds/publication retain their own required checks |
+| Ordinary main push | Focused cumulative integration on hosted Ubuntu; a source-bound plan records its exact green main baseline, intervening revisions and deferred coverage |
+| Daily 05:00 full QA, manual CI, release | Ten macOS all-E2E shards and macOS specialist checks in their applicable lanes; platform builds/publication retain their own required checks |
 | Missing or unreadable controls; applicable P0 or P1 hold | Fail closed or hold the affected merge; do not manufacture a green gate |
 | Stale full QA report without an applicable hold | Request shared recovery and restrict optional broader-lane reduction; ordinary fast PR selection remains available |
 
@@ -138,21 +141,21 @@ integrity checks remain separate from retired runtime tests.
 
 Sensitive auth, permission, credential, redaction, persistence, dispatch,
 driver and native changes still receive the fixed core, affected contracts and
-full validation after integration. The path/text guard does not replace review
+applicable scheduled or explicit full validation. The path/text guard does not replace review
 of semantics. Reviewer may request an explicit wider run with `ci:full`; label
 changes start a new run. Shadow timing and area admission do not delay the
 ordinary five-minute path or relax current-head and QA-hold checks.
 
 The required `CI` check starts with the workflow and binds its selection
 artifact to the run, revision and producing attempt. It waits for the selected
-required jobs, rechecks current PR controls and QA holds, and fails on missing,
+required jobs and rechecks the live PR head, base, merge tree, controls and QA holds, and fails on missing,
 skipped, cancelled or failed required work. An ordinary fast run that exceeds
 five minutes remains pending until its required work completes. Successful
 quality checks produce a green gate regardless of elapsed time. The independent
 process scan records timing violations, including queue/setup and slow phases.
 Actual required failures or incomplete execution still fail; execution safety
-timeouts are not the five-minute performance target. Explicit wider runs and post-integration
-validation keep their selected platform and specialist jobs. Unreadable
+timeouts are not the five-minute performance target. Explicit wider runs and
+full validation keep their selected platform and specialist jobs. Unreadable
 controls fail closed; an unreadable issue list cannot grant an exemption.
 Failed-job reruns reuse valid
 successful evidence from the same immutable run and revision, with the newest
@@ -161,7 +164,7 @@ remains a finding for Lead to classify and cannot verify the incident until a
 later clean execution covers it.
 
 For an open same-repository `qa:repair` PR linked to an active global hold,
-a trusted `workflow_run` handler inspects completed failed PR CI. It requests
+the trusted CI-completion listener in `qa-report.yml` inspects failed PR CI. It requests
 GitHub's failed-job rerun only when every failed/cancelled worker had no runner
 or steps, has GitHub's hosted acquisition failure annotation, and the gate log
 attributes its failure to those workers. It rechecks the live repair and latest
@@ -182,8 +185,9 @@ Lead. The rerun checks controls and holds again with the ordinary CI token.
 ## Advisory process scan and PR recovery
 
 `scripts/qa/scan.mjs` records process cases separately from quality results.
-The trusted-main `scan` job in `qa-report.yml` runs after PR CI completes; it is
-not a required PR check and uses `continue-on-error`. Its
+The trusted-main `scan` job in `qa-report.yml` runs after scheduled CI or on
+manual report delivery and inspects recent PR activity. It is not a required
+PR check and uses `continue-on-error`. A green PR starts no follow-up job. Its
 `process-scan.json` reports `passed`, `optimization_needed` or `incomplete`.
 The workflow scan is read-only and retains its report artifact. Lead reviews
 its findings alongside open PRs at the scheduled checkpoint and owns any
@@ -237,10 +241,15 @@ complete macOS selection, with ten all-E2E shards and specialist jobs. PR pushes
 cannot cancel it. Root `pnpm test` alone is not a full QA run.
 
 `qa-report.yml` executes trusted main code with issue-write permission, separate
-from PR execution. It accepts completed scheduled/manual main runs and main
-integration runs, reads result artifacts as data, and records execution
-completeness, outcomes and report delivery separately. Report artifacts are
-retained for 30 days and raw test results for seven days.
+from PR execution. This single CI-completion listener also hosts hold release
+and runner-capacity recovery as separate jobs with narrower permissions. The
+reporter reads selected results as data and records execution completeness,
+outcomes and delivery separately. Focused pushes keep failures, tested source
+and deferred coverage in their CI artifacts; the trusted focused run-name
+marker skips automatic report jobs without skipping legacy full pushes or
+manual replay. A focused report does not prove full QA, refresh full-run
+health, qualify for release or verify existing issues. Report
+artifacts are retained for 30 days and raw test results for seven days.
 
 Report one shared spelling or naming problem in one issue, listing every affected
 file, case and platform. Update that issue on repeat findings; do not file one

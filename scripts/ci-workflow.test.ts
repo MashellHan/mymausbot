@@ -1,8 +1,9 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { SELECTABLE_JOBS, ciOutputs, LINUX_OS, vitestMatrix } from "./ci-scope.mjs";
-import { interpolate } from "./testing/github-expression.ts";
+import { evaluate, interpolate } from "./testing/github-expression.ts";
 import { executionComplete, expectedJobs } from "./qa/contracts.mjs";
 import { verifyGate } from "./qa/gate.mjs";
 
@@ -58,7 +59,7 @@ describe("CI concurrency", () => {
     expect(workflow.on.pull_request).toBeDefined();
   });
 
-  it.each(["qa:triaged", "qa:p1", "qa:kind:product", "qa:scope:agents", "owner:upstream", "bug"])(
+  it.each(["qa:triaged", "qa:p1", "qa:kind:product", "qa:scope:agents", "owner:upstream", "bug", "upstream-sync"])(
     "keeps %s metadata separate while its required proof gate stays pending", (label) => {
       for (const action of ["labeled", "unlabeled"]) {
         expect(decision(prContext(action, label))).toEqual({
@@ -84,7 +85,7 @@ describe("CI concurrency", () => {
       .toMatchObject({ group: "ci-pr-134", cancel: true, static: true, gateName: "CI", gate: true });
   });
 
-  it.each(["ci:full", "qa:repair", "windows", "upstream-sync"])("runs required checks when %s is added or removed", (label) => {
+  it.each(["ci:full", "qa:repair", "windows"])("runs required checks when %s is added or removed", (label) => {
     for (const action of ["labeled", "unlabeled"]) {
       expect(decision(prContext(action, label))).toEqual({
         group: "ci-pr-134", cancel: true, static: true, gateName: "CI", gate: true,
@@ -227,10 +228,14 @@ describe("CI concurrency", () => {
     const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
     const checkout = release.jobs.ci.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/checkout@"));
     const sparse = (checkout.with["sparse-checkout"] as string).split("\n").map((line) => line.trim()).filter(Boolean);
-    const imports = [...readFileSync(new URL("./release-ci.mjs", import.meta.url), "utf8").matchAll(/^import .* from "\.\/([^"]+)";$/gm)]
-      .map((match) => `scripts/${match[1]}`);
-    expect(imports).toContain("scripts/ci-scope.mjs");
-    expect(sparse.sort()).toEqual(["scripts/release-ci.mjs", ...imports].sort());
+    const modules = new Set(["scripts/release-ci.mjs"]);
+    for (const file of modules) {
+      for (const [, path] of readFileSync(file, "utf8").matchAll(/^import .* from "(\.[^"]+)";$/gm)) {
+        modules.add(posix.normalize(`${posix.dirname(file)}/${path}`));
+      }
+    }
+    expect(modules).toContain("scripts/ci-integration.mjs");
+    expect(sparse.sort()).toEqual([...modules].sort());
   });
 
   it("builds the Windows Defender check's installer exactly as the release's Windows job does", () => {
@@ -244,14 +249,10 @@ describe("CI concurrency", () => {
     expect(check.jobs.check["runs-on"]).toBe(release.jobs.windows["runs-on"]);
   });
 
-  it("lets the scope read the previous commit's CI and a pull request's labels, and nothing more", () => {
-    // ci-scope.mjs runs a push's docs- or version-only diff without the runtime
-    // jobs only when the commit before it has its own green run, and a PR's
-    // Windows jobs when it carries the windows label.
-    expect(workflow.jobs.static.permissions).toEqual({ contents: "read", actions: "read", "pull-requests": "read", issues: "read" });
+  it("lets scope read main CI baseline evidence and live issue labels without any write permission", () => {
+    expect(workflow.jobs.static.permissions).toEqual({ contents: "read", actions: "read", issues: "read" });
     const scope = workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope");
-    expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}", MAUSBOT_CI_MODE: "${{ vars.MAUSBOT_CI_MODE }}",
-      OMB_CI_LINUX_IN_STATIC: "${{ runner.environment == 'self-hosted' }}", OMB_CI_EXECUTION_BINDING: "1" });
+    expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}", MAUSBOT_CI_MODE: "${{ vars.MAUSBOT_CI_MODE }}", OMB_CI_EXECUTION_BINDING: "1" });
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { permissions?: unknown }][]) {
       if (name === "gate") expect(job.permissions).toEqual({ contents: "read", actions: "read", issues: "read", "pull-requests": "read" });
       else if (name !== "static") expect(job.permissions, name).toBeUndefined();
@@ -377,23 +378,24 @@ describe("CI concurrency", () => {
     expect(planUpload).toBeGreaterThan(steps.findIndex((step) => step.id === "scope"));
     expect(planUpload).toBeLessThan(steps.findIndex((step) => step.run === "pnpm install --frozen-lockfile"));
     const fast = steps.find((step) => step.name === "Security, data and dispatch core with bounded affected tests")!;
-    expect(fast.if).toBe("steps.scope.outputs.fast_pr == 'true'");
-    expect(fast.run).toBe("node scripts/testing/fast-static-overlap.mjs run");
+    expect(fast.if).toBe("steps.scope.outputs.fast_pr == 'true' || steps.scope.outputs.focused_push == 'true'");
+    expect(fast.run).toBe("mkdir -p qa-results\nnode scripts/testing/fast-static-overlap.mjs run\n");
     expect(fast.env).toMatchObject({ OMB_VITEST_E2E: "all", OMB_VITEST_WORKERS: 2,
+      OMB_VITEST_RETRY_LOG: "${{ github.workspace }}/qa-results/vitest-retries.jsonl",
       OMB_VITEST_SUBSET: "${{ steps.scope.outputs.fast_files }}", OMB_FAST_TYPECHECK: "${{ steps.scope.outputs.build }}" });
-    expect(steps[steps.indexOf(fast) + 1]?.if).toBe("always() && steps.scope.outputs.fast_pr == 'true'");
-    const built = (workflow.jobs.static.steps as { if?: string; run?: string }[]).filter((step) => step.if?.includes("outputs.build"));
-    expect(built.map((step) => [step.if, step.run])).toEqual([
-      ["always() && steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr == 'true'", "node scripts/testing/fast-static-overlap.mjs typecheck-result"],
-      ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm typecheck"],
-      ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm check:electron"],
-      ["steps.scope.outputs.build == 'true' && steps.scope.outputs.fast_pr != 'true'", "pnpm exec vite build"],
-    ]);
-    expect(steps.find((step) => step.name === "pnpm typecheck (parallel result)")?.run)
-      .toBe("node scripts/testing/fast-static-overlap.mjs typecheck-result");
-    expect(workflow.jobs.static.steps.some((step: { run?: string }) =>
-      step.run === "pnpm exec vitest run scripts/ci-scope.test.ts scripts/ci-linux-lanes.test.ts scripts/ci-workflow.test.ts scripts/testing/verification-docs.test.ts scripts/check.test.ts scripts/typecheck.test.ts scripts/check-electron-entrypoints.test.ts scripts/check-local-app.test.ts scripts/qa/qa.test.ts",
-    )).toBe(true);
+    expect(steps[steps.indexOf(fast) + 1]?.with?.name).toContain("'focused' || 'fast'");
+    const generated = steps.find((step) => step.name === "Validate generated Settings places")!;
+    expect(generated).toMatchObject({ if: "steps.scope.outputs.settings_places == 'true'", run: "pnpm exec vitest run src/components/settings/settings-places.test.ts" });
+    expect(steps.indexOf(generated)).toBeLessThan(steps.indexOf(fast));
+    const result = steps.find((step) => step.name === "pnpm typecheck (parallel result)")!;
+    expect(result.if).toContain("steps.fast.outcome");
+    expect(result.run).toBe("node scripts/testing/fast-static-overlap.mjs typecheck-result");
+    const contracts = steps.find((step) => step.name === "Verify CI selection and documentation references")!;
+    expect(contracts.run).toContain("scripts/ci-scope.test.ts scripts/ci-workflow.test.ts");
+    expect(contracts.run).toContain("scripts/qa/*.test.ts scripts/release-ci.test.ts");
+    expect(steps.indexOf(result)).toBeLessThan(steps.indexOf(contracts));
+    expect(steps.indexOf(steps.find((step) => step.run === "pnpm typecheck")!)).toBeLessThan(steps.indexOf(contracts));
+    expect(workflow.jobs.gate.steps.at(-1).env.OMB_CI_EXECUTION_BINDING).toBe("1");
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { needs?: string | string[]; if?: string }][]) {
       if (["static", "gate", "shadow"].includes(name)) continue;
       // The one deploy job: after the control-plane checks, on main pushes only. It is
@@ -445,87 +447,60 @@ describe("CI concurrency", () => {
 
 type Step = { id?: string; name?: string; if?: string; run?: string; uses?: string; shell?: string; env?: Record<string, string>; with?: Record<string, string> };
 
-/** The contexts a run's static job is routed by: a pull request from `author`, a push, a merge group or a scheduled run. */
-function runContext({ boat = "on", event = "pull_request", actor = "milind-soni", triggering = actor, author = actor, head = "milind-soni/OpenMausBot" }: {
-  boat?: string | null; event?: string; actor?: string; triggering?: string; author?: string; head?: string | null;
-} = {}) {
-  return {
-    vars: boat === null ? {} : { BOAT_CI: boat },
-    github: {
-      event_name: event, actor, triggering_actor: triggering, repository: "milind-soni/OpenMausBot", repository_owner: "milind-soni",
-      event: event === "pull_request" ? { pull_request: { user: { login: author }, head: { repo: head === null ? null : { full_name: head } } } } : {},
-    },
-  };
-}
-
-describe("CI on Boat", () => {
-  const routed = (context: ReturnType<typeof runContext>) => ({
-    runsOn: interpolate(workflow.jobs.static["runs-on"], context),
-    name: interpolate(workflow.jobs.static.name, context),
-    timeout: interpolate(String(workflow.jobs.static["timeout-minutes"]), context),
-  });
-  const boat = { runsOn: "boat-xlarge", name: "typecheck + lint (Boat)", timeout: 45 };
-  const github = (timeout: number) => ({ runsOn: "ubuntu-latest", name: "typecheck + lint", timeout });
-
-  it.each([
-    ["the owner's push to main", { event: "push" }],
-    ["a merge group the owner queued", { event: "merge_group" }],
-  ])("runs static source checks on one Boat VM for %s", (_, run) => {
-    expect(routed(runContext(run))).toEqual(boat);
+describe("trusted CI follow-up", () => {
+  const listener = parse(readFileSync(".github/workflows/qa-report.yml", "utf8"));
+  const repository = "o/r";
+  const jobs = (event_name: string, event: Parameters<typeof evaluate>[1], ref = "refs/heads/main") =>
+    Object.entries(listener.jobs).filter(([, job]) => evaluate((job as { if: string }).if, { github: { event_name, event, repository, ref } }))
+      .map(([name]) => name);
+  const sha = "d26942a074c92528f2be9c8f56c516c8112310e3";
+  const completion = (event: string, conclusion = "success", run_attempt = 1, repo = repository, head_branch = "main", display_title = "Merge pull request #1083") => ({
+    workflow_run: { event, conclusion, run_attempt, head_branch, head_sha: sha, path: ".github/workflows/ci.yml", display_title, head_repository: { full_name: repo } },
   });
 
-  it.each([
-    ["for the owner's pull request", {}, 15],
-    ["while BOAT_CI is not set", { boat: null }, 15],
-    ["while BOAT_CI is off", { boat: "off" }, 15],
-    ["for a fork's pull request", { head: "someone/OpenMausBot", author: "someone", actor: "someone" }, 15],
-    ["for a fork's pull request the owner started", { head: "someone/OpenMausBot", author: "someone" }, 15],
-    ["for a deleted fork's pull request", { head: null }, 15],
-    ["for a teammate's pull request on this repository", { author: "teammate", actor: "teammate" }, 15],
-    ["for the owner's pull request that a teammate pushed to", { actor: "teammate" }, 15],
-    ["for the owner's pull request that a teammate re-ran", { triggering: "teammate" }, 15],
-    ["for a push a bot made", { event: "push", actor: "github-actions[bot]" }, 45],
-    ["for the nightly run", { event: "schedule" }, 45],
-    ["for a manual run, the release lane among them", { event: "workflow_dispatch" }, 45],
-  ])("keeps every job on GitHub's runners %s", (_, run, timeout) => {
-    expect(routed(runContext(run))).toEqual(github(timeout));
+  it("uses one completion listener, one full schedule, and no contributor or Boat automation", () => {
+    const directory = ".github/workflows";
+    const listeners = readdirSync(directory).filter((file) => file.endsWith(".yml")).filter((file) =>
+      parse(readFileSync(`${directory}/${file}`, "utf8")).on?.workflow_run?.workflows?.includes("CI"));
+    expect(listeners).toEqual(["qa-report.yml"]);
+    expect(listener.on.workflow_run).toEqual({ workflows: ["CI"], types: ["completed"] });
+    expect(listener.on.schedule).toBeUndefined();
+    expect(workflow.on.schedule).toEqual([{ cron: "0 21 * * *" }]);
+    expect(existsSync(`${directory}/contributors.yml`)).toBe(false);
+    expect(workflow.jobs.static).toMatchObject({ name: "typecheck + lint", "runs-on": "ubuntu-latest", "timeout-minutes": 15 });
+    expect(readFileSync(`${directory}/ci.yml`, "utf8")).not.toMatch(/BOAT_CI|boat-xlarge|linux_lanes/);
   });
 
-  it("does the Linux work in the static job only where ci-scope moved it there, without Boat's extra rights or desktop", () => {
-    const steps = workflow.jobs.static.steps as Step[];
-    const boatOnly = steps.slice(steps.findIndex((step) => step.name === "Remove what Boat installs and GitHub's runners lack"));
-    expect(boatOnly.map((step) => step.if)).toEqual([
-      "steps.scope.outputs.linux_lanes",
-      "steps.scope.outputs.linux_lanes",
-      "steps.scope.outputs.linux_lanes && steps.electron-cache.outputs.eligible == 'true'",
-      "steps.scope.outputs.linux_lanes",
-      "steps.scope.outputs.linux_lanes && steps.electron-cache.outputs.eligible == 'true' && steps.electron-cache-restore.outputs.cache-hit != 'true' && steps.electron-cache-prepare.outputs.cache-ready == 'true'",
-      "steps.scope.outputs.linux_lanes",
-      "${{ !cancelled() && steps.scope.outputs.linux_lanes }}",
-      "failure() && steps.scope.outputs.linux_lanes",
-      "always() && steps.scope.outputs.linux_lanes",
-    ]);
-    const lanes = boatOnly.find((step) => step.run === "node scripts/ci-linux-lanes.mjs")!;
-    expect(lanes.env).toMatchObject({ OMB_CI_LINUX_LANES: "${{ steps.scope.outputs.linux_lanes }}", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC" });
-    expect(lanes.shell).toBe("setpriv --inh-caps=-all --ambient-caps=-all -- env -u DISPLAY -u XAUTHORITY bash --noprofile --norc -eo pipefail {0}");
-    expect(boatOnly.find((step) => step.run?.startsWith("sudo rm -f "))!.run).toContain("/usr/bin/bwrap");
-    // The same report and artifact as the vitest and behavior-evals jobs.
-    const report = (workflow.jobs.vitest.steps as Step[]).find((step) => step.run === "node scripts/testing/ci-retry-summary.mjs")!;
-    expect(boatOnly.find((step) => step.run === "node scripts/testing/ci-retry-summary.mjs")!.env).toEqual(report.env);
-    const upload = (workflow.jobs["behavior-evals"].steps as Step[]).find((step) => step.uses?.startsWith("actions/upload-artifact@"))!;
-    expect(boatOnly.at(-2)).toEqual({ ...upload, if: "failure() && steps.scope.outputs.linux_lanes" });
+  it("reports trusted main, scans only the scheduled or manual path, and rechecks only eligible failures", () => {
+    expect(jobs("workflow_run", completion("pull_request"))).toEqual([]);
+    expect(jobs("workflow_run", completion("pull_request", "failure"))).toEqual(["reconcile", "recover"]);
+    expect(jobs("workflow_run", completion("pull_request", "failure", 4))).toEqual(["reconcile"]);
+    expect(jobs("workflow_run", completion("pull_request", "failure", 1, "fork/r"))).toEqual([]);
+    expect(jobs("workflow_run", completion("push"))).toEqual(["report"]);
+    const marker = interpolate(workflow["run-name"], { github: { event_name: "push", sha } });
+    expect(marker).toBe(`Focused main integration ${sha}`);
+    for (const conclusion of ["success", "failure", "cancelled"]) {
+      expect(jobs("workflow_run", completion("push", conclusion, 1, repository, "main", String(marker)))).toEqual([]);
+    }
+    expect(jobs("workflow_run", completion("push", "success", 1, repository, "main", `Focused main integration ${"f".repeat(40)}`))).toEqual(["report"]);
+    expect(interpolate(workflow["run-name"], { github: { event_name: "schedule", sha } })).toBe("");
+    expect(jobs("workflow_run", completion("schedule"))).toEqual(["scan", "report"]);
+    expect(jobs("workflow_run", completion("schedule", "success", 1, "fork/r"))).toEqual([]);
+    expect(jobs("workflow_run", completion("workflow_dispatch", "success", 1, repository, "release-ci/v1"))).toEqual([]);
+    expect(jobs("workflow_dispatch", {})).toEqual(["scan", "report"]);
+    expect(jobs("workflow_dispatch", {}, "refs/heads/topic")).toEqual([]);
   });
 
-  it("does not run retired full Linux lanes on Boat", () => {
-    expect(workflow.jobs.static.steps.some((step: Step) => step.run === "node scripts/ci-linux-lanes.mjs" && !step.if)).toBe(false);
-    expect(workflow.jobs["behavior-evals"]["runs-on"]).toBe("macos-latest");
-    expect(workflow.jobs["control-plane"]["runs-on"]).toBe("macos-latest");
-  });
-
-  it("starts Boat VMs from no other workflow", () => {
-    const directory = new URL("../.github/workflows/", import.meta.url);
-    const onBoat = readdirSync(directory).filter((file) => /\.ya?ml$/.test(file))
-      .filter((file) => /runs-on:[^\n]*boat|'boat(?:-\w+)?'/.test(readFileSync(new URL(file, directory), "utf8")));
-    expect(onBoat).toEqual(["ci.yml"]);
+  it("retains real QA hold release events and scoped trusted-main permissions", () => {
+    const issue = { labels: [{ name: "qa" }] };
+    expect(jobs("issues", { action: "closed", issue })).toEqual(["reconcile"]);
+    expect(jobs("issues", { action: "labeled", issue, label: { name: "qa:scope:usage" } })).toEqual(["reconcile"]);
+    expect(jobs("issues", { action: "unlabeled", issue: { labels: [] }, label: { name: "qa" } })).toEqual(["reconcile"]);
+    expect(jobs("issues", { action: "labeled", issue, label: { name: "documentation" } })).toEqual([]);
+    expect(jobs("issues", { action: "closed", issue: { labels: [{ name: "bug" }] } })).toEqual([]);
+    expect(listener.permissions).toEqual({});
+    for (const job of Object.values(listener.jobs) as { steps: Step[] }[]) {
+      expect(job.steps[0].with).toEqual({ ref: "${{ github.sha }}", "persist-credentials": false });
+    }
   });
 });
