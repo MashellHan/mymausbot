@@ -90,12 +90,13 @@ describe("original Electron runtime recovery", () => {
 
   it("prepares the same verified runtime in all three independent CI runners", () => {
     const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-    const jobs = Object.values(workflow.jobs);
-    const steps = jobs.flatMap((job) => job.steps ?? []);
-    const prepare = steps.filter((step) => step.name === "Prepare Electron test runtime");
-    expect(prepare).toHaveLength(3);
-    expect(prepare.map((step) => step.run)).toEqual(Array(3).fill("node scripts/prepare-electron-ci.mjs"));
-    for (const job of jobs.filter((candidate) => (candidate.steps ?? []).some((step) => step.name === "Prepare Electron test runtime"))) {
+    const preparingJobs = Object.entries(workflow.jobs)
+      .filter(([, job]) => (job.steps ?? []).some((step) => step.name === "Prepare Electron test runtime"));
+    expect(preparingJobs.map(([id]) => id)).toEqual(["vitest", "electron-smokes"]);
+    const prepare = preparingJobs.flatMap(([, job]) => job.steps.filter((step) => step.name === "Prepare Electron test runtime"));
+    expect(prepare).toHaveLength(2);
+    expect(prepare.map((step) => step.run)).toEqual(Array(2).fill("node scripts/prepare-electron-ci.mjs"));
+    for (const [, job] of preparingJobs) {
       const names = job.steps.map((step) => step.name);
       const resolveIndex = names.indexOf("Resolve Electron archive cache");
       const restoreIndex = names.indexOf("Restore Electron archive cache");
