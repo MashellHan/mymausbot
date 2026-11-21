@@ -505,6 +505,44 @@ describe("ProviderRegistry", () => {
     expect(fake.probes).toEqual(["a", "a", "a", "a"]);
   });
 
+  it("rebuilds manifest-backed models on manifest change without forgetting status snapshots", async () => {
+    const fake = makeFakeDriver({ kind: "claudeAgent" });
+    let notifyManifest!: () => void;
+    let currentCatalog: ModelCatalog = { default: "old", options: [{ id: "old", label: "Old" }] };
+    const registry = new ProviderRegistry([fake.driver], {
+      manifest: {
+        onChange: (listener) => {
+          notifyManifest = listener;
+          return () => {};
+        },
+      },
+      startManifestRefresh: () => {},
+    });
+    let refreshed = 0;
+    await registry.load({ a: { driver: "claudeAgent" } }, (instance) => ({
+      ...instance,
+      get models() {
+        return currentCatalog;
+      },
+      refreshModels: async () => {
+        refreshed += 1;
+        currentCatalog = { default: "new", options: [{ id: "new", label: "New" }] };
+      },
+    }));
+
+    const reuse = { ms: ENGINE_LIST_REUSE_MS, changed: vi.fn() };
+    expect((await registry.describe({ reuse }))[0].models.default).toBe("old");
+    expect(fake.probes).toEqual(["a"]);
+
+    notifyManifest();
+    await Promise.resolve();
+
+    const described = await registry.describe({ reuse });
+    expect(refreshed).toBe(1);
+    expect(described[0].models).toEqual({ default: "new", options: [{ id: "new", label: "New" }] });
+    expect(fake.probes).toEqual(["a"]);
+  });
+
   it("disposeAll disposes every live instance and empties the registry", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([fake.driver]);
