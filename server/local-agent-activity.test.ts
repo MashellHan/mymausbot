@@ -289,13 +289,13 @@ describe("bounded per-agent Codex activity", () => {
     const result = await provider.get("w6:pG");
     expect(result.events.map(({ kind, tool, text }) => [kind, tool, text])).toEqual([
       ["tool-result", null, "[Result details unavailable]"],
-      ["tool-call", "functions.exec", input],
+      ["tool-call", "functions.exec", "cmd: printf synthetic"],
       ["tool-result", "functions.exec", "Script completed Wall time 0.1 seconds Exit code: 0 Synthetic command output"],
-      ["tool-call", "functions.exec", blockInput],
+      ["tool-call", "functions.exec", "cmd: printf block"],
       ["tool-result", "functions.exec", "Script completed Wall time 0.1 seconds Exit code: 0 Minimal output"],
       ["tool-call", "functions.exec", "cmd: ok"],
       ["tool-result", null, "[Result details unavailable]"],
-      ["tool-call", "functions.exec", input],
+      ["tool-call", "functions.exec", "cmd: printf synthetic"],
       ["tool-result", null, "[Result details unavailable]"],
     ]);
     expect(JSON.stringify(result)).not.toMatch(/ignored alternative|private path|private reasoning|c1|c2|12345|original_token_count|chunk_id|MISMATCH_FN_RESULT/);
