@@ -10807,5 +10807,10 @@
   "server.reach.placeMovedNew": "{bot} 现在在{to}上工作，这是一台新的、从空白开始的机器。它在{from}上的文件仍然在那里，没有丢失任何东西。",
   "server.reach.place.myCloud": "My Cloud",
   "server.reach.place.thisCloud": "这个 Cloud",
-  "server.reach.place.cloudDesktop": "云端桌面"
+  "server.reach.place.cloudDesktop": "云端桌面",
+  "server.teammates.noLongerWaiting": "{who} 不再等你了",
+  "chat.notice.waitingPasswordElsewhere": "正在等你在 @{name} 里填写{label}",
+  "chat.notice.waitingSignInElsewhere": "正在等你在 @{name} 里登录 {label}",
+  "chat.notice.waitingConnectElsewhere": "正在等你在 @{name} 里连接 {label}",
+  "chat.notice.waitingReviewElsewhere": "正在等你在 @{name} 里审阅"
 }

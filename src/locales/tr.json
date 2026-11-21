@@ -5998,5 +5998,6 @@
   "workspaces.upgraded": "Çalışan her kurulum yeni sürümle yeniden başlatıldı.",
   "workspaces.users": "Kullanıcılar",
   "workspaces.usersTitle": "{slug} alanına kimler giriş yapabilir",
-  "workspaces.working": "İşleniyor…"
+  "workspaces.working": "İşleniyor…",
+  "server.teammates.noLongerWaiting": "{who} artık sizi beklemiyor"
 }

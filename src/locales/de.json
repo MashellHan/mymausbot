@@ -4147,5 +4147,6 @@
   "server.reach.placeMovedNew": "{bot} arbeitet jetzt auf {to}, einem neuen, der leer beginnt. Seine Dateien auf {from} sind noch da; nichts ging verloren.",
   "server.reach.place.myCloud": "My Cloud",
   "server.reach.place.thisCloud": "dieser Cloud",
-  "server.reach.place.cloudDesktop": "dem Cloud-Desktop"
+  "server.reach.place.cloudDesktop": "dem Cloud-Desktop",
+  "server.teammates.noLongerWaiting": "{who} wartet nicht mehr auf dich"
 }

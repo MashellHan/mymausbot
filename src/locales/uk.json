@@ -4179,5 +4179,6 @@
   "workspaces.upgradeAll": "Оновити всі",
   "workspaces.users": "Користувачі",
   "workspaces.usersTitle": "Хто може входити в {slug}",
-  "workspaces.working": "Працюємо…"
+  "workspaces.working": "Працюємо…",
+  "server.teammates.noLongerWaiting": "{who} більше не чекає на вас"
 }

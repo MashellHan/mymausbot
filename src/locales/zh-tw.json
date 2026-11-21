@@ -10303,5 +10303,10 @@
   "server.reach.placeMovedNew": "{bot} 現在在{to}上工作，這是一台新的、從空白開始的機器。它在{from}上的檔案仍然在那裡，沒有遺失任何東西。",
   "server.reach.place.myCloud": "My Cloud",
   "server.reach.place.thisCloud": "這個 Cloud",
-  "server.reach.place.cloudDesktop": "雲端桌面"
+  "server.reach.place.cloudDesktop": "雲端桌面",
+  "server.teammates.noLongerWaiting": "{who} 不再等待你",
+  "chat.notice.waitingPasswordElsewhere": "正在 @{name} 中等待你填寫{label}",
+  "chat.notice.waitingSignInElsewhere": "正在 @{name} 中等待你登入 {label}",
+  "chat.notice.waitingConnectElsewhere": "正在 @{name} 中等待你連接 {label}",
+  "chat.notice.waitingReviewElsewhere": "正在 @{name} 中等待你審閱"
 }

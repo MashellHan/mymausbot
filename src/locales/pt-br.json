@@ -11295,5 +11295,10 @@
   "server.reach.placeMovedNew": "{bot} agora trabalha em outra máquina: {to}, nova e vazia. Nada foi perdido: os arquivos dele continuam no lugar anterior, {from}.",
   "server.reach.place.myCloud": "My Cloud",
   "server.reach.place.thisCloud": "este Cloud",
-  "server.reach.place.cloudDesktop": "o desktop na nuvem"
+  "server.reach.place.cloudDesktop": "o desktop na nuvem",
+  "server.teammates.noLongerWaiting": "{who} não está mais esperando você",
+  "chat.notice.waitingPasswordElsewhere": "Esperando você em @{name}: {label}",
+  "chat.notice.waitingSignInElsewhere": "Esperando você entrar em {label} em @{name}",
+  "chat.notice.waitingConnectElsewhere": "Esperando você conectar {label} em @{name}",
+  "chat.notice.waitingReviewElsewhere": "Esperando sua revisão em @{name}"
 }

@@ -4137,7 +4137,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "es": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -10646,7 +10647,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "fr": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -14556,7 +14558,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "hi": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -18318,7 +18321,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "it": {
       "access.worksOn": "f85a852d83f31ae30da146438dd4cfa1a3b9c491c768fd20ae3c7e833097714e",
@@ -25393,7 +25397,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "ja": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -33445,7 +33450,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "ko": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -41187,7 +41193,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "pl": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -48396,7 +48403,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "pt-br": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -59668,7 +59676,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "ru": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -66931,7 +66940,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "tr": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -72933,7 +72943,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "uk": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -77116,7 +77127,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "vi": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -83118,7 +83130,8 @@
       "settings.updates.openReleases": "478fd2df212e37d2052afbc72b991999c65ff016189b30f985f7ec73d120c9ca",
       "sidebar.update.manual": "7ebfee1513d4da1f7f746d82e68ff63cfaf5c49f13c2380b37f14e91bfd06196",
       "sidebar.update.manualFailed": "cc8104a0c49e1311e9a030baf18c5c22b8b4fe9179b678ba88aefa8a22de17dc",
-      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd"
+      "sidebar.update.openReleases": "12fb30bf69dceb5e9513c74c70e17a6373aefc2b5a739c300b6d1be199cd6fdd",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "zh": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -93860,7 +93873,8 @@
       "chat.handoffExchange.back": "76900f1bfd16c8d4dd3d25e6f46638d7165aee23883ccea6bfe071c514421769",
       "chat.handoffExchange.loading": "08cd9919453184389e78d9924a9dc3d4b68f2529b79bdd195dd51fb6139f927c",
       "chat.handoffExchange.failed": "9205f816010803c4e86ee0b2e43f1b99582f2dc452ac93d7c187e8d1e6686b2f",
-      "chat.handoffExchange.empty": "f0d5968f615ed7ab11fdf8f17586cfaeb2845eee5757459e804b4e9d663a3588"
+      "chat.handoffExchange.empty": "f0d5968f615ed7ab11fdf8f17586cfaeb2845eee5757459e804b4e9d663a3588",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     },
     "zh-tw": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -104153,7 +104167,8 @@
       "pwaBridge.status.off": "ca7981b46ecf2c1787b6d76d81d9fd7fa0ca95842e2fcc2a452869891a9334d1",
       "pwaBridge.status.replaced": "11eac34bfe2cce832191595fe579415bfaad86d930553f7e33e30cfe0611e042",
       "pwaBridge.status.timeout": "165bf1d26372706216396ae444ea6e34d9335cbd7df363395301b4001122eb16",
-      "pwaBridge.title": "116218ef82f4a01d68635d78f47dfbb6c1d7cb1353945272cafc9120dcf15275"
+      "pwaBridge.title": "116218ef82f4a01d68635d78f47dfbb6c1d7cb1353945272cafc9120dcf15275",
+      "server.teammates.noLongerWaiting": "49259fb62a6e8687efa6a6e69da294c81bd67a19c57687d0724ee4bdd5cc4645"
     }
   }
 }

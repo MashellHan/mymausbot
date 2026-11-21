@@ -11940,5 +11940,10 @@
   "server.reach.placeMovedNew": "{bot} now works on {to}, a new one that starts empty. Its files on {from} are still there; nothing was lost.",
   "server.reach.place.myCloud": "My Cloud",
   "server.reach.place.thisCloud": "this Cloud",
-  "server.reach.place.cloudDesktop": "the cloud desktop"
+  "server.reach.place.cloudDesktop": "the cloud desktop",
+  "server.teammates.noLongerWaiting": "{who} no longer waits on you",
+  "chat.notice.waitingPasswordElsewhere": "Waiting on your {label} in @{name}",
+  "chat.notice.waitingSignInElsewhere": "Waiting on you to sign in to {label} in @{name}",
+  "chat.notice.waitingConnectElsewhere": "Waiting on you to connect {label} in @{name}",
+  "chat.notice.waitingReviewElsewhere": "Waiting on your review in @{name}"
 }
