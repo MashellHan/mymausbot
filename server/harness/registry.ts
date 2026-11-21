@@ -126,27 +126,38 @@ export class ProviderRegistry {
   private readonly npmPresent: () => boolean;
   private readonly status: ReturnType<typeof engineStatusFile> | null;
   private readonly installStandalone: InstallStandalone;
+  private readonly manifest: { onChange(listener: () => void): () => void } | undefined;
+  private readonly startManifestRefresh: (() => void) | undefined;
 
   constructor(
     drivers: readonly AnyProviderDriver[],
-    options: { enginesBaseDir?: string; npmAvailable?: () => boolean; statusFile?: string; installStandalone?: InstallStandalone } = {},
+    options: {
+      enginesBaseDir?: string;
+      npmAvailable?: () => boolean;
+      statusFile?: string;
+      installStandalone?: InstallStandalone;
+      manifest?: { onChange(listener: () => void): () => void };
+      startManifestRefresh?: () => void;
+    } = {},
   ) {
     this.enginesBaseDir = options.enginesBaseDir;
     this.npmPresent = options.npmAvailable ?? npmAvailable;
     this.status = options.statusFile ? engineStatusFile(options.statusFile) : null;
     this.installStandalone = options.installStandalone ?? installStandaloneEngine;
+    this.manifest = options.manifest;
+    this.startManifestRefresh = options.startManifestRefresh;
     this.driversByKind = new Map(drivers.map((d) => [d.driverKind, d]));
   }
 
   private watchModelManifest(): void {
     if (this.manifestWatched) return;
     this.manifestWatched = true;
-    modelManifest().onChange(() => {
+    (this.manifest ?? modelManifest()).onChange(() => {
       for (const instance of this.instances()) {
-        if (MANIFEST_REBUILT_DRIVERS.has(instance.driverKind)) void this.refreshModels(instance.instanceId).catch(() => {});
+        if (MANIFEST_REBUILT_DRIVERS.has(instance.driverKind)) void instance.refreshModels?.().catch(() => {});
       }
     });
-    startModelManifestRefresh();
+    (this.startManifestRefresh ?? startModelManifestRefresh)();
   }
 
   async load(configs: InstanceConfigMap, decorate?: (instance: ProviderInstance) => ProviderInstance) {

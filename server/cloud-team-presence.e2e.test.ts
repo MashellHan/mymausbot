@@ -89,19 +89,19 @@ it("the people in a shared chat see each other there; Bob's private chat is name
   const bobPrivate = await here(bob, bobThread);
   expect(bobPrivate.status).toBe(200);
   expect(bobPrivate.body).toEqual({ ok: true });
-  await until(() => lastList("owner", scout.mainThreadId)?.length === 2);
+  await until(() => lastList("owner", scout.mainThreadId)?.length === 2 && lastList("admin", scout.mainThreadId)?.length === 2);
   expect(lastList("owner", scout.mainThreadId)).toEqual([ADMIN.email, OWNER.email]);
   expect(lastList("admin", scout.mainThreadId)).toEqual([ADMIN.email, OWNER.email]);
 
   // Bob joins the shared chat, and everyone in it sees all three.
   await here(bob, scout.mainThreadId);
-  await until(() => lastList("owner", scout.mainThreadId)?.length === 3 && lastList("bob", scout.mainThreadId)?.length === 3);
+  await until(() => lastList("owner", scout.mainThreadId)?.length === 3 && lastList("admin", scout.mainThreadId)?.length === 3 && lastList("bob", scout.mainThreadId)?.length === 3);
   expect(lastList("admin", scout.mainThreadId)).toEqual([ADMIN.email, BOB.email, OWNER.email]);
 
   // Back to his private chat: the shared chat just loses him.
   const mark = { owner: streams.owner!.mark(), admin: streams.admin!.mark() };
   await here(bob, bobThread);
-  await until(() => lastList("owner", scout.mainThreadId)?.length === 2);
+  await until(() => lastList("owner", scout.mainThreadId)?.length === 2 && lastList("admin", scout.mainThreadId)?.length === 2);
   expect(lastList("owner", scout.mainThreadId)).toEqual([ADMIN.email, OWNER.email]);
   for (const who of ["owner", "admin"] as const) {
     const after = streams[who]!.since(mark[who]);
@@ -120,7 +120,7 @@ it("the people in a shared chat see each other there; Bob's private chat is name
 it("a group chat's list reaches the people in it, and a bot Bob may not use keeps him out of its chat", async () => {
   await here(owner, roomThread);
   await here(bob, roomThread);
-  await until(() => lastList("bob", roomThread)?.length === 2);
+  await until(() => lastList("owner", roomThread)?.length === 2 && lastList("bob", roomThread)?.length === 2);
   expect(lastList("owner", roomThread)).toEqual([BOB.email, OWNER.email]);
 
   await here(owner, payroll.mainThreadId);
