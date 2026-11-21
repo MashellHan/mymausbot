@@ -29,7 +29,7 @@ export function githubActivityPageAllowed(raw) {
     if (url.origin !== GITHUB_ACTIVITY_ORIGIN || url.port || url.username || url.password || url.search || url.hash.length > 256) {
       return false;
     }
-    if (url.pathname === "/github/" || url.pathname === "/github/demo/univer-orders/") return true;
+    if (url.pathname === "/github/" || url.pathname === "/github/demo/univer-orders/" || url.pathname === "/github/demo/pandera-orders/") return true;
     const editionMatch = /^\/github\/(\d{8})\/$/.exec(url.pathname);
     if (editionMatch) return isValidCompactDate(editionMatch[1]);
     const repoMatch = /^\/github\/(\d{8})\/([^/]+)\/([^/]+)\/$/.exec(url.pathname);
