@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
   type DependencyList,
   type PointerEvent,
   type TouchEvent,
@@ -28,8 +29,15 @@ import {
   withRestingCard,
   type TranscriptWindowBounds,
 } from "@/lib/transcript-window";
+import { copyText } from "@/lib/copy-text";
 import { reducedMotion } from "@/lib/onboarding";
-import { restoreSelection, selectedRows, setSelectionAside, type SetAsideSelection } from "@/lib/transcript-selection";
+import {
+  copyInTranscriptScope,
+  restoreSelection,
+  selectedRows,
+  setSelectionAside,
+  type SetAsideSelection,
+} from "@/lib/transcript-selection";
 import {
   JUMP_TO_LATEST_DELAY_MS,
   initialTranscriptFollow,
@@ -124,6 +132,13 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
   };
   const dragging = useRef(false);
   const setAside = useRef<{ key: string; selection: SetAsideSelection } | null>(null);
+  const transcriptKeyRef = useRef(transcriptKey);
+  transcriptKeyRef.current = transcriptKey;
+  const transcriptShownRef = useRef(transcriptShown);
+  transcriptShownRef.current = transcriptShown;
+  if (setAside.current && (!transcriptShown || setAside.current.key !== transcriptKey)) {
+    setAside.current = null;
+  }
   /**
    * `next`, widened over the rows a text selection spans so a step never lets them go. Past the hold's cap a drag keeps
    * `refused` (the drawn window), and anything else sets the selection aside until its rows are drawn again.
@@ -268,9 +283,14 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
   // A selection set aside comes back once both of its rows are drawn again; a click elsewhere or a new selection lets it go.
   useLayoutEffect(() => {
     const aside = setAside.current, list = transcriptRef.current;
-    if (!aside || !list) return;
+    if (!aside) return;
+    if (!transcriptShown || aside.key !== transcriptKey) {
+      setAside.current = null;
+      return;
+    }
+    if (!list) return;
     const active = list.ownerDocument.getSelection();
-    if (aside.key !== transcriptKey || (active && !active.isCollapsed) || restoreSelection(list, aside.selection) !== "waiting") {
+    if ((active && !active.isCollapsed) || restoreSelection(list, aside.selection) !== "waiting") {
       setAside.current = null;
     }
   });
@@ -323,22 +343,71 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
     lastTop.current = el.scrollTop;
   });
 
+  const asideForCopy = useCallback((target: EventTarget | null): SetAsideSelection | null => {
+    const aside = setAside.current;
+    const scroller = scrollRef.current, list = transcriptRef.current;
+    if (!aside || !transcriptShownRef.current || aside.key !== transcriptKeyRef.current || !scroller || !list) return null;
+    const active = list.ownerDocument.getSelection();
+    if (active && !active.isCollapsed) {
+      setAside.current = null;
+      return null;
+    }
+    return copyInTranscriptScope(scroller, list, target) ? aside.selection : null;
+  }, []);
+
+  const writeAsideToCopy = useCallback((
+    defaultPrevented: boolean,
+    target: EventTarget | null,
+    clipboardData: DataTransfer | null | undefined,
+    preventDefault: () => void,
+  ) => {
+    if (defaultPrevented) return;
+    const aside = asideForCopy(target);
+    if (!aside) return;
+    if (clipboardData) clipboardData.setData("text/plain", aside.text);
+    else void copyText(aside.text);
+    preventDefault();
+  }, [asideForCopy]);
+
   useEffect(() => {
+    if (typeof document === "undefined") return;
     const pressed = () => {
       setAside.current = null;
     };
     const released = () => {
       dragging.current = false;
     };
+    const onSelectionChange = () => {
+      if (!setAside.current) return;
+      const active = (transcriptRef.current?.ownerDocument ?? document).getSelection();
+      if (active && !active.isCollapsed) setAside.current = null;
+    };
+    const onCopy = (e: ClipboardEvent) => {
+      writeAsideToCopy(e.defaultPrevented, e.target, e.clipboardData, () => e.preventDefault());
+    };
+    const onCopyKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c" && !e.defaultPrevented) {
+        const aside = asideForCopy(e.target);
+        if (!aside) return;
+        e.preventDefault();
+        void copyText(aside.text);
+      }
+    };
     window.addEventListener("pointerdown", pressed, true);
     window.addEventListener("pointerup", released, true);
     window.addEventListener("pointercancel", released, true);
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("keydown", onCopyKey);
+    document.addEventListener("selectionchange", onSelectionChange);
     return () => {
       window.removeEventListener("pointerdown", pressed, true);
       window.removeEventListener("pointerup", released, true);
       window.removeEventListener("pointercancel", released, true);
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("keydown", onCopyKey);
+      document.removeEventListener("selectionchange", onSelectionChange);
     };
-  }, []);
+  }, [asideForCopy, writeAsideToCopy]);
 
   const stepWindow = (step: (window: TranscriptWindowBounds, total: number) => TranscriptWindowBounds) => {
     const target = keepSelection(step(drawnBounds, messages.length), drawnBounds);
@@ -436,6 +505,9 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
   };
 
   const scrollHandlers = {
+    onCopy: (e: ReactClipboardEvent<HTMLDivElement>) => {
+      writeAsideToCopy(e.defaultPrevented, e.target, e.clipboardData, () => e.preventDefault());
+    },
     onPointerDown: (e: PointerEvent<HTMLDivElement>) => {
       // Grabbing the scrollbar is a scroll gesture: its lane lies past clientWidth.
       const el = scrollRef.current;

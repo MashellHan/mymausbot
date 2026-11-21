@@ -105,12 +105,9 @@ function pointAt(row: HTMLElement, offset: number): { node: Node; offset: number
   return { node: row, offset: row.childNodes.length };
 }
 
-/** A selection's text without the line breaks its rows' hover-only parts add or take away. */
-const words = (text: string) => text.replace(/\s+/g, "");
-
 /**
  * Puts a set-aside selection back once both of its rows are drawn again. "waiting" while one is not; "dropped" when the
- * rows no longer hold the same text, so a selection is never put back over other words.
+ * rows no longer hold the exact text (including spacing and line breaks), so a selection is never put back changed.
  */
 export function restoreSelection(list: Element, aside: SetAsideSelection): "waiting" | "restored" | "dropped" {
   const rows = Array.from(list.querySelectorAll<HTMLElement>(ROW));
@@ -121,7 +118,31 @@ export function restoreSelection(list: Element, aside: SetAsideSelection): "wait
   if (!selection) return "dropped";
   const anchor = pointAt(anchorRow, aside.anchor.offset), focus = pointAt(focusRow, aside.focus.offset);
   selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
-  if (words(selection.toString()) === words(aside.text)) return "restored";
+  if (selection.toString() === aside.text) return "restored";
   selection.removeAllRanges();
   return "dropped";
+}
+
+const EDITABLE = 'input, textarea, select, [contenteditable="true"], [contenteditable=""]';
+const DIALOG = '[role="dialog"], [role="alertdialog"], [aria-modal="true"]';
+
+function inOtherScope(node: EventTarget | null, scroller: Element, list: Element, main: Element | null): boolean {
+  if (!(node instanceof Element)) return false;
+  if (node.closest(EDITABLE) || (node as HTMLElement).isContentEditable) return true;
+  const log = node.closest('[role="log"]');
+  if (log && log !== list) return true;
+  const otherScroller = node.closest("[data-chat-transcript-scroll]");
+  if (otherScroller && otherScroller !== scroller) return true;
+  const dialog = node.closest(DIALOG);
+  if (dialog && !dialog.contains(scroller)) return true;
+  const doc = list.ownerDocument;
+  if (main && node !== doc.body && node !== doc.documentElement && !main.contains(node)) return true;
+  return false;
+}
+
+/** Whether a copy gesture targeting `target` belongs to `scroller`/`list` rather than an input, dialog, or other view. */
+export function copyInTranscriptScope(scroller: Element, list: Element, target: EventTarget | null): boolean {
+  const doc = list.ownerDocument;
+  const main = scroller.closest("main");
+  return !inOtherScope(target, scroller, list, main) && !inOtherScope(doc.activeElement, scroller, list, main);
 }

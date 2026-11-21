@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { restoreSelection, selectedRows, setSelectionAside, type SetAsideSelection } from "./transcript-selection";
+import { copyInTranscriptScope, restoreSelection, selectedRows, setSelectionAside, type SetAsideSelection } from "./transcript-selection";
 import { SELECTION_HOLD_MAX, TRANSCRIPT_WINDOW_MAX, holdRows, tailWindowStart, windowEarlier, windowLater, type TranscriptWindowBounds } from "./transcript-window";
 
 const TOTAL = 3_000;
@@ -106,16 +106,46 @@ describe("a text selection in a windowed transcript", () => {
     expect(selected().startsWith("Reply m100")).toBe(true);
   });
 
-  it("puts a selection back when only the blank lines between its rows changed", () => {
+  it("drops a set-aside selection when an intervening row changes spacing or newlines", () => {
+    draw({ start: 100, end: 110 });
+    row("m102").innerHTML = "<p>one two</p>";
+    document.getSelection()!.setBaseAndExtent(row("m101").querySelector("b")!.firstChild!, 1, row("m103").querySelector("b")!.firstChild!, 3);
+    const text = selected();
+    expect(text).toContain("one two");
+    const aside = setSelectionAside(list)!;
+    draw({ start: 0, end: 10 });
+    draw({ start: 100, end: 110 });
+    row("m102").innerHTML = "<p>one\ntwo</p>";
+    expect(restoreSelection(list, aside)).toBe("dropped");
+    expect(document.getSelection()!.isCollapsed).toBe(true);
+  });
+
+  it("drops a set-aside selection when blank lines are added inside the selected span", () => {
     draw({ start: 100, end: 110 });
     document.getSelection()!.setBaseAndExtent(row("m101").querySelector("b")!.firstChild!, 0, row("m103").querySelector("b")!.firstChild!, 4);
-    const text = selected();
     const aside = setSelectionAside(list)!;
     draw({ start: 0, end: 10 });
     draw({ start: 100, end: 110 });
     row("m102").append("\n\n");
+    expect(restoreSelection(list, aside)).toBe("dropped");
+    expect(document.getSelection()!.isCollapsed).toBe(true);
+  });
+
+  it("restores exact leading/trailing truncation, direction, spacing, and newlines when unchanged", () => {
+    draw({ start: 100, end: 110 });
+    row("m102").innerHTML = "<p>one  two\nthree</p>";
+    document.getSelection()!.setBaseAndExtent(row("m103").querySelector("b")!.firstChild!, 3, row("m101").querySelector("b")!.firstChild!, 1);
+    const text = selected();
+    expect(text).toContain("one  two\nthree");
+    const aside = setSelectionAside(list)!;
+    draw({ start: 0, end: 10 });
+    draw({ start: 100, end: 110 });
+    row("m102").innerHTML = "<p>one  two\nthree</p>";
     expect(restoreSelection(list, aside)).toBe("restored");
-    expect(selected().replace(/\s+/g, "")).toBe(text.replace(/\s+/g, ""));
+    expect(selected()).toBe(text);
+    const selection = document.getSelection()!;
+    expect(selection.anchorNode?.parentElement?.closest("[data-mid]")?.getAttribute("data-mid")).toBe("m103");
+    expect(selection.focusNode?.parentElement?.closest("[data-mid]")?.getAttribute("data-mid")).toBe("m101");
   });
 
   it("drops a set-aside selection whose rows no longer hold its text", () => {
@@ -129,5 +159,32 @@ describe("a text selection in a windowed transcript", () => {
     row("m102").querySelector("b")!.textContent = "changed";
     expect(restoreSelection(list, aside)).toBe("dropped");
     expect(document.getSelection()!.isCollapsed).toBe(true);
+  });
+
+  it("scopes aside copy to the active transcript rather than inputs, dialogs, or other logs", () => {
+    document.body.innerHTML = `
+      <main id="primary">
+        <div data-chat-transcript-scroll=""><div role="log"></div></div>
+        <textarea></textarea>
+      </main>
+      <main id="fork">
+        <div data-chat-transcript-scroll=""><div role="log"></div></div>
+      </main>
+      <div role="dialog"><button>Close</button></div>
+    `;
+    const primaryScroll = document.querySelector("#primary [data-chat-transcript-scroll]")!;
+    const primaryLog = document.querySelector("#primary [role='log']")!;
+    const forkLog = document.querySelector("#fork [role='log']")!;
+    const textarea = document.querySelector("textarea")!;
+    const dialogBtn = document.querySelector('[role="dialog"] button')!;
+
+    expect(copyInTranscriptScope(primaryScroll, primaryLog, document.body)).toBe(true);
+    expect(copyInTranscriptScope(primaryScroll, primaryLog, primaryLog)).toBe(true);
+    expect(copyInTranscriptScope(primaryScroll, primaryLog, textarea)).toBe(false);
+    expect(copyInTranscriptScope(primaryScroll, primaryLog, forkLog)).toBe(false);
+    expect(copyInTranscriptScope(primaryScroll, primaryLog, dialogBtn)).toBe(false);
+
+    textarea.focus();
+    expect(copyInTranscriptScope(primaryScroll, primaryLog, document.body)).toBe(false);
   });
 });
