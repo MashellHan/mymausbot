@@ -113,6 +113,16 @@ function outlivesLauncher({ pid, session }: LinuxProcess): boolean {
   }
 }
 
+/** A child recorded between its fork and its exec still showed its launcher's command line and environment, so a
+ * gateway can already be in the tree: forget it before walking the tree. */
+function forgetOutliving(tree: Map<number, string>): void {
+  for (const [pid, start] of tree) {
+    let current: LinuxProcess | null;
+    try { current = linuxProcess(pid); } catch { continue; }
+    if (current?.start === start && outlivesLauncher(current)) tree.delete(pid);
+  }
+}
+
 function isLinuxProcess(pid: number, start: string): boolean {
   try { return linuxProcess(pid)?.start === start; } catch { return false; }
 }
@@ -125,6 +135,7 @@ export function captureCliTree(child: ChildProcess): void {
     tree = new Map();
     linuxTrees.set(child, tree);
   }
+  forgetOutliving(tree);
   if (!linuxChildrenFiles() || !addLinuxDescendants(tree)) addLinuxDescendantsFromEveryProcess(tree);
 }
 
@@ -181,7 +192,7 @@ function linuxDescendantsStopped(child: ChildProcess): boolean {
     if (pid === child.pid) continue;
     try {
       const current = linuxProcess(pid);
-      if (current?.start === start && current.state !== "Z" && current.state !== "X") return false;
+      if (current?.start === start && current.state !== "Z" && current.state !== "X" && !outlivesLauncher(current)) return false;
     } catch { return false; }
   }
   return true;
