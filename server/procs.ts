@@ -57,7 +57,7 @@ export function assertSafeCliArgv(
 const cliGroups = new WeakSet<ChildProcess>();
 const stopping = new WeakMap<ChildProcess, Promise<boolean>>();
 
-type LinuxProcess = { pid: number; parent: number; start: string; state: string };
+type LinuxProcess = { pid: number; parent: number; start: string; state: string; session?: number };
 const linuxTrees = new WeakMap<ChildProcess, Map<number, string>>();
 
 function linuxProcess(pid: number, file = `/proc/${pid}/stat`): LinuxProcess | null {
@@ -73,7 +73,7 @@ function linuxProcess(pid: number, file = `/proc/${pid}/stat`): LinuxProcess | n
   const state = fields[0];
   const parent = Number(fields[1]);
   if (!start || !state || !Number.isInteger(parent)) throw new Error("Unreadable Linux process identity");
-  return { pid, parent, start, state };
+  return { pid, parent, start, state, session: Number(fields[3]) };
 }
 
 /** /proc/<pid>/task/<tid>/children needs CONFIG_PROC_CHILDREN (CONFIG_CHECKPOINT_RESTORE before Linux 4.2); a kernel built without it, or gVisor, has no such file. */
@@ -98,6 +98,19 @@ function linuxChildren(pid: number): number[] | null {
     for (const entry of listed.split(" ")) if (/^\d+$/.test(entry)) children.push(Number(entry));
   }
   return children;
+}
+
+/** A daemon a CLI starts on purpose to outlive it, in a session of its own: Hermes' shared gateway, which every other
+ * conversation's `hermes acp` on the same profile attaches to. A stop leaves it and its own children out of the tree. */
+function outlivesLauncher({ pid, session }: LinuxProcess): boolean {
+  if (session !== pid) return false;
+  try {
+    const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+    if (!argv.some((word, at) => word === "gateway" && argv[at + 1] === "run")) return false;
+    return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").includes("HERMES_GATEWAY_DETACHED=1");
+  } catch {
+    return false;
+  }
 }
 
 function isLinuxProcess(pid: number, start: string): boolean {
@@ -129,7 +142,7 @@ function addLinuxDescendants(tree: Map<number, string>): boolean {
       let current: LinuxProcess | null;
       try { current = linuxProcess(pid); } catch { return false; }
       if (!current || current.parent !== parent) return false;
-      if (tree.get(pid) === current.start) continue;
+      if (tree.get(pid) === current.start || outlivesLauncher(current)) continue;
       tree.set(pid, current.start);
       queue.push([pid, current.start]);
     }
@@ -155,6 +168,7 @@ function addLinuxDescendantsFromEveryProcess(tree: Map<number, string>): void {
     discovered = false;
     for (const current of snapshot.values()) {
       if (current.pid === process.pid || !parents.has(current.parent) || tree.get(current.pid) === current.start) continue;
+      if (outlivesLauncher(current)) continue;
       tree.set(current.pid, current.start);
       parents.add(current.pid);
       discovered = true;
