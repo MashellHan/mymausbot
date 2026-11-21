@@ -13,7 +13,7 @@ import { splitTranscriptCitations, type CitationAttachment } from "@/lib/citatio
 import { cn } from "@/lib/cn";
 import { formatTime, type Bot, type Message } from "@/state/store";
 import { useStoreDispatch, useStoreSelector } from "@/state/store-select";
-import { isLiveReply, streamedReply } from "@/state/live-reply";
+import { isLiveReply, streamedReply, useLiveRow } from "@/state/live-reply";
 import { useTeammates } from "@/state/team-people";
 import { stripLeakedSystemHarnessMessages } from "../../shared/system-message-guard.ts";
 import { ThreadRefText } from "./ThreadRefs";
@@ -61,13 +61,15 @@ function sameRow(previous: RoomTextMessageProps, next: RoomTextMessageProps): bo
   return keys.length === Object.keys(previous).length && keys.every((key) => key === "members" ? sameMembers(previous.members, next.members) : Object.is(previous[key], next[key]));
 }
 
+/** One text message in a room: drawn again only when its own props or the store slices it shows change, or, while it
+ * streams, its words. */
 export const RoomTextMessage = memo(function RoomTextMessage({
   groupId,
   threadId,
   dm,
   pinned,
   working,
-  message: m,
+  message: row,
   members,
   replyTarget,
   emerging,
@@ -78,6 +80,7 @@ export const RoomTextMessage = memo(function RoomTextMessage({
   phone,
   localVoice,
 }: RoomTextMessageProps) {
+  const m = useLiveRow(threadId, row);
   const dispatch = useStoreDispatch();
   const focusNonce = useStoreSelector((state) => {
     const focus = state.focusMessage;
