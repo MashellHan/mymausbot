@@ -11,6 +11,7 @@ import type { OptionCardData } from "../../shared/wire.ts";
 import { appendDecision } from "../decision-log.ts";
 import { UNDO_STALE } from "../direct-apply.ts";
 import { json } from "../harness/http.ts";
+import type { TurnOwnerRefusal } from "../host/phones.ts";
 import { buildNotification } from "../notify.ts";
 import { serverLine } from "../server-lines.ts";
 import type { BotRecord, GroupRecord, Store } from "../store.ts";
@@ -84,6 +85,8 @@ export interface AppSettingsDeps {
   holdMs?: number;
   /** Non-null when the turn is the owner's own (phones.turnOwner). */
   turnOwner(turn: Turn): string | null;
+  /** Why turnOwner is null (phones.turnOwnerRefusal), for the refusal's words only; turnOwner stays the guard. */
+  ownerRefusal?(turn: Turn): TurnOwnerRefusal | null;
   guestDriven(threadId: string): boolean;
   /** The secret card, as request_credential posts it. */
   requestCredential(bot: BotRecord, threadId: string, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
@@ -114,6 +117,9 @@ export function createAppSettings(deps: AppSettingsDeps) {
   const describe = (entry: SettingEntry) => ({ id: entry.id, label: entry.label, tier: entry.tier, value: text(entry.read()), where: settingLocation(entry.where) });
   const decide = (turn: Turn, bot: BotRecord | undefined, entry: SettingEntry, summary: string, decision: "auto-approved" | "card-shown", requestId?: string) =>
     appendDecision(deps.dataDir, { threadId: turn.threadId, ...(requestId ? { requestId } : {}), botId: turn.botId, botName: bot?.name, tool: TOOL, summary: `${entry.id}: ${summary}`, decision, source: "app-settings" });
+  /** Null when the turn is the owner's own; otherwise why not, so the refusal can say what the person can do instead. */
+  const notOwners = (turn: Turn): NotOwners | null =>
+    deps.guestDriven(turn.threadId) ? "guest" : deps.turnOwner(turn) !== null ? null : (deps.ownerRefusal?.(turn) ?? "unknown");
   const from = (bot: BotRecord, threadId: string) => (deps.connectorThread(bot.id, threadId)?.group ? { from: { botId: bot.id, name: bot.name, color: bot.color } } : {});
   const card = (bot: BotRecord, threadId: string, entry: WritableEntry, { before, after }: Shown, requestId: string, options: string[], settled: Partial<OptionCardData>) => {
     const language = deps.language(threadId);
@@ -226,7 +232,8 @@ export function createAppSettings(deps: AppSettingsDeps) {
       return refuse(403, knownPlace ? personOnly(entry.label, entry.where)
         : `${entry.label} is changed only by the owner, in ${entry.where}. Tell the user where to find it; do not try another way.`);
     }
-    if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "Settings change only in the owner's own conversation. This turn was not started by the owner here, so nothing changed; you may still read settings.");
+    const notOwner = notOwners(turn);
+    if (notOwner) return refuse(403, `Settings change only in the owner's own conversation. Nothing changed; you may still read settings. ${whyNotOwners(notOwner, settingLocation(entry.where))}`);
     if (entry.tier === "secret") {
       if (body.value !== undefined) return refuse(400, `Never send a key or token as a value. Call set on ${entry.id} with no value: a secure card asks the user for it, and you never see it.`);
       const budget = spendWrite(turn);
@@ -289,7 +296,8 @@ export function createAppSettings(deps: AppSettingsDeps) {
     const card = SETTINGS_CARDS[body.card];
     const bot = store.bot(turn.botId);
     if (!bot) return refuse(404, "This bot no longer exists.");
-    if (deps.guestDriven(turn.threadId) || deps.turnOwner(turn) === null) return refuse(403, "A settings card shows only in the owner's own conversation, when they asked. This turn was not started by the owner here, so nothing was shown.");
+    const notOwner = notOwners(turn);
+    if (notOwner) return refuse(403, `A settings card shows only in the owner's own conversation, when they asked. Nothing was shown. ${whyNotOwners(notOwner, "Settings")}`);
     if (!deps.cards?.here(body.card)) return reply(200, { text: cardElsewhere(card) });
     if (deps.connectorThread(bot.id, turn.threadId)?.group) return reply(200, { text: cardNotInRoom(card) });
     const budget = spendWrite(turn);
@@ -383,4 +391,23 @@ export function createAppSettings(deps: AppSettingsDeps) {
       return { claimed: true, state: "undone" };
     },
   };
+}
+
+type NotOwners = TurnOwnerRefusal | "guest" | "unknown";
+
+/** Why a turn is not the owner's own, and what the person can do instead, in words the bot can pass on. */
+export function whyNotOwners(why: NotOwners, where: string): string {
+  const themselves = `The person can change it themselves in ${where}.`;
+  const fresh = "Or they ask again in a new conversation with this bot that only they write in.";
+  switch (why) {
+    case "shared": return `Several people share this server, so bots never change its settings. ${themselves}`;
+    case "service": return `This server is set up as a shared or hosted server, so bots never change its settings. ${themselves}`;
+    case "guest": return `A guest writes in this conversation, so it is not the owner's own. ${themselves}`;
+    case "someone-else": return `Someone else wrote or answered in this conversation, or a bot opened it, so asking again here won't work. ${themselves} ${fresh}`;
+    case "not-owner": return `This turn was started by someone other than the owner, or by a routine, webhook or app the owner didn't write. ${themselves} ${fresh}`;
+    case "memory-changed":
+    case "memory-changed-here": return `This bot's memory was changed in a conversation the owner didn't write. ${themselves} Or, in this bot's settings, they open Memory, check what changed, tap Mark reviewed and ask again.`;
+    case "unproven":
+    case "unknown": return `This turn can't be tied to a message the owner sent here (it was stopped, or started another way). ${themselves} Or they send the request again.`;
+  }
 }
