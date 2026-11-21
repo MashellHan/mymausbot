@@ -96,11 +96,16 @@ describe("a call's record at the end of a chat that is still working", () => {
   it("shows no working line for a reply that settled just before the call ended, once the turn has ended", () => {
     const settled = [spoken, message("b1", "All tests pass.", { role: "bot", requestMessageId: "m1" }), record];
     resetTurnLive();
-    expect(drawWorking(settled), "the turn has not ended yet: the reply may be words mid-turn").toContain("thinking-shimmer");
+    const midTurn = drawWorking(settled);
+    expect(midTurn, "the turn has not ended yet: the reply may be words mid-turn").toContain("turn-presence");
+    expect(midTurn).toContain("data-turn-status");
+    expect(midTurn).not.toContain("thinking-shimmer");
     noteTurnEvent({ eventId: "end", provider: "claudeAgent", threadId: "t1", createdAt: "2026-10-23T12:00:00.000Z", turnId: "u1", type: "turn.completed", ok: true });
     const markup = drawWorking(settled);
     resetTurnLive();
     expect(markup).toContain("All tests pass.");
+    expect(markup).not.toContain("turn-presence");
+    expect(markup).not.toContain("data-turn-status");
     expect(markup).not.toContain("thinking-shimmer");
   });
 
@@ -118,8 +123,17 @@ describe("a call's record at the end of a chat that is still working", () => {
   });
 
   it("still shows the working line for a request nobody has answered yet", () => {
-    const markup = drawWorking([spoken, record]);
-    expect(markup).toContain("thinking-shimmer");
+    resetTurnLive();
+    const pending = drawWorking([spoken, record]);
+    expect(pending).toContain("turn-presence");
+    expect(pending).toContain("data-turn-status");
+    expect(pending).not.toContain("thinking-shimmer");
+    noteTurnEvent({ eventId: "start", provider: "claudeAgent", threadId: "t1", createdAt: "2026-10-23T12:00:00.000Z", turnId: "u1", type: "turn.started", requestMessageId: "m1" });
+    noteTurnEvent({ eventId: "tool", provider: "claudeAgent", threadId: "t1", createdAt: "2026-10-23T12:00:01.000Z", turnId: "u1", type: "item.started", itemType: "tool", itemId: "item-1", title: "Bash", step: { activity: "command", target: "run the tests" } });
+    const running = drawWorking([spoken, record]);
+    resetTurnLive();
+    expect(running).toContain("thinking-shimmer");
+    expect(running).toContain("Running a command");
   });
 });
 
