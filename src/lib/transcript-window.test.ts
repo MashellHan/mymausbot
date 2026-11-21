@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  SELECTION_HOLD_MAX,
   TRANSCRIPT_WINDOW_MAX,
   TRANSCRIPT_WINDOW_SIZE,
   capWindowEnd,
   expandWindowStart,
   focusWindowRange,
   followWindowStart,
+  holdRows,
   resolveTranscriptWindow,
   restoreWindow,
   tailWindowStart,
@@ -246,5 +248,16 @@ describe("withRestingCard", () => {
   it("adds nothing when no card rests on the person", () => {
     expect(withRestingCard(rows, range.visible, range.startIndex, () => false)).toBe(range.visible);
     expect(withRestingCard(rows, range.visible, range.startIndex)).toBe(range.visible);
+  });
+});
+
+describe("holdRows", () => {
+  it("widens a window over the rows a selection spans, up to the hold cap", () => {
+    expect(holdRows({ start: 500, end: 740 }, 3_000, { first: 400, last: 410 })).toEqual({ start: 400, end: 740 });
+    expect(holdRows({ start: 500, end: 740 }, 3_000, { first: 760, last: 800 })).toEqual({ start: 500, end: 801 });
+    expect(holdRows({ start: 500, end: 740 }, 3_000, { first: 600, last: 610 })).toEqual({ start: 500, end: 740 });
+    expect(holdRows({ start: 2_800, end: null }, 3_000, { first: 2_700, last: 2_999 })).toEqual({ start: 2_700, end: null });
+    expect(holdRows({ start: 500, end: 740 }, 3_000, { first: 740 + SELECTION_HOLD_MAX, last: 740 + SELECTION_HOLD_MAX })).toBeNull();
+    expect(holdRows({ start: 1_000, end: 1_240 }, 3_000, { first: 1_240 - SELECTION_HOLD_MAX, last: 1_000 })).toEqual({ start: 1_240 - SELECTION_HOLD_MAX, end: 1_240 });
   });
 });
