@@ -893,6 +893,8 @@
   "backup.exportPassword": "备份密码",
   "backup.exportShort": "有密码保护。不包含已保存的登录信息。",
   "backup.exporting": "正在创建加密备份…",
+  "backup.exportReconnecting": "正在重新连接以检查备份…",
+  "backup.exportUnavailable": "此备份已不可用。请重新导出并输入备份密码。",
   "backup.file": "备份文件",
   "backup.files": "文件",
   "backup.groups": "群组",

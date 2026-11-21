@@ -940,6 +940,8 @@
   "backup.exportPassword": "Senha do backup",
   "backup.exportShort": "Protegido por senha. Logins salvos não são incluídos.",
   "backup.exporting": "Criando backup criptografado…",
+  "backup.exportReconnecting": "Reconectando para verificar seu backup…",
+  "backup.exportUnavailable": "Este backup não está mais disponível. Exporte novamente e informe a senha do backup.",
   "backup.file": "Arquivo de backup",
   "backup.files": "Arquivos",
   "backup.groups": "Grupos",

@@ -956,6 +956,8 @@
   "backup.exportPassword": "Backup password",
   "backup.exportShort": "Password-protected. Saved logins are not included.",
   "backup.exporting": "Creating encrypted backup…",
+  "backup.exportReconnecting": "Reconnecting to check your backup…",
+  "backup.exportUnavailable": "This backup is no longer available. Start another export and enter your backup password.",
   "backup.file": "Backup file",
   "backup.files": "Files",
   "backup.groups": "Groups",

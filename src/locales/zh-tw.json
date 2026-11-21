@@ -918,6 +918,8 @@
   "backup.exportPassword": "備份密碼",
   "backup.exportShort": "有密碼保護。不包含已儲存的登入資訊。",
   "backup.exporting": "正在建立加密備份…",
+  "backup.exportReconnecting": "正在重新連線以檢查備份…",
+  "backup.exportUnavailable": "此備份已無法使用。請重新匯出並輸入備份密碼。",
   "backup.file": "備份檔案",
   "backup.files": "檔案",
   "backup.groups": "聊天室",
