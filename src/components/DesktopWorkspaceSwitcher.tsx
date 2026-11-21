@@ -6,7 +6,7 @@ import type { Action } from "@/state/store";
 import type { CloudPlanSnapshot } from "../../electron/cloud-account.mjs";
 import { cloudColor } from "@/lib/cloud-look";
 import { t } from "@/lib/i18n";
-import { railShown, usePlaces } from "@/lib/places";
+import { railShown, usePlaces, windowPlaceName } from "@/lib/places";
 import { CloudTile } from "./cloud-buy/parts";
 import { SIMPLE_RAIL_BUTTON } from "./SidebarSimpleTop";
 
