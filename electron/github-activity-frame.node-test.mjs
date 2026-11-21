@@ -76,6 +76,9 @@ test("combined guards allow canonical GitHub routes and redirects while blocking
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/20261120/dream-num/univer/", { initiator: frame }), false);
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/univer-orders/", { initiator: frame }), false);
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/univer-orders/demo.js", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/pandera-orders/", { initiator: frame }), false);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/pandera-orders/source.zip", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/pandera-orders/demo.js", { initiator: frame }), true);
   assert.equal(emit("will-frame-navigate", "https://other.example/", { initiator: frame }), true);
   assert.equal(emit("will-redirect", "https://other.example/", { initiator: null }), true);
   assert.deepEqual(getFallbacks(), [0, 0]);
@@ -125,5 +128,41 @@ test("validates canonical GitHub document routes and media URLs strictly", () =>
     "https://mxhan.com/github/media/%2e%2e/x.png",
     "https://mxhan.com/x/assets/demo.png",
     "https://other.example/github/media/demo.png",
+  ]) assert.equal(githubMediaUrlAllowed(url), false, url);
+});
+
+test("allows only the exact Pandera demo document route while rejecting lookalike/ZIP/script/media/query/dot/encoded/other-origin URLs", () => {
+  for (const url of [
+    "https://mxhan.com/github/demo/pandera-orders/",
+    "https://mxhan.com/github/demo/pandera-orders/#section-1",
+  ]) assert.equal(githubActivityPageAllowed(url), true, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/pandera-orders",
+    "https://mxhan.com/github/demo/pandera-orders-2/",
+    "https://mxhan.com/github/demo/pandera-orders/extra/",
+    "https://mxhan.com/github/demo/pandera/",
+    "https://mxhan.com/github/demo/pandera-orders/index.html",
+    "https://mxhan.com/github/demo/pandera-orders/source.zip",
+    "https://mxhan.com/github/demo/pandera-orders.zip",
+    "https://mxhan.com/github/demo/pandera-orders/demo.js",
+    "https://mxhan.com/github/demo/pandera-orders/app.mjs",
+    "https://mxhan.com/github/demo/pandera-orders/preview.png",
+    "https://mxhan.com/github/demo/pandera-orders/?q=1",
+    "https://mxhan.com/github/demo/pandera-orders/../univer-orders/",
+    "https://mxhan.com/github/demo/./pandera-orders/",
+    "https://mxhan.com/github/demo/pandera%2dorders/",
+    "https://mxhan.com/github/demo/%2e%2e/pandera-orders/",
+    "https://other.example/github/demo/pandera-orders/",
+    "http://mxhan.com/github/demo/pandera-orders/",
+    "https://www.mxhan.com/github/demo/pandera-orders/",
+    "https://mxhan.com:443/github/demo/pandera-orders/",
+    "https://user:pass@mxhan.com/github/demo/pandera-orders/",
+  ]) assert.equal(githubActivityPageAllowed(url), false, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/pandera-orders/",
+    "https://mxhan.com/github/demo/pandera-orders/source.zip",
+    "https://mxhan.com/github/demo/pandera-orders/preview.png",
   ]) assert.equal(githubMediaUrlAllowed(url), false, url);
 });

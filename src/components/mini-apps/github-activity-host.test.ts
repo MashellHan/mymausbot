@@ -59,5 +59,11 @@ it("validates and maps canonical edition/repo selections in both directions", ()
     .toEqual({ ok: false });
   expect(selectionFromGithubPath("/github/demo/univer-orders/"))
     .toEqual({ ok: true, selection: { editionKey: null, repo: null } });
+  expect(selectionFromGithubPath("/github/demo/pandera-orders/", "2026-11-21", "unionai-oss/pandera"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-21", repo: "unionai-oss/pandera" } });
+  expect(selectionFromGithubPath("/github/demo/pandera-orders/"))
+    .toEqual({ ok: true, selection: { editionKey: null, repo: null } });
+  expect(selectionFromGithubPath("/github/demo/pandera-orders/source.zip", "2026-11-21", "unionai-oss/pandera"))
+    .toEqual({ ok: false });
   expect(selectionFromGithubPath("/github/media/demo.png")).toEqual({ ok: false });
 });

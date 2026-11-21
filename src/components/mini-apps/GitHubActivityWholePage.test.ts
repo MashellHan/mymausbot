@@ -113,6 +113,14 @@ it("enforces githubDeepDive handshake and route validation", () => {
   const next = load(site, post);
   message("ready", "/github/demo/univer-orders/", { nonce: next });
   expect(host.querySelector('[role="status"]')).toBeNull();
+
+  message("leaving", "/github/demo/univer-orders/");
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  const panderaNonce = load(site, post);
+  message("ready", "/github/demo/pandera-orders/", { nonce: panderaNonce, editionKey: "2026-11-21", repo: "unionai-oss/pandera" });
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  press("web", "ArrowRight");
+  expect(mockState.lastSelection).toEqual({ editionKey: "2026-11-21", repo: "unionai-oss/pandera" });
 });
 
 it("syncs reading selection across Web and Saved editions tabs", () => {
