@@ -297,3 +297,33 @@ it("retains GitHub across hide, ignores prior openings and only reopens the Web 
   expect(f.onGithubSelection).toHaveBeenCalledTimes(1);
   expect(f.remote()).toBeNull();
 });
+
+it("enforces exact SQLGlot demo edition/repo context on ready while retaining leaving/shown/nonce handling", () => {
+  const f = reportFixture("github-activity");
+  f.send(1);
+  const remote = f.watch();
+  const firstNonce = remote.load();
+  remote.notify({ type: "ready", path: "/github/demo/sqlglot-query-lab/", nonce: firstNonce, editionKey: "2026-11-22", repo: "tobymao/sqlglot" });
+  f.phase(1, "ready");
+  expect(f.overlay().inert).toBe(false);
+  expect(f.onGithubSelection).toHaveBeenLastCalledWith({ editionKey: "2026-11-22", repo: "tobymao/sqlglot" });
+
+  remote.notify({ type: "leaving", path: "/github/demo/sqlglot-query-lab/" });
+  f.phase(1, "loading");
+  expect(f.overlay().inert).toBe(true);
+
+  remote.notify({ type: "shown", path: "/github/demo/sqlglot-query-lab/" });
+  const shownNonce = remote.load();
+  remote.notify({ type: "ready", path: "/github/demo/sqlglot-query-lab/", nonce: firstNonce, editionKey: "2026-11-22", repo: "tobymao/sqlglot" });
+  expect(f.overlay().inert).toBe(true);
+  remote.notify({ type: "ready", path: "/github/demo/sqlglot-query-lab/", nonce: shownNonce, editionKey: "2026-11-22", repo: "unionai-oss/pandera" });
+  f.phase(1, "failed");
+  expect(f.overlay().inert).toBe(true);
+
+  f.send(2, { retry: true });
+  const retry = f.watch();
+  const retryNonce = retry.load();
+  retry.notify({ type: "ready", path: "/github/demo/sqlglot-query-lab/", nonce: retryNonce });
+  f.phase(2, "failed");
+  expect(f.overlay().inert).toBe(true);
+});
