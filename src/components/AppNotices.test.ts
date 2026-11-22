@@ -1270,6 +1270,7 @@ describe("bots in two places", () => {
     expect(accepted, "one tap never moves anyone").toEqual([]);
     expect(asking).toContain("Move this computer&#x27;s bots to Garage server?");
     expect(asking, "the undo switch is My Cloud's only").not.toContain("Keep this computer&#x27;s bots on this computer");
+    expect(asking, "only My Cloud is sure to keep using this computer").not.toContain("when you type on it");
     press("Move bots");
     await flush();
     expect(accepted).toEqual([GARAGE.key]);
