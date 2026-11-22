@@ -121,6 +121,39 @@ it("enforces githubDeepDive handshake and route validation", () => {
   expect(host.querySelector('[role="status"]')).toBeNull();
   press("web", "ArrowRight");
   expect(mockState.lastSelection).toEqual({ editionKey: "2026-11-21", repo: "unionai-oss/pandera" });
+
+  press("saved", "Home");
+  const sqlglotSite = frame()!;
+  const sqlglotPost = watchPosts(sqlglotSite);
+  const sqlglotNonce = load(sqlglotSite, sqlglotPost);
+  message("ready", "/github/demo/sqlglot-query-lab/", { nonce: "stale", editionKey: "2026-11-22", repo: "tobymao/sqlglot" });
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  message("ready", "/github/demo/sqlglot-query-lab/", { nonce: sqlglotNonce, editionKey: "2026-11-22", repo: "tobymao/sqlglot" });
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  press("web", "ArrowRight");
+  expect(mockState.lastSelection).toEqual({ editionKey: "2026-11-22", repo: "tobymao/sqlglot" });
+
+  press("saved", "Home");
+  const shownSite = frame()!;
+  const shownPost = watchPosts(shownSite);
+  message("shown", "/github/demo/sqlglot-query-lab/");
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  const shownNonce = shownPost.mock.calls.at(-1)![0].nonce as string;
+  message("ready", "/github/demo/sqlglot-query-lab/", { nonce: shownNonce, editionKey: "2026-11-22", repo: "tobymao/sqlglot" });
+  expect(host.querySelector('[role="status"]')).toBeNull();
+
+  message("leaving", "/github/demo/sqlglot-query-lab/");
+  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  const badNonce = load(shownSite, shownPost);
+  message("ready", "/github/demo/sqlglot-query-lab/", { nonce: badNonce, editionKey: "2026-11-21", repo: "tobymao/sqlglot" });
+  expect(host.querySelector('[data-testid="github-activity-failed"]')).not.toBeNull();
+
+  act(() => host.querySelector<HTMLButtonElement>('[data-testid="github-activity-failed"] button')!.click());
+  const retriedSite = frame()!;
+  const retriedPost = watchPosts(retriedSite);
+  const missingContextNonce = load(retriedSite, retriedPost);
+  message("ready", "/github/demo/sqlglot-query-lab/", { nonce: missingContextNonce }, "https://mxhan.com", retriedSite.contentWindow);
+  expect(host.querySelector('[data-testid="github-activity-failed"]')).not.toBeNull();
 });
 
 it("syncs reading selection across Web and Saved editions tabs", () => {

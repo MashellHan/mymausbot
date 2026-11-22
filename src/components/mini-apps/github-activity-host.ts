@@ -7,6 +7,9 @@ export { GITHUB_ACTIVITY_URL, GITHUB_ACTIVITY_FRAME_NAME, githubActivityPageAllo
 export const GITHUB_ACTIVITY_APP_ID = LEGACY_MINI_APP_IDS.github_activity;
 export const GITHUB_DEEP_DIVE_FIRST_EDITION = "2026-11-20";
 const REPO_SEGMENT = /^[a-z0-9_.-]{1,100}$/;
+const SQLGLOT_DEMO_PATH = "/github/demo/sqlglot-query-lab/";
+const SQLGLOT_DEMO_EDITION_KEY = "2026-11-22";
+const SQLGLOT_DEMO_REPO = "tobymao/sqlglot";
 
 export interface GithubActivitySelection {
   editionKey: string | null;
@@ -49,8 +52,12 @@ export function githubWebUrlForSelection(selection: GithubActivitySelection | nu
   return githubActivityPageAllowed(candidate) ? candidate : GITHUB_ACTIVITY_URL;
 }
 
-export function selectionFromGithubPath(path: string, rawEditionKey?: unknown, rawRepo?: unknown):
-  { ok: true; selection: GithubActivitySelection } | { ok: false } {
+export function selectionFromGithubPath(
+  path: string,
+  rawEditionKey?: unknown,
+  rawRepo?: unknown,
+  messageType: "ready" | "leaving" | "shown" = "ready",
+): { ok: true; selection: GithubActivitySelection } | { ok: false } {
   const fullUrl = `https://mxhan.com${path}`;
   if (!githubActivityPageAllowed(fullUrl)) return { ok: false };
   if (rawEditionKey !== undefined && rawEditionKey !== null && !isValidIsoDate(rawEditionKey)) return { ok: false };
@@ -72,6 +79,16 @@ export function selectionFromGithubPath(path: string, rawEditionKey?: unknown, r
     if (rawEditionKey !== undefined && rawEditionKey !== editionKey) return { ok: false };
     if (rawRepo !== undefined && rawRepo !== null) return { ok: false };
     return { ok: true, selection: { editionKey, repo: null } };
+  }
+  if (pathname === SQLGLOT_DEMO_PATH) {
+    if (messageType === "ready") {
+      if (rawEditionKey !== SQLGLOT_DEMO_EDITION_KEY || rawRepo !== SQLGLOT_DEMO_REPO) return { ok: false };
+    } else {
+      if (rawEditionKey !== undefined && rawEditionKey !== SQLGLOT_DEMO_EDITION_KEY) return { ok: false };
+      if (rawRepo !== undefined && rawRepo !== SQLGLOT_DEMO_REPO) return { ok: false };
+      if ((rawEditionKey === undefined) !== (rawRepo === undefined)) return { ok: false };
+    }
+    return { ok: true, selection: { editionKey: SQLGLOT_DEMO_EDITION_KEY, repo: SQLGLOT_DEMO_REPO } };
   }
   const fallbackEdition = (rawEditionKey as string | null | undefined) ?? null;
   const fallbackRepo = (rawRepo as string | null | undefined) ?? null;

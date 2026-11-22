@@ -44,13 +44,16 @@ function ReportSiteFrame({ view, visible }: { view: MiniAppReportSiteView; visib
       if (failed || !source || event.source !== source || event.origin !== origin) return;
       const data = event.data as Record<string, unknown> | null;
       if (!data || typeof data !== "object" || data[channel] !== 1 || typeof data.path !== "string"
-        || data.path.length > 2048 || !data.path.startsWith("/")
-        || (data.type !== "ready" && data.type !== "shown" && data.type !== "leaving")) return;
-      if (data.type === "ready" && (!nonce || data.nonce !== nonce)) return;
-      const github = site === "github-activity" ? selectionFromGithubPath(data.path, data.editionKey, data.repo) : null;
+        || data.path.length > 2048 || !data.path.startsWith("/")) return;
+      const type = data.type;
+      if (type !== "ready" && type !== "shown" && type !== "leaving") return;
+      if (type === "ready" && (!nonce || data.nonce !== nonce)) return;
+      const github = site === "github-activity"
+        ? selectionFromGithubPath(data.path, data.editionKey, data.repo, type)
+        : null;
       if (github ? !github.ok : !dailyXPageAllowed(origin + data.path)) return fail();
-      if (data.type === "shown") challenge();
-      else if (data.type === "leaving") { nonce = null; loading(); }
+      if (type === "shown") challenge();
+      else if (type === "leaving") { nonce = null; loading(); }
       else {
         nonce = null;
         clearTimeout(timer);
