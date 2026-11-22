@@ -82,6 +82,16 @@ describe("copyText", () => {
     expect(writeText).not.toHaveBeenCalled();
     expect(bridge).not.toHaveBeenCalled();
   });
+
+  it("preserves exact whitespace-only text when preserveWhitespace is set while still rejecting empty strings", async () => {
+    const writeText = vi.fn(async () => {});
+    setEnv(writeText);
+    expect(await copyText("", { preserveWhitespace: true })).toBe("empty");
+    expect(writeText).not.toHaveBeenCalled();
+    expect(await copyText("  \n\t ", { preserveWhitespace: true })).toBe("copied");
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith("  \n\t ");
+  });
 });
 
 describe("createCopyFeedback", () => {

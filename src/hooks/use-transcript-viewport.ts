@@ -352,7 +352,7 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
       setAside.current = null;
       return null;
     }
-    return copyInTranscriptScope(scroller, list, target) ? aside.selection : null;
+    return aside.selection.text.length > 0 && copyInTranscriptScope(scroller, list, target) ? aside.selection : null;
   }, []);
 
   const writeAsideToCopy = useCallback((
@@ -365,7 +365,7 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
     const aside = asideForCopy(target);
     if (!aside) return;
     if (clipboardData) clipboardData.setData("text/plain", aside.text);
-    else void copyText(aside.text);
+    else void copyText(aside.text, { preserveWhitespace: true });
     preventDefault();
   }, [asideForCopy]);
 
@@ -390,7 +390,7 @@ export function useTranscriptViewport<T extends { id: string; role?: string }>({
         const aside = asideForCopy(e.target);
         if (!aside) return;
         e.preventDefault();
-        void copyText(aside.text);
+        void copyText(aside.text, { preserveWhitespace: true });
       }
     };
     window.addEventListener("pointerdown", pressed, true);

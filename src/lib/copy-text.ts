@@ -53,9 +53,13 @@ function writeLegacy(text: string): boolean {
   }
 }
 
+export interface CopyTextOptions {
+  preserveWhitespace?: boolean;
+}
+
 /** Web Clipboard API, then the desktop bridge, then legacy execCommand (insecure-context mobile). Never throws. */
-export async function copyText(text: string): Promise<CopyResult> {
-  if (!text.trim()) return "empty";
+export async function copyText(text: string, options?: CopyTextOptions): Promise<CopyResult> {
+  if (options?.preserveWhitespace ? text.length === 0 : !text.trim()) return "empty";
   if (await writeWeb(text)) return "copied";
   try {
     if (typeof window !== "undefined" && (await window.ogb?.copyText?.(text)) === true) return "copied";

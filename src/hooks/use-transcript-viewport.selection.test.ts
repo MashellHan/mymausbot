@@ -264,6 +264,51 @@ describe("useTranscriptViewport cross-line selection retention", () => {
     expect(String(document.getSelection())).toBe(expectedText);
   });
 
+  it("writes whitespace-only cross-line text byte-for-byte once on Cmd/Ctrl+C past the 480-row hold cap", async () => {
+    const messages = makeRows(1_200).map((row) =>
+      row.id === "m1180" || row.id === "m1181"
+        ? { ...row, lines: ["  \n ", " \n\t "] as [string, string] }
+        : row,
+    );
+    render({ messages });
+
+    const startNode = container.querySelector<HTMLElement>('[data-mid="m1180"]')!.querySelectorAll("p")[0]!.firstChild!;
+    const endNode = container.querySelector<HTMLElement>('[data-mid="m1181"]')!.querySelectorAll("p")[1]!.firstChild!;
+    const selection = document.getSelection()!;
+    selection.setBaseAndExtent(startNode, 1, endNode, 4);
+    const expectedText = String(selection);
+    expect(expectedText.length).toBeGreaterThan(0);
+    expect(expectedText.trim()).toBe("");
+    expect(expectedText).toContain("\n");
+
+    for (let step = 0; step < 6; step++) flushSync(() => viewport.showEarlier());
+
+    expect(container.querySelector('[data-mid="m1180"]')).toBeNull();
+    expect(document.getSelection()!.isCollapsed).toBe(true);
+
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      const cmdCopy = new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true });
+      window.dispatchEvent(cmdCopy);
+      await Promise.resolve();
+      expect(cmdCopy.defaultPrevented).toBe(true);
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith(expectedText);
+
+      writeText.mockClear();
+      const ctrlCopy = new KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true, cancelable: true });
+      window.dispatchEvent(ctrlCopy);
+      await Promise.resolve();
+      expect(ctrlCopy.defaultPrevented).toBe(true);
+      expect(writeText).toHaveBeenCalledTimes(1);
+      expect(writeText).toHaveBeenCalledWith(expectedText);
+    } finally {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+    }
+  });
+
   it("does not copy old set-aside text after clearing, making a new selection, switching threads, or inside an input", () => {
     const threadA = makeRows(1_200, "a");
     const threadB = makeRows(300, "b");
