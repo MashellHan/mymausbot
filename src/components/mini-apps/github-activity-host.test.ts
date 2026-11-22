@@ -53,6 +53,9 @@ it("validates and maps canonical edition/repo selections in both directions", ()
   expect(githubWebUrlForSelection({ editionKey: "2026-11-20", repo: "dream-num/univer" }))
     .toBe("https://mxhan.com/github/20261120/dream-num/univer/");
 
+  expect(githubWebUrlForSelection({ editionKey: "2026-11-22", repo: "tobymao/sqlglot" }))
+    .toBe("https://mxhan.com/github/20261122/tobymao/sqlglot/");
+
   expect(selectionFromGithubPath("/github/20261120/dream-num/univer/", "2026-11-20", "dream-num/univer"))
     .toEqual({ ok: true, selection: { editionKey: "2026-11-20", repo: "dream-num/univer" } });
   expect(selectionFromGithubPath("/github/20261120/dream-num/univer/", "2026-11-20", "other/repo"))
@@ -65,5 +68,36 @@ it("validates and maps canonical edition/repo selections in both directions", ()
     .toEqual({ ok: true, selection: { editionKey: null, repo: null } });
   expect(selectionFromGithubPath("/github/demo/pandera-orders/source.zip", "2026-11-21", "unionai-oss/pandera"))
     .toEqual({ ok: false });
+  expect(selectionFromGithubPath("/github/demo/sqlglot-query-lab/", "2026-11-22", "tobymao/sqlglot"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-22", repo: "tobymao/sqlglot" } });
+  expect(selectionFromGithubPath("/github/demo/sqlglot-query-lab/#sqlite-exec", "2026-11-22", "tobymao/sqlglot"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-22", repo: "tobymao/sqlglot" } });
+  expect(selectionFromGithubPath("/github/demo/sqlglot-query-lab/", undefined, undefined, "leaving"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-22", repo: "tobymao/sqlglot" } });
+  expect(selectionFromGithubPath("/github/demo/sqlglot-query-lab/", undefined, undefined, "shown"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-22", repo: "tobymao/sqlglot" } });
+  expect(selectionFromGithubPath("/github/demo/sqlglot-query-lab/", "2026-11-22", "tobymao/sqlglot", "shown"))
+    .toEqual({ ok: true, selection: { editionKey: "2026-11-22", repo: "tobymao/sqlglot" } });
+  const rejectedSqlglotCases: ReadonlyArray<Parameters<typeof selectionFromGithubPath>> = [
+    ["/github/demo/sqlglot-query-lab/"],
+    ["/github/demo/sqlglot-query-lab/", null, null],
+    ["/github/demo/sqlglot-query-lab/", "2026-11-22"],
+    ["/github/demo/sqlglot-query-lab/", "2026-11-22", null],
+    ["/github/demo/sqlglot-query-lab/", null, "tobymao/sqlglot"],
+    ["/github/demo/sqlglot-query-lab/", "2026-11-21", "tobymao/sqlglot"],
+    ["/github/demo/sqlglot-query-lab/", "2026-11-22", "unionai-oss/pandera"],
+    ["/github/demo/sqlglot-query-lab/", "2026-11-21", "tobymao/sqlglot", "leaving"],
+    ["/github/demo/sqlglot-query-lab/", "2026-11-22", "other/repo", "shown"],
+    ["/github/demo/sqlglot-query-lab/", "2026-11-22", undefined, "shown"],
+    ["/github/demo/sqlglot-query-lab/", null, null, "leaving"],
+    ["/github/demo/sqlglot-query-lab/sqlglot-query-lab-source.zip", "2026-11-22", "tobymao/sqlglot"],
+    ["/github/demo/sqlglot-query-lab/results.json", "2026-11-22", "tobymao/sqlglot"],
+    ["/github/demo/sqlglot-query-lab/run_demo.py", "2026-11-22", "tobymao/sqlglot"],
+    ["/github/demo/sqlglot-query-lab/index.html", "2026-11-22", "tobymao/sqlglot"],
+    ["/github/demo/sqlglot-query-lab", "2026-11-22", "tobymao/sqlglot"],
+  ];
+  for (const args of rejectedSqlglotCases) {
+    expect(selectionFromGithubPath(...args)).toEqual({ ok: false });
+  }
   expect(selectionFromGithubPath("/github/media/demo.png")).toEqual({ ok: false });
 });

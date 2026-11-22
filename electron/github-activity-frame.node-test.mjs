@@ -79,6 +79,11 @@ test("combined guards allow canonical GitHub routes and redirects while blocking
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/pandera-orders/", { initiator: frame }), false);
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/pandera-orders/source.zip", { initiator: frame }), true);
   assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/pandera-orders/demo.js", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/sqlglot-query-lab/", { initiator: frame }), false);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/sqlglot-query-lab/sqlglot-query-lab-source.zip", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/sqlglot-query-lab/results.json", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/sqlglot-query-lab/run_demo.py", { initiator: frame }), true);
+  assert.equal(emit("will-frame-navigate", "https://mxhan.com/github/demo/sqlglot-query-lab/index.html", { initiator: frame }), true);
   assert.equal(emit("will-frame-navigate", "https://other.example/", { initiator: frame }), true);
   assert.equal(emit("will-redirect", "https://other.example/", { initiator: null }), true);
   assert.deepEqual(getFallbacks(), [0, 0]);
@@ -164,5 +169,47 @@ test("allows only the exact Pandera demo document route while rejecting lookalik
     "https://mxhan.com/github/demo/pandera-orders/",
     "https://mxhan.com/github/demo/pandera-orders/source.zip",
     "https://mxhan.com/github/demo/pandera-orders/preview.png",
+  ]) assert.equal(githubMediaUrlAllowed(url), false, url);
+});
+
+test("allows only the exact SQLGlot demo document route while rejecting lookalike/ZIP/subfile/media/query/dot/encoded/other-origin URLs", () => {
+  for (const url of [
+    "https://mxhan.com/github/demo/sqlglot-query-lab/",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/#sqlite-exec",
+  ]) assert.equal(githubActivityPageAllowed(url), true, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/sqlglot-query-lab",
+    "https://mxhan.com/github/demo/sqlglot-query-lab-2/",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/extra/",
+    "https://mxhan.com/github/demo/sqlglot/",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/index.html",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/results.json",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/run_demo.py",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/requirements.lock",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/README.md",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/LICENSE",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/sqlglot-query-lab-source.zip",
+    "https://mxhan.com/github/demo/sqlglot-query-lab.zip",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/demo.js",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/app.mjs",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/preview.png",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/?q=1",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/../pandera-orders/",
+    "https://mxhan.com/github/demo/./sqlglot-query-lab/",
+    "https://mxhan.com/github/demo/sqlglot%2dquery%2dlab/",
+    "https://mxhan.com/github/demo/%2e%2e/sqlglot-query-lab/",
+    "https://other.example/github/demo/sqlglot-query-lab/",
+    "http://mxhan.com/github/demo/sqlglot-query-lab/",
+    "https://www.mxhan.com/github/demo/sqlglot-query-lab/",
+    "https://mxhan.com:443/github/demo/sqlglot-query-lab/",
+    "https://user:pass@mxhan.com/github/demo/sqlglot-query-lab/",
+  ]) assert.equal(githubActivityPageAllowed(url), false, url);
+
+  for (const url of [
+    "https://mxhan.com/github/demo/sqlglot-query-lab/",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/sqlglot-query-lab-source.zip",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/results.json",
+    "https://mxhan.com/github/demo/sqlglot-query-lab/preview.png",
   ]) assert.equal(githubMediaUrlAllowed(url), false, url);
 });

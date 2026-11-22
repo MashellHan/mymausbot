@@ -50,7 +50,7 @@ export function GitHubActivityWholePage({ document, state, onRevoked }: {
       const message = event.data;
       if (!message || typeof message !== "object" || message.githubDeepDive !== 1
         || !["ready", "leaving", "shown"].includes(message.type) || typeof message.path !== "string") return;
-      const parsed = selectionFromGithubPath(message.path, message.editionKey, message.repo);
+      const parsed = selectionFromGithubPath(message.path, message.editionKey, message.repo, message.type);
       if (!parsed.ok) {
         challenge.current = null;
         return setPhase("failed");
