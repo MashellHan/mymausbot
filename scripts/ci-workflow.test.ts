@@ -8,7 +8,7 @@ import { executionComplete, expectedJobs } from "./qa/contracts.mjs";
 import { verifyGate } from "./qa/gate.mjs";
 
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
-const requiredRuntimeJobs = ["vitest", "behavior-evals", "electron-smokes", "control-plane", "relay"];
+const requiredRuntimeJobs = ["vitest", "behavior-evals", "electron-smokes", "control-plane", "relay", "pwa-relay"];
 const prContext = (action: string | null, label: string | null, { number = 134, base = "a".repeat(40), head = "b".repeat(40), baseRef = "main", runId = 42 }: {
   number?: number | null; base?: string | null; head?: string | null; baseRef?: string; runId?: number;
 } = {}) => ({ github: { event_name: "pull_request", event: { action, label: label === null ? null : { name: label },

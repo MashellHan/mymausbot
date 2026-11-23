@@ -24,7 +24,7 @@ export async function verifyGate(outputs, { api = github, runId = process.env.GI
     || !Array.isArray(outputs.required_jobs) || outputs.required_jobs.some((id) => !expected.some((item) => item.id === id))) throw new Error("Missing required validation plan");
   if (outputs.fast_pr) {
     const jobs = outputs.jobs;
-    const selected = Array.isArray(jobs) && (jobs.length === 0 || isDeepStrictEqual(jobs, ["control-plane"]));
+    const selected = [ [], ["control-plane"], ["pwa-relay"], ["control-plane", "pwa-relay"] ].some((valid) => isDeepStrictEqual(jobs, valid));
     if (outputs.fast_pr !== true || !Number.isFinite(createdAt) || outputs.full_required !== false || outputs.reduced !== false
       || outputs.build !== true || !selected || outputs.boat_static || outputs.linux_lanes
       || !isDeepStrictEqual(outputs.required_jobs, jobs)
