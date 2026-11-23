@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import type { LocalAgentMember, LocalAgentState, LocalAgentTeamsResponse, LocalAgentTeam } from "../shared/local-dashboard.ts";
+import { OwnedFile } from "./atomic.ts";
 import { augmentedPath } from "./env-path.ts";
 import { readOpenCodeMessages } from "./local-agent-opencode-message.ts";
 import { openCodeSessionId, openCodeUsageDatabase, readOpenCodeMemberUsage } from "./local-agent-opencode-usage.ts";
@@ -11,10 +13,11 @@ import { codexSessionId, createLocalAgentSessionReader, dashboardText, unavailab
 import { PI_CONTEXT_KEY, parsePiContext, readPiProcessStart, type PiProcessStart } from "./local-agent-pi-context.ts";
 import { createPiSessionReader, type PiSessionView } from "./local-agent-pi-message.ts";
 import { localAgentOccupantId } from "./local-agent-occupant.ts";
-import { localAgentRoles, verifiedLocalAgentMembers } from "./local-agent-association.ts";
+import { localAgentRoles, readDocument, verifiedLocalAgentMembers } from "./local-agent-association.ts";
 
 const execute = promisify(execFile);
 const STATES = new Set<LocalAgentState>(["idle", "working", "blocked", "done", "unknown"]);
+const BINDING_FINGERPRINT = /^[a-f0-9]{64}$/;
 export type HerdrRunner = (args: readonly string[]) => Promise<string>;
 
 export const runHerdr: HerdrRunner = async (args) => (await execute("herdr", [...args], {
@@ -81,9 +84,26 @@ async function observePiContexts(agents: Record<string, unknown>[], sessions: Ma
   } catch { return new Map(); }
 }
 
+async function restoreBindingStarts(file: OwnedFile): Promise<Map<string, number>> {
+  try {
+    const saved = await readDocument(dirname(file.path), file.path);
+    if (saved.status === "ready") {
+      const entries: unknown = JSON.parse(saved.markdown!);
+      if (Array.isArray(entries) && entries.length <= 200 && entries.every((entry): entry is [string, number] =>
+        Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string" && BINDING_FINGERPRINT.test(entry[0]) &&
+        Number.isSafeInteger(entry[1]) && entry[1] >= 0)) {
+        file.loaded(saved.markdown!);
+        return new Map(entries);
+      }
+    }
+  } catch { /* The cache is optional. */ }
+  return new Map();
+}
+
 export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir(), codexHome = process.env.CODEX_HOME || join(home, ".codex"),
-  now = Date.now, readProcessStart = readPiProcessStart }: {
-  run?: HerdrRunner; home?: string; codexHome?: string; now?: () => number; readProcessStart?: PiProcessStart;
+  bindingCachePath, now = Date.now, readProcessStart = readPiProcessStart }: {
+  run?: HerdrRunner; home?: string; codexHome?: string; bindingCachePath?: string;
+  now?: () => number; readProcessStart?: PiProcessStart;
 } = {}) {
   const observationsFor = createLocalAgentSessionReader(codexHome, now);
   const piSessionsFor = createPiSessionReader(join(home, ".local", "share", "mausbot-team", "pi-agent"));
@@ -92,7 +112,9 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
   let lastAttempt = -Infinity;
   let pending: Promise<LocalAgentTeamsResponse> | null = null;
   let revision = 0;
-  const paneBindings = new Map<string, { key: string | null; switchedAt: number | null }>();
+  const bindingFile = bindingCachePath ? new OwnedFile(bindingCachePath, { mode: 0o600 }) : null;
+  let restoredBindings: Promise<Map<string, number>> | undefined;
+  let bindingStarts: Map<string, number> | undefined;
 
   async function refresh(current: () => boolean): Promise<LocalAgentTeamsResponse> {
     try {
@@ -145,7 +167,8 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         owners.add(String(agent.workspace_id));
         sessionTeams.set(session, owners);
       }
-      const nextBindings = new Map<string, { key: string | null; switchedAt: number | null }>();
+      const previousBindings = bindingStarts ?? await (restoredBindings ??= bindingFile ? restoreBindingStarts(bindingFile) : Promise.resolve(new Map()));
+      const nextBindings = new Map<string, number>();
       const seen = new Set<string>();
       for (const agent of agents) {
         const id = agent.pane_id;
@@ -161,15 +184,15 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
         const occupantId = localAgentOccupantId(agent, id);
         const boundSession = verifiedCodexMember ? sessionId : openCodeSession;
-        const bindingKey = boundSession
-          ? JSON.stringify([agent.agent, occupantId, boundSession])
-          : JSON.stringify([agent.agent ?? null, occupantId ?? agent.name ?? null, null]);
-        const previous = paneBindings.get(id);
-        const switchedAt = previous && previous.key === bindingKey ? previous.switchedAt : sampledAt;
-        nextBindings.set(id, { key: bindingKey, switchedAt });
+        const binding = boundSession && occupantId ? JSON.stringify([id, agent.agent, occupantId, boundSession, agent.cwd, agent.terminal_id]) : null;
+        const bindingKey = binding && typeof agent.terminal_id === "string" && agent.terminal_id
+          ? createHash("sha256").update(binding).digest("hex") : binding;
+        const savedStart = bindingKey ? previousBindings.get(bindingKey) : undefined;
+        const switchedAt = savedStart !== undefined && savedStart <= sampledAt ? savedStart : sampledAt;
+        if (bindingKey) nextBindings.set(bindingKey, switchedAt);
         const usage = verifiedCodexMember && observation
           ? observation.memberUsage(switchedAt)
-          : (openCodeSession ? openCodeUsage.get(openCodeSession)?.(switchedAt ?? sampledAt) : undefined)
+          : (openCodeSession ? openCodeUsage.get(openCodeSession)?.(switchedAt) : undefined)
             ?? { tokenUsage24h: unavailableMemberUsage(), tokenUsage7d: unavailableMemberUsage() };
         const member: LocalAgentMember = {
           id, name: dashboardText(agent.name, 100) || id, kind: dashboardText(agent.agent, 40) || "unknown",
@@ -185,15 +208,9 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         team.agents.push(member);
       }
       if (current()) {
-        for (const [pane, binding] of paneBindings) {
-          if (seen.has(pane)) continue;
-          const absentSince = binding.key === null ? binding.switchedAt : sampledAt;
-          if (absentSince !== null && sampledAt - absentSince <= 7 * 24 * 60 * 60 * 1000) {
-            nextBindings.set(pane, { key: null, switchedAt: absentSince });
-          }
-        }
-        paneBindings.clear();
-        for (const [pane, binding] of nextBindings) paneBindings.set(pane, binding);
+        bindingStarts = nextBindings;
+        const saved = [...nextBindings].filter(([key]) => BINDING_FINGERPRINT.test(key)).sort();
+        try { bindingFile?.write(JSON.stringify(saved)); } catch { /* Keep the in-memory observations. */ }
       }
       for (const team of teams.values()) {
         team.agentCount = team.agents.length;

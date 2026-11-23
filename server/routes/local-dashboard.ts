@@ -1,5 +1,8 @@
+import { join } from "node:path";
+
 import type { LocalAgentActivityHistoryRequest, LocalAgentActivityResponse, LocalAgentConfigurationResponse,
   LocalAgentSkillDocumentResponse, LocalAgentTeamRulesResponse, LocalAgentTeamsResponse, LocalUsageResponse } from "../../shared/local-dashboard.ts";
+import { DATA_DIR } from "../config.ts";
 import { createLocalAgentActivityProvider } from "../local-agent-activity.ts";
 import { createLocalAgentConfigurationProvider } from "../local-agent-configuration.ts";
 import { createLocalAgentTeamsProvider } from "../local-agent-teams.ts";
@@ -40,7 +43,7 @@ export function createLocalDashboardRoutes(providers: LocalDashboardProviders): 
 }
 
 export const localDashboardProviders: LocalDashboardProviders = {
-  agents: createLocalAgentTeamsProvider(),
+  agents: createLocalAgentTeamsProvider({ bindingCachePath: join(DATA_DIR, "local-agent-usage-bindings-v1.json") }),
   activity: createLocalAgentActivityProvider(),
   configuration: createLocalAgentConfigurationProvider(),
   usage: createLocalUsageProvider(),
