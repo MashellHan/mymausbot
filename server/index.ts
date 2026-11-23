@@ -90,7 +90,7 @@ import { createQueuedNotes, createWaitWords } from "./host/wait-words.ts";
 import { landTurnFiles, parkedFilesKey, settleParkedFiles, takeParkedFiles, type ParkedTurnAttachment } from "./host/turn-attachments.ts";
 import { createReplyVoiceNotes } from "./host/reply-voice-notes.ts";
 import { runtimeRequestCardFields } from "./request-card.ts";
-import type { DirectSendInput, DirectSendReceipt } from "./direct-send.ts";
+import { DirectSendRefused, type DirectSendInput, type DirectSendReceipt } from "./direct-send.ts";
 import { finishedWithoutSummaryLine, ROOM_SUMMARY_REASK, roomTurnNarrationIds, roomTurnReply } from "./room-reply.ts";
 import { chosenPlace, pickComputer } from "./computer-selection.ts";
 import * as boat from "./boat.ts"; import { keyHint, keyStatus, nestedKeyStatus, withoutKeyHints } from "./key-hint.ts";
@@ -7168,16 +7168,6 @@ async function startOrQueueDirectMessage(botId: string, threadId: string, text: 
   }
   const message = await startTurn(botId, text, { threadId, replyTo, sendId, sender, trigger, via, callId, dataContext, app, mentions, allowRoomTurnElsewhere: true });
   return { ok: true as const, threadId, message };
-}
-
-class DirectSendRefused extends Error {
-  readonly status: number;
-  readonly body: Record<string, unknown>;
-  constructor(status: number, body: Record<string, unknown>) {
-    super(typeof body.error === "string" ? body.error : "send refused");
-    this.status = status;
-    this.body = body;
-  }
 }
 
 function directSendRefusal(botId: string, threadId: string): DirectSendRefused | null { const standIn = store.standIns.get(botId); if (standIn) return new DirectSendRefused(409, { error: botMoveRefusal(standIn)!, code: "moved" });
