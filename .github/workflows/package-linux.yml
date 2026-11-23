@@ -1,10 +1,9 @@
 # Ubuntu packages built on the exact distribution we support, with static artifact validation.
 #
-# This workflow deliberately produces an artifact instead of publishing a
-# partial release. That keeps release credentials and publication authority
-# in the unified release workflow while making every release candidate
-# reproducible from an exact ref. Attach the resulting files to the matching
-# canonical OpenMausBot release after the release gate passes.
+# This workflow deliberately produces standalone manual workflow artifacts
+# instead of publishing a GitHub release. Canonical desktop releases publish
+# macOS installers only, so these Ubuntu packages are not required to be
+# attached to a canonical release.
 name: Package Ubuntu
 
 on:
