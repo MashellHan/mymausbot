@@ -242,7 +242,9 @@ the binding again before exposing the observation.
 read for a recent snapshot. It accepts a Herdr pane ID such as `w6:p1` and no
 query parameters. Codex uses a 512 KiB recent tail. Pi verifies the session
 path, header and current persisted branch. OpenCode reads the verified session
-from its local read-only SQLite store with a 512 KiB recent scan budget.
+from its local read-only SQLite store with a 512 KiB recent scan budget for the
+projected message data. The current store filters tool blocks before counting
+message bytes, so a tool-heavy tail does not displace the last visible reply.
 The OpenCode reader exposes visible user and assistant text. All three return at most 60 events,
 including at most 30 tool events. Tool detail is redacted and bounded, and may
 be available, absent or withheld. Path-like values and recognized credential

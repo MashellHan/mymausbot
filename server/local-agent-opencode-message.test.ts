@@ -119,4 +119,23 @@ describe("bounded OpenCode panel messages", () => {
       expect((await activity.get(pane, { occupantId })).events.map(({ text }) => text)).toEqual(["Legacy reply"]);
     });
   });
+
+  it("finds visible content through a tool-heavy current session tail", async () => {
+    await fixture(async (home, db) => {
+      const add = db.prepare("INSERT INTO session_message VALUES (?, ?, 'assistant', ?, ?, ?)");
+      add.run("visible-message", SESSION, 1, 1000, JSON.stringify({
+        content: [{ type: "text", text: "Last visible reply" }, { type: "text", text: "Private synthetic", synthetic: true }],
+      }));
+      const toolOnly = JSON.stringify({ model: { id: "fixture-model", variant: "high" },
+        content: [{ type: "tool", result: "Private result".repeat(3000) }] });
+      for (let index = 2; index < 68; index++) add.run(`fixture-message-${index}`, SESSION, index, 1000 + index, toolOnly);
+      const run = async () => listed([agent]);
+      const team = createLocalAgentTeamsProvider({ home, run });
+      const activity = createLocalAgentActivityProvider({ home, run });
+      expect((await team.get()).teams[0]?.agents[0]).toMatchObject({
+        messagePreview: "Last visible reply", model: "fixture-model", reasoningEffort: "high",
+      });
+      expect((await activity.get(pane)).events.map(({ text }) => text)).toEqual(["Last visible reply"]);
+    });
+  });
 });

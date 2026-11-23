@@ -22,7 +22,19 @@ function messageStores(db: DatabaseSync) {
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_message', 'session_v2', 'message', 'part', 'session')").all().map(({ name }) => name));
   const current: MessageStore | null = tables.has("session_message") ? {
     messages: db.prepare(`SELECT id, time_created AS at, type AS kind,
-      CASE WHEN length(CAST(data AS BLOB)) <= ? THEN data END AS data
+      CASE WHEN length(CAST(data AS BLOB)) <= ? AND json_valid(data) THEN
+        CASE type
+          WHEN 'user' THEN json_object('text', json_extract(data, '$.text'))
+          ELSE json_object(
+            'model', json_object('id', json_extract(data, '$.model.id'), 'variant', json_extract(data, '$.model.variant')),
+            'content', json((SELECT json_group_array(json_object('type', 'text', 'text', json_extract(block.value, '$.text')) ORDER BY block.key)
+              FROM json_each(data, '$.content') AS block
+              WHERE CASE WHEN block.type = 'object' THEN json_extract(block.value, '$.type') = 'text'
+                AND json_type(block.value, '$.text') = 'text'
+                AND json_type(block.value, '$.synthetic') IS NOT 'true'
+                AND json_type(block.value, '$.ignored') IS NOT 'true' END)))
+        END
+      END AS data
       FROM session_message WHERE session_id = ? AND type IN ('assistant', 'user')
       ORDER BY seq DESC LIMIT ?`),
     hasSession: tables.has("session_v2") ? db.prepare("SELECT 1 FROM session_v2 WHERE id = ? LIMIT 1") : undefined,
@@ -49,6 +61,7 @@ function textParts(parts: unknown[]): string {
 
 function readMessages(store: MessageStore, sessionId: string, view: View): MessageRead | null {
   const limit = view === "history" ? MAX_ACTIVITY_HISTORY_EVENTS : MAX_ACTIVITY_EVENTS;
+  const scanLimit = store.parts ? limit : MAX_ACTIVITY_HISTORY_EVENTS;
   const budget = view === "history" ? HISTORY_BYTES : RECENT_BYTES;
   const events: LocalAgentActivityEvent[] = [];
   let bytes = 0, rows = 0, truncated = false;
@@ -60,8 +73,8 @@ function readMessages(store: MessageStore, sessionId: string, view: View): Messa
     try { return object(JSON.parse(data)); }
     catch { truncated = true; return null; }
   };
-  for (const row of store.messages.iterate(ROW_BYTES, sessionId, limit + 1)) {
-    if (++rows > limit) { truncated = true; break; }
+  for (const row of store.messages.iterate(ROW_BYTES, sessionId, scanLimit + 1)) {
+    if (++rows > scanLimit) { truncated = true; break; }
     const data = parse(row.data);
     if (!data) { if (bytes > budget) break; continue; }
     const kind = store.parts ? data.role : row.kind;
@@ -95,6 +108,7 @@ function readMessages(store: MessageStore, sessionId: string, view: View): Messa
     if (visible.text === null) continue;
     if (kind === "assistant" && preview === null) preview = visible.text;
     if (view === "preview") break;
+    if (events.length === limit) { truncated = true; break; }
     const id = createHash("sha256").update(row.id).digest("hex").slice(0, 14);
     const at = typeof row.at === "number" && Number.isSafeInteger(row.at) && row.at > 0 ? row.at : null;
     events.push({ id: `e${id}`, at, kind, tool: null, text: visible.text });
