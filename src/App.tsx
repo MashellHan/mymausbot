@@ -23,6 +23,7 @@ import { useFilePreviewScope } from "@/lib/file-preview";
 import { viewerClosedRelease } from "@/components/computer-takeover";
 import { Sidebar } from "@/components/Sidebar";
 import { ChatView } from "@/components/ChatView";
+import { HandoffExchangeHost } from "@/components/HandoffExchange";
 import { GroupView } from "@/components/GroupView";
 import { ForkPanel } from "@/components/ForkPanel";
 import { SIDEBAR_AND_PANEL_FIT, SIDEBAR_INLINE, TWO_SIDE_PANELS_FIT, useMediaQuery } from "@/lib/use-media-query";
@@ -421,7 +422,9 @@ function Shell({ viewer }: { viewer: WelcomeViewer | null }) {
       ) : group ? (
         <GroupView key={group.id} group={group} />
       ) : bot ? (
-        <ChatView bot={bot} />
+        <HandoffExchangeHost bot={bot}>
+          <ChatView bot={bot} />
+        </HandoffExchangeHost>
       ) : noEngines ? (
         <NoEngines />
       ) : (

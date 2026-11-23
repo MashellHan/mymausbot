@@ -4037,7 +4037,14 @@
       "whatsNew.team.sales": "8de4e0ea7370e4e60a521379c9edf3253afcba7660e647f3aa788e49e8993d1a",
       "whatsNew.team.start": "c0210f0f43ba481f584dfa73f12f1475312574a260c091cf0e390ce0e8f96672",
       "whatsNew.team.support": "be91940b79f469101df9a50544b6873aa5509a12f1f93f1cb5e3be3990d344b3",
-      "whatsNew.team.title": "a12b07b6e8b2ced9f7ef1e920da7f445c9e40847cc79a1df6129abba933824a9"
+      "whatsNew.team.title": "a12b07b6e8b2ced9f7ef1e920da7f445c9e40847cc79a1df6129abba933824a9",
+      "chat.handoffExchange.open": "f7c1034c502cfbd020cc6c7a00d6aeafcf2957853b24bf08f689679f75aaf14e",
+      "chat.handoffExchange.label": "62b00eda3fb12bc5fc268c60883841abd8a7774ea096109771d2a130364b6a50",
+      "chat.handoffExchange.backTo": "11b2bf44df264af7dbb26dfd164187bd2ce06ba8cf6a756567c49b6ca1604041",
+      "chat.handoffExchange.back": "76900f1bfd16c8d4dd3d25e6f46638d7165aee23883ccea6bfe071c514421769",
+      "chat.handoffExchange.loading": "08cd9919453184389e78d9924a9dc3d4b68f2529b79bdd195dd51fb6139f927c",
+      "chat.handoffExchange.failed": "9205f816010803c4e86ee0b2e43f1b99582f2dc452ac93d7c187e8d1e6686b2f",
+      "chat.handoffExchange.empty": "f0d5968f615ed7ab11fdf8f17586cfaeb2845eee5757459e804b4e9d663a3588"
     },
     "es": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",
@@ -58827,7 +58834,14 @@
       "workspaces.upgraded": "c74bcc667a882bc1498b5dc5940280e4330d6403888887aa5402b72cb9bbc87a",
       "workspaces.users": "6b0cc904d081a8c11cfdaec667f05132cbfa8a57f5040d27d5fc0f2fc50d0dc6",
       "workspaces.usersTitle": "9d2e3d266b256ec23504b97fcd3624727d439574f62d994e560b0cca54340713",
-      "workspaces.working": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0"
+      "workspaces.working": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
+      "chat.handoffExchange.open": "f7c1034c502cfbd020cc6c7a00d6aeafcf2957853b24bf08f689679f75aaf14e",
+      "chat.handoffExchange.label": "62b00eda3fb12bc5fc268c60883841abd8a7774ea096109771d2a130364b6a50",
+      "chat.handoffExchange.backTo": "11b2bf44df264af7dbb26dfd164187bd2ce06ba8cf6a756567c49b6ca1604041",
+      "chat.handoffExchange.back": "76900f1bfd16c8d4dd3d25e6f46638d7165aee23883ccea6bfe071c514421769",
+      "chat.handoffExchange.loading": "08cd9919453184389e78d9924a9dc3d4b68f2529b79bdd195dd51fb6139f927c",
+      "chat.handoffExchange.failed": "9205f816010803c4e86ee0b2e43f1b99582f2dc452ac93d7c187e8d1e6686b2f",
+      "chat.handoffExchange.empty": "f0d5968f615ed7ab11fdf8f17586cfaeb2845eee5757459e804b4e9d663a3588"
     },
     "ru": {
       "about.connectedTo": "7eba311e0e3c7146cf09856dae9934abad7b60e15b5a60679db755aab63541f9",

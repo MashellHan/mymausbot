@@ -4054,5 +4054,12 @@
   "whatsNew.team.sales": "Vertrieb",
   "whatsNew.team.start": "Team starten",
   "whatsNew.team.support": "Support",
-  "whatsNew.team.title": "Gemeinsame Bots für dein ganzes Team"
+  "whatsNew.team.title": "Gemeinsame Bots für dein ganzes Team",
+  "chat.handoffExchange.open": "Austausch mit {name} öffnen",
+  "chat.handoffExchange.label": "Austausch zwischen den Bots {asker} und {helper}",
+  "chat.handoffExchange.backTo": "Zurück zu {name}",
+  "chat.handoffExchange.back": "Zurück",
+  "chat.handoffExchange.loading": "Unterhaltung wird geladen…",
+  "chat.handoffExchange.failed": "Die Unterhaltung konnte nicht geladen werden.",
+  "chat.handoffExchange.empty": "Noch keine Nachrichten."
 }

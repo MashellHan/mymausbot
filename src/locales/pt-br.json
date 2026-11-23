@@ -11188,5 +11188,12 @@
   "workspaces.upgraded": "Todas as instalações em execução foram reiniciadas na nova versão.",
   "workspaces.users": "Usuários",
   "workspaces.usersTitle": "Quem pode entrar em {slug}",
-  "workspaces.working": "Trabalhando…"
+  "workspaces.working": "Trabalhando…",
+  "chat.handoffExchange.open": "Abrir conversa com {name}",
+  "chat.handoffExchange.label": "Conversa entre os bots {asker} e {helper}",
+  "chat.handoffExchange.backTo": "Voltar para {name}",
+  "chat.handoffExchange.back": "Voltar",
+  "chat.handoffExchange.loading": "Carregando a conversa…",
+  "chat.handoffExchange.failed": "Não foi possível carregar a conversa.",
+  "chat.handoffExchange.empty": "Nenhuma mensagem ainda."
 }
