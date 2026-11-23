@@ -3,7 +3,7 @@ import { RuntimeNoticeError, runtimeErrorText } from "./runtime-notice-error.ts"
 // The pi coding agent (@earendil-works/pi-coding-agent) over its own stdio JSON-RPC mode
 // (`pi --mode rpc --no-session`), not ACP. Pi reads auth.json from its agent folder itself, so this driver
 // holds no key; resumeCursor is pi's `sessionFile` (switch_session).
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,7 +49,7 @@ import {
 import { appendNative } from "./native.ts";
 import { allowsTool, parseToolScope } from "../../shared/tool-scope.ts";
 import { buildMcpServers } from "./pi-mcp-servers.ts";
-import { ownPiAgentDir, piAgentDir, preparePiAgentConfig, readPiAgentFile, readPiDefaultModel } from "./pi-agent-dir.ts";
+import { assertPiAuthReachableInBox, ownPiAgentDir, piAgentDir, preparePiAgentConfig, readPiAgentFile, readPiDefaultModel } from "./pi-agent-dir.ts";
 import { noticeFailure } from "../chat-notices.ts";
 
 import { decodePiFrame, PiRpcChunks, piLineReader, readPiPromptImages } from "./pi-rpc.ts";
@@ -196,9 +196,6 @@ export function ensurePiInjectModel(
   providers[inject.host] = existing;
   root.providers = providers;
   writeFileAtomic(path, `${JSON.stringify(root, null, 2)}\n`, { mode: 0o600 });
-  try {
-    chmodSync(path, 0o600);
-  } catch {}
   return split;
 }
 
@@ -210,6 +207,7 @@ export async function fetchPiModels(
   allowEnv: readonly string[] = [],
   agentDir?: string,
 ): Promise<ModelCatalog> {
+  if (agentDir) assertPiAuthReachableInBox(agentDir, env, cli);
   const child = spawnCli(cli, PI_ARGS, { stdio: ["pipe", "pipe", "pipe"], env, box: { allowEnv, rw: agentDir ? [agentDir] : [] } });
   return new Promise((resolve) => {
     let done = false;
@@ -250,6 +248,7 @@ export async function updatePiModelCatalog(
   allowEnv: readonly string[] = [],
   agentDir?: string,
 ): Promise<boolean> {
+  if (agentDir) assertPiAuthReachableInBox(agentDir, env, cli);
   return new Promise((resolve) => {
     execCliBoxed(cli, PI_MODEL_UPDATE_ARGS, { env, timeout: 60_000, maxBuffer: 1024 * 1024, box: { allowEnv, rw: agentDir ? [agentDir] : [] } }, (error) => resolve(!error));
   });
@@ -326,7 +325,9 @@ export const PiDriver: ProviderDriver<PiConfig> = {
     const sourceEnvironment = () => ({ ...process.env, ...input.environment });
     const localAgent = (source = sourceEnvironment()) => {
       const dir = ownPiAgentDir(source, instanceId);
-      return { dir, env: { ...source, PI_CODING_AGENT_DIR: dir } };
+      const env = { ...source, PI_CODING_AGENT_DIR: dir };
+      assertPiAuthReachableInBox(dir, env, config.cli);
+      return { dir, env };
     };
     let models = EMPTY;
     const readModels = async () => {

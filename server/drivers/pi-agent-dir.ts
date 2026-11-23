@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { writeFileAtomic } from "../atomic.ts";
+import { botBox } from "../bot-box/box.ts";
+import { planBox, under, visibleInBox } from "../bot-box/plan.ts";
 import { DATA_DIR } from "../config.ts";
 
 // Pi 1.6.0's SettingsManager loads packages, extensions, skills and prompts from settings.json.
@@ -128,4 +130,65 @@ export function ownPiAgentDir(env: Record<string, string | undefined>, instanceI
     throw new Error(`Could not prepare the isolated Pi agent directory. ${detail}`, { cause: error });
   }
   return own;
+}
+
+function tryRealpath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+export function assertPiAuthReachableInBox(
+  agentDir: string,
+  env: Record<string, string | undefined>,
+  cli: string,
+): void {
+  if (!botBox.enabled()) return;
+  const authLink = join(agentDir, "auth.json");
+  const entry = lstatSync(authLink, { throwIfNoEntry: false });
+  if (!entry?.isSymbolicLink()) return;
+  const linkTarget = resolve(agentDir, readlinkSync(authLink));
+  let canonical: string;
+  try {
+    canonical = realpathSync(authLink);
+  } catch {
+    throw new Error("Pi sign-in target could not be resolved for the bot box.");
+  }
+  const started = botBox.startOptions();
+  const dataDir = resolve(started?.dataDir ?? DATA_DIR);
+  const home = resolve(started?.home ?? (env.HOME || env.USERPROFILE || homedir()));
+  const codeRoots = started?.codeRoots ?? [];
+  const engineRoots = started?.engineRoots ?? [];
+  const plan = planBox(
+    {
+      dataDir,
+      home,
+      codeRoots,
+      engineRoots,
+      bridges: [],
+    },
+    { command: cli, args: [], env, rw: [agentDir] },
+  );
+  const realPlan = planBox(
+    {
+      dataDir: tryRealpath(dataDir),
+      home: tryRealpath(home),
+      codeRoots: codeRoots.map(tryRealpath),
+      engineRoots: engineRoots.map(tryRealpath),
+      bridges: [],
+    },
+    { command: cli, args: [], env, rw: [tryRealpath(agentDir)] },
+  );
+  if (
+    visibleInBox(plan, linkTarget) !== "rw" ||
+    visibleInBox(realPlan, canonical) !== "rw" ||
+    visibleInBox(realPlan, dirname(canonical)) !== "rw"
+  ) {
+    const guidance = under(canonical, tryRealpath(dataDir)) || under(linkTarget, dataDir)
+      ? `place PI_CODING_AGENT_DIR outside ${dataDir}`
+      : `place PI_CODING_AGENT_DIR inside ${home} and outside ${dataDir}`;
+    throw new Error(`Pi sign-in (${canonical}) is not reachable inside the bot box; ${guidance}.`);
+  }
 }

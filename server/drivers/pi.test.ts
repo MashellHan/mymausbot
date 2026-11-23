@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1248,6 +1248,71 @@ describe("PiDriver turns (fake CLI)", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("rejects an unreachable masked-data Pi sign-in before spawning while keeping an unmasked named profile reachable", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-box-reach-"));
+    const maskedProfile = join(DATA_DIR, "profiles", `masked-${randomUUID()}`);
+    const reachableProfile = join(home, "profiles", "raven");
+    const maskedDump = join(home, "masked-dump.jsonl");
+    const reachableDump = join(home, "reachable-dump.jsonl");
+    mkdirSync(maskedProfile, { recursive: true });
+    mkdirSync(reachableProfile, { recursive: true });
+    writeFileSync(join(maskedProfile, "auth.json"), '{"raven":{"type":"api_key","key":"masked-fixture"}}');
+    writeFileSync(join(maskedProfile, "models.json"), '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}');
+    writeFileSync(join(reachableProfile, "auth.json"), '{"raven":{"type":"api_key","key":"reachable-fixture"}}');
+    writeFileSync(join(reachableProfile, "models.json"), '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}');
+
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir: DATA_DIR,
+      home,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    const wrap = vi.spyOn(botBox, "wrap").mockReturnValue(null);
+    let maskedInstance: ProviderInstance | null = null;
+    try {
+      maskedInstance = await PiDriver.create({
+        instanceId: `pi-masked-${randomUUID()}`,
+        displayName: "pi Masked",
+        environment: { HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: maskedProfile, FAKE_PI_DUMP: maskedDump },
+        enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      await expect(maskedInstance.snapshot()).resolves.toMatchObject({
+        state: "unavailable",
+        reason: expect.stringContaining("not reachable inside the bot box"),
+      });
+      await expect(maskedInstance.refreshModels?.()).rejects.toThrow(/not reachable inside the bot box/);
+      await expect(maskedInstance.adapter.sendTurn({ threadId: "t-masked", text: "hi" })).rejects.toThrow(/not reachable inside the bot box/);
+      expect(existsSync(maskedDump)).toBe(false);
+
+      await create("profile-models", {
+        HOME: home,
+        TMPDIR: "/tmp",
+        PI_CODING_AGENT_DIR: "~/profiles/raven",
+        FAKE_PI_DUMP: reachableDump,
+      });
+      await expect(instance.snapshot()).resolves.toMatchObject({ state: "available", authenticated: true });
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-reachable", text: "hi" });
+      expect(await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: true });
+      expect(existsSync(reachableDump)).toBe(true);
+
+      const turn = wrap.mock.calls.at(-1)![0];
+      const plan = planBox({ dataDir: DATA_DIR, home, codeRoots: [], engineRoots: [], bridges: [] }, turn);
+      expect(visibleInBox(plan, join(reachableProfile, "auth.json"))).toBe("rw");
+      expect(visibleInBox(plan, join(maskedProfile, "auth.json"))).toBe("none");
+    } finally {
+      await maskedInstance?.dispose();
+      await removeTempDir(maskedProfile);
+      wrap.mockRestore();
+      startOptions.mockRestore();
+      enabled.mockRestore();
+      await removeTempDir(home);
+    }
+  });
+
   it("writes models.json and set_model for a host::model inject pick, in MausBot's own Pi folder", async () => {
     const home = mkdtempSync(join(tmpdir(), "omb-pi-turn-inject-"));
     const dump = join(home, "dump.jsonl");
@@ -1412,6 +1477,20 @@ describe("ensurePiInjectModel", () => {
       modelId: "MiniMax-M3-4bit",
     });
     expect(readFileSync(path, "utf8")).toBe("not json");
+  });
+
+  it.skipIf(process.platform === "win32")("publishes updated models.json with 0o600 permissions directly at atomic rename", () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-inject-mode-"));
+    const agentDir = join(home, ".pi", "agent");
+    const modelsPath = join(agentDir, "models.json");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(modelsPath, JSON.stringify({ providers: {} }), { mode: 0o644 });
+    chmodSync(modelsPath, 0o644);
+    expect(statSync(modelsPath).mode & 0o777).toBe(0o644);
+
+    ensurePiInjectModel("omlx::MiniMax-M3-4bit", { HOME: home });
+
+    expect(statSync(modelsPath).mode & 0o777).toBe(0o600);
   });
 });
 

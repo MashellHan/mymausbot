@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,7 @@ import { encodeInjectId } from "./local-inject.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, symlinkSync: vi.fn(actual.symlinkSync) };
+  return { ...actual, chmodSync: vi.fn(actual.chmodSync), symlinkSync: vi.fn(actual.symlinkSync) };
 });
 
 const same = (a: string, b: string) => {
@@ -145,5 +145,19 @@ describe("MausBot's own Pi agent folder", () => {
     }
     expect(lstatSync(join(own, name)).isSymbolicLink()).toBe(true);
     expect(readFileSync(privateFile, "utf8")).toBe('{"keep":"private"}');
+  });
+
+  it.skipIf(process.platform === "win32")("publishes injected models with 0o600 mode at rename without post-publish chmod", () => {
+    const own = ownPiAgentDir(env(), "pi-1", dataDir);
+    const modelsPath = join(own, "models.json");
+    chmodSync(modelsPath, 0o644);
+    vi.mocked(chmodSync).mockClear();
+
+    ensurePiInjectModel(encodeInjectId("omlx", "MiniMax-M3-4bit"), { ...env(), PI_CODING_AGENT_DIR: own });
+
+    expect(vi.mocked(chmodSync)).not.toHaveBeenCalled();
+    expect(lstatSync(modelsPath).isFile()).toBe(true);
+    expect(lstatSync(modelsPath).isSymbolicLink()).toBe(false);
+    expect(statSync(modelsPath).mode & 0o777).toBe(0o600);
   });
 });
