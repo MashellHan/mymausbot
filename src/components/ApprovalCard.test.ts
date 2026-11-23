@@ -735,22 +735,75 @@ describe("ApprovalCard for a change that applied on its own", () => {
     const compactProfile = renderCompact(profileMessage);
     expect(compactProfile).toContain("Profile updated");
     expect(compactProfile).not.toMatch(/standing instructions|<button/);
-    const model = render(applied({
+    const modelMessage = applied({
       tool: "update_model",
       modelRequest: {
         version: 1, requestId: "m", botId: "bot-1", threadId: "thread-1", targetBotId: "bot-1", targetName: "Scout",
         createdAt: 1, reason: "asked", selection: { instanceId: "codex", model: "gpt-fixture" }, before: { instanceId: "claude", model: "sonnet" },
       },
-    }));
+    });
+    const model = render(modelMessage);
     expect(model).toContain("Scout changed its default model: gpt-fixture");
-    const skill = render(applied({
+    const compactModel = renderCompact(modelMessage);
+    expect(compactModel).toContain("Default model changed");
+    expect(compactModel).toContain("gpt-fixture");
+    expect(compactModel).not.toMatch(/<button|Undo|Details/);
+    const skillMessage = applied({
       tool: "stage_skill",
       skillRequest: {
         version: 1, requestId: "s", botId: "bot-1", threadId: "thread-1", stagedId: "staged", action: "create",
         name: "file-expense", gist: "Files an expense.", warnings: [], createdAt: 1,
       },
-    }));
+    });
+    const skill = render(skillMessage);
     expect(skill).toContain("Scout added a skill: file-expense");
+    const compactSkill = renderCompact(skillMessage);
+    expect(compactSkill).toContain("Skill enabled");
+    expect(compactSkill).toContain("file-expense");
+    expect(compactSkill).not.toMatch(/<button|Undo|Details/);
+  });
+
+  it("compacts team setup, app settings, automations and waits in Simple mode without Undo or Details", () => {
+    const setup = { version: 1 as const, requestId: "t", botId: "bot-1", threadId: "thread-1", reason: "asked", createdAt: 1, requesterRevision: "r", newTeams: [] };
+    const compactTeam = renderCompact(applied({ tool: "set_up_team", teamSetupRequest: { ...setup, operations: [], resumed: true,
+      result: { state: "applied", newTeams: [], bots: [{ id: "b2", name: "Mira", action: "created" }] },
+      undo: { created: ["b2"], before: [], revisions: {} } } }));
+    expect(compactTeam).toContain("Team setup applied");
+    expect(compactTeam).not.toMatch(/Mira|<button|Undo|Details/);
+
+    const compactSetting = renderCompact(applied({ tool: "app_settings", appSettingRequest: {
+      settingId: "rooms.turnTimeoutMinutes", label: "Room turn timeout", before: "30", after: "45", tier: "safe",
+    } }));
+    expect(compactSetting).toContain("Setting updated");
+    expect(compactSetting).toContain("Room turn timeout");
+    expect(compactSetting).not.toMatch(/<button|Undo|Details/);
+
+    const compactWebhook = renderCompact(applied({ tool: "create_trigger", webhookRequest: {
+      version: 1, requestId: "w", botId: "bot-1", threadId: "thread-1", createdAt: 1, resultId: "wh-1",
+      operation: { action: "create", webhook: { name: "Lead alert", instructions: "Notify", runOn: "maus" } },
+      undo: { name: "Lead alert" },
+    } }));
+    expect(compactWebhook).toContain("Automation set up");
+    expect(compactWebhook).toContain("Lead alert");
+    expect(compactWebhook).not.toMatch(/<button|Undo|Details/);
+
+    const compactAppTrigger = renderCompact(applied({ tool: "create_trigger", appTriggerRequest: {
+      version: 1, requestId: "a", botId: "bot-1", threadId: "thread-1", createdAt: 1, resultId: "app-1",
+      operation: { action: "create", trigger: { name: "New mail", app: "gmail", event: "new_email", instructions: "Triage", runOn: "maus" } as never },
+      undo: { name: "New mail" },
+    } }));
+    expect(compactAppTrigger).toContain("Automation set up");
+    expect(compactAppTrigger).toContain("New mail");
+    expect(compactAppTrigger).not.toMatch(/<button|Undo|Details/);
+
+    const compactWait = renderCompact(applied({ tool: "wait_until", waitRequest: { waitId: "w1", label: "the build", followUp: "Deploy it." } }));
+    expect(compactWait).toContain("Scout is waiting for the build");
+    expect(compactWait).not.toMatch(/<button|Undo|Details/);
+
+    const compactMemory = renderCompact(applied({ tool: "propose_team_memory", subtitle: "Person: Ada Lovelace — Runs the payroll review.",
+      teamMemoryRequest: { section: "", entryId: "e", kind: "person", revision: "v1" } }));
+    expect(compactMemory).toContain("Saved to department memory");
+    expect(compactMemory).not.toMatch(/Ada Lovelace|<button|Undo|Details/);
   });
 
   it("reads team setup and team memory as one line, with Undo except for a deletion", () => {

@@ -567,12 +567,11 @@ describe("how every bot replies", () => {
     }
   });
 
-  it("asks for an opening line on longer work, the answer first, one question at most, plain words and money facts first", () => {
+  it("stays silent before and between tool calls, puts the answer first, asks one question at most, uses plain words and puts money facts first", () => {
     for (const habit of [
-      "send one short line in their words on what you are doing and why",
-      "add what they will get and roughly how long",
-      "Quick answers skip both.",
-      "Between tool calls, stay silent: never narrate plans, checks or verification before the result.",
+      "Stay silent before and between tool calls",
+      "never send a preamble, plan, status line, check or partial reply while tools are running",
+      "finish every tool call (including memory saves and teammate handoffs) first, then send one concise final reply without repeating anything already sent.",
       "Answer first (verdict, result or answer), then support.",
       "Say in one line where and when looked-up facts came from",
       "Use and convert to their units, currency, time zone and numbers",
