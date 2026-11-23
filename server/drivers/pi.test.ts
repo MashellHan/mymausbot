@@ -1365,6 +1365,58 @@ describe("PiDriver turns (fake CLI)", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("rejects a relative auth symlink using '..' after a directory alias into masked data before spawning", async () => {
+    const home = mkdtempSync(join(tmpdir(), "omb-pi-box-dotdot-"));
+    const profile = join(home, "profile");
+    const routes = join(home, "routes");
+    const redirectBase = join(DATA_DIR, "redirects", randomUUID());
+    const redirectNested = join(redirectBase, "nested");
+    const dump = join(home, "dotdot-dump.jsonl");
+    mkdirSync(profile, { recursive: true });
+    mkdirSync(routes, { recursive: true });
+    mkdirSync(redirectNested, { recursive: true });
+    writeFileSync(join(routes, "auth.json"), '{"raven":{"type":"api_key","key":"decoy-fixture"}}');
+    writeFileSync(join(redirectBase, "auth.json"), '{"raven":{"type":"api_key","key":"masked-fixture"}}');
+    writeFileSync(join(profile, "models.json"), '{"providers":{"raven":{"models":[{"id":"fixture"}]}}}');
+    symlinkSync(redirectNested, join(routes, "alias"));
+    symlinkSync("../routes/alias/../auth.json", join(profile, "auth.json"));
+
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir: DATA_DIR,
+      home,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    const wrap = vi.spyOn(botBox, "wrap").mockReturnValue(null);
+    let dotdotInstance: ProviderInstance | null = null;
+    try {
+      dotdotInstance = await PiDriver.create({
+        instanceId: `pi-dotdot-${randomUUID()}`,
+        displayName: "pi DotDot",
+        environment: { HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: "~/profile", FAKE_PI_DUMP: dump },
+        enabled: true,
+        config: { cli: FAKE_CLI, fullAuto: false },
+      });
+      await expect(dotdotInstance.snapshot()).resolves.toMatchObject({
+        state: "unavailable",
+        reason: expect.stringMatching(/not reachable inside the bot box|could not be resolved for the bot box/),
+      });
+      await expect(dotdotInstance.refreshModels?.()).rejects.toThrow(/not reachable inside the bot box|could not be resolved for the bot box/);
+      await expect(dotdotInstance.adapter.sendTurn({ threadId: "t-dotdot", text: "hi" })).rejects.toThrow(/not reachable inside the bot box|could not be resolved for the bot box/);
+      expect(existsSync(dump)).toBe(false);
+    } finally {
+      await dotdotInstance?.dispose();
+      await removeTempDir(redirectBase);
+      wrap.mockRestore();
+      startOptions.mockRestore();
+      enabled.mockRestore();
+      await removeTempDir(home);
+    }
+  });
+
   it("writes models.json and set_model for a host::model inject pick, in MausBot's own Pi folder", async () => {
     const home = mkdtempSync(join(tmpdir(), "omb-pi-turn-inject-"));
     const dump = join(home, "dump.jsonl");

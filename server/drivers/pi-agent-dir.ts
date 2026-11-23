@@ -161,6 +161,12 @@ function unreachablePiAuthError(target: string, dataDir: string, home: string): 
   return new Error(`Pi sign-in (${target}) is not reachable inside the bot box; ${guidance}.`);
 }
 
+function splitPathComponents(target: string): string[] {
+  const parts = target.split(sep).filter(Boolean);
+  if (target.length > 1 && target.endsWith(sep)) parts.push(".");
+  return parts;
+}
+
 export function assertPiAuthReachableInBox(
   agentDir: string,
   env: Record<string, string | undefined>,
@@ -192,48 +198,74 @@ export function assertPiAuthReachableInBox(
         },
         { command: cli, args: [], env, rw: [tryRealpath(agentDir)] },
       );
+  const maskedRealDataDir = !homeIsSymlink && under(dataDir, home)
+    ? join(tryRealpath(home), relative(home, dataDir))
+    : null;
   const boxRwRoot = (target: string): string | null => {
     const full = resolve(target);
     const direct = rwMountRoot(plan, full);
     if (direct) return direct;
-    if (under(full, dataDir)) return null;
+    if (under(full, dataDir) || (maskedRealDataDir && under(full, maskedRealDataDir))) return null;
     return realPlan ? rwMountRoot(realPlan, full) : null;
   };
 
-  let current = resolve(agentDir, readlinkSync(authLink));
+  const rawAuthLink = readlinkSync(authLink);
+  let current = isAbsolute(rawAuthLink) ? sep : agentDir;
+  let inMount = !isAbsolute(rawAuthLink);
+  let queue = splitPathComponents(rawAuthLink);
   let hops = 1;
-  let canonical: string | null = null;
-  while (!canonical) {
-    const root = boxRwRoot(current);
-    if (!root) throw unreachablePiAuthError(current, dataDir, home);
-    const parts = relative(root, current).split(sep).filter(Boolean);
-    let prefix = root;
-    let redirected = false;
-    for (let i = 0; i < parts.length; i++) {
-      prefix = join(prefix, parts[i]!);
-      if (!boxRwRoot(prefix)) throw unreachablePiAuthError(prefix, dataDir, home);
-      const stat = lstatSync(prefix, { throwIfNoEntry: false });
-      if (!stat) throw new Error("Pi sign-in target could not be resolved for the bot box.");
-      if (stat.isSymbolicLink()) {
-        if (++hops > MAX_SYMLINK_HOPS) {
-          throw new Error("Pi sign-in target could not be resolved for the bot box.");
-        }
-        const target = resolve(dirname(prefix), readlinkSync(prefix));
-        if (!boxRwRoot(target)) throw unreachablePiAuthError(target, dataDir, home);
-        const rest = parts.slice(i + 1);
-        current = rest.length ? join(target, ...rest) : target;
-        redirected = true;
-        break;
+
+  for (let i = 0; i < queue.length; i++) {
+    const part = queue[i]!;
+    if (part === ".") {
+      if (inMount) {
+        const stat = lstatSync(current, { throwIfNoEntry: false });
+        if (!stat?.isDirectory()) throw new Error("Pi sign-in target could not be resolved for the bot box.");
       }
-      if (i < parts.length - 1 && !stat.isDirectory()) {
+      continue;
+    }
+    if (part === "..") {
+      if (!inMount) throw new Error("Pi sign-in target could not be resolved for the bot box.");
+      const stat = lstatSync(current, { throwIfNoEntry: false });
+      if (!stat?.isDirectory()) throw new Error("Pi sign-in target could not be resolved for the bot box.");
+      const parent = dirname(current);
+      if (!boxRwRoot(parent)) throw unreachablePiAuthError(parent, dataDir, home);
+      current = parent;
+      continue;
+    }
+
+    const next = join(current, part);
+    if (!inMount) {
+      current = next;
+      if (boxRwRoot(current)) inMount = true;
+      continue;
+    }
+
+    if (!boxRwRoot(next)) throw unreachablePiAuthError(next, dataDir, home);
+    const stat = lstatSync(next, { throwIfNoEntry: false });
+    if (!stat) throw new Error("Pi sign-in target could not be resolved for the bot box.");
+    if (stat.isSymbolicLink()) {
+      if (++hops > MAX_SYMLINK_HOPS) {
         throw new Error("Pi sign-in target could not be resolved for the bot box.");
       }
+      const linkTarget = readlinkSync(next);
+      const remaining = queue.slice(i + 1);
+      if (isAbsolute(linkTarget)) {
+        current = sep;
+        inMount = false;
+      }
+      queue = [...splitPathComponents(linkTarget), ...remaining];
+      i = -1;
+      continue;
     }
-    if (!redirected) {
-      const leaf = lstatSync(prefix, { throwIfNoEntry: false });
-      if (!leaf?.isFile()) throw new Error("Pi sign-in target could not be resolved for the bot box.");
-      canonical = prefix;
+    if (i < queue.length - 1 && !stat.isDirectory()) {
+      throw new Error("Pi sign-in target could not be resolved for the bot box.");
     }
+    current = next;
   }
-  if (!boxRwRoot(dirname(canonical))) throw unreachablePiAuthError(canonical, dataDir, home);
+
+  if (!inMount || !boxRwRoot(current)) throw unreachablePiAuthError(current, dataDir, home);
+  const leaf = lstatSync(current, { throwIfNoEntry: false });
+  if (!leaf?.isFile()) throw new Error("Pi sign-in target could not be resolved for the bot box.");
+  if (!boxRwRoot(dirname(current))) throw unreachablePiAuthError(current, dataDir, home);
 }

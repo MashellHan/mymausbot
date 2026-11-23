@@ -248,4 +248,52 @@ describe("MausBot's own Pi agent folder", () => {
       enabled.mockRestore();
     }
   });
+
+  it.skipIf(process.platform === "win32")("evaluates directory symlinks before '..' rather than collapsing '..' lexically", () => {
+    const profileDir = join(home, "profile");
+    const routesDir = join(home, "routes");
+    const redirectNested = join(dataDir, "redirects", "nested");
+    const maskedAuth = join(dataDir, "redirects", "auth.json");
+    const realTargetNested = join(home, "real-target", "nested");
+    const realTargetAuth = join(home, "real-target", "auth.json");
+    mkdirSync(profileDir, { recursive: true });
+    mkdirSync(routesDir, { recursive: true });
+    mkdirSync(redirectNested, { recursive: true });
+    mkdirSync(realTargetNested, { recursive: true });
+    // Decoy file under HOME/routes/auth.json that lexical resolve() would mistakenly hit.
+    writeFileSync(join(routesDir, "auth.json"), '{"raven":{"type":"api_key","key":"decoy"}}');
+    writeFileSync(maskedAuth, '{"raven":{"type":"api_key","key":"masked"}}');
+    writeFileSync(realTargetAuth, '{"raven":{"type":"api_key","key":"real"}}');
+    symlinkSync(redirectNested, join(routesDir, "alias"));
+    symlinkSync("../routes/alias/../auth.json", join(profileDir, "auth.json"));
+
+    const own = ownPiAgentDir({ HOME: home, PI_CODING_AGENT_DIR: profileDir }, "pi-dotdot", dataDir);
+    const enabled = vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    const startOptions = vi.spyOn(botBox, "startOptions").mockReturnValue({
+      dataDir,
+      home,
+      port: 0,
+      denyEnv: new Set(),
+      codeRoots: [],
+      engineRoots: [],
+    });
+    try {
+      const boxedEnv = { HOME: home, TMPDIR: "/tmp", PI_CODING_AGENT_DIR: own };
+      expect(() => assertPiAuthReachableInBox(own, boxedEnv, "pi")).toThrow(/not reachable inside the bot box/);
+
+      // A directory alias followed by '..' that resolves inside unmasked HOME succeeds.
+      rmSync(join(routesDir, "auth.json"));
+      rmSync(join(routesDir, "alias"));
+      symlinkSync(realTargetNested, join(routesDir, "alias"));
+      expect(() => assertPiAuthReachableInBox(own, boxedEnv, "pi")).not.toThrow();
+
+      // Backtracking outside HOME before re-entering HOME is rejected even if the collapsed path exists.
+      rmSync(join(profileDir, "auth.json"));
+      symlinkSync(`${home}/../home/real-target/auth.json`, join(profileDir, "auth.json"));
+      expect(() => assertPiAuthReachableInBox(own, boxedEnv, "pi")).toThrow(/not reachable inside the bot box/);
+    } finally {
+      startOptions.mockRestore();
+      enabled.mockRestore();
+    }
+  });
 });
