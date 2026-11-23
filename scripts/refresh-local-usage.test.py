@@ -994,6 +994,66 @@ class LegacyAdoJoinTests(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
 
+    def test_request_budget_before_pinning_retains_bound_cache_until_fresh_proof(self):
+        snapshot = self.fixture("stale")
+        source = snapshot["ado"]["sources"][0]
+        source["coverage"]["reasons"] = ["request-budget"]
+        source["provenance"]["pinnedHeads"] = {}
+        project = snapshot["ado"]["state"]["projects"]["example/project"]
+        work = project["work"]
+        work.update(repoDone={}, scanComplete=False)
+        retained = project["cache"][self.repo_id]
+
+        result = self.extract(snapshot)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+        repo = work["inventory"][0]
+        for field, value in (("defaultBranch", "refs/heads/another"), ("isDisabled", True)):
+            with self.subTest(field=field), patch.dict(repo, {field: value}):
+                self.assertEqual(self.extract(snapshot), {"records": [], "complete": False})
+
+        fresh = self.fixture()
+        fresh_project = fresh["ado"]["state"]["projects"]["example/project"]
+        proof = fresh_project["work"]["repoDone"][self.repo_id]
+        proof["items"] = [row for row in proof["items"] if row["id"] != self.ordinary]
+        fresh_project["cache"][self.repo_id] = retained
+        self.assertEqual(self.extract(fresh), {"records": [], "complete": True})
+
+    def test_transient_identity_read_retains_only_previously_bound_repository_evidence(self):
+        snapshot = self.fixture("stale")
+        ado = snapshot["ado"]
+        cutoff = "2026-11-06T08:02:00Z"
+        captured = "2026-11-06T08:03:00Z"
+        ado.update(asOfAt=cutoff, capturedAt=captured)
+        source = ado["sources"][0]
+        source["coverage"].update(identityVerified=False, reasons=["authenticated-read-interrupted-http-503"])
+        source["provenance"].update(sourceCutoffAt=cutoff, sourceCapturedAt=captured, pinnedHeads={})
+        project = ado["state"]["projects"]["example/project"]
+        project["expectedRepositoryIds"] = [self.repo_id]
+        project["work"].update(cutoff=cutoff, inventory=None, selectedRepoIds=[], repoDone={}, scanComplete=False)
+        proof = project["cache"][self.repo_id]
+        proof["items"] = [row for row in proof["items"] if row["id"] != self.later]
+        prior_repository = {"id": usage.local_usage_ado.digest("ado-repo", "example", self.repo_id),
+                            "name": "example/Project/Repo", "status": "ready"}
+        prior_day = {"status": "stale", "capturedAt": "2026-11-06T08:01:01Z", "repositories": [prior_repository]}
+        source["days"] = [prior_day]
+
+        result = self.extract(snapshot, at=cutoff)
+        self.assertFalse(result["complete"])
+        self.assertEqual([row["key"] for row in result["records"]], [self.ordinary])
+
+        for code in (401, 403):
+            with self.subTest(code=code), patch.dict(source["coverage"], {
+                "reasons": [f"authenticated-read-interrupted-http-{code}"],
+            }):
+                self.assertEqual(self.extract(snapshot, at=cutoff), {"records": [], "complete": False})
+        for field, value in (("id", "0" * 64), ("name", "example/Project/Unconfigured"), ("status", "partial")):
+            with self.subTest(field=field), patch.dict(prior_repository, {field: value}):
+                self.assertEqual(self.extract(snapshot, at=cutoff), {"records": [], "complete": False})
+        with patch.dict(prior_day, {"capturedAt": "2026-11-06T08:00:59Z"}):
+            self.assertEqual(self.extract(snapshot, at=cutoff), {"records": [], "complete": False})
+
     def test_proof_binding_rejects_changed_head_and_author_scope(self):
         changed = self.fixture()
         changed["ado"]["sources"][0]["provenance"]["pinnedHeads"][self.repo_id] = "b" * 40

@@ -596,6 +596,33 @@ describe("local Usage panel", () => {
     expect(text()).not.toContain("Shaded columns: unavailable. Pale PR segments");
   });
 
+  it("marks recovered partial commit lower bounds and removes the marker after exact recovery", async () => {
+    const snapshot = structuredClone(sample);
+    const current = snapshot.windows!["1"];
+    current.commits = null;
+    current.knownCommits = 1;
+    current.categories.work.commits = null;
+    current.categories.work.knownCommits = 1;
+    current.repositories.rows[0]!.commits = null;
+    current.repositories.rows[0]!.knownCommits = 1;
+    Object.assign(snapshot.trend.at(-1)!, { commits: null, knownCommits: 1 });
+    snapshot.trend.at(-1)!.categories.work.commits = null;
+    snapshot.trend.at(-1)!.categories.work.knownCommits = 1;
+    await renderRaw(snapshot);
+    const card = host.querySelectorAll("section")[0]!;
+    expect(card.querySelectorAll("dd")[1]!.querySelector("[data-usage-provisional]")?.textContent).toBe("1 observed");
+    expect(card.querySelector('[data-usage-category-row="work"] [data-usage-provisional]')?.textContent).toBe("1 observed");
+
+    current.commits = 1;
+    current.knownCommits = 1;
+    current.categories.work.commits = 1;
+    current.repositories.rows[0]!.commits = 1;
+    await renderRaw(snapshot);
+    const recovered = host.querySelectorAll("section")[0]!;
+    expect(recovered.querySelectorAll("dd")[1]!.querySelector("[data-usage-provisional]")).toBeNull();
+    expect(recovered.querySelectorAll("dd")[1]!.textContent).toContain("1");
+  });
+
   it("renders provisional local-ref commit deltas in DoD and WoW cards without altering exact, repo, or trend", async () => {
     const snapshot = structuredClone(sample);
     snapshot.windows!["1"].comparison = { ...snapshot.windows!["1"].comparison, commits: null, known: { prs: null, commits: 100 } };
