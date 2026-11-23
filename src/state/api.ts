@@ -3,6 +3,7 @@
 import { asleepAnswer, BACKGROUND_HEADER, cloudAsleep, markCloudAsleep, markCloudAwake, pageHidden, pageShown } from "../lib/cloud-power";
 import { lacksAdminScope } from "../lib/admin-scope";
 import { isBotLimitRefusal, isBotPausedRefusal, showBotLimit } from "../lib/bot-limit";
+import { remoteFetch } from "../lib/pwa-config";
 import { noteRefusedRequest } from "../lib/session-ended";
 import { serverErrorText } from "../lib/server-error";
 
@@ -34,7 +35,7 @@ export async function api<T = any>(path: string, init?: ApiInit): Promise<T> {
   }
   const sent = new Headers(headers ?? { "content-type": "application/json" });
   if (background) sent.set(BACKGROUND_HEADER, "1");
-  const res = await fetch(path, {
+  const res = await remoteFetch(path, {
     ...rest,
     headers: sent,
     signal: timeoutMs === undefined

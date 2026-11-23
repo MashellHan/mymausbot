@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { t } from "@/lib/i18n";
 import type { LocaleKey } from "@/locales";
 import { BANNER_ACCEPT, bannerSrc, prepareBanner, removeBanner, uploadBanner, type BannerProblem, type BannerSummary } from "@/lib/place-banner";
+import { useRemoteMediaUrl } from "@/lib/use-remote-media";
 import { SettingRow } from "./SettingsPrimitives";
 
 const PROBLEM: Readonly<Record<BannerProblem | "animated" | "failed", LocaleKey>> = {
@@ -15,6 +16,7 @@ export function PlacePicture({ banner, canChange, subtitle }: { banner: BannerSu
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<LocaleKey | null>(null);
   const src = bannerSrc(banner);
+  const remoteBanner = useRemoteMediaUrl(src);
   const run = async (work: () => Promise<{ ok: true } | { ok: false; problem: keyof typeof PROBLEM }>) => {
     setBusy(true); setProblem(null);
     const answer = await Promise.resolve().then(work).catch(() => ({ ok: false as const, problem: "failed" as const }));
@@ -34,7 +36,7 @@ export function PlacePicture({ banner, canChange, subtitle }: { banner: BannerSu
   return <div data-place-picture={src ? "set" : "none"}>
     <SettingRow title={t("placeLook.sidebarPicture")} subtitle={subtitle} message={message}>
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {src && <img src={src} alt={t("placeLook.currentImage")} className="h-8 w-14 rounded-md border border-ink/10 object-cover" />}
+        {remoteBanner.url && <img src={remoteBanner.url} alt={t("placeLook.currentImage")} className="h-8 w-14 rounded-md border border-ink/10 object-cover" />}
         <button type="button" className="ui-button" disabled={!canChange || busy} onClick={() => input.current?.click()}>
           {busy ? t("placeLook.imageSaving") : t(src ? "placeLook.changeImage" : "placeLook.useImage")}
         </button>

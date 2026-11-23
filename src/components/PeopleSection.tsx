@@ -4,6 +4,7 @@ import { Check, Copy, ExternalLink, Link2, Loader2, Plus, RefreshCw, Users, X } 
 import { api } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { remoteFetch } from "@/lib/pwa-config";
 import { useCopyFeedback } from "@/lib/copy-text";
 import { formatUsd, hasFiniteCost } from "@/lib/usage";
 import { readMembership, type Membership } from "../lib/membership";
@@ -202,7 +203,7 @@ export function PeopleSection({ simple = false, startOpen = false }: { simple?: 
         api("/api/auth/sessions").catch(() => ({ sessions: [] })),
         api("/api/usage?groupBy=user").catch(() => ({ groups: [] })),
         api("/api/settings/custom-domain").catch(() => null),
-        fetch("/.well-known/openmausbot/environment").then((res) => (res.ok ? res.json() : null)).catch(() => null),
+        remoteFetch("/.well-known/openmausbot/environment").then((res) => (res.ok ? res.json() : null)).catch(() => null),
       ]);
       const current: SignInLists = {
         admins: Array.isArray(config?.signIn?.admins) ? config.signIn.admins : [],

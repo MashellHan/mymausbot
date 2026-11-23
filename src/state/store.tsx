@@ -42,11 +42,7 @@ import type { RoutineRequestCardData } from "../../shared/routine-request";
 import type { RoutineRunCardData } from "../../shared/routine-run";
 import type { GroupGoalRunCardData } from "../../shared/group-goal-run"; import type { BurstCardData } from "../../shared/burst";
 import type { PlaceRow } from "../../shared/place-view";
-import {
-  reviewedSkillSha256,
-  skillRequestBehavior,
-  type SkillRequestCardData,
-} from "../../shared/skill-request";
+import { reviewedSkillSha256, skillRequestBehavior, type SkillRequestCardData } from "../../shared/skill-request";
 import type { Routine, RoutineInput, RoutineRun, RoutineRunStatusFilter } from "@/lib/routines";
 import type { WebhookAttempt, WebhookIngressStatus, WebhookTrigger } from "@/lib/webhooks";
 import { duplicateBotProfile, restrictedCopyRequest } from "@/lib/bot-duplicate";
@@ -70,6 +66,8 @@ import { createBotPatchQueue, flushWhenLeaving, keepaliveFits, type BotUpdatePat
 import { liveCallFromFrame, nextLiveCallLookup } from "./live-call";
 import { isNoAiRefusal, useChatErrorClear } from "./chat-error";
 import { openLiveEvents, publishLiveFrame, publishMissedFrames, withoutScreenPixels } from "@/lib/live-events";
+import { remoteFetch } from "@/lib/pwa-config";
+import { noteRefusedRequest } from "@/lib/session-ended";
 import { unlessRefused } from "@/lib/admin-scope";
 import { olderRunsSince, ROUTINE_RUNS_WINDOW_MS, trimRoutineRuns, withOlderRoutineRuns } from "./routine-runs";
 import { reconcileSnapshotQueues, rememberConsumedQueueId, replaceBotQueues } from "./queue-receipts";
@@ -2132,7 +2130,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return { host, card: cardMessages(stateRef.current, action.botId, action.groupId, action.threadId)?.find((m) => m.id === action.messageId)?.card, inRoom: !!action.groupId };
     };
     const persistCard = (botId: string, messageId: string, patch: Partial<OptionCardData>, threadId?: string) => {
-      fetch(`/api/bots/${botId}/cards/${messageId}`, {
+      remoteFetch(`/api/bots/${botId}/cards/${messageId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ...patch, threadId }),
@@ -3066,7 +3064,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const readsInFlight = new Map<string, { covers: number; again: boolean }>();
     const sendRead = (botId: string, threadId: string | undefined, key: string, covers: number): void => {
       readsInFlight.set(key, { covers, again: false });
-      void fetch(`/api/bots/${botId}/read`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) }).catch(() => {}).finally(() => {
+      void remoteFetch(`/api/bots/${botId}/read`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ threadId }) }).catch(() => {}).finally(() => {
         const open = readsInFlight.get(key); readsInFlight.delete(key);
         if (open?.again && alive) sendRead(botId, threadId, key, open.covers);
       });
@@ -3232,6 +3230,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const stopLive = openLiveEvents({
       onOpen: () => { rawDispatch({ type: "connected", value: true }); reportWindowPrefs(); },
       onError: () => rawDispatch({ type: "connected", value: false }),
+      onUnauthenticated: () => { rawDispatch({ type: "connected", value: false }); noteRefusedRequest(); },
       onSnapshotRequired: () => {
         store.flushFrames(); // the old stream's waiting frames go first, so forgetLiveTurns() below has the last word
         clearTimeout(hydrationFallback);
