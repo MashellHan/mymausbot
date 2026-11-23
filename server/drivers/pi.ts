@@ -1,12 +1,13 @@
 import { piModelId } from "./pi-model-id.ts";
 import { RuntimeNoticeError, runtimeErrorText } from "./runtime-notice-error.ts";
 // The pi coding agent (@earendil-works/pi-coding-agent) over its own stdio JSON-RPC mode
-// (`pi --mode rpc --no-session`), not ACP. pi is BYOK and reads ~/.pi/agent/auth.json itself, so
-// this driver holds no key; resumeCursor is pi's `sessionFile` (switch_session).
+// (`pi --mode rpc --no-session`), not ACP. Pi reads auth.json from its agent folder itself, so this driver
+// holds no key; resumeCursor is pi's `sessionFile` (switch_session).
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { writeFileAtomic } from "../atomic.ts";
 import { PROVIDER_CREDENTIAL_ENV, stripWorkspaceCredentialEnv } from "../config.ts";
 import { openStartupModelCatalog, unconfirmedModelCatalog, writeStartupModelCache } from "../startup-model-catalog.ts";
 import { augmentedPath } from "../env-path.ts";
@@ -47,6 +48,7 @@ import {
 import { appendNative } from "./native.ts";
 import { allowsTool, parseToolScope } from "../../shared/tool-scope.ts";
 import { buildMcpServers } from "./pi-mcp-servers.ts";
+import { piAgentDir, readPiDefaultModel, withOwnPiAgentDir } from "./pi-agent-dir.ts";
 import { noticeFailure } from "../chat-notices.ts";
 
 import { decodePiFrame, PiRpcChunks, piLineReader, readPiPromptImages } from "./pi-rpc.ts";
@@ -123,11 +125,7 @@ export async function applyPiLocalCatalog(
   return preferPiInjectRows(await mergeLocalInject(catalog, env, fetchImpl));
 }
 
-function piAgentDir(env: Record<string, string | undefined>): string {
-  return join(env.HOME || env.USERPROFILE || homedir(), ".pi", "agent");
-}
-
-/** Upsert a live local host into ~/.pi/agent/models.json so `set_model` can reach it. */
+/** Upsert a live local host into the Pi agent folder's models.json so `set_model` can reach it. */
 export function ensurePiInjectModel(
   modelId: string,
   env: Record<string, string | undefined> = process.env,
@@ -195,27 +193,14 @@ export function ensurePiInjectModel(
   existing.models = models;
   providers[inject.host] = existing;
   root.providers = providers;
-  writeFileSync(path, `${JSON.stringify(root, null, 2)}\n`, { mode: 0o600 });
+  writeFileAtomic(path, `${JSON.stringify(root, null, 2)}\n`, { mode: 0o600 });
   try {
     chmodSync(path, 0o600);
   } catch {}
   return split;
 }
 
-function readPiDefaultModel(env: Record<string, string | undefined>): string {
-  const home = env.HOME || env.USERPROFILE || homedir();
-  try {
-    const s = JSON.parse(readFileSync(`${home}/.pi/agent/settings.json`, "utf8")) as {
-      defaultProvider?: string;
-      defaultModel?: string;
-    };
-    return s.defaultProvider && s.defaultModel ? `${s.defaultProvider}/${s.defaultModel}` : "";
-  } catch {
-    return "";
-  }
-}
-
-/** Security: Pi loads its extensions from ~/.pi/agent on every start, so while the bot box is on its model list runs in
+/** Security: Pi loads its extensions from its agent folder on every start, so while the bot box is on its model list runs in
  * the box, as a bot's turn does. `allowEnv`: the keys the instance's own settings put in `env`. */
 export async function fetchPiModels(
   cli: string,
@@ -334,11 +319,14 @@ export const PiDriver: ProviderDriver<PiConfig> = {
 
   async create(input: DriverCreateInput<PiConfig>): Promise<ProviderInstance> {
     const { instanceId, config } = input;
-    const catalogEnv = piEnvironment({ ...process.env, ...input.environment });
+    const sourceEnvironment = () => ({ ...process.env, ...input.environment });
+    const agentEnvironment = () => withOwnPiAgentDir(sourceEnvironment(), instanceId);
     let models = EMPTY;
     const readModels = async () => {
       let base = models, listed = false;
+      let catalogEnv = piEnvironment(sourceEnvironment());
       try {
+        catalogEnv = withOwnPiAgentDir(catalogEnv, instanceId);
         const resolved = await fetchPiModels(config.cli, catalogEnv, instanceEnvNames(input.environment, catalogEnv));
         if (resolved.options.length) [base, listed] = [resolved, true];
       } catch {}
@@ -351,6 +339,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
       try { if (!listed) unconfirmedModelCatalog(models); writeStartupModelCache(instanceId, models); } catch {}
     };
     const refreshModels = async () => {
+      const catalogEnv = piEnvironment(agentEnvironment());
       await updatePiModelCatalog(config.cli, catalogEnv, instanceEnvNames(input.environment, catalogEnv));
       await readModels();
     };
@@ -414,9 +403,8 @@ export const PiDriver: ProviderDriver<PiConfig> = {
       const images = readPiPromptImages(turn);
 
       // Before any credential-bearing temp file, so a model setup failure leaves nothing to clean up.
-      if (typeof turn.model === "string" && turn.model) {
-        ensurePiInjectModel(turn.model, { ...process.env, ...input.environment });
-      }
+      const turnEnv = agentEnvironment();
+      if (typeof turn.model === "string" && turn.model) ensurePiInjectModel(turn.model, turnEnv);
 
       // The MCP config carries credentials: a 0600 temp file removed at settle, never argv.
       // Written on every turn: the extension also carries ask_user.
@@ -441,11 +429,7 @@ export const PiDriver: ProviderDriver<PiConfig> = {
           return spawnCli(config.cli, childArgs, {
             stdio: ["pipe", "pipe", "pipe"],
             cwd: turn.cwd,
-            env: piEnvironment({
-              ...process.env,
-              ...input.environment,
-              OMB_MCP_CONFIG: join(mcpTempDir, "mcp.json"),
-            }),
+            env: piEnvironment({ ...turnEnv, OMB_MCP_CONFIG: join(mcpTempDir, "mcp.json") }),
           }, "bot");
         } catch (err) {
           try {
@@ -891,10 +875,16 @@ export const PiDriver: ProviderDriver<PiConfig> = {
     };
 
     const snapshot = async (): Promise<ProviderSnapshot> => {
+      let env;
+      try {
+        env = piEnvironment(agentEnvironment());
+      } catch (error) {
+        return { state: "unavailable", reason: error instanceof Error ? error.message : String(error) };
+      }
       const version = await new Promise<string | null>((resolve) => {
         const child = spawnCli(config.cli, ["--version"], {
           stdio: ["ignore", "pipe", "pipe"],
-          env: piEnvironment({ ...process.env, ...input.environment }),
+          env,
         });
         let out = "";
         child.stdout?.setEncoding("utf8");

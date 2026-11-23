@@ -46,6 +46,7 @@ if (process.env.FAKE_PI_DUMP) {
           (k) => process.env[k] !== undefined,
         ),
         mcpConfig,
+        agentDir: process.env.PI_CODING_AGENT_DIR ?? null,
       }) + "\n",
     );
   } catch {}
