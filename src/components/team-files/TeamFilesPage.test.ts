@@ -133,6 +133,18 @@ describe("the Team files page", () => {
     expect(host.querySelector("[role='alert']")).toBeNull();
   });
 
+  it("uses the server upload check while the folder listing is pending", async () => {
+    fixture.api.mockImplementationOnce(() => new Promise(() => {}));
+    await render();
+    const file = new File([], "pending.bin");
+    Object.defineProperty(file, "size", { value: 100 * 1024 ** 2 + 1 });
+    const picker = host.querySelector<HTMLInputElement>("[data-testid='team-files-picker']")!;
+    Object.defineProperty(picker, "files", { value: [file] });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(fetches).toEqual([{ url: "/api/team-files/file?path=&name=pending.bin", method: "PUT" }]);
+    expect(host.querySelector("[role='alert']")).toBeNull();
+  });
+
   it("makes a folder and deletes after asking", async () => {
     await render();
     await act(async () => button("New folder").click());

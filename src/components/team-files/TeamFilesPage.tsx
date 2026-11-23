@@ -108,9 +108,10 @@ export function TeamFilesPage() {
     await load(folder);
   };
   const upload = (files: readonly File[]) => act(async () => {
+    const uploadMax = listing?.path === folder ? listing.uploadMax : undefined;
     try {
       for (const file of files) {
-        if (file.size > limits.uploadMax) {
+        if (uploadMax !== undefined && file.size > uploadMax) {
           throw new ApiError("413", 413, { code: "too_large" satisfies TeamFilesRefusal });
         }
         setUploading(file.name);
