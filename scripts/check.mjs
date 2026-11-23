@@ -48,8 +48,9 @@ function main() {
   console.log(JSON.stringify({ ...plan, source }, null, 2));
   if (action === "plan") return;
   const nativeRelay = plan.nativeRelay || extra.some((file) => file.startsWith("relay/test/"));
-  const files = [...new Set([...plan[action], ...extra.filter((file) => !file.startsWith("relay/test/"))])].sort();
-  if (!files.length && !nativeRelay) throw new Error("No mapped contract test: supply --test <file>, then record the mapping for review");
+  const nativePwaRelay = plan.nativePwaRelay || extra.some((file) => file.startsWith("pwa-relay/test/"));
+  const files = [...new Set([...plan[action], ...extra.filter((file) => !file.startsWith("relay/test/") && !file.startsWith("pwa-relay/test/"))])].sort();
+  if (!files.length && !nativeRelay && !nativePwaRelay) throw new Error("No mapped contract test: supply --test <file>, then record the mapping for review");
   const startedAt = new Date().toISOString();
   const directory = join(".omb-scratch", "validation", `${startedAt.replace(/[:.]/g, "-")}-${action}`);
   mkdirSync(directory, { recursive: true });
@@ -64,6 +65,13 @@ function main() {
     process.stdout.write(nativeOutput);
     writeFileSync(join(directory, "relay.tap"), nativeOutput);
   }
+  const nativePwaCommand = nativePwaRelay ? ["pnpm", "--dir", "pwa-relay", "test"] : null;
+  const nativePwaResult = nativePwaCommand ? spawnSync(nativePwaCommand[0], nativePwaCommand.slice(1), { encoding: "utf8", env: process.env }) : null;
+  const nativePwaOutput = `${nativePwaResult?.stdout ?? ""}${nativePwaResult?.stderr ?? ""}`;
+  if (nativePwaResult) {
+    process.stdout.write(nativePwaOutput);
+    writeFileSync(join(directory, "pwa-relay.tap"), nativePwaOutput);
+  }
   const durationMs = Date.now() - Date.parse(startedAt);
   const budgetMs = action === "edit" ? 30_000 : 120_000;
   const endSource = localChange(base);
@@ -75,21 +83,24 @@ function main() {
   }
   const nativeSummary = [...nativeOutput.matchAll(/^ℹ (tests|pass|fail|cancelled|skipped|todo) (\d+)$/gm)];
   const nativeCounts = nativeSummary.length ? Object.fromEntries(nativeSummary.map((match) => [match[1], Number(match[2])])) : null;
-  const exitCode = [result, nativeResult].every((item) => !item || item.status === 0) ? 0 : 1;
+  const nativePwaSummary = [...nativePwaOutput.matchAll(/^ℹ (tests|pass|fail|cancelled|skipped|todo) (\d+)$/gm)];
+  const nativePwaCounts = nativePwaSummary.length ? Object.fromEntries(nativePwaSummary.map((match) => [match[1], Number(match[2])])) : null;
+  const exitCode = [result, nativeResult, nativePwaResult].every((item) => !item || item.status === 0) ? 0 : 1;
   const receipt = {
     version: 1, action, source, endSource, inputsStable, plan, command: result ? [process.execPath, ...command] : null,
     nativeCommand, nativeCounts, nativeResultFile: nativeResult ? join(directory, "relay.tap") : null,
+    nativePwaCommand, nativePwaCounts, nativePwaResultFile: nativePwaResult ? join(directory, "pwa-relay.tap") : null,
     env: { ...env, CI: process.env.CI ?? "", TZ: Intl.DateTimeFormat().resolvedOptions().timeZone, LANG: process.env.LANG ?? "" },
     node: process.version, platform: process.platform, arch: process.arch,
     startedAt, finishedAt: new Date().toISOString(), durationMs, budgetMs, overBudget: durationMs > budgetMs,
-    exitCode, signal: result?.signal ?? nativeResult?.signal,
-    error: result?.error?.message ?? nativeResult?.error?.message, counts, resultFile,
+    exitCode, signal: result?.signal ?? nativeResult?.signal ?? nativePwaResult?.signal,
+    error: result?.error?.message ?? nativeResult?.error?.message ?? nativePwaResult?.error?.message, counts, resultFile,
   };
   writeFileSync(join(directory, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
   console.log(`Validation receipt: ${directory}/receipt.json`);
   console.log(`Local ${action}: ${(durationMs / 1000).toFixed(1)}s; target ${budgetMs / 1000}s. Global typecheck belongs in CI; pnpm build includes its own typecheck.`);
   if (durationMs > budgetMs) console.error("Local feedback exceeded its target; record and fix the expensive phase instead of repeating unchanged checks.");
-  console.log(`Local validation: ${files.length} Vitest files${nativeRelay ? " and the Relay native suite" : ""}; ordinary PR and focused integration CI run the Ubuntu core and bounded affected tests; scheduled, manual and release lanes retain full validation. Normal push hooks and independent review still apply.`);
+  console.log(`Local validation: ${files.length} Vitest files${nativeRelay ? " and the Relay native suite" : ""}${nativePwaRelay ? " and the PWA Relay native suite" : ""}; ordinary PR and focused integration CI run the Ubuntu core and bounded affected tests; scheduled, manual and release lanes retain full validation. Normal push hooks and independent review still apply.`);
   if (!inputsStable) console.error("Source inputs changed during validation; this receipt cannot mark the current source ready.");
   process.exitCode = inputsStable ? exitCode : 1;
 }

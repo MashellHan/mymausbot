@@ -82,6 +82,42 @@ describe("complete CI and trusted QA health", () => {
     expect(executionComplete([relay], [{ ...observed, steps: steps.slice(0, -1) }], new Set())).toBe(false);
   });
 
+  it("requires the pwa-relay's audit, check and test on a fast PR", async () => {
+    const policy = readCheckPolicy();
+    const selected = selectCheckPlan({ files: ["pwa-relay/src/bridge.ts"], policy, fastPr: true });
+    expect(selected.scope.checks).toEqual(["build", "pwa-relay"]);
+    const ci = ciOutputs(selected.scope, ["ubuntu-latest"]);
+    const prHead = "b".repeat(40);
+    const outputs = {
+      ...ci,
+      fast_pr: true,
+      full_required: false,
+      reduced: false,
+      required_jobs: ci.jobs,
+      expected_jobs: expectedJobs({ ...ci, fast_pr: true }, false),
+      qa_areas: selected.holdAreas,
+      pr_number: 8,
+      pr_head: prHead,
+    };
+    expect(MERGE_JOBS).toContain("pwa-relay");
+    expect(outputs.required_jobs).toEqual(["pwa-relay"]);
+    const pwaRelay = outputs.expected_jobs.find((item) => item.id === "pwa-relay")!;
+    expect(pwaRelay.name).toBe("pwa-relay typecheck + tests + audit");
+    const steps = ["Audit the production dependencies", "pnpm check", "pnpm test"].map((name) => ({ name, conclusion: "success" }));
+    expect(executionComplete([pwaRelay], [{ name: pwaRelay.name, status: "completed", conclusion: "success", steps }], new Set())).toBe(true);
+
+    const staticJob = { name: outputs.expected_jobs[0].name, run_attempt: 1, status: "completed", conclusion: "success" };
+    const pwaJob = { name: pwaRelay.name, run_attempt: 1, status: "completed", conclusion: "success" };
+    let jobs = [staticJob];
+    const api = async (path: string) => path === "/pulls/8" ? { head: { sha: prHead }, labels: [] }
+      : path.startsWith("/issues?") ? [] : { jobs };
+    await expect(verifyGate(outputs, { api, runId: 101, attempt: 1, createdAt: 1_000_000, deadlineMs: 0 })).rejects.toThrow("Incomplete required validation");
+    jobs = [staticJob, { ...pwaJob, conclusion: "skipped" }];
+    await expect(verifyGate(outputs, { api, runId: 101, attempt: 1, createdAt: 1_000_000, deadlineMs: 0 })).rejects.toThrow("Required validation failed");
+    jobs = [staticJob, pwaJob];
+    await expect(verifyGate(outputs, { api, runId: 101, attempt: 1, createdAt: 1_000_000, deadlineMs: 0 })).resolves.toBeUndefined();
+  });
+
   it("requires one broker check and test in the selected control-plane job", () => {
     const control = expectedJobs().find((item) => item.id === "control-plane")!;
     expect(control.broker).toBe(true);
@@ -358,7 +394,7 @@ describe("complete CI and trusted QA health", () => {
     const narrow = narrowPlan();
     expect(plan.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
     expect(narrow.outputs.expected_jobs[0]).toEqual({ id: "static", name: "typecheck + lint", build: true, linux: false });
-    expect(plan.outputs.expected_jobs).toHaveLength(19);
+    expect(plan.outputs.expected_jobs).toHaveLength(20);
     expect(plan.outputs.platform_policy).toEqual(PLATFORM_POLICY);
     expect(fullPushPlan(plan)).toBe(true);
     expect(fullPushPlan(pushPlan({ ...ciOutputs(FULL_SCOPE, ALL_OS), boat_static: true }))).toBe(true);

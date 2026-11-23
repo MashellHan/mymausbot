@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ALL_OS, ciOutputs, FULL_SCOPE, PLATFORM_POLICY } from "../ci-scope.mjs";
 import { validIntegration } from "../ci-integration.mjs";
 
-export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "control-plane", "relay"];
+export const MERGE_JOBS = ["build", "vitest", "behavior-evals", "packaged-server", "windows-cua", "electron-smokes", "control-plane", "relay", "pwa-relay"];
 const PREFLIGHT_NAMES = {
   hosted: ["typecheck + lint", "preflight"],
   boat: ["typecheck + lint + Linux tests (Boat)", "preflight + Linux tests (Boat)"],
@@ -26,6 +26,7 @@ const NAMES = {
   "ui-smoke": "renderer smoke (control-omb ui, Ubuntu 24.04)",
   "package-linux": "package + smoke (Ubuntu 24.04 x64)",
   relay: "relay typecheck + tests + fuzz + audit",
+  "pwa-relay": "pwa-relay typecheck + tests + audit",
 };
 
 export function expectedJobs(outputs = ciOutputs(FULL_SCOPE, ALL_OS), full = true, preflightName) {
@@ -86,6 +87,7 @@ const VALIDATION_STEPS = {
   "browser-identity": ["Drive a real Chrome through the launcher"],
   "package-linux": ["Prove overlay-free X11 input routing", "Package from the verified offline CUA stage", "node scripts/verify-linux-package.mjs", "Reproduce and verify an in-place DEB upgrade", "Verify the installed browser", "Launch packaged app"],
   relay: ["Audit the production dependencies", "pnpm check", "pnpm test"],
+  "pwa-relay": ["Audit the production dependencies", "pnpm check", "pnpm test"],
   "browser-driver": ["S4 on the runner's Google Chrome"],
 };
 
@@ -145,7 +147,7 @@ export function narrowPushPlan(plan) {
   if (outputs?.focused_push && (!validIntegration(plan.integration, plan.sha) || plan.plan?.focusedPush !== true
     || outputs.fast_pr !== false || outputs.build !== true || outputs.reduced !== false || outputs.platform_policy !== undefined
     || outputs.boat_static || outputs.linux_lanes || !Array.isArray(outputs.deferred_files) || !Array.isArray(outputs.deferred_checks)
-    || !(isDeepStrictEqual(outputs.jobs, []) || isDeepStrictEqual(outputs.jobs, ["control-plane"])))) return false;
+    || !( [ [], ["control-plane"], ["pwa-relay"], ["control-plane", "pwa-relay"] ].some((valid) => isDeepStrictEqual(outputs.jobs, valid)) ))) return false;
   if (plan?.version !== 1 || (plan.plan !== null && (plan.plan?.full !== false
     || !Array.isArray(plan.plan?.scope?.areas) || !Array.isArray(plan.plan?.scope?.checks)
     || isDeepStrictEqual(plan.plan?.scope, FULL_SCOPE)))
