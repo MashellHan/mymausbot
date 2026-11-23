@@ -19,6 +19,7 @@ const { TeamFilesPage, changedLine, formatSize, refusalText } = await import("./
 
 const NOW = Date.parse("2026-11-17T12:00:00Z");
 const GB = 1024 ** 3;
+const PAYROLL_UPLOAD_MAX = 10 * 1024 ** 2;
 const listings: Record<string, TeamFilesListing> = {
   "": {
     path: "", used: 1.5 * GB, cap: 5 * GB, uploadMax: 100 * 1024 ** 2, admin: false, entries: [
@@ -28,7 +29,7 @@ const listings: Record<string, TeamFilesListing> = {
     ],
   },
   payroll: {
-    path: "payroll", used: 1.5 * GB, cap: 5 * GB, uploadMax: 100 * 1024 ** 2, admin: false, entries: [
+    path: "payroll", used: 1.5 * GB, cap: 5 * GB, uploadMax: PAYROLL_UPLOAD_MAX, admin: false, entries: [
       { name: "nov.csv", path: "payroll/nov.csv", kind: "file", size: 20, modifiedAt: NOW, canDelete: false, mine: false, last: { at: NOW - 2 * 3_600_000, action: "added", person: "Mira", bot: "Payroll" } },
     ],
   },
@@ -110,6 +111,38 @@ describe("the Team files page", () => {
     await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
     await act(async () => {});
     expect(host.querySelector("[role='alert']")?.textContent).toBe("Team files are full (5 GB). Remove files to make room.");
+  });
+
+  it("refuses an oversized drop before sending it and uploads a picked file at the listed limit", async () => {
+    await render();
+    await act(async () => button("Open payroll").click());
+    const oversized = new File([], "oversized.bin");
+    Object.defineProperty(oversized, "size", { value: PAYROLL_UPLOAD_MAX + 1 });
+    const drop = new Event("drop", { bubbles: true });
+    Object.defineProperty(drop, "dataTransfer", { value: { files: [oversized] } });
+    await act(async () => host.querySelector("[data-team-files]")!.dispatchEvent(drop));
+    expect(fetches).toEqual([]);
+    expect(host.querySelector("[role='alert']")?.textContent).toBe("A file may be at most 10 MB.");
+
+    const atLimit = new File([], "at-limit.bin");
+    Object.defineProperty(atLimit, "size", { value: PAYROLL_UPLOAD_MAX });
+    const picker = host.querySelector<HTMLInputElement>("[data-testid='team-files-picker']")!;
+    Object.defineProperty(picker, "files", { value: [atLimit] });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(fetches).toEqual([{ url: "/api/team-files/file?path=payroll&name=at-limit.bin", method: "PUT" }]);
+    expect(host.querySelector("[role='alert']")).toBeNull();
+  });
+
+  it("uses the server upload check while the folder listing is pending", async () => {
+    fixture.api.mockImplementationOnce(() => new Promise(() => {}));
+    await render();
+    const file = new File([], "pending.bin");
+    Object.defineProperty(file, "size", { value: 100 * 1024 ** 2 + 1 });
+    const picker = host.querySelector<HTMLInputElement>("[data-testid='team-files-picker']")!;
+    Object.defineProperty(picker, "files", { value: [file] });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(fetches).toEqual([{ url: "/api/team-files/file?path=&name=pending.bin", method: "PUT" }]);
+    expect(host.querySelector("[role='alert']")).toBeNull();
   });
 
   it("makes a folder and deletes after asking", async () => {
