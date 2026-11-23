@@ -839,6 +839,43 @@ def finalized_day(current, at, focus_start, previous_finalized):
     return yesterday
 
 
+def stale_ado_repositories(source, project_state, org, project, repository_names, cutoff):
+    reasons = source["coverage"]["reasons"]
+    if (source["status"] != "stale"
+            or not any(re.fullmatch(r"authenticated-read-interrupted-http-5\d{2}", reason) for reason in reasons)
+            or any(re.search(r"-http-(401|403)$", reason) for reason in reasons)):
+        return []
+    cache = project_state.get("cache")
+    expected = project_state.get("expectedRepositoryIds")
+    if not isinstance(cache, dict) or not isinstance(expected, list):
+        return []
+    raw_ids = {local_usage_ado.digest("ado-repo", org.casefold(), repo_id): repo_id
+               for repo_id in expected if isinstance(repo_id, str) and repo_id in cache}
+    scope = f"{org}/{project}".casefold()
+    repositories = {}
+    for day in source["days"]:
+        if day["status"] != "stale":
+            continue
+        observed_at = local_usage_ado.instant(day["capturedAt"])
+        if observed_at > cutoff:
+            continue
+        for row in day["repositories"]:
+            repo_id = raw_ids.get(row["id"])
+            repository_scope, _, name = row["name"].rpartition("/")
+            if repo_id is None or row["status"] != "ready" or repository_scope.casefold() != scope:
+                continue
+            proof = cache[repo_id]
+            branch = proof.get("branch") if isinstance(proof, dict) else None
+            if (name.casefold() not in repository_names or not isinstance(branch, str)
+                    or not branch.startswith("refs/heads/") or local_usage_ado.instant(proof.get("pinnedAt")) > observed_at):
+                continue
+            record = {"id": repo_id, "name": name, "defaultBranch": branch, "isDisabled": False}
+            if repo_id in repositories and repositories[repo_id]["name"].casefold() != name.casefold():
+                raise ValueError("ADO stale repository binding mismatch")
+            repositories[repo_id] = record
+    return list(repositories.values())
+
+
 def legacy_ado_commits(config, repository_identity, repository_category, *, at, snapshot=None, file=None):
     if not config.get("mergedAdoProjects") and not config.get("adoRemotes"):
         return {"records": [], "complete": True}
@@ -884,29 +921,34 @@ def legacy_ado_commits(config, repository_identity, repository_category, *, at, 
                         and source["coverage"]["visibilityComplete"] is True)
         source_complete = raw_complete and cutoff >= aggregate_at
         complete = complete and source_complete
+        retained_repositories = []
         if not verified:
-            continue
+            retained_repositories = stale_ado_repositories(source, project_state, org, project, repository_names, cutoff)
+            if not retained_repositories:
+                continue
         work = project_state.get("work")
         prior_cache = project_state.get("cache")
         if (not isinstance(work, dict) or not isinstance(prior_cache, dict)
                 or work.get("cutoff") != local_usage_ado.stamp(cutoff)
                 or work.get("firstDay") != ado["operationWindow"]["startDay"]
-                or work.get("lastDay") != ado["operationWindow"]["endDay"]
-                or not isinstance(work.get("inventory"), list)):
+                or work.get("lastDay") != ado["operationWindow"]["endDay"]):
             raise ValueError("ADO raw work binding mismatch")
-        inventory = {repo.get("id"): repo for repo in work["inventory"]
-                     if isinstance(repo, dict) and isinstance(repo.get("id"), str)}
-        if len(inventory) != len(work["inventory"]):
+        repositories = work.get("inventory") if verified else retained_repositories
+        if not isinstance(repositories, list):
             raise ValueError("ADO raw repository inventory is invalid")
-        selected = work.get("selectedRepoIds")
+        inventory = {repo.get("id"): repo for repo in repositories
+                     if isinstance(repo, dict) and isinstance(repo.get("id"), str)}
+        if len(inventory) != len(repositories):
+            raise ValueError("ADO raw repository inventory is invalid")
+        selected = work.get("selectedRepoIds") if verified else list(inventory)
         if (not isinstance(selected, list) or len(selected) != len(set(selected))
                 or any(repo_id not in inventory for repo_id in selected)):
             raise ValueError("ADO raw selected repositories are invalid")
         selected_repos = [inventory[repo_id] for repo_id in selected]
-        if {repo["name"].casefold() for repo in selected_repos} != set(repository_names):
+        if verified and {repo["name"].casefold() for repo in selected_repos} != set(repository_names):
             raise ValueError("ADO raw repository scope mismatch")
-        completed = work.get("repoDone")
-        progress = work.get("progress")
+        completed = work.get("repoDone") if verified else {}
+        progress = work.get("progress") if verified else {}
         if not isinstance(completed, dict) or not isinstance(progress, dict):
             raise ValueError("ADO raw repository proofs are invalid")
         if not source_complete and work.get("scanComplete") is True:
