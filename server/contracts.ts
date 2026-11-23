@@ -9,6 +9,7 @@ import type {
 import type { LocalModelFacts, OllamaProblem } from "../shared/local-model.ts";
 import type { ProviderIcon } from "../shared/provider-icon.ts";
 import type { ModelProviderRoute } from "../shared/model-provider-route.ts";
+import type { ModelListProblem } from "../shared/model-selection.ts";
 import type { ContextBreakdown } from "../shared/context-breakdown.ts";
 
 export type { CloudBackend, EffortLevel, ModelSelection } from "../shared/wire.ts";
@@ -582,6 +583,8 @@ export interface ProviderInstance {
   readonly models: ModelCatalog;
   /** True while the catalog is the driver's fixed list or a failed read's leftover, not a list the engine gave. */
   readonly modelsUnconfirmed?: boolean;
+  /** Set with modelsUnconfirmed when the engine's last read of its list failed: why, for the picker to say. */
+  readonly modelsUnreadable?: ModelListProblem;
   /** False while the sign-in can refuse a model its catalog lists (Codex on a ChatGPT account): a short message and background text then stay on the bot's own model. */
   readonly quickModelsUsable?: () => boolean;
   /** Refresh a live catalog without recreating the provider instance. */

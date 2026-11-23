@@ -89,6 +89,15 @@ function catalogFrom(value: unknown): ModelCatalog | null {
 }
 
 const unconfirmed = new WeakSet<ModelCatalog>();
+const catalogSources = new WeakMap<ModelCatalog, string>();
+
+export function setStartupModelCacheSource(catalog: ModelCatalog, source: string): void {
+  catalogSources.set(catalog, source);
+}
+
+export function startupModelCacheSource(catalog: ModelCatalog): string | undefined {
+  return catalogSources.get(catalog);
+}
 
 /** The engine did not give this list (its CLI timed out, or answered nothing): it is saved, but read again at the next start. */
 export function unconfirmedModelCatalog(catalog: ModelCatalog): void {
@@ -101,17 +110,22 @@ export interface StartupModelCacheEntry {
   build: string | null;
 }
 
-export function readStartupModelCacheEntry(instanceId: string): StartupModelCacheEntry | null {
+export function readStartupModelCacheEntry(instanceId: string, source?: string): StartupModelCacheEntry | null {
   const path = startupModelCachePath(instanceId);
   if (!path) return null;
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as { checkedAt?: unknown; build?: unknown; schemaVersion?: unknown };
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { checkedAt?: unknown; build?: unknown; schemaVersion?: unknown; source?: unknown };
     const catalog = catalogFrom(raw);
-    return catalog ? {
+    if (!catalog) return null;
+    if (typeof raw.source === "string" && /^[a-f0-9]{64}$/.test(raw.source)) {
+      if (source !== undefined && raw.source !== source) return null;
+      catalogSources.set(catalog, raw.source);
+    }
+    return {
       catalog,
       checkedAt: typeof raw.checkedAt === "number" && Number.isFinite(raw.checkedAt) ? raw.checkedAt : null,
       build: raw.schemaVersion === CATALOG_SCHEMA_VERSION && typeof raw.build === "string" ? raw.build : null,
-    } : null;
+    };
   } catch {
     return null;
   }
@@ -128,7 +142,7 @@ export function writeStartupModelCache(instanceId: string, catalog: ModelCatalog
   const stored = catalogFrom(catalog);
   if (!stored) return;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileAtomic(path, JSON.stringify({ ...stored, schemaVersion: CATALOG_SCHEMA_VERSION,
+  writeFileAtomic(path, JSON.stringify({ ...stored, schemaVersion: CATALOG_SCHEMA_VERSION, source: catalogSources.get(catalog),
     checkedAt: read.checkedAt ?? (unconfirmed.has(catalog) ? 0 : Date.now()), build: read.build ?? buildStamp() }), { durable: false });
 }
 
@@ -137,6 +151,7 @@ export type DeferredStartupModelRefresh = { pending: Promise<void> };
 
 export function openStartupModelCatalog(input: {
   instanceId: string;
+  source?: string;
   use: (catalog: ModelCatalog) => void;
   current: () => ModelCatalog;
   refresh: () => Promise<void>;
@@ -144,7 +159,7 @@ export function openStartupModelCatalog(input: {
 }): Promise<null> | DeferredStartupModelRefresh {
   const reopened = openedThisRun.has(input.instanceId);
   openedThisRun.add(input.instanceId);
-  const entry = readStartupModelCacheEntry(input.instanceId);
+  const entry = readStartupModelCacheEntry(input.instanceId, input.source);
   const cached = entry?.catalog ?? null;
   if (cached) input.use(cached);
   const persist = () => {
@@ -160,7 +175,8 @@ export function openStartupModelCatalog(input: {
     });
   }
   const age = (input.now ?? Date.now()) - (entry?.checkedAt ?? -Infinity);
-  if (cached && !reopened && entry?.build === buildStamp() && age >= 0 && age < STARTUP_MODEL_CACHE_FRESH_MS) return Promise.resolve(null);
+  if (cached && (input.source === undefined || startupModelCacheSource(cached) === input.source)
+    && !reopened && entry?.build === buildStamp() && age >= 0 && age < STARTUP_MODEL_CACHE_FRESH_MS) return Promise.resolve(null);
   // A saved list stands in while the refresh waits; with none the engine would offer no model at all until it runs.
   const startAfter = cached ? afterFirstEngineRead() : Promise.resolve();
   return { pending: startAfter.then(() => input.refresh()).then(persist, () => undefined) };
