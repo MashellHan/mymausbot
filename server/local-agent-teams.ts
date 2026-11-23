@@ -137,9 +137,9 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       const verifiedIds = new Set(verified.map((agent) => agent.pane_id));
       const openCodeSessions = new Map(verified.flatMap((agent) => {
         const id = openCodeSessionId(agent);
-        return id ? [[agent.pane_id, { id, agent }] as const] : [];
+        return id ? [[agent.pane_id, id] as const] : [];
       }));
-      const openCodeIds = [...openCodeSessions.values()].map(({ id }) => id);
+      const openCodeIds = [...openCodeSessions.values()];
       const openCodeFile = openCodeUsageDatabase(home);
       const openCodeUsage = readOpenCodeMemberUsage(openCodeFile, openCodeIds, sampledAt);
       const [observations, roles, piSessions] = await Promise.all([
@@ -147,16 +147,9 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
       ]);
       const piContexts = await observePiContexts(verified, piSessions, run, readProcessStart, now);
       const openCodeMessages = readOpenCodeMessages(openCodeFile, openCodeIds, "preview");
-      const liveOpenCode = openCodeMessages.size ? await run(["--session", "default", "agent", "list"])
-        .then((output) => verifiedLocalAgentMembers(herdrRows(output, "agents"))).catch(() => []) : [];
-      const openCodePreviews = new Map(liveOpenCode.flatMap((agent) => {
-        const pane = String(agent.pane_id);
-        const original = openCodeSessions.get(pane);
-        const session = openCodeSessionId(agent);
-        return original && session === original.id && agent.cwd === original.agent.cwd &&
-          localAgentOccupantId(agent, pane) === localAgentOccupantId(original.agent, pane)
-          ? [[pane, openCodeMessages.get(session)] as const] : [];
-      }));
+      const liveUsageMembers = openCodeIds.length || verified.some(codexSessionId)
+        ? verifiedLocalAgentMembers(herdrRows(await run(["--session", "default", "agent", "list"]), "agents")) : [];
+      const liveByPane = new Map(liveUsageMembers.map((agent) => [agent.pane_id, agent] as const));
       const sessionTeams = new Map<string, Set<string>>();
       const sessionClaims = new Map<string, number>();
       for (const agent of agents) {
@@ -176,13 +169,17 @@ export function createLocalAgentTeamsProvider({ run = runHerdr, home = homedir()
         if (typeof id !== "string" || !id || seen.has(id) || !team) throw new Error("Invalid agent identity");
         seen.add(id);
         const sessionId = codexSessionId(agent);
-        const verifiedCodexMember = verifiedIds.has(id) && sessionId !== null && sessionClaims.get(sessionId) === 1;
-        const openCodeSession = openCodeSessions.get(id)?.id;
-        const openCode = current() ? openCodePreviews.get(id) : undefined;
+        const occupantId = localAgentOccupantId(agent, id);
+        const live = liveByPane.get(id);
+        const sameBinding = current() && live && occupantId && live.agent === agent.agent && live.cwd === agent.cwd &&
+          live.terminal_id === agent.terminal_id && localAgentOccupantId(live, id) === occupantId;
+        const verifiedCodexMember = sameBinding && verifiedIds.has(id) && sessionId !== null && codexSessionId(live) === sessionId &&
+          sessionClaims.get(sessionId) === 1;
+        const openCodeSession = sameBinding && openCodeSessionId(live) === openCodeSessions.get(id) ? openCodeSessions.get(id) : undefined;
+        const openCode = openCodeSession ? openCodeMessages.get(openCodeSession) : undefined;
         const observation = sessionId ? observations.get(sessionId) : null;
         const pi = verifiedIds.has(id) ? piSessions.get(id) : null;
         if (observation?.lastActivityAt != null) team.lastActivityAt = Math.max(team.lastActivityAt ?? 0, observation.lastActivityAt);
-        const occupantId = localAgentOccupantId(agent, id);
         const boundSession = verifiedCodexMember ? sessionId : openCodeSession;
         const binding = boundSession && occupantId ? JSON.stringify([id, agent.agent, occupantId, boundSession, agent.cwd, agent.terminal_id]) : null;
         const bindingKey = binding && typeof agent.terminal_id === "string" && agent.terminal_id

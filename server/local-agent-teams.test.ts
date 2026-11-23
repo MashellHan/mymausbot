@@ -321,9 +321,17 @@ describe("local Agent Team provider", () => {
     };
     let agents = [seat, { ...seat, pane_id: "w6:p2", name: "unverified", agent_session: { ...seat.agent_session, source: "other:opencode" } },
       { ...seat, pane_id: "w6:p3", name: "legacy", agent_session: { ...seat.agent_session, value: legacyId } }];
-    const makeProvider = () => createLocalAgentTeamsProvider({ home, codexHome: join(home, ".codex"), now: () => time,
-      bindingCachePath: join(home, "bindings.json"),
-      run: async (args) => args.at(-2) === "workspace" ? workspaces : JSON.stringify({ result: { agents } }) });
+    let recheckedAgents: typeof agents | undefined;
+    const makeProvider = () => {
+      let firstRead = true;
+      return createLocalAgentTeamsProvider({ home, codexHome: join(home, ".codex"), now: () => time,
+        bindingCachePath: join(home, "bindings.json"), run: async (args) => {
+          if (args.at(-2) === "workspace") return workspaces;
+          const listed = firstRead ? agents : recheckedAgents ?? agents;
+          firstRead = !firstRead;
+          return JSON.stringify({ result: { agents: listed } });
+        } });
+    };
     const provider = makeProvider();
     write(time - 500);
     expect((await provider.get()).teams[0]!.agents[0]!.tokenUsage24h).toMatchObject({ coverage: "unavailable", knownTokens: null });
@@ -349,12 +357,13 @@ describe("local Agent Team provider", () => {
     expect(restored.tokenUsage24h).toEqual(verified!.tokenUsage24h);
     expect(restored.tokenUsage7d).toEqual(verified!.tokenUsage7d);
 
-    agents = [...agents, { ...seat, pane_id: "w6:p4", name: "duplicate" }];
+    recheckedAgents = [...agents, { ...seat, pane_id: "w6:p4", name: "duplicate" }];
     time += 2_000;
     const duplicate = (await restarted.get()).teams[0]!.agents;
-    expect(duplicate.map((member) => member.tokenUsage24h?.coverage)).toEqual(["unavailable", "unavailable", "partial", "unavailable"]);
+    expect(duplicate.map((member) => member.tokenUsage24h?.coverage)).toEqual(["unavailable", "unavailable", "partial"]);
 
     agents = [seat];
+    recheckedAgents = undefined;
     const rebound = (await makeProvider().get()).teams[0]!.agents[0]!;
     expect(rebound.tokenUsage7d).toMatchObject({ coverage: "unavailable", knownTokens: null });
   });
