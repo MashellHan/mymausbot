@@ -1,5 +1,5 @@
 import { isCitationAttachment, serializeCitation, type CitationAttachment } from "./citations.ts";
-import { remoteFetch } from "./pwa-config.ts";
+import { remoteFetch } from "./pwa-transport.ts";
 import { randomUuid } from "./random-uuid.ts";
 import { FILE_MAX_BYTES } from "../../shared/upload-limits.ts";
 export { dataContextFor, type DataContext, type DataViewContext } from "../../shared/data-context.ts";

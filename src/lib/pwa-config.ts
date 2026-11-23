@@ -1,5 +1,30 @@
 // Remote PWA pairing, IndexedDB (`omb-pwa-v1`) auth store, authenticated fetch wrappers, and blob media cache.
 import type { PwaPairingPayload } from "../../shared/pwa-bridge.ts";
+import {
+  getPwaAuth,
+  isElectronDesktop,
+  isJsonResponse,
+  isRelayMediaPath,
+  isRelayTarget,
+  isRemotePwaMode,
+  remoteFetch,
+  remoteFetchInit,
+  remoteUrl,
+  setActivePwaAuth,
+  type PwaAuthRecord,
+} from "./pwa-transport.ts";
+
+export {
+  getPwaAuth,
+  isJsonResponse,
+  isRelayMediaPath,
+  isRelayTarget,
+  isRemotePwaMode,
+  remoteFetch,
+  remoteFetchInit,
+  remoteUrl,
+  type PwaAuthRecord,
+};
 
 export function defaultDeviceLabel(userAgent: string = typeof navigator !== "undefined" ? navigator.userAgent : ""): string {
   const browser = /Edg\//.test(userAgent) ? "Edge" : /OPR\//.test(userAgent) ? "Opera" : /Chrome\//.test(userAgent) ? "Chrome" : /Firefox\//.test(userAgent) ? "Firefox" : /Safari\//.test(userAgent) ? "Safari" : "Browser";
@@ -15,19 +40,6 @@ export const DEFAULT_PWA_RELAY_ORIGIN = "https://relay.mxhan.com";
 
 const PAIR_REQUEST_PREFIX = "omb.pwa.pairRequest.";
 const MAX_CACHED_MEDIA_BLOBS = 128;
-
-export interface PwaAuthRecord {
-  ownerKey: string;
-  relayUrl: string;
-  token: string;
-  deviceId: string;
-  environmentId: string;
-  sessionId: string;
-  serverName: string;
-  scopes: string[];
-  defaultBotId?: string;
-  pairedAt: number;
-}
 
 export type PwaPairingBootResult =
   | { status: "none" }
@@ -47,7 +59,6 @@ export interface ActivatePairingOptions extends RelayValidationOptions {
   now?: () => number;
 }
 
-let activeAuth: PwaAuthRecord | null = null;
 let initPromise: Promise<PwaAuthRecord | null> | null = null;
 const memoryPairRequests = new Map<string, string>();
 const mediaBlobCache = new Map<string, string>();
@@ -55,15 +66,6 @@ const mediaInFlight = new Map<string, Promise<string>>();
 
 export function makePwaOwnerKey(relayUrl: string, environmentId: string, sessionId: string): string {
   return `${relayUrl}::${environmentId}::${sessionId}`;
-}
-
-export function isJsonResponse(res: Pick<Response, "headers">): boolean {
-  const contentType = res.headers.get("content-type") ?? "";
-  return /^application\/(?:[\w.+-]+\+)?json\b/i.test(contentType);
-}
-
-function isElectronDesktop(): boolean {
-  return typeof window !== "undefined" && Boolean((window as { ogb?: unknown }).ogb);
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -355,26 +357,17 @@ export function revokeMediaBlobCache(): void {
   mediaInFlight.clear();
 }
 
-export function getPwaAuth(): PwaAuthRecord | null {
-  if (isElectronDesktop()) return null;
-  return activeAuth;
-}
-
-export function isRemotePwaMode(): boolean {
-  return getPwaAuth() !== null;
-}
-
 export async function setPwaAuth(record: PwaAuthRecord, idbFactory?: IDBFactory): Promise<void> {
-  if (activeAuth?.ownerKey !== record.ownerKey) {
+  if (getPwaAuth()?.ownerKey !== record.ownerKey) {
     revokeMediaBlobCache();
   }
   await writeStoredAuth(record, idbFactory);
-  activeAuth = record;
+  setActivePwaAuth(record);
   initPromise = Promise.resolve(record);
 }
 
 export async function clearPwaAuth(idbFactory?: IDBFactory): Promise<void> {
-  activeAuth = null;
+  setActivePwaAuth(null);
   initPromise = Promise.resolve(null);
   revokeMediaBlobCache();
   await deleteStoredAuth(idbFactory);
@@ -382,17 +375,17 @@ export async function clearPwaAuth(idbFactory?: IDBFactory): Promise<void> {
 
 export function initPwaAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | null> {
   if (isElectronDesktop()) {
-    activeAuth = null;
+    setActivePwaAuth(null);
     return Promise.resolve(null);
   }
   if (initPromise) return initPromise;
   initPromise = readStoredAuth(idbFactory)
     .then((record) => {
-      activeAuth = record;
+      setActivePwaAuth(record);
       return record;
     })
     .catch(() => {
-      activeAuth = null;
+      setActivePwaAuth(null);
       return null;
     });
   return initPromise;
@@ -401,13 +394,14 @@ export function initPwaAuth(idbFactory?: IDBFactory): Promise<PwaAuthRecord | nu
 export function pwaReady(): Promise<PwaAuthRecord | null> {
   if (isElectronDesktop()) return Promise.resolve(null);
   if (initPromise) return initPromise;
-  if (activeAuth) return Promise.resolve(activeAuth);
+  const current = getPwaAuth();
+  if (current) return Promise.resolve(current);
   if (!resolveIdbFactory()) return Promise.resolve(null);
   return initPwaAuth();
 }
 
 export function resetPwaConfigForTests(): void {
-  activeAuth = null;
+  setActivePwaAuth(null);
   initPromise = null;
   memoryPairRequests.clear();
   revokeMediaBlobCache();
@@ -544,56 +538,6 @@ export async function bootstrapPwaConfig(options: ActivatePairingOptions = {}): 
     return { status: "failed", error: activated.error };
   }
   return { status: "paired", auth: activated.auth };
-}
-
-export function isRelayTarget(path: string): boolean {
-  const auth = getPwaAuth();
-  if (!auth) return false;
-  if (path.startsWith("/") && !path.startsWith("//")) return true;
-  return path.startsWith(`${auth.relayUrl}/`) || path === auth.relayUrl;
-}
-
-export function isRelayMediaPath(path: string | null | undefined): boolean {
-  if (!path) return false;
-  if (path.startsWith("blob:") || path.startsWith("data:")) return false;
-  const auth = getPwaAuth();
-  if (!auth) return false;
-  if (path.startsWith("/api/")) return true;
-  return path.startsWith(`${auth.relayUrl}/api/`);
-}
-
-export function remoteUrl(path: string): string {
-  const auth = getPwaAuth();
-  if (!auth) return path;
-  if (path.startsWith("/") && !path.startsWith("//")) {
-    return `${auth.relayUrl}${path}`;
-  }
-  return path;
-}
-
-export function remoteFetchInit(init?: RequestInit): RequestInit {
-  const auth = getPwaAuth();
-  if (!auth) return init ?? {};
-  const headers = new Headers(init?.headers);
-  if (!headers.has("authorization")) {
-    headers.set("authorization", `Bearer ${auth.token}`);
-  }
-  return {
-    ...init,
-    headers,
-    credentials: "omit",
-  };
-}
-
-export function remoteFetch(
-  path: string,
-  init?: RequestInit,
-  fetchImpl: typeof fetch = fetch,
-): Promise<Response> {
-  if (!isRemotePwaMode() || !isRelayTarget(path)) {
-    return init === undefined ? fetchImpl(path) : fetchImpl(path, init);
-  }
-  return fetchImpl(remoteUrl(path), remoteFetchInit(init));
 }
 
 function setCachedMediaBlob(cacheKey: string, blobUrl: string): void {
