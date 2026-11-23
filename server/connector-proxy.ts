@@ -279,7 +279,15 @@ function refusedListing(failure: { status?: number } | Json | null): boolean {
   return Boolean(failure && "result" in failure && !("error" in failure));
 }
 
+function isContinuationListing(message: Json): boolean {
+  const params = message.params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) return false;
+  const cursor = (params as { cursor?: unknown }).cursor;
+  return typeof cursor === "string" ? cursor.length > 0 : cursor !== undefined && cursor !== null;
+}
+
 async function listTools(message: Json): Promise<Json> {
+  const continuation = isContinuationListing(message);
   let refused = false;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (attempt) await delay(TOOLS_LIST_RETRY_MS);
@@ -295,8 +303,8 @@ async function listTools(message: Json): Promise<Json> {
   process.stderr.write(refused
     ? "connector-proxy: Connected apps refused this bot's tool list.\n"
     : "connector-proxy: Connected apps are temporarily unavailable; start a new session to retry discovery.\n");
-  // In an outage, with a service to send calls to, its own tools still go on the list: calls reach it once it answers again.
-  return { jsonrpc: "2.0", id: message.id, result: { tools: UPSTREAM && !refused ? structuredClone(DISCOVERY_FALLBACK_TOOLS) : [] } };
+  // In an outage, with a service to send calls to, its own tools still go on the initial list: calls reach it once it answers again.
+  return { jsonrpc: "2.0", id: message.id, result: { tools: UPSTREAM && !refused && !continuation ? structuredClone(DISCOVERY_FALLBACK_TOOLS) : [] } };
 }
 
 async function handle(received: Json): Promise<void> {

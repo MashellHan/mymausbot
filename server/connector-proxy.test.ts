@@ -608,6 +608,7 @@ describe("connector MCP bridge", () => {
   });
 
   it.each([
+    ["an HTTP 401 refusal", 401, { error: "invalid project key" }],
     ["an HTTP refusal", 403, { error: "connected apps are not enabled for this bot" }],
     ["a refusal answered as a result", 200, { jsonrpc: "2.0", id: 8, result: { content: [{ type: "text", text: "Only the member's own turn may use this." }], isError: true } }],
     ["an intentionally empty tool list", 200, { jsonrpc: "2.0", id: 8, result: { tools: [] } }],
@@ -623,6 +624,44 @@ describe("connector MCP bridge", () => {
     child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 8, method: "tools/list" })}\n`);
     expect(await nextJson(lines)).toEqual({ jsonrpc: "2.0", id: 8, result: { tools: [] } });
     expect(listings).toBe(1);
+  });
+
+  it("does not repeat the synthetic service tools on a failed tools/list continuation page", async () => {
+    const cursors: Array<string | undefined> = [];
+    const upstream = await listen((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        const rpc = JSON.parse(body);
+        const cursor = rpc.params?.cursor;
+        cursors.push(cursor);
+        if (cursor === undefined) {
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          const frame = {
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              tools: SERVICE_TOOLS.map((name) => ({ name })),
+              nextCursor: "page-2",
+            },
+          };
+          response.end(`data: ${JSON.stringify(frame)}\n\n`);
+          return;
+        }
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "continuation unavailable" }));
+      });
+    });
+    const lines = start({ OMB_CONNECTOR_UPSTREAM_URL: upstream });
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })}\n`);
+    const first = await nextJson(lines);
+    expect(first.result.tools.map((tool: { name: string }) => tool.name)).toEqual(SERVICE_TOOLS);
+    expect(first.result.nextCursor).toBe("page-2");
+
+    child!.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: { cursor: "page-2" } })}\n`);
+    const second = await nextJson(lines);
+    expect(second).toEqual({ jsonrpc: "2.0", id: 2, result: { tools: [] } });
+    expect(cursors).toEqual([undefined, "page-2", "page-2"]);
   });
 
   it("treats HTTP 429 as a discovery outage and keeps granted fallback tools listed", async () => {
